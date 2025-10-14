@@ -1,10 +1,49 @@
-# Node / Python / secrets / artifacts
-node_modules/
-dist/
-.env
-*.env
-*.local
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.so
+.Python
+venv/
+.venv/
+ENV/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node.js
+node_modules/
+npm-debug.log*
+dist/
+build/
+
+# Environment
+.env
+.env.local
+.env*.local
+
+# Logs
 *.log
-provision/ansible/inventory/hosts.local
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/*
+!.vscode/settings.json
+.idea/
+*.swp
+*~
+
+# Project Specific
+!provision/pct/vars.env
+!provision/ansible/inventory/hosts.yml
+
+# Security
+*.pem
+*.key
+id_rsa*
+credentials.json
+secrets.yaml

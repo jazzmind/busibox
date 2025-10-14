@@ -35,8 +35,8 @@ description: "Task list for Local LLM Infrastructure Platform implementation"
 - [x] T007 [P] Create Ansible role structure for all services (postgres, minio, milvus, agent_api, ingest_worker, deploywatch, node_common)
 - [x] T008 [P] Create README.md describing system architecture
 - [x] T009 [P] Create QUICKSTART.md with provisioning instructions
-- [ ] T010 [P] Create Milvus initialization script in `tools/milvus_init.py`
-- [ ] T011 [P] Create architecture documentation in `docs/architecture.md`
+- [x] T010 [P] Create Milvus initialization script in `tools/milvus_init.py`
+- [x] T011 [P] Create architecture documentation in `docs/architecture.md`
 
 ---
 
@@ -368,9 +368,9 @@ With multiple developers:
 ## Task Status Summary
 
 ### Completed Tasks
-- **Phase 1 (Setup)**: 9/11 tasks complete (82%)
+- **Phase 1 (Setup)**: 11/11 tasks complete (100%) ✅
   - ✅ T001-T009: Container scripts, Ansible structure, documentation
-  - ⏳ T010-T011: Milvus init script, architecture docs (pending)
+  - ✅ T010-T011: Milvus init script, architecture docs
 
 - **Phase 2 (Foundational)**: 0/14 tasks complete (0%)
 - **Phase 3 (US1)**: 0/12 tasks complete (0%)
@@ -383,7 +383,7 @@ With multiple developers:
 - **Phase 10 (US8)**: 0/8 tasks complete (0%)
 - **Phase 11 (Polish)**: 0/18 tasks complete (0%)
 
-**Total**: 9/138 tasks complete (7%)
+**Total**: 11/138 tasks complete (8%)
 
 **Recent Additions** (from analysis):
 - T122a-T122b: Trace ID propagation for observability
