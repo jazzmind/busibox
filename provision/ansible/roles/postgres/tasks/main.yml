@@ -20,26 +20,58 @@
       host    all    all    10.96.200.0/21    md5
   notify: Reload Postgres
 
-- name: Create db and user
+- name: Create busibox database user
   become_user: postgres
   postgresql_user:
-    name: appuser
-    password: "app_password_change_me"
-    role_attr_flags: "LOGIN"
-- become_user: postgres
-  postgresql_db:
-    name: appdb
-    owner: appuser
+    name: busibox_user
+    password: "{{ postgres_password | default('busibox_password_change_me') }}"
+    role_attr_flags: "LOGIN,CREATEDB"
 
-- name: Copy schema
+- name: Create busibox database
+  become_user: postgres
+  postgresql_db:
+    name: busibox
+    owner: busibox_user
+    encoding: UTF8
+    lc_collate: en_US.UTF-8
+    lc_ctype: en_US.UTF-8
+    template: template0
+
+- name: Create migrations directory
+  file:
+    path: /root/migrations
+    state: directory
+    mode: "0755"
+
+- name: Copy migration files
   copy:
-    src: files/schema.sql
-    dest: /root/schema.sql
+    src: "files/migrations/"
+    dest: /root/migrations/
     mode: "0644"
 
-- name: Apply schema
+- name: Apply database migrations
   become_user: postgres
-  command: psql -d appdb -f /root/schema.sql
+  shell: |
+    # Check if migration {{ item.version }} has been applied
+    APPLIED=$(psql -d busibox -t -c "SELECT COUNT(*) FROM schema_migrations WHERE version = {{ item.version }}" 2>/dev/null || echo "0")
+    
+    if [ "$APPLIED" -eq "0" ]; then
+      echo "Applying migration {{ item.version }}: {{ item.name }}"
+      psql -d busibox -f /root/migrations/{{ item.file }}
+      if [ $? -eq 0 ]; then
+        echo "Migration {{ item.version }} applied successfully"
+      else
+        echo "Migration {{ item.version }} failed"
+        exit 1
+      fi
+    else
+      echo "Migration {{ item.version }} already applied, skipping"
+    fi
+  loop:
+    - { version: 1, name: "initial_schema", file: "001_initial_schema.sql" }
+    - { version: 2, name: "add_rls_policies", file: "002_add_rls_policies.sql" }
+  register: migration_result
+  changed_when: "'applied successfully' in migration_result.stdout"
 
 handlers:
   - name: Restart Postgres

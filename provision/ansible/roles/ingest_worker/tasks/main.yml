@@ -1,28 +1,155 @@
-- name: Create ingest dir
-  file: { path: /srv/apps/ingest, state: directory }
+# Redis Installation (for job queue)
+- name: Install Redis
+  apt:
+    name:
+      - redis-server
+      - redis-tools
+    state: present
+    update_cache: yes
 
-- name: Seed minimal worker (placeholder)
+- name: Configure Redis to listen on all interfaces
+  lineinfile:
+    path: /etc/redis/redis.conf
+    regexp: '^bind '
+    line: 'bind 0.0.0.0 ::1'
+  notify: Restart Redis
+
+- name: Enable Redis protected mode (require password for remote access)
+  lineinfile:
+    path: /etc/redis/redis.conf
+    regexp: '^protected-mode '
+    line: 'protected-mode no'
+  notify: Restart Redis
+
+- name: Start and enable Redis
+  systemd:
+    name: redis-server
+    state: started
+    enabled: yes
+
+# Python Environment for Ingest Worker
+- name: Install Python and dependencies
+  apt:
+    name:
+      - python3
+      - python3-pip
+      - python3-venv
+      - python3-dev
+      - build-essential
+    state: present
+
+- name: Create ingest worker directory
+  file:
+    path: /srv/ingest
+    state: directory
+    mode: "0755"
+
+- name: Create Python virtual environment
+  shell: python3 -m venv /srv/ingest/venv
+  args:
+    creates: /srv/ingest/venv/bin/python
+
+- name: Copy ingest worker source code
   copy:
-    dest: /srv/apps/ingest/worker.js
+    src: "{{ playbook_dir }}/../../srv/ingest/src/"
+    dest: /srv/ingest/src/
+    mode: "0644"
+
+- name: Copy requirements.txt
+  copy:
+    src: "{{ playbook_dir }}/../../srv/ingest/requirements.txt"
+    dest: /srv/ingest/requirements.txt
+    mode: "0644"
+
+- name: Install Python dependencies
+  pip:
+    requirements: /srv/ingest/requirements.txt
+    virtualenv: /srv/ingest/venv
+
+- name: Download spaCy English model
+  shell: /srv/ingest/venv/bin/python -m spacy download en_core_web_sm
+  args:
+    creates: /srv/ingest/venv/lib/python*/site-packages/en_core_web_sm
+
+- name: Create ingest worker environment file
+  copy:
+    dest: /srv/ingest/.env
     content: |
-      setInterval(()=>console.log('worker tick'), 10000);
+      # Redis configuration
+      REDIS_HOST={{ redis_host | default('localhost') }}
+      REDIS_PORT={{ redis_port | default('6379') }}
+      REDIS_STREAM=jobs:ingestion
+      REDIS_CONSUMER_GROUP=workers
+      
+      # PostgreSQL configuration
+      POSTGRES_HOST={{ postgres_host | default('10.96.200.26') }}
+      POSTGRES_PORT={{ postgres_port | default('5432') }}
+      POSTGRES_DB={{ postgres_db | default('busibox') }}
+      POSTGRES_USER={{ postgres_user | default('busibox_user') }}
+      POSTGRES_PASSWORD={{ postgres_password | default('busibox_password_change_me') }}
+      
+      # Milvus configuration
+      MILVUS_HOST={{ milvus_host | default('10.96.200.27') }}
+      MILVUS_PORT={{ milvus_port | default('19530') }}
+      MILVUS_COLLECTION=document_embeddings
+      
+      # MinIO configuration
+      MINIO_ENDPOINT={{ minio_endpoint | default('10.96.200.28:9000') }}
+      MINIO_ACCESS_KEY={{ minio_root_user | default('minioadmin') }}
+      MINIO_SECRET_KEY={{ minio_root_password | default('minioadminchange') }}
+      MINIO_SECURE=false
+      
+      # liteLLM configuration
+      LITELLM_BASE_URL={{ litellm_base_url | default('http://10.96.200.30:8000') }}
+      LITELLM_API_KEY={{ litellm_api_key | default('') }}
+      
+      # Processing configuration
+      CHUNK_SIZE=512
+      CHUNK_OVERLAP=50
+      EMBEDDING_MODEL=text-embedding-ada-002
+      
+      # Worker configuration
+      WORKER_ID={{ ansible_hostname }}
+    mode: "0600"
 
-- name: systemd service
+- name: Create systemd service for ingest worker
   copy:
-    dest: /etc/systemd/system/ingest.service
+    dest: /etc/systemd/system/ingest-worker.service
     content: |
       [Unit]
-      Description=Ingest Worker
-      After=network-online.target
+      Description=Busibox File Ingestion Worker
+      After=network-online.target redis-server.service
+      Wants=network-online.target
+      Requires=redis-server.service
+      
       [Service]
+      Type=simple
       User=root
-      WorkingDirectory=/srv/apps/ingest
-      ExecStart=/usr/bin/node worker.js
+      WorkingDirectory=/srv/ingest/src
+      EnvironmentFile=/srv/ingest/.env
+      ExecStart=/srv/ingest/venv/bin/python worker.py
       Restart=always
+      RestartSec=10
+      StandardOutput=journal
+      StandardError=journal
+      
       [Install]
       WantedBy=multi-user.target
-  notify: Restart ingest
+  notify: Restart ingest worker
+
+- name: Enable ingest worker service
+  systemd:
+    name: ingest-worker
+    enabled: yes
+    daemon_reload: yes
 
 handlers:
-  - name: Restart ingest
-    systemd: { name: ingest, state: restarted, enabled: yes }
+  - name: Restart Redis
+    systemd:
+      name: redis-server
+      state: restarted
+  
+  - name: Restart ingest worker
+    systemd:
+      name: ingest-worker
+      state: restarted

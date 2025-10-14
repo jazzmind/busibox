@@ -12,13 +12,20 @@
     apt update && apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
   args: { executable: /bin/bash }
 
+- name: Create Milvus data directory
+  file:
+    path: /srv/milvus/data
+    state: directory
+    mode: "0755"
+
 - name: Deploy Milvus standalone
   copy:
     dest: /srv/milvus/docker-compose.yml
     content: |
       services:
         milvus:
-          image: milvusdb/milvus:latest
+          container_name: milvus-standalone
+          image: milvusdb/milvus:v2.3.3
           restart: unless-stopped
           ports:
             - "19530:19530"
@@ -27,9 +34,100 @@
             ETCD_USE_EMBED: "true"
             MINIO_USE_EMBED: "true"
             ROCKSMQ_USE_EMBED: "true"
+            COMMON_STORAGETYPE: local
           volumes:
             - /srv/milvus/data:/var/lib/milvus
+          command: ["milvus", "run", "standalone"]
+          healthcheck:
+            test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+            interval: 30s
+            timeout: 10s
+            retries: 3
+            start_period: 90s
   notify: Up Milvus
+
+- name: Start Milvus
+  shell: docker compose up -d
+  args: { chdir: /srv/milvus }
+
+- name: Wait for Milvus to be ready
+  wait_for:
+    host: localhost
+    port: 19530
+    delay: 10
+    timeout: 120
+
+- name: Install Python and dependencies for Milvus initialization
+  apt:
+    name:
+      - python3
+      - python3-pip
+      - python3-venv
+    state: present
+
+- name: Create Python virtual environment for Milvus tools
+  shell: python3 -m venv /opt/milvus-tools
+  args:
+    creates: /opt/milvus-tools/bin/python
+
+- name: Install pymilvus in virtual environment
+  pip:
+    name: pymilvus==2.3.5
+    virtualenv: /opt/milvus-tools
+
+- name: Copy Milvus initialization script
+  copy:
+    src: "{{ playbook_dir }}/../../tools/milvus_init.py"
+    dest: /root/milvus_init.py
+    mode: "0755"
+
+- name: Initialize Milvus collection
+  shell: |
+    /opt/milvus-tools/bin/python /root/milvus_init.py
+  environment:
+    MILVUS_HOST: localhost
+    MILVUS_PORT: "19530"
+    EMBEDDING_DIM: "768"
+  register: milvus_init
+  ignore_errors: yes
+
+- name: Display Milvus initialization result
+  debug:
+    var: milvus_init.stdout_lines
+  when: milvus_init.stdout_lines is defined
+
+- name: Create Milvus health check script
+  copy:
+    dest: /usr/local/bin/milvus-health-check
+    content: |
+      #!/bin/bash
+      curl -f -s http://localhost:9091/healthz > /dev/null
+    mode: "0755"
+
+- name: Create systemd service for Milvus (ensures Docker Compose starts on boot)
+  copy:
+    dest: /etc/systemd/system/milvus.service
+    content: |
+      [Unit]
+      Description=Milvus Vector Database
+      Requires=docker.service
+      After=docker.service
+      
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      WorkingDirectory=/srv/milvus
+      ExecStart=/usr/bin/docker compose up -d
+      ExecStop=/usr/bin/docker compose down
+      
+      [Install]
+      WantedBy=multi-user.target
+
+- name: Enable Milvus systemd service
+  systemd:
+    name: milvus
+    enabled: yes
+    daemon_reload: yes
 
 handlers:
   - name: Up Milvus

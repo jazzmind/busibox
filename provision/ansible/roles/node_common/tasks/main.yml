@@ -1,8 +1,81 @@
-- name: Install Node.js 20
-  shell: |
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-    apt-get install -y nodejs git jq
-  args: { executable: /bin/bash }
+# Install Node.js via NodeSource (stable, official repository)
+- name: Install Node.js prerequisites
+  apt:
+    name:
+      - curl
+      - ca-certificates
+      - gnupg
+      - git
+      - jq
+      - build-essential
+    state: present
+    update_cache: yes
 
-- name: Create apps root
-  file: { path: /srv/apps, state: directory, mode: "0755" }
+- name: Add NodeSource GPG key
+  shell: |
+    mkdir -p /etc/apt/keyrings
+    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+  args:
+    creates: /etc/apt/keyrings/nodesource.gpg
+
+- name: Add NodeSource repository (Node.js 20.x LTS)
+  shell: |
+    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list
+  args:
+    creates: /etc/apt/sources.list.d/nodesource.list
+
+- name: Install Node.js
+  apt:
+    name: nodejs
+    state: present
+    update_cache: yes
+
+- name: Verify Node.js installation
+  command: node --version
+  register: node_version
+  changed_when: false
+
+- name: Display Node.js version
+  debug:
+    msg: "Node.js {{ node_version.stdout }} installed"
+
+- name: Install PM2 globally
+  npm:
+    name: pm2
+    global: yes
+    state: present
+
+- name: Setup PM2 startup script
+  shell: pm2 startup systemd -u root --hp /root
+  args:
+    creates: /etc/systemd/system/pm2-root.service
+
+- name: Enable PM2 service
+  systemd:
+    name: pm2-root
+    enabled: yes
+    daemon_reload: yes
+
+- name: Create apps root directory
+  file:
+    path: /srv/apps
+    state: directory
+    mode: "0755"
+
+- name: Create PM2 ecosystem config
+  copy:
+    dest: /srv/apps/ecosystem.config.js
+    content: |
+      module.exports = {
+        apps: []
+      };
+    mode: "0644"
+
+- name: Install common Node.js utilities
+  npm:
+    name: "{{ item }}"
+    global: yes
+    state: present
+  loop:
+    - yarn
+    - pnpm

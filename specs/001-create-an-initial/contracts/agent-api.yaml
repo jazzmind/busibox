@@ -1,0 +1,679 @@
+openapi: 3.0.3
+info:
+  title: Busibox Agent API
+  description: |
+    API gateway for the busibox local LLM infrastructure platform.
+    Provides authentication, file operations, semantic search, and AI agent invocation.
+  version: 1.0.0
+  contact:
+    name: Busibox Platform
+    url: https://github.com/jazzmind/busibox
+
+servers:
+  - url: http://10.96.200.24:3001
+    description: Agent API server (agent-lxc container)
+
+tags:
+  - name: health
+    description: Health check and service status
+  - name: auth
+    description: Authentication and user management
+  - name: files
+    description: File upload and retrieval operations
+  - name: search
+    description: Semantic search and retrieval
+  - name: agent
+    description: AI agent operations
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Health check
+      description: Returns service health status and dependency checks
+      operationId: healthCheck
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Service is unhealthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: User login
+      description: Authenticate user and receive JWT token
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/me:
+    get:
+      tags: [auth]
+      summary: Get current user
+      description: Returns information about the authenticated user
+      operationId: getCurrentUser
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: User information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /files/upload:
+    post:
+      tags: [files]
+      summary: Initiate file upload
+      description: |
+        Creates a file record and returns a presigned URL for uploading content to MinIO.
+        Client should then PUT file content to the presigned URL.
+      operationId: initiateFileUpload
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FileUploadRequest'
+      responses:
+        '200':
+          description: Upload initiated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileUploadResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /files/{file_id}:
+    get:
+      tags: [files]
+      summary: Get file metadata
+      description: Returns metadata about a file (does not include file content)
+      operationId: getFileMetadata
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: file_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: File metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileMetadata'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient permissions to access this file
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: File not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      tags: [files]
+      summary: Delete file
+      description: Deletes a file and all associated chunks and embeddings
+      operationId: deleteFile
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: file_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: File deleted successfully
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient permissions to delete this file
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: File not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /files/{file_id}/download:
+    get:
+      tags: [files]
+      summary: Get download URL
+      description: Returns a presigned URL for downloading file content from MinIO
+      operationId: getFileDownloadUrl
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: file_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Presigned download URL
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileDownloadResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient permissions to access this file
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: File not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /search:
+    post:
+      tags: [search]
+      summary: Semantic search
+      description: |
+        Performs semantic search across uploaded documents using vector similarity.
+        Results are filtered by user permissions (only returns chunks from files the user has access to).
+      operationId: semanticSearch
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SearchRequest'
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+        '400':
+          description: Invalid search query
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient permissions to search
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /agent/invoke:
+    post:
+      tags: [agent]
+      summary: Invoke AI agent
+      description: |
+        Invokes an AI agent with a query. The agent performs semantic search for relevant context,
+        retrieves it from the vector database (respecting user permissions), and generates a response
+        using the local LLM.
+      operationId: invokeAgent
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentInvokeRequest'
+      responses:
+        '200':
+          description: Agent response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentInvokeResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient permissions to invoke agents
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token obtained from /auth/login
+
+  schemas:
+    HealthResponse:
+      type: object
+      required:
+        - status
+        - service
+        - version
+        - timestamp
+        - checks
+      properties:
+        status:
+          type: string
+          enum: [healthy, unhealthy]
+        service:
+          type: string
+          example: agent-api
+        version:
+          type: string
+          example: 1.0.0
+        timestamp:
+          type: string
+          format: date-time
+        checks:
+          type: object
+          properties:
+            database:
+              type: string
+              example: ok
+            milvus:
+              type: string
+              example: ok
+            minio:
+              type: string
+              example: ok
+            redis:
+              type: string
+              example: ok
+
+    LoginRequest:
+      type: object
+      required:
+        - username
+        - password
+      properties:
+        username:
+          type: string
+          example: user@example.com
+        password:
+          type: string
+          format: password
+          example: SecurePassword123
+
+    LoginResponse:
+      type: object
+      required:
+        - token
+        - user
+      properties:
+        token:
+          type: string
+          description: JWT access token
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+        user:
+          $ref: '#/components/schemas/UserResponse'
+
+    UserResponse:
+      type: object
+      required:
+        - id
+        - username
+        - email
+        - roles
+        - is_active
+      properties:
+        id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        email:
+          type: string
+          format: email
+        roles:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                format: uuid
+              name:
+                type: string
+              permissions:
+                type: object
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    FileUploadRequest:
+      type: object
+      required:
+        - filename
+        - content_type
+        - size_bytes
+      properties:
+        filename:
+          type: string
+          example: document.pdf
+        content_type:
+          type: string
+          example: application/pdf
+        size_bytes:
+          type: integer
+          format: int64
+          example: 1048576
+          maximum: 104857600
+
+    FileUploadResponse:
+      type: object
+      required:
+        - file_id
+        - upload_url
+        - expires_at
+      properties:
+        file_id:
+          type: string
+          format: uuid
+        upload_url:
+          type: string
+          format: uri
+          description: Presigned S3 URL for uploading file content
+        expires_at:
+          type: string
+          format: date-time
+          description: When the presigned URL expires
+
+    FileMetadata:
+      type: object
+      required:
+        - id
+        - owner_id
+        - filename
+        - content_type
+        - size_bytes
+        - status
+        - uploaded_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        owner_id:
+          type: string
+          format: uuid
+        filename:
+          type: string
+        content_type:
+          type: string
+        size_bytes:
+          type: integer
+          format: int64
+        bucket:
+          type: string
+        object_key:
+          type: string
+        status:
+          type: string
+          enum: [pending, processing, indexed, failed]
+        uploaded_at:
+          type: string
+          format: date-time
+        indexed_at:
+          type: string
+          format: date-time
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+
+    FileDownloadResponse:
+      type: object
+      required:
+        - download_url
+        - expires_at
+      properties:
+        download_url:
+          type: string
+          format: uri
+          description: Presigned S3 URL for downloading file content
+        expires_at:
+          type: string
+          format: date-time
+          description: When the presigned URL expires
+
+    SearchRequest:
+      type: object
+      required:
+        - query
+      properties:
+        query:
+          type: string
+          description: Natural language search query
+          example: What are the key features of the platform?
+        limit:
+          type: integer
+          default: 10
+          minimum: 1
+          maximum: 100
+          description: Maximum number of results to return
+        min_score:
+          type: number
+          format: float
+          default: 0.5
+          minimum: 0.0
+          maximum: 1.0
+          description: Minimum relevance score threshold
+
+    SearchResponse:
+      type: object
+      required:
+        - query
+        - results
+        - total
+      properties:
+        query:
+          type: string
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchResult'
+        total:
+          type: integer
+          description: Total number of results (may be more than returned if limit applied)
+
+    SearchResult:
+      type: object
+      required:
+        - chunk_id
+        - file_id
+        - filename
+        - content
+        - score
+      properties:
+        chunk_id:
+          type: string
+          format: uuid
+        file_id:
+          type: string
+          format: uuid
+        filename:
+          type: string
+        content:
+          type: string
+          description: Chunk text content
+        score:
+          type: number
+          format: float
+          description: Relevance score (0.0 to 1.0, higher is more relevant)
+        chunk_index:
+          type: integer
+          description: Position of this chunk within the source file
+
+    AgentInvokeRequest:
+      type: object
+      required:
+        - query
+      properties:
+        query:
+          type: string
+          description: User's question or request
+          example: Summarize the key points from the uploaded documents about infrastructure security.
+        model:
+          type: string
+          default: llama2-7b
+          description: LLM model to use for generation
+          example: llama2-7b
+        max_context_chunks:
+          type: integer
+          default: 5
+          minimum: 1
+          maximum: 20
+          description: Maximum number of relevant chunks to include as context
+
+    AgentInvokeResponse:
+      type: object
+      required:
+        - response
+        - sources
+      properties:
+        response:
+          type: string
+          description: Agent-generated response
+        sources:
+          type: array
+          description: Source chunks used to generate the response
+          items:
+            $ref: '#/components/schemas/SearchResult'
+        model:
+          type: string
+          description: LLM model used
+        usage:
+          type: object
+          description: Token usage statistics
+          properties:
+            prompt_tokens:
+              type: integer
+            completion_tokens:
+              type: integer
+            total_tokens:
+              type: integer
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          description: Error code
+          example: UNAUTHORIZED
+        message:
+          type: string
+          description: Human-readable error message
+          example: Invalid credentials
+        details:
+          type: object
+          description: Additional error details (optional)
+

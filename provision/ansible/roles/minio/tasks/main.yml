@@ -35,9 +35,58 @@
   copy:
     dest: /srv/minio/.env
     content: |
-      MINIO_ROOT_USER=minioadmin
-      MINIO_ROOT_PASSWORD=minioadminchange
-  mode: "0600"
+      MINIO_ROOT_USER={{ minio_root_user | default('minioadmin') }}
+      MINIO_ROOT_PASSWORD={{ minio_root_password | default('minioadminchange') }}
+    mode: "0600"
+
+- name: Start MinIO
+  shell: docker compose up -d
+  args: { chdir: /srv/minio }
+
+- name: Wait for MinIO to be ready
+  wait_for:
+    host: localhost
+    port: 9000
+    delay: 5
+    timeout: 60
+
+- name: Install MinIO client (mc)
+  shell: |
+    curl https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc
+    chmod +x /usr/local/bin/mc
+  args:
+    creates: /usr/local/bin/mc
+
+- name: Configure MinIO client alias
+  shell: |
+    mc alias set local http://localhost:9000 {{ minio_root_user | default('minioadmin') }} {{ minio_root_password | default('minioadminchange') }}
+  environment:
+    MC_HOST_local: "http://{{ minio_root_user | default('minioadmin') }}:{{ minio_root_password | default('minioadminchange') }}@localhost:9000"
+
+- name: Create documents bucket
+  shell: |
+    mc mb local/documents --ignore-existing
+    mc anonymous set download local/documents  # Allow presigned URL downloads
+  environment:
+    MC_HOST_local: "http://{{ minio_root_user | default('minioadmin') }}:{{ minio_root_password | default('minioadminchange') }}@localhost:9000"
+
+- name: Configure bucket event notification (webhook to agent API)
+  shell: |
+    # Configure webhook for file upload events
+    mc event add local/documents arn:minio:sqs::primary:webhook \
+      --event put \
+      --suffix .pdf --suffix .docx --suffix .txt
+  environment:
+    MC_HOST_local: "http://{{ minio_root_user | default('minioadmin') }}:{{ minio_root_password | default('minioadminchange') }}@localhost:9000"
+  ignore_errors: yes  # Webhook config requires agent API to be running
+
+- name: Create MinIO health check script
+  copy:
+    dest: /usr/local/bin/minio-health-check
+    content: |
+      #!/bin/bash
+      curl -f -s http://localhost:9000/minio/health/live > /dev/null
+    mode: "0755"
 
 handlers:
   - name: Up MinIO
