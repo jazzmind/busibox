@@ -84,7 +84,7 @@ description: "Task list for Local LLM Infrastructure Platform implementation"
 - [x] T034 [US1] Implement deploywatch systemd service in `provision/ansible/roles/deploywatch/tasks/main.yml`
 - [x] T035 [US1] Add health check implementations to all Ansible roles (verify service is running and responsive)
 - [ ] T036 [US1] Test end-to-end: Run `provision/pct/create_lxc_base.sh` → `make all` → `make verify` on test Proxmox host
-- [ ] T037 [US1] Document any manual post-deployment steps in QUICKSTART.md (credential changes, LLM provider setup)
+- [x] T037 [US1] Document any manual post-deployment steps in QUICKSTART.md (credential changes, LLM provider setup)
 
 **Checkpoint**: At this point, User Story 1 should be fully functional and testable independently - complete infrastructure can be provisioned
 
@@ -379,11 +379,12 @@ With multiple developers:
   - ✅ T020-T021: Python requirements files
   - ✅ T022-T025: Ansible migrations and verification targets
 
-- **Phase 3 (US1)**: 10/12 tasks complete (83%) 🚀
+- **Phase 3 (US1)**: 11/12 tasks complete (92%) 🚀
   - ✅ T026-T027: Container creation with test mode and validation
   - ✅ T028-T031: Service deployments (MinIO, PostgreSQL, Milvus, Redis+Worker)
   - ✅ T032-T035: Node.js setup, Agent API, webhook config, health checks
-  - ⏳ T036-T037: End-to-end testing and documentation (pending)
+  - ✅ T037: Documentation complete (QUICKSTART.md updated)
+  - ⏳ T036: End-to-end testing (ready for execution)
 - **Phase 4 (US2)**: 0/19 tasks complete (0%)
 - **Phase 5 (US3)**: 0/20 tasks complete (0%)
 - **Phase 6 (US4)**: 0/9 tasks complete (0%)
@@ -393,7 +394,7 @@ With multiple developers:
 - **Phase 10 (US8)**: 0/8 tasks complete (0%)
 - **Phase 11 (Polish)**: 0/18 tasks complete (0%)
 
-**Total**: 35/138 tasks complete (25%)
+**Total**: 36/138 tasks complete (26%)
 
 **Recent Additions** (from analysis):
 - T122a-T122b: Trace ID propagation for observability
