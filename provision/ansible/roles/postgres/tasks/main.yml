@@ -87,13 +87,6 @@
     lc_ctype: en_US.UTF-8
     template: template0
 
-- name: Set password-based authentication for local connections (after user creation)
-  lineinfile:
-    path: "/etc/postgresql/{{ pg_version.stdout }}/main/pg_hba.conf"
-    regexp: "^local\\s+all\\s+all\\s+trust"
-    line: "local   all             all                                     md5"
-  notify: Reload Postgres
-
 - name: Create migrations directory
   file:
     path: /var/lib/postgresql/migrations
@@ -133,3 +126,11 @@
     - { version: 2, name: "add_rls_policies", file: "002_add_rls_policies.sql" }
   register: migration_result
   changed_when: "'applied successfully' in migration_result.stdout"
+
+- name: Configure peer/md5 authentication for non-postgres users (after migrations)
+  lineinfile:
+    path: "/etc/postgresql/{{ pg_version.stdout }}/main/pg_hba.conf"
+    regexp: "^local\\s+all\\s+all\\s+trust"
+    line: "local   all             all                                     peer"
+    insertafter: "^local\\s+all\\s+postgres"
+  notify: Reload Postgres
