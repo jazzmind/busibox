@@ -72,29 +72,48 @@ echo ""
 DESTROYED_COUNT=0
 SKIPPED_COUNT=0
 
+# Temporarily disable pipefail to continue through errors
+set +e
+
 for CTID in "${TEST_CONTAINERS[@]}"; do
   if pct status "$CTID" &>/dev/null; then
-    NAME=$(pct config "$CTID" | grep "^hostname:" | awk '{print $2}' || echo "unknown")
+    NAME=$(pct config "$CTID" 2>/dev/null | grep "^hostname:" | awk '{print $2}' || echo "unknown")
     echo "==> Destroying $NAME ($CTID)"
     
     # Stop container if running
-    if pct status "$CTID" | grep -q "running"; then
+    if pct status "$CTID" 2>/dev/null | grep -q "running"; then
       echo "    Stopping container..."
-      pct stop "$CTID" || true
+      pct stop "$CTID" 2>/dev/null || {
+        echo "    Warning: Failed to stop gracefully, forcing..."
+        pct stop "$CTID" --force 2>/dev/null || true
+      }
       sleep 2
     fi
     
     # Destroy container
     echo "    Deleting container..."
-    pct destroy "$CTID" --purge
-    
-    echo "    ✓ Destroyed $NAME ($CTID)"
-    ((DESTROYED_COUNT++))
+    if pct destroy "$CTID" --purge 2>/dev/null; then
+      echo "    ✓ Destroyed $NAME ($CTID)"
+      ((DESTROYED_COUNT++))
+    else
+      echo "    ✗ Failed to destroy $NAME ($CTID)"
+      # Try force destroy
+      echo "    Attempting force destroy..."
+      if pct destroy "$CTID" --purge --force 2>/dev/null; then
+        echo "    ✓ Force destroyed $NAME ($CTID)"
+        ((DESTROYED_COUNT++))
+      else
+        echo "    ✗ Could not destroy container $CTID"
+      fi
+    fi
   else
     echo "==> Container $CTID does not exist, skipping"
     ((SKIPPED_COUNT++))
   fi
 done
+
+# Re-enable error handling
+set -e
 
 echo ""
 echo "=========================================="
