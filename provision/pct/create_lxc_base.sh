@@ -42,11 +42,31 @@ create_ct () {
   fi
   
   echo "==> Creating $NAME ($CTID) at $IP"
-  pct create "$CTID" "$TEMPLATE"     -hostname "$NAME"     -net0 name=eth0,bridge=$BRIDGE,ip=${IP}${CIDR},gw=$GW     -storage "$STORAGE"     -memory "$MEM_MB" -cores "$CPUS"     -rootfs "$STORAGE:$DISK_GB"     -features nesting=1,keyctl=1     -onboot 1 -start 1     -ssh-public-keys "$SSH_PUBKEY_PATH"
   
+  # Build create command with proper privilege settings
   if [[ "$PRIV" == "priv" ]]; then
-    pct set "$CTID" -unprivileged 0
-    pct set "$CTID" -features nesting=1,keyctl=1
+    # Create privileged container (unprivileged=0)
+    pct create "$CTID" "$TEMPLATE" \
+      -hostname "$NAME" \
+      -net0 name=eth0,bridge=$BRIDGE,ip=${IP}${CIDR},gw=$GW \
+      -storage "$STORAGE" \
+      -memory "$MEM_MB" -cores "$CPUS" \
+      -rootfs "$STORAGE:$DISK_GB" \
+      -features nesting=1,keyctl=1 \
+      -unprivileged 0 \
+      -onboot 1 -start 1 \
+      -ssh-public-keys "$SSH_PUBKEY_PATH" || return 1
+  else
+    # Create unprivileged container (default)
+    pct create "$CTID" "$TEMPLATE" \
+      -hostname "$NAME" \
+      -net0 name=eth0,bridge=$BRIDGE,ip=${IP}${CIDR},gw=$GW \
+      -storage "$STORAGE" \
+      -memory "$MEM_MB" -cores "$CPUS" \
+      -rootfs "$STORAGE:$DISK_GB" \
+      -features nesting=1,keyctl=1 \
+      -onboot 1 -start 1 \
+      -ssh-public-keys "$SSH_PUBKEY_PATH" || return 1
   fi
   
   # /dev/net/tun
@@ -66,23 +86,69 @@ if [[ "$MODE" == "test" ]]; then
   PREFIX="${TEST_PREFIX}"
 fi
 
-# Create containers based on mode
+# Track created containers for cleanup on error
+CREATED_CONTAINERS=()
+
+cleanup_on_error() {
+  echo ""
+  echo "=========================================="
+  echo "Error occurred - cleaning up created containers"
+  echo "=========================================="
+  for ctid in "${CREATED_CONTAINERS[@]}"; do
+    if pct status "$ctid" &>/dev/null; then
+      echo "Removing container $ctid..."
+      pct stop "$ctid" 2>/dev/null || true
+      sleep 2
+      pct destroy "$ctid" --purge 2>/dev/null || true
+    fi
+  done
+  echo "Cleanup complete"
+  exit 1
+}
+
+# Create containers based on mode with error handling
 if [[ "$MODE" == "test" ]]; then
-  create_ct "$CT_FILES_TEST"  "$IP_FILES_TEST"  "${PREFIX}files-lxc"  priv
-  create_ct "$CT_PG_TEST"     "$IP_PG_TEST"     "${PREFIX}pg-lxc"     unpriv
-  create_ct "$CT_MILVUS_TEST" "$IP_MILVUS_TEST" "${PREFIX}milvus-lxc" priv
-  create_ct "$CT_AGENT_TEST"  "$IP_AGENT_TEST"  "${PREFIX}agent-lxc"  unpriv
-  create_ct "$CT_INGEST_TEST" "$IP_INGEST_TEST" "${PREFIX}ingest-lxc" unpriv
-  create_ct "$CT_APPS_TEST"   "$IP_APPS_TEST"   "${PREFIX}apps-lxc"   unpriv
-  create_ct "$CT_OPENWEBUI_TEST" "$IP_OPENWEBUI_TEST" "${PREFIX}openwebui-lxc" unpriv
+  create_ct "$CT_FILES_TEST"  "$IP_FILES_TEST"  "${PREFIX}files-lxc"  priv || cleanup_on_error
+  CREATED_CONTAINERS+=("$CT_FILES_TEST")
+  
+  create_ct "$CT_PG_TEST"     "$IP_PG_TEST"     "${PREFIX}pg-lxc"     unpriv || cleanup_on_error
+  CREATED_CONTAINERS+=("$CT_PG_TEST")
+  
+  create_ct "$CT_MILVUS_TEST" "$IP_MILVUS_TEST" "${PREFIX}milvus-lxc" priv || cleanup_on_error
+  CREATED_CONTAINERS+=("$CT_MILVUS_TEST")
+  
+  create_ct "$CT_AGENT_TEST"  "$IP_AGENT_TEST"  "${PREFIX}agent-lxc"  unpriv || cleanup_on_error
+  CREATED_CONTAINERS+=("$CT_AGENT_TEST")
+  
+  create_ct "$CT_INGEST_TEST" "$IP_INGEST_TEST" "${PREFIX}ingest-lxc" unpriv || cleanup_on_error
+  CREATED_CONTAINERS+=("$CT_INGEST_TEST")
+  
+  create_ct "$CT_APPS_TEST"   "$IP_APPS_TEST"   "${PREFIX}apps-lxc"   unpriv || cleanup_on_error
+  CREATED_CONTAINERS+=("$CT_APPS_TEST")
+  
+  create_ct "$CT_OPENWEBUI_TEST" "$IP_OPENWEBUI_TEST" "${PREFIX}openwebui-lxc" unpriv || cleanup_on_error
+  CREATED_CONTAINERS+=("$CT_OPENWEBUI_TEST")
 else
-  create_ct "$CT_FILES"  "$IP_FILES"  files-lxc  priv
-  create_ct "$CT_PG"     "$IP_PG"     pg-lxc     unpriv
-  create_ct "$CT_MILVUS" "$IP_MILVUS" milvus-lxc priv
-  create_ct "$CT_AGENT"  "$IP_AGENT"  agent-lxc  unpriv
-  create_ct "$CT_INGEST" "$IP_INGEST" ingest-lxc unpriv
-  create_ct "$CT_APPS"   "$IP_APPS"   apps-lxc   unpriv
-  create_ct "$CT_OPENWEBUI" "$IP_OPENWEBUI" openwebui-lxc unpriv
+  create_ct "$CT_FILES"  "$IP_FILES"  files-lxc  priv || cleanup_on_error
+  CREATED_CONTAINERS+=("$CT_FILES")
+  
+  create_ct "$CT_PG"     "$IP_PG"     pg-lxc     unpriv || cleanup_on_error
+  CREATED_CONTAINERS+=("$CT_PG")
+  
+  create_ct "$CT_MILVUS" "$IP_MILVUS" milvus-lxc priv || cleanup_on_error
+  CREATED_CONTAINERS+=("$CT_MILVUS")
+  
+  create_ct "$CT_AGENT"  "$IP_AGENT"  agent-lxc  unpriv || cleanup_on_error
+  CREATED_CONTAINERS+=("$CT_AGENT")
+  
+  create_ct "$CT_INGEST" "$IP_INGEST" ingest-lxc unpriv || cleanup_on_error
+  CREATED_CONTAINERS+=("$CT_INGEST")
+  
+  create_ct "$CT_APPS"   "$IP_APPS"   apps-lxc   unpriv || cleanup_on_error
+  CREATED_CONTAINERS+=("$CT_APPS")
+  
+  create_ct "$CT_OPENWEBUI" "$IP_OPENWEBUI" openwebui-lxc unpriv || cleanup_on_error
+  CREATED_CONTAINERS+=("$CT_OPENWEBUI")
 fi
 
 echo ""
