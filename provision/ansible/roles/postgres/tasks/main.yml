@@ -14,9 +14,11 @@
     enabled: yes
 
 - name: Get PostgreSQL version
-  shell: psql --version | grep -oP '\d+' | head -1
+  shell: |
+    psql --version | awk '{print $3}' | cut -d'.' -f1
   register: pg_version
   changed_when: false
+  failed_when: false
 
 - name: Verify PostgreSQL version detected
   debug:
@@ -29,19 +31,19 @@
     line: "listen_addresses = '*'"
   notify: Restart Postgres
 
-- name: Configure peer authentication for local postgres user
+- name: Configure trust authentication for local setup
   lineinfile:
     path: "/etc/postgresql/{{ pg_version.stdout }}/main/pg_hba.conf"
-    regexp: "^local\\s+all\\s+postgres\\s+peer"
-    line: "local   all             postgres                                peer"
+    regexp: "^local\\s+all\\s+postgres"
+    line: "local   all             postgres                                trust"
     insertbefore: "^# TYPE"
   notify: Reload Postgres
 
-- name: Configure peer authentication for other local users
+- name: Configure trust authentication for all local users
   lineinfile:
     path: "/etc/postgresql/{{ pg_version.stdout }}/main/pg_hba.conf"
-    regexp: "^local\\s+all\\s+all\\s+peer"
-    line: "local   all             all                                     peer"
+    regexp: "^local\\s+all\\s+all"
+    line: "local   all             all                                     trust"
     insertafter: "^local\\s+all\\s+postgres"
   notify: Reload Postgres
 
@@ -50,7 +52,7 @@
     path: "/etc/postgresql/{{ pg_version.stdout }}/main/pg_hba.conf"
     marker: "# {mark} ANSIBLE MANAGED BLOCK - Network Access"
     block: |
-      host    all    all    10.96.200.0/21    md5
+      host    all             all             10.96.200.0/21          md5
   notify: Reload Postgres
 
 - name: Flush handlers to restart/reload PostgreSQL
@@ -79,6 +81,13 @@
     lc_collate: en_US.UTF-8
     lc_ctype: en_US.UTF-8
     template: template0
+
+- name: Set password-based authentication for local connections (after user creation)
+  lineinfile:
+    path: "/etc/postgresql/{{ pg_version.stdout }}/main/pg_hba.conf"
+    regexp: "^local\\s+all\\s+all\\s+trust"
+    line: "local   all             all                                     md5"
+  notify: Reload Postgres
 
 - name: Create migrations directory
   file:
