@@ -2,6 +2,12 @@
 #
 # Busibox Infrastructure Test Suite
 #
+# ⚠️  IMPORTANT: This script is designed to run ON THE PROXMOX HOST
+#     It requires:
+#     - Proxmox VE with pct command
+#     - Ansible installed
+#     - Access to LXC storage (local-lvm or similar)
+#
 # This script provides comprehensive testing of the infrastructure provisioning:
 # 1. Create test containers (IDs 301-307, TEST- prefix)
 # 2. Provision services via Ansible
@@ -9,7 +15,7 @@
 # 4. Test incremental provisioning (add 1 container to existing stack)
 # 5. Clean up test environment
 #
-# Usage:
+# Usage (on Proxmox host):
 #   bash test-infrastructure.sh [command]
 #
 # Commands:
@@ -21,6 +27,21 @@
 #   help       - Show this help message
 
 set -euo pipefail
+
+# Check if running on Proxmox
+if ! command -v pct &> /dev/null; then
+    echo "❌ ERROR: This script must run on a Proxmox host with 'pct' command available"
+    echo ""
+    echo "Current environment: $(uname -s)"
+    echo ""
+    echo "To test the infrastructure:"
+    echo "  1. Copy this repository to your Proxmox host"
+    echo "  2. SSH to the Proxmox host"
+    echo "  3. Run: bash test-infrastructure.sh full"
+    echo ""
+    echo "See docs/testing.md for detailed instructions"
+    exit 1
+fi
 
 SCRIPT_DIR="$(dirname "$0")"
 PROVISION_DIR="${SCRIPT_DIR}/provision"

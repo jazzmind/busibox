@@ -1,0 +1,249 @@
+# Busibox Testing Guide
+
+## ⚠️ Important: Where to Run Tests
+
+The infrastructure tests **must run on a Proxmox host**, not on your local workstation.
+
+### Why?
+
+The test infrastructure requires:
+- **Proxmox VE** with `pct` command for LXC containers
+- **LXC storage** (e.g., `local-lvm`)
+- **Network access** to create containers on the Proxmox network
+- **Ansible** for service provisioning
+
+Your Mac workstation doesn't have these dependencies.
+
+---
+
+## Quick Testing on Proxmox
+
+### Step 1: Copy Repository to Proxmox
+
+```bash
+# On your Mac
+rsync -av --exclude '.git' \
+  /Users/wessonnenreich/Code/sonnenreich/busibox/ \
+  root@your-proxmox-host:/root/busibox/
+```
+
+Or use git:
+
+```bash
+# On Proxmox host
+cd /root
+git clone https://github.com/jazzmind/busibox.git
+cd busibox
+git checkout 001-create-an-initial
+```
+
+### Step 2: Configure Test Environment
+
+```bash
+# On Proxmox host
+cd /root/busibox/provision/pct
+
+# Review test configuration
+cat test-vars.env
+
+# Adjust if needed (storage, template path, etc.)
+vim test-vars.env
+```
+
+### Step 3: Run Tests
+
+```bash
+# On Proxmox host
+cd /root/busibox
+
+# Full automated test
+bash test-infrastructure.sh full
+
+# Or step-by-step
+bash test-infrastructure.sh provision  # Create test containers
+bash test-infrastructure.sh verify     # Run health checks
+bash test-infrastructure.sh cleanup    # Clean up
+```
+
+---
+
+## Alternative: Test Individual Components
+
+If you don't have a Proxmox host yet, you can test individual components:
+
+### Test Ansible Playbooks (Dry Run)
+
+```bash
+# On your Mac (requires Ansible)
+cd provision/ansible
+
+# Check syntax
+ansible-playbook --syntax-check site.yml
+
+# Dry run (won't actually change anything)
+ansible-playbook -i inventory/test-hosts.yml site.yml --check
+```
+
+### Test Python Code
+
+```bash
+# On your Mac
+cd srv/agent
+
+# Create virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Run linter
+pip install flake8
+flake8 src/
+```
+
+### Test Database Migrations
+
+```bash
+# On your Mac (requires PostgreSQL and psql)
+# Create test database
+createdb busibox_test
+
+# Apply migrations
+psql -d busibox_test -f provision/ansible/roles/postgres/files/migrations/001_initial_schema.sql
+psql -d busibox_test -f provision/ansible/roles/postgres/files/migrations/002_add_rls_policies.sql
+
+# Verify tables
+psql -d busibox_test -c "\dt"
+
+# Test rollback
+psql -d busibox_test -f provision/ansible/roles/postgres/files/migrations/002_rollback.sql
+psql -d busibox_test -f provision/ansible/roles/postgres/files/migrations/001_rollback.sql
+```
+
+### Test Milvus Initialization
+
+```bash
+# On your Mac (requires Milvus running)
+# Start Milvus with Docker
+docker run -d --name milvus-test \
+  -p 19530:19530 -p 9091:9091 \
+  milvusdb/milvus:v2.3.3 \
+  milvus run standalone
+
+# Run initialization script
+pip install pymilvus==2.3.5
+python tools/milvus_init.py
+
+# Cleanup
+docker stop milvus-test
+docker rm milvus-test
+```
+
+---
+
+## CI/CD Testing (Future)
+
+When you set up CI/CD, you can use GitHub Actions with:
+- Docker containers for services (PostgreSQL, Milvus, MinIO, Redis)
+- Mock Proxmox environment for testing scripts
+
+See `.github/workflows/test.yml` (to be created).
+
+---
+
+## Common Test Issues
+
+### Issue: `storage 'local-lvm' does not exist`
+
+**Cause**: Running test script on non-Proxmox system or wrong storage name
+
+**Solution**: 
+1. Run on Proxmox host, OR
+2. Update `test-vars.env` with your actual storage name:
+   ```bash
+   STORAGE=your-storage-name
+   ```
+
+### Issue: `pct: command not found`
+
+**Cause**: Running on non-Proxmox system
+
+**Solution**: Copy repository to Proxmox host and run there
+
+### Issue: `ansible: command not found`
+
+**Cause**: Ansible not installed on Proxmox host
+
+**Solution**:
+```bash
+# On Proxmox host
+apt update
+apt install -y ansible
+```
+
+### Issue: Template not found
+
+**Cause**: Ubuntu LXC template not downloaded
+
+**Solution**:
+```bash
+# On Proxmox host - download Ubuntu 22.04 template
+pveam update
+pveam download local ubuntu-22.04-standard_22.04-1_amd64.tar.zst
+
+# Or update test-vars.env with correct path
+```
+
+---
+
+## Testing Workflow
+
+```
+┌─────────────────────────────────────────────────────┐
+│              Development Workstation                 │
+│                  (Your Mac)                          │
+│                                                      │
+│  • Edit code                                        │
+│  • Run linters                                      │
+│  • Test Python code in isolation                   │
+│  • Commit & push to GitHub                         │
+│                                                      │
+└──────────────────┬──────────────────────────────────┘
+                   │
+                   │ rsync or git pull
+                   ▼
+┌─────────────────────────────────────────────────────┐
+│              Proxmox Test Host                       │
+│                                                      │
+│  • Run test-infrastructure.sh                       │
+│  • Create test containers (301-307)                 │
+│  • Deploy services with Ansible                     │
+│  • Run integration tests                            │
+│  • Verify health checks                             │
+│  • Clean up test environment                        │
+│                                                      │
+└─────────────────────────────────────────────────────┘
+                   │
+                   │ If tests pass
+                   ▼
+┌─────────────────────────────────────────────────────┐
+│            Proxmox Production Host                   │
+│                                                      │
+│  • Deploy to production containers (201-207)        │
+│  • Run verification suite                           │
+│                                                      │
+└─────────────────────────────────────────────────────┘
+```
+
+---
+
+## Next Steps
+
+1. **Get Proxmox Access**: Set up a Proxmox host for testing
+2. **Run Full Test Suite**: Validate complete infrastructure
+3. **Report Issues**: Document any problems found
+4. **Iterate**: Fix issues and re-test
+
+See [`docs/testing.md`](docs/testing.md) for comprehensive testing documentation.
+
