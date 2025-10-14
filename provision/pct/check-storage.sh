@@ -17,21 +17,32 @@ echo "Storage suitable for LXC containers:"
 echo "=========================================="
 echo ""
 
-# Show storage that supports containers
-pvesm status | awk 'NR>1 && ($6 == "yes" || $6 ~ /rootdir/) {print $1}'
+# Show storage that supports containers (dir and zfspool types)
+pvesm status | awk 'NR>1 && ($2 == "dir" || $2 == "zfspool" || $2 == "lvmthin") {print $1 " (" $2 ")"}'
 
 echo ""
 echo "=========================================="
 echo "Recommended configuration:"
 echo "=========================================="
 echo ""
-echo "Edit provision/pct/vars.env and set:"
-echo "  STORAGE=<name from above>"
+
+# Determine best storage
+if pvesm status | grep -q "local-zfs.*zfspool"; then
+  echo "✓ Recommended: STORAGE=local-zfs"
+  echo "  (ZFS detected - best for containers)"
+elif pvesm status | grep -q "local-lvm.*lvmthin"; then
+  echo "✓ Recommended: STORAGE=local-lvm"
+  echo "  (LVM thin detected)"
+elif pvesm status | grep -q "local.*dir"; then
+  echo "✓ Recommended: STORAGE=local"
+  echo "  (Directory storage detected)"
+else
+  echo "⚠  No standard storage found"
+  echo "  Choose from the list above"
+fi
+
 echo ""
-echo "Common options:"
-echo "  - local (directory storage)"
-echo "  - local-lvm (LVM thin)"
-echo "  - local-zfs (ZFS)"
-echo "  - dir (custom directory)"
+echo "Edit provision/pct/vars.env or provision/pct/test-vars.env and set:"
+echo "  STORAGE=<storage-name>"
 echo ""
 
