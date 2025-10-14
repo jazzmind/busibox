@@ -1,15 +1,21 @@
-- name: Install Postgres
+- name: Install Postgres and Python dependencies
   apt:
     name:
       - postgresql
       - postgresql-contrib
+      - python3-psycopg2
     state: present
     update_cache: yes
 
 - name: Get PostgreSQL version
-  shell: ls /etc/postgresql | sort -V | tail -n1
+  shell: ls /etc/postgresql 2>/dev/null | sort -V | tail -n1 || echo ""
   register: pg_version
   changed_when: false
+  failed_when: false
+
+- name: Verify PostgreSQL version detected
+  debug:
+    msg: "PostgreSQL version: {{ pg_version.stdout }}"
 
 - name: Allow listen on all
   lineinfile:
@@ -17,6 +23,7 @@
     regexp: "^#?listen_addresses"
     line: "listen_addresses = '*'"
   notify: Restart Postgres
+  when: pg_version.stdout != ""
 
 - name: pg_hba for vlan
   blockinfile:
@@ -24,6 +31,7 @@
     block: |
       host    all    all    10.96.200.0/21    md5
   notify: Reload Postgres
+  when: pg_version.stdout != ""
 
 - name: Create busibox database user
   become_user: postgres
