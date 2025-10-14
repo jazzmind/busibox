@@ -87,8 +87,3 @@
       #!/bin/bash
       curl -f -s http://localhost:9000/minio/health/live > /dev/null
     mode: "0755"
-
-handlers:
-  - name: Up MinIO
-    shell: docker compose up -d
-    args: { chdir: /srv/minio }

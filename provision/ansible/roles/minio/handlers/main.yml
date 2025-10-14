@@ -1,0 +1,6 @@
+---
+- name: Up MinIO
+  shell: docker compose up -d
+  args:
+    chdir: /srv/minio
+

@@ -228,24 +228,26 @@ test_idempotency() {
   
   log_info "Re-running container creation (should be idempotent)..."
   
-  if bash "${PCT_DIR}/create_lxc_base.sh" test 2>&1 | grep -q "already exists"; then
+  # Capture output and check for idempotency message
+  local output=$(bash "${PCT_DIR}/create_lxc_base.sh" test 2>&1)
+  if echo "$output" | grep -q "already exists"; then
+    log_success "Container creation is idempotent"
     record_test "Container creation idempotency" "PASS"
   else
+    log_error "Did not detect existing containers"
+    echo "$output" | head -20  # Show first 20 lines for debugging
     record_test "Container creation idempotency" "FAIL" "Did not detect existing containers"
   fi
   
   log_info "Re-running Ansible provisioning (should be idempotent)..."
   
-  cd "${ANSIBLE_DIR}"
-  
-  if ansible-playbook -i inventory/test-hosts.yml site.yml --check; then
+  # Run from ansible directory
+  if ansible-playbook -i "${ANSIBLE_DIR}/inventory/test-hosts.yml" "${ANSIBLE_DIR}/site.yml" --check 2>&1; then
     record_test "Ansible idempotency" "PASS"
   else
     log_warning "Ansible check mode failed (may have changes)"
     record_test "Ansible idempotency" "PASS" "Check mode detected changes (expected for initial setup)"
   fi
-  
-  cd "${SCRIPT_DIR}"
 }
 
 test_incremental_provisioning() {
