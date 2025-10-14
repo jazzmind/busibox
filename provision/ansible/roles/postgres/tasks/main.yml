@@ -4,8 +4,14 @@
       - postgresql
       - postgresql-contrib
       - python3-psycopg2
+      - locales
     state: present
     update_cache: yes
+
+- name: Generate en_US.UTF-8 locale
+  locale_gen:
+    name: en_US.UTF-8
+    state: present
 
 - name: Ensure PostgreSQL is started
   systemd:
