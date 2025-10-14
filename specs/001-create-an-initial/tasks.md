@@ -73,16 +73,16 @@ description: "Task list for Local LLM Infrastructure Platform implementation"
 
 ### Implementation for User Story 1
 
-- [ ] T026 [P] [US1] Enhance `provision/pct/vars.env` with documentation comments for all configuration options
-- [ ] T027 [P] [US1] Add container creation validation to `provision/pct/create_lxc_base.sh` (check if CTID exists, verify network config)
-- [ ] T028 [US1] Implement MinIO deployment in `provision/ansible/roles/minio/tasks/main.yml` (install, configure buckets, setup systemd service)
-- [ ] T029 [US1] Implement PostgreSQL deployment in `provision/ansible/roles/postgres/tasks/main.yml` (install, run migrations, create users)
-- [ ] T030 [US1] Implement Milvus deployment in `provision/ansible/roles/milvus/tasks/main.yml` (Docker installation, Milvus container, systemd service)
-- [ ] T031 [US1] Implement Redis deployment (part of ingest_worker role) for job queue
-- [ ] T032 [US1] Implement Node.js common setup in `provision/ansible/roles/node_common/tasks/main.yml` (NVM, Node 18+, PM2 or systemd)
-- [ ] T033 [US1] Configure MinIO webhook in Ansible role to trigger agent API endpoint
-- [ ] T034 [US1] Implement deploywatch systemd service in `provision/ansible/roles/deploywatch/tasks/main.yml`
-- [ ] T035 [US1] Add health check implementations to all Ansible roles (verify service is running and responsive)
+- [x] T026 [P] [US1] Enhance `provision/pct/vars.env` with documentation comments for all configuration options
+- [x] T027 [P] [US1] Add container creation validation to `provision/pct/create_lxc_base.sh` (check if CTID exists, verify network config)
+- [x] T028 [US1] Implement MinIO deployment in `provision/ansible/roles/minio/tasks/main.yml` (install, configure buckets, setup systemd service)
+- [x] T029 [US1] Implement PostgreSQL deployment in `provision/ansible/roles/postgres/tasks/main.yml` (install, run migrations, create users)
+- [x] T030 [US1] Implement Milvus deployment in `provision/ansible/roles/milvus/tasks/main.yml` (Docker installation, Milvus container, systemd service)
+- [x] T031 [US1] Implement Redis deployment (part of ingest_worker role) for job queue
+- [x] T032 [US1] Implement Node.js common setup in `provision/ansible/roles/node_common/tasks/main.yml` (Node 20 LTS, PM2, yarn/pnpm)
+- [x] T033 [US1] Configure MinIO webhook in Ansible role to trigger agent API endpoint
+- [x] T034 [US1] Implement deploywatch systemd service in `provision/ansible/roles/deploywatch/tasks/main.yml`
+- [x] T035 [US1] Add health check implementations to all Ansible roles (verify service is running and responsive)
 - [ ] T036 [US1] Test end-to-end: Run `provision/pct/create_lxc_base.sh` → `make all` → `make verify` on test Proxmox host
 - [ ] T037 [US1] Document any manual post-deployment steps in QUICKSTART.md (credential changes, LLM provider setup)
 
@@ -378,7 +378,12 @@ With multiple developers:
   - ✅ T018-T019: Structured logging and health checks
   - ✅ T020-T021: Python requirements files
   - ✅ T022-T025: Ansible migrations and verification targets
-- **Phase 3 (US1)**: 0/12 tasks complete (0%)
+
+- **Phase 3 (US1)**: 10/12 tasks complete (83%) 🚀
+  - ✅ T026-T027: Container creation with test mode and validation
+  - ✅ T028-T031: Service deployments (MinIO, PostgreSQL, Milvus, Redis+Worker)
+  - ✅ T032-T035: Node.js setup, Agent API, webhook config, health checks
+  - ⏳ T036-T037: End-to-end testing and documentation (pending)
 - **Phase 4 (US2)**: 0/19 tasks complete (0%)
 - **Phase 5 (US3)**: 0/20 tasks complete (0%)
 - **Phase 6 (US4)**: 0/9 tasks complete (0%)
@@ -388,7 +393,7 @@ With multiple developers:
 - **Phase 10 (US8)**: 0/8 tasks complete (0%)
 - **Phase 11 (Polish)**: 0/18 tasks complete (0%)
 
-**Total**: 25/138 tasks complete (18%)
+**Total**: 35/138 tasks complete (25%)
 
 **Recent Additions** (from analysis):
 - T122a-T122b: Trace ID propagation for observability
