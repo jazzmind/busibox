@@ -6,16 +6,21 @@
     state: present
     update_cache: yes
 
+- name: Get PostgreSQL version
+  shell: ls /etc/postgresql | sort -V | tail -n1
+  register: pg_version
+  changed_when: false
+
 - name: Allow listen on all
   lineinfile:
-    path: "/etc/postgresql/{{ lookup('pipe','ls /etc/postgresql') | split() | sort | last }}/main/postgresql.conf"
+    path: "/etc/postgresql/{{ pg_version.stdout }}/main/postgresql.conf"
     regexp: "^#?listen_addresses"
     line: "listen_addresses = '*'"
   notify: Restart Postgres
 
 - name: pg_hba for vlan
   blockinfile:
-    path: "/etc/postgresql/{{ lookup('pipe','ls /etc/postgresql') | split() | sort | last }}/main/pg_hba.conf"
+    path: "/etc/postgresql/{{ pg_version.stdout }}/main/pg_hba.conf"
     block: |
       host    all    all    10.96.200.0/21    md5
   notify: Reload Postgres
