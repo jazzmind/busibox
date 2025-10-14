@@ -7,11 +7,16 @@
     state: present
     update_cache: yes
 
+- name: Ensure PostgreSQL is started
+  systemd:
+    name: postgresql
+    state: started
+    enabled: yes
+
 - name: Get PostgreSQL version
-  shell: ls /etc/postgresql 2>/dev/null | sort -V | tail -n1 || echo ""
+  shell: psql --version | grep -oP '\d+' | head -1
   register: pg_version
   changed_when: false
-  failed_when: false
 
 - name: Verify PostgreSQL version detected
   debug:
@@ -23,15 +28,39 @@
     regexp: "^#?listen_addresses"
     line: "listen_addresses = '*'"
   notify: Restart Postgres
-  when: pg_version.stdout != ""
 
-- name: pg_hba for vlan
+- name: Configure peer authentication for local postgres user
+  lineinfile:
+    path: "/etc/postgresql/{{ pg_version.stdout }}/main/pg_hba.conf"
+    regexp: "^local\\s+all\\s+postgres\\s+peer"
+    line: "local   all             postgres                                peer"
+    insertbefore: "^# TYPE"
+  notify: Reload Postgres
+
+- name: Configure peer authentication for other local users
+  lineinfile:
+    path: "/etc/postgresql/{{ pg_version.stdout }}/main/pg_hba.conf"
+    regexp: "^local\\s+all\\s+all\\s+peer"
+    line: "local   all             all                                     peer"
+    insertafter: "^local\\s+all\\s+postgres"
+  notify: Reload Postgres
+
+- name: pg_hba for network access
   blockinfile:
     path: "/etc/postgresql/{{ pg_version.stdout }}/main/pg_hba.conf"
+    marker: "# {mark} ANSIBLE MANAGED BLOCK - Network Access"
     block: |
       host    all    all    10.96.200.0/21    md5
   notify: Reload Postgres
-  when: pg_version.stdout != ""
+
+- name: Flush handlers to restart/reload PostgreSQL
+  meta: flush_handlers
+
+- name: Wait for PostgreSQL to be ready
+  wait_for:
+    port: 5432
+    delay: 2
+    timeout: 30
 
 - name: Create busibox database user
   become_user: postgres
@@ -39,6 +68,7 @@
     name: busibox_user
     password: "{{ postgres_password | default('busibox_password_change_me') }}"
     role_attr_flags: "LOGIN,CREATEDB"
+    state: present
 
 - name: Create busibox database
   become_user: postgres
