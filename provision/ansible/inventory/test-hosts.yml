@@ -46,6 +46,30 @@ all:
     agent_host: "{{ agent_ip }}"
     
     litellm_base_url: "http://{{ agent_ip }}:8000"
+    
+    # Application Definitions (TEST - overrides group_vars/all.yml)
+    # These use test-specific IPs and database names
+    applications:
+      - name: agent-server
+        github_repo: jazzmind/agent-server
+        container: agent-lxc
+        container_ip: "{{ agent_ip }}"
+        port: 8000
+        deploy_path: /srv/agent
+        health_endpoint: /health
+        routes: []  # Internal only - no NGINX routing
+        secrets:
+          - database_url
+          - minio_access_key
+          - minio_secret_key
+          - redis_url
+        env:
+          LOG_LEVEL: info
+          MILVUS_HOST: "{{ milvus_ip }}"
+          MILVUS_PORT: "{{ milvus_port }}"
+          MINIO_ENDPOINT: "{{ minio_ip }}:{{ minio_port }}"
+          POSTGRES_HOST: "{{ postgres_ip }}"
+          REDIS_HOST: "{{ ingest_ip }}"
 
   children:
     files:

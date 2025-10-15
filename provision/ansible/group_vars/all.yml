@@ -88,8 +88,13 @@ applications:
       - minio_access_key
       - minio_secret_key
       - redis_url
+    # Note: env vars reference inventory variables which are resolved at runtime
+    # This ensures test environments get test values, production gets production values
     env:
       LOG_LEVEL: "{{ log_level }}"
-      MILVUS_HOST: "{{ milvus_host }}"
+      MILVUS_HOST: "{{ milvus_ip }}"  # Changed from milvus_host to milvus_ip for direct reference
       MILVUS_PORT: "{{ milvus_port }}"
+      MINIO_ENDPOINT: "{{ minio_ip }}:{{ minio_port }}"  # Added for completeness
+      POSTGRES_HOST: "{{ postgres_ip }}"  # Added for visibility
+      REDIS_HOST: "{{ ingest_ip }}"  # Added for visibility
 
