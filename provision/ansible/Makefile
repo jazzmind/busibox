@@ -1,4 +1,4 @@
-.PHONY: ping all files pg milvus agent ingest apps deploy-apps verify verify-health verify-smoke
+.PHONY: ping all files pg milvus agent ingest apps openwebui deploy-apps verify verify-health verify-smoke
 INV=inventory/hosts.yml
 
 ping:
@@ -24,6 +24,9 @@ ingest:
 
 apps:
 	ansible-playbook -i $(INV) -l apps site.yml
+
+openwebui:
+	ansible-playbook -i $(INV) -l openwebui site.yml
 
 # T029: Deploy applications (runs app_deployer + secrets roles)
 deploy-apps:

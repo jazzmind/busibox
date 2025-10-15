@@ -1,0 +1,93 @@
+---
+# Provisioned SSL Certificate Tasks
+# Purpose: Deploy pre-existing SSL certificates from secrets vault
+# Requirements: FR-013a (provisioned certificate mode)
+
+- name: Create SSL certificates directory
+  file:
+    path: /etc/ssl/busibox
+    state: directory
+    mode: "0755"
+    owner: root
+    group: root
+
+- name: Check if provisioned certificates exist in vault
+  assert:
+    that:
+      - secrets.ssl_certificates is defined
+      - secrets.ssl_certificates.certificate is defined
+      - secrets.ssl_certificates.private_key is defined
+      - secrets.ssl_certificates.chain is defined or true
+    fail_msg: |
+      ❌ Provisioned SSL mode selected but certificates not found in vault.yml
+      
+      Please add to provision/ansible/roles/secrets/vars/vault.yml:
+      
+      secrets:
+        ssl_certificates:
+          certificate: |
+            -----BEGIN CERTIFICATE-----
+            ...certificate content...
+            -----END CERTIFICATE-----
+          private_key: |
+            -----BEGIN PRIVATE KEY-----
+            ...private key content...
+            -----END PRIVATE KEY-----
+          chain: |
+            -----BEGIN CERTIFICATE-----
+            ...intermediate certificate chain...
+            -----END CERTIFICATE-----
+      
+      Then encrypt: ansible-vault encrypt provision/ansible/roles/secrets/vars/vault.yml
+  no_log: true
+
+- name: Deploy SSL certificate
+  copy:
+    content: "{{ secrets.ssl_certificates.certificate }}"
+    dest: "/etc/ssl/busibox/{{ domain }}.crt"
+    mode: "0644"
+    owner: root
+    group: root
+  no_log: true
+
+- name: Deploy SSL private key
+  copy:
+    content: "{{ secrets.ssl_certificates.private_key }}"
+    dest: "/etc/ssl/busibox/{{ domain }}.key"
+    mode: "0600"
+    owner: root
+    group: root
+  no_log: true
+
+- name: Deploy SSL certificate chain
+  copy:
+    content: "{{ secrets.ssl_certificates.chain }}"
+    dest: "/etc/ssl/busibox/{{ domain }}-chain.crt"
+    mode: "0644"
+    owner: root
+    group: root
+  when: secrets.ssl_certificates.chain is defined
+  no_log: true
+
+- name: Create fullchain certificate (certificate + chain)
+  shell: |
+    cat /etc/ssl/busibox/{{ domain }}.crt /etc/ssl/busibox/{{ domain }}-chain.crt > /etc/ssl/busibox/{{ domain }}-fullchain.crt
+  when: secrets.ssl_certificates.chain is defined
+  args:
+    creates: "/etc/ssl/busibox/{{ domain }}-fullchain.crt"
+
+- name: Set SSL certificate paths for NGINX
+  set_fact:
+    ssl_certificate: "/etc/ssl/busibox/{{ domain }}{% if secrets.ssl_certificates.chain is defined %}-fullchain{% endif %}.crt"
+    ssl_certificate_key: "/etc/ssl/busibox/{{ domain }}.key"
+
+- name: Display provisioned certificate summary
+  debug:
+    msg: |
+      ✅ Provisioned SSL certificates deployed
+      - Certificate: {{ ssl_certificate }}
+      - Private key: {{ ssl_certificate_key }}
+      - Mode: Manual management (you must renew certificates manually)
+      
+      ⚠️ IMPORTANT: Monitor certificate expiration and update vault.yml before expiry
+

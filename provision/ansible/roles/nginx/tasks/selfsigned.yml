@@ -1,0 +1,55 @@
+---
+# Self-Signed SSL Certificate Tasks
+# Purpose: Generate self-signed certificates for development/testing
+# Requirements: FR-013a (self-signed certificate mode)
+
+- name: Create SSL certificates directory
+  file:
+    path: /etc/ssl/busibox
+    state: directory
+    mode: "0755"
+    owner: root
+    group: root
+
+- name: Check if self-signed certificate already exists
+  stat:
+    path: "/etc/ssl/busibox/{{ domain }}.crt"
+  register: selfsigned_cert
+
+- name: Generate self-signed SSL certificate
+  command: |
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+      -keyout /etc/ssl/busibox/{{ domain }}.key \
+      -out /etc/ssl/busibox/{{ domain }}.crt \
+      -subj "/C=US/ST=State/L=City/O=Organization/CN={{ domain }}" \
+      -addext "subjectAltName=DNS:{{ domain }},DNS:*.{{ domain }}"
+  args:
+    creates: "/etc/ssl/busibox/{{ domain }}.crt"
+  when: not selfsigned_cert.stat.exists
+
+- name: Set private key permissions
+  file:
+    path: "/etc/ssl/busibox/{{ domain }}.key"
+    mode: "0600"
+    owner: root
+    group: root
+
+- name: Set SSL certificate paths for NGINX
+  set_fact:
+    ssl_certificate: "/etc/ssl/busibox/{{ domain }}.crt"
+    ssl_certificate_key: "/etc/ssl/busibox/{{ domain }}.key"
+
+- name: Display self-signed certificate summary
+  debug:
+    msg: |
+      ✅ Self-signed SSL certificate generated
+      - Certificate: {{ ssl_certificate }}
+      - Private key: {{ ssl_certificate_key }}
+      - Valid for: 365 days
+      - Subject Alternative Names: {{ domain }}, *.{{ domain }}
+      
+      ⚠️ WARNING: Self-signed certificates are for DEVELOPMENT/TESTING ONLY
+      - Browsers will show security warnings
+      - Not suitable for production use
+      - Use Let's Encrypt or provisioned certificates for production
+
