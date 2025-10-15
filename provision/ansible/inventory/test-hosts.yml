@@ -15,6 +15,15 @@ all:
     busibox_env: test
     busibox_test_mode: true
     
+    # Container IP Addresses (TEST environment - offset by +0.1.0 from production)
+    openwebui_ip: 10.96.201.24
+    apps_ip: 10.96.201.25
+    postgres_ip: 10.96.201.26
+    milvus_ip: 10.96.201.27
+    minio_ip: 10.96.201.28
+    ingest_ip: 10.96.201.29
+    agent_ip: 10.96.201.30
+    
     # Service configuration (using test IPs)
     postgres_host: 10.96.201.26
     postgres_port: 5432

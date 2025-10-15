@@ -22,7 +22,7 @@
       - item.github_repo is match('^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+$')
       - item.container is defined
       - item.container_ip is defined
-      - item.container_ip | ansible.utils.ipaddr
+      - item.container_ip | ansible.utils.ipaddr | length > 0
       - item.port is defined
       - item.port | int > 0
       - item.port | int < 65536
