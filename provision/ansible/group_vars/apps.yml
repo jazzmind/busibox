@@ -1,0 +1,100 @@
+---
+# Application Definitions for Busibox
+# Created: 2025-10-15
+# Purpose: Declarative configuration for all deployable applications
+#
+# Schema Reference: specs/002-deploy-app-servers/data-model.md
+#
+# Each application definition includes:
+# - name: Unique identifier (alphanumeric + hyphens)
+# - github_repo: GitHub repository (owner/repo format)
+# - container: Target LXC container name
+# - container_ip: IP address of target container
+# - port: Port application listens on
+# - deploy_path: Absolute path for deployment
+# - health_endpoint: HTTP path for health checks
+# - process_manager: (optional) "pm2" or "systemd" (default: pm2)
+# - routes: (optional) List of routing configurations (empty = internal only)
+# - secrets: (optional) List of secret keys from vault.yml
+# - env: (optional) Non-secret environment variables
+# - build_command: (optional) Command to run after deployment
+# - start_command: (optional) Override default start command
+#
+# Route types:
+# - domain: Multiple domain names pointing to application
+# - subdomain: Subdomain prefix (e.g., "agents" -> agents.ai.jaycashman.com)
+# - path: URL path routing (e.g., "/agents" -> ai.jaycashman.com/agents)
+
+# T016: Agent-server definition (internal-only service)
+applications:
+  - name: agent-server
+    github_repo: jazzmind/agent-server
+    container: agent-lxc
+    container_ip: "{{ agent_ip }}"
+    port: 8000
+    deploy_path: /srv/agent
+    health_endpoint: /health
+    routes: []  # Internal only - no NGINX routing (FR-002)
+    secrets:
+      - database_url
+      - minio_access_key
+      - minio_secret_key
+      - redis_url
+    env:
+      LOG_LEVEL: "{{ log_level }}"
+      MILVUS_HOST: "{{ milvus_host }}"
+      MILVUS_PORT: "{{ milvus_port }}"
+
+# Additional application definitions (add as needed):
+#
+# # Public web application (domain routing)
+#   - name: cashman-portal
+#     github_repo: jazzmind/cashman
+#     container: apps-lxc
+#     container_ip: "{{ apps_ip }}"
+#     port: 3000
+#     deploy_path: /srv/apps/cashman
+#     health_endpoint: /api/health
+#     build_command: "npm run build"
+#     routes:
+#       - type: domain
+#         domains:
+#           - "{{ domain }}"
+#           - "{{ www_domain }}"
+#       - type: path
+#         domain: "{{ domain }}"
+#         path: /home
+#     secrets:
+#       - session_secret
+#       - oauth_client_id
+#       - oauth_client_secret
+#       - database_url
+#       - jwt_secret
+#     env:
+#       NODE_ENV: production
+#       JWT_ISSUER: cashman-portal
+#
+# # Application with subdomain and path routing
+#   - name: agent-client
+#     github_repo: jazzmind/agent-client
+#     container: apps-lxc
+#     container_ip: "{{ apps_ip }}"
+#     port: 3001
+#     deploy_path: /srv/apps/agent-client
+#     health_endpoint: /health
+#     build_command: "npm run build"
+#     routes:
+#       - type: subdomain
+#         subdomain: agents
+#         websocket: true  # Enable WebSocket support
+#       - type: path
+#         domain: "{{ domain }}"
+#         path: /agents
+#         strip_path: false
+#     env:
+#       AGENT_API_URL: "http://{{ agent_api_host }}:{{ agent_api_port }}"
+#       NODE_ENV: production
+#     secrets:
+#       - agent_api_key
+#       - jwt_secret
+

@@ -21,11 +21,11 @@
 
 **Purpose**: Project initialization and directory structure for new Ansible roles
 
-- [ ] T001 [P] Create `provision/ansible/roles/nginx/` directory structure (tasks/, templates/, handlers/, vars/)
-- [ ] T002 [P] Create `provision/ansible/roles/app_deployer/` directory structure (tasks/, templates/, handlers/)
-- [ ] T003 [P] Create `provision/ansible/roles/secrets/` directory structure (tasks/, vars/)
-- [ ] T004 [P] Create `provision/ansible/group_vars/` directory for centralized configuration
-- [ ] T005 [P] Create documentation structure in `specs/002-deploy-app-servers/` (verified complete)
+- [x] T001 [P] Create `provision/ansible/roles/nginx/` directory structure (tasks/, templates/, handlers/, vars/)
+- [x] T002 [P] Create `provision/ansible/roles/app_deployer/` directory structure (tasks/, templates/, handlers/)
+- [x] T003 [P] Create `provision/ansible/roles/secrets/` directory structure (tasks/, vars/)
+- [x] T004 [P] Create `provision/ansible/group_vars/` directory for centralized configuration
+- [x] T005 [P] Create documentation structure in `specs/002-deploy-app-servers/` (verified complete)
 
 **Checkpoint**: Directory structure ready for role implementation
 
@@ -39,22 +39,22 @@
 
 ### Configuration Schema & Validation
 
-- [ ] T006 [Foundational] Create `provision/ansible/group_vars/all.yml` with global variables (domain: ai.jaycashman.com, SSL email, network config)
-- [ ] T007 [Foundational] Create `provision/ansible/group_vars/apps.yml` schema template with application definition fields (name, github_repo, container, port, deploy_path, health_endpoint, routes[], secrets[], env{})
-- [ ] T008 [Foundational] Implement configuration validation script in `provision/ansible/roles/app_deployer/tasks/validate.yml` (check required fields, duplicate route detection, secret existence validation per FR-006a)
+- [x] T006 [Foundational] Create `provision/ansible/group_vars/all.yml` with global variables (domain: ai.jaycashman.com, SSL email, network config)
+- [x] T007 [Foundational] Create `provision/ansible/group_vars/apps.yml` schema template with application definition fields (name, github_repo, container, port, deploy_path, health_endpoint, routes[], secrets[], env{})
+- [x] T008 [Foundational] Implement configuration validation script in `provision/ansible/roles/app_deployer/tasks/validate.yml` (check required fields, duplicate route detection, secret existence validation per FR-006a)
 
 ### Secrets Management Infrastructure
 
-- [ ] T009 [P] [Foundational] Create Ansible vault structure in `provision/ansible/roles/secrets/vars/vault.yml` with encryption enabled
-- [ ] T010 [P] [Foundational] Create secrets deployment template in `provision/ansible/roles/secrets/templates/app.env.j2` (environment variable generation from vault)
-- [ ] T011 [Foundational] Implement secrets validation in `provision/ansible/roles/secrets/tasks/main.yml` (verify all required secrets exist per FR-008)
+- [x] T009 [P] [Foundational] Create Ansible vault structure in `provision/ansible/roles/secrets/vars/vault.yml` with encryption enabled
+- [x] T010 [P] [Foundational] Create secrets deployment template in `provision/ansible/roles/secrets/templates/app.env.j2` (environment variable generation from vault)
+- [x] T011 [Foundational] Implement secrets validation in `provision/ansible/roles/secrets/tasks/main.yml` (verify all required secrets exist per FR-008)
 
 ### Deploywatch Extension Framework
 
-- [ ] T012 [P] [Foundational] Create deploywatch app template in `provision/ansible/roles/app_deployer/templates/deploywatch-app.sh.j2` (GitHub release checking, download, deploy, health check, rollback logic per FR-035)
-- [ ] T013 [P] [Foundational] Create deploywatch orchestrator update in `/srv/deploywatch/deploywatch.sh` (loop over `/srv/deploywatch/apps/*.sh`)
-- [ ] T014 [Foundational] Implement rollback mechanism in deploywatch template (preserve previous version, restore on failure per clarification)
-- [ ] T015 [Foundational] Implement database migration detection and execution in deploywatch template (auto-detect migrations, run, rollback on failure per FR-036, FR-037)
+- [x] T012 [P] [Foundational] Create deploywatch app template in `provision/ansible/roles/app_deployer/templates/deploywatch-app.sh.j2` (GitHub release checking, download, deploy, health check, rollback logic per FR-035)
+- [x] T013 [P] [Foundational] Create deploywatch orchestrator update in `/srv/deploywatch/deploywatch.sh` (loop over `/srv/deploywatch/apps/*.sh`)
+- [x] T014 [Foundational] Implement rollback mechanism in deploywatch template (preserve previous version, restore on failure per clarification)
+- [x] T015 [Foundational] Implement database migration detection and execution in deploywatch template (auto-detect migrations, run, rollback on failure per FR-036, FR-037)
 
 **Checkpoint**: Configuration management, secrets, and deploywatch foundations complete - user stories can now proceed
 
@@ -68,12 +68,12 @@
 
 ### Implementation for User Story 1
 
-- [ ] T016 [P] [US1] Add agent-server definition to `provision/ansible/group_vars/apps.yml` (name: agent-server, github_repo: jazzmind/agent-server, container: agent-lxc, IP: 10.96.200.30, port: 8000, routes: [] for internal-only per FR-002)
-- [ ] T017 [P] [US1] Add agent-server secrets to `provision/ansible/roles/secrets/vars/vault.yml` (database_url, minio_access_key, minio_secret_key, redis_url per FR-005)
-- [ ] T018 [US1] Implement app_deployer role main task in `provision/ansible/roles/app_deployer/tasks/main.yml` (read apps.yml, loop over applications, generate deploywatch scripts, create .env files)
-- [ ] T019 [US1] Create deploywatch scripts directory and generate agent-server script in `/srv/deploywatch/apps/agent-server.sh` via Ansible template
-- [ ] T020 [US1] Deploy agent-server .env file to `/srv/agent/.env` with secrets from vault (owner: root, mode: 0600 per FR-008)
-- [ ] T021 [US1] Verify agent-server internal-only access by confirming no NGINX routes generated (routes: [] in apps.yml per FR-002)
+- [x] T016 [P] [US1] Add agent-server definition to `provision/ansible/group_vars/apps.yml` (name: agent-server, github_repo: jazzmind/agent-server, container: agent-lxc, IP: 10.96.200.30, port: 8000, routes: [] for internal-only per FR-002)
+- [x] T017 [P] [US1] Add agent-server secrets to `provision/ansible/roles/secrets/vars/vault.yml` (database_url, minio_access_key, minio_secret_key, redis_url per FR-005)
+- [x] T018 [US1] Implement app_deployer role main task in `provision/ansible/roles/app_deployer/tasks/main.yml` (read apps.yml, loop over applications, generate deploywatch scripts, create .env files)
+- [x] T019 [US1] Create deploywatch scripts directory and generate agent-server script in `/srv/deploywatch/apps/agent-server.sh` via Ansible template
+- [x] T020 [US1] Deploy agent-server .env file to `/srv/agent/.env` with secrets from vault (owner: root, mode: 0600 per FR-008)
+- [x] T021 [US1] Verify agent-server internal-only access by confirming no NGINX routes generated (routes: [] in apps.yml per FR-002)
 - [ ] T022 [US1] Test agent-server deployment: trigger deploywatch manually, verify health endpoint at http://10.96.200.30:8000/health
 - [ ] T023 [US1] Verify agent-server connectivity to PostgreSQL (10.96.200.26), Milvus (10.96.200.27), MinIO (10.96.200.28), Redis (10.96.200.29) per FR-003
 
@@ -89,12 +89,12 @@
 
 ### Implementation for User Story 2
 
-- [ ] T024 [P] [US2] Document apps.yml schema in `provision/ansible/roles/app_deployer/README.md` (all fields, validation rules, examples per data-model.md)
-- [ ] T025 [US2] Implement automatic secret distribution in `provision/ansible/roles/secrets/tasks/main.yml` (create /etc/busibox/secrets/ directory, deploy encrypted secrets per FR-007, FR-009)
-- [ ] T026 [US2] Implement configuration change detection in `provision/ansible/roles/app_deployer/tasks/main.yml` (detect apps.yml changes, mark affected apps for redeployment per FR-010)
-- [ ] T027 [US2] Add handler for application restart on secret change in `provision/ansible/roles/app_deployer/handlers/main.yml` (PM2 restart per FR-010 clarification)
-- [ ] T028 [US2] Update `provision/ansible/site.yml` to include app_deployer and secrets roles
-- [ ] T029 [US2] Update `provision/ansible/Makefile` with deploy-apps target (runs app_deployer + secrets roles)
+- [x] T024 [P] [US2] Document apps.yml schema in `provision/ansible/roles/app_deployer/README.md` (all fields, validation rules, examples per data-model.md)
+- [x] T025 [US2] Implement automatic secret distribution in `provision/ansible/roles/secrets/tasks/main.yml` (create /etc/busibox/secrets/ directory, deploy encrypted secrets per FR-007, FR-009)
+- [x] T026 [US2] Implement configuration change detection in `provision/ansible/roles/app_deployer/tasks/main.yml` (detect apps.yml changes, mark affected apps for redeployment per FR-010)
+- [x] T027 [US2] Add handler for application restart on secret change in `provision/ansible/roles/app_deployer/handlers/main.yml` (PM2 restart per FR-010 clarification)
+- [x] T028 [US2] Update `provision/ansible/site.yml` to include app_deployer and secrets roles
+- [x] T029 [US2] Update `provision/ansible/Makefile` with deploy-apps target (runs app_deployer + secrets roles)
 - [ ] T030 [US2] Test adding a new application: add test app to apps.yml, run `make deploy-apps`, verify deployment without SSH
 - [ ] T031 [US2] Test secret rotation: update secret in vault.yml, run deployment, verify application restarted with new secret
 

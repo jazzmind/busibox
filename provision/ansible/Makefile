@@ -1,4 +1,4 @@
-.PHONY: ping all files pg milvus agent ingest verify verify-health verify-smoke
+.PHONY: ping all files pg milvus agent ingest apps deploy-apps verify verify-health verify-smoke
 INV=inventory/hosts.yml
 
 ping:
@@ -21,6 +21,13 @@ agent:
 
 ingest:
 	ansible-playbook -i $(INV) -l ingest site.yml
+
+apps:
+	ansible-playbook -i $(INV) -l apps site.yml
+
+# T029: Deploy applications (runs app_deployer + secrets roles)
+deploy-apps:
+	ansible-playbook -i $(INV) -l agent,apps --tags app_deployer,secrets site.yml
 
 # Verification targets
 verify: verify-health verify-smoke

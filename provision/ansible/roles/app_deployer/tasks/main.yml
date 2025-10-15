@@ -1,0 +1,95 @@
+---
+# App Deployer Role - Main Tasks
+# Purpose: Generate deploywatch scripts and .env files for all applications
+# Requirements: FR-001, FR-005, FR-030 (GitHub deployment, secrets as env vars, extensibility)
+
+- name: Include validation tasks
+  include_tasks: validate.yml
+
+- name: Load secrets for environment file generation
+  include_vars:
+    file: "{{ playbook_dir }}/roles/secrets/vars/vault.yml"
+  no_log: true
+
+- name: Create deploywatch apps directory
+  file:
+    path: "{{ deploywatch_apps_dir }}"
+    state: directory
+    mode: "0755"
+    owner: root
+    group: root
+
+- name: Generate deploywatch scripts for each application
+  template:
+    src: deploywatch-app.sh.j2
+    dest: "{{ deploywatch_apps_dir }}/{{ item.name }}.sh"
+    mode: "0755"
+    owner: root
+    group: root
+  loop: "{{ applications }}"
+  loop_control:
+    label: "{{ item.name }}"
+  vars:
+    app: "{{ item }}"
+  when: applications | length > 0
+
+- name: Deploy deploywatch orchestrator script
+  template:
+    src: deploywatch-orchestrator.sh.j2
+    dest: /srv/deploywatch/deploywatch-orchestrator.sh
+    mode: "0755"
+    owner: root
+    group: root
+
+- name: Create application deploy directories
+  file:
+    path: "{{ item.deploy_path }}"
+    state: directory
+    mode: "0755"
+    owner: root
+    group: root
+  loop: "{{ applications }}"
+  loop_control:
+    label: "{{ item.name }}: {{ item.deploy_path }}"
+  when: applications | length > 0
+
+- name: Deploy application environment files (.env)
+  template:
+    src: "{{ playbook_dir }}/roles/secrets/templates/app.env.j2"
+    dest: "{{ item.deploy_path }}/.env"
+    mode: "0600"
+    owner: root
+    group: root
+  loop: "{{ applications }}"
+  loop_control:
+    label: "{{ item.name }}"
+  vars:
+    app: "{{ item }}"
+  no_log: true  # Don't log secrets
+  when: applications | length > 0
+  notify: Restart application
+
+- name: Detect configuration changes
+  stat:
+    path: "{{ deploywatch_apps_dir }}/{{ item.name }}.sh"
+  register: deploywatch_scripts
+  loop: "{{ applications }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: applications | length > 0
+
+- name: Display deployment summary
+  debug:
+    msg: |
+      ✅ App deployer configuration complete
+      - Applications configured: {{ applications | length }}
+      - Deploywatch scripts generated: {{ deploywatch_apps_dir }}
+      - Environment files deployed: {{ applications | length }}
+      
+      Next steps:
+      1. Manually trigger deploywatch for initial deployment:
+         for app in {{ deploywatch_apps_dir }}/*.sh; do bash "$app"; done
+      
+      2. Or wait for deploywatch timer to run (every {{ deploywatch_check_interval }}s)
+  when: applications | length > 0
+

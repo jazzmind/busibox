@@ -1,0 +1,142 @@
+---
+# Configuration Validation Tasks
+# Purpose: Validate apps.yml configuration before deployment
+# Requirements: FR-006a (validate config, fail with clear errors for conflicts)
+
+- name: Validate application definitions exist
+  assert:
+    that:
+      - applications is defined
+      - applications is iterable
+    fail_msg: "applications list not defined in apps.yml"
+    success_msg: "applications list found ({{ applications | length }} apps)"
+
+- name: Validate each application has required fields
+  assert:
+    that:
+      - item.name is defined
+      - item.name | length > 0
+      - item.name is match('^[a-zA-Z0-9-]+$')
+      - item.github_repo is defined
+      - item.github_repo is match('^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+$')
+      - item.container is defined
+      - item.container_ip is defined
+      - item.container_ip | ansible.utils.ipaddr
+      - item.port is defined
+      - item.port | int > 0
+      - item.port | int < 65536
+      - item.deploy_path is defined
+      - item.deploy_path is match('^/')
+      - item.health_endpoint is defined
+      - item.health_endpoint is match('^/')
+    fail_msg: |
+      Application '{{ item.name | default("UNNAMED") }}' has invalid configuration:
+      - name must be alphanumeric + hyphens
+      - github_repo must be in 'owner/repo' format
+      - container must be defined
+      - container_ip must be valid IPv4 address
+      - port must be between 1-65535
+      - deploy_path must be absolute path (starts with /)
+      - health_endpoint must start with /
+    success_msg: "Application '{{ item.name }}' configuration valid"
+  loop: "{{ applications }}"
+  loop_control:
+    label: "{{ item.name | default('UNNAMED') }}"
+  when: applications | length > 0
+
+- name: Check for duplicate application names
+  assert:
+    that:
+      - applications | map(attribute='name') | list | length == applications | map(attribute='name') | unique | list | length
+    fail_msg: |
+      Duplicate application names detected!
+      Applications: {{ applications | map(attribute='name') | list }}
+      Please ensure each application has a unique name.
+  when: applications | length > 0
+
+- name: Build route list for duplicate detection
+  set_fact:
+    all_routes: []
+
+- name: Collect all routes from applications
+  set_fact:
+    all_routes: "{{ all_routes + item.routes | default([]) }}"
+  loop: "{{ applications }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: applications | length > 0
+
+- name: Build route keys for duplicate detection
+  set_fact:
+    route_keys: []
+
+- name: Generate route keys (domain + subdomain + path combinations)
+  set_fact:
+    route_keys: "{{ route_keys + [item | route_key] }}"
+  vars:
+    route_key: |
+      {%- if item.type == 'domain' -%}
+        {{ item.domains | join(',') }}
+      {%- elif item.type == 'subdomain' -%}
+        {{ item.subdomain }}.{{ domain }}
+      {%- elif item.type == 'path' -%}
+        {{ item.domain }}{{ item.path }}
+      {%- else -%}
+        INVALID
+      {%- endif -%}
+  loop: "{{ all_routes }}"
+  when: all_routes | length > 0
+
+- name: Check for duplicate routes
+  assert:
+    that:
+      - route_keys | length == route_keys | unique | length
+    fail_msg: |
+      Duplicate routes detected!
+      Routes: {{ route_keys }}
+      Each subdomain and path must be unique across all applications.
+  when: route_keys | length > 0
+
+- name: Validate route configurations
+  assert:
+    that:
+      - item.1.type is defined
+      - item.1.type in ['domain', 'subdomain', 'path']
+      - (item.1.type == 'domain' and item.1.domains is defined and item.1.domains | length > 0) or item.1.type != 'domain'
+      - (item.1.type == 'subdomain' and item.1.subdomain is defined) or item.1.type != 'subdomain'
+      - (item.1.type == 'path' and item.1.path is defined and item.1.domain is defined) or item.1.type != 'path'
+      - (item.1.type == 'path' and item.1.path is match('^/') and item.1.path != '/') or item.1.type != 'path'
+    fail_msg: |
+      Invalid route configuration for '{{ item.0.name }}':
+      - type must be 'domain', 'subdomain', or 'path'
+      - domain type requires 'domains' list
+      - subdomain type requires 'subdomain' field
+      - path type requires 'path' and 'domain' fields
+      - path must start with / and cannot be / alone
+  with_subelements:
+    - "{{ applications }}"
+    - routes
+    - skip_missing: yes
+  loop_control:
+    label: "{{ item.0.name }} - {{ item.1.type | default('INVALID') }}"
+  when: applications | length > 0
+
+- name: Validate process manager values
+  assert:
+    that:
+      - item.process_manager is defined and item.process_manager in ['pm2', 'systemd'] or item.process_manager is not defined
+    fail_msg: "Application '{{ item.name }}' has invalid process_manager. Must be 'pm2' or 'systemd'"
+  loop: "{{ applications }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: applications | length > 0
+
+- name: Display validation summary
+  debug:
+    msg: |
+      ✅ Configuration validation passed
+      - Total applications: {{ applications | length }}
+      - Applications with routes: {{ applications | selectattr('routes', 'defined') | selectattr('routes', 'ne', []) | list | length }}
+      - Internal-only apps: {{ applications | rejectattr('routes', 'defined') | list | length + applications | selectattr('routes', 'defined') | selectattr('routes', 'eq', []) | list | length }}
+      - Total routes: {{ all_routes | length }}
+

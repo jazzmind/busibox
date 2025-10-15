@@ -8,7 +8,10 @@
   roles: [milvus]
 
 - hosts: agent
-  roles: [node_common, agent_api, deploywatch]
+  roles: [node_common, agent_api, deploywatch, secrets, app_deployer]
 
 - hosts: ingest
   roles: [node_common, ingest_worker]
+
+- hosts: apps
+  roles: [node_common, secrets, app_deployer]

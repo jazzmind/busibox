@@ -1,0 +1,11 @@
+---
+# App Deployer Handlers
+# Purpose: Restart applications when configuration changes
+
+- name: Restart application
+  shell: |
+    # This handler is notified when .env files change
+    # Individual application restarts are handled by deploywatch scripts
+    echo "Application configuration updated - restart will occur on next deploywatch run"
+  changed_when: false
+
