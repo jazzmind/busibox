@@ -379,37 +379,19 @@ start_application() {
             fi
             
             if [[ -n "$MASTRA_BUILD_DIR" ]]; then
-                log_info "Mastra app detected, starting from $MASTRA_BUILD_DIR"
+                log_info "Mastra app detected, build found at: $MASTRA_BUILD_DIR"
                 
-                # Build absolute path to entry point
-                MASTRA_ENTRY_POINT="${DEPLOY_PATH}/${MASTRA_BUILD_DIR}/index.mjs"
+                # Mastra apps need to be started with 'mastra start' from the root directory
+                # The build output in .mastra/.build is used by the mastra CLI, not run directly
+                log_info "Starting Mastra app with: mastra start"
                 
-                # Debug: Show what we're looking for
-                log_info "Looking for entry point: $MASTRA_ENTRY_POINT"
-                if [[ -f "$MASTRA_ENTRY_POINT" ]]; then
-                    log_info "✓ Found index.mjs at: $MASTRA_ENTRY_POINT"
+                # Check if mastra command exists (should be installed via npm)
+                if command -v mastra &> /dev/null || [[ -f "node_modules/.bin/mastra" ]]; then
+                    # Use npx to ensure we use the local mastra
+                    pm2 start npx --name "${APP_NAME}" -- mastra start
                 else
-                    log_error "✗ index.mjs not found at: $MASTRA_ENTRY_POINT"
-                    log_info "Directory contents:"
-                    ls -la "${DEPLOY_PATH}/${MASTRA_BUILD_DIR}/" >&2 || true
-                fi
-                
-                # Mastra builds to .mjs files, use node to run index.mjs
-                if [[ -f "$MASTRA_ENTRY_POINT" ]]; then
-                    log_info "Starting with: pm2 start $MASTRA_ENTRY_POINT --name ${APP_NAME}"
-                    pm2 start "$MASTRA_ENTRY_POINT" --name "${APP_NAME}"
-                elif [[ -f "${DEPLOY_PATH}/${MASTRA_BUILD_DIR}/index.js" ]]; then
-                    log_info "Found index.js in $MASTRA_BUILD_DIR"
-                    cd "${DEPLOY_PATH}/${MASTRA_BUILD_DIR}"
-                    pm2 start index.js --name "${APP_NAME}"
-                elif [[ -f "${DEPLOY_PATH}/${MASTRA_BUILD_DIR}/package.json" ]]; then
-                    log_info "Found package.json in $MASTRA_BUILD_DIR"
-                    cd "${DEPLOY_PATH}/${MASTRA_BUILD_DIR}"
+                    log_error "mastra CLI not found. Trying npm start as fallback..."
                     pm2 start npm --name "${APP_NAME}" -- start
-                else
-                    log_error "No entry point found in $MASTRA_BUILD_DIR"
-                    ls -la "${DEPLOY_PATH}/${MASTRA_BUILD_DIR}" >&2 || true
-                    return 1
                 fi
             # Check if this has a start script
             elif grep -q '"start"' package.json; then
