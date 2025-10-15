@@ -71,3 +71,25 @@ structured_logging: true
 # Security
 hsts_max_age: 63072000  # 2 years in seconds
 
+# Application Definitions
+# Moved from apps.yml to make available to all host groups
+# See apps.yml for schema documentation and examples
+applications:
+  - name: agent-server
+    github_repo: jazzmind/agent-server
+    container: agent-lxc
+    container_ip: "{{ agent_ip }}"
+    port: 8000
+    deploy_path: /srv/agent
+    health_endpoint: /health
+    routes: []  # Internal only - no NGINX routing
+    secrets:
+      - database_url
+      - minio_access_key
+      - minio_secret_key
+      - redis_url
+    env:
+      LOG_LEVEL: "{{ log_level }}"
+      MILVUS_HOST: "{{ milvus_host }}"
+      MILVUS_PORT: "{{ milvus_port }}"
+
