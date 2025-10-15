@@ -73,7 +73,7 @@
 - name: Create busibox database user
   become_user: postgres
   postgresql_user:
-    name: busibox_user
+    name: "{{ postgres_user }}"
     password: "{{ postgres_password | default('busibox_password_change_me') }}"
     role_attr_flags: "LOGIN,CREATEDB"
     state: present
@@ -81,8 +81,8 @@
 - name: Create busibox database
   become_user: postgres
   postgresql_db:
-    name: busibox
-    owner: busibox_user
+    name: "{{ postgres_db }}"
+    owner: "{{ postgres_user }}"
     encoding: UTF8
     lc_collate: en_US.UTF-8
     lc_ctype: en_US.UTF-8
@@ -108,11 +108,11 @@
   become_user: postgres
   shell: |
     # Check if migration {{ item.version }} has been applied
-    APPLIED=$(psql -U postgres -d busibox -t -c "SELECT COUNT(*) FROM schema_migrations WHERE version = {{ item.version }}" 2>/dev/null || echo "0")
+    APPLIED=$(psql -U postgres -d {{ postgres_db }} -t -c "SELECT COUNT(*) FROM schema_migrations WHERE version = {{ item.version }}" 2>/dev/null || echo "0")
     
     if [ "$APPLIED" -eq "0" ]; then
       echo "Applying migration {{ item.version }}: {{ item.name }}"
-      psql -U postgres -d busibox -f /var/lib/postgresql/migrations/{{ item.file }}
+      psql -U postgres -d {{ postgres_db }} -f /var/lib/postgresql/migrations/{{ item.file }}
       if [ $? -eq 0 ]; then
         echo "Migration {{ item.version }} applied successfully"
       else
