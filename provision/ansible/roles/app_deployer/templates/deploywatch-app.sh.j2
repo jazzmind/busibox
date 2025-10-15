@@ -381,18 +381,20 @@ start_application() {
             if [[ -n "$MASTRA_BUILD_DIR" ]]; then
                 log_info "Mastra app detected, build found at: $MASTRA_BUILD_DIR"
                 
-                # Mastra apps need to be started with 'mastra start' from the root directory
-                # The build output in .mastra/.build is used by the mastra CLI, not run directly
-                log_info "Starting Mastra app with: mastra start"
+                # Mastra apps are started with 'npm start' which runs 'mastra start'
+                # The build output in .mastra/.build is used by the mastra CLI
+                # mastra is a devDependency installed in node_modules
+                log_info "Starting Mastra app with: npm start"
                 
-                # Check if mastra command exists (should be installed via npm)
-                if command -v mastra &> /dev/null || [[ -f "node_modules/.bin/mastra" ]]; then
-                    # Use npx to ensure we use the local mastra
-                    pm2 start npx --name "${APP_NAME}" -- mastra start
+                # Verify mastra is available
+                if [[ -f "node_modules/.bin/mastra" ]]; then
+                    log_info "✓ mastra CLI found in node_modules/.bin/"
                 else
-                    log_error "mastra CLI not found. Trying npm start as fallback..."
-                    pm2 start npm --name "${APP_NAME}" -- start
+                    log_error "✗ mastra CLI not found - check if devDependencies were installed"
+                    ls -la node_modules/.bin/ >&2 || true
                 fi
+                
+                pm2 start npm --name "${APP_NAME}" -- start
             # Check if this has a start script
             elif grep -q '"start"' package.json; then
                 log_info "Using npm start (npm script detected)"
