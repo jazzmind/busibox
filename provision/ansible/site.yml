@@ -8,13 +8,25 @@
   roles: [milvus]
 
 - hosts: agent
-  roles: [node_common, agent_api, deploywatch, secrets, app_deployer]
+  roles:
+    - node_common
+    - agent_api
+    - deploywatch
+    - role: secrets
+      tags: [secrets]
+    - role: app_deployer
+      tags: [app_deployer]
 
 - hosts: ingest
   roles: [node_common, ingest_worker]
 
 - hosts: apps
-  roles: [node_common, secrets, app_deployer]
+  roles:
+    - node_common
+    - role: secrets
+      tags: [secrets]
+    - role: app_deployer
+      tags: [app_deployer]
 
 - hosts: openwebui
   roles: [nginx]
