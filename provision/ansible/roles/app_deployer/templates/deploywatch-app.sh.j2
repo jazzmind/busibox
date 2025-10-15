@@ -162,19 +162,30 @@ deploy_application() {
     log_info "Deploying ${version} to ${DEPLOY_PATH}"
     
     # Extract tarball
-    mkdir -p "${DEPLOY_PATH}"
-    tar -xzf "${temp_dir}/release.tar.gz" -C "${temp_dir}"
+    mkdir -p "${temp_dir}/extracted"
+    tar -xzf "${temp_dir}/release.tar.gz" -C "${temp_dir}/extracted"
     
     # Find extracted directory (GitHub archives as owner-repo-version/)
-    local extracted_dir=$(find "${temp_dir}" -maxdepth 1 -type d -name "*-*" | head -1)
+    # GitHub creates a subdirectory like "agent-server-0.0.1/" or "agent-server-v0.0.1/"
+    local extracted_dir=$(find "${temp_dir}/extracted" -mindepth 1 -maxdepth 1 -type d | head -1)
     
     if [[ -z "${extracted_dir}" ]]; then
-        log_error "Could not find extracted directory"
+        log_error "Could not find extracted directory in ${temp_dir}/extracted"
+        ls -la "${temp_dir}/extracted" >&2
         return 1
     fi
     
-    # Copy files to deploy path
-    rsync -a "${extracted_dir}/" "${DEPLOY_PATH}/"
+    log_info "Found extracted directory: ${extracted_dir}"
+    
+    # Create deploy path if it doesn't exist
+    mkdir -p "${DEPLOY_PATH}"
+    
+    # Copy files to deploy path (using cp -a instead of rsync for portability)
+    # Remove existing files first (except .env)
+    find "${DEPLOY_PATH}" -mindepth 1 ! -name '.env' ! -name '.version' -exec rm -rf {} + 2>/dev/null || true
+    
+    # Copy new files
+    cp -a "${extracted_dir}/." "${DEPLOY_PATH}/"
     
     # Restore .env file if it was backed up
     if [[ -f "${BACKUP_DIR}/.env" ]]; then
@@ -244,9 +255,31 @@ start_application() {
     if [[ "${PROCESS_MANAGER}" == "pm2" ]]; then
         log_info "Starting application via PM2"
 {% if app.start_command is defined %}
+        # Use custom start command
         pm2 start "{{ app.start_command }}" --name "${APP_NAME}" || pm2 restart "${APP_NAME}"
 {% else %}
-        pm2 start package.json --name "${APP_NAME}" || pm2 restart "${APP_NAME}"
+        # Auto-detect: package.json (Node.js) or main.py (Python)
+        if [[ -f "package.json" ]]; then
+            log_info "Detected Node.js application (package.json found)"
+            pm2 start package.json --name "${APP_NAME}" || pm2 restart "${APP_NAME}"
+        elif [[ -f "main.py" ]]; then
+            log_info "Detected Python application (main.py found)"
+            pm2 start main.py --name "${APP_NAME}" --interpreter python3 || pm2 restart "${APP_NAME}"
+        elif [[ -f "app.py" ]]; then
+            log_info "Detected Python application (app.py found)"
+            pm2 start app.py --name "${APP_NAME}" --interpreter python3 || pm2 restart "${APP_NAME}"
+        elif [[ -f "server.js" ]]; then
+            log_info "Detected Node.js application (server.js found)"
+            pm2 start server.js --name "${APP_NAME}" || pm2 restart "${APP_NAME}"
+        elif [[ -f "index.js" ]]; then
+            log_info "Detected Node.js application (index.js found)"
+            pm2 start index.js --name "${APP_NAME}" || pm2 restart "${APP_NAME}"
+        else
+            log_error "Could not detect application entry point"
+            log_error "Files in ${DEPLOY_PATH}:"
+            ls -la "${DEPLOY_PATH}" >&2
+            return 1
+        fi
 {% endif %}
     elif [[ "${PROCESS_MANAGER}" == "systemd" ]]; then
         log_info "Starting application via systemd"
