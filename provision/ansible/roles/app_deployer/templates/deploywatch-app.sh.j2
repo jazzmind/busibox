@@ -255,6 +255,14 @@ install_dependencies() {
 run_migrations() {
     cd "${DEPLOY_PATH}"
     
+    # Load environment variables from .env file if it exists
+    if [[ -f ".env" ]]; then
+        log_info "Loading environment variables from .env"
+        set -a  # Automatically export all variables
+        source .env
+        set +a  # Turn off automatic export
+    fi
+    
     # Check for npm migration script first
     if [[ -f "package.json" ]] && grep -q '"migrate:up"' package.json; then
         log_info "Running database migrations via npm"
@@ -287,6 +295,13 @@ run_migrations() {
 # Build application (if build command specified)
 build_application() {
     cd "${DEPLOY_PATH}"
+    
+    # Load environment variables from .env file if it exists
+    if [[ -f ".env" ]]; then
+        set -a  # Automatically export all variables
+        source .env
+        set +a  # Turn off automatic export
+    fi
     
 {% if app.build_command is defined %}
     log_info "Running build command: {{ app.build_command }}"
