@@ -137,7 +137,7 @@ test_ansible_provisioning() {
   
   # Test ping connectivity
   log_info "Testing Ansible connectivity..."
-  if ansible -i inventory/test-hosts.yml all -m ping; then
+  if ansible -i inventory/test all -m ping; then
     record_test "Ansible connectivity" "PASS"
   else
     record_test "Ansible connectivity" "FAIL" "Ping failed"
@@ -146,7 +146,7 @@ test_ansible_provisioning() {
   
   # Run full provisioning
   log_info "Running full Ansible provisioning..."
-  if ansible-playbook -i inventory/test-hosts.yml site.yml; then
+  if ansible-playbook -i inventory/test site.yml; then
     record_test "Ansible provisioning" "PASS"
   else
     record_test "Ansible provisioning" "FAIL" "Playbook failed"
@@ -249,7 +249,7 @@ test_idempotency() {
   log_info "Re-running Ansible provisioning (should be idempotent)..."
   
   # Run from ansible directory
-  if ansible-playbook -i "${ANSIBLE_DIR}/inventory/test-hosts.yml" "${ANSIBLE_DIR}/site.yml" --check 2>&1; then
+  if ansible-playbook -i "${ANSIBLE_DIR}/inventory/test" "${ANSIBLE_DIR}/site.yml" --check 2>&1; then
     record_test "Ansible idempotency" "PASS"
   else
     log_warning "Ansible check mode failed (may have changes)"

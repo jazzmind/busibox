@@ -1,5 +1,6 @@
 .PHONY: ping all files pg milvus agent ingest apps openwebui deploy-apps verify verify-health verify-smoke
-INV=inventory/hosts.yml
+# Default to production inventory (can override with: make all INV=inventory/test)
+INV=inventory/production
 
 ping:
 	ansible -i $(INV) all -m ping
