@@ -334,7 +334,10 @@ build_application() {
 stop_application() {
     if [[ "${PROCESS_MANAGER}" == "pm2" ]]; then
         log_info "Stopping application via PM2"
-        pm2 stop "${APP_NAME}" || true
+        # Stop and delete all instances of this app (including old stopped ones)
+        pm2 delete "${APP_NAME}" 2>/dev/null || true
+        # Wait for cleanup
+        sleep 1
     elif [[ "${PROCESS_MANAGER}" == "systemd" ]]; then
         log_info "Stopping application via systemd"
         systemctl stop "${APP_NAME}.service" || true
@@ -349,18 +352,24 @@ start_application() {
         log_info "Starting application via PM2"
 {% if app.start_command is defined %}
         # Use custom start command
-        pm2 start "{{ app.start_command }}" --name "${APP_NAME}" || pm2 restart "${APP_NAME}"
+        pm2 start "{{ app.start_command }}" --name "${APP_NAME}"
 {% else %}
         # Auto-detect: package.json (Node.js) or main.py (Python)
         if [[ -f "package.json" ]]; then
             log_info "Detected Node.js application (package.json found)"
-            # Check if this is a Mastra app or has a start script
-            if grep -q '"mastra"' package.json || grep -q '"start"' package.json; then
-                log_info "Using npm start (Mastra or npm script detected)"
-                pm2 start npm --name "${APP_NAME}" -- start || pm2 restart "${APP_NAME}"
+            
+            # Check if this is a Mastra app (built output in .mastra/output)
+            if [[ -d ".mastra/output" ]] && [[ -f ".mastra/output/package.json" ]]; then
+                log_info "Mastra app detected, starting from .mastra/output"
+                cd .mastra/output
+                pm2 start npm --name "${APP_NAME}" -- start
+            # Check if this has a start script
+            elif grep -q '"start"' package.json; then
+                log_info "Using npm start (npm script detected)"
+                pm2 start npm --name "${APP_NAME}" -- start
             else
                 # Try to use package.json directly (works for some apps)
-                pm2 start package.json --name "${APP_NAME}" || pm2 restart "${APP_NAME}"
+                pm2 start package.json --name "${APP_NAME}"
             fi
         elif [[ -f "main.py" ]]; then
             log_info "Detected Python application (main.py found)"
