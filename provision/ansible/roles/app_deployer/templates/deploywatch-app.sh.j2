@@ -200,11 +200,24 @@ deploy_application() {
 
 # Run database migrations (if present)
 run_migrations() {
-    local migration_script="${DEPLOY_PATH}/scripts/migrate.sh"
+    cd "${DEPLOY_PATH}"
     
+    # Check for npm migration script first
+    if [[ -f "package.json" ]] && grep -q '"migrate:up"' package.json; then
+        log_info "Running database migrations via npm"
+        if npm run migrate:up 2>&1 | sed 's/^/[migration] /' >&2; then
+            log_success "Migrations completed successfully"
+            return 0
+        else
+            log_error "Migration failed"
+            return 1
+        fi
+    fi
+    
+    # Check for shell script
+    local migration_script="scripts/migrate.sh"
     if [[ -f "${migration_script}" && -x "${migration_script}" ]]; then
-        log_info "Running database migrations"
-        
+        log_info "Running database migrations via script"
         if bash "${migration_script}"; then
             log_success "Migrations completed successfully"
             return 0
@@ -212,18 +225,18 @@ run_migrations() {
             log_error "Migration failed"
             return 1
         fi
-    else
-        log_info "No migrations to run"
-        return 0
     fi
+    
+    log_info "No migrations to run"
+    return 0
 }
 
 # Build application (if build command specified)
 build_application() {
-{% if app.build_command is defined %}
-    log_info "Running build command: {{ app.build_command }}"
     cd "${DEPLOY_PATH}"
     
+{% if app.build_command is defined %}
+    log_info "Running build command: {{ app.build_command }}"
     if {{ app.build_command }}; then
         log_success "Build completed successfully"
         return 0
@@ -232,8 +245,20 @@ build_application() {
         return 1
     fi
 {% else %}
-    log_info "No build command specified, skipping build"
-    return 0
+    # Auto-detect build script
+    if [[ -f "package.json" ]] && grep -q '"build"' package.json; then
+        log_info "Running npm build (build script detected in package.json)"
+        if npm run build 2>&1 | sed 's/^/[build] /' >&2; then
+            log_success "Build completed successfully"
+            return 0
+        else
+            log_error "Build failed"
+            return 1
+        fi
+    else
+        log_info "No build command specified, skipping build"
+        return 0
+    fi
 {% endif %}
 }
 
@@ -261,7 +286,14 @@ start_application() {
         # Auto-detect: package.json (Node.js) or main.py (Python)
         if [[ -f "package.json" ]]; then
             log_info "Detected Node.js application (package.json found)"
-            pm2 start package.json --name "${APP_NAME}" || pm2 restart "${APP_NAME}"
+            # Check if this is a Mastra app or has a start script
+            if grep -q '"mastra"' package.json || grep -q '"start"' package.json; then
+                log_info "Using npm start (Mastra or npm script detected)"
+                pm2 start npm --name "${APP_NAME}" -- start || pm2 restart "${APP_NAME}"
+            else
+                # Try to use package.json directly (works for some apps)
+                pm2 start package.json --name "${APP_NAME}" || pm2 restart "${APP_NAME}"
+            fi
         elif [[ -f "main.py" ]]; then
             log_info "Detected Python application (main.py found)"
             pm2 start main.py --name "${APP_NAME}" --interpreter python3 || pm2 restart "${APP_NAME}"
