@@ -1,0 +1,444 @@
+openapi: 3.0.3
+info:
+  title: Busibox Agent API
+  version: 1.0.0
+  description: |
+    API for the Busibox agent-server, providing AI agent operations, file ingestion management,
+    and search capabilities across the knowledge base.
+    
+    ## Authentication
+    All endpoints require JWT authentication via Bearer token or session cookie.
+    
+    ## Base URL
+    Internal: http://10.96.200.30:8000 (not publicly exposed)
+
+servers:
+  - url: http://10.96.200.30:8000
+    description: Internal agent-server (agent-lxc container)
+
+security:
+  - bearerAuth: []
+  - cookieAuth: []
+
+tags:
+  - name: Health
+    description: Health check and status endpoints
+  - name: Files
+    description: File upload and management
+  - name: Search
+    description: Semantic search across knowledge base
+  - name: Agents
+    description: AI agent execution and management
+  - name: Webhooks
+    description: Webhook receivers (internal, from MinIO)
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      description: Returns service health status and dependency connectivity
+      tags: [Health]
+      security: []  # Public endpoint
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [healthy, degraded]
+                  timestamp:
+                    type: string
+                    format: date-time
+                  version:
+                    type: string
+                  dependencies:
+                    type: object
+                    properties:
+                      postgresql:
+                        type: string
+                        enum: [connected, disconnected]
+                      milvus:
+                        type: string
+                        enum: [connected, disconnected]
+                      minio:
+                        type: string
+                        enum: [connected, disconnected]
+                      redis:
+                        type: string
+                        enum: [connected, disconnected]
+        '503':
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/files:
+    get:
+      summary: List files
+      description: Get list of files accessible to the authenticated user (filtered by RLS)
+      tags: [Files]
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 100
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, processing, completed, failed]
+      responses:
+        '200':
+          description: List of files
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  files:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/File'
+                  total:
+                    type: integer
+                  limit:
+                    type: integer
+                  offset:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/files/{file_id}:
+    get:
+      summary: Get file details
+      description: Retrieve metadata for a specific file
+      tags: [Files]
+      parameters:
+        - name: file_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: File details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/File'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/search:
+    post:
+      summary: Semantic search
+      description: Search the knowledge base using semantic similarity
+      tags: [Search]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query:
+                  type: string
+                  description: Natural language search query
+                limit:
+                  type: integer
+                  default: 10
+                  maximum: 50
+                role_id:
+                  type: string
+                  format: uuid
+                  description: Filter by role (defaults to user's roles)
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SearchResult'
+                  query:
+                    type: string
+                  total:
+                    type: integer
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/agents/{agent_name}/run:
+    post:
+      summary: Run an agent
+      description: Execute a named agent with provided input
+      tags: [Agents]
+      parameters:
+        - name: agent_name
+          in: path
+          required: true
+          schema:
+            type: string
+          example: document-qa
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [input]
+              properties:
+                input:
+                  type: object
+                  description: Agent-specific input parameters
+                  additionalProperties: true
+                context:
+                  type: object
+                  description: Additional context for the agent
+                  properties:
+                    user_id:
+                      type: string
+                      format: uuid
+                    role_id:
+                      type: string
+                      format: uuid
+      responses:
+        '200':
+          description: Agent execution result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Agent not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/agents:
+    get:
+      summary: List available agents
+      description: Get list of all configured agents
+      tags: [Agents]
+      responses:
+        '200':
+          description: List of agents
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agents:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Agent'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /webhooks/minio:
+    post:
+      summary: MinIO webhook receiver
+      description: Receives file upload events from MinIO and queues ingestion jobs
+      tags: [Webhooks]
+      security: []  # Internal webhook, MinIO doesn't support auth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                EventName:
+                  type: string
+                  example: s3:ObjectCreated:Put
+                Key:
+                  type: string
+                  example: documents/myfile.pdf
+                Records:
+                  type: array
+                  items:
+                    type: object
+      responses:
+        '202':
+          description: Event accepted, job queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [queued]
+                  job_id:
+                    type: string
+                    format: uuid
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: session
+
+  schemas:
+    File:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        owner_id:
+          type: string
+          format: uuid
+        role_id:
+          type: string
+          format: uuid
+        filename:
+          type: string
+        mime_type:
+          type: string
+        bytes:
+          type: integer
+          format: int64
+        bucket:
+          type: string
+        key:
+          type: string
+        sha256:
+          type: string
+          format: byte
+        status:
+          type: string
+          enum: [pending, processing, completed, failed]
+        created_at:
+          type: string
+          format: date-time
+        error_message:
+          type: string
+          nullable: true
+
+    SearchResult:
+      type: object
+      properties:
+        chunk_id:
+          type: string
+          format: uuid
+        file_id:
+          type: string
+          format: uuid
+        filename:
+          type: string
+        text:
+          type: string
+        score:
+          type: number
+          format: float
+          description: Similarity score (0-1, higher is better)
+        metadata:
+          type: object
+          additionalProperties: true
+
+    Agent:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        input_schema:
+          type: object
+          description: JSON schema for agent input
+        output_schema:
+          type: object
+          description: JSON schema for agent output
+
+    AgentResult:
+      type: object
+      properties:
+        agent_name:
+          type: string
+        output:
+          type: object
+          additionalProperties: true
+        execution_time_ms:
+          type: integer
+        tokens_used:
+          type: integer
+        error:
+          type: string
+          nullable: true
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        trace_id:
+          type: string
+          format: uuid
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    
+    Forbidden:
+      description: Access denied (insufficient permissions)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+

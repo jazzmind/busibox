@@ -4,6 +4,7 @@ Auto-generated from all feature plans. Last updated: 2025-10-14
 
 ## Active Technologies
 - (001-create-an-initial)
+- Bash 5.x (scripts), Ansible 2.14+ (configuration management), NGINX 1.18+ (reverse proxy) (002-deploy-app-servers)
 
 ## Project Structure
 ```
@@ -18,6 +19,7 @@ tests/
 : Follow standard conventions
 
 ## Recent Changes
+- 002-deploy-app-servers: Added Bash 5.x (scripts), Ansible 2.14+ (configuration management), NGINX 1.18+ (reverse proxy)
 - 001-create-an-initial: Added
 
 <!-- MANUAL ADDITIONS START -->
