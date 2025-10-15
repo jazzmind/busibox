@@ -362,20 +362,38 @@ start_application() {
             if [[ -d ".mastra" ]]; then
                 log_info "Contents of .mastra directory:"
                 ls -la .mastra/ >&2 || true
+                if [[ -d ".mastra/.build" ]]; then
+                    log_info "Contents of .mastra/.build directory:"
+                    ls -la .mastra/.build/ >&2 || true
+                fi
             fi
             
             # Check if this is a Mastra app (built output in .mastra/output or .mastra/.build)
             MASTRA_BUILD_DIR=""
-            if [[ -d ".mastra/output" ]] && [[ -f ".mastra/output/package.json" ]]; then
+            if [[ -d ".mastra/output" ]]; then
                 MASTRA_BUILD_DIR=".mastra/output"
-            elif [[ -d ".mastra/.build" ]] && [[ -f ".mastra/.build/package.json" ]]; then
+                log_info "Found Mastra build at: .mastra/output"
+            elif [[ -d ".mastra/.build" ]]; then
                 MASTRA_BUILD_DIR=".mastra/.build"
+                log_info "Found Mastra build at: .mastra/.build"
             fi
             
             if [[ -n "$MASTRA_BUILD_DIR" ]]; then
                 log_info "Mastra app detected, starting from $MASTRA_BUILD_DIR"
                 cd "$MASTRA_BUILD_DIR"
-                pm2 start npm --name "${APP_NAME}" -- start
+                
+                # Verify we can find package.json or a start script
+                if [[ -f "package.json" ]]; then
+                    log_info "Found package.json in $MASTRA_BUILD_DIR"
+                    pm2 start npm --name "${APP_NAME}" -- start
+                elif [[ -f "index.js" ]]; then
+                    log_info "Found index.js in $MASTRA_BUILD_DIR"
+                    pm2 start index.js --name "${APP_NAME}"
+                else
+                    log_error "No entry point found in $MASTRA_BUILD_DIR"
+                    ls -la >&2
+                    return 1
+                fi
             # Check if this has a start script
             elif grep -q '"start"' package.json; then
                 log_info "Using npm start (npm script detected)"
