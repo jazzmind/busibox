@@ -47,54 +47,54 @@ applications:
 
 # Additional application definitions (add as needed):
 #
-# # Public web application (domain routing)
-#   - name: cashman-portal
-#     github_repo: jazzmind/cashman
-#     container: apps-lxc
-#     container_ip: "{{ apps_ip }}"
-#     port: 3000
-#     deploy_path: /srv/apps/cashman
-#     health_endpoint: /api/health
-#     build_command: "npm run build"
-#     routes:
-#       - type: domain
-#         domains:
-#           - "{{ domain }}"
-#           - "{{ www_domain }}"
-#       - type: path
-#         domain: "{{ domain }}"
-#         path: /home
-#     secrets:
-#       - session_secret
-#       - oauth_client_id
-#       - oauth_client_secret
-#       - database_url
-#       - jwt_secret
-#     env:
-#       NODE_ENV: production
-#       JWT_ISSUER: cashman-portal
+# # Example: Public web application (domain routing)
+# - name: cashman-portal
+#   github_repo: jazzmind/cashman
+#   container: apps-lxc
+#   container_ip: "{{ apps_ip }}"
+#   port: 3000
+#   deploy_path: /srv/apps/cashman
+#   health_endpoint: /api/health
+#   build_command: "npm run build"
+#   routes:
+#     - type: domain
+#       domains:
+#         - "{{ domain }}"
+#         - "{{ www_domain }}"
+#     - type: path
+#       domain: "{{ domain }}"
+#       path: /home
+#   secrets:
+#     - session_secret
+#     - oauth_client_id
+#     - oauth_client_secret
+#     - database_url
+#     - jwt_secret
+#   env:
+#     NODE_ENV: production
+#     JWT_ISSUER: cashman-portal
 #
-# # Application with subdomain and path routing
-#   - name: agent-client
-#     github_repo: jazzmind/agent-client
-#     container: apps-lxc
-#     container_ip: "{{ apps_ip }}"
-#     port: 3001
-#     deploy_path: /srv/apps/agent-client
-#     health_endpoint: /health
-#     build_command: "npm run build"
-#     routes:
-#       - type: subdomain
-#         subdomain: agents
-#         websocket: true  # Enable WebSocket support
-#       - type: path
-#         domain: "{{ domain }}"
-#         path: /agents
-#         strip_path: false
-#     env:
-#       AGENT_API_URL: "http://{{ agent_api_host }}:{{ agent_api_port }}"
-#       NODE_ENV: production
-#     secrets:
-#       - agent_api_key
-#       - jwt_secret
+# # Example: Application with subdomain and path routing
+# - name: agent-client
+#   github_repo: jazzmind/agent-client
+#   container: apps-lxc
+#   container_ip: "{{ apps_ip }}"
+#   port: 3001
+#   deploy_path: /srv/apps/agent-client
+#   health_endpoint: /health
+#   build_command: "npm run build"
+#   routes:
+#     - type: subdomain
+#       subdomain: agents
+#       websocket: true  # Enable WebSocket support
+#     - type: path
+#       domain: "{{ domain }}"
+#       path: /agents
+#       strip_path: false
+#   env:
+#     AGENT_API_URL: "http://{{ agent_api_host }}:{{ agent_api_port }}"
+#     NODE_ENV: production
+#   secrets:
+#     - agent_api_key
+#     - jwt_secret
 
