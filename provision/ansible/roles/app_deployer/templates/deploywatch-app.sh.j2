@@ -198,6 +198,59 @@ deploy_application() {
     log_success "Deployment complete"
 }
 
+# Install dependencies
+install_dependencies() {
+    cd "${DEPLOY_PATH}"
+    
+    # Node.js application
+    if [[ -f "package.json" ]]; then
+        log_info "Installing Node.js dependencies"
+        
+        # Check if we need devDependencies (for migrations, builds, etc.)
+        local needs_dev=false
+        if grep -q '"migrate:up"' package.json || \
+           grep -q '"build"' package.json || \
+           grep -q '"mastra"' package.json; then
+            needs_dev=true
+        fi
+        
+        if [[ "$needs_dev" == "true" ]]; then
+            log_info "Installing all dependencies (including dev) for migrations/build"
+            if npm install 2>&1 | sed 's/^/[npm] /' >&2; then
+                log_success "Dependencies installed successfully"
+                return 0
+            else
+                log_error "Failed to install dependencies"
+                return 1
+            fi
+        else
+            log_info "Installing production dependencies only"
+            if npm install --production 2>&1 | sed 's/^/[npm] /' >&2; then
+                log_success "Dependencies installed successfully"
+                return 0
+            else
+                log_error "Failed to install dependencies"
+                return 1
+            fi
+        fi
+    fi
+    
+    # Python application
+    if [[ -f "requirements.txt" ]]; then
+        log_info "Installing Python dependencies"
+        if pip3 install -r requirements.txt 2>&1 | sed 's/^/[pip] /' >&2; then
+            log_success "Dependencies installed successfully"
+            return 0
+        else
+            log_error "Failed to install dependencies"
+            return 1
+        fi
+    fi
+    
+    log_info "No dependencies to install"
+    return 0
+}
+
 # Run database migrations (if present)
 run_migrations() {
     cd "${DEPLOY_PATH}"
@@ -354,6 +407,14 @@ main() {
     # Deploy application
     if ! deploy_application "${latest_version}" "${temp_dir}"; then
         log_error "Deployment failed"
+        rm -rf "${temp_dir}"
+        rollback
+        return 1
+    fi
+    
+    # Install dependencies
+    if ! install_dependencies; then
+        log_error "Dependency installation failed, rolling back"
         rm -rf "${temp_dir}"
         rollback
         return 1
