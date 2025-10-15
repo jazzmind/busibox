@@ -5,6 +5,16 @@
 **Status**: Draft  
 **Input**: User description: "a new feature. This focuses on ensuring all our app servers/services are running within the containers."
 
+## Clarifications
+
+### Session 2025-10-15
+
+- Q: When a deployment fails (malformed release, broken dependencies, health check failure), what should the system do? → A: Automatically rollback to previous version and send alert to operators
+- Q: How should the system handle SSL certificate expiration? → A: SSL certificate management must be configurable: Let's Encrypt with auto-renewal (certbot + alerts 7 days before expiry), pre-provisioned certificates (manual management), or self-signed certificates (no expiration handling)
+- Q: How should configuration conflicts be handled when two applications claim the same route? → A: Configuration validation fails deployment with clear error message identifying the conflict
+- Q: How should the system handle missing or invalid secrets during application deployment? → A: Configuration validation fails before deployment starts, listing all missing/invalid secrets
+- Q: How should database migrations be handled when a new application version includes schema changes? → A: Automatically detect and run migrations during deployment, rollback entire deployment (application + database) if migration fails
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Agent Server Operational (Priority: P1)
@@ -95,14 +105,14 @@ As a system administrator, I need access to the agent-client application to mana
 
 ### Edge Cases
 
-- What happens when a GitHub repository release is malformed or the deployment fails?
-- How does the system handle SSL certificate expiration?
+- **Deployment Failure**: When a GitHub repository release is malformed or deployment fails (broken dependencies, health check failure), the system automatically rolls back to the previous version and sends an alert to operators
+- **SSL Certificate Expiration**: SSL certificate mode is configurable - Let's Encrypt mode uses automatic renewal via certbot with alerts 7 days before expiration; pre-provisioned certificate mode requires manual management; self-signed certificate mode has no expiration handling
 - What occurs when an application crashes or becomes unresponsive after deployment?
-- How are conflicting subdomain/path routes resolved (e.g., if two apps claim the same path)?
-- What happens when secrets are missing or invalid for an application?
+- **Routing Conflicts**: When two applications claim the same subdomain or path, configuration validation fails the deployment with a clear error message identifying the conflicting applications and routes
+- **Missing Secrets**: When secrets required by an application are missing or invalid, configuration validation fails before deployment starts and lists all missing/invalid secrets
 - How does the system behave when the agent-server is unreachable from an application?
 - What occurs when deploywatch attempts to deploy during an active user session?
-- How are database migrations handled when deploying new application versions?
+- **Database Migrations**: When a new application version includes database schema changes, migrations are automatically detected and run during deployment; if migration fails, both the application and database changes are rolled back
 - What happens when NGINX configuration errors occur during reload?
 - How does authentication work across applications if the portal is down?
 
@@ -121,6 +131,7 @@ As a system administrator, I need access to the agent-client application to mana
 #### Configuration Management (P1)
 
 - **FR-006**: System MUST maintain a configuration file that defines all deployable applications with their GitHub repository URLs and deployment parameters
+- **FR-006a**: System MUST validate application configuration before deployment and fail with clear error messages for conflicts (duplicate routes, missing required fields, missing/invalid secrets)
 - **FR-007**: System MUST support secure secret management for all applications and services
 - **FR-008**: Secrets MUST be stored encrypted at rest and MUST NOT appear in application logs or version control
 - **FR-009**: System MUST make secrets available to applications as environment variables during runtime
@@ -131,6 +142,8 @@ As a system administrator, I need access to the agent-client application to mana
 
 - **FR-012**: System MUST configure NGINX as a reverse proxy to route HTTP/HTTPS traffic to backend applications
 - **FR-013**: NGINX MUST serve all traffic over HTTPS with valid SSL certificates for the ai.jaycashman.com domain and subdomains
+- **FR-013a**: System MUST support configurable SSL certificate modes: Let's Encrypt (auto-renewal via certbot), pre-provisioned certificates (manual management), or self-signed certificates
+- **FR-013b**: When using Let's Encrypt mode, system MUST automatically renew certificates and alert operators 7 days before expiration
 - **FR-014**: System MUST support subdomain-based virtual hosts (e.g., agents.ai.jaycashman.com, docintel.ai.jaycashman.com)
 - **FR-015**: System MUST support sub-directory routing (e.g., ai.jaycashman.com/agents, ai.jaycashman.com/docintel)
 - **FR-016**: NGINX MUST redirect HTTP requests to HTTPS automatically
@@ -161,6 +174,9 @@ As a system administrator, I need access to the agent-client application to mana
 - **FR-032**: System MUST support automatic restarts of failed applications
 - **FR-033**: System MUST log all deployment activities including successes, failures, and errors
 - **FR-034**: System MUST preserve application data during redeployments (stateful data must persist)
+- **FR-035**: System MUST automatically rollback to the previous version when deployment fails and send alerts to operators
+- **FR-036**: System MUST automatically detect and run database migrations during deployment
+- **FR-037**: System MUST rollback both application and database changes if migration fails
 
 ### Key Entities
 
@@ -193,7 +209,7 @@ As a system administrator, I need access to the agent-client application to mana
 
 ## Assumptions
 
-- SSL certificates for ai.jaycashman.com and *.ai.jaycashman.com will be obtained via Let's Encrypt or provided by the system administrator
+- SSL certificate mode is configurable per deployment: Let's Encrypt (requires DNS provider API access), pre-provisioned certificates (provided by administrator), or self-signed (for development/testing)
 - All applications follow standard Node.js deployment patterns (PM2 compatible) or containerized deployments
 - Applications expose standard HTTP health check endpoints (e.g., /health or /api/health)
 - The main portal (cashman) implements standard session-based authentication that can be shared across applications via cookies or headers
