@@ -76,9 +76,9 @@ applications:
     github_repo: jazzmind/agent-server
     container: agent-lxc
     container_ip: 10.96.201.30
-    port: 8000
+    port: 4111
     deploy_path: /srv/agent
-    health_endpoint: /health
+    health_endpoint: /auth/health
     routes: []  # Internal only - no NGINX routing
     secrets:
       - database_url
@@ -92,4 +92,6 @@ applications:
       MINIO_ENDPOINT: 10.96.201.28:9000
       POSTGRES_HOST: 10.96.201.26
       REDIS_HOST: 10.96.201.29
+      TOKEN_SERVICE_URL: http://10.96.201.30:4111
+      MASTRA_API_URL: http://10.96.201.30:4111
 
