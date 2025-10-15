@@ -18,6 +18,9 @@
   include_vars:
     file: "{{ playbook_dir }}/roles/secrets/vars/vault.yml"
   no_log: true
+  tags:
+    - app_deployer
+    - secrets
 
 - name: Create deploywatch apps directory
   file:
@@ -60,6 +63,9 @@
   loop_control:
     label: "{{ item.name }}: {{ item.deploy_path }}"
   when: applications | length > 0
+  tags:
+    - app_deployer
+    - secrets
 
 - name: Deploy application environment files (.env)
   template:
@@ -76,6 +82,9 @@
   no_log: true  # Don't log secrets
   when: applications | length > 0
   notify: Restart application
+  tags:
+    - app_deployer
+    - secrets
 
 - name: Detect configuration changes
   stat:
