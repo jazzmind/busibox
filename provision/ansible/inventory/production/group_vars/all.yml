@@ -79,9 +79,9 @@ applications:
     github_repo: jazzmind/agent-server
     container: agent-lxc
     container_ip: "{{ agent_ip }}"
-    port: 8000
+    port: 4111
     deploy_path: /srv/agent
-    health_endpoint: /health
+    health_endpoint: /auth/health
     routes: []  # Internal only - no NGINX routing
     secrets:
       - database_url
@@ -92,9 +92,11 @@ applications:
     # This ensures test environments get test values, production gets production values
     env:
       LOG_LEVEL: "{{ log_level }}"
-      MILVUS_HOST: "{{ milvus_ip }}"  # Changed from milvus_host to milvus_ip for direct reference
+      MILVUS_HOST: "{{ milvus_ip }}"
       MILVUS_PORT: "{{ milvus_port }}"
-      MINIO_ENDPOINT: "{{ minio_ip }}:{{ minio_port }}"  # Added for completeness
-      POSTGRES_HOST: "{{ postgres_ip }}"  # Added for visibility
-      REDIS_HOST: "{{ ingest_ip }}"  # Added for visibility
+      MINIO_ENDPOINT: "{{ milvus_ip }}:{{ minio_port }}"
+      POSTGRES_HOST: "{{ postgres_ip }}"
+      REDIS_HOST: "{{ ingest_ip }}"
+      TOKEN_SERVICE_URL: "http://{{ agent_ip }}:4111"
+      MASTRA_API_URL: "http://{{ agent_ip }}:4111"
 
