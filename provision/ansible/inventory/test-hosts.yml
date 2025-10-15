@@ -24,25 +24,28 @@ all:
     ingest_ip: 10.96.201.29
     agent_ip: 10.96.201.30
     
-    # Service configuration (using test IPs)
-    postgres_host: 10.96.201.26
+    # Service Endpoints (TEST - must match group_vars/all.yml structure)
+    postgres_host: "{{ postgres_ip }}"
     postgres_port: 5432
     postgres_db: busibox_test
     postgres_user: busibox_test_user
     
-    minio_endpoint: 10.96.201.28:9000
-    minio_console_port: 9001
-    
-    milvus_host: 10.96.201.27
+    milvus_host: "{{ milvus_ip }}"
     milvus_port: 19530
     
-    redis_host: 10.96.201.29
+    minio_host: "{{ minio_ip }}"
+    minio_port: 9000
+    minio_console_port: 9001
+    minio_endpoint: "{{ minio_ip }}:9000"
+    
+    redis_host: "{{ ingest_ip }}"
     redis_port: 6379
     
-    agent_host: 10.96.201.30
-    agent_port: 8000
+    agent_api_host: "{{ agent_ip }}"
+    agent_api_port: 8000
+    agent_host: "{{ agent_ip }}"
     
-    litellm_base_url: http://10.96.201.30:8000
+    litellm_base_url: "http://{{ agent_ip }}:8000"
 
   children:
     files:
