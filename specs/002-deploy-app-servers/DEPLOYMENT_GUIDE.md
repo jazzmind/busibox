@@ -6,6 +6,27 @@
 
 ---
 
+## 🎯 Environment Selection
+
+This guide covers **TWO** separate environments:
+
+| Environment | Purpose | Container IPs | Inventory File |
+|-------------|---------|---------------|----------------|
+| **TEST** | Testing, development, validation | `10.96.201.x` | `inventory/test-hosts.yml` |
+| **PRODUCTION** | Live, production workloads | `10.96.200.x` | `inventory/hosts.yml` |
+
+**Key Differences:**
+- **TEST containers** have `TEST-` prefix (e.g., `TEST-agent-lxc`)
+- **TEST IPs** are in `10.96.201.x` range (offset by +0.1.0)
+- **PRODUCTION IPs** are in `10.96.200.x` range
+
+**⚠️ IMPORTANT**: 
+- For initial deployment and testing, use **TEST** environment
+- Only deploy to **PRODUCTION** after validating in TEST
+- Each command below is marked with its target environment
+
+---
+
 ## ✅ Prerequisites Checklist
 
 Before deploying the agent-server, verify:
@@ -97,18 +118,41 @@ Choose one of the following deployment methods:
 
 This generates the deploywatch script and `.env` file automatically.
 
+**For TEST Environment:**
 ```bash
-# From Proxmox host (or workstation with Ansible)
+# From Proxmox host
 cd /root/busibox/provision/ansible
 
-# Deploy to TEST environment
+# Deploy app_deployer and secrets roles to TEST agent container
 ansible-playbook -i inventory/test-hosts.yml \
   --limit agent \
   --tags app_deployer,secrets \
   site.yml
 
-# Or use the Makefile shortcut (for production)
+# Then SSH to TEST agent container and run deployment script
+ssh root@10.96.201.30
+# Or: ssh TEST-agent-lxc
+bash /srv/deploywatch/apps/agent-server.sh
+```
+
+**For PRODUCTION Environment:**
+```bash
+# From Proxmox host or workstation with Ansible
+cd /root/busibox/provision/ansible
+
+# Deploy using production inventory
+ansible-playbook -i inventory/hosts.yml \
+  --limit agent \
+  --tags app_deployer,secrets \
+  site.yml
+
+# Or use the Makefile shortcut
 make deploy-apps
+
+# Then SSH to production agent container
+ssh root@10.96.200.30
+# Or: ssh agent-lxc
+bash /srv/deploywatch/apps/agent-server.sh
 ```
 
 **What this does:**
@@ -144,14 +188,16 @@ PLAY RECAP *************************************************************
 
 If you prefer to deploy manually or troubleshoot:
 
+**For TEST Environment:**
 ```bash
-# SSH to agent container
-ssh root@10.96.201.30  # or: ssh TEST-agent-lxc
+# SSH to TEST agent container
+ssh root@10.96.201.30
+# Or: ssh TEST-agent-lxc
 
-# Run the generated deployment script
+# Run the generated deployment script (if it exists)
 bash /srv/deploywatch/apps/agent-server.sh
 
-# Or manually:
+# Or manually deploy:
 cd /srv/agent
 git clone https://github.com/jazzmind/agent-server.git .
 
@@ -166,14 +212,28 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 pm2 start "python main.py" --name agent-server
+pm2 save
+```
+
+**For PRODUCTION Environment:**
+```bash
+# SSH to production agent container
+ssh root@10.96.200.30
+# Or: ssh agent-lxc
+
+# Same steps as TEST, but on production IP
+cd /srv/agent
+git clone https://github.com/jazzmind/agent-server.git .
+# ... (rest same as above)
 ```
 
 ### Method 3: Deploywatch Timer (Automated)
 
 The `deploywatch` systemd timer runs every 5 minutes and checks for new GitHub releases.
 
+**For TEST Environment:**
 ```bash
-# Check deploywatch status
+# Check deploywatch status on TEST agent container
 ssh root@10.96.201.30
 systemctl status deploywatch.timer
 systemctl status deploywatch.service
@@ -185,14 +245,23 @@ journalctl -u deploywatch.service -n 50 --no-pager
 systemctl start deploywatch.service
 ```
 
+**For PRODUCTION Environment:**
+```bash
+# Same commands, but SSH to production container
+ssh root@10.96.200.30
+systemctl status deploywatch.timer
+# ... (rest same as above)
+```
+
 ---
 
 ## 🔍 Verification
 
 ### 1. Check if agent-server is running
 
+**For TEST Environment:**
 ```bash
-# SSH to agent container
+# SSH to TEST agent container
 ssh root@10.96.201.30
 
 # Check process
@@ -203,10 +272,18 @@ pm2 list
 systemctl status agent-api
 ```
 
+**For PRODUCTION Environment:**
+```bash
+# SSH to production agent container
+ssh root@10.96.200.30
+pm2 list
+```
+
 ### 2. Health Check
 
+**For TEST Environment:**
 ```bash
-# From Proxmox host or any machine in the network
+# From Proxmox host or any machine in the TEST network
 curl http://10.96.201.30:8000/health
 
 # Expected response:
@@ -220,6 +297,12 @@ curl http://10.96.201.30:8000/health
 #     "redis": "ok"
 #   }
 # }
+```
+
+**For PRODUCTION Environment:**
+```bash
+# Use production IP
+curl http://10.96.200.30:8000/health
 ```
 
 ### 3. Check Logs
