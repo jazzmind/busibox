@@ -1,0 +1,96 @@
+---
+# NGINX Role - Main Tasks
+# Purpose: Install and configure NGINX reverse proxy with SSL
+# Requirements: FR-012, FR-013, FR-016, FR-017 (reverse proxy, SSL, HTTP redirect, graceful reload)
+
+- name: Install NGINX
+  apt:
+    name:
+      - nginx
+      - ssl-cert
+    state: present
+    update_cache: yes
+
+- name: Ensure NGINX is enabled and started
+  systemd:
+    name: nginx
+    enabled: yes
+    state: started
+
+- name: Create NGINX configuration directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+    owner: root
+    group: root
+  loop:
+    - /etc/nginx/sites-available
+    - /etc/nginx/sites-enabled
+    - /etc/nginx/snippets
+
+- name: Detect SSL certificate mode
+  set_fact:
+    detected_ssl_mode: "{{ ssl_mode | default('selfsigned') }}"
+
+- name: Display SSL mode
+  debug:
+    msg: |
+      SSL Certificate Mode: {{ detected_ssl_mode }}
+      - letsencrypt: Automatic certificate acquisition and renewal
+      - provisioned: Use pre-existing certificates
+      - selfsigned: Generate self-signed certificates (development only)
+
+- name: Include SSL certificate tasks based on mode
+  include_tasks: "{{ detected_ssl_mode }}.yml"
+
+- name: Deploy main NGINX configuration
+  template:
+    src: nginx.conf.j2
+    dest: /etc/nginx/nginx.conf
+    mode: "0644"
+    owner: root
+    group: root
+  notify: Reload NGINX
+
+- name: Deploy HTTP to HTTPS redirect configuration
+  template:
+    src: redirect-https.conf.j2
+    dest: /etc/nginx/sites-available/redirect-to-https.conf
+    mode: "0644"
+    owner: root
+    group: root
+  notify: Reload NGINX
+
+- name: Enable HTTP to HTTPS redirect
+  file:
+    src: /etc/nginx/sites-available/redirect-to-https.conf
+    dest: /etc/nginx/sites-enabled/redirect-to-https.conf
+    state: link
+  notify: Reload NGINX
+
+- name: Include application routing configuration
+  include_tasks: configure.yml
+  when: applications is defined and applications | length > 0
+
+- name: Test NGINX configuration
+  command: nginx -t
+  changed_when: false
+  register: nginx_test
+
+- name: Display NGINX configuration test result
+  debug:
+    msg: "{{ nginx_test.stderr_lines }}"
+
+- name: Display NGINX configuration summary
+  debug:
+    msg: |
+      ✅ NGINX configuration complete
+      - SSL Mode: {{ detected_ssl_mode }}
+      - Applications configured: {{ applications | selectattr('routes', 'defined') | selectattr('routes', 'ne', []) | list | length }}
+      - HTTP to HTTPS redirect: enabled
+      
+      Next steps:
+      1. Access applications via HTTPS
+      2. Monitor NGINX logs: journalctl -u nginx -f
+

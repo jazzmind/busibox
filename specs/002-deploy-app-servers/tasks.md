@@ -110,22 +110,22 @@
 
 ### Implementation for User Story 3
 
-- [ ] T032 [P] [US3] Implement NGINX installation in `provision/ansible/roles/nginx/tasks/main.yml` (apt install nginx, systemd enable per FR-012)
-- [ ] T033 [P] [US3] Implement SSL certificate mode detection in `provision/ansible/roles/nginx/tasks/main.yml` (check ssl_mode variable: letsencrypt, provisioned, selfsigned per FR-013a)
-- [ ] T034 [US3] Implement Let's Encrypt certificate acquisition in `provision/ansible/roles/nginx/tasks/letsencrypt.yml` (install certbot, DNS plugin, obtain wildcard cert for *.ai.jaycashman.com per FR-013b)
-- [ ] T035 [US3] Implement certbot auto-renewal configuration in `provision/ansible/roles/nginx/tasks/letsencrypt.yml` (systemd timer, reload hook, alert 7 days before expiry per FR-013b)
-- [ ] T036 [US3] Implement pre-provisioned certificate deployment in `provision/ansible/roles/nginx/tasks/provisioned.yml` (copy cert files from secrets vault)
-- [ ] T037 [US3] Implement self-signed certificate generation in `provision/ansible/roles/nginx/tasks/selfsigned.yml` (openssl generate for development)
-- [ ] T038 [P] [US3] Create main NGINX config template in `provision/ansible/roles/nginx/templates/nginx.conf.j2` (worker processes, logging, include sites-enabled/*)
-- [ ] T039 [P] [US3] Create HTTP to HTTPS redirect template in `provision/ansible/roles/nginx/templates/redirect-https.conf.j2` (listen 80, return 301 per FR-016)
-- [ ] T040 [P] [US3] Create subdomain virtual host template in `provision/ansible/roles/nginx/templates/vhost-subdomain.conf.j2` (server block, SSL config, proxy_pass, security headers per FR-014)
-- [ ] T041 [P] [US3] Create path routing location block template in `provision/ansible/roles/nginx/templates/location-path.conf.j2` (location directive, optional path stripping, proxy settings per FR-015)
-- [ ] T042 [US3] Implement NGINX configuration generation in `provision/ansible/roles/nginx/tasks/configure.yml` (loop over apps.yml routes, generate vhosts and locations per app)
-- [ ] T043 [US3] Implement NGINX configuration validation in `provision/ansible/roles/nginx/tasks/configure.yml` (nginx -t before reload per FR-017)
-- [ ] T044 [US3] Create NGINX reload handler in `provision/ansible/roles/nginx/handlers/main.yml` (graceful reload without dropping connections per FR-017)
-- [ ] T045 [P] [US3] Create error page templates in `provision/ansible/roles/nginx/templates/errors/` (404.html, 502.html, 503.html per FR-018)
-- [ ] T046 [US3] Add WebSocket support template in `provision/ansible/roles/nginx/templates/websocket.conf.j2` (upgrade headers, connection upgrade for apps with websocket: true)
-- [ ] T047 [US3] Update `provision/ansible/site.yml` to include nginx role for openwebui-lxc container
+- [x] T032 [P] [US3] Implement NGINX installation in `provision/ansible/roles/nginx/tasks/main.yml` (apt install nginx, systemd enable per FR-012)
+- [x] T033 [P] [US3] Implement SSL certificate mode detection in `provision/ansible/roles/nginx/tasks/main.yml` (check ssl_mode variable: letsencrypt, provisioned, selfsigned per FR-013a)
+- [x] T034 [US3] Implement Let's Encrypt certificate acquisition in `provision/ansible/roles/nginx/tasks/letsencrypt.yml` (install certbot, DNS plugin, obtain wildcard cert for *.ai.jaycashman.com per FR-013b)
+- [x] T035 [US3] Implement certbot auto-renewal configuration in `provision/ansible/roles/nginx/tasks/letsencrypt.yml` (systemd timer, reload hook, alert 7 days before expiry per FR-013b)
+- [x] T036 [US3] Implement pre-provisioned certificate deployment in `provision/ansible/roles/nginx/tasks/provisioned.yml` (copy cert files from secrets vault)
+- [x] T037 [US3] Implement self-signed certificate generation in `provision/ansible/roles/nginx/tasks/selfsigned.yml` (openssl generate for development)
+- [x] T038 [P] [US3] Create main NGINX config template in `provision/ansible/roles/nginx/templates/nginx.conf.j2` (worker processes, logging, include sites-enabled/*)
+- [x] T039 [P] [US3] Create HTTP to HTTPS redirect template in `provision/ansible/roles/nginx/templates/redirect-https.conf.j2` (listen 80, return 301 per FR-016)
+- [x] T040 [P] [US3] Create subdomain virtual host template in `provision/ansible/roles/nginx/templates/vhost-subdomain.conf.j2` (server block, SSL config, proxy_pass, security headers per FR-014)
+- [x] T041 [P] [US3] Create path routing location block template in `provision/ansible/roles/nginx/templates/location-path.conf.j2` (location directive, optional path stripping, proxy settings per FR-015)
+- [x] T042 [US3] Implement NGINX configuration generation in `provision/ansible/roles/nginx/tasks/configure.yml` (loop over apps.yml routes, generate vhosts and locations per app)
+- [x] T043 [US3] Implement NGINX configuration validation in `provision/ansible/roles/nginx/tasks/configure.yml` (nginx -t before reload per FR-017)
+- [x] T044 [US3] Create NGINX reload handler in `provision/ansible/roles/nginx/handlers/main.yml` (graceful reload without dropping connections per FR-017)
+- [x] T045 [P] [US3] Create error page templates in `provision/ansible/roles/nginx/templates/errors/` (404.html, 502.html, 503.html per FR-018)
+- [x] T046 [US3] Add WebSocket support template in `provision/ansible/roles/nginx/templates/websocket.conf.j2` (upgrade headers, connection upgrade for apps with websocket: true)
+- [x] T047 [US3] Update `provision/ansible/site.yml` to include nginx role for openwebui-lxc container
 - [ ] T048 [US3] Add NGINX verification to test-infrastructure.sh (SSL cert valid, HTTP redirects to HTTPS, subdomain routing works)
 
 **Checkpoint**: NGINX operational with SSL, subdomain and path routing configured, ready for application traffic

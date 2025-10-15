@@ -15,3 +15,6 @@
 
 - hosts: apps
   roles: [node_common, secrets, app_deployer]
+
+- hosts: openwebui
+  roles: [nginx]

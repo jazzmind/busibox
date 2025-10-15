@@ -1,0 +1,89 @@
+---
+# NGINX Configuration Generation Tasks
+# Purpose: Generate vhost and location configs for all applications
+# Requirements: FR-014, FR-015 (subdomain and path routing)
+
+- name: Load secrets for SSL certificate deployment
+  include_vars:
+    file: "{{ playbook_dir }}/roles/secrets/vars/vault.yml"
+  no_log: true
+  when: detected_ssl_mode == 'provisioned'
+
+- name: Remove existing site configurations
+  file:
+    path: /etc/nginx/sites-enabled/{{ item }}
+    state: absent
+  with_fileglob:
+    - "/etc/nginx/sites-enabled/*.conf"
+  when: item != 'redirect-to-https.conf'
+
+- name: Collect all applications with routes
+  set_fact:
+    apps_with_routes: "{{ applications | selectattr('routes', 'defined') | selectattr('routes', 'ne', []) | list }}"
+
+- name: Generate subdomain virtual hosts
+  template:
+    src: vhost-subdomain.conf.j2
+    dest: "/etc/nginx/sites-available/{{ app.name }}-{{ route.subdomain }}.conf"
+    mode: "0644"
+    owner: root
+    group: root
+  loop: "{{ apps_with_routes | subelements('routes') }}"
+  loop_control:
+    label: "{{ item.0.name }} - {{ item.1.type }}: {{ item.1.subdomain | default('N/A') }}"
+  when: item.1.type == 'subdomain'
+  vars:
+    app: "{{ item.0 }}"
+    route: "{{ item.1 }}"
+  notify: Reload NGINX
+
+- name: Enable subdomain virtual hosts
+  file:
+    src: "/etc/nginx/sites-available/{{ app.name }}-{{ route.subdomain }}.conf"
+    dest: "/etc/nginx/sites-enabled/{{ app.name }}-{{ route.subdomain }}.conf"
+    state: link
+  loop: "{{ apps_with_routes | subelements('routes') }}"
+  loop_control:
+    label: "{{ item.0.name }} - {{ item.1.subdomain | default('N/A') }}"
+  when: item.1.type == 'subdomain'
+  vars:
+    app: "{{ item.0 }}"
+    route: "{{ item.1 }}"
+  notify: Reload NGINX
+
+- name: Collect domain routes for main vhost
+  set_fact:
+    domain_apps: "{{ apps_with_routes | selectattr('routes', 'defined') | map('combine', {'domain_routes': []}) | list }}"
+
+- name: Build domain routes list
+  set_fact:
+    domain_apps: "{{ domain_apps | map('combine', {'domain_routes': item.routes | selectattr('type', 'in', ['domain', 'path']) | list}) | list }}"
+  loop: "{{ apps_with_routes }}"
+  when: item.routes | selectattr('type', 'in', ['domain', 'path']) | list | length > 0
+
+- name: Generate main domain virtual host with path locations
+  template:
+    src: vhost-domain.conf.j2
+    dest: "/etc/nginx/sites-available/{{ domain }}.conf"
+    mode: "0644"
+    owner: root
+    group: root
+  when: domain_apps | length > 0
+  notify: Reload NGINX
+
+- name: Enable main domain virtual host
+  file:
+    src: "/etc/nginx/sites-available/{{ domain }}.conf"
+    dest: "/etc/nginx/sites-enabled/{{ domain }}.conf"
+    state: link
+  when: domain_apps | length > 0
+  notify: Reload NGINX
+
+- name: Display routing configuration summary
+  debug:
+    msg: |
+      ✅ NGINX routing configuration complete
+      - Subdomain routes: {{ apps_with_routes | subelements('routes') | selectattr('1.type', 'eq', 'subdomain') | list | length }}
+      - Domain routes: {{ apps_with_routes | subelements('routes') | selectattr('1.type', 'eq', 'domain') | list | length }}
+      - Path routes: {{ apps_with_routes | subelements('routes') | selectattr('1.type', 'eq', 'path') | list | length }}
+

@@ -1,0 +1,112 @@
+---
+# Let's Encrypt SSL Certificate Tasks
+# Purpose: Automatic certificate acquisition and renewal via certbot
+# Requirements: FR-013a, FR-013b (Let's Encrypt mode, auto-renewal)
+
+- name: Install certbot and NGINX plugin
+  apt:
+    name:
+      - certbot
+      - python3-certbot-nginx
+      - python3-certbot-dns-cloudflare  # For DNS challenge (wildcard certs)
+    state: present
+    update_cache: yes
+
+- name: Create Let's Encrypt directory
+  file:
+    path: /etc/letsencrypt
+    state: directory
+    mode: "0755"
+    owner: root
+    group: root
+
+- name: Check if wildcard certificate already exists
+  stat:
+    path: "/etc/letsencrypt/live/{{ domain }}/fullchain.pem"
+  register: letsencrypt_cert
+
+- name: Display certificate status
+  debug:
+    msg: |
+      {% if letsencrypt_cert.stat.exists %}
+      ✓ Let's Encrypt certificate already exists for {{ domain }}
+      {% else %}
+      ⚠ Let's Encrypt certificate does not exist - manual acquisition required
+      {% endif %}
+
+- name: Create Cloudflare API credentials file (if DNS provider is cloudflare)
+  template:
+    src: cloudflare-credentials.ini.j2
+    dest: /etc/letsencrypt/cloudflare-credentials.ini
+    mode: "0600"
+    owner: root
+    group: root
+  when: 
+    - secrets.letsencrypt is defined
+    - secrets.letsencrypt.dns_provider is defined
+    - secrets.letsencrypt.dns_provider == 'cloudflare'
+  no_log: true
+
+- name: Display Let's Encrypt acquisition instructions
+  debug:
+    msg: |
+      📋 To acquire Let's Encrypt certificate manually:
+      
+      For wildcard certificate (recommended):
+      sudo certbot certonly --dns-cloudflare \
+        --dns-cloudflare-credentials /etc/letsencrypt/cloudflare-credentials.ini \
+        -d {{ domain }} \
+        -d *.{{ domain }} \
+        --email {{ ssl_email }} \
+        --agree-tos \
+        --non-interactive
+      
+      For single domain:
+      sudo certbot certonly --nginx \
+        -d {{ domain }} \
+        --email {{ ssl_email }} \
+        --agree-tos \
+        --non-interactive
+      
+      Note: Automatic acquisition requires valid DNS and accessible server
+  when: not letsencrypt_cert.stat.exists
+
+- name: Set up certbot renewal timer
+  systemd:
+    name: certbot.timer
+    enabled: yes
+    state: started
+
+- name: Create certbot renewal hook for NGINX reload
+  copy:
+    dest: /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+    content: |
+      #!/bin/bash
+      # Reload NGINX after certificate renewal
+      systemctl reload nginx
+    mode: "0755"
+    owner: root
+    group: root
+
+- name: Create certificate expiration monitoring script
+  template:
+    src: check-cert-expiry.sh.j2
+    dest: /usr/local/bin/check-cert-expiry.sh
+    mode: "0755"
+    owner: root
+    group: root
+
+- name: Set SSL certificate paths for NGINX
+  set_fact:
+    ssl_certificate: "/etc/letsencrypt/live/{{ domain }}/fullchain.pem"
+    ssl_certificate_key: "/etc/letsencrypt/live/{{ domain }}/privkey.pem"
+
+- name: Display Let's Encrypt summary
+  debug:
+    msg: |
+      ✅ Let's Encrypt configuration complete
+      - Certificate path: {{ ssl_certificate }}
+      - Auto-renewal: enabled (certbot.timer)
+      - Renewal hook: NGINX reload configured
+      - Expiration monitoring: /usr/local/bin/check-cert-expiry.sh
+

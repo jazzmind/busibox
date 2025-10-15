@@ -1,0 +1,12 @@
+---
+# NGINX Handlers
+# Purpose: Graceful NGINX reload without dropping connections (FR-017)
+
+- name: Reload NGINX
+  systemd:
+    name: nginx
+    state: reloaded
+  # Graceful reload: nginx -s reload
+  # This sends SIGQUIT to workers, allowing them to finish current requests
+  # New workers start immediately with new configuration
+
