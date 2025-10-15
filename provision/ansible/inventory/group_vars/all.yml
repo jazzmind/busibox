@@ -1,0 +1,95 @@
+# Test Environment - Global Variables
+# Created: 2025-10-15
+# Purpose: Override production defaults with test-specific values
+#
+# This file is loaded when using inventory/test-hosts.yml
+# It completely overrides group_vars/all.yml for the test environment
+
+# Domain Configuration (same as production for now)
+domain: ai.jaycashman.com
+www_domain: www.ai.jaycashman.com
+
+# SSL Certificate Mode
+ssl_mode: selfsigned  # Use self-signed for testing
+
+# SSL Email for Let's Encrypt
+ssl_email: admin@jaycashman.com
+
+# Network Configuration
+internal_network: 10.96.200.0/21  # Same network range
+internal_gateway: 10.96.200.1
+
+# Container IP Addresses (TEST - offset by +1.0 from production)
+openwebui_ip: 10.96.201.24
+apps_ip: 10.96.201.25
+postgres_ip: 10.96.201.26
+milvus_ip: 10.96.201.27
+minio_ip: 10.96.201.28
+ingest_ip: 10.96.201.29
+agent_ip: 10.96.201.30
+
+# Service Endpoints
+postgres_host: "{{ postgres_ip }}"
+postgres_port: 5432
+postgres_db: busibox_test
+postgres_user: busibox_test_user
+postgres_password: busibox_password_change_me
+
+milvus_host: "{{ milvus_ip }}"
+milvus_port: 19530
+
+minio_host: "{{ minio_ip }}"
+minio_port: 9000
+minio_console_port: 9001
+
+redis_host: "{{ ingest_ip }}"
+redis_port: 6379
+
+agent_api_host: "{{ agent_ip }}"
+agent_api_port: 8000
+
+# Deployment Configuration
+deploywatch_check_interval: 3600
+deploywatch_apps_dir: /srv/deploywatch/apps
+
+# Application Defaults
+default_process_manager: pm2
+default_node_version: "20"
+
+# NGINX Configuration
+nginx_worker_processes: auto
+nginx_worker_connections: 1024
+nginx_client_max_body_size: 100M
+nginx_proxy_timeout: 60s
+
+# Logging
+log_level: debug  # More verbose for testing
+structured_logging: true
+
+# Security
+hsts_max_age: 63072000
+
+# Application Definitions (TEST)
+# These use test-specific IPs and database names
+applications:
+  - name: agent-server
+    github_repo: jazzmind/agent-server
+    container: agent-lxc
+    container_ip: 10.96.201.30
+    port: 8000
+    deploy_path: /srv/agent
+    health_endpoint: /health
+    routes: []  # Internal only - no NGINX routing
+    secrets:
+      - database_url
+      - minio_access_key
+      - minio_secret_key
+      - redis_url
+    env:
+      LOG_LEVEL: debug
+      MILVUS_HOST: 10.96.201.27
+      MILVUS_PORT: "19530"
+      MINIO_ENDPOINT: 10.96.201.28:9000
+      POSTGRES_HOST: 10.96.201.26
+      REDIS_HOST: 10.96.201.29
+

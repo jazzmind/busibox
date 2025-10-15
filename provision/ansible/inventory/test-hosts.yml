@@ -15,61 +15,8 @@ all:
     busibox_env: test
     busibox_test_mode: true
     
-    # Container IP Addresses (TEST environment - offset by +0.1.0 from production)
-    openwebui_ip: 10.96.201.24
-    apps_ip: 10.96.201.25
-    postgres_ip: 10.96.201.26
-    milvus_ip: 10.96.201.27
-    minio_ip: 10.96.201.28
-    ingest_ip: 10.96.201.29
-    agent_ip: 10.96.201.30
-    
-    # Service Endpoints (TEST - must match group_vars/all.yml structure)
-    postgres_host: "{{ postgres_ip }}"
-    postgres_port: 5432
-    postgres_db: busibox_test
-    postgres_user: busibox_test_user
-    
-    milvus_host: "{{ milvus_ip }}"
-    milvus_port: 19530
-    
-    minio_host: "{{ minio_ip }}"
-    minio_port: 9000
-    minio_console_port: 9001
-    minio_endpoint: "{{ minio_ip }}:9000"
-    
-    redis_host: "{{ ingest_ip }}"
-    redis_port: 6379
-    
-    agent_api_host: "{{ agent_ip }}"
-    agent_api_port: 8000
-    agent_host: "{{ agent_ip }}"
-    
-    litellm_base_url: "http://{{ agent_ip }}:8000"
-    
-    # Application Definitions (TEST - overrides group_vars/all.yml)
-    # These use test-specific IPs and database names
-    applications:
-      - name: agent-server
-        github_repo: jazzmind/agent-server
-        container: agent-lxc
-        container_ip: "{{ agent_ip }}"
-        port: 8000
-        deploy_path: /srv/agent
-        health_endpoint: /health
-        routes: []  # Internal only - no NGINX routing
-        secrets:
-          - database_url
-          - minio_access_key
-          - minio_secret_key
-          - redis_url
-        env:
-          LOG_LEVEL: info
-          MILVUS_HOST: "{{ milvus_ip }}"
-          MILVUS_PORT: "{{ milvus_port }}"
-          MINIO_ENDPOINT: "{{ minio_ip }}:{{ minio_port }}"
-          POSTGRES_HOST: "{{ postgres_ip }}"
-          REDIS_HOST: "{{ ingest_ip }}"
+    # All other variables are now in inventory/group_vars/all.yml
+    # This ensures test-specific values (IPs, database names, etc.) are used
 
   children:
     files:
