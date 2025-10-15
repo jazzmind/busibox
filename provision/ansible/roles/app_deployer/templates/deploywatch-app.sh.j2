@@ -380,18 +380,22 @@ start_application() {
             
             if [[ -n "$MASTRA_BUILD_DIR" ]]; then
                 log_info "Mastra app detected, starting from $MASTRA_BUILD_DIR"
-                cd "$MASTRA_BUILD_DIR"
                 
-                # Verify we can find package.json or a start script
-                if [[ -f "package.json" ]]; then
-                    log_info "Found package.json in $MASTRA_BUILD_DIR"
-                    pm2 start npm --name "${APP_NAME}" -- start
-                elif [[ -f "index.js" ]]; then
+                # Mastra builds to .mjs files, use node to run index.mjs
+                if [[ -f "$MASTRA_BUILD_DIR/index.mjs" ]]; then
+                    log_info "Found index.mjs, starting with: node $MASTRA_BUILD_DIR/index.mjs"
+                    pm2 start node --name "${APP_NAME}" -- "$MASTRA_BUILD_DIR/index.mjs"
+                elif [[ -f "$MASTRA_BUILD_DIR/index.js" ]]; then
                     log_info "Found index.js in $MASTRA_BUILD_DIR"
+                    cd "$MASTRA_BUILD_DIR"
                     pm2 start index.js --name "${APP_NAME}"
+                elif [[ -f "$MASTRA_BUILD_DIR/package.json" ]]; then
+                    log_info "Found package.json in $MASTRA_BUILD_DIR"
+                    cd "$MASTRA_BUILD_DIR"
+                    pm2 start npm --name "${APP_NAME}" -- start
                 else
                     log_error "No entry point found in $MASTRA_BUILD_DIR"
-                    ls -la >&2
+                    ls -la "$MASTRA_BUILD_DIR" >&2
                     return 1
                 fi
             # Check if this has a start script
