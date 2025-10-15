@@ -358,6 +358,12 @@ start_application() {
         if [[ -f "package.json" ]]; then
             log_info "Detected Node.js application (package.json found)"
             
+            # Debug: Show .mastra directory structure
+            if [[ -d ".mastra" ]]; then
+                log_info "Contents of .mastra directory:"
+                ls -la .mastra/ >&2 || true
+            fi
+            
             # Check if this is a Mastra app (built output in .mastra/output or .mastra/.build)
             MASTRA_BUILD_DIR=""
             if [[ -d ".mastra/output" ]] && [[ -f ".mastra/output/package.json" ]]; then
