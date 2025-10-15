@@ -128,6 +128,45 @@
   register: migration_result
   changed_when: "'applied successfully' in migration_result.stdout"
 
+- name: Grant ownership of all tables to application user
+  become_user: postgres
+  postgresql_query:
+    db: "{{ postgres_db }}"
+    query: |
+      -- Grant ownership of all tables in public schema
+      DO $$
+      DECLARE
+        tbl RECORD;
+      BEGIN
+        FOR tbl IN SELECT tablename FROM pg_tables WHERE schemaname = 'public'
+        LOOP
+          EXECUTE 'ALTER TABLE public.' || quote_ident(tbl.tablename) || ' OWNER TO {{ postgres_user }}';
+        END LOOP;
+      END $$;
+      
+      -- Grant ownership of all sequences
+      DO $$
+      DECLARE
+        seq RECORD;
+      BEGIN
+        FOR seq IN SELECT sequencename FROM pg_sequences WHERE schemaname = 'public'
+        LOOP
+          EXECUTE 'ALTER SEQUENCE public.' || quote_ident(seq.sequencename) || ' OWNER TO {{ postgres_user }}';
+        END LOOP;
+      END $$;
+      
+      -- Grant schema usage
+      GRANT USAGE ON SCHEMA public TO {{ postgres_user }};
+      GRANT CREATE ON SCHEMA public TO {{ postgres_user }};
+      
+      -- Grant all privileges on all tables
+      GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO {{ postgres_user }};
+      GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO {{ postgres_user }};
+      
+      -- Set default privileges for future objects
+      ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO {{ postgres_user }};
+      ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO {{ postgres_user }};
+
 - name: Configure peer/md5 authentication for non-postgres users (after migrations)
   lineinfile:
     path: "/etc/postgresql/{{ pg_version.stdout }}/main/pg_hba.conf"
