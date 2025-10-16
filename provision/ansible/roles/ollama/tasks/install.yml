@@ -107,15 +107,11 @@
   failed_when: false
   tags: [ollama_install]
 
-- name: Download Ollama binary
-  get_url:
-    url: "{{ ollama_binary_url }}"
-    dest: "{{ ollama_install_dir }}/ollama"
-    mode: '0755'
-    owner: root
-    group: root
-  when: not ollama_binary.stat.exists or ollama_version == "latest"
-  notify: restart ollama
+- name: Install Ollama using official install script
+  shell: curl -fsSL https://ollama.com/install.sh | sh
+  args:
+    creates: "{{ ollama_install_dir }}/ollama"
+  when: not ollama_binary.stat.exists
   tags: [ollama_install]
 
 - name: Verify Ollama installation

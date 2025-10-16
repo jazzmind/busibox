@@ -6,7 +6,7 @@
 # Ollama Installation
 ollama_version: "latest"
 ollama_install_dir: /usr/local/bin
-ollama_binary_url: "https://ollama.com/download/ollama-linux-amd64"
+ollama_binary_url: "https://github.com/ollama/ollama/releases/download/v0.5.4/ollama-linux-amd64"
 
 # Ollama Service Configuration
 ollama_user: ollama
