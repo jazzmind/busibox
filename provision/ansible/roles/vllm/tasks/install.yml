@@ -37,11 +37,11 @@
   changed_when: false
   tags: [vllm_install, vllm_gpu]
 
-- name: Purge existing NVIDIA drivers if GPU devices exist but nvidia-smi fails
+- name: Always purge existing NVIDIA packages in LXC to avoid version mismatch
   block:
     - name: Display purge reason
       debug:
-        msg: "GPU devices detected but nvidia-smi not working. Purging and reinstalling NVIDIA drivers..."
+        msg: "Purging any existing NVIDIA packages to ensure clean install matching host driver version..."
 
     - name: Stop any running NVIDIA services
       systemd:
@@ -66,6 +66,10 @@
     - name: Clean apt cache
       apt:
         autoclean: yes
+        
+    - name: Update apt cache after purge
+      apt:
+        update_cache: yes
 
     - name: Remove NVIDIA configuration files
       file:
@@ -75,10 +79,9 @@
         - /etc/modprobe.d/nvidia.conf
         - /etc/modprobe.d/nvidia-installer-disable-nouveau.conf
         - /usr/local/cuda
+        - /usr/local/cuda-12
       ignore_errors: true
-  when: 
-    - nvidia_check.rc != 0
-    - "'No NVIDIA devices found' not in gpu_devices_initial_check.stdout"
+  when: "'No NVIDIA devices found' not in gpu_devices_initial_check.stdout"
   tags: [vllm_install, vllm_gpu]
 
 - name: Install NVIDIA drivers and CUDA if not available
@@ -122,14 +125,26 @@
       apt:
         update_cache: yes
 
-    - name: Install NVIDIA userspace utilities for LXC
+    - name: Check NVIDIA driver version on host via kernel module
+      shell: "cat /proc/driver/nvidia/version 2>/dev/null | head -1 | awk '{print $8}' || echo ''"
+      register: host_nvidia_version
+      changed_when: false
+      failed_when: false
+
+    - name: Display detected host NVIDIA driver version
+      debug:
+        msg: "Host NVIDIA driver version: {{ host_nvidia_version.stdout }}"
+
+    - name: Install NVIDIA userspace utilities matching host driver
       apt:
         name:
-          - nvidia-utils-535
-          - cuda-toolkit-12-1
+          - cuda-drivers
+          - cuda-runtime-12-1
         state: present
         install_recommends: no
       register: nvidia_install
+      environment:
+        DEBIAN_FRONTEND: noninteractive
 
     - name: Reboot container if drivers were installed
       shell: "sleep 2 && reboot"

@@ -128,14 +128,26 @@
       apt:
         update_cache: yes
 
-    - name: Install NVIDIA userspace utilities for LXC
+    - name: Check NVIDIA driver version on host via kernel module
+      shell: "cat /proc/driver/nvidia/version 2>/dev/null | head -1 | awk '{print $8}' || echo ''"
+      register: host_nvidia_version
+      changed_when: false
+      failed_when: false
+
+    - name: Display detected host NVIDIA driver version
+      debug:
+        msg: "Host NVIDIA driver version: {{ host_nvidia_version.stdout }}"
+
+    - name: Install NVIDIA userspace utilities matching host driver
       apt:
         name:
-          - nvidia-utils-535
-          - cuda-toolkit-12-1
+          - cuda-drivers
+          - cuda-runtime-12-1
         state: present
         install_recommends: no
       register: nvidia_install
+      environment:
+        DEBIAN_FRONTEND: noninteractive
 
     - name: Reboot container if drivers were installed
       shell: "sleep 2 && reboot"
