@@ -146,7 +146,7 @@ install_nvidia_drivers() {
   
   # Install current NVIDIA driver and CUDA userspace tools
   log_info "Installing NVIDIA driver and CUDA tools..."
-  apt-get install -y nvidia-driver nvidia-drivers-cuda cuda-toolkit
+  apt-get install -y nvidia-driver nvidia-driver-cuda cuda-toolkit
   
   log_warning "=========================================="
   log_warning "NVIDIA drivers installed!"

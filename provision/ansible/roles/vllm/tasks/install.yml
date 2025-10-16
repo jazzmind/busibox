@@ -147,7 +147,7 @@
     - name: Install NVIDIA userspace utilities (nvidia-drivers-cuda + cuda-toolkit)
       apt:
         name:
-          - nvidia-drivers-cuda
+          - nvidia-driver-cuda
           - cuda-toolkit
         state: present
         install_recommends: yes
