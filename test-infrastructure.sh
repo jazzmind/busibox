@@ -114,7 +114,7 @@ test_provision_containers() {
   
   # Verify containers exist
   log_info "Verifying containers exist..."
-  local test_ctids=(301 302 303 304 305 306 307)
+  local test_ctids=(300 301 302 303 304 305 306)
   
   for ctid in "${test_ctids[@]}"; do
     if pct status "$ctid" &>/dev/null; then
@@ -163,31 +163,31 @@ test_health_checks() {
   
   # PostgreSQL
   log_info "Checking PostgreSQL..."
-  if psql -h 10.96.201.26 -U busibox_test_user -d busibox_test -c "SELECT 1" &>/dev/null; then
+  if psql -h 10.96.201.203 -U busibox_test_user -d busibox_test -c "SELECT 1" &>/dev/null; then
     record_test "PostgreSQL health" "PASS"
   else
     record_test "PostgreSQL health" "FAIL" "Connection failed"
   fi
   
-  # MinIO
-  log_info "Checking MinIO..."
-  if curl -f -s http://10.96.201.28:9000/minio/health/live > /dev/null 2>&1; then
-    record_test "MinIO health" "PASS"
-  else
-    record_test "MinIO health" "FAIL" "Health endpoint failed"
-  fi
-  
   # Milvus
   log_info "Checking Milvus..."
-  if curl -f -s http://10.96.201.27:9091/healthz > /dev/null 2>&1; then
+  if curl -f -s http://10.96.201.204:9091/healthz > /dev/null 2>&1; then
     record_test "Milvus health" "PASS"
   else
     record_test "Milvus health" "FAIL" "Health endpoint failed"
   fi
   
+  # MinIO
+  log_info "Checking MinIO..."
+  if curl -f -s http://10.96.201.205:9000/minio/health/live > /dev/null 2>&1; then
+    record_test "MinIO health" "PASS"
+  else
+    record_test "MinIO health" "FAIL" "Health endpoint failed"
+  fi
+  
   # Agent API (may not be deployed yet)
   log_info "Checking Agent API..."
-  if curl -f -s http://10.96.201.30:8000/health/live > /dev/null 2>&1; then
+  if curl -f -s http://10.96.201.202:8000/health/live > /dev/null 2>&1; then
     record_test "Agent API health" "PASS"
   else
     log_warning "Agent API not responding (may not be deployed yet)"
@@ -201,7 +201,7 @@ test_database_schema() {
   log_info "Verifying database schema..."
   
   # Check tables exist
-  local tables=$(psql -h 10.96.201.26 -U busibox_test_user -d busibox_test -t -c "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename;" 2>/dev/null | wc -l)
+  local tables=$(psql -h 10.96.201.203 -U busibox_test_user -d busibox_test -t -c "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename;" 2>/dev/null | wc -l)
   
   if [[ "$tables" -gt 0 ]]; then
     log_success "Found $tables tables in database"
@@ -213,7 +213,7 @@ test_database_schema() {
   
   # Check migrations applied
   log_info "Checking migrations..."
-  local migrations=$(psql -h 10.96.201.26 -U busibox_test_user -d busibox_test -t -c "SELECT COUNT(*) FROM schema_migrations;" 2>/dev/null | xargs)
+  local migrations=$(psql -h 10.96.201.203 -U busibox_test_user -d busibox_test -t -c "SELECT COUNT(*) FROM schema_migrations;" 2>/dev/null | xargs)
   
   if [[ "$migrations" -ge 2 ]]; then
     log_success "Found $migrations migrations applied"

@@ -68,21 +68,21 @@ fi
 
 # Create containers based on mode
 if [[ "$MODE" == "test" ]]; then
-  create_ct "$CT_FILES_TEST"  "$IP_FILES_TEST"  "${PREFIX}files-lxc"  priv
+  create_ct "$CT_PROXY_TEST" "$IP_PROXY_TEST" "${PREFIX}proxy-lxc" unpriv
+  create_ct "$CT_APPS_TEST"   "$IP_APPS_TEST"   "${PREFIX}apps-lxc"   unpriv
+  create_ct "$CT_AGENT_TEST"  "$IP_AGENT_TEST"  "${PREFIX}agent-lxc"  unpriv
   create_ct "$CT_PG_TEST"     "$IP_PG_TEST"     "${PREFIX}pg-lxc"     unpriv
   create_ct "$CT_MILVUS_TEST" "$IP_MILVUS_TEST" "${PREFIX}milvus-lxc" priv
-  create_ct "$CT_AGENT_TEST"  "$IP_AGENT_TEST"  "${PREFIX}agent-lxc"  unpriv
+  create_ct "$CT_FILES_TEST"  "$IP_FILES_TEST"  "${PREFIX}files-lxc"  priv
   create_ct "$CT_INGEST_TEST" "$IP_INGEST_TEST" "${PREFIX}ingest-lxc" unpriv
-  create_ct "$CT_APPS_TEST"   "$IP_APPS_TEST"   "${PREFIX}apps-lxc"   unpriv
-  create_ct "$CT_OPENWEBUI_TEST" "$IP_OPENWEBUI_TEST" "${PREFIX}openwebui-lxc" unpriv
 else
-  create_ct "$CT_FILES"  "$IP_FILES"  files-lxc  priv
+  create_ct "$CT_PROXY" "$IP_PROXY" proxy-lxc unpriv
+  create_ct "$CT_APPS"   "$IP_APPS"   apps-lxc   unpriv
+  create_ct "$CT_AGENT"  "$IP_AGENT"  agent-lxc  unpriv
   create_ct "$CT_PG"     "$IP_PG"     pg-lxc     unpriv
   create_ct "$CT_MILVUS" "$IP_MILVUS" milvus-lxc priv
-  create_ct "$CT_AGENT"  "$IP_AGENT"  agent-lxc  unpriv
+  create_ct "$CT_FILES"  "$IP_FILES"  files-lxc  priv
   create_ct "$CT_INGEST" "$IP_INGEST" ingest-lxc unpriv
-  create_ct "$CT_APPS"   "$IP_APPS"   apps-lxc   unpriv
-  create_ct "$CT_OPENWEBUI" "$IP_OPENWEBUI" openwebui-lxc unpriv
 fi
 
 echo ""

@@ -63,7 +63,7 @@ echo ""
 echo "=========================================="
 echo "Step 4: Checking for LXC Template"
 echo "=========================================="
-TEMPLATE="debian-12-standard_12.7-1_amd64.tar.zst"
+TEMPLATE="debian-12-standard_12.12-1_amd64.tar.zst"
 if [[ -f "/var/lib/vz/template/cache/${TEMPLATE}" ]]; then
     echo "✓ Template already downloaded: ${TEMPLATE}"
 else
