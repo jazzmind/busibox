@@ -139,7 +139,6 @@
       apt:
         name:
           - cuda-drivers
-          - cuda-runtime-12-1
         state: present
         install_recommends: no
       register: nvidia_install
