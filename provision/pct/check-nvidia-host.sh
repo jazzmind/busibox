@@ -117,45 +117,39 @@ main() {
 }
 
 install_nvidia_drivers() {
-  log_info "Installing NVIDIA driver 550 and CUDA 12.4 on host..."
+  log_info "Installing NVIDIA driver 550 and CUDA 12.4 from NVIDIA repository..."
   
-  # Add NVIDIA repository if not present
-  if [[ ! -f /etc/apt/sources.list.d/nvidia-cuda.list ]]; then
+  # Add NVIDIA CUDA repository
+  if [[ ! -f /etc/apt/sources.list.d/cuda.list ]]; then
     log_info "Adding NVIDIA CUDA repository..."
     
-    # Remove old keyring files if present
-    rm -f /usr/share/keyrings/nvidia-cuda-keyring.* 2>/dev/null || true
+    # Download and install CUDA keyring package
+    wget -q https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-keyring_1.1-1_all.deb -O /tmp/cuda-keyring.deb
     
-    wget -q https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/3bf863cc.pub -O /tmp/nvidia-cuda-keyring.asc
-    
-    if [[ ! -f /tmp/nvidia-cuda-keyring.asc ]]; then
-      log_error "Failed to download NVIDIA keyring"
+    if [[ ! -f /tmp/cuda-keyring.deb ]]; then
+      log_error "Failed to download CUDA keyring"
       exit 1
     fi
     
-    gpg --dearmor < /tmp/nvidia-cuda-keyring.asc > /usr/share/keyrings/nvidia-cuda-keyring.gpg
-    chmod 644 /usr/share/keyrings/nvidia-cuda-keyring.gpg
-    
-    echo "deb [signed-by=/usr/share/keyrings/nvidia-cuda-keyring.gpg] https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/ /" > /etc/apt/sources.list.d/nvidia-cuda.list
-    
-    rm -f /tmp/nvidia-cuda-keyring.asc
+    dpkg -i /tmp/cuda-keyring.deb
+    rm -f /tmp/cuda-keyring.deb
   fi
   
   log_info "Updating package lists..."
   apt-get update
   
   # List available driver versions for debugging
-  log_info "Available NVIDIA driver versions:"
-  apt-cache search --names-only '^nvidia-driver-[0-9]' | head -10
+  log_info "Available NVIDIA driver 550 packages:"
+  apt-cache search --names-only 'nvidia' | grep '550' | head -15
   
-  # Install NVIDIA driver 550, CUDA 12.4 toolkit, and userspace tools
-  log_info "Installing NVIDIA driver 550, CUDA 12.4 toolkit, and userspace tools..."
+  # Install NVIDIA driver 550 and CUDA 12.4 toolkit from NVIDIA repository
+  # Using nvidia-driver-bin which contains the actual driver binary
+  log_info "Installing NVIDIA driver 550.163.01 and CUDA 12.4 toolkit..."
   apt-get install -y \
-    nvidia-driver-550 \
-    nvidia-kernel-550-open \
-    cuda-drivers-550 \
-    cuda-toolkit-12-4 \
-    nvidia-utils-550
+    nvidia-driver-bin \
+    nvidia-kernel-open-dkms \
+    nvidia-utils-550 \
+    cuda-toolkit-12-4
   
   log_warning "=========================================="
   log_warning "NVIDIA driver 550 and CUDA 12.4 installed!"
@@ -167,22 +161,10 @@ install_nvidia_drivers() {
 }
 
 install_cuda_drivers_metapackage() {
-  log_info "Installing NVIDIA driver 550 and CUDA 12.4 packages..."
+  log_info "Installing NVIDIA driver and CUDA 12.4 packages..."
   
-  # Ensure NVIDIA repo is configured
-  if [[ ! -f /etc/apt/sources.list.d/nvidia-cuda.list ]]; then
-    install_nvidia_drivers
-    return
-  fi
-  
-  apt-get update
-  apt-get install -y \
-    nvidia-driver-550 \
-    cuda-drivers-550 \
-    cuda-toolkit-12-4 \
-    nvidia-utils-550
-  
-  log_success "NVIDIA driver 550 and CUDA 12.4 packages installed"
+  # Just call the main install function
+  install_nvidia_drivers
 }
 
 purge_and_reinstall() {

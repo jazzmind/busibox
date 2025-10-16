@@ -82,41 +82,23 @@
 
 - name: Install NVIDIA drivers and CUDA (if GPU available)
   block:
-    - name: Remove old NVIDIA repository configurations
-      file:
-        path: "{{ item }}"
-        state: absent
-      loop:
-        - /etc/apt/sources.list.d/cuda-debian12-x86_64.list
-        - /usr/share/keyrings/cuda-archive-keyring.gpg
-        - /usr/share/keyrings/cuda-archive-keyring.asc
-        - /usr/share/keyrings/nvidia-cuda-keyring.gpg
-        - /tmp/nvidia-cuda-keyring.asc
-
-    - name: Install gnupg for key conversion
-      apt:
-        name: gnupg
-        state: present
-        update_cache: yes
-
-    - name: Download NVIDIA CUDA repository GPG key
+    - name: Download CUDA keyring package
       get_url:
-        url: https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/3bf863cc.pub
-        dest: /tmp/nvidia-cuda-keyring.asc
+        url: https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-keyring_1.1-1_all.deb
+        dest: /tmp/cuda-keyring.deb
         mode: '0644'
 
-    - name: Convert and install GPG key
-      shell: |
-        gpg --dearmor < /tmp/nvidia-cuda-keyring.asc > /usr/share/keyrings/nvidia-cuda-keyring.gpg
-        chmod 644 /usr/share/keyrings/nvidia-cuda-keyring.gpg
-
-    - name: Add NVIDIA CUDA repository
-      apt_repository:
-        repo: "deb [signed-by=/usr/share/keyrings/nvidia-cuda-keyring.gpg] https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/ /"
+    - name: Install CUDA keyring package
+      apt:
+        deb: /tmp/cuda-keyring.deb
         state: present
-        filename: nvidia-cuda-debian12
 
-    - name: Update apt cache after adding NVIDIA repo
+    - name: Remove temporary keyring file
+      file:
+        path: /tmp/cuda-keyring.deb
+        state: absent
+
+    - name: Update apt cache after adding NVIDIA repository
       apt:
         update_cache: yes
 
@@ -130,11 +112,10 @@
       debug:
         msg: "Host NVIDIA driver version: {{ host_nvidia_version.stdout }}"
 
-    - name: Install NVIDIA userspace utilities for CUDA 12.4 (driver 550 compatible)
+    - name: Install NVIDIA userspace utilities and CUDA 12.4 toolkit (for LXC containers)
       apt:
         name:
           - nvidia-utils-550
-          - cuda-drivers-550
           - cuda-toolkit-12-4
         state: present
         install_recommends: yes
