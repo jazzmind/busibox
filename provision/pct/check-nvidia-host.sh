@@ -117,47 +117,55 @@ main() {
 }
 
 install_nvidia_drivers() {
-  log_info "Installing NVIDIA driver 550 and CUDA 12.4 from NVIDIA repository..."
+  log_info "Installing NVIDIA driver 550.163.01 directly from NVIDIA..."
   
-  # Add NVIDIA CUDA repository
-  if [[ ! -f /etc/apt/sources.list.d/cuda.list ]]; then
-    log_info "Adding NVIDIA CUDA repository..."
-    
-    # Download and install CUDA keyring package
-    wget -q https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-keyring_1.1-1_all.deb -O /tmp/cuda-keyring.deb
-    
-    if [[ ! -f /tmp/cuda-keyring.deb ]]; then
-      log_error "Failed to download CUDA keyring"
-      exit 1
-    fi
-    
-    dpkg -i /tmp/cuda-keyring.deb
-    rm -f /tmp/cuda-keyring.deb
-  fi
+  # Base URL for NVIDIA packages
+  NVIDIA_REPO="https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64"
   
-  log_info "Updating package lists..."
+  # Remove any conflicting repository configurations
+  rm -f /etc/apt/sources.list.d/cuda*.list
+  rm -f /usr/share/keyrings/cuda-archive-keyring.gpg
+  rm -f /usr/share/keyrings/nvidia-cuda-keyring.gpg
+  
+  log_info "Downloading NVIDIA driver 550.163.01 packages..."
+  
+  # Download the specific packages
+  cd /tmp
+  wget -q "${NVIDIA_REPO}/nvidia-driver-bin_550.163.01-1_amd64.deb"
+  wget -q "${NVIDIA_REPO}/nvidia-kernel-open-dkms_550.163.01-1_amd64.deb"
+  wget -q "${NVIDIA_REPO}/nvidia-kernel-common_550.163.01-1_amd64.deb"
+  wget -q "${NVIDIA_REPO}/nvidia-utils-550_550.163.01-1_amd64.deb"
+  wget -q "${NVIDIA_REPO}/libnvidia-ml1_550.163.01-1_amd64.deb"
+  wget -q "${NVIDIA_REPO}/cuda-keyring_1.1-1_all.deb"
+  
+  log_info "Installing NVIDIA driver packages..."
+  
+  # Install in dependency order
+  dpkg -i cuda-keyring_1.1-1_all.deb
+  dpkg -i nvidia-kernel-common_550.163.01-1_amd64.deb
+  dpkg -i nvidia-kernel-open-dkms_550.163.01-1_amd64.deb || apt-get install -f -y
+  dpkg -i libnvidia-ml1_550.163.01-1_amd64.deb
+  dpkg -i nvidia-utils-550_550.163.01-1_amd64.deb
+  dpkg -i nvidia-driver-bin_550.163.01-1_amd64.deb
+  
+  # Fix any dependency issues
+  apt-get install -f -y
+  
+  log_info "Installing CUDA 12.4 toolkit..."
   apt-get update
+  apt-get install -y cuda-toolkit-12-4
   
-  # List available driver versions for debugging
-  log_info "Available NVIDIA driver 550 packages:"
-  apt-cache search --names-only 'nvidia' | grep '550' | head -15
-  
-  # Install NVIDIA driver 550 and CUDA 12.4 toolkit from NVIDIA repository
-  # Using nvidia-driver-bin which contains the actual driver binary
-  log_info "Installing NVIDIA driver 550.163.01 and CUDA 12.4 toolkit..."
-  apt-get install -y \
-    nvidia-driver-bin \
-    nvidia-kernel-open-dkms \
-    nvidia-utils-550 \
-    cuda-toolkit-12-4
+  # Cleanup
+  cd /
+  rm -f /tmp/nvidia-*.deb /tmp/libnvidia-*.deb /tmp/cuda-keyring*.deb
   
   log_warning "=========================================="
-  log_warning "NVIDIA driver 550 and CUDA 12.4 installed!"
+  log_warning "NVIDIA driver 550.163.01 and CUDA 12.4 installed!"
   log_warning "HOST REBOOT REQUIRED!"
   log_warning "=========================================="
   log_info "Run: reboot"
   log_info "After reboot, verify with: nvidia-smi"
-  log_info "Should show driver version 550.x and CUDA 12.4"
+  log_info "Should show driver version 550.163.01 and CUDA 12.4"
 }
 
 install_cuda_drivers_metapackage() {
