@@ -66,29 +66,8 @@ main() {
     DRIVER_VERSION=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1)
     log_success "NVIDIA Driver Version: $DRIVER_VERSION"
     
-    # Check if driver is compatible with PyTorch (550.x recommended)
-    MAJOR_VERSION=$(echo "$DRIVER_VERSION" | cut -d. -f1)
-    if [[ "$MAJOR_VERSION" -gt 550 ]]; then
-      log_warning "Driver version $DRIVER_VERSION may be incompatible with PyTorch!"
-      log_warning "PyTorch requires CUDA 12.4 which is best supported by driver 550.x"
-      log_warning "See: https://discuss.pytorch.org/t/no-more-cuda-available-after-installing-last-nvidia-drivers/203376"
-      if [[ "$FIX_MODE" == "true" ]]; then
-        log_info "Downgrading to driver 550..."
-        purge_and_reinstall
-      else
-        log_info "Run with --fix to downgrade to driver 550"
-      fi
-    elif [[ "$MAJOR_VERSION" -lt 550 ]]; then
-      log_warning "Driver version $DRIVER_VERSION is older than recommended 550.x"
-      if [[ "$FIX_MODE" == "true" ]]; then
-        log_info "Upgrading to driver 550..."
-        purge_and_reinstall
-      else
-        log_info "Run with --fix to upgrade to driver 550"
-      fi
-    else
-      log_success "Driver version is compatible with PyTorch CUDA 12.4"
-    fi
+    # Driver version check (any modern driver should work with nvidia-drivers-cuda)
+    log_info "Current driver supports CUDA $(nvidia-smi | grep 'CUDA Version' | awk '{print $9}')"
   else
     log_error "nvidia-smi failed to run"
     if [[ "$FIX_MODE" == "true" ]]; then
@@ -138,33 +117,7 @@ main() {
 }
 
 install_nvidia_drivers() {
-  log_info "Installing NVIDIA driver 550 (CUDA 12.4 compatible) on host..."
-  
-  # First, clean uninstall any existing drivers
-  log_info "Checking for existing NVIDIA drivers..."
-  if dpkg -l | grep -q "^ii.*nvidia-driver"; then
-    log_warning "Existing NVIDIA drivers detected - performing clean removal..."
-    
-    # Stop NVIDIA services
-    systemctl stop nvidia-persistenced 2>/dev/null || true
-    
-    # Unload kernel modules
-    log_info "Unloading NVIDIA kernel modules..."
-    rmmod nvidia_uvm 2>/dev/null || true
-    rmmod nvidia_drm 2>/dev/null || true
-    rmmod nvidia_modeset 2>/dev/null || true
-    rmmod nvidia 2>/dev/null || true
-    
-    # Purge all NVIDIA packages
-    log_info "Purging old NVIDIA packages..."
-    apt-get purge -y 'nvidia-driver-*' 'nvidia-kernel-*' 'nvidia-dkms-*' || true
-    apt-get purge -y 'cuda-drivers-*' 'cuda-toolkit-*' 'cuda-runtime-*' || true
-    apt-get purge -y 'libnvidia-*' 'libcuda*' 'nvidia-utils-*' || true
-    apt-get autoremove -y
-    apt-get autoclean
-    
-    log_success "Old drivers removed"
-  fi
+  log_info "Installing NVIDIA drivers on host..."
   
   # Add NVIDIA repository if not present
   if [[ ! -f /etc/apt/sources.list.d/nvidia-cuda.list ]]; then
@@ -191,23 +144,20 @@ install_nvidia_drivers() {
   log_info "Updating package lists..."
   apt-get update
   
-  # Install specific driver version 550 (compatible with CUDA 12.4 and PyTorch)
-  log_info "Installing NVIDIA driver 550..."
-  apt-get install -y nvidia-driver-550 cuda-drivers-550
+  # Install current NVIDIA driver and CUDA userspace tools
+  log_info "Installing NVIDIA driver and CUDA tools..."
+  apt-get install -y nvidia-driver nvidia-drivers-cuda cuda-toolkit
   
   log_warning "=========================================="
-  log_warning "NVIDIA driver 550 installed!"
+  log_warning "NVIDIA drivers installed!"
   log_warning "HOST REBOOT REQUIRED!"
   log_warning "=========================================="
   log_info "Run: reboot"
   log_info "After reboot, verify with: nvidia-smi"
-  log_info "Should show driver version 550.x and CUDA 12.4/12.5"
-  log_info ""
-  log_info "Reference: https://discuss.pytorch.org/t/no-more-cuda-available-after-installing-last-nvidia-drivers/203376"
 }
 
 install_cuda_drivers_metapackage() {
-  log_info "Installing cuda-drivers-550 package..."
+  log_info "Installing NVIDIA CUDA packages..."
   
   # Ensure NVIDIA repo is configured
   if [[ ! -f /etc/apt/sources.list.d/nvidia-cuda.list ]]; then
@@ -216,9 +166,9 @@ install_cuda_drivers_metapackage() {
   fi
   
   apt-get update
-  apt-get install -y cuda-drivers-550
+  apt-get install -y nvidia-drivers-cuda cuda-toolkit
   
-  log_success "cuda-drivers-550 package installed"
+  log_success "NVIDIA CUDA packages installed"
 }
 
 purge_and_reinstall() {
