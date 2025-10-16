@@ -126,7 +126,12 @@ install_nvidia_drivers() {
   apt-get update
   apt-get install -y cuda-drivers
   
-  log_success "NVIDIA drivers installed. You may need to reboot the host."
+  log_warning "=========================================="
+  log_warning "NVIDIA drivers installed!"
+  log_warning "HOST REBOOT REQUIRED!"
+  log_warning "=========================================="
+  log_info "Run: reboot"
+  log_info "After reboot, verify with: nvidia-smi"
 }
 
 install_cuda_drivers_metapackage() {
@@ -158,7 +163,9 @@ purge_and_reinstall() {
   # Reinstall
   install_nvidia_drivers
   
-  log_warning "Host reboot required for changes to take effect"
+  log_warning "=========================================="
+  log_warning "HOST REBOOT REQUIRED!"
+  log_warning "=========================================="
 }
 
 # Run main function
