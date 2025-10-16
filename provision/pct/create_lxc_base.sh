@@ -128,6 +128,15 @@ if [[ "$MODE" == "test" ]]; then
   
   create_ct "$CT_INGEST_TEST" "$IP_INGEST_TEST" "${PREFIX}ingest-lxc" unpriv || cleanup_on_error
   CREATED_CONTAINERS+=("$CT_INGEST_TEST")
+  
+  create_ct "$CT_LITELLM_TEST" "$IP_LITELLM_TEST" "${PREFIX}litellm-lxc" unpriv || cleanup_on_error
+  CREATED_CONTAINERS+=("$CT_LITELLM_TEST")
+  
+  create_ct "$CT_OLLAMA_TEST" "$IP_OLLAMA_TEST" "${PREFIX}ollama-lxc" priv || cleanup_on_error
+  CREATED_CONTAINERS+=("$CT_OLLAMA_TEST")
+  
+  create_ct "$CT_VLLM_TEST" "$IP_VLLM_TEST" "${PREFIX}vllm-lxc" priv || cleanup_on_error
+  CREATED_CONTAINERS+=("$CT_VLLM_TEST")
 
 else
   create_ct "$CT_PROXY" "$IP_PROXY" proxy-lxc unpriv || cleanup_on_error
@@ -150,6 +159,15 @@ else
   
   create_ct "$CT_INGEST" "$IP_INGEST" ingest-lxc unpriv || cleanup_on_error
   CREATED_CONTAINERS+=("$CT_INGEST")
+  
+  create_ct "$CT_LITELLM" "$IP_LITELLM" litellm-lxc unpriv || cleanup_on_error
+  CREATED_CONTAINERS+=("$CT_LITELLM")
+  
+  create_ct "$CT_OLLAMA" "$IP_OLLAMA" ollama-lxc priv || cleanup_on_error
+  CREATED_CONTAINERS+=("$CT_OLLAMA")
+  
+  create_ct "$CT_VLLM" "$IP_VLLM" vllm-lxc priv || cleanup_on_error
+  CREATED_CONTAINERS+=("$CT_VLLM")
 
 fi
 
