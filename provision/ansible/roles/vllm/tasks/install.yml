@@ -144,7 +144,7 @@
       debug:
         msg: "{{ cuda_packages_available.stdout_lines }}"
 
-    - name: Install NVIDIA userspace utilities (nvidia-drivers-cuda + cuda-toolkit)
+    - name: Install NVIDIA userspace utilities (nvidia-driver-cuda + cuda-toolkit)
       apt:
         name:
           - nvidia-driver-cuda

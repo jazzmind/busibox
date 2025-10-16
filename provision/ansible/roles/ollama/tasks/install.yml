@@ -138,7 +138,7 @@
       debug:
         msg: "Host NVIDIA driver version: {{ host_nvidia_version.stdout }}"
 
-    - name: Install NVIDIA userspace utilities (nvidia-drivers-cuda + cuda-toolkit)
+    - name: Install NVIDIA userspace utilities (nvidia-driver-cuda + cuda-toolkit)
       apt:
         name:
           - nvidia-driver-cuda
