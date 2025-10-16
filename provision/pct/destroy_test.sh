@@ -22,13 +22,13 @@ fi
 
 # Array of test container IDs
 TEST_CONTAINERS=(
-  "$CT_OPENWEBUI_TEST"
+  "$CT_PROXY_TEST"
   "$CT_APPS_TEST"
+  "$CT_AGENT_TEST"
   "$CT_PG_TEST"
   "$CT_MILVUS_TEST"
   "$CT_FILES_TEST"
   "$CT_INGEST_TEST"
-  "$CT_AGENT_TEST"
 )
 
 # Safety check - ensure we're only destroying test containers (ID >= 300)

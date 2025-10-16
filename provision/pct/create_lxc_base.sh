@@ -126,8 +126,8 @@ if [[ "$MODE" == "test" ]]; then
   create_ct "$CT_APPS_TEST"   "$IP_APPS_TEST"   "${PREFIX}apps-lxc"   unpriv || cleanup_on_error
   CREATED_CONTAINERS+=("$CT_APPS_TEST")
   
-  create_ct "$CT_OPENWEBUI_TEST" "$IP_OPENWEBUI_TEST" "${PREFIX}openwebui-lxc" unpriv || cleanup_on_error
-  CREATED_CONTAINERS+=("$CT_OPENWEBUI_TEST")
+  create_ct "$CT_PROXY_TEST" "$IP_PROXY_TEST" "${PREFIX}proxy-lxc" unpriv || cleanup_on_error
+  CREATED_CONTAINERS+=("$CT_PROXY_TEST")
 else
   create_ct "$CT_FILES"  "$IP_FILES"  files-lxc  priv || cleanup_on_error
   CREATED_CONTAINERS+=("$CT_FILES")
