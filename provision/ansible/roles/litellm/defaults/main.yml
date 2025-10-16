@@ -1,0 +1,88 @@
+---
+# LiteLLM Role - Default Variables
+# Created: 2025-10-16
+# Purpose: Unified API gateway for multiple LLM backends
+
+# LiteLLM Installation
+litellm_version: "latest"
+litellm_install_method: "pip"
+litellm_install_dir: /opt/litellm
+litellm_venv_dir: "{{ litellm_install_dir }}/venv"
+litellm_config_dir: /etc/litellm
+
+# Python Configuration
+litellm_python_version: "3.11"
+
+# LiteLLM Service Configuration
+litellm_user: litellm
+litellm_group: litellm
+litellm_home: /var/lib/litellm
+
+# Network Configuration
+litellm_host: "0.0.0.0"
+litellm_port: 4000
+
+# Master Key (should be overridden with vault)
+litellm_master_key: "sk-litellm-master-key-change-me"
+
+# Backend Configuration
+litellm_backends:
+  ollama:
+    host: "{{ ollama_ip }}"
+    port: "{{ ollama_port }}"
+  vllm:
+    host: "{{ vllm_ip }}"
+    port: "{{ vllm_port }}"
+
+# Model Configuration
+litellm_models:
+  - model_name: "llama3-8b"
+    litellm_params:
+      model: "ollama/llama3:8b"
+      api_base: "http://{{ ollama_ip }}:{{ ollama_port }}"
+  - model_name: "phi3"
+    litellm_params:
+      model: "ollama/phi3:3.8b"
+      api_base: "http://{{ ollama_ip }}:{{ ollama_port }}"
+  - model_name: "gemma-2b"
+    litellm_params:
+      model: "ollama/gemma:2b"
+      api_base: "http://{{ ollama_ip }}:{{ ollama_port }}"
+  - model_name: "llama3-8b-vllm"
+    litellm_params:
+      model: "openai/meta-llama/Meta-Llama-3-8B-Instruct"
+      api_base: "http://{{ vllm_ip }}:{{ vllm_port }}/v1"
+
+# Router Settings
+litellm_routing_strategy: "simple-shuffle"
+litellm_allowed_fails: 3
+litellm_num_retries: 2
+litellm_timeout: 60
+litellm_fallbacks: []
+
+# General Settings
+litellm_drop_params: true
+litellm_add_function_to_prompt: true
+
+# Service Configuration
+litellm_enable_service: true
+litellm_start_service: true
+litellm_restart_on_failure: true
+litellm_restart_sec: 10
+
+# Logging
+litellm_log_level: info
+litellm_detailed_debug: false
+
+# Resource Limits
+litellm_memory_limit: "4G"
+litellm_cpu_limit: "2"
+
+# Database (optional - for cost tracking, caching)
+litellm_enable_database: false
+litellm_database_url: "sqlite:///{{ litellm_home }}/litellm.db"
+
+# Proxy Features
+litellm_enable_swagger: true
+litellm_enable_prometheus: false
+

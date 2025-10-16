@@ -1,0 +1,13 @@
+---
+# LiteLLM Role - Main Tasks
+# Created: 2025-10-16
+# Purpose: Install and configure LiteLLM proxy
+
+- name: Include installation tasks
+  include_tasks: install.yml
+  tags: [litellm, litellm_install]
+
+- name: Include configuration tasks
+  include_tasks: configure.yml
+  tags: [litellm, litellm_configure]
+

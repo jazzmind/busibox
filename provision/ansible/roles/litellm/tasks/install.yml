@@ -1,0 +1,107 @@
+---
+# LiteLLM Installation Tasks
+
+- name: Update apt cache
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+  tags: [litellm_install]
+
+- name: Install system dependencies
+  apt:
+    name:
+      - python3-pip
+      - python3-venv
+      - python3-dev
+      - build-essential
+      - curl
+      - ca-certificates
+    state: present
+  tags: [litellm_install]
+
+- name: Create LiteLLM system group
+  group:
+    name: "{{ litellm_group }}"
+    system: yes
+    state: present
+  tags: [litellm_install]
+
+- name: Create LiteLLM system user
+  user:
+    name: "{{ litellm_user }}"
+    group: "{{ litellm_group }}"
+    system: yes
+    create_home: yes
+    home: "{{ litellm_home }}"
+    shell: /bin/bash
+    comment: "LiteLLM Service User"
+  tags: [litellm_install]
+
+- name: Create LiteLLM directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ litellm_user }}"
+    group: "{{ litellm_group }}"
+    mode: '0755'
+  loop:
+    - "{{ litellm_install_dir }}"
+    - "{{ litellm_home }}"
+    - "{{ litellm_config_dir }}"
+  tags: [litellm_install]
+
+- name: Create Python virtual environment
+  command: "python3 -m venv {{ litellm_venv_dir }}"
+  args:
+    creates: "{{ litellm_venv_dir }}/bin/python"
+  become: yes
+  become_user: "{{ litellm_user }}"
+  tags: [litellm_install]
+
+- name: Upgrade pip in virtual environment
+  pip:
+    name:
+      - pip
+      - setuptools
+      - wheel
+    state: latest
+    virtualenv: "{{ litellm_venv_dir }}"
+  become: yes
+  become_user: "{{ litellm_user }}"
+  tags: [litellm_install]
+
+- name: Install LiteLLM
+  pip:
+    name: "litellm{% if litellm_version != 'latest' %}=={{ litellm_version }}{% endif %}[proxy]"
+    virtualenv: "{{ litellm_venv_dir }}"
+  become: yes
+  become_user: "{{ litellm_user }}"
+  tags: [litellm_install]
+
+- name: Install additional dependencies
+  pip:
+    name:
+      - fastapi
+      - uvicorn
+      - pyyaml
+      - python-dotenv
+    virtualenv: "{{ litellm_venv_dir }}"
+  become: yes
+  become_user: "{{ litellm_user }}"
+  tags: [litellm_install]
+
+- name: Verify LiteLLM installation
+  shell: |
+    source {{ litellm_venv_dir }}/bin/activate
+    python -c "import litellm; print('LiteLLM version:', litellm.__version__)"
+  register: litellm_version_check
+  become: yes
+  become_user: "{{ litellm_user }}"
+  changed_when: false
+  tags: [litellm_install]
+
+- name: Display LiteLLM version
+  debug:
+    msg: "{{ litellm_version_check.stdout }}"
+  tags: [litellm_install]
+

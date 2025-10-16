@@ -1,0 +1,110 @@
+---
+# LiteLLM Configuration Tasks
+
+- name: Deploy LiteLLM configuration file
+  template:
+    src: config.yaml.j2
+    dest: "{{ litellm_config_dir }}/config.yaml"
+    owner: "{{ litellm_user }}"
+    group: "{{ litellm_group }}"
+    mode: '0640'
+  notify: restart litellm
+  tags: [litellm_configure]
+
+- name: Deploy LiteLLM systemd service file
+  template:
+    src: litellm.service.j2
+    dest: /etc/systemd/system/litellm.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - reload systemd
+    - restart litellm
+  tags: [litellm_configure]
+
+- name: Create LiteLLM environment file
+  template:
+    src: litellm.env.j2
+    dest: /etc/default/litellm
+    owner: root
+    group: root
+    mode: '0640'
+  notify: restart litellm
+  tags: [litellm_configure]
+
+- name: Ensure systemd is reloaded
+  systemd:
+    daemon_reload: yes
+  tags: [litellm_configure]
+
+- name: Enable LiteLLM service
+  systemd:
+    name: litellm
+    enabled: "{{ litellm_enable_service }}"
+  when: litellm_enable_service
+  tags: [litellm_configure]
+
+- name: Start LiteLLM service
+  systemd:
+    name: litellm
+    state: started
+  when: litellm_start_service
+  tags: [litellm_configure]
+
+- name: Wait for LiteLLM service to be ready
+  wait_for:
+    host: "{{ litellm_host if litellm_host != '0.0.0.0' else 'localhost' }}"
+    port: "{{ litellm_port }}"
+    delay: 2
+    timeout: 30
+  when: litellm_start_service
+  tags: [litellm_configure]
+
+- name: Check LiteLLM service status
+  systemd:
+    name: litellm
+  register: litellm_service_status
+  tags: [litellm_configure]
+
+- name: Display service status
+  debug:
+    msg: "LiteLLM service is {{ litellm_service_status.status.ActiveState }}"
+  tags: [litellm_configure]
+
+- name: Test LiteLLM health endpoint
+  uri:
+    url: "http://{{ litellm_host if litellm_host != '0.0.0.0' else 'localhost' }}:{{ litellm_port }}/health"
+    method: GET
+    status_code: 200
+  register: litellm_health_test
+  retries: 3
+  delay: 2
+  when: litellm_start_service
+  tags: [litellm_configure, litellm_test]
+
+- name: Display health check result
+  debug:
+    msg: "LiteLLM health check passed"
+  when: litellm_health_test is defined and litellm_health_test.status == 200
+  tags: [litellm_configure, litellm_test]
+
+- name: Test LiteLLM models endpoint
+  uri:
+    url: "http://{{ litellm_host if litellm_host != '0.0.0.0' else 'localhost' }}:{{ litellm_port }}/models"
+    method: GET
+    status_code: 200
+    headers:
+      Authorization: "Bearer {{ litellm_master_key }}"
+  register: litellm_models_test
+  retries: 3
+  delay: 2
+  when: litellm_start_service
+  tags: [litellm_configure, litellm_test]
+
+- name: Display available models
+  debug:
+    msg: "{{ litellm_models_test.json.data | map(attribute='id') | list if litellm_models_test.json is defined else 'Unable to retrieve models' }}"
+  when: litellm_models_test is defined
+  tags: [litellm_configure, litellm_test]
+
