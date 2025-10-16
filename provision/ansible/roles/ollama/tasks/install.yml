@@ -1,0 +1,131 @@
+---
+# Ollama Installation Tasks
+# Install Ollama binary and dependencies
+
+- name: Update apt cache
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+  tags: [ollama_install]
+
+- name: Install dependencies
+  apt:
+    name:
+      - curl
+      - ca-certificates
+      - gnupg
+      - lsb-release
+      - software-properties-common
+      - wget
+    state: present
+  tags: [ollama_install]
+
+- name: Check if NVIDIA GPU is available
+  command: nvidia-smi
+  register: nvidia_check
+  failed_when: false
+  changed_when: false
+  tags: [ollama_install, ollama_gpu]
+
+- name: Set GPU availability fact
+  set_fact:
+    ollama_has_gpu: "{{ nvidia_check.rc == 0 }}"
+  tags: [ollama_install, ollama_gpu]
+
+- name: Display GPU status
+  debug:
+    msg: "GPU {{ 'AVAILABLE' if ollama_has_gpu else 'NOT AVAILABLE' }} - {{ 'will use GPU acceleration' if ollama_has_gpu else 'will use CPU only' }}"
+  tags: [ollama_install, ollama_gpu]
+
+- name: Install NVIDIA Container Toolkit (if GPU available)
+  block:
+    - name: Add NVIDIA GPG key
+      get_url:
+        url: https://nvidia.github.io/libnvidia-container/gpgkey
+        dest: /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+        mode: '0644'
+
+    - name: Add NVIDIA repository
+      apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://nvidia.github.io/libnvidia-container/stable/debian12/$(ARCH) /"
+        state: present
+        filename: nvidia-container-toolkit
+
+    - name: Update apt cache after adding NVIDIA repo
+      apt:
+        update_cache: yes
+
+    - name: Install NVIDIA Container Toolkit
+      apt:
+        name:
+          - nvidia-container-toolkit
+        state: present
+  when: ollama_has_gpu and ollama_gpu_enabled
+  tags: [ollama_install, ollama_gpu]
+
+- name: Create Ollama system group
+  group:
+    name: "{{ ollama_group }}"
+    system: yes
+    state: present
+  tags: [ollama_install]
+
+- name: Create Ollama system user
+  user:
+    name: "{{ ollama_user }}"
+    group: "{{ ollama_group }}"
+    system: yes
+    create_home: yes
+    home: "{{ ollama_home }}"
+    shell: /bin/bash
+    comment: "Ollama Service User"
+  tags: [ollama_install]
+
+- name: Create Ollama directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ ollama_user }}"
+    group: "{{ ollama_group }}"
+    mode: '0755'
+  loop:
+    - "{{ ollama_home }}"
+    - "{{ ollama_models_dir }}"
+  tags: [ollama_install]
+
+- name: Check if Ollama is already installed
+  stat:
+    path: "{{ ollama_install_dir }}/ollama"
+  register: ollama_binary
+  tags: [ollama_install]
+
+- name: Get installed Ollama version
+  command: "{{ ollama_install_dir }}/ollama --version"
+  register: ollama_version_check
+  when: ollama_binary.stat.exists
+  changed_when: false
+  failed_when: false
+  tags: [ollama_install]
+
+- name: Download Ollama binary
+  get_url:
+    url: "{{ ollama_binary_url }}"
+    dest: "{{ ollama_install_dir }}/ollama"
+    mode: '0755'
+    owner: root
+    group: root
+  when: not ollama_binary.stat.exists or ollama_version == "latest"
+  notify: restart ollama
+  tags: [ollama_install]
+
+- name: Verify Ollama installation
+  command: "{{ ollama_install_dir }}/ollama --version"
+  register: ollama_verify
+  changed_when: false
+  tags: [ollama_install]
+
+- name: Display Ollama version
+  debug:
+    msg: "Ollama installed: {{ ollama_verify.stdout }}"
+  tags: [ollama_install]
+

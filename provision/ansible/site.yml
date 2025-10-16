@@ -30,3 +30,19 @@
 
 - hosts: openwebui
   roles: [nginx]
+
+# LLM Services
+- hosts: ollama
+  roles:
+    - role: ollama
+      tags: [llm, ollama]
+
+- hosts: vllm
+  roles:
+    - role: vllm
+      tags: [llm, vllm]
+
+- hosts: litellm
+  roles:
+    - role: litellm
+      tags: [llm, litellm]

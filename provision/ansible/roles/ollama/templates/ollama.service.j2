@@ -1,0 +1,44 @@
+[Unit]
+Description=Ollama LLM Server
+Documentation=https://github.com/ollama/ollama
+After=network.target
+
+[Service]
+Type=simple
+User={{ ollama_user }}
+Group={{ ollama_group }}
+WorkingDirectory={{ ollama_home }}
+
+# Environment configuration
+EnvironmentFile=/etc/default/ollama
+
+# Service execution
+ExecStart={{ ollama_install_dir }}/ollama serve
+
+# Restart configuration
+Restart={{ 'always' if ollama_restart_on_failure else 'no' }}
+RestartSec={{ ollama_restart_sec }}
+
+# Resource limits
+{% if ollama_memory_limit is defined %}
+MemoryLimit={{ ollama_memory_limit }}
+{% endif %}
+{% if ollama_cpu_limit is defined %}
+CPUQuota={{ ollama_cpu_limit }}00%
+{% endif %}
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths={{ ollama_home }}
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ollama
+
+[Install]
+WantedBy=multi-user.target
+

@@ -1,0 +1,87 @@
+---
+# Ollama Model Management Tasks
+# Pull and manage initial models
+
+- name: Ensure Ollama service is running
+  systemd:
+    name: ollama
+    state: started
+  tags: [ollama_models]
+
+- name: Wait for Ollama to be ready before pulling models
+  wait_for:
+    host: "{{ ollama_host if ollama_host != '0.0.0.0' else 'localhost' }}"
+    port: "{{ ollama_port }}"
+    delay: 2
+    timeout: 30
+  tags: [ollama_models]
+
+- name: Get list of currently installed models
+  command: "{{ ollama_install_dir }}/ollama list"
+  register: ollama_current_models
+  changed_when: false
+  become: yes
+  become_user: "{{ ollama_user }}"
+  environment:
+    OLLAMA_HOST: "{{ ollama_host }}:{{ ollama_port }}"
+  tags: [ollama_models]
+
+- name: Display currently installed models
+  debug:
+    msg: "{{ ollama_current_models.stdout_lines }}"
+  tags: [ollama_models]
+
+- name: Pull initial models
+  command: "{{ ollama_install_dir }}/ollama pull {{ item.name }}"
+  loop: "{{ ollama_initial_models }}"
+  when: item.name not in ollama_current_models.stdout
+  become: yes
+  become_user: "{{ ollama_user }}"
+  environment:
+    OLLAMA_HOST: "{{ ollama_host }}:{{ ollama_port }}"
+  register: ollama_pull_result
+  async: 3600  # 1 hour timeout for large models
+  poll: 10     # Check every 10 seconds
+  tags: [ollama_models]
+
+- name: Display model pull results
+  debug:
+    msg: "Pulled model: {{ item.item.name }} - {{ item.item.description }}"
+  loop: "{{ ollama_pull_result.results }}"
+  when: item.changed
+  tags: [ollama_models]
+
+- name: Verify models are installed
+  command: "{{ ollama_install_dir }}/ollama list"
+  register: ollama_final_models
+  changed_when: false
+  become: yes
+  become_user: "{{ ollama_user }}"
+  environment:
+    OLLAMA_HOST: "{{ ollama_host }}:{{ ollama_port }}"
+  tags: [ollama_models]
+
+- name: Display final model list
+  debug:
+    msg: "{{ ollama_final_models.stdout_lines }}"
+  tags: [ollama_models]
+
+- name: Test inference with first model
+  command: >
+    {{ ollama_install_dir }}/ollama run {{ ollama_initial_models[0].name }}
+    "Say 'Hello from Ollama!' and nothing else."
+  register: ollama_inference_test
+  changed_when: false
+  become: yes
+  become_user: "{{ ollama_user }}"
+  environment:
+    OLLAMA_HOST: "{{ ollama_host }}:{{ ollama_port }}"
+  when: ollama_initial_models | length > 0
+  tags: [ollama_models, ollama_test]
+
+- name: Display inference test result
+  debug:
+    msg: "Inference test: {{ ollama_inference_test.stdout }}"
+  when: ollama_inference_test is defined
+  tags: [ollama_models, ollama_test]
+

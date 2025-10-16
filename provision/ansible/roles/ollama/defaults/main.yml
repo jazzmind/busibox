@@ -1,0 +1,55 @@
+---
+# Ollama Role - Default Variables
+# Created: 2025-10-16
+# Purpose: Fast inference for small/medium language models with GPU support
+
+# Ollama Installation
+ollama_version: "latest"
+ollama_install_dir: /usr/local/bin
+ollama_binary_url: "https://ollama.com/download/ollama-linux-amd64"
+
+# Ollama Service Configuration
+ollama_user: ollama
+ollama_group: ollama
+ollama_home: /var/lib/ollama
+ollama_models_dir: "{{ ollama_home }}/models"
+
+# Network Configuration
+ollama_host: "0.0.0.0"
+ollama_port: 11434
+
+# Model Configuration
+ollama_num_parallel: 4  # Number of parallel requests
+ollama_max_loaded_models: 3  # Maximum models to keep in memory
+ollama_max_queue: 512  # Maximum queued requests
+
+# GPU Configuration (auto-detected, but can override)
+ollama_gpu_enabled: true
+ollama_gpu_layers: -1  # -1 = use all GPU layers
+
+# Initial Models to Pull
+ollama_initial_models:
+  - name: "llama3:8b"
+    description: "Fast general-purpose model"
+  - name: "phi3:3.8b"
+    description: "Code and reasoning model"
+  - name: "gemma:2b"
+    description: "Lightweight tasks model"
+
+# Service Configuration
+ollama_enable_service: true
+ollama_start_service: true
+ollama_restart_on_failure: true
+ollama_restart_sec: 10
+
+# Logging
+ollama_log_level: info  # debug, info, warn, error
+
+# Resource Limits (systemd)
+ollama_memory_limit: "16G"
+ollama_cpu_limit: "4"
+
+# Health Check
+ollama_health_check_enabled: true
+ollama_health_check_interval: 60  # seconds
+
