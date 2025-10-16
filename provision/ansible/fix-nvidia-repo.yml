@@ -7,7 +7,7 @@
 
 - name: Fix NVIDIA Repository Conflicts
   hosts: llm_services
-  become: yes
+  become: true
   gather_facts: no
   
   tasks:

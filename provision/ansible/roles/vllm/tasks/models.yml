@@ -30,7 +30,7 @@
     python -c "from huggingface_hub import snapshot_download; snapshot_download('{{ vllm_default_model }}', cache_dir='{{ vllm_cache_dir }}')"
   args:
     creates: "{{ vllm_cache_dir }}/hub/models--{{ vllm_default_model | replace('/', '--') }}"
-  become: yes
+  become: true
   become_user: "{{ vllm_user }}"
   async: 7200  # 2 hours for very large models
   poll: 30     # Check every 30 seconds

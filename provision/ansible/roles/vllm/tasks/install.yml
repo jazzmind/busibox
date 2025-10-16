@@ -159,7 +159,7 @@
   command: "python3 -m venv {{ vllm_venv_dir }}"
   args:
     creates: "{{ vllm_venv_dir }}/bin/python"
-  become: yes
+  become: true
   become_user: "{{ vllm_user }}"
   tags: [vllm_install]
 
@@ -171,7 +171,7 @@
       - wheel
     state: latest
     virtualenv: "{{ vllm_venv_dir }}"
-  become: yes
+  become: true
   become_user: "{{ vllm_user }}"
   tags: [vllm_install]
 
@@ -183,16 +183,15 @@
       - torchaudio
     extra_args: "--index-url {{ vllm_pip_extra_index_url }}"
     virtualenv: "{{ vllm_venv_dir }}"
-  become: yes
+  become: true
   become_user: "{{ vllm_user }}"
   tags: [vllm_install]
 
 - name: Verify PyTorch CUDA availability
   shell: |
-    source {{ vllm_venv_dir }}/bin/activate
-    python -c "import torch; print('CUDA available:', torch.cuda.is_available()); print('CUDA version:', torch.version.cuda); print('GPU count:', torch.cuda.device_count())"
+    {{ vllm_venv_dir }}/bin/python -c "import torch; print('CUDA available:', torch.cuda.is_available()); print('CUDA version:', torch.version.cuda); print('GPU count:', torch.cuda.device_count())"
   register: pytorch_cuda_check
-  become: yes
+  become: true
   become_user: "{{ vllm_user }}"
   changed_when: false
   tags: [vllm_install, vllm_gpu]
@@ -212,7 +211,7 @@
   pip:
     name: "vllm{% if vllm_version != 'latest' %}=={{ vllm_version }}{% endif %}"
     virtualenv: "{{ vllm_venv_dir }}"
-  become: yes
+  become: true
   become_user: "{{ vllm_user }}"
   tags: [vllm_install]
 
@@ -225,16 +224,15 @@
       - fastapi
       - uvicorn
     virtualenv: "{{ vllm_venv_dir }}"
-  become: yes
+  become: true
   become_user: "{{ vllm_user }}"
   tags: [vllm_install]
 
 - name: Verify vLLM installation
   shell: |
-    source {{ vllm_venv_dir }}/bin/activate
-    python -c "import vllm; print('vLLM version:', vllm.__version__)"
+    {{ vllm_venv_dir }}/bin/python -c "import vllm; print('vLLM version:', vllm.__version__)"
   register: vllm_version_check
-  become: yes
+  become: true
   become_user: "{{ vllm_user }}"
   changed_when: false
   tags: [vllm_install]

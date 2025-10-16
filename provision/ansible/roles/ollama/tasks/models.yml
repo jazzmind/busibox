@@ -20,7 +20,7 @@
   command: "{{ ollama_install_dir }}/ollama list"
   register: ollama_current_models
   changed_when: false
-  become: yes
+  become: true
   become_user: "{{ ollama_user }}"
   environment:
     OLLAMA_HOST: "{{ ollama_host }}:{{ ollama_port }}"
@@ -35,7 +35,7 @@
   command: "{{ ollama_install_dir }}/ollama pull {{ item.name }}"
   loop: "{{ ollama_initial_models }}"
   when: item.name not in ollama_current_models.stdout
-  become: yes
+  become: true
   become_user: "{{ ollama_user }}"
   environment:
     OLLAMA_HOST: "{{ ollama_host }}:{{ ollama_port }}"
@@ -55,7 +55,7 @@
   command: "{{ ollama_install_dir }}/ollama list"
   register: ollama_final_models
   changed_when: false
-  become: yes
+  become: true
   become_user: "{{ ollama_user }}"
   environment:
     OLLAMA_HOST: "{{ ollama_host }}:{{ ollama_port }}"
@@ -72,7 +72,7 @@
     "Say 'Hello from Ollama!' and nothing else."
   register: ollama_inference_test
   changed_when: false
-  become: yes
+  become: true
   become_user: "{{ ollama_user }}"
   environment:
     OLLAMA_HOST: "{{ ollama_host }}:{{ ollama_port }}"
