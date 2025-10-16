@@ -108,29 +108,36 @@ cleanup_on_error() {
 
 # Create containers based on mode with error handling
 if [[ "$MODE" == "test" ]]; then
-  create_ct "$CT_FILES_TEST"  "$IP_FILES_TEST"  "${PREFIX}files-lxc"  priv || cleanup_on_error
-  CREATED_CONTAINERS+=("$CT_FILES_TEST")
+  create_ct "$CT_PROXY_TEST" "$IP_PROXY_TEST" "${PREFIX}proxy-lxc" unpriv || cleanup_on_error
+  CREATED_CONTAINERS+=("$CT_PROXY_TEST")
+
+  create_ct "$CT_APPS_TEST"   "$IP_APPS_TEST"   "${PREFIX}apps-lxc"   unpriv || cleanup_on_error
+  CREATED_CONTAINERS+=("$CT_APPS_TEST")
+
+  create_ct "$CT_AGENT_TEST"  "$IP_AGENT_TEST"  "${PREFIX}agent-lxc"  unpriv || cleanup_on_error
+  CREATED_CONTAINERS+=("$CT_AGENT_TEST")
   
   create_ct "$CT_PG_TEST"     "$IP_PG_TEST"     "${PREFIX}pg-lxc"     unpriv || cleanup_on_error
   CREATED_CONTAINERS+=("$CT_PG_TEST")
   
   create_ct "$CT_MILVUS_TEST" "$IP_MILVUS_TEST" "${PREFIX}milvus-lxc" priv || cleanup_on_error
   CREATED_CONTAINERS+=("$CT_MILVUS_TEST")
-  
-  create_ct "$CT_AGENT_TEST"  "$IP_AGENT_TEST"  "${PREFIX}agent-lxc"  unpriv || cleanup_on_error
-  CREATED_CONTAINERS+=("$CT_AGENT_TEST")
+    
+  create_ct "$CT_FILES_TEST"  "$IP_FILES_TEST"  "${PREFIX}files-lxc"  priv || cleanup_on_error
+  CREATED_CONTAINERS+=("$CT_FILES_TEST")
   
   create_ct "$CT_INGEST_TEST" "$IP_INGEST_TEST" "${PREFIX}ingest-lxc" unpriv || cleanup_on_error
   CREATED_CONTAINERS+=("$CT_INGEST_TEST")
-  
-  create_ct "$CT_APPS_TEST"   "$IP_APPS_TEST"   "${PREFIX}apps-lxc"   unpriv || cleanup_on_error
-  CREATED_CONTAINERS+=("$CT_APPS_TEST")
-  
-  create_ct "$CT_PROXY_TEST" "$IP_PROXY_TEST" "${PREFIX}proxy-lxc" unpriv || cleanup_on_error
-  CREATED_CONTAINERS+=("$CT_PROXY_TEST")
+
 else
-  create_ct "$CT_FILES"  "$IP_FILES"  files-lxc  priv || cleanup_on_error
-  CREATED_CONTAINERS+=("$CT_FILES")
+  create_ct "$CT_PROXY" "$IP_PROXY" proxy-lxc unpriv || cleanup_on_error
+  CREATED_CONTAINERS+=("$CT_PROXY")
+
+  create_ct "$CT_APPS"   "$IP_APPS"   apps-lxc   unpriv || cleanup_on_error
+  CREATED_CONTAINERS+=("$CT_APPS")
+
+  create_ct "$CT_AGENT"  "$IP_AGENT"  agent-lxc  unpriv || cleanup_on_error
+  CREATED_CONTAINERS+=("$CT_AGENT")
   
   create_ct "$CT_PG"     "$IP_PG"     pg-lxc     unpriv || cleanup_on_error
   CREATED_CONTAINERS+=("$CT_PG")
@@ -138,17 +145,12 @@ else
   create_ct "$CT_MILVUS" "$IP_MILVUS" milvus-lxc priv || cleanup_on_error
   CREATED_CONTAINERS+=("$CT_MILVUS")
   
-  create_ct "$CT_AGENT"  "$IP_AGENT"  agent-lxc  unpriv || cleanup_on_error
-  CREATED_CONTAINERS+=("$CT_AGENT")
+  create_ct "$CT_FILES"  "$IP_FILES"  files-lxc  priv || cleanup_on_error
+  CREATED_CONTAINERS+=("$CT_FILES")
   
   create_ct "$CT_INGEST" "$IP_INGEST" ingest-lxc unpriv || cleanup_on_error
   CREATED_CONTAINERS+=("$CT_INGEST")
-  
-  create_ct "$CT_APPS"   "$IP_APPS"   apps-lxc   unpriv || cleanup_on_error
-  CREATED_CONTAINERS+=("$CT_APPS")
-  
-  create_ct "$CT_OPENWEBUI" "$IP_OPENWEBUI" openwebui-lxc unpriv || cleanup_on_error
-  CREATED_CONTAINERS+=("$CT_OPENWEBUI")
+
 fi
 
 echo ""
