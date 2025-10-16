@@ -142,6 +142,8 @@
       apt:
         name:
           - cuda-drivers
+          - cuda-cudart-12-1
+          - libcublas-12-1
         state: present
         install_recommends: no
       register: nvidia_install
