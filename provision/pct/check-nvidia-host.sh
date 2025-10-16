@@ -66,7 +66,7 @@ main() {
     DRIVER_VERSION=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1)
     log_success "NVIDIA Driver Version: $DRIVER_VERSION"
     
-    # Driver version check (any modern driver should work with nvidia-drivers-cuda)
+    # Driver version check (any modern driver should work with nvidia-driver-cuda)
     log_info "Current driver supports CUDA $(nvidia-smi | grep 'CUDA Version' | awk '{print $9}')"
   else
     log_error "nvidia-smi failed to run"
@@ -166,7 +166,7 @@ install_cuda_drivers_metapackage() {
   fi
   
   apt-get update
-  apt-get install -y nvidia-drivers-cuda cuda-toolkit
+  apt-get install -y nvidia-driver-cuda cuda-toolkit
   
   log_success "NVIDIA CUDA packages installed"
 }
