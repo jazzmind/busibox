@@ -31,16 +31,58 @@
   changed_when: false
   tags: [vllm_install, vllm_gpu]
 
-- name: Verify GPU is available
-  fail:
-    msg: "NVIDIA GPU not detected! vLLM requires GPU for optimal performance."
+- name: Install NVIDIA drivers and CUDA if not available
+  block:
+    - name: Add NVIDIA CUDA repository GPG key
+      get_url:
+        url: https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/3bf863cc.pub
+        dest: /usr/share/keyrings/cuda-archive-keyring.asc
+        mode: '0644'
+
+    - name: Add NVIDIA CUDA repository
+      apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/cuda-archive-keyring.asc] https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/ /"
+        state: present
+        filename: cuda-debian12-x86_64
+
+    - name: Update apt cache after adding NVIDIA repo
+      apt:
+        update_cache: yes
+
+    - name: Install NVIDIA drivers and CUDA toolkit
+      apt:
+        name:
+          - nvidia-driver
+          - cuda-toolkit
+          - nvidia-kernel-dkms
+        state: present
+        install_recommends: yes
+
+    - name: Verify NVIDIA driver installation
+      command: nvidia-smi
+      register: nvidia_check_after
+      changed_when: false
+      retries: 3
+      delay: 5
+      until: nvidia_check_after.rc == 0
+
+    - name: Display GPU information
+      debug:
+        msg: "{{ nvidia_check_after.stdout_lines }}"
   when: nvidia_check.rc != 0
   tags: [vllm_install, vllm_gpu]
 
-- name: Display GPU information
+- name: Display GPU information (if already available)
   debug:
     msg: "{{ nvidia_check.stdout_lines }}"
   when: nvidia_check.rc == 0
+  tags: [vllm_install, vllm_gpu]
+
+- name: Verify GPU is available after driver install
+  command: nvidia-smi
+  register: nvidia_final_check
+  failed_when: nvidia_final_check.rc != 0
+  changed_when: false
   tags: [vllm_install, vllm_gpu]
 
 - name: Create vLLM system group

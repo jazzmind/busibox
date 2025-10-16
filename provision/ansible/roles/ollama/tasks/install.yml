@@ -37,30 +37,45 @@
     msg: "GPU {{ 'AVAILABLE' if ollama_has_gpu else 'NOT AVAILABLE' }} - {{ 'will use GPU acceleration' if ollama_has_gpu else 'will use CPU only' }}"
   tags: [ollama_install, ollama_gpu]
 
-- name: Install NVIDIA Container Toolkit (if GPU available)
+- name: Install NVIDIA drivers and CUDA (if GPU available)
   block:
-    - name: Add NVIDIA GPG key
+    - name: Add NVIDIA CUDA repository GPG key
       get_url:
-        url: https://nvidia.github.io/libnvidia-container/gpgkey
-        dest: /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+        url: https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/3bf863cc.pub
+        dest: /usr/share/keyrings/cuda-archive-keyring.asc
         mode: '0644'
 
-    - name: Add NVIDIA repository
+    - name: Add NVIDIA CUDA repository
       apt_repository:
-        repo: "deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://nvidia.github.io/libnvidia-container/stable/debian12/$(ARCH) /"
+        repo: "deb [signed-by=/usr/share/keyrings/cuda-archive-keyring.asc] https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/ /"
         state: present
-        filename: nvidia-container-toolkit
+        filename: cuda-debian12-x86_64
 
     - name: Update apt cache after adding NVIDIA repo
       apt:
         update_cache: yes
 
-    - name: Install NVIDIA Container Toolkit
+    - name: Install NVIDIA drivers and CUDA toolkit
       apt:
         name:
-          - nvidia-container-toolkit
+          - nvidia-driver
+          - cuda-toolkit
+          - nvidia-kernel-dkms
         state: present
-  when: ollama_has_gpu and ollama_gpu_enabled
+        install_recommends: yes
+      register: nvidia_install
+
+    - name: Check NVIDIA driver version after install
+      command: nvidia-smi
+      register: nvidia_smi_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display NVIDIA driver info
+      debug:
+        msg: "{{ nvidia_smi_check.stdout_lines }}"
+      when: nvidia_smi_check.rc == 0
+  when: not ollama_has_gpu and ollama_gpu_enabled
   tags: [ollama_install, ollama_gpu]
 
 - name: Create Ollama system group
