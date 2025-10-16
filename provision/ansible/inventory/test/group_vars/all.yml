@@ -20,13 +20,13 @@ internal_network: 10.96.200.0/21  # Same network range
 internal_gateway: 10.96.200.1
 
 # Container IP Addresses (TEST - offset by +1.0 from production)
-openwebui_ip: 10.96.201.24
-apps_ip: 10.96.201.25
-postgres_ip: 10.96.201.26
-milvus_ip: 10.96.201.27
-minio_ip: 10.96.201.28
-ingest_ip: 10.96.201.29
-agent_ip: 10.96.201.30
+proxy_ip: 10.96.201.200
+apps_ip: 10.96.201.201
+agent_ip: 10.96.201.202
+postgres_ip: 10.96.201.203
+milvus_ip: 10.96.201.204
+minio_ip: 10.96.201.205
+ingest_ip: 10.96.201.206  
 
 # Service Endpoints
 postgres_host: "{{ postgres_ip }}"
@@ -75,7 +75,7 @@ applications:
   - name: agent-server
     github_repo: jazzmind/agent-server
     container: agent-lxc
-    container_ip: 10.96.201.30
+    container_ip: "{{ agent_ip }}"
     port: 4111
     deploy_path: /srv/agent
     health_endpoint: /auth/health
@@ -87,11 +87,11 @@ applications:
       - redis_url
     env:
       LOG_LEVEL: debug
-      MILVUS_HOST: 10.96.201.27
+      MILVUS_HOST: "{{ milvus_ip }}"
       MILVUS_PORT: "19530"
-      MINIO_ENDPOINT: 10.96.201.28:9000
-      POSTGRES_HOST: 10.96.201.26
-      REDIS_HOST: 10.96.201.29
-      TOKEN_SERVICE_URL: http://10.96.201.30:4111
-      MASTRA_API_URL: http://10.96.201.30:4111
+      MINIO_ENDPOINT: "{{ minio_ip }}:{{ minio_port }}"
+      POSTGRES_HOST: "{{ postgres_ip }}"
+      REDIS_HOST: "{{ ingest_ip }}"
+      TOKEN_SERVICE_URL: http://{{ agent_ip }}:4111
+      MASTRA_API_URL: http://{{ agent_ip }}:4111
 

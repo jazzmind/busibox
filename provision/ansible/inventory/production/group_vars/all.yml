@@ -12,7 +12,7 @@ www_domain: www.ai.jaycashman.com
 # - letsencrypt: Automatic certificate acquisition and renewal via certbot
 # - provisioned: Use pre-existing certificates (manual management)
 # - selfsigned: Generate self-signed certificates (development only)
-ssl_mode: letsencrypt
+ssl_mode: provisioned
 
 # SSL Email for Let's Encrypt
 # Used for expiration notifications and certificate management
@@ -23,13 +23,13 @@ internal_network: 10.96.200.0/21
 internal_gateway: 10.96.200.1
 
 # Container IP Addresses (from vars.env)
-openwebui_ip: 10.96.200.24
-apps_ip: 10.96.200.25
-postgres_ip: 10.96.200.26
-milvus_ip: 10.96.200.27
-minio_ip: 10.96.200.28
-ingest_ip: 10.96.200.29
-agent_ip: 10.96.200.30
+proxy_ip: 10.96.200.200
+apps_ip: 10.96.200.201
+agent_ip: 10.96.200.202
+postgres_ip: 10.96.200.203
+milvus_ip: 10.96.200.204
+minio_ip: 10.96.200.205
+ingest_ip: 10.96.200.206
 
 # Service Endpoints
 postgres_host: "{{ postgres_ip }}"
