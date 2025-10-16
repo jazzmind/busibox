@@ -128,14 +128,13 @@
       apt:
         update_cache: yes
 
-    - name: Install NVIDIA drivers and CUDA toolkit
+    - name: Install NVIDIA userspace utilities for LXC
       apt:
         name:
-          - nvidia-driver
-          - cuda-toolkit
-          - nvidia-kernel-dkms
+          - nvidia-utils-535
+          - cuda-toolkit-12-1
         state: present
-        install_recommends: yes
+        install_recommends: no
       register: nvidia_install
 
     - name: Reboot container if drivers were installed
