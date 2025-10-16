@@ -16,6 +16,7 @@ PROCESS_MANAGER="{{ app.process_manager | default('pm2') }}"
 
 VERSION_FILE="${DEPLOY_PATH}/.version"
 BACKUP_DIR="${DEPLOY_PATH}.backup"
+FAILED_DIR="${DEPLOY_PATH}.failed"
 ENV_FILE="${DEPLOY_PATH}/.env"
 
 # Logging functions
@@ -90,6 +91,16 @@ backup_current() {
 # Rollback to previous version
 rollback() {
     log_error "Rolling back to previous version"
+    
+    # Save failed deployment for debugging
+    if [[ -d "${DEPLOY_PATH}" ]]; then
+        local timestamp=$(date +'%Y%m%d-%H%M%S')
+        local failed_backup="${FAILED_DIR}.${timestamp}"
+        log_info "Saving failed deployment to ${failed_backup} for debugging"
+        rm -rf "${failed_backup}"
+        cp -a "${DEPLOY_PATH}" "${failed_backup}"
+        log_info "Failed deployment saved - investigate with: ls -la ${failed_backup}"
+    fi
     
     # Stop current version
     stop_application
