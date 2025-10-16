@@ -30,6 +30,9 @@ postgres_ip: 10.96.200.203
 milvus_ip: 10.96.200.204
 minio_ip: 10.96.200.205
 ingest_ip: 10.96.200.206
+litellm_ip: 10.96.200.30
+ollama_ip: 10.96.200.31
+vllm_ip: 10.96.200.32
 
 # Service Endpoints
 postgres_host: "{{ postgres_ip }}"
@@ -49,6 +52,16 @@ redis_port: 6379
 
 agent_api_host: "{{ agent_ip }}"
 agent_api_port: 8000
+
+# LLM Service Endpoints
+litellm_host: "{{ litellm_ip }}"
+litellm_port: 4000
+
+ollama_host: "{{ ollama_ip }}"
+ollama_port: 11434
+
+vllm_host: "{{ vllm_ip }}"
+vllm_port: 8000
 
 # Deployment Configuration
 deploywatch_check_interval: 3600  # Check for new releases every hour (seconds)
