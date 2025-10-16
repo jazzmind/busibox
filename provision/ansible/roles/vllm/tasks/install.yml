@@ -24,13 +24,6 @@
     state: present
   tags: [vllm_install]
 
-- name: Check if NVIDIA GPU is available
-  command: nvidia-smi
-  register: nvidia_check
-  failed_when: false
-  changed_when: false
-  tags: [vllm_install, vllm_gpu]
-
 - name: Check if GPU devices are present
   shell: "ls -la /dev/nvidia* 2>/dev/null || echo 'No NVIDIA devices found'"
   register: gpu_devices_initial_check
@@ -52,16 +45,16 @@
       failed_when: false
       ignore_errors: true
 
+    - name: Check if any NVIDIA packages are installed
+      shell: "dpkg -l | grep -E '^ii.*(nvidia|cuda)' || echo 'none'"
+      register: nvidia_packages_check
+      changed_when: false
+      
     - name: Purge all NVIDIA packages
-      apt:
-        name:
-          - 'nvidia-*'
-          - 'cuda-*'
-          - 'libnvidia-*'
-          - 'libcuda*'
-        state: absent
-        purge: yes
-        autoremove: yes
+      shell: |
+        apt-get purge -y 'nvidia-*' 'cuda-*' 'libnvidia-*' 'libcuda*' 2>/dev/null || true
+        apt-get autoremove -y
+      when: "'none' not in nvidia_packages_check.stdout"
 
     - name: Clean apt cache
       apt:

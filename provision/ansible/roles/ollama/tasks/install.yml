@@ -20,34 +20,27 @@
     state: present
   tags: [ollama_install]
 
-- name: Check if NVIDIA GPU is available
-  command: nvidia-smi
-  register: nvidia_check
-  failed_when: false
-  changed_when: false
-  tags: [ollama_install, ollama_gpu]
-
 - name: Check if GPU devices are present
   shell: "ls -la /dev/nvidia* 2>/dev/null || echo 'No NVIDIA devices found'"
   register: ollama_gpu_devices_check
   changed_when: false
   tags: [ollama_install, ollama_gpu]
 
-- name: Set GPU availability fact
+- name: Set GPU availability fact (based on device presence)
   set_fact:
-    ollama_has_gpu: "{{ nvidia_check.rc == 0 }}"
+    ollama_has_gpu: "{{ 'No NVIDIA devices found' not in ollama_gpu_devices_check.stdout }}"
   tags: [ollama_install, ollama_gpu]
 
 - name: Display GPU status
   debug:
-    msg: "GPU {{ 'AVAILABLE' if ollama_has_gpu else 'NOT AVAILABLE' }} - {{ 'will use GPU acceleration' if ollama_has_gpu else 'will use CPU only' }}"
+    msg: "GPU devices {{ 'DETECTED' if ollama_has_gpu else 'NOT DETECTED' }} - will install {{ 'GPU support' if ollama_has_gpu else 'CPU-only mode' }}"
   tags: [ollama_install, ollama_gpu]
 
-- name: Purge existing NVIDIA drivers if GPU devices exist but nvidia-smi fails
+- name: Purge existing NVIDIA packages if GPU devices present
   block:
     - name: Display purge reason
       debug:
-        msg: "GPU devices detected but nvidia-smi not working. Purging and reinstalling NVIDIA drivers..."
+        msg: "Purging any existing NVIDIA packages to ensure clean install matching host driver version..."
 
     - name: Stop any running NVIDIA services
       systemd:
@@ -58,16 +51,16 @@
       failed_when: false
       ignore_errors: true
 
+    - name: Check if any NVIDIA packages are installed
+      shell: "dpkg -l | grep -E '^ii.*(nvidia|cuda)' || echo 'none'"
+      register: nvidia_packages_check
+      changed_when: false
+      
     - name: Purge all NVIDIA packages
-      apt:
-        name:
-          - 'nvidia-*'
-          - 'cuda-*'
-          - 'libnvidia-*'
-          - 'libcuda*'
-        state: absent
-        purge: yes
-        autoremove: yes
+      shell: |
+        apt-get purge -y 'nvidia-*' 'cuda-*' 'libnvidia-*' 'libcuda*' 2>/dev/null || true
+        apt-get autoremove -y
+      when: "'none' not in nvidia_packages_check.stdout"
 
     - name: Clean apt cache
       apt:
@@ -83,9 +76,8 @@
         - /usr/local/cuda
       ignore_errors: true
   when: 
-    - not ollama_has_gpu
+    - ollama_has_gpu
     - ollama_gpu_enabled
-    - "'No NVIDIA devices found' not in ollama_gpu_devices_check.stdout"
   tags: [ollama_install, ollama_gpu]
 
 - name: Install NVIDIA drivers and CUDA (if GPU available)
