@@ -294,15 +294,37 @@
   changed_when: "'Successfully installed' in pytorch_install.stdout"
   tags: [vllm_install]
 
-- name: Check CUDA libraries in container
-  shell: "ldconfig -p | grep -i cuda || echo 'No CUDA libraries found'"
-  register: cuda_libs_check
+- name: Check what's in CUDA lib directory
+  shell: "ls -la /usr/local/cuda/targets/x86_64-linux/lib 2>/dev/null | head -20 || echo 'Directory not found'"
+  register: cuda_dir_check
   changed_when: false
   tags: [vllm_install, vllm_gpu]
 
-- name: Display CUDA libraries
+- name: Display CUDA directory contents
   debug:
-    msg: "{{ cuda_libs_check.stdout_lines }}"
+    msg: "{{ cuda_dir_check.stdout_lines }}"
+  tags: [vllm_install, vllm_gpu]
+
+- name: Check current ld.so.conf.d/cuda.conf
+  shell: "cat /etc/ld.so.conf.d/cuda.conf 2>/dev/null || echo 'File does not exist'"
+  register: cuda_conf_check
+  changed_when: false
+  tags: [vllm_install, vllm_gpu]
+
+- name: Display cuda.conf contents
+  debug:
+    msg: "{{ cuda_conf_check.stdout_lines }}"
+  tags: [vllm_install, vllm_gpu]
+
+- name: Check CUDA libraries in ldconfig BEFORE our changes
+  shell: "ldconfig -p | grep -E '(cuda|nvidia)' | head -20 || echo 'No CUDA/NVIDIA libraries found'"
+  register: cuda_libs_before
+  changed_when: false
+  tags: [vllm_install, vllm_gpu]
+
+- name: Display libraries before
+  debug:
+    msg: "{{ cuda_libs_before.stdout_lines }}"
   tags: [vllm_install, vllm_gpu]
 
 - name: Configure CUDA library paths
@@ -316,6 +338,17 @@
 - name: Update library cache
   command: ldconfig
   changed_when: false
+  tags: [vllm_install, vllm_gpu]
+
+- name: Check CUDA libraries in ldconfig AFTER our changes
+  shell: "ldconfig -p | grep -E '(cuda|nvidia)' | head -20 || echo 'No CUDA/NVIDIA libraries found'"
+  register: cuda_libs_after
+  changed_when: false
+  tags: [vllm_install, vllm_gpu]
+
+- name: Display libraries after
+  debug:
+    msg: "{{ cuda_libs_after.stdout_lines }}"
   tags: [vllm_install, vllm_gpu]
 
 - name: Verify PyTorch CUDA availability
