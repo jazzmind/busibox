@@ -103,7 +103,7 @@ record_test() {
 test_provision_containers() {
   log_section "Test 1: Provision Test Containers"
   
-  log_info "Creating test containers with IDs 301-307..."
+  log_info "Creating test containers with IDs 300-309..."
   
   if bash "${PCT_DIR}/create_lxc_base.sh" test; then
     record_test "Container creation" "PASS"
@@ -114,7 +114,7 @@ test_provision_containers() {
   
   # Verify containers exist
   log_info "Verifying containers exist..."
-  local test_ctids=(300 301 302 303 304 305 306)
+  local test_ctids=(300 301 302 303 304 305 306 307 308 309)
   
   for ctid in "${test_ctids[@]}"; do
     if pct status "$ctid" &>/dev/null; then
@@ -126,6 +126,48 @@ test_provision_containers() {
   done
   
   record_test "Container verification" "PASS"
+}
+
+test_gpu_passthrough() {
+  log_section "Test 1.5: Configure GPU Passthrough for LLM Containers"
+  
+  log_info "Configuring GPU passthrough for Ollama (308) and vLLM (309)..."
+  
+  # Check if GPUs are available on host
+  if ! command -v nvidia-smi &>/dev/null; then
+    log_warning "nvidia-smi not found - skipping GPU passthrough"
+    record_test "GPU passthrough" "PASS" "No GPU available (skipped)"
+    return 0
+  fi
+  
+  # Run GPU passthrough script
+  if bash "${PCT_DIR}/configure-gpu-passthrough.sh" 308 309; then
+    log_success "GPU passthrough configured"
+    record_test "GPU passthrough configuration" "PASS"
+  else
+    log_error "GPU passthrough configuration failed"
+    record_test "GPU passthrough configuration" "FAIL" "Script failed"
+    return 1
+  fi
+  
+  # Verify GPU configuration in LXC configs
+  log_info "Verifying GPU passthrough in container configs..."
+  
+  if grep -q "GPU Passthrough" /etc/pve/lxc/308.conf 2>/dev/null; then
+    log_success "Ollama container (308) has GPU passthrough configured"
+  else
+    record_test "Ollama GPU config verification" "FAIL" "GPU config not found"
+    return 1
+  fi
+  
+  if grep -q "GPU Passthrough" /etc/pve/lxc/309.conf 2>/dev/null; then
+    log_success "vLLM container (309) has GPU passthrough configured"
+  else
+    record_test "vLLM GPU config verification" "FAIL" "GPU config not found"
+    return 1
+  fi
+  
+  record_test "GPU passthrough verification" "PASS"
 }
 
 test_ansible_provisioning() {
@@ -345,6 +387,7 @@ cmd_full() {
   log_section "Running Full Test Suite"
   
   test_provision_containers || true
+  test_gpu_passthrough || true
   test_ansible_provisioning || true
   test_health_checks || true
   test_database_schema || true
