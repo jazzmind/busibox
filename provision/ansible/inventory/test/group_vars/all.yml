@@ -61,6 +61,25 @@ ollama_port: 11434
 vllm_host: "{{ vllm_ip }}"
 vllm_port: 8000
 
+# Ollama Model Configuration (TEST - use smallest models for fast testing)
+ollama_initial_models:
+  - name: "qwen2.5:0.5b"
+    description: "Tiny test model (397MB)"
+
+# vLLM Model Configuration (TEST - use smaller model)
+vllm_default_model: "Qwen/Qwen2.5-0.5B-Instruct"  # Small test model
+
+# LiteLLM Model Configuration (TEST - matches Ollama test models)
+litellm_models:
+  - model_name: "qwen-0.5b"
+    litellm_params:
+      model: "ollama/qwen2.5:0.5b"
+      api_base: "http://{{ ollama_ip }}:{{ ollama_port }}"
+  - model_name: "qwen-0.5b-vllm"
+    litellm_params:
+      model: "openai/Qwen/Qwen2.5-0.5B-Instruct"
+      api_base: "http://{{ vllm_ip }}:{{ vllm_port }}/v1"
+
 # Deployment Configuration
 deploywatch_check_interval: 3600
 deploywatch_apps_dir: /srv/deploywatch/apps

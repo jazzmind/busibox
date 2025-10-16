@@ -46,7 +46,7 @@ ollama_restart_sec: 10
 ollama_log_level: info  # debug, info, warn, error
 
 # Resource Limits (systemd)
-ollama_memory_limit: "16G"
+ollama_memory_limit: "24G"
 ollama_cpu_limit: "4"
 
 # Health Check

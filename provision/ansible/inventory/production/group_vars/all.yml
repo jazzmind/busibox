@@ -63,6 +63,18 @@ ollama_port: 11434
 vllm_host: "{{ vllm_ip }}"
 vllm_port: 8000
 
+# Ollama Model Configuration (PRODUCTION - full models)
+ollama_initial_models:
+  - name: "llama3:8b"
+    description: "Fast general-purpose model"
+  - name: "phi3:3.8b"
+    description: "Code and reasoning model"
+  - name: "gemma:2b"
+    description: "Lightweight tasks model"
+
+# vLLM Model Configuration (PRODUCTION)
+vllm_default_model: "meta-llama/Meta-Llama-3-8B-Instruct"
+
 # Deployment Configuration
 deploywatch_check_interval: 3600  # Check for new releases every hour (seconds)
 deploywatch_apps_dir: /srv/deploywatch/apps
