@@ -47,6 +47,14 @@
         - /etc/apt/sources.list.d/cuda-debian12-x86_64.list
         - /usr/share/keyrings/cuda-archive-keyring.gpg
         - /usr/share/keyrings/cuda-archive-keyring.asc
+        - /usr/share/keyrings/nvidia-cuda-keyring.gpg
+        - /tmp/nvidia-cuda-keyring.asc
+
+    - name: Install gnupg for key conversion
+      apt:
+        name: gnupg
+        state: present
+        update_cache: yes
 
     - name: Download NVIDIA CUDA repository GPG key
       get_url:
@@ -58,8 +66,6 @@
       shell: |
         gpg --dearmor < /tmp/nvidia-cuda-keyring.asc > /usr/share/keyrings/nvidia-cuda-keyring.gpg
         chmod 644 /usr/share/keyrings/nvidia-cuda-keyring.gpg
-      args:
-        creates: /usr/share/keyrings/nvidia-cuda-keyring.gpg
 
     - name: Add NVIDIA CUDA repository
       apt_repository:
