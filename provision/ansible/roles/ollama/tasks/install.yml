@@ -27,6 +27,12 @@
   changed_when: false
   tags: [ollama_install, ollama_gpu]
 
+- name: Check if GPU devices are present
+  shell: "ls -la /dev/nvidia* 2>/dev/null || echo 'No NVIDIA devices found'"
+  register: ollama_gpu_devices_check
+  changed_when: false
+  tags: [ollama_install, ollama_gpu]
+
 - name: Set GPU availability fact
   set_fact:
     ollama_has_gpu: "{{ nvidia_check.rc == 0 }}"
@@ -35,6 +41,51 @@
 - name: Display GPU status
   debug:
     msg: "GPU {{ 'AVAILABLE' if ollama_has_gpu else 'NOT AVAILABLE' }} - {{ 'will use GPU acceleration' if ollama_has_gpu else 'will use CPU only' }}"
+  tags: [ollama_install, ollama_gpu]
+
+- name: Purge existing NVIDIA drivers if GPU devices exist but nvidia-smi fails
+  block:
+    - name: Display purge reason
+      debug:
+        msg: "GPU devices detected but nvidia-smi not working. Purging and reinstalling NVIDIA drivers..."
+
+    - name: Stop any running NVIDIA services
+      systemd:
+        name: "{{ item }}"
+        state: stopped
+      loop:
+        - nvidia-persistenced
+      failed_when: false
+      ignore_errors: true
+
+    - name: Purge all NVIDIA packages
+      apt:
+        name:
+          - 'nvidia-*'
+          - 'cuda-*'
+          - 'libnvidia-*'
+          - 'libcuda*'
+        state: absent
+        purge: yes
+        autoremove: yes
+
+    - name: Clean apt cache
+      apt:
+        autoclean: yes
+
+    - name: Remove NVIDIA configuration files
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/modprobe.d/nvidia.conf
+        - /etc/modprobe.d/nvidia-installer-disable-nouveau.conf
+        - /usr/local/cuda
+      ignore_errors: true
+  when: 
+    - not ollama_has_gpu
+    - ollama_gpu_enabled
+    - "'No NVIDIA devices found' not in ollama_gpu_devices_check.stdout"
   tags: [ollama_install, ollama_gpu]
 
 - name: Install NVIDIA drivers and CUDA (if GPU available)
