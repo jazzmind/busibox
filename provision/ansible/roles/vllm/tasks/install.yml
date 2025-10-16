@@ -174,13 +174,7 @@
       debug:
         msg: "{{ nvidia_check_after.stdout_lines }}"
       when: nvidia_install.changed
-  when: nvidia_check.rc != 0
-  tags: [vllm_install, vllm_gpu]
-
-- name: Display GPU information (if already available)
-  debug:
-    msg: "{{ nvidia_check.stdout_lines }}"
-  when: nvidia_check.rc == 0
+  when: "'No NVIDIA devices found' not in gpu_devices_initial_check.stdout"
   tags: [vllm_install, vllm_gpu]
 
 - name: Check final GPU availability
