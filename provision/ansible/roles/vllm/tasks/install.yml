@@ -80,18 +80,23 @@
           - nvidia-kernel-dkms
         state: present
         install_recommends: yes
+      register: nvidia_install
 
-    - name: Verify NVIDIA driver installation
+    - name: Notify about required reboot
+      debug:
+        msg: "NVIDIA drivers installed. Container reboot required for GPU to be available."
+      when: nvidia_install.changed
+
+    - name: Check if nvidia-smi works after install
       command: nvidia-smi
       register: nvidia_check_after
       changed_when: false
-      retries: 3
-      delay: 5
-      until: nvidia_check_after.rc == 0
+      failed_when: false
 
-    - name: Display GPU information
+    - name: Display GPU information if available
       debug:
         msg: "{{ nvidia_check_after.stdout_lines }}"
+      when: nvidia_check_after.rc == 0
   when: nvidia_check.rc != 0
   tags: [vllm_install, vllm_gpu]
 
@@ -101,11 +106,21 @@
   when: nvidia_check.rc == 0
   tags: [vllm_install, vllm_gpu]
 
-- name: Verify GPU is available after driver install
+- name: Check final GPU availability
   command: nvidia-smi
   register: nvidia_final_check
-  failed_when: nvidia_final_check.rc != 0
+  failed_when: false
   changed_when: false
+  tags: [vllm_install, vllm_gpu]
+
+- name: Set GPU availability fact
+  set_fact:
+    vllm_gpu_ready: "{{ nvidia_final_check.rc == 0 }}"
+  tags: [vllm_install, vllm_gpu]
+
+- name: Display GPU readiness status
+  debug:
+    msg: "{{ 'GPU is ready and available' if vllm_gpu_ready else 'GPU not ready - container reboot may be required if drivers were just installed' }}"
   tags: [vllm_install, vllm_gpu]
 
 - name: Create vLLM system group
