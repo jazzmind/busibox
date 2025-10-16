@@ -135,13 +135,23 @@
       debug:
         msg: "Host NVIDIA driver version: {{ host_nvidia_version.stdout }}"
 
+    - name: Check what cuda packages are available
+      shell: "apt-cache search '^cuda-' | grep -E 'cuda-(toolkit|runtime|drivers|libraries)' | head -20"
+      register: cuda_packages_available
+      changed_when: false
+
+    - name: Display available CUDA packages
+      debug:
+        msg: "{{ cuda_packages_available.stdout_lines }}"
+
     - name: Install NVIDIA userspace utilities matching host driver
       apt:
         name:
           - cuda-drivers
-          - cuda-toolkit
+          - cuda-cudart-13-0
+          - cuda-libraries-13-0
         state: present
-        install_recommends: no
+        install_recommends: yes
       register: nvidia_install
       environment:
         DEBIAN_FRONTEND: noninteractive
