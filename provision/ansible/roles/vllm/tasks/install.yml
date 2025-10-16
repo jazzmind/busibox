@@ -137,11 +137,12 @@
       debug:
         msg: "{{ cuda_packages_available.stdout_lines }}"
 
-    - name: Install NVIDIA userspace utilities (nvidia-driver-cuda + cuda-toolkit)
+    - name: Install NVIDIA userspace utilities for CUDA 12.4 (driver 550 compatible)
       apt:
         name:
-          - nvidia-driver-cuda
-          - nvidia-open
+          - nvidia-utils-550
+          - cuda-drivers-550
+          - cuda-toolkit-12-4
         state: present
         install_recommends: yes
       register: nvidia_install

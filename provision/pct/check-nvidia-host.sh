@@ -117,7 +117,7 @@ main() {
 }
 
 install_nvidia_drivers() {
-  log_info "Installing NVIDIA drivers on host..."
+  log_info "Installing NVIDIA driver 550 and CUDA 12.4 on host..."
   
   # Add NVIDIA repository if not present
   if [[ ! -f /etc/apt/sources.list.d/nvidia-cuda.list ]]; then
@@ -144,20 +144,30 @@ install_nvidia_drivers() {
   log_info "Updating package lists..."
   apt-get update
   
-  # Install current NVIDIA driver and CUDA userspace tools
-  log_info "Installing NVIDIA driver and CUDA tools..."
-  apt-get install -y nvidia-driver nvidia-driver-cuda cuda-toolkit
+  # List available driver versions for debugging
+  log_info "Available NVIDIA driver versions:"
+  apt-cache search --names-only '^nvidia-driver-[0-9]' | head -10
+  
+  # Install NVIDIA driver 550, CUDA 12.4 toolkit, and userspace tools
+  log_info "Installing NVIDIA driver 550, CUDA 12.4 toolkit, and userspace tools..."
+  apt-get install -y \
+    nvidia-driver-550 \
+    nvidia-kernel-550-open \
+    cuda-drivers-550 \
+    cuda-toolkit-12-4 \
+    nvidia-utils-550
   
   log_warning "=========================================="
-  log_warning "NVIDIA drivers installed!"
+  log_warning "NVIDIA driver 550 and CUDA 12.4 installed!"
   log_warning "HOST REBOOT REQUIRED!"
   log_warning "=========================================="
   log_info "Run: reboot"
   log_info "After reboot, verify with: nvidia-smi"
+  log_info "Should show driver version 550.x and CUDA 12.4"
 }
 
 install_cuda_drivers_metapackage() {
-  log_info "Installing NVIDIA CUDA packages..."
+  log_info "Installing NVIDIA driver 550 and CUDA 12.4 packages..."
   
   # Ensure NVIDIA repo is configured
   if [[ ! -f /etc/apt/sources.list.d/nvidia-cuda.list ]]; then
@@ -166,9 +176,13 @@ install_cuda_drivers_metapackage() {
   fi
   
   apt-get update
-  apt-get install -y nvidia-driver-cuda cuda-toolkit
+  apt-get install -y \
+    nvidia-driver-550 \
+    cuda-drivers-550 \
+    cuda-toolkit-12-4 \
+    nvidia-utils-550
   
-  log_success "NVIDIA CUDA packages installed"
+  log_success "NVIDIA driver 550 and CUDA 12.4 packages installed"
 }
 
 purge_and_reinstall() {
