@@ -148,8 +148,8 @@
       apt:
         name:
           - cuda-drivers
-          - cuda-cudart-13-0
-          - cuda-libraries-13-0
+          - cuda-cudart-12-5
+          - cuda-libraries-12-5
         state: present
         install_recommends: yes
       register: nvidia_install
