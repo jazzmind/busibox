@@ -17,12 +17,18 @@ log_info "Setting up vLLM test environment on Proxmox host..."
 log_info "Using Debian's open NVIDIA drivers and CUDA toolkit"
 
 # Step 1: Clean up any existing NVIDIA installations
-log_info "Step 1: Cleaning up existing NVIDIA packages..."
-apt-get purge -y 'nvidia-*' 'cuda-*' 'libnvidia-*' 2>/dev/null || true
-apt-get autoremove -y
+log_info "Step 1: Cleaning up existing NVIDIA packages and repositories..."
+
+# Remove repository files FIRST to avoid apt errors
 rm -f /etc/apt/sources.list.d/cuda*.list
 rm -f /usr/share/keyrings/cuda*.gpg
 rm -f /usr/share/keyrings/nvidia*.gpg
+rm -f /tmp/cuda-keyring*.deb
+
+# Now we can safely use apt
+apt-get purge -y 'nvidia-*' 'cuda-*' 'libnvidia-*' 2>/dev/null || true
+apt-get autoremove -y
+apt-get clean
 
 # Step 2: Enable Debian non-free and contrib repos
 log_info "Step 2: Enabling Debian non-free and contrib repositories..."
