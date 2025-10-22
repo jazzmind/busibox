@@ -48,40 +48,38 @@ if ! grep -q "non-free-firmware non-free contrib" /etc/apt/sources.list; then
 fi
 apt-get update
 
-# Step 3: Search for ALL available NVIDIA packages
-log_info "Step 3: Searching for available NVIDIA packages in Debian..."
-log_info "All NVIDIA packages:"
-apt-cache search nvidia | grep -E "^nvidia-" | sort
+# Step 3: Install NVIDIA open kernel driver and utilities
+log_info "Step 3: Installing NVIDIA open kernel driver (DKMS)..."
+
+# The key package is nvidia-open-kernel-dkms which builds the open kernel module
+# This should pull in all necessary dependencies including nvidia-alternative
+
+log_info "Installing nvidia-open-kernel-dkms..."
+apt-get install -y nvidia-open-kernel-dkms
 
 log_info ""
-log_info "Searching for specific driver versions..."
-apt-cache search --names-only "^nvidia-" | grep -v "legacy" | head -30
+log_info "Installed NVIDIA kernel packages:"
+dpkg -l | grep nvidia | awk '{print $2, $3}'
 
-# Install NVIDIA open kernel driver
-log_info "Installing NVIDIA open kernel driver and tools..."
+# Now we need the userspace utilities (nvidia-smi, etc)
+log_info ""
+log_info "Searching for NVIDIA userspace utilities packages..."
+apt-cache search --names-only nvidia | grep -E "utils" | head -10
 
-# Based on the package list, let's try:
-# - nvidia-open-kernel-support (the open kernel support we saw)
-# - nvidia-kernel-common (common support files)
-# Let's also search for the actual userspace packages
-
-log_info "Searching for NVIDIA userspace tools..."
-apt-cache search --names-only nvidia | grep -E "(utils|smi|settings)" | head -20
+# Try to install nvidia utilities
+log_info "Installing NVIDIA utilities..."
+# The utils package name might be versioned or just "nvidia-utils"
+if apt-cache show nvidia-utils &>/dev/null; then
+  apt-get install -y nvidia-utils
+elif apt-cache show nvidia-utils-550 &>/dev/null; then
+  apt-get install -y nvidia-utils-550
+else
+  log_warning "Could not find nvidia-utils package, checking what's available..."
+  apt-cache search nvidia | grep -i "utils\|smi"
+fi
 
 log_info ""
-log_info "Installing NVIDIA kernel modules and utilities..."
-
-# Install the open kernel support and common files
-apt-get install -y \
-  nvidia-open-kernel-support \
-  nvidia-kernel-common
-
-# Now search for what driver/utils packages are available after installing kernel support
-log_info ""
-log_info "Checking for driver packages after kernel installation..."
-apt-cache search --names-only "^nvidia-" | grep -E "(driver|utils|smi)" | head -20
-
-log_info "Installed NVIDIA packages so far:"
+log_info "All installed NVIDIA packages:"
 dpkg -l | grep nvidia | awk '{print $2, $3}'
 
 # Step 4: Install CUDA toolkit from Debian
