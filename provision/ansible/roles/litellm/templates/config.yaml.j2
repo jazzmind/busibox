@@ -33,6 +33,8 @@ general_settings:
 {% if litellm_enable_database %}
   database_url: "{{ litellm_database_url }}"
 {% endif %}
+  # Allow unauthenticated access to health endpoint for monitoring
+  public_routes: ["/health", "/health/readiness", "/health/liveliness"]
   
 # API Settings
 {% if litellm_enable_swagger %}
