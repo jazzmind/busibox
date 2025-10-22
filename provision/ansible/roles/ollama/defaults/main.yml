@@ -12,7 +12,8 @@ ollama_binary_url: "https://github.com/ollama/ollama/releases/download/v0.5.4/ol
 ollama_user: ollama
 ollama_group: ollama
 ollama_home: /var/lib/ollama
-ollama_models_dir: "{{ ollama_home }}/models"
+# Use shared host storage for models (mounted via pct)
+ollama_models_dir: /var/lib/llm-models/ollama
 
 # Network Configuration
 ollama_host: "0.0.0.0"

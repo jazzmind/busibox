@@ -68,8 +68,8 @@ fi
 log_success "Containers created"
 echo ""
 
-# Step 2: Configure GPU passthrough
-log_info "Step 2: Configuring GPU passthrough..."
+# Step 2: Add model storage bind mounts
+log_info "Step 2: Configuring shared model storage..."
 
 # Set container IDs based on mode
 if [[ "$MODE" == "test" ]]; then
@@ -79,6 +79,29 @@ else
     OLLAMA_CTID="${CT_OLLAMA}"
     VLLM_CTID="${CT_VLLM}"
 fi
+
+# Add bind mounts for shared model storage
+log_info "Adding bind mounts for Ollama container ${OLLAMA_CTID}..."
+if ! grep -q "/var/lib/llm-models/ollama" "/etc/pve/lxc/${OLLAMA_CTID}.conf" 2>/dev/null; then
+    echo "mp0: /var/lib/llm-models/ollama,mp=/var/lib/llm-models/ollama" >> "/etc/pve/lxc/${OLLAMA_CTID}.conf"
+    log_info "  ✓ Ollama models mounted"
+else
+    log_info "  ✓ Ollama models already mounted"
+fi
+
+log_info "Adding bind mounts for vLLM container ${VLLM_CTID}..."
+if ! grep -q "/var/lib/llm-models/huggingface" "/etc/pve/lxc/${VLLM_CTID}.conf" 2>/dev/null; then
+    echo "mp0: /var/lib/llm-models/huggingface,mp=/var/lib/llm-models/huggingface" >> "/etc/pve/lxc/${VLLM_CTID}.conf"
+    log_info "  ✓ HuggingFace cache mounted"
+else
+    log_info "  ✓ HuggingFace cache already mounted"
+fi
+
+log_success "Model storage configured"
+echo ""
+
+# Step 3: Configure GPU passthrough
+log_info "Step 3: Configuring GPU passthrough..."
 
 log_info "Ollama container: ${OLLAMA_CTID} (GPU 0)"
 log_info "vLLM container: ${VLLM_CTID} (GPU 1)"
