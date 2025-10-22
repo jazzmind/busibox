@@ -16,10 +16,18 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_info "Installing NVIDIA driver 550 using official NVIDIA CUDA repository..."
 log_info "This works on Debian 13 (Trixie) and Debian 12 (Bookworm)"
 
-# Clean up any existing broken installations
-log_info "Step 1: Cleaning up any existing NVIDIA packages..."
+# Clean up any existing installations
+log_info "Step 1: Removing existing NVIDIA packages..."
+
+# First, remove repository configs to avoid conflicts
 rm -rf /etc/apt/sources.list.d/cuda* /etc/apt/sources.list.d/nvidia*
 rm -rf /usr/share/keyrings/cuda* /usr/share/keyrings/nvidia*
+
+# Purge all existing NVIDIA packages
+log_info "Purging all existing NVIDIA/CUDA packages..."
+apt-get purge -y 'nvidia-*' 'cuda-*' 'libnvidia-*' 'libcuda*' 2>/dev/null || true
+apt-get autoremove -y
+apt-get clean
 
 # Install the CUDA keyring package directly
 log_info "Step 2: Installing NVIDIA CUDA repository keyring..."
