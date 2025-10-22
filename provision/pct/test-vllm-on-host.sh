@@ -165,7 +165,12 @@ pip install litellm
 log_info "Testing LiteLLM import..."
 python -c "
 import litellm
-print('LiteLLM version:', litellm.__version__)
+# litellm doesn't always have __version__, try to get it from package metadata
+try:
+    from importlib.metadata import version
+    print('LiteLLM version:', version('litellm'))
+except:
+    print('LiteLLM version: (unable to detect)')
 print('LiteLLM imported successfully!')
 "
 
