@@ -126,10 +126,34 @@ if command -v nvcc &>/dev/null; then
   nvcc --version | grep "release" || true
 fi
 
-# Step 5: Check if reboot is needed
-if [[ ! -f /dev/nvidia0 ]] || ! nvidia-smi &>/dev/null; then
+# Step 5: Check if NVIDIA driver is already working
+log_info "Step 5: Checking for existing NVIDIA driver..."
+
+if nvidia-smi &>/dev/null; then
+  log_success "NVIDIA driver is already working!"
+  nvidia-smi
+elif [[ ! -f /dev/nvidia0 ]]; then
   log_warning "=========================================="
-  log_warning "Kernel driver installed - REBOOT REQUIRED"
+  log_warning "No NVIDIA GPU devices found in /dev/"
+  log_warning "=========================================="
+  log_warning "Debian 13 (Trixie) NVIDIA packages appear incomplete."
+  log_warning "You may need to install drivers manually or use NVIDIA's official repository."
+  log_warning ""
+  log_info "Checking if nvidia-smi is installed but driver not loaded..."
+  if command -v nvidia-smi &>/dev/null; then
+    log_info "nvidia-smi found, trying to run it..."
+    nvidia-smi || log_warning "nvidia-smi failed - driver may need reboot or is not installed"
+  fi
+  
+  log_warning ""
+  log_warning "To proceed, you have two options:"
+  log_warning "1. Install NVIDIA drivers from their official repository"
+  log_warning "2. If you already have drivers installed, reboot the host"
+  exit 1
+else
+  log_warning "=========================================="
+  log_warning "GPU devices exist but nvidia-smi not working"
+  log_warning "May need reboot to load new drivers"
   log_warning "=========================================="
   log_info "After reboot, run this script again to continue with Python setup"
   exit 0
