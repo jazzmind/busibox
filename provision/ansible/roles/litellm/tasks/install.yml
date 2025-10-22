@@ -92,6 +92,14 @@
   become_user: "{{ litellm_user }}"
   tags: [litellm_install]
 
+- name: Generate Prisma binaries for database support
+  command: "{{ litellm_venv_dir }}/bin/prisma generate"
+  become: true
+  become_user: "{{ litellm_user }}"
+  environment:
+    PRISMA_PYTHON_INSTALL_DIR: "{{ litellm_venv_dir }}/lib/python{{ litellm_python_version }}/site-packages/prisma"
+  tags: [litellm_install]
+
 - name: Verify LiteLLM installation
   shell: |
     {{ litellm_venv_dir }}/bin/python -c "import litellm; from importlib.metadata import version; print('LiteLLM version:', version('litellm')); print('LiteLLM imported successfully!')"
