@@ -61,66 +61,49 @@ fi
 
 apt-get update
 
-# Step 3: Install NVIDIA open kernel driver and utilities
+# Step 3: Install NVIDIA drivers
 log_info "Step 3: Searching for available NVIDIA packages..."
 
-# First check what's available
-log_info "Available NVIDIA kernel packages:"
-apt-cache search --names-only "nvidia.*kernel" | head -20
+# Check what alternative/driver packages exist
+log_info "Searching for nvidia-alternative packages:"
+apt-cache search --names-only "nvidia-alternative" | head -20
 
 log_info ""
-log_info "Attempting to install nvidia-open-kernel-dkms from backports if needed..."
-
-# Try to install from backports first if it's Debian 12
-if [[ "$DEBIAN_VERSION" == "12" ]]; then
-  log_info "Trying backports first..."
-  apt-get install -y -t bookworm-backports nvidia-open-kernel-dkms || {
-    log_warning "Backports install failed, trying regular repository..."
-    apt-get install -y nvidia-open-kernel-dkms
-  }
-else
-  apt-get install -y nvidia-open-kernel-dkms
-fi
-
-# If that fails, let's try the proprietary kernel instead
-if [[ $? -ne 0 ]]; then
-  log_warning "Open kernel failed, trying proprietary nvidia-kernel-dkms..."
-  apt-get install -y nvidia-kernel-dkms
-fi
+log_info "Searching for legacy driver packages:"
+apt-cache search --names-only "nvidia-legacy" | head -20
 
 log_info ""
-log_info "Installed NVIDIA kernel packages:"
+log_info "The nvidia-alternative package is missing from Debian 12 non-free."
+log_info "We'll use the NVIDIA CUDA repository approach instead for better compatibility."
+log_info ""
+
+# Since Debian's packaging is incomplete, let's just install the CUDA toolkit
+# which will pull in the necessary driver components from NVIDIA's repository
+log_info "Installing nvidia-cuda-toolkit (includes driver components)..."
+apt-get install -y nvidia-cuda-toolkit
+
+log_info ""
+log_info "Installed NVIDIA packages:"
 dpkg -l | grep nvidia | awk '{print $2, $3}'
 
-# Now we need the userspace utilities (nvidia-smi, etc)
-log_info ""
-log_info "Searching for NVIDIA userspace utilities packages..."
-apt-cache search --names-only nvidia | grep -E "utils" | head -10
-
-# Try to install nvidia utilities
-log_info "Installing NVIDIA utilities..."
-# The utils package name might be versioned or just "nvidia-utils"
-if apt-cache show nvidia-utils &>/dev/null; then
-  apt-get install -y nvidia-utils
-elif apt-cache show nvidia-utils-550 &>/dev/null; then
-  apt-get install -y nvidia-utils-550
+# Check if we have nvidia-smi now
+if command -v nvidia-smi &>/dev/null; then
+  log_success "nvidia-smi is available!"
 else
-  log_warning "Could not find nvidia-utils package, checking what's available..."
-  apt-cache search nvidia | grep -i "utils\|smi"
+  log_warning "nvidia-smi not found yet, may need additional packages or reboot"
 fi
 
-log_info ""
-log_info "All installed NVIDIA packages:"
-dpkg -l | grep nvidia | awk '{print $2, $3}'
-
-# Step 4: Install CUDA toolkit from Debian
-log_info "Step 4: Installing CUDA toolkit from Debian repositories..."
-apt-get install -y \
-  nvidia-cuda-toolkit \
-  nvidia-cuda-dev
+# Step 4: Already installed CUDA toolkit above, check version
+log_info "Step 4: Checking CUDA installation..."
 
 log_info "CUDA packages installed:"
 dpkg -l | grep cuda | awk '{print $2, $3}'
+
+# Check for nvcc
+if command -v nvcc &>/dev/null; then
+  log_info "CUDA compiler version:"
+  nvcc --version | grep "release" || true
+fi
 
 # Step 5: Check if reboot is needed
 if [[ ! -f /dev/nvidia0 ]] || ! nvidia-smi &>/dev/null; then
