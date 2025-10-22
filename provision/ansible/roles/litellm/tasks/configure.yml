@@ -52,12 +52,23 @@
   when: litellm_start_service
   tags: [litellm_configure]
 
+- name: Check LiteLLM service logs
+  command: journalctl -u litellm -n 50 --no-pager
+  register: litellm_logs
+  changed_when: false
+  tags: [litellm_configure]
+
+- name: Display LiteLLM service logs
+  debug:
+    msg: "{{ litellm_logs.stdout_lines }}"
+  tags: [litellm_configure]
+
 - name: Wait for LiteLLM service to be ready
   wait_for:
     host: "{{ litellm_host if litellm_host != '0.0.0.0' else 'localhost' }}"
     port: "{{ litellm_port }}"
-    delay: 2
-    timeout: 30
+    delay: 5
+    timeout: 60
   when: litellm_start_service
   tags: [litellm_configure]
 

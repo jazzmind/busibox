@@ -43,27 +43,39 @@
   when: vllm_start_service
   tags: [vllm_configure]
 
+- name: Check vLLM service logs immediately
+  command: journalctl -u vllm -n 50 --no-pager
+  register: vllm_logs_initial
+  changed_when: false
+  tags: [vllm_configure]
+
+- name: Display initial vLLM service logs
+  debug:
+    msg: "{{ vllm_logs_initial.stdout_lines }}"
+  tags: [vllm_configure]
+
 - name: Wait for vLLM service to be ready
   wait_for:
     host: "{{ vllm_host if vllm_host != '0.0.0.0' else 'localhost' }}"
     port: "{{ vllm_port }}"
     delay: 10
-    timeout: 60
+    timeout: 120
   when: vllm_start_service
   failed_when: false
   register: vllm_port_check
   tags: [vllm_configure]
 
 - name: Get vLLM service logs if port check failed
-  shell: "journalctl -u vllm -n 50 --no-pager"
+  command: journalctl -u vllm -n 100 --no-pager
   register: vllm_logs
   when: 
     - vllm_start_service
     - vllm_port_check.failed is defined
     - vllm_port_check.failed
+  changed_when: false
   tags: [vllm_configure]
 
-- name: Display vLLM service logs
+- name: Display vLLM service logs if failed
   debug:
     msg: "{{ vllm_logs.stdout_lines }}"
   when: 
