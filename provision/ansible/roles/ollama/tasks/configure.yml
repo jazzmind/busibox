@@ -36,11 +36,16 @@
   when: ollama_enable_service
   tags: [ollama_configure]
 
-- name: Start Ollama service
+- name: Restart Ollama service to apply environment changes
   systemd:
     name: ollama
-    state: started
+    state: restarted
   when: ollama_start_service
+  tags: [ollama_configure]
+
+- name: Wait for Ollama to fully start
+  pause:
+    seconds: 3
   tags: [ollama_configure]
 
 - name: Check if Ollama is listening
