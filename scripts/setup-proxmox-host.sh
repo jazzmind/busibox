@@ -145,6 +145,15 @@ else
         echo ""
         echo "✓ NVIDIA drivers installed!"
         echo ""
+        
+        # Create udev rule for nvidia-caps permissions
+        echo "  Creating udev rule for NVIDIA capability devices..."
+        cat > /etc/udev/rules.d/70-nvidia-caps.rules << 'UDEV_EOF'
+# Make NVIDIA capability devices accessible to LXC containers
+KERNEL=="nvidia-cap[0-9]*", MODE="0666"
+UDEV_EOF
+        
+        echo ""
         echo "⚠ ⚠ ⚠  REBOOT REQUIRED  ⚠ ⚠ ⚠"
         echo ""
         echo "After reboot:"
@@ -162,6 +171,21 @@ else
     else
         echo "⚠ Skipping NVIDIA driver installation"
         echo "  Note: GPU passthrough to LXC containers requires NVIDIA drivers on host"
+    fi
+else
+    # Drivers already installed, check if udev rule exists
+    if [[ ! -f /etc/udev/rules.d/70-nvidia-caps.rules ]]; then
+        echo "  Creating udev rule for NVIDIA capability devices..."
+        cat > /etc/udev/rules.d/70-nvidia-caps.rules << 'UDEV_EOF'
+# Make NVIDIA capability devices accessible to LXC containers
+KERNEL=="nvidia-cap[0-9]*", MODE="0666"
+UDEV_EOF
+        
+        echo "  Reloading udev rules..."
+        udevadm control --reload-rules
+        udevadm trigger
+        
+        echo "  ✓ udev rule created and applied"
     fi
 fi
 echo ""

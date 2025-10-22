@@ -25,13 +25,16 @@ fix_container_gpu() {
         sleep 3
     fi
     
-    # Remove ALL GPU-related lines from config
+    # Backup original config
+    cp "${conf}" "${conf}.backup-$(date +%s)"
+    
+    # Remove only GPU-related lines from config (preserve everything else)
     echo "  Removing old GPU configuration..."
-    sed -i '/GPU Passthrough/d' "${conf}"
-    sed -i '/lxc.cgroup2.devices.allow.*195/d' "${conf}"
-    sed -i '/lxc.cgroup2.devices.allow.*234/d' "${conf}"
-    sed -i '/lxc.cgroup2.devices.allow.*508/d' "${conf}"
-    sed -i '/lxc.mount.entry.*nvidia/d' "${conf}"
+    sed -i '/^# GPU Passthrough/d' "${conf}"
+    sed -i '/^lxc.cgroup2.devices.allow: c 195/d' "${conf}"
+    sed -i '/^lxc.cgroup2.devices.allow: c 234/d' "${conf}"
+    sed -i '/^lxc.cgroup2.devices.allow: c 508/d' "${conf}"
+    sed -i '/^lxc.mount.entry:.*nvidia/d' "${conf}"
     
     # Add fresh GPU configuration
     echo "  Adding fresh GPU configuration..."
