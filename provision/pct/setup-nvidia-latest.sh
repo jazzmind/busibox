@@ -28,10 +28,19 @@ else
   exit 1
 fi
 
-# Clean up any existing repository configs
-log_info "Step 1: Cleaning up old repository configurations..."
+# Clean up any existing installations
+log_info "Step 1: Removing any existing NVIDIA installations..."
+
+# Remove repository configs
 rm -rf /etc/apt/sources.list.d/cuda* /etc/apt/sources.list.d/nvidia*
 rm -rf /usr/share/keyrings/cuda* /usr/share/keyrings/nvidia*
+
+# Purge all existing NVIDIA/CUDA packages to avoid conflicts
+log_info "Purging existing NVIDIA/CUDA packages..."
+apt-get purge -y 'nvidia-*' 'cuda-*' 'libnvidia-*' 'libcuda*' 2>/dev/null || true
+apt-get autoremove -y
+apt-get clean
+log_success "Cleanup complete"
 
 # Install the CUDA keyring package
 log_info "Step 2: Installing NVIDIA CUDA repository keyring..."
