@@ -46,10 +46,13 @@ else
 # GPU Passthrough: NVIDIA GPU 0
 lxc.cgroup2.devices.allow: c 195:* rwm
 lxc.cgroup2.devices.allow: c 234:* rwm
+lxc.cgroup2.devices.allow: c 508:* rwm
 lxc.mount.entry: /dev/nvidia0 dev/nvidia0 none bind,optional,create=file
 lxc.mount.entry: /dev/nvidiactl dev/nvidiactl none bind,optional,create=file
+lxc.mount.entry: /dev/nvidia-modeset dev/nvidia-modeset none bind,optional,create=file
 lxc.mount.entry: /dev/nvidia-uvm dev/nvidia-uvm none bind,optional,create=file
 lxc.mount.entry: /dev/nvidia-uvm-tools dev/nvidia-uvm-tools none bind,optional,create=file
+lxc.mount.entry: /dev/nvidia-caps dev/nvidia-caps none bind,optional,create=dir
 OLLAMA_EOF
     echo "    ✓ Ollama GPU 0 configuration added"
     CHANGES_MADE=true
@@ -63,10 +66,13 @@ else
 # GPU Passthrough: NVIDIA GPU 1
 lxc.cgroup2.devices.allow: c 195:* rwm
 lxc.cgroup2.devices.allow: c 234:* rwm
+lxc.cgroup2.devices.allow: c 508:* rwm
 lxc.mount.entry: /dev/nvidia1 dev/nvidia1 none bind,optional,create=file
 lxc.mount.entry: /dev/nvidiactl dev/nvidiactl none bind,optional,create=file
+lxc.mount.entry: /dev/nvidia-modeset dev/nvidia-modeset none bind,optional,create=file
 lxc.mount.entry: /dev/nvidia-uvm dev/nvidia-uvm none bind,optional,create=file
 lxc.mount.entry: /dev/nvidia-uvm-tools dev/nvidia-uvm-tools none bind,optional,create=file
+lxc.mount.entry: /dev/nvidia-caps dev/nvidia-caps none bind,optional,create=dir
 VLLM_EOF
     echo "    ✓ vLLM GPU 1 configuration added"
     CHANGES_MADE=true
