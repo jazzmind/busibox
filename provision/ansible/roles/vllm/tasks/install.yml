@@ -237,7 +237,7 @@
   args:
     executable: /bin/bash
   environment:
-    LD_LIBRARY_PATH: "/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu"
+    LD_LIBRARY_PATH: "/usr/local/cuda/targets/x86_64-linux/lib:/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu"
   register: pytorch_cuda_test
   changed_when: false
   tags: [vllm_install, vllm_gpu]
@@ -251,7 +251,7 @@
   shell: |
     {{ vllm_venv_dir }}/bin/python -c "import torch; assert torch.cuda.is_available(), 'CUDA not available'"
   environment:
-    LD_LIBRARY_PATH: "/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu"
+    LD_LIBRARY_PATH: "/usr/local/cuda/targets/x86_64-linux/lib:/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu"
   register: pytorch_cuda_verify
   changed_when: false
   failed_when: pytorch_cuda_verify.rc != 0
