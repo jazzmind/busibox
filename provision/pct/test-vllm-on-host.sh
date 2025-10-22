@@ -209,9 +209,25 @@ find /usr -name "libcublas.so*" 2>/dev/null || true
 
 # Step 11: Install PyTorch with CUDA support
 log_info "Step 11: Installing PyTorch with CUDA support..."
-log_info "Using PyTorch's recommended CUDA 12.1 build..."
 
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# Detect CUDA version from nvidia-smi
+CUDA_VERSION=$(nvidia-smi | grep "CUDA Version" | awk '{print $9}' | cut -d. -f1)
+log_info "Detected CUDA version: ${CUDA_VERSION}.x"
+
+# Choose PyTorch build based on CUDA version
+if [[ "$CUDA_VERSION" == "13" ]]; then
+  log_info "Installing PyTorch with CUDA 12.4 support (compatible with CUDA 13.x driver)..."
+  pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+elif [[ "$CUDA_VERSION" == "12" ]]; then
+  log_info "Installing PyTorch with CUDA 12.1 support..."
+  pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+elif [[ "$CUDA_VERSION" == "11" ]]; then
+  log_info "Installing PyTorch with CUDA 11.8 support..."
+  pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+else
+  log_warning "Unknown CUDA version ${CUDA_VERSION}, trying CUDA 12.4..."
+  pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+fi
 
 # Step 12: Test PyTorch CUDA
 log_info "Step 12: Testing PyTorch CUDA detection..."
