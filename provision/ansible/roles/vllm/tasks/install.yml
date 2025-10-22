@@ -58,10 +58,11 @@
           apt:
             update_cache: yes
 
-    - name: Install NVIDIA userspace utilities (no kernel driver needed in LXC)
+    - name: Install NVIDIA drivers and CUDA toolkit (userspace only in LXC)
       apt:
         name:
           - cuda-drivers
+          - cuda-toolkit
         state: present
         install_recommends: no
       environment:
