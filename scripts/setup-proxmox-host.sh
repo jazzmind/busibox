@@ -86,7 +86,87 @@ else
 fi
 echo ""
 
-# 6. Summary
+# 6. Check and install NVIDIA drivers
+echo "=========================================="
+echo "Step 6: Checking NVIDIA Drivers"
+echo "=========================================="
+
+if command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null; then
+    DRIVER_VERSION=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1)
+    CUDA_VERSION=$(nvidia-smi | grep "CUDA Version" | awk '{print $9}')
+    echo "✓ NVIDIA drivers already installed"
+    echo "  Driver version: ${DRIVER_VERSION}"
+    echo "  CUDA version: ${CUDA_VERSION}"
+    
+    # List GPUs
+    echo ""
+    echo "Available GPUs:"
+    nvidia-smi -L
+else
+    echo "⚠ NVIDIA drivers not found or not working"
+    echo ""
+    read -p "Install latest NVIDIA drivers? (y/N): " -n 1 -r
+    echo ""
+    
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        echo "Installing latest NVIDIA drivers from NVIDIA repository..."
+        
+        # Detect Debian version
+        DEBIAN_VERSION=$(cat /etc/debian_version | cut -d. -f1)
+        if [[ "$DEBIAN_VERSION" == "13" ]] || [[ "$DEBIAN_VERSION" == "12" ]]; then
+            DEBIAN_CODENAME="debian12"
+            echo "  Detected Debian ${DEBIAN_VERSION} - using debian12 NVIDIA repository"
+        else
+            echo "  ❌ Unsupported Debian version: $DEBIAN_VERSION"
+            exit 1
+        fi
+        
+        # Clean up any existing installations
+        echo "  Cleaning up old NVIDIA installations..."
+        rm -rf /etc/apt/sources.list.d/cuda* /etc/apt/sources.list.d/nvidia*
+        rm -rf /usr/share/keyrings/cuda* /usr/share/keyrings/nvidia*
+        apt-get purge -y 'nvidia-*' 'cuda-*' 'libnvidia-*' 'libcuda*' 2>/dev/null || true
+        apt-get autoremove -y
+        apt-get clean
+        
+        # Install CUDA keyring
+        echo "  Installing NVIDIA CUDA repository..."
+        cd /tmp
+        wget -q https://developer.download.nvidia.com/compute/cuda/repos/${DEBIAN_CODENAME}/x86_64/cuda-keyring_1.1-1_all.deb
+        dpkg -i cuda-keyring_1.1-1_all.deb
+        rm cuda-keyring_1.1-1_all.deb
+        cd -
+        
+        # Update and install
+        echo "  Installing NVIDIA drivers and CUDA toolkit..."
+        apt-get update
+        apt-get install -y cuda-drivers cuda-toolkit
+        
+        echo ""
+        echo "✓ NVIDIA drivers installed!"
+        echo ""
+        echo "⚠ ⚠ ⚠  REBOOT REQUIRED  ⚠ ⚠ ⚠"
+        echo ""
+        echo "After reboot:"
+        echo "  1. Run: nvidia-smi"
+        echo "  2. Verify GPUs are detected"
+        echo "  3. Re-run this script to continue setup"
+        echo ""
+        read -p "Reboot now? (y/N): " -n 1 -r
+        echo ""
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            reboot
+        else
+            exit 0
+        fi
+    else
+        echo "⚠ Skipping NVIDIA driver installation"
+        echo "  Note: GPU passthrough to LXC containers requires NVIDIA drivers on host"
+    fi
+fi
+echo ""
+
+# 7. Summary
 echo "=========================================="
 echo "Setup Complete!"
 echo "=========================================="
