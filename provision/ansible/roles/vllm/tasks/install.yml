@@ -124,7 +124,8 @@
     name: "{{ vllm_user }}"
     group: "{{ vllm_user }}"
     system: yes
-    create_home: no
+    create_home: yes
+    home: "{{ vllm_home }}"
     shell: /bin/false
     state: present
   tags: [vllm_install]
@@ -139,6 +140,9 @@
   loop:
     - "{{ vllm_install_dir }}"
     - "{{ vllm_home }}"
+    - "{{ vllm_home }}/.cache"
+    - "{{ vllm_home }}/.cache/vllm"
+    - "{{ vllm_home }}/.cache/vllm/modelinfos"
     - "{{ vllm_cache_dir }}"
     - "{{ vllm_cache_dir }}/hub"
   tags: [vllm_install]
