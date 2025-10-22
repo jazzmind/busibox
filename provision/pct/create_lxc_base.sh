@@ -16,7 +16,7 @@ else
 fi
 
 create_ct () {
-  local CTID=$1 IP=$2 NAME=$3 PRIV=$4
+  local CTID=$1 IP=$2 NAME=$3 PRIV=$4 DISK_SIZE="${5:-$DISK_GB}"
   
   # Check if container already exists
   if pct status "$CTID" &>/dev/null; then
@@ -41,7 +41,7 @@ create_ct () {
     return 0
   fi
   
-  echo "==> Creating $NAME ($CTID) at $IP"
+  echo "==> Creating $NAME ($CTID) at $IP (disk: ${DISK_SIZE})"
   
   # Build create command with proper privilege settings
   if [[ "$PRIV" == "priv" ]]; then
@@ -51,7 +51,7 @@ create_ct () {
       -net0 name=eth0,bridge=$BRIDGE,ip=${IP}${CIDR},gw=$GW \
       -storage "$STORAGE" \
       -memory "$MEM_MB" -cores "$CPUS" \
-      -rootfs "$STORAGE:$DISK_GB" \
+      -rootfs "$STORAGE:$DISK_SIZE" \
       -features nesting=1,keyctl=1 \
       -unprivileged 0 \
       -onboot 1 -start 1 \
@@ -63,7 +63,7 @@ create_ct () {
       -net0 name=eth0,bridge=$BRIDGE,ip=${IP}${CIDR},gw=$GW \
       -storage "$STORAGE" \
       -memory "$MEM_MB" -cores "$CPUS" \
-      -rootfs "$STORAGE:$DISK_GB" \
+      -rootfs "$STORAGE:$DISK_SIZE" \
       -features nesting=1,keyctl=1 \
       -onboot 1 -start 1 \
       -ssh-public-keys "$SSH_PUBKEY_PATH" || return 1
@@ -135,7 +135,7 @@ if [[ "$MODE" == "test" ]]; then
   create_ct "$CT_OLLAMA_TEST" "$IP_OLLAMA_TEST" "${PREFIX}ollama-lxc" priv || cleanup_on_error
   CREATED_CONTAINERS+=("$CT_OLLAMA_TEST")
   
-  create_ct "$CT_VLLM_TEST" "$IP_VLLM_TEST" "${PREFIX}vllm-lxc" priv || cleanup_on_error
+  create_ct "$CT_VLLM_TEST" "$IP_VLLM_TEST" "${PREFIX}vllm-lxc" priv 40 || cleanup_on_error
   CREATED_CONTAINERS+=("$CT_VLLM_TEST")
 
 else
@@ -166,7 +166,7 @@ else
   create_ct "$CT_OLLAMA" "$IP_OLLAMA" ollama-lxc priv || cleanup_on_error
   CREATED_CONTAINERS+=("$CT_OLLAMA")
   
-  create_ct "$CT_VLLM" "$IP_VLLM" vllm-lxc priv || cleanup_on_error
+  create_ct "$CT_VLLM" "$IP_VLLM" vllm-lxc priv 40 || cleanup_on_error
   CREATED_CONTAINERS+=("$CT_VLLM")
 
 fi
