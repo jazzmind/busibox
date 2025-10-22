@@ -78,6 +78,35 @@
       debug:
         msg: "{{ nvidia_smi_check.stdout_lines }}"
       when: nvidia_smi_check.rc == 0
+      
+    - name: Reboot container if drivers were just installed
+      block:
+        - name: Reboot container
+          shell: "sleep 2 && reboot"
+          async: 1
+          poll: 0
+          ignore_errors: true
+          
+        - name: Wait for container to go down
+          wait_for_connection:
+            delay: 5
+            timeout: 30
+          ignore_errors: true
+          
+        - name: Wait for container to come back up
+          wait_for_connection:
+            delay: 10
+            timeout: 120
+            
+        - name: Verify nvidia-smi after reboot
+          command: nvidia-smi
+          register: nvidia_smi_after_reboot
+          changed_when: false
+          
+        - name: Display nvidia-smi after reboot
+          debug:
+            msg: "{{ nvidia_smi_after_reboot.stdout_lines }}"
+      when: nvidia_drivers_install.changed
 
   when: "'No NVIDIA devices' not in gpu_devices_check.stdout"
   tags: [vllm_install, vllm_gpu]
@@ -180,11 +209,13 @@
     msg: "{{ cuda_libs_check.stdout_lines }}"
   tags: [vllm_install, vllm_gpu]
 
-- name: Test PyTorch CUDA availability
+- name: Test PyTorch CUDA availability (without CUDA_VISIBLE_DEVICES)
   shell: |
+    unset CUDA_VISIBLE_DEVICES
     {{ vllm_venv_dir }}/bin/python -c "
     import os
     print('LD_LIBRARY_PATH:', os.environ.get('LD_LIBRARY_PATH', 'NOT SET'))
+    print('CUDA_VISIBLE_DEVICES:', os.environ.get('CUDA_VISIBLE_DEVICES', 'NOT SET'))
     import torch
     print('PyTorch version:', torch.__version__)
     print('CUDA available:', torch.cuda.is_available())
@@ -200,6 +231,8 @@
         except Exception as e:
             print(f'CUDA init error: {e}')
     "
+  args:
+    executable: /bin/bash
   environment:
     LD_LIBRARY_PATH: "/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu"
   register: pytorch_cuda_test
