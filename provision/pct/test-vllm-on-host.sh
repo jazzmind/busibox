@@ -48,14 +48,32 @@ if ! grep -q "non-free-firmware non-free contrib" /etc/apt/sources.list; then
 fi
 apt-get update
 
-# Step 3: Install open NVIDIA kernel drivers
-log_info "Step 3: Installing Debian's open NVIDIA kernel drivers..."
-apt-get install -y \
-  nvidia-kernel-open-dkms \
-  nvidia-smi \
-  libnvidia-ml1
+# Step 3: Search for available NVIDIA packages
+log_info "Step 3: Searching for available NVIDIA packages in Debian..."
+log_info "Available nvidia-driver packages:"
+apt-cache search --names-only nvidia-driver | head -20
 
-log_info "Installed packages:"
+log_info "Available nvidia-kernel packages:"
+apt-cache search --names-only nvidia-kernel | head -20
+
+# Install open NVIDIA kernel drivers using correct Debian package names
+log_info "Installing Debian's NVIDIA driver packages..."
+
+# In Debian, the main packages are:
+# - nvidia-driver: Meta-package for the full driver
+# - nvidia-kernel-dkms: Kernel module (or nvidia-kernel-open-dkms if available)
+# - nvidia-smi is part of nvidia-utils or nvidia-driver
+
+# Try to install open kernel if available, fall back to proprietary
+if apt-cache show nvidia-kernel-open-dkms &>/dev/null; then
+  log_info "Installing nvidia-kernel-open-dkms (open source driver)..."
+  apt-get install -y nvidia-kernel-open-dkms nvidia-driver
+else
+  log_info "Open kernel not available, installing standard nvidia-driver..."
+  apt-get install -y nvidia-driver
+fi
+
+log_info "Installed NVIDIA packages:"
 dpkg -l | grep nvidia | awk '{print $2, $3}'
 
 # Step 4: Install CUDA toolkit from Debian
