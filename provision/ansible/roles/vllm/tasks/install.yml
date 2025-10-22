@@ -167,6 +167,8 @@
         for i in range(torch.cuda.device_count()):
             print(f'GPU {i}: {torch.cuda.get_device_name(i)}')
     "
+  environment:
+    LD_LIBRARY_PATH: "/usr/local/cuda/targets/x86_64-linux/lib:/lib/x86_64-linux-gnu"
   register: pytorch_cuda_test
   changed_when: false
   tags: [vllm_install, vllm_gpu]
@@ -179,6 +181,8 @@
 - name: Verify PyTorch can detect CUDA
   shell: |
     {{ vllm_venv_dir }}/bin/python -c "import torch; assert torch.cuda.is_available(), 'CUDA not available'"
+  environment:
+    LD_LIBRARY_PATH: "/usr/local/cuda/targets/x86_64-linux/lib:/lib/x86_64-linux-gnu"
   register: pytorch_cuda_verify
   changed_when: false
   failed_when: pytorch_cuda_verify.rc != 0
@@ -217,6 +221,5 @@
     recurse: yes
   loop:
     - "{{ vllm_install_dir }}"
-    - "{{ vllm_data_dir }}"
-    - "{{ vllm_cache_dir }}"
+    - "{{ vllm_home }}"
   tags: [vllm_install]
