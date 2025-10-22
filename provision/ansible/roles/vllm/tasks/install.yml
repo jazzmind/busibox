@@ -155,6 +155,28 @@
     virtualenv: "{{ vllm_venv_dir }}"
   tags: [vllm_install, vllm_gpu]
 
+- name: Check CUDA libraries are available
+  shell: |
+    echo "=== Checking for CUDA libraries ==="
+    ldconfig -p | grep -i cuda || echo "No CUDA libs in ldconfig cache"
+    echo ""
+    echo "=== Checking /usr/local/cuda ==="
+    ls -la /usr/local/cuda/targets/x86_64-linux/lib/ 2>/dev/null | head -20 || echo "Directory not found"
+    echo ""
+    echo "=== Checking for libcuda.so ==="
+    find /usr/lib /lib -name "libcuda.so*" 2>/dev/null || echo "libcuda.so not found"
+    echo ""
+    echo "=== Checking nvidia-smi ==="
+    nvidia-smi -L || echo "nvidia-smi failed"
+  register: cuda_libs_check
+  changed_when: false
+  tags: [vllm_install, vllm_gpu]
+
+- name: Display CUDA libraries check
+  debug:
+    msg: "{{ cuda_libs_check.stdout_lines }}"
+  tags: [vllm_install, vllm_gpu]
+
 - name: Test PyTorch CUDA availability
   shell: |
     {{ vllm_venv_dir }}/bin/python -c "
