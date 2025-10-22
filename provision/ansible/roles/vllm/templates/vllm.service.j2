@@ -37,9 +37,8 @@ ExecStart={{ vllm_venv_dir }}/bin/python -m vllm.entrypoints.openai.api_server \
   --api-key {{ vllm_api_key }} \
 {% endif %}
 {% if vllm_disable_log_stats %}
-  --disable-log-stats \
+  --disable-log-stats
 {% endif %}
-  --log-level {{ vllm_log_level }}
 
 # Restart configuration
 Restart={{ 'always' if vllm_restart_on_failure else 'no' }}
@@ -48,7 +47,7 @@ TimeoutStartSec={{ vllm_startup_timeout }}
 
 # Resource limits
 {% if vllm_memory_limit is defined %}
-MemoryLimit={{ vllm_memory_limit }}
+MemoryMax={{ vllm_memory_limit }}
 {% endif %}
 {% if vllm_cpu_limit is defined %}
 CPUQuota={{ vllm_cpu_limit }}00%
