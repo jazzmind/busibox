@@ -69,6 +69,10 @@ ollama_initial_models:
 # vLLM Model Configuration (TEST - use smaller model)
 vllm_default_model: "Qwen/Qwen2.5-0.5B-Instruct"  # Small test model
 
+# LiteLLM Configuration
+litellm_enable_database: true
+litellm_database_url: "postgresql://{{ postgres_user }}:{{ postgres_password }}@{{ postgres_host }}:{{ postgres_port }}/{{ postgres_db }}"
+
 # LiteLLM Model Configuration (TEST - matches Ollama test models)
 litellm_models:
   - model_name: "qwen-0.5b"

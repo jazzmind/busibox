@@ -85,6 +85,7 @@
       - uvicorn
       - pyyaml
       - python-dotenv
+      - psycopg2-binary  # PostgreSQL adapter
     virtualenv: "{{ litellm_venv_dir }}"
   become: true
   become_user: "{{ litellm_user }}"
