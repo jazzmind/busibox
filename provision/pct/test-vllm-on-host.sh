@@ -19,16 +19,27 @@ log_info "Using Debian's open NVIDIA drivers and CUDA toolkit"
 # Step 1: Clean up any existing NVIDIA installations
 log_info "Step 1: Cleaning up existing NVIDIA packages and repositories..."
 
-# Remove repository files FIRST to avoid apt errors
-rm -f /etc/apt/sources.list.d/cuda*.list
-rm -f /usr/share/keyrings/cuda*.gpg
-rm -f /usr/share/keyrings/nvidia*.gpg
-rm -f /tmp/cuda-keyring*.deb
+# Remove ALL NVIDIA repository configurations
+log_info "Removing all NVIDIA repository files..."
+rm -rf /etc/apt/sources.list.d/cuda*
+rm -rf /usr/share/keyrings/cuda*
+rm -rf /usr/share/keyrings/nvidia*
+rm -rf /tmp/cuda-keyring*
 
+# Also check for any .sources files (new apt format)
+rm -rf /etc/apt/sources.list.d/nvidia*
+find /etc/apt -name "*nvidia*" -delete 2>/dev/null || true
+find /etc/apt -name "*cuda*" -delete 2>/dev/null || true
+
+# Purge the cuda-keyring package if installed
+dpkg -P cuda-keyring 2>/dev/null || true
+
+log_info "Purging existing NVIDIA packages..."
 # Now we can safely use apt
 apt-get purge -y 'nvidia-*' 'cuda-*' 'libnvidia-*' 2>/dev/null || true
 apt-get autoremove -y
 apt-get clean
+apt-get update
 
 # Step 2: Enable Debian non-free and contrib repos
 log_info "Step 2: Enabling Debian non-free and contrib repositories..."
