@@ -1,6 +1,6 @@
 ---
 # vLLM Installation Tasks
-# Install Python, CUDA, PyTorch, and vLLM
+# Simplified approach: Install userspace NVIDIA drivers and vLLM
 
 - name: Update apt cache
   apt:
@@ -19,161 +19,14 @@
       - curl
       - wget
       - ca-certificates
-      - gnupg
-      - software-properties-common
     state: present
   tags: [vllm_install]
 
-- name: Check if GPU devices are present
-  shell: "ls -la /dev/nvidia* 2>/dev/null || echo 'No NVIDIA devices found'"
-  register: gpu_devices_initial_check
-  changed_when: false
-  tags: [vllm_install, vllm_gpu]
-
-- name: Always purge existing NVIDIA packages in LXC to avoid version mismatch
-  block:
-    - name: Display purge reason
-      debug:
-        msg: "Purging any existing NVIDIA packages to ensure clean install matching host driver version..."
-
-    - name: Stop any running NVIDIA services
-      systemd:
-        name: "{{ item }}"
-        state: stopped
-      loop:
-        - nvidia-persistenced
-      failed_when: false
-      ignore_errors: true
-
-    - name: Check if any NVIDIA packages are installed
-      shell: "dpkg -l | grep -E '^ii.*(nvidia|cuda)' || echo 'none'"
-      register: nvidia_packages_check
-      changed_when: false
-      
-    - name: Purge all NVIDIA packages
-      shell: |
-        apt-get purge -y 'nvidia-*' 'cuda-*' 'libnvidia-*' 'libcuda*' 2>/dev/null || true
-        apt-get autoremove -y
-      when: "'none' not in nvidia_packages_check.stdout"
-
-    - name: Clean apt cache
-      apt:
-        autoclean: yes
-        
-    - name: Update apt cache after purge
-      apt:
-        update_cache: yes
-
-    - name: Remove NVIDIA configuration files
-      file:
-        path: "{{ item }}"
-        state: absent
-      loop:
-        - /etc/modprobe.d/nvidia.conf
-        - /etc/modprobe.d/nvidia-installer-disable-nouveau.conf
-        - /usr/local/cuda
-        - /usr/local/cuda-12
-      ignore_errors: true
-  when: "'No NVIDIA devices found' not in gpu_devices_initial_check.stdout"
-  tags: [vllm_install, vllm_gpu]
-
-- name: Install NVIDIA drivers and CUDA if not available
-  block:
-    - name: Download CUDA keyring package
-      get_url:
-        url: https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-keyring_1.1-1_all.deb
-        dest: /tmp/cuda-keyring.deb
-        mode: '0644'
-
-    - name: Install CUDA keyring package
-      apt:
-        deb: /tmp/cuda-keyring.deb
-        state: present
-
-    - name: Remove temporary keyring file
-      file:
-        path: /tmp/cuda-keyring.deb
-        state: absent
-
-    - name: Update apt cache after adding NVIDIA repository
-      apt:
-        update_cache: yes
-
-    - name: Check NVIDIA driver version on host via kernel module
-      shell: "cat /proc/driver/nvidia/version 2>/dev/null | head -1 | awk '{print $8}' || echo ''"
-      register: host_nvidia_version
-      changed_when: false
-      failed_when: false
-
-    - name: Display detected host NVIDIA driver version
-      debug:
-        msg: "Host NVIDIA driver version: {{ host_nvidia_version.stdout }}"
-
-    - name: Check what cuda packages are available
-      shell: "apt-cache search '^cuda-' | grep -E 'cuda-(toolkit|runtime|drivers|libraries)' | head -20"
-      register: cuda_packages_available
-      changed_when: false
-
-    - name: Display available CUDA packages
-      debug:
-        msg: "{{ cuda_packages_available.stdout_lines }}"
-
-    - name: Install NVIDIA userspace utilities and CUDA 12.4 toolkit (for LXC containers)
-      apt:
-        name:
-          - nvidia-utils-550
-          - cuda-toolkit-12-4
-        state: present
-        install_recommends: yes
-      register: nvidia_install
-      environment:
-        DEBIAN_FRONTEND: noninteractive
-
-    - name: Reboot container if drivers were installed
-      shell: "sleep 2 && reboot"
-      async: 1
-      poll: 0
-      when: nvidia_install.changed
-      ignore_errors: true
-
-    - name: Wait for container to come back up
-      wait_for_connection:
-        delay: 10
-        timeout: 300
-      when: nvidia_install.changed
-
-    - name: Verify nvidia-smi works after reboot
-      command: nvidia-smi
-      register: nvidia_check_after
-      changed_when: false
-      retries: 5
-      delay: 5
-      until: nvidia_check_after.rc == 0
-      when: nvidia_install.changed
-
-    - name: Display GPU information after driver install
-      debug:
-        msg: "{{ nvidia_check_after.stdout_lines }}"
-      when: nvidia_install.changed
-  when: "'No NVIDIA devices found' not in gpu_devices_initial_check.stdout"
-  tags: [vllm_install, vllm_gpu]
-
-- name: Check final GPU availability
-  command: nvidia-smi
-  register: nvidia_final_check
-  failed_when: false
-  changed_when: false
-  tags: [vllm_install, vllm_gpu]
-
-- name: Set GPU availability fact
-  set_fact:
-    vllm_gpu_ready: "{{ nvidia_final_check.rc == 0 }}"
-  tags: [vllm_install, vllm_gpu]
-
-- name: Check if GPU devices are visible in container
-  shell: "ls -la /dev/nvidia* 2>/dev/null || echo 'No NVIDIA devices found'"
+- name: Check if GPU devices are present in container
+  shell: "ls -la /dev/nvidia* 2>/dev/null || echo 'No NVIDIA devices'"
   register: gpu_devices_check
   changed_when: false
+  failed_when: false
   tags: [vllm_install, vllm_gpu]
 
 - name: Display GPU device status
@@ -181,38 +34,58 @@
     msg: "{{ gpu_devices_check.stdout_lines }}"
   tags: [vllm_install, vllm_gpu]
 
-- name: Check all devices in /dev for debugging
-  shell: "ls -la /dev/ | grep -E '(nvidia|drm|dri)' || echo 'No GPU-related devices found'"
-  register: dev_devices_check
-  changed_when: false
-  tags: [vllm_install, vllm_gpu]
+- name: Install NVIDIA userspace drivers for LXC
+  block:
+    - name: Add NVIDIA CUDA repository
+      block:
+        - name: Download CUDA keyring
+          get_url:
+            url: https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-keyring_1.1-1_all.deb
+            dest: /tmp/cuda-keyring.deb
+            mode: '0644'
 
-- name: Display all GPU-related devices
-  debug:
-    msg: "{{ dev_devices_check.stdout_lines }}"
-  tags: [vllm_install, vllm_gpu]
+        - name: Install CUDA keyring
+          apt:
+            deb: /tmp/cuda-keyring.deb
+            state: present
 
-- name: Display GPU readiness status
-  debug:
-    msg: "{{ 'GPU is ready and available' if vllm_gpu_ready else 'GPU not ready - check if GPU passthrough is configured on Proxmox host' }}"
-  tags: [vllm_install, vllm_gpu]
+        - name: Remove keyring deb file
+          file:
+            path: /tmp/cuda-keyring.deb
+            state: absent
 
-- name: Fail if GPU devices not found in container
-  fail:
-    msg: |
-      No NVIDIA GPU devices found in container!
-      
-      GPU passthrough may not be configured. To configure GPU passthrough:
-      1. On Proxmox host, run: bash /root/busibox/provision/pct/configure-gpu-passthrough.sh {{ container_id }}
-      2. Or run the test infrastructure script which includes GPU setup
-      
-      The container needs GPU device {{ gpu_device | default('N/A') }} to be passed through.
-  when: "'No NVIDIA devices found' in gpu_devices_check.stdout"
+        - name: Update apt cache
+          apt:
+            update_cache: yes
+
+    - name: Install NVIDIA userspace utilities (no kernel driver needed in LXC)
+      apt:
+        name:
+          - nvidia-utils
+          - libnvidia-ml1
+        state: present
+        install_recommends: no
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+      register: nvidia_utils_install
+
+    - name: Verify nvidia-smi is available
+      command: nvidia-smi
+      register: nvidia_smi_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display nvidia-smi output
+      debug:
+        msg: "{{ nvidia_smi_check.stdout_lines }}"
+      when: nvidia_smi_check.rc == 0
+
+  when: "'No NVIDIA devices' not in gpu_devices_check.stdout"
   tags: [vllm_install, vllm_gpu]
 
 - name: Create vLLM system group
   group:
-    name: "{{ vllm_group }}"
+    name: "{{ vllm_user }}"
     system: yes
     state: present
   tags: [vllm_install]
@@ -220,12 +93,11 @@
 - name: Create vLLM system user
   user:
     name: "{{ vllm_user }}"
-    group: "{{ vllm_group }}"
+    group: "{{ vllm_user }}"
     system: yes
-    create_home: yes
-    home: "{{ vllm_home }}"
-    shell: /bin/bash
-    comment: "vLLM Service User"
+    create_home: no
+    shell: /bin/false
+    state: present
   tags: [vllm_install]
 
 - name: Create vLLM directories
@@ -233,188 +105,118 @@
     path: "{{ item }}"
     state: directory
     owner: "{{ vllm_user }}"
-    group: "{{ vllm_group }}"
+    group: "{{ vllm_user }}"
     mode: '0755'
   loop:
     - "{{ vllm_install_dir }}"
-    - "{{ vllm_home }}"
-    - "{{ vllm_cache_dir }}"
-    - "{{ vllm_download_dir }}"
+    - "{{ vllm_data_dir }}"
+    - "{{ vllm_cache_dir }}/hub"
   tags: [vllm_install]
 
 - name: Create Python virtual environment
-  command: "python3 -m venv {{ vllm_venv_dir }}"
+  command: python3 -m venv {{ vllm_venv_dir }}
   args:
     creates: "{{ vllm_venv_dir }}/bin/python"
-  become: true
-  become_user: "{{ vllm_user }}"
   tags: [vllm_install]
 
 - name: Upgrade pip in virtual environment
   pip:
-    name:
-      - pip
-      - setuptools
-      - wheel
+    name: pip
     state: latest
     virtualenv: "{{ vllm_venv_dir }}"
-  become: true
-  become_user: "{{ vllm_user }}"
   tags: [vllm_install]
 
-- name: Install PyTorch with CUDA support
-  shell: |
-    {{ vllm_venv_dir }}/bin/pip install torch torchvision torchaudio --index-url {{ vllm_pip_extra_index_url }}
-  become: true
-  become_user: "{{ vllm_user }}"
-  register: pytorch_install
-  changed_when: "'Successfully installed' in pytorch_install.stdout"
-  tags: [vllm_install]
-
-- name: Check what's in CUDA lib directory
-  shell: "ls -la /usr/local/cuda/targets/x86_64-linux/lib 2>/dev/null | head -20 || echo 'Directory not found'"
-  register: cuda_dir_check
-  changed_when: false
-  tags: [vllm_install, vllm_gpu]
-
-- name: Display CUDA directory contents
-  debug:
-    msg: "{{ cuda_dir_check.stdout_lines }}"
-  tags: [vllm_install, vllm_gpu]
-
-- name: Check current ld.so.conf.d/cuda.conf
-  shell: "cat /etc/ld.so.conf.d/cuda.conf 2>/dev/null || echo 'File does not exist'"
-  register: cuda_conf_check
-  changed_when: false
-  tags: [vllm_install, vllm_gpu]
-
-- name: Display cuda.conf contents
-  debug:
-    msg: "{{ cuda_conf_check.stdout_lines }}"
-  tags: [vllm_install, vllm_gpu]
-
-- name: Check CUDA libraries in ldconfig BEFORE our changes
-  shell: "ldconfig -p | grep -E '(cuda|nvidia)' | head -20 || echo 'No CUDA/NVIDIA libraries found'"
-  register: cuda_libs_before
-  changed_when: false
-  tags: [vllm_install, vllm_gpu]
-
-- name: Display libraries before
-  debug:
-    msg: "{{ cuda_libs_before.stdout_lines }}"
-  tags: [vllm_install, vllm_gpu]
-
-- name: Configure CUDA library paths
-  copy:
-    dest: /etc/ld.so.conf.d/cuda.conf
-    content: |
-      /usr/local/cuda/targets/x86_64-linux/lib
-      /lib/x86_64-linux-gnu
-  tags: [vllm_install, vllm_gpu]
-
-- name: Update library cache
-  command: ldconfig
-  changed_when: false
-  tags: [vllm_install, vllm_gpu]
-
-- name: Check CUDA libraries in ldconfig AFTER our changes
-  shell: "ldconfig -p | grep -E '(cuda|nvidia)' | head -20 || echo 'No CUDA/NVIDIA libraries found'"
-  register: cuda_libs_after
-  changed_when: false
-  tags: [vllm_install, vllm_gpu]
-
-- name: Display libraries after
-  debug:
-    msg: "{{ cuda_libs_after.stdout_lines }}"
-  tags: [vllm_install, vllm_gpu]
-
-- name: Verify PyTorch CUDA availability
-  shell: |
-    export LD_LIBRARY_PATH=/usr/local/cuda/targets/x86_64-linux/lib:/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
-    {{ vllm_venv_dir }}/bin/python -c "
-    import torch
-    import os
-    print('PyTorch version:', torch.__version__)
-    print('CUDA compiled version:', torch.version.cuda)
-    print('LD_LIBRARY_PATH:', os.environ.get('LD_LIBRARY_PATH', 'not set'))
-    
-    # Force CUDA initialization
-    torch.cuda.init()
-    
-    is_available = torch.cuda.is_available()
-    print('CUDA available:', is_available)
-    device_count = torch.cuda.device_count()
-    print('CUDA device count:', device_count)
-    
-    if device_count > 0:
-        for i in range(device_count):
-            try:
-                name = torch.cuda.get_device_name(i)
-                print(f'GPU {i}: {name}')
-                # Try to allocate on GPU to truly test
-                x = torch.tensor([1.0], device=f'cuda:{i}')
-                print(f'GPU {i}: Successfully allocated tensor')
-            except Exception as e:
-                print(f'GPU {i}: Error - {type(e).__name__}: {str(e)}')
-    " 2>&1
-  register: pytorch_cuda_check
-  become: true
-  become_user: "{{ vllm_user }}"
+- name: Detect CUDA version from nvidia-smi
+  shell: "nvidia-smi | grep 'CUDA Version' | awk '{print $9}' | cut -d. -f1"
+  register: cuda_version_detect
   changed_when: false
   failed_when: false
   tags: [vllm_install, vllm_gpu]
 
-- name: Display PyTorch CUDA status
-  debug:
-    msg: "{{ pytorch_cuda_check.stdout_lines }}"
+- name: Set PyTorch index URL based on CUDA version
+  set_fact:
+    pytorch_index_url: >-
+      {% if cuda_version_detect.stdout == '13' or cuda_version_detect.stdout == '12' %}
+      https://download.pytorch.org/whl/cu124
+      {% elif cuda_version_detect.stdout == '11' %}
+      https://download.pytorch.org/whl/cu118
+      {% else %}
+      https://download.pytorch.org/whl/cu124
+      {% endif %}
   tags: [vllm_install, vllm_gpu]
 
-- name: Display PyTorch errors if any
-  debug:
-    msg: "{{ pytorch_cuda_check.stderr_lines }}"
-  when: pytorch_cuda_check.stderr is defined and pytorch_cuda_check.stderr != ''
+- name: Install PyTorch with CUDA support
+  pip:
+    name:
+      - torch
+      - torchvision
+      - torchaudio
+    extra_args: "--index-url {{ pytorch_index_url }}"
+    virtualenv: "{{ vllm_venv_dir }}"
   tags: [vllm_install, vllm_gpu]
 
-- name: Warn if PyTorch cannot detect CUDA but devices are present
+- name: Test PyTorch CUDA availability
+  shell: |
+    {{ vllm_venv_dir }}/bin/python -c "
+    import torch
+    print('PyTorch version:', torch.__version__)
+    print('CUDA available:', torch.cuda.is_available())
+    print('CUDA version:', torch.version.cuda)
+    print('GPU count:', torch.cuda.device_count())
+    if torch.cuda.is_available():
+        for i in range(torch.cuda.device_count()):
+            print(f'GPU {i}: {torch.cuda.get_device_name(i)}')
+    "
+  register: pytorch_cuda_test
+  changed_when: false
+  tags: [vllm_install, vllm_gpu]
+
+- name: Display PyTorch CUDA test results
   debug:
-    msg: "WARNING: PyTorch reports CUDA unavailable but GPU devices exist. This may be due to PyTorch/CUDA library mismatch. Continuing anyway - vLLM may still work."
-  when: 
-    - "'CUDA available: False' in pytorch_cuda_check.stdout"
-    - "'CUDA device count: 0' not in pytorch_cuda_check.stdout"
+    msg: "{{ pytorch_cuda_test.stdout_lines }}"
+  tags: [vllm_install, vllm_gpu]
+
+- name: Verify PyTorch can detect CUDA
+  shell: |
+    {{ vllm_venv_dir }}/bin/python -c "import torch; assert torch.cuda.is_available(), 'CUDA not available'"
+  register: pytorch_cuda_verify
+  changed_when: false
+  failed_when: pytorch_cuda_verify.rc != 0
   tags: [vllm_install, vllm_gpu]
 
 - name: Install vLLM
   pip:
-    name: "vllm{% if vllm_version != 'latest' %}=={{ vllm_version }}{% endif %}"
+    name: vllm
     virtualenv: "{{ vllm_venv_dir }}"
-  become: true
-  become_user: "{{ vllm_user }}"
   tags: [vllm_install]
 
 - name: Install additional Python packages
   pip:
     name:
+      - huggingface-hub
       - transformers
-      - accelerate
-      - huggingface_hub
-      - fastapi
-      - uvicorn
     virtualenv: "{{ vllm_venv_dir }}"
-  become: true
-  become_user: "{{ vllm_user }}"
   tags: [vllm_install]
 
 - name: Verify vLLM installation
-  shell: |
-    {{ vllm_venv_dir }}/bin/python -c "import vllm; print('vLLM version:', vllm.__version__)"
+  command: "{{ vllm_venv_dir }}/bin/python -c 'import vllm; print(vllm.__version__)'"
   register: vllm_version_check
-  become: true
-  become_user: "{{ vllm_user }}"
   changed_when: false
   tags: [vllm_install]
 
 - name: Display vLLM version
   debug:
-    msg: "{{ vllm_version_check.stdout }}"
+    msg: "vLLM version: {{ vllm_version_check.stdout }}"
   tags: [vllm_install]
 
+- name: Set vLLM directory ownership
+  file:
+    path: "{{ item }}"
+    owner: "{{ vllm_user }}"
+    group: "{{ vllm_user }}"
+    recurse: yes
+  loop:
+    - "{{ vllm_install_dir }}"
+    - "{{ vllm_data_dir }}"
+    - "{{ vllm_cache_dir }}"
+  tags: [vllm_install]

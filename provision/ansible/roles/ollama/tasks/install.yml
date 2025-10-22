@@ -1,6 +1,6 @@
 ---
 # Ollama Installation Tasks
-# Install Ollama binary and dependencies
+# Simplified approach: Install userspace NVIDIA drivers and Ollama
 
 - name: Update apt cache
   apt:
@@ -12,149 +12,74 @@
   apt:
     name:
       - curl
-      - ca-certificates
-      - gnupg
-      - lsb-release
-      - software-properties-common
       - wget
+      - ca-certificates
     state: present
   tags: [ollama_install]
 
-- name: Check if GPU devices are present
-  shell: "ls -la /dev/nvidia* 2>/dev/null || echo 'No NVIDIA devices found'"
-  register: ollama_gpu_devices_check
+- name: Check if GPU devices are present in container
+  shell: "ls -la /dev/nvidia* 2>/dev/null || echo 'No NVIDIA devices'"
+  register: gpu_devices_check
   changed_when: false
+  failed_when: false
   tags: [ollama_install, ollama_gpu]
 
-- name: Set GPU availability fact (based on device presence)
-  set_fact:
-    ollama_has_gpu: "{{ 'No NVIDIA devices found' not in ollama_gpu_devices_check.stdout }}"
-  tags: [ollama_install, ollama_gpu]
-
-- name: Display GPU status
+- name: Display GPU device status
   debug:
-    msg: "GPU devices {{ 'DETECTED' if ollama_has_gpu else 'NOT DETECTED' }} - will install {{ 'GPU support' if ollama_has_gpu else 'CPU-only mode' }}"
+    msg: "{{ gpu_devices_check.stdout_lines }}"
   tags: [ollama_install, ollama_gpu]
 
-- name: Purge existing NVIDIA packages if GPU devices present
+- name: Install NVIDIA userspace drivers for LXC
   block:
-    - name: Display purge reason
-      debug:
-        msg: "Purging any existing NVIDIA packages to ensure clean install matching host driver version..."
+    - name: Add NVIDIA CUDA repository
+      block:
+        - name: Download CUDA keyring
+          get_url:
+            url: https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-keyring_1.1-1_all.deb
+            dest: /tmp/cuda-keyring.deb
+            mode: '0644'
 
-    - name: Stop any running NVIDIA services
-      systemd:
-        name: "{{ item }}"
-        state: stopped
-      loop:
-        - nvidia-persistenced
-      failed_when: false
-      ignore_errors: true
+        - name: Install CUDA keyring
+          apt:
+            deb: /tmp/cuda-keyring.deb
+            state: present
 
-    - name: Check if any NVIDIA packages are installed
-      shell: "dpkg -l | grep -E '^ii.*(nvidia|cuda)' || echo 'none'"
-      register: nvidia_packages_check
-      changed_when: false
-      
-    - name: Purge all NVIDIA packages
-      shell: |
-        apt-get purge -y 'nvidia-*' 'cuda-*' 'libnvidia-*' 'libcuda*' 2>/dev/null || true
-        apt-get autoremove -y
-      when: "'none' not in nvidia_packages_check.stdout"
+        - name: Remove keyring deb file
+          file:
+            path: /tmp/cuda-keyring.deb
+            state: absent
 
-    - name: Clean apt cache
-      apt:
-        autoclean: yes
+        - name: Update apt cache
+          apt:
+            update_cache: yes
 
-    - name: Remove NVIDIA configuration files
-      file:
-        path: "{{ item }}"
-        state: absent
-      loop:
-        - /etc/modprobe.d/nvidia.conf
-        - /etc/modprobe.d/nvidia-installer-disable-nouveau.conf
-        - /usr/local/cuda
-      ignore_errors: true
-  when: 
-    - ollama_has_gpu
-    - ollama_gpu_enabled
-  tags: [ollama_install, ollama_gpu]
-
-- name: Install NVIDIA drivers and CUDA (if GPU available)
-  block:
-    - name: Download CUDA keyring package
-      get_url:
-        url: https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-keyring_1.1-1_all.deb
-        dest: /tmp/cuda-keyring.deb
-        mode: '0644'
-
-    - name: Install CUDA keyring package
-      apt:
-        deb: /tmp/cuda-keyring.deb
-        state: present
-
-    - name: Remove temporary keyring file
-      file:
-        path: /tmp/cuda-keyring.deb
-        state: absent
-
-    - name: Update apt cache after adding NVIDIA repository
-      apt:
-        update_cache: yes
-
-    - name: Check NVIDIA driver version on host via kernel module
-      shell: "cat /proc/driver/nvidia/version 2>/dev/null | head -1 | awk '{print $8}' || echo ''"
-      register: host_nvidia_version
-      changed_when: false
-      failed_when: false
-
-    - name: Display detected host NVIDIA driver version
-      debug:
-        msg: "Host NVIDIA driver version: {{ host_nvidia_version.stdout }}"
-
-    - name: Install NVIDIA userspace utilities and CUDA 12.4 toolkit (for LXC containers)
+    - name: Install NVIDIA userspace utilities (no kernel driver needed in LXC)
       apt:
         name:
-          - nvidia-utils-550
-          - cuda-toolkit-12-4
+          - nvidia-utils
+          - libnvidia-ml1
         state: present
-        install_recommends: yes
-      register: nvidia_install
+        install_recommends: no
       environment:
         DEBIAN_FRONTEND: noninteractive
 
-    - name: Reboot container if drivers were installed
-      shell: "sleep 2 && reboot"
-      async: 1
-      poll: 0
-      when: nvidia_install.changed
-      ignore_errors: true
-
-    - name: Wait for container to come back up
-      wait_for_connection:
-        delay: 10
-        timeout: 300
-      when: nvidia_install.changed
-
-    - name: Verify nvidia-smi works after reboot
+    - name: Verify nvidia-smi is available
       command: nvidia-smi
       register: nvidia_smi_check
       changed_when: false
-      retries: 5
-      delay: 5
-      until: nvidia_smi_check.rc == 0
-      when: nvidia_install.changed
+      failed_when: false
 
-    - name: Display NVIDIA driver info after install
+    - name: Display nvidia-smi output
       debug:
         msg: "{{ nvidia_smi_check.stdout_lines }}"
-      when: nvidia_install.changed
-  when: not ollama_has_gpu and ollama_gpu_enabled
+      when: nvidia_smi_check.rc == 0
+
+  when: "'No NVIDIA devices' not in gpu_devices_check.stdout"
   tags: [ollama_install, ollama_gpu]
 
 - name: Create Ollama system group
   group:
-    name: "{{ ollama_group }}"
+    name: "{{ ollama_user }}"
     system: yes
     state: present
   tags: [ollama_install]
@@ -162,12 +87,12 @@
 - name: Create Ollama system user
   user:
     name: "{{ ollama_user }}"
-    group: "{{ ollama_group }}"
+    group: "{{ ollama_user }}"
     system: yes
+    home: "{{ ollama_data_dir }}"
     create_home: yes
-    home: "{{ ollama_home }}"
-    shell: /bin/bash
-    comment: "Ollama Service User"
+    shell: /bin/false
+    state: present
   tags: [ollama_install]
 
 - name: Create Ollama directories
@@ -175,50 +100,33 @@
     path: "{{ item }}"
     state: directory
     owner: "{{ ollama_user }}"
-    group: "{{ ollama_group }}"
+    group: "{{ ollama_user }}"
     mode: '0755'
   loop:
-    - "{{ ollama_home }}"
-    - "{{ ollama_models_dir }}"
+    - "{{ ollama_data_dir }}"
+    - "{{ ollama_data_dir }}/models"
   tags: [ollama_install]
 
 - name: Check if Ollama is already installed
   stat:
-    path: "{{ ollama_install_dir }}/ollama"
+    path: /usr/local/bin/ollama
   register: ollama_binary
-  tags: [ollama_install]
-
-- name: Get installed Ollama version
-  command: "{{ ollama_install_dir }}/ollama --version"
-  register: ollama_version_check
-  when: ollama_binary.stat.exists
-  changed_when: false
-  failed_when: false
   tags: [ollama_install]
 
 - name: Install Ollama using official install script
   shell: curl -fsSL https://ollama.com/install.sh | sh
   args:
-    creates: "{{ ollama_install_dir }}/ollama"
+    creates: /usr/local/bin/ollama
   when: not ollama_binary.stat.exists
-  tags: [ollama_install]
-
-- name: Stop Ollama service installed by script (we'll reconfigure it)
-  systemd:
-    name: ollama
-    state: stopped
-  when: not ollama_binary.stat.exists
-  failed_when: false
   tags: [ollama_install]
 
 - name: Verify Ollama installation
-  command: "{{ ollama_install_dir }}/ollama --version"
-  register: ollama_verify
+  command: /usr/local/bin/ollama --version
+  register: ollama_version
   changed_when: false
   tags: [ollama_install]
 
 - name: Display Ollama version
   debug:
-    msg: "Ollama installed: {{ ollama_verify.stdout }}"
+    msg: "{{ ollama_version.stdout }}"
   tags: [ollama_install]
-
