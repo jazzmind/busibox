@@ -165,12 +165,14 @@
 - name: Set PyTorch index URL based on CUDA version
   set_fact:
     pytorch_index_url: >-
-      {% if cuda_version_detect.stdout == '13' or cuda_version_detect.stdout == '12' %}
-      https://download.pytorch.org/whl/cu124
+      {% if cuda_version_detect.stdout == '13' %}
+      https://download.pytorch.org/whl/cu121
+      {% elif cuda_version_detect.stdout == '12' %}
+      https://download.pytorch.org/whl/cu121
       {% elif cuda_version_detect.stdout == '11' %}
       https://download.pytorch.org/whl/cu118
       {% else %}
-      https://download.pytorch.org/whl/cu124
+      https://download.pytorch.org/whl/cu121
       {% endif %}
   tags: [vllm_install, vllm_gpu]
 
