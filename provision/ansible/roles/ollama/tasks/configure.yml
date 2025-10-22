@@ -43,12 +43,25 @@
   when: ollama_start_service
   tags: [ollama_configure]
 
+- name: Check if Ollama is listening
+  shell: "journalctl -u ollama -n 50 --no-pager"
+  register: ollama_logs
+  changed_when: false
+  failed_when: false
+  tags: [ollama_configure]
+
+- name: Display Ollama service logs
+  debug:
+    msg: "{{ ollama_logs.stdout_lines }}"
+  when: ollama_logs.stdout_lines is defined
+  tags: [ollama_configure]
+
 - name: Wait for Ollama service to be ready
   wait_for:
     host: "{{ ollama_host if ollama_host != '0.0.0.0' else 'localhost' }}"
     port: "{{ ollama_port }}"
-    delay: 2
-    timeout: 30
+    delay: 5
+    timeout: 60
   when: ollama_start_service
   tags: [ollama_configure]
 
