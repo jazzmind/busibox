@@ -62,25 +62,46 @@ fi
 apt-get update
 
 # Step 3: Install NVIDIA drivers
-log_info "Step 3: Searching for available NVIDIA packages..."
+log_info "Step 3: Searching for available NVIDIA packages in Debian ${DEBIAN_VERSION} (Trixie)..."
 
-# Check what alternative/driver packages exist
-log_info "Searching for nvidia-alternative packages:"
-apt-cache search --names-only "nvidia-alternative" | head -20
-
-log_info ""
-log_info "Searching for legacy driver packages:"
-apt-cache search --names-only "nvidia-legacy" | head -20
+# Search for all available NVIDIA packages
+log_info "All available NVIDIA packages:"
+apt-cache search nvidia | grep "^nvidia-" | sort | head -40
 
 log_info ""
-log_info "The nvidia-alternative package is missing from Debian 12 non-free."
-log_info "We'll use the NVIDIA CUDA repository approach instead for better compatibility."
-log_info ""
+log_info "Searching for CUDA packages:"
+apt-cache search cuda | grep -E "^(nvidia-cuda|cuda-)" | head -20
 
-# Since Debian's packaging is incomplete, let's just install the CUDA toolkit
-# which will pull in the necessary driver components from NVIDIA's repository
-log_info "Installing nvidia-cuda-toolkit (includes driver components)..."
-apt-get install -y nvidia-cuda-toolkit
+log_info ""
+log_info "Searching for driver packages specifically:"
+apt-cache search --names-only "^nvidia-driver" | head -10
+
+log_info ""
+log_info "Based on what's available, attempting installation..."
+
+# Try different package combinations based on what exists in Trixie
+PACKAGES_TO_TRY=(
+  "nvidia-driver"
+  "nvidia-kernel-dkms"
+  "nvidia-smi"
+  "nvidia-utils"
+)
+
+INSTALLED_PACKAGES=()
+
+for pkg in "${PACKAGES_TO_TRY[@]}"; do
+  if apt-cache show "$pkg" &>/dev/null; then
+    log_info "Package $pkg is available, installing..."
+    if apt-get install -y "$pkg"; then
+      INSTALLED_PACKAGES+=("$pkg")
+      log_success "Installed $pkg"
+    else
+      log_warning "Failed to install $pkg"
+    fi
+  else
+    log_warning "Package $pkg not available in repositories"
+  fi
+done
 
 log_info ""
 log_info "Installed NVIDIA packages:"
