@@ -25,8 +25,15 @@
     - node_common
     - role: secrets
       tags: [secrets]
+    - role: nextjs_app
+      tags: [apps, nextjs]
     - role: app_deployer
       tags: [app_deployer]
+
+- hosts: proxy
+  roles:
+    - role: nginx
+      tags: [proxy, nginx]
 
 - hosts: openwebui
   roles: [nginx]

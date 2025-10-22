@@ -1,0 +1,56 @@
+---
+# Apps Container Configuration (TEST environment)
+
+# Next.js App Configuration
+app_name: "ai-portal"
+app_user: "appuser"
+app_group: "appuser"
+app_home: "/opt/ai-portal"
+app_port: 3000
+
+# Node.js version
+nodejs_version: "20"
+
+# Git repository (update with actual repo)
+app_git_repo: "https://github.com/sonnenreich/ai-portal.git"
+app_git_branch: "main"
+
+# Database configuration
+app_database_url: "postgresql://{{ postgres_user }}:{{ postgres_password }}@{{ postgres_host }}:{{ postgres_port }}/ai_portal_test"
+
+# PM2 configuration
+pm2_instances: 2
+pm2_max_memory_restart: "1G"
+
+# Health check
+app_health_check_path: "/api/health"
+app_health_check_timeout: 30
+
+# Environment variables for ai-portal
+app_env_vars:
+  # LiteLLM Integration
+  LITELLM_BASE_URL: "http://{{ hostvars['10.96.201.207']['ansible_host'] }}:4000/v1"
+  LITELLM_API_KEY: "{{ litellm_master_key }}"
+  
+  # Better Auth (will be set from vault)
+  BETTER_AUTH_SECRET: "{{ vault_better_auth_secret | default('change-me-in-vault') }}"
+  BETTER_AUTH_URL: "https://test.ai.jaycashman.com"
+  
+  # Resend Email
+  RESEND_API_KEY: "{{ vault_resend_api_key | default('') }}"
+  EMAIL_FROM: "AI Portal <noreply@jaycashman.com>"
+  
+  # SSO Configuration
+  SSO_JWT_SECRET: "{{ vault_sso_jwt_secret | default('change-me-in-vault') }}"
+  SSO_TOKEN_EXPIRY: "900"
+  
+  # Admin Bootstrap
+  ADMIN_EMAIL: "admin@jaycashman.com"
+  
+  # Email Domain Restrictions
+  ALLOWED_EMAIL_DOMAINS: "jaycashman.com"
+  
+  # Environment
+  NODE_ENV: "production"
+  PORT: "{{ app_port }}"
+

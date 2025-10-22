@@ -1,0 +1,89 @@
+---
+# Deployment tasks for Next.js app
+
+- name: Clone or update git repository
+  git:
+    repo: "{{ app_git_repo }}"
+    dest: "{{ app_home }}/current"
+    version: "{{ app_git_branch }}"
+    force: yes
+  become: yes
+  become_user: "{{ app_user }}"
+  register: git_clone
+  tags: [nextjs_deploy]
+
+- name: Install npm dependencies
+  npm:
+    path: "{{ app_home }}/current"
+    state: present
+  become: yes
+  become_user: "{{ app_user }}"
+  when: git_clone.changed
+  tags: [nextjs_deploy]
+
+- name: Build Next.js app
+  command: "{{ app_build_command }}"
+  args:
+    chdir: "{{ app_home }}/current"
+  become: yes
+  become_user: "{{ app_user }}"
+  environment:
+    NODE_ENV: production
+  when: git_clone.changed
+  register: build_result
+  tags: [nextjs_deploy]
+
+- name: Display build output
+  debug:
+    var: build_result.stdout_lines
+  when: build_result.changed
+  tags: [nextjs_deploy]
+
+- name: Check if PM2 process exists
+  command: pm2 describe {{ app_name }}
+  become: yes
+  become_user: "{{ app_user }}"
+  register: pm2_check
+  failed_when: false
+  changed_when: false
+  tags: [nextjs_deploy]
+
+- name: Start app with PM2
+  command: pm2 start {{ app_home }}/ecosystem.config.js
+  args:
+    chdir: "{{ app_home }}/current"
+  become: yes
+  become_user: "{{ app_user }}"
+  when: pm2_check.rc != 0
+  tags: [nextjs_deploy]
+
+- name: Reload app with PM2
+  command: pm2 reload {{ app_name }}
+  become: yes
+  become_user: "{{ app_user }}"
+  when: pm2_check.rc == 0 and git_clone.changed
+  tags: [nextjs_deploy]
+
+- name: Save PM2 process list
+  command: pm2 save
+  become: yes
+  become_user: "{{ app_user }}"
+  tags: [nextjs_deploy]
+
+- name: Wait for app to be ready
+  uri:
+    url: "http://localhost:{{ app_port }}{{ app_health_check_path }}"
+    status_code: 200
+    timeout: "{{ app_health_check_timeout }}"
+  register: health_check
+  until: health_check.status == 200
+  retries: 10
+  delay: 3
+  failed_when: false
+  tags: [nextjs_deploy]
+
+- name: Display app status
+  debug:
+    msg: "{{ app_name }} is {{ 'running' if health_check.status == 200 else 'not responding' }}"
+  tags: [nextjs_deploy]
+

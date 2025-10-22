@@ -1,0 +1,36 @@
+---
+# Configuration tasks for Next.js app
+
+- name: Deploy environment file
+  template:
+    src: app.env.j2
+    dest: "{{ app_home }}/.env"
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+    mode: '0600'
+  notify: restart nextjs app
+  tags: [nextjs_configure]
+
+- name: Deploy PM2 ecosystem file
+  template:
+    src: ecosystem.config.js.j2
+    dest: "{{ app_home }}/ecosystem.config.js"
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+    mode: '0644'
+  notify: restart nextjs app
+  tags: [nextjs_configure]
+
+- name: Setup PM2 startup script
+  command: pm2 startup systemd -u {{ app_user }} --hp {{ app_home }}
+  args:
+    creates: /etc/systemd/system/pm2-{{ app_user }}.service
+  tags: [nextjs_configure]
+
+- name: Enable PM2 service
+  systemd:
+    name: pm2-{{ app_user }}
+    enabled: yes
+    daemon_reload: yes
+  tags: [nextjs_configure]
+

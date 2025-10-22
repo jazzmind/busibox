@@ -1,0 +1,9 @@
+---
+# Handlers for Next.js app
+
+- name: restart nextjs app
+  command: pm2 reload {{ app_name }}
+  become: yes
+  become_user: "{{ app_user }}"
+  failed_when: false
+

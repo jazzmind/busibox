@@ -1,0 +1,40 @@
+---
+# Proxy Container Configuration (TEST environment)
+
+# Domain configuration
+domain: "ai.jaycashman.com"
+subdomain: "test"
+full_domain: "{{ subdomain }}.{{ domain }}"
+
+# SSL Configuration
+ssl_mode: "provisioned"  # Options: letsencrypt, provisioned, selfsigned
+
+# Application routing
+applications:
+  - name: "ai-portal"
+    subdomain: "{{ subdomain }}"
+    domain: "{{ domain }}"
+    routes:
+      - path: "/"
+        backend: "http://{{ hostvars['10.96.201.201']['ansible_host'] }}:3000"
+        description: "AI Portal main application"
+
+# Nginx configuration
+nginx_worker_processes: auto
+nginx_worker_connections: 1024
+nginx_client_max_body_size: "100M"
+nginx_keepalive_timeout: 65
+
+# Security headers
+nginx_security_headers:
+  X-Frame-Options: "SAMEORIGIN"
+  X-Content-Type-Options: "nosniff"
+  X-XSS-Protection: "1; mode=block"
+  Referrer-Policy: "strict-origin-when-cross-origin"
+
+# Rate limiting
+nginx_rate_limit_enabled: true
+nginx_rate_limit_zone: "api_limit"
+nginx_rate_limit_rate: "10r/s"
+nginx_rate_limit_burst: 20
+
