@@ -17,7 +17,8 @@ vllm_pip_extra_index_url: "https://download.pytorch.org/whl/cu121"  # CUDA 12.1
 vllm_user: vllm
 vllm_group: vllm
 vllm_home: /var/lib/vllm
-vllm_cache_dir: "{{ vllm_home }}/huggingface"
+# Use shared host storage for HuggingFace cache (mounted via pct)
+vllm_cache_dir: /var/lib/llm-models/huggingface
 
 # Network Configuration
 vllm_host: "0.0.0.0"

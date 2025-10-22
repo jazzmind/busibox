@@ -166,7 +166,83 @@ else
 fi
 echo ""
 
-# 7. Summary
+# 7. Setup LLM model storage
+echo "=========================================="
+echo "Step 7: Setting up LLM Model Storage"
+echo "=========================================="
+
+# Create ZFS dataset for models if using ZFS
+if command -v zfs &>/dev/null && zfs list rpool &>/dev/null 2>&1; then
+    echo "Detected ZFS storage"
+    
+    if ! zfs list rpool/llm-models &>/dev/null 2>&1; then
+        echo "  Creating ZFS dataset for LLM models..."
+        zfs create -o mountpoint=/var/lib/llm-models rpool/llm-models
+        zfs create rpool/llm-models/ollama
+        zfs create rpool/llm-models/huggingface
+        echo "  ✓ ZFS datasets created:"
+        echo "    rpool/llm-models/ollama -> /var/lib/llm-models/ollama"
+        echo "    rpool/llm-models/huggingface -> /var/lib/llm-models/huggingface"
+    else
+        echo "  ✓ ZFS dataset already exists"
+    fi
+else
+    # Fallback to regular directories
+    echo "  Creating directories for LLM models..."
+    mkdir -p /var/lib/llm-models/ollama
+    mkdir -p /var/lib/llm-models/huggingface
+    echo "  ✓ Directories created"
+fi
+
+echo ""
+read -p "Pre-download test models now? (saves time during deployment) (y/N): " -n 1 -r
+echo ""
+
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    echo "  Downloading test models..."
+    
+    # Install Ollama on host
+    if ! command -v ollama &>/dev/null; then
+        echo "    Installing Ollama..."
+        curl -fsSL https://ollama.com/install.sh | sh
+    fi
+    
+    # Download Ollama test model
+    echo "    Downloading qwen2.5:0.5b for Ollama (~500MB)..."
+    OLLAMA_MODELS=/var/lib/llm-models/ollama ollama pull qwen2.5:0.5b
+    
+    # Install Python/pip for HuggingFace
+    if ! command -v pip3 &>/dev/null; then
+        echo "    Installing Python pip..."
+        apt-get install -y python3-pip >/dev/null
+    fi
+    
+    # Download HuggingFace test model
+    echo "    Installing huggingface-hub..."
+    pip3 install -q huggingface-hub
+    
+    echo "    Downloading Qwen2.5-0.5B-Instruct for vLLM (~1GB)..."
+    HF_HOME=/var/lib/llm-models/huggingface python3 -c "
+from huggingface_hub import snapshot_download
+snapshot_download('Qwen/Qwen2.5-0.5B-Instruct', local_dir_use_symlinks=False)
+print('Model downloaded successfully')
+" || echo "    Model download failed, can retry later"
+    
+    echo ""
+    echo "  ✓ Models downloaded"
+    echo ""
+    echo "  Model storage:"
+    du -sh /var/lib/llm-models/ollama 2>/dev/null || echo "    Ollama: 0B"
+    du -sh /var/lib/llm-models/huggingface 2>/dev/null || echo "    HuggingFace: 0B"
+else
+    echo "  ⚠ Skipping model download"
+    echo "    Models can be downloaded later with:"
+    echo "    bash provision/pct/setup-llm-models.sh"
+fi
+
+echo ""
+
+# 8. Summary
 echo "=========================================="
 echo "Setup Complete!"
 echo "=========================================="
