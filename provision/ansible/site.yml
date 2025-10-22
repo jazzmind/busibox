@@ -31,18 +31,19 @@
 - hosts: openwebui
   roles: [nginx]
 
-# LLM Services
-- hosts: ollama
+# LLM Services - Deploy backends first, then proxy
+- name: Deploy LLM Inference Backends (can run in parallel)
+  hosts: ollama:vllm
   roles:
     - role: ollama
+      when: "'ollama' in group_names"
       tags: [llm, ollama]
-
-- hosts: vllm
-  roles:
     - role: vllm
+      when: "'vllm' in group_names"
       tags: [llm, vllm]
 
-- hosts: litellm
+- name: Deploy LiteLLM Proxy (depends on backends)
+  hosts: litellm
   roles:
     - role: litellm
       tags: [llm, litellm]
