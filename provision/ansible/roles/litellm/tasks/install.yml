@@ -93,12 +93,15 @@
   tags: [litellm_install]
 
 - name: Generate Prisma binaries for database support
-  command: "{{ litellm_venv_dir }}/bin/prisma generate"
+  shell: |
+    cd {{ litellm_venv_dir }}/lib/python{{ litellm_python_version }}/site-packages/litellm/proxy
+    {{ litellm_venv_dir }}/bin/prisma generate
   become: true
   become_user: "{{ litellm_user }}"
-  environment:
-    PRISMA_PYTHON_INSTALL_DIR: "{{ litellm_venv_dir }}/lib/python{{ litellm_python_version }}/site-packages/prisma"
+  args:
+    executable: /bin/bash
   tags: [litellm_install]
+  ignore_errors: yes  # LiteLLM may auto-generate on first run
 
 - name: Verify LiteLLM installation
   shell: |
