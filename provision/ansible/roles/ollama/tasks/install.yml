@@ -89,7 +89,7 @@
     name: "{{ ollama_user }}"
     group: "{{ ollama_user }}"
     system: yes
-    home: "{{ ollama_data_dir }}"
+    home: "{{ ollama_home }}"
     create_home: yes
     shell: /bin/false
     state: present
@@ -103,8 +103,8 @@
     group: "{{ ollama_user }}"
     mode: '0755'
   loop:
-    - "{{ ollama_data_dir }}"
-    - "{{ ollama_data_dir }}/models"
+    - "{{ ollama_home }}"
+    - "{{ ollama_models_dir }}"
   tags: [ollama_install]
 
 - name: Check if Ollama is already installed
