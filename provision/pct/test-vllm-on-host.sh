@@ -46,16 +46,47 @@ log_info "Step 2: Enabling Debian non-free and contrib repositories..."
 if ! grep -q "non-free-firmware non-free contrib" /etc/apt/sources.list; then
   sed -i 's/main$/main non-free-firmware non-free contrib/' /etc/apt/sources.list
 fi
+
+# Check what Debian version we're on
+DEBIAN_VERSION=$(cat /etc/debian_version | cut -d. -f1)
+log_info "Debian version: ${DEBIAN_VERSION}"
+
+# For Debian 12 (bookworm), we might need backports for newer NVIDIA packages
+if [[ "$DEBIAN_VERSION" == "12" ]]; then
+  log_info "Adding bookworm-backports repository for newer NVIDIA packages..."
+  if ! grep -q "bookworm-backports" /etc/apt/sources.list; then
+    echo "deb http://deb.debian.org/debian bookworm-backports main non-free-firmware non-free contrib" >> /etc/apt/sources.list
+  fi
+fi
+
 apt-get update
 
 # Step 3: Install NVIDIA open kernel driver and utilities
-log_info "Step 3: Installing NVIDIA open kernel driver (DKMS)..."
+log_info "Step 3: Searching for available NVIDIA packages..."
 
-# The key package is nvidia-open-kernel-dkms which builds the open kernel module
-# This should pull in all necessary dependencies including nvidia-alternative
+# First check what's available
+log_info "Available NVIDIA kernel packages:"
+apt-cache search --names-only "nvidia.*kernel" | head -20
 
-log_info "Installing nvidia-open-kernel-dkms..."
-apt-get install -y nvidia-open-kernel-dkms
+log_info ""
+log_info "Attempting to install nvidia-open-kernel-dkms from backports if needed..."
+
+# Try to install from backports first if it's Debian 12
+if [[ "$DEBIAN_VERSION" == "12" ]]; then
+  log_info "Trying backports first..."
+  apt-get install -y -t bookworm-backports nvidia-open-kernel-dkms || {
+    log_warning "Backports install failed, trying regular repository..."
+    apt-get install -y nvidia-open-kernel-dkms
+  }
+else
+  apt-get install -y nvidia-open-kernel-dkms
+fi
+
+# If that fails, let's try the proprietary kernel instead
+if [[ $? -ne 0 ]]; then
+  log_warning "Open kernel failed, trying proprietary nvidia-kernel-dkms..."
+  apt-get install -y nvidia-kernel-dkms
+fi
 
 log_info ""
 log_info "Installed NVIDIA kernel packages:"
