@@ -108,7 +108,8 @@
     mode: '0755'
   loop:
     - "{{ vllm_install_dir }}"
-    - "{{ vllm_data_dir }}"
+    - "{{ vllm_home }}"
+    - "{{ vllm_cache_dir }}"
     - "{{ vllm_cache_dir }}/hub"
   tags: [vllm_install]
 
