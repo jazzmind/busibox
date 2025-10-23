@@ -50,5 +50,6 @@ secrets.yaml
 
 # Ansible Vault - Deployment-Specific
 provision/ansible/roles/secrets/vars/vault.yml
+provision/ansible/inventory/*/group_vars/all/vault.yml
 
 ssl
