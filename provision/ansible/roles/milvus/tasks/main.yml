@@ -68,17 +68,30 @@
       - python3-venv
     state: present
 
+- name: Remove old Python virtual environment if it exists
+  file:
+    path: /opt/milvus-tools
+    state: absent
+  when: ansible_run_tags is not defined or 'never' not in ansible_run_tags
+
 - name: Create Python virtual environment for Milvus tools
   shell: python3 -m venv /opt/milvus-tools
   args:
     creates: /opt/milvus-tools/bin/python
 
+- name: Upgrade pip in virtual environment
+  pip:
+    name: pip
+    state: latest
+    virtualenv: /opt/milvus-tools
+
 - name: Install pymilvus and dependencies in virtual environment
   pip:
     name:
-      - "marshmallow>=3.13.0"  # Fix version compatibility
+      - "marshmallow>=3.13.0"  # Fix version compatibility with environs
       - "pymilvus==2.3.5"
     virtualenv: /opt/milvus-tools
+    state: forcereinstall  # Force reinstall to ensure correct versions
 
 - name: Copy Milvus initialization script
   copy:
