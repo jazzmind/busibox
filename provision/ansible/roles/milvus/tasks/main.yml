@@ -85,7 +85,7 @@
     state: absent
   when: 
     - marshmallow_check.stdout is defined
-    - marshmallow_check.stdout is version('3.13.0', '<') or marshmallow_check.stdout in ['old', 'none']
+    - marshmallow_check.stdout in ['old', 'none'] or (marshmallow_check.stdout not in ['old', 'none'] and marshmallow_check.stdout is version('3.13.0', '<'))
 
 - name: Create Python virtual environment for Milvus tools
   shell: python3 -m venv /opt/milvus-tools
