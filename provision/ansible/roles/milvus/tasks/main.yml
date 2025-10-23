@@ -98,13 +98,31 @@
     state: latest
     virtualenv: /opt/milvus-tools
 
-- name: Install pymilvus and dependencies in virtual environment
+- name: Install marshmallow first (required version for environs)
+  pip:
+    name: "marshmallow>=3.13.0"
+    virtualenv: /opt/milvus-tools
+    state: present
+
+- name: Install pymilvus in virtual environment
+  pip:
+    name: "pymilvus==2.3.5"
+    virtualenv: /opt/milvus-tools
+    state: present
+    extra_args: "--no-deps"  # Don't install dependencies to avoid downgrading marshmallow
+
+- name: Install remaining pymilvus dependencies
   pip:
     name:
-      - "marshmallow>=3.13.0"  # Fix version compatibility with environs
-      - "pymilvus==2.3.5"
+      - "grpcio>=1.49.1"
+      - "grpcio-tools>=1.49.1"
+      - "protobuf>=3.20.0"
+      - "environs>=9.5.0"
+      - "ujson>=2.0.0"
+      - "pandas>=1.2.4"
+      - "numpy"
     virtualenv: /opt/milvus-tools
-    state: forcereinstall  # Force reinstall to ensure correct versions
+    state: present
 
 - name: Copy Milvus initialization script
   copy:
