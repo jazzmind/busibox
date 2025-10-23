@@ -20,6 +20,15 @@
   tags: [nextjs_deploy]
   no_log: true  # Don't log the repo URL with token
 
+- name: Deploy environment file to current directory
+  template:
+    src: app.env.j2
+    dest: "{{ app_home }}/current/.env"
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+    mode: '0600'
+  tags: [nextjs_deploy]
+
 - name: Install npm dependencies
   command: npm install
   args:

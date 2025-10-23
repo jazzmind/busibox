@@ -31,26 +31,6 @@
   tags: [nextjs_configure, debug]
   no_log: false  # Just showing keys, not values
 
-- name: Deploy environment file
-  template:
-    src: app.env.j2
-    dest: "{{ app_home }}/.env"
-    owner: "{{ app_user }}"
-    group: "{{ app_group }}"
-    mode: '0600'
-  notify: restart nextjs app
-  tags: [nextjs_configure]
-
-- name: Debug - Show generated .env file (CAREFUL - contains secrets!)
-  command: cat {{ app_home }}/.env
-  register: env_contents
-  changed_when: false
-  tags: [nextjs_configure, debug]
-
-- name: Debug - Display .env contents
-  debug:
-    msg: "{{ env_contents.stdout_lines }}"
-  tags: [nextjs_configure, debug]
 
 - name: Deploy PM2 ecosystem file
   template:
