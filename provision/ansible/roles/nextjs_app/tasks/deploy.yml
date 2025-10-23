@@ -20,12 +20,38 @@
   tags: [nextjs_deploy]
   no_log: true  # Don't log the repo URL with token
 
+- name: Check package.json exists
+  stat:
+    path: "{{ app_home }}/current/package.json"
+  register: package_json_check
+  tags: [nextjs_deploy]
+
+- name: Display repo contents
+  command: ls -la
+  args:
+    chdir: "{{ app_home }}/current"
+  register: repo_contents
+  tags: [nextjs_deploy]
+
+- name: Show repo contents
+  debug:
+    var: repo_contents.stdout_lines
+  tags: [nextjs_deploy]
+
 - name: Install npm dependencies
   command: npm install
   args:
     chdir: "{{ app_home }}/current"
   become: yes
   become_user: "{{ app_user }}"
+  register: npm_install
+  tags: [nextjs_deploy]
+
+- name: Display npm install output
+  debug:
+    msg: |
+      STDOUT: {{ npm_install.stdout }}
+      STDERR: {{ npm_install.stderr }}
   tags: [nextjs_deploy]
 
 - name: Build Next.js app
@@ -36,14 +62,18 @@
   become_user: "{{ app_user }}"
   environment:
     NODE_ENV: production
-  when: git_clone.changed
   register: build_result
+  failed_when: build_result.rc != 0
   tags: [nextjs_deploy]
 
-- name: Display build output
+- name: Display build error only on failure
   debug:
-    var: build_result.stdout_lines
-  when: build_result.changed
+    msg: |
+      ❌ Build failed with exit code {{ build_result.rc }}
+      
+      Last 20 lines of error output:
+      {{ (build_result.stderr_lines | default([]))[-20:] | join('\n') if build_result.stderr_lines | default([]) | length > 0 else 'No error output' }}
+  when: build_result.failed | default(false)
   tags: [nextjs_deploy]
 
 - name: Check if PM2 process exists
