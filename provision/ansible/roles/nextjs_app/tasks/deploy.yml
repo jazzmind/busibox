@@ -102,6 +102,36 @@
   failed_when: false
   tags: [nextjs_deploy]
 
+- name: Get PM2 process status
+  command: pm2 status
+  become: yes
+  become_user: "{{ app_user }}"
+  register: pm2_status
+  failed_when: false
+  changed_when: false
+  tags: [nextjs_deploy]
+
+- name: Display PM2 status
+  debug:
+    var: pm2_status.stdout_lines
+  tags: [nextjs_deploy]
+
+- name: Get PM2 logs for troubleshooting
+  command: pm2 logs {{ app_name }} --lines 50 --nostream
+  become: yes
+  become_user: "{{ app_user }}"
+  register: pm2_logs
+  failed_when: false
+  changed_when: false
+  when: health_check.status is defined and health_check.status != 200
+  tags: [nextjs_deploy]
+
+- name: Display PM2 logs
+  debug:
+    var: pm2_logs.stdout_lines
+  when: pm2_logs.stdout_lines is defined
+  tags: [nextjs_deploy]
+
 - name: Display app status
   debug:
     msg: "{{ app_name }} is {{ 'running' if health_check.status == 200 else 'not responding' }}"
