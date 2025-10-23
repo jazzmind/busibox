@@ -102,22 +102,33 @@
 
 - name: Configure bucket event notification (webhook to agent API)
   shell: |
+    set -e  # Exit on error
+    
+    echo "=== Configuring MinIO webhook endpoint ==="
     # First, configure the webhook endpoint in MinIO
     mc admin config set local notify_webhook:primary \
       endpoint="http://{{ agent_api_host }}:{{ agent_api_port }}/webhooks/minio" \
       queue_limit="100" \
       queue_dir="/tmp/minio-events"
     
+    echo "=== Restarting MinIO to apply webhook config ==="
     # Restart MinIO to apply config
     mc admin service restart local
     
+    echo "=== Waiting for MinIO to restart ==="
     # Wait for MinIO to come back
     sleep 10
     
+    # Verify MinIO is accessible
+    mc admin info local || { echo "ERROR: MinIO not responding after restart"; exit 1; }
+    
+    echo "=== Adding event notification for documents bucket ==="
     # Configure webhook for file upload events
     mc event add local/documents arn:minio:sqs::primary:webhook \
       --event put \
       --suffix .pdf --suffix .docx --suffix .txt
+    
+    echo "=== Webhook configuration complete ==="
   environment:
     MC_HOST_local: "http://{{ minio_root_user | default('minioadmin') }}:{{ minio_root_password | default('minioadminchange') }}@localhost:9000"
   when: 
@@ -131,15 +142,35 @@
   debug:
     msg: |
       {% if webhook_config.changed is defined and webhook_config.changed %}
+      {% if webhook_config.rc == 0 %}
       ✅ MinIO webhook configured successfully
+      {% else %}
+      ⚠️  MinIO webhook configuration failed (exit code: {{ webhook_config.rc }})
+      {% endif %}
       {% elif webhook_config.skipped is defined and webhook_config.skipped %}
       ⏭️  MinIO webhook skipped (agent API not available)
-      {% elif webhook_config.rc is defined and webhook_config.rc != 0 %}
-      ⚠️  MinIO webhook configuration failed (non-critical)
       {% else %}
       ℹ️  MinIO webhook not configured
       {% endif %}
   when: agent_api_host is defined
+
+- name: Display webhook stdout (if any)
+  debug:
+    var: webhook_config.stdout_lines
+  when: 
+    - agent_api_host is defined
+    - webhook_config.stdout_lines is defined
+    - webhook_config.stdout_lines | length > 0
+
+- name: Display webhook stderr (if any errors)
+  debug:
+    msg: |
+      ⚠️  MinIO webhook error output:
+      {{ webhook_config.stderr }}
+  when: 
+    - agent_api_host is defined
+    - webhook_config.stderr is defined
+    - webhook_config.stderr | length > 0
 
 - name: Create MinIO health check script
   copy:
