@@ -1,6 +1,27 @@
 ---
 # Configuration tasks for Next.js app
 
+- name: Debug - Show app_name
+  debug:
+    msg: "App name: {{ app_name }}"
+  tags: [nextjs_configure, debug]
+
+- name: Debug - Show app_secrets list
+  debug:
+    msg: "App secrets list: {{ app_secrets | default([]) }}"
+  tags: [nextjs_configure, debug]
+
+- name: Debug - Show if secrets var is defined
+  debug:
+    msg: "Secrets defined: {{ secrets is defined }}, App secrets in vault: {{ secrets[app_name] is defined if secrets is defined else 'secrets not defined' }}"
+  tags: [nextjs_configure, debug]
+
+- name: Debug - Show secret keys available (no values)
+  debug:
+    msg: "Available secret keys for {{ app_name }}: {{ secrets[app_name].keys() | list if (secrets is defined and secrets[app_name] is defined) else 'none' }}"
+  tags: [nextjs_configure, debug]
+  no_log: false  # Just showing keys, not values
+
 - name: Deploy environment file
   template:
     src: app.env.j2
@@ -10,6 +31,17 @@
     mode: '0600'
   notify: restart nextjs app
   tags: [nextjs_configure]
+
+- name: Debug - Show generated .env file (CAREFUL - contains secrets!)
+  command: cat {{ app_home }}/.env
+  register: env_contents
+  changed_when: false
+  tags: [nextjs_configure, debug]
+
+- name: Debug - Display .env contents
+  debug:
+    msg: "{{ env_contents.stdout_lines }}"
+  tags: [nextjs_configure, debug]
 
 - name: Deploy PM2 ecosystem file
   template:
