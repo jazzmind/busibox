@@ -1,11 +1,12 @@
-- hosts: files
-  roles: [minio]
+# Deployment order optimized for dependencies:
+# 1. PostgreSQL (database - required by many services)
+# 2. Agent API (provides webhooks for MinIO)
+# 3. MinIO (file storage - can configure webhook to agent API)
+# 4. Milvus (vector database)
+# 5. Ingest Worker (needs agent API + MinIO)
 
 - hosts: pg
   roles: [postgres]
-
-- hosts: milvus
-  roles: [milvus]
 
 - hosts: agent
   roles:
@@ -16,6 +17,12 @@
       tags: [secrets]
     - role: app_deployer
       tags: [app_deployer]
+
+- hosts: files
+  roles: [minio]
+
+- hosts: milvus
+  roles: [milvus]
 
 - hosts: ingest
   roles: [node_common, ingest_worker]
