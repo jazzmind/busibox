@@ -38,6 +38,7 @@
         app_build_command: "{{ (applications | selectattr('name', 'equalto', 'ai-portal') | first).build_command | default('npm run build') }}"
         app_health_check_path: "{{ (applications | selectattr('name', 'equalto', 'ai-portal') | first).health_endpoint }}"
         app_env_vars: "{{ (applications | selectattr('name', 'equalto', 'ai-portal') | first).env }}"
+        app_secrets: "{{ (applications | selectattr('name', 'equalto', 'ai-portal') | first).secrets | default([]) }}"
         app_git_branch: "main"
       when: applications is defined
       tags: [apps, nextjs]
