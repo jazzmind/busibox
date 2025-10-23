@@ -21,12 +21,11 @@
   no_log: true  # Don't log the repo URL with token
 
 - name: Install npm dependencies
-  npm:
-    path: "{{ app_home }}/current"
-    state: present
+  command: npm install
+  args:
+    chdir: "{{ app_home }}/current"
   become: yes
   become_user: "{{ app_user }}"
-  when: git_clone.changed
   tags: [nextjs_deploy]
 
 - name: Build Next.js app
