@@ -48,4 +48,7 @@ id_rsa*
 credentials.json
 secrets.yaml
 
+# Ansible Vault - Deployment-Specific
+provision/ansible/roles/secrets/vars/vault.yml
+
 ssl

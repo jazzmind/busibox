@@ -1,56 +1,23 @@
 ---
 # Apps Container Configuration (TEST environment)
+# Created: 2025-10-15
+# Updated: 2025-10-23
+# Purpose: Apps-specific overrides for TEST environment
+#
+# Most configuration is in all.yml. This file contains only apps-specific overrides.
 
-# Next.js App Configuration
-app_name: "ai-portal"
+# Legacy application deployment support (deprecated - use applications[] in all.yml)
+# These are kept for backward compatibility with existing roles
 app_user: "appuser"
 app_group: "appuser"
-app_home: "/opt/ai-portal"
-app_port: 3000
 
 # Node.js version
-nodejs_version: "20"
+nodejs_version: "{{ default_node_version }}"
 
-# Git repository (update with actual repo)
-app_git_repo: "https://github.com/jazzmind/ai-portal.git"
-app_git_branch: "main"
+# PM2 configuration (lower resources for test)
+pm2_instances: 1
+pm2_max_memory_restart: "512M"
 
-# Database configuration
-app_database_url: "postgresql://{{ postgres_user }}:{{ postgres_password }}@{{ postgres_host }}:{{ postgres_port }}/ai_portal_test"
-
-# PM2 configuration
-pm2_instances: 2
-pm2_max_memory_restart: "1G"
-
-# Health check
-app_health_check_path: "/api/health"
+# Health check configuration
 app_health_check_timeout: 30
-
-# Environment variables for ai-portal
-app_env_vars:
-  # LiteLLM Integration
-  LITELLM_BASE_URL: "http://{{ hostvars['10.96.201.207']['ansible_host'] }}:4000/v1"
-  LITELLM_API_KEY: "{{ litellm_master_key }}"
-  
-  # Better Auth (will be set from vault)
-  BETTER_AUTH_SECRET: "{{ vault_better_auth_secret | default('change-me-in-vault') }}"
-  BETTER_AUTH_URL: "{{ vault_better_auth_url | default('https://ai.maigentpartners.com') }}"
-  
-  # Resend Email
-  RESEND_API_KEY: "{{ vault_resend_api_key | default('') }}"
-  EMAIL_FROM: "{{ vault_email_from | default('AI Portal <noreply@maigentpartners.com>') }}"
-  
-  # SSO Configuration
-  SSO_JWT_SECRET: "{{ vault_sso_jwt_secret | default('change-me-in-vault') }}"
-  SSO_TOKEN_EXPIRY: "{{ vault_sso_token_expiry | default('900') }}"
-  
-  # Admin Bootstrap
-  ADMIN_EMAIL: "{{ vault_admin_email | default('admin@maigentpartners.com') }}"
-  
-  # Email Domain Restrictions
-  ALLOWED_EMAIL_DOMAINS: "{{ vault_allowed_email_domains | default('maigentpartners.com') }}"
-  
-  # Environment
-  NODE_ENV: "{{ vault_node_env | default('production') }}"
-  PORT: "{{ app_port }}"
 

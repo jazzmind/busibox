@@ -1,18 +1,262 @@
 ---
-# Global variables for TEST environment
+# Global Variables for Busibox Application Deployment - TEST
+# Created: 2025-10-15
+# Updated: 2025-10-23
+# Purpose: Centralized configuration for TEST environment
+#
+# This file contains ONLY test-specific configuration.
+# Secrets are stored in roles/secrets/vars/vault.yml (encrypted)
 
-# PostgreSQL credentials (should be in vault in production)
-postgres_password: "test_password_change_me"
+# ============================================================================
+# Environment Configuration
+# ============================================================================
+busibox_env: test
+busibox_test_mode: true
 
-# LiteLLM configuration
-litellm_master_key: "sk-litellm-test-key-change-me"
+# ============================================================================
+# Network Configuration - Test
+# ============================================================================
+# Base IP from vault (deployment-specific)
+network_base_octets: "{{ network_base_octets_test }}"
+internal_network: "{{ network_base_octets }}.0/21"
+internal_gateway: "{{ network_base_octets }}.1"
 
-# Vault variables (these should be encrypted with ansible-vault)
-# For now, using placeholder values for testing
-vault_better_auth_secret: "test-better-auth-secret-32-bytes-long-change-me"
-vault_sso_jwt_secret: "test-sso-jwt-secret-32-bytes-long-change-me"
-vault_resend_api_key: ""  # Add your Resend API key here or in vault
+# Container IP Addresses (calculated from base)
+# Infrastructure containers: .200-.209
+proxy_ip: "{{ network_base_octets }}.200"
+apps_ip: "{{ network_base_octets }}.201"
+agent_ip: "{{ network_base_octets }}.202"
+postgres_ip: "{{ network_base_octets }}.203"
+milvus_ip: "{{ network_base_octets }}.204"
+minio_ip: "{{ network_base_octets }}.205"
+ingest_ip: "{{ network_base_octets }}.206"
+
+# LLM Service IPs: .30-.39 (to allow room for more infrastructure)
+litellm_ip: "{{ network_base_octets }}.207"
+ollama_ip: "{{ network_base_octets }}.208"
+vllm_ip: "{{ network_base_octets }}.209"
+
+# ============================================================================
+# Domain Configuration - Test
+# ============================================================================
+# Base domain from vault (deployment-specific)
+subdomain: test
+domain: "ai.{{ base_domain }}"
+full_domain: "{{ subdomain }}.{{ domain }}"
+
+# SSL Certificate Mode
+# Options: "letsencrypt", "provisioned", "selfsigned"
+ssl_mode: selfsigned  # Use self-signed for testing
+# ssl_email comes from vault
+
+# ============================================================================
+# Service Endpoints
+# ============================================================================
+postgres_host: "{{ postgres_ip }}"
+postgres_port: 5432
+postgres_db: busibox_test
+postgres_user: busibox_test_user
+
+milvus_host: "{{ milvus_ip }}"
+milvus_port: 19530
+
+minio_host: "{{ minio_ip }}"
+minio_port: 9000
+minio_console_port: 9001
+
+redis_host: "{{ ingest_ip }}"
+redis_port: 6379
+
+agent_api_host: "{{ agent_ip }}"
+agent_api_port: 4111
+
+# LLM Service Endpoints
+litellm_host: "{{ litellm_ip }}"
+litellm_port: 4000
+
+ollama_host: "{{ ollama_ip }}"
+ollama_port: 11434
+
+vllm_host: "{{ vllm_ip }}"
+vllm_port: 8000
+
+# ============================================================================
+# LLM Model Configuration
+# ============================================================================
+# Ollama Models (TEST - lightweight models)
+ollama_initial_models:
+  - name: "gemma:2b"
+    description: "Lightweight test model"
+
+# vLLM Model Configuration (TEST - smaller model)
+vllm_default_model: "meta-llama/Meta-Llama-3-8B-Instruct"
 
 # LiteLLM Database Configuration
 litellm_enable_database: false  # Disabled until Prisma issues resolved
-# litellm_database_url: "postgresql://{{ postgres_user }}:{{ postgres_password }}@{{ postgres_host }}:{{ postgres_port }}/litellm_test"
+
+# ============================================================================
+# Deployment Configuration
+# ============================================================================
+deploywatch_check_interval: 300  # Check more frequently in test (5 minutes)
+deploywatch_apps_dir: /srv/deploywatch/apps
+
+# Application Defaults
+default_process_manager: pm2
+default_node_version: "20"
+
+# ============================================================================
+# NGINX Configuration
+# ============================================================================
+nginx_worker_processes: auto
+nginx_worker_connections: 512  # Lower for test
+nginx_client_max_body_size: 50M  # Lower for test
+nginx_proxy_timeout: 60s
+
+# ============================================================================
+# Logging & Security
+# ============================================================================
+log_level: debug  # More verbose logging for test
+structured_logging: true
+hsts_max_age: 31536000  # 1 year (shorter for test)
+
+# ============================================================================
+# Application Definitions
+# ============================================================================
+# All applications deployed in the Busibox TEST environment
+# Schema reference: specs/002-deploy-app-servers/data-model.md
+#
+# Port allocation strategy:
+# - 3000-3099: Public web applications
+# - 4000-4099: Internal API services
+# - 8000-8099: LLM/AI services
+applications:
+  # Internal API Services
+  - name: agent-server
+    github_repo: jazzmind/agent-server
+    container: agent-lxc
+    container_ip: "{{ agent_ip }}"
+    port: 4111
+    deploy_path: /srv/agent
+    health_endpoint: /auth/health
+    routes: []  # Internal only - no NGINX routing
+    secrets:
+      - database_url
+      - minio_access_key
+      - minio_secret_key
+      - redis_url
+      - jwt_secret
+    env:
+      LOG_LEVEL: "{{ log_level }}"
+      MILVUS_HOST: "{{ milvus_ip }}"
+      MILVUS_PORT: "{{ milvus_port }}"
+      MINIO_ENDPOINT: "{{ minio_ip }}:{{ minio_port }}"
+      POSTGRES_HOST: "{{ postgres_ip }}"
+      REDIS_HOST: "{{ ingest_ip }}"
+      TOKEN_SERVICE_URL: "http://{{ agent_ip }}:4111"
+      MASTRA_API_URL: "http://{{ agent_ip }}:4111"
+  
+  # Public Web Applications
+  - name: ai-portal
+    github_repo: jazzmind/ai-portal
+    container: apps-lxc
+    container_ip: "{{ apps_ip }}"
+    port: 3000
+    deploy_path: /srv/apps/ai-portal
+    health_endpoint: /api/health
+    build_command: "npm run build"
+    routes:
+      - type: domain
+        domains:
+          - "{{ full_domain }}"
+    secrets:
+      - database_url
+      - better_auth_secret
+      - resend_api_key
+      - sso_jwt_secret
+      - litellm_api_key
+    env:
+      NODE_ENV: development
+      LITELLM_BASE_URL: "http://{{ litellm_ip }}:{{ litellm_port }}/v1"
+      BETTER_AUTH_URL: "https://{{ full_domain }}"
+      EMAIL_FROM: "AI Portal Test <noreply@{{ base_domain }}>"
+      SSO_TOKEN_EXPIRY: "900"
+      ADMIN_EMAIL: "admin@{{ base_domain }}"
+      ALLOWED_EMAIL_DOMAINS: "{{ base_domain }}"
+      PORT: "3000"
+  
+  - name: agent-client
+    github_repo: jazzmind/agent-client
+    container: apps-lxc
+    container_ip: "{{ apps_ip }}"
+    port: 3001
+    deploy_path: /srv/apps/agent-client
+    health_endpoint: /api/health
+    build_command: "npm run build"
+    routes:
+      - type: subdomain
+        subdomain: agents
+        websocket: true
+      - type: path
+        domain: "{{ full_domain }}"
+        path: /agents
+        strip_path: false
+    secrets:
+      - database_url
+      - agent_api_key
+      - jwt_secret
+      - session_secret
+    env:
+      NODE_ENV: development
+      AGENT_API_URL: "http://{{ agent_api_host }}:{{ agent_api_port }}"
+      PORT: "3001"
+  
+  - name: doc-intel
+    github_repo: jazzmind/docintel
+    container: apps-lxc
+    container_ip: "{{ apps_ip }}"
+    port: 3002
+    deploy_path: /srv/apps/doc-intel
+    health_endpoint: /api/health
+    build_command: "npm run build"
+    routes:
+      - type: subdomain
+        subdomain: docs
+      - type: path
+        domain: "{{ full_domain }}"
+        path: /docs
+        strip_path: false
+    secrets:
+      - database_url
+      - openai_api_key
+      - better_auth_secret
+      - jwt_secret
+    env:
+      NODE_ENV: development
+      MILVUS_HOST: "{{ milvus_ip }}"
+      MILVUS_PORT: "{{ milvus_port }}"
+      PORT: "3002"
+  
+  - name: innovation
+    github_repo: jazzmind/innovation
+    container: apps-lxc
+    container_ip: "{{ apps_ip }}"
+    port: 3003
+    deploy_path: /srv/apps/innovation
+    health_endpoint: /api/health
+    build_command: "npm run build"
+    routes:
+      - type: subdomain
+        subdomain: innovation
+      - type: path
+        domain: "{{ full_domain }}"
+        path: /innovation
+        strip_path: false
+    secrets:
+      - database_url
+      - better_auth_secret
+      - jwt_secret
+      - openai_api_key
+    env:
+      NODE_ENV: development
+      LITELLM_BASE_URL: "http://{{ litellm_ip }}:{{ litellm_port }}/v1"
+      PORT: "3003"

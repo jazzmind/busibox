@@ -1,85 +1,25 @@
 ---
-# Application Definitions - Schema Reference and Examples
+# Apps Container Configuration (PRODUCTION environment)
 # Created: 2025-10-15
-# Purpose: Documentation and examples for application configuration
+# Updated: 2025-10-23
+# Purpose: Apps-specific overrides for PRODUCTION environment
 #
-# ⚠️ NOTE: Active application definitions are now in group_vars/all.yml
-# This file is kept for schema documentation and examples only.
+# ⚠️ NOTE: Active application definitions are now in all.yml
+# This file is kept for apps-specific configuration overrides.
 #
 # Schema Reference: specs/002-deploy-app-servers/data-model.md
-#
-# Each application definition includes:
-# - name: Unique identifier (alphanumeric + hyphens)
-# - github_repo: GitHub repository (owner/repo format)
-# - container: Target LXC container name
-# - container_ip: IP address of target container
-# - port: Port application listens on
-# - deploy_path: Absolute path for deployment
-# - health_endpoint: HTTP path for health checks
-# - process_manager: (optional) "pm2" or "systemd" (default: pm2)
-# - routes: (optional) List of routing configurations (empty = internal only)
-# - secrets: (optional) List of secret keys from vault.yml
-# - env: (optional) Non-secret environment variables
-# - build_command: (optional) Command to run after deployment
-# - start_command: (optional) Override default start command
-#
-# Route types:
-# - domain: Multiple domain names pointing to application
-# - subdomain: Subdomain prefix (e.g., "agents" -> agents.ai.jaycashman.com)
-# - path: URL path routing (e.g., "/agents" -> ai.jaycashman.com/agents)
-#
-# To add a new application, edit group_vars/all.yml and add to the 'applications' list.
-#
-# Example application definitions:
-#
-# # Example: Public web application (domain routing)
-# - name: cashman-portal
-#   github_repo: jazzmind/cashman
-#   container: apps-lxc
-#   container_ip: "{{ apps_ip }}"
-#   port: 3000
-#   deploy_path: /srv/apps/cashman
-#   health_endpoint: /api/health
-#   build_command: "npm run build"
-#   routes:
-#     - type: domain
-#       domains:
-#         - "{{ domain }}"
-#         - "{{ www_domain }}"
-#     - type: path
-#       domain: "{{ domain }}"
-#       path: /home
-#   secrets:
-#     - session_secret
-#     - oauth_client_id
-#     - oauth_client_secret
-#     - database_url
-#     - jwt_secret
-#   env:
-#     NODE_ENV: production
-#     JWT_ISSUER: cashman-portal
-#
-# # Example: Application with subdomain and path routing
-# - name: agent-client
-#   github_repo: jazzmind/agent-client
-#   container: apps-lxc
-#   container_ip: "{{ apps_ip }}"
-#   port: 3001
-#   deploy_path: /srv/apps/agent-client
-#   health_endpoint: /health
-#   build_command: "npm run build"
-#   routes:
-#     - type: subdomain
-#       subdomain: agents
-#       websocket: true  # Enable WebSocket support
-#     - type: path
-#       domain: "{{ domain }}"
-#       path: /agents
-#       strip_path: false
-#   env:
-#     AGENT_API_URL: "http://{{ agent_api_host }}:{{ agent_api_port }}"
-#     NODE_ENV: production
-#   secrets:
-#     - agent_api_key
-#     - jwt_secret
 
+# Legacy application deployment support (deprecated - use applications[] in all.yml)
+# These are kept for backward compatibility with existing roles
+app_user: "appuser"
+app_group: "appuser"
+
+# Node.js version
+nodejs_version: "{{ default_node_version }}"
+
+# PM2 configuration (production resources)
+pm2_instances: 2
+pm2_max_memory_restart: "1G"
+
+# Health check configuration
+app_health_check_timeout: 30
