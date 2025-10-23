@@ -73,9 +73,11 @@
   args:
     creates: /opt/milvus-tools/bin/python
 
-- name: Install pymilvus in virtual environment
+- name: Install pymilvus and dependencies in virtual environment
   pip:
-    name: pymilvus==2.3.5
+    name:
+      - "marshmallow>=3.13.0"  # Fix version compatibility
+      - "pymilvus==2.3.5"
     virtualenv: /opt/milvus-tools
 
 - name: Copy Milvus initialization script
