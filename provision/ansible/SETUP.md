@@ -15,6 +15,9 @@ cp roles/secrets/vars/vault.example.yml roles/secrets/vars/vault.yml
 
 # Edit with your deployment-specific values
 ansible-vault edit roles/secrets/vars/vault.yml
+
+# Setup vault symlinks for inventory loading
+./setup-vault-links.sh
 ```
 
 **Required values in vault.yml**:
