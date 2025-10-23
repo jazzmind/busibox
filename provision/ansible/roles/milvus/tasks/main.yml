@@ -68,11 +68,24 @@
       - python3-venv
     state: present
 
-- name: Remove old Python virtual environment if it exists
+- name: Check if old marshmallow version exists
+  shell: |
+    if [ -f /opt/milvus-tools/bin/python ]; then
+      /opt/milvus-tools/bin/python -c "import marshmallow; print(marshmallow.__version__)" 2>/dev/null || echo "old"
+    else
+      echo "none"
+    fi
+  register: marshmallow_check
+  changed_when: false
+  failed_when: false
+
+- name: Remove old Python virtual environment if it has incompatible marshmallow
   file:
     path: /opt/milvus-tools
     state: absent
-  when: ansible_run_tags is not defined or 'never' not in ansible_run_tags
+  when: 
+    - marshmallow_check.stdout is defined
+    - marshmallow_check.stdout is version('3.13.0', '<') or marshmallow_check.stdout in ['old', 'none']
 
 - name: Create Python virtual environment for Milvus tools
   shell: python3 -m venv /opt/milvus-tools
