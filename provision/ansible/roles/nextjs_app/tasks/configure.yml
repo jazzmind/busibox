@@ -13,12 +13,21 @@
 
 - name: Debug - Show if secrets var is defined
   debug:
-    msg: "Secrets defined: {{ secrets is defined }}, App secrets in vault: {{ secrets[app_name] is defined if secrets is defined else 'secrets not defined' }}"
+    msg: "Secrets var is defined: {{ secrets is defined }}"
+  tags: [nextjs_configure, debug]
+
+- name: Debug - Show if app secrets exist in vault
+  debug:
+    msg: "Secrets for '{{ app_name }}' exist in vault: {{ secrets[app_name] is defined }}"
+  when: secrets is defined
   tags: [nextjs_configure, debug]
 
 - name: Debug - Show secret keys available (no values)
   debug:
-    msg: "Available secret keys for {{ app_name }}: {{ secrets[app_name].keys() | list if (secrets is defined and secrets[app_name] is defined) else 'none' }}"
+    msg: "Available secret keys: {{ secrets[app_name].keys() | list }}"
+  when: 
+    - secrets is defined
+    - secrets[app_name] is defined
   tags: [nextjs_configure, debug]
   no_log: false  # Just showing keys, not values
 
