@@ -73,17 +73,17 @@
 
 - name: Generate route keys (domain + subdomain + path combinations)
   set_fact:
-    route_keys: "{{ route_keys + [item | route_key] }}"
+    route_keys: "{{ route_keys + [route_key] }}"
   vars:
-    route_key: |
+    route_key: >-
       {%- if item.type == 'domain' -%}
-        {{ item.domains | join(',') }}
+      {{ item.domains | join(',') }}
       {%- elif item.type == 'subdomain' -%}
-        {{ item.subdomain }}.{{ domain }}
+      {{ item.subdomain }}.{{ domain }}
       {%- elif item.type == 'path' -%}
-        {{ item.domain }}{{ item.path }}
+      {{ item.domain }}{{ item.path }}
       {%- else -%}
-        INVALID
+      INVALID
       {%- endif -%}
   loop: "{{ all_routes }}"
   when: all_routes | length > 0
