@@ -2,6 +2,12 @@
 # Configure NGINX with placeholder pages
 # Use this BEFORE apps are deployed to verify routing and SSL
 
+- name: Load secrets for SSL certificates
+  include_vars:
+    file: "{{ playbook_dir }}/roles/secrets/vars/vault.yml"
+  no_log: true
+  when: detected_ssl_mode == 'provisioned'
+
 - name: Remove existing site configurations
   file:
     path: /etc/nginx/sites-enabled/

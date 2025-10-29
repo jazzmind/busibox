@@ -27,18 +27,18 @@ server {
     root /var/www/placeholder;
     index index.html;
     
-    # Path routing for agent-client
-    location /agents {
+    # Path routing for agent-client (exact match)
+    location = /agents {
         try_files /agents.html =404;
     }
     
-    # Path routing for doc-intel
-    location /docs {
+    # Path routing for doc-intel (exact match)
+    location = /docs {
         try_files /docs.html =404;
     }
     
-    # Path routing for innovation
-    location /innovation {
+    # Path routing for innovation (exact match)
+    location = /innovation {
         try_files /innovation.html =404;
     }
     
