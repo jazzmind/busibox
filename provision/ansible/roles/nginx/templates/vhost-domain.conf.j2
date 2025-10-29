@@ -27,7 +27,44 @@ server {
 {% for app in apps_with_routes %}
 {% for route in app.routes %}
 {% if route.type == 'path' %}
-{{ lookup('template', 'location-path.conf.j2') }}
+    # Path routing: {{ route.path }}
+    # Application: {{ app.name }}
+    location {{ route.path }} {
+{% if route.strip_path is defined and route.strip_path %}
+        # Strip path prefix before proxying
+        rewrite ^{{ route.path }}(.*)$ $1 break;
+{% endif %}
+        
+        proxy_pass http://{{ app.container_ip }}:{{ app.port }};
+        
+        # Proxy headers
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+{% if not (route.strip_path is defined and route.strip_path) %}
+        proxy_set_header X-Script-Name {{ route.path }};
+{% endif %}
+        
+{% if route.websocket is defined and route.websocket %}
+        # WebSocket support
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 86400;
+{% endif %}
+        
+        # Buffering
+        proxy_buffering off;
+        proxy_request_buffering off;
+        
+        # Timeouts
+        proxy_connect_timeout {{ nginx_proxy_timeout }};
+        proxy_send_timeout {{ nginx_proxy_timeout }};
+        proxy_read_timeout {{ nginx_proxy_timeout }};
+    }
 
 {% endif %}
 {% endfor %}

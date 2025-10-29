@@ -113,3 +113,8 @@ echo "     MinIO Console:  http://localhost:9001"
 echo ""
 echo "See docs/LOCAL_DEVELOPMENT.md for more details."
 
+
+
+
+
+
