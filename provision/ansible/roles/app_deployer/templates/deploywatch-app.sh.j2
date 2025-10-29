@@ -49,8 +49,9 @@ get_latest_release() {
     if echo "${release_info}" | jq -e '.tag_name' > /dev/null 2>&1; then
         echo "${release_info}" | jq -r '.tag_name'
     else
-        log_error "Failed to fetch latest release from GitHub"
-        return 1
+        # No releases found, use main branch
+        log_info "No releases found, using main branch"
+        echo "main"
     fi
 }
 
@@ -133,6 +134,21 @@ download_release() {
     local version=$1
     local temp_dir=$(mktemp -d)
     
+    # If version is "main", clone from git
+    if [[ "${version}" == "main" ]]; then
+        log_info "Cloning from main branch"
+        mkdir -p "${temp_dir}/extracted"
+        if git clone --depth 1 "https://github.com/${GITHUB_REPO}.git" "${temp_dir}/extracted/${GITHUB_REPO##*/}"; then
+            log_success "Cloned repository successfully"
+            echo "${temp_dir}"
+            return 0
+        else
+            log_error "Failed to clone repository"
+            rm -rf "${temp_dir}"
+            return 1
+        fi
+    fi
+    
     # Try to get release assets first (uploaded tarballs)
     log_info "Checking for release assets for ${version}"
     local release_info=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${version}")
@@ -172,12 +188,15 @@ deploy_application() {
     
     log_info "Deploying ${version} to ${DEPLOY_PATH}"
     
-    # Extract tarball
-    mkdir -p "${temp_dir}/extracted"
-    tar -xzf "${temp_dir}/release.tar.gz" -C "${temp_dir}/extracted"
+    # Extract tarball if it exists (not needed for git clone)
+    if [[ -f "${temp_dir}/release.tar.gz" ]]; then
+        mkdir -p "${temp_dir}/extracted"
+        tar -xzf "${temp_dir}/release.tar.gz" -C "${temp_dir}/extracted"
+    fi
     
     # Find extracted directory (GitHub archives as owner-repo-version/)
     # GitHub creates a subdirectory like "agent-server-0.0.1/" or "agent-server-v0.0.1/"
+    # For git clones, it's just the repo name
     local extracted_dir=$(find "${temp_dir}/extracted" -mindepth 1 -maxdepth 1 -type d | head -1)
     
     if [[ -z "${extracted_dir}" ]]; then
