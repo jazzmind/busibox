@@ -1,0 +1,93 @@
+---
+# Initial application deployment tasks
+# Purpose: Actually deploy applications on first run or when forced
+# This runs the generated deploywatch scripts
+
+- name: Check if applications are already deployed
+  stat:
+    path: "{{ item.deploy_path }}/package.json"
+  register: app_deployed
+  loop: "{{ applications }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: 
+    - applications is defined
+    - applications | length > 0
+    - item.container == inventory_hostname or item.container + '-lxc' == inventory_hostname
+
+- name: Initial deployment of applications
+  command: "bash {{ deploywatch_apps_dir }}/{{ item.item.name }}.sh"
+  loop: "{{ app_deployed.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when:
+    - item.stat is defined
+    - not item.stat.exists
+    - item.item.container == inventory_hostname or item.item.container + '-lxc' == inventory_hostname
+  register: initial_deployment
+  failed_when: false
+  async: 1800  # 30 minutes timeout for deployment
+  poll: 10     # Check every 10 seconds
+
+- name: Display deployment results
+  debug:
+    msg: |
+      Application: {{ item.item.item.name }}
+      Status: {{ 'Success' if item.rc == 0 else 'Failed' }}
+      {% if item.rc != 0 %}
+      Error: Check logs at {{ item.item.item.deploy_path }}/logs/
+      {% endif %}
+  loop: "{{ initial_deployment.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.item.name }}"
+  when: item.item is defined
+
+- name: Force redeployment if requested
+  command: "bash {{ deploywatch_apps_dir }}/{{ item.name }}.sh"
+  loop: "{{ applications }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - applications is defined
+    - applications | length > 0
+    - item.container == inventory_hostname or item.container + '-lxc' == inventory_hostname
+    - force_redeploy is defined
+    - force_redeploy | bool
+  register: forced_deployment
+  failed_when: false
+  async: 1800
+  poll: 10
+
+- name: Wait for applications to be healthy
+  uri:
+    url: "http://localhost:{{ item.port }}{{ item.health_endpoint }}"
+    status_code: 200
+    timeout: 30
+  register: health_check
+  until: health_check.status == 200
+  retries: 20
+  delay: 5
+  loop: "{{ applications }}"
+  loop_control:
+    label: "{{ item.name }}: {{ item.health_endpoint }}"
+  when:
+    - applications is defined
+    - applications | length > 0
+    - item.container == inventory_hostname or item.container + '-lxc' == inventory_hostname
+    - initial_deployment.changed or (forced_deployment is defined and forced_deployment.changed)
+  failed_when: false
+
+- name: Display final deployment status
+  debug:
+    msg: |
+      ✅ Application Deployment Complete
+      
+      {% for app in applications %}
+      {% if app.container == inventory_hostname or app.container + '-lxc' == inventory_hostname %}
+      - {{ app.name }}: {% if health_check.results | selectattr('item.name', 'equalto', app.name) | map(attribute='status') | first | default(0) == 200 %}✅ Healthy{% else %}⚠️  Check logs{% endif %}
+      {% endif %}
+      {% endfor %}
+      
+      Deploywatch scripts: {{ deploywatch_apps_dir }}
+      Check logs: /var/log/deploywatch/
+

@@ -95,18 +95,21 @@
     label: "{{ item.name }}"
   when: applications | length > 0
 
-- name: Display deployment summary
+- name: Display configuration summary
   debug:
     msg: |
       ✅ App deployer configuration complete
       - Applications configured: {{ applications | length }}
       - Deploywatch scripts generated: {{ deploywatch_apps_dir }}
       - Environment files deployed: {{ applications | length }}
-      
-      Next steps:
-      1. Manually trigger deploywatch for initial deployment:
-         for app in {{ deploywatch_apps_dir }}/*.sh; do bash "$app"; done
-      
-      2. Or wait for deploywatch timer to run (every {{ deploywatch_check_interval }}s)
   when: applications | length > 0
 
+- name: Deploy applications
+  include_tasks: deploy.yml
+  when: 
+    - applications is defined
+    - applications | length > 0
+    - deploy_apps is not defined or deploy_apps | bool
+  tags:
+    - app_deployer
+    - deploy
