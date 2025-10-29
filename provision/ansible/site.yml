@@ -15,11 +15,6 @@
   roles:
     - node_common
     - agent_api
-    - deploywatch
-    - role: secrets
-      tags: [secrets]
-    - role: app_deployer
-      tags: [app_deployer]
 
 - hosts: files
   roles: [minio]
