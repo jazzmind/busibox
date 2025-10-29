@@ -69,9 +69,22 @@
     state: link
   notify: Reload NGINX
 
-- name: Include application routing configuration
+- name: Deploy placeholder HTML pages
+  include_tasks: placeholders.yml
+  tags: [nginx, placeholders]
+
+- name: Configure NGINX with placeholders (if placeholder_mode enabled)
+  include_tasks: configure-placeholders.yml
+  when: placeholder_mode is defined and placeholder_mode | bool
+  tags: [nginx, placeholders]
+
+- name: Configure NGINX with application routing (normal mode)
   include_tasks: configure.yml
-  when: applications is defined and applications | length > 0
+  when: 
+    - placeholder_mode is not defined or not placeholder_mode | bool
+    - applications is defined 
+    - applications | length > 0
+  tags: [nginx, apps]
 
 - name: Test NGINX configuration
   command: nginx -t
