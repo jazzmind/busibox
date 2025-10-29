@@ -21,6 +21,25 @@ cd ~/busibox/provision/ansible
 ansible-vault edit roles/secrets/vars/vault.yml
 ```
 
+### GitHub Token (Required for Private Repos)
+
+If your GitHub repositories are private, you MUST add a GitHub token:
+
+1. **Create GitHub Personal Access Token**:
+   - Go to: https://github.com/settings/tokens
+   - Click: "Generate new token (classic)"
+   - Name: "Busibox Deployment"
+   - Scope: ✅ **repo** (full control of private repositories)
+   - Copy the token (format: `ghp_...`)
+
+2. **Add to vault**:
+   ```yaml
+   secrets:
+     github_token: "ghp_your_actual_token_here"
+   ```
+
+This token will be automatically deployed to `~/.github_token` on containers that run deploywatch scripts.
+
 ### JWT Secrets to Add
 
 JWT secrets are used for cross-application authentication. You can:
@@ -78,6 +97,8 @@ ssl_email: "admin@jaycashman.com"
 
 # Secrets (Deployment-Specific)
 secrets:
+  # GitHub Personal Access Token for private repository access
+  github_token: "ghp_your_actual_token_here"
   postgresql:
     password: "YOUR_POSTGRES_PASSWORD"
     

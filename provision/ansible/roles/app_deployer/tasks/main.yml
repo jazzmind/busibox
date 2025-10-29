@@ -67,6 +67,21 @@
     - app_deployer
     - secrets
 
+- name: Deploy GitHub token for private repository access
+  copy:
+    content: "{{ secrets.github_token }}"
+    dest: "~/.github_token"
+    mode: "0600"
+    owner: root
+    group: root
+  no_log: true
+  when: 
+    - secrets.github_token is defined
+    - secrets.github_token | length > 0
+  tags:
+    - app_deployer
+    - secrets
+
 - name: Deploy application environment files (.env)
   template:
     src: "{{ playbook_dir }}/roles/secrets/templates/app.env.j2"
