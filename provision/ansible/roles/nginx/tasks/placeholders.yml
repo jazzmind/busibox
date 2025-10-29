@@ -91,6 +91,7 @@
               h1 { font-size: 3rem; margin: 0 0 1rem 0; }
               p { font-size: 1.2rem; opacity: 0.9; }
               .info { margin-top: 2rem; font-size: 0.9rem; opacity: 0.7; }
+              .route { font-family: monospace; background: rgba(255,255,255,0.2); padding: 0.5rem; border-radius: 5px; display: inline-block; margin-top: 0.5rem; }
           </style>
       </head>
       <body>
@@ -99,10 +100,14 @@
               <p>Coming Soon</p>
               <div class="info">
                   <p>This is a placeholder page</p>
-                  <p>Subdomain: agents.{{ full_domain }}</p>
-                  <p>Path: /agents</p>
+                  <p class="route">agents.{{ full_domain }}</p>
+                  <p class="route">{{ full_domain }}/agents</p>
               </div>
           </div>
+          <script>
+              // Display current URL for debugging
+              document.querySelector('.info').innerHTML += '<p style="margin-top: 1rem; font-size: 0.8rem; opacity: 0.6;">Current URL: ' + window.location.href + '</p>';
+          </script>
       </body>
       </html>
     dest: /var/www/placeholder/agents.html
@@ -141,6 +146,7 @@
               h1 { font-size: 3rem; margin: 0 0 1rem 0; }
               p { font-size: 1.2rem; opacity: 0.9; }
               .info { margin-top: 2rem; font-size: 0.9rem; opacity: 0.7; }
+              .route { font-family: monospace; background: rgba(255,255,255,0.2); padding: 0.5rem; border-radius: 5px; display: inline-block; margin-top: 0.5rem; }
           </style>
       </head>
       <body>
@@ -149,10 +155,13 @@
               <p>Coming Soon</p>
               <div class="info">
                   <p>This is a placeholder page</p>
-                  <p>Subdomain: docs.{{ full_domain }}</p>
-                  <p>Path: /docs</p>
+                  <p class="route">docs.{{ full_domain }}</p>
+                  <p class="route">{{ full_domain }}/docs</p>
               </div>
           </div>
+          <script>
+              document.querySelector('.info').innerHTML += '<p style="margin-top: 1rem; font-size: 0.8rem; opacity: 0.6;">Current URL: ' + window.location.href + '</p>';
+          </script>
       </body>
       </html>
     dest: /var/www/placeholder/docs.html
@@ -191,6 +200,7 @@
               h1 { font-size: 3rem; margin: 0 0 1rem 0; }
               p { font-size: 1.2rem; opacity: 0.9; }
               .info { margin-top: 2rem; font-size: 0.9rem; opacity: 0.7; }
+              .route { font-family: monospace; background: rgba(255,255,255,0.2); padding: 0.5rem; border-radius: 5px; display: inline-block; margin-top: 0.5rem; }
           </style>
       </head>
       <body>
@@ -199,10 +209,13 @@
               <p>Coming Soon</p>
               <div class="info">
                   <p>This is a placeholder page</p>
-                  <p>Subdomain: innovation.{{ full_domain }}</p>
-                  <p>Path: /innovation</p>
+                  <p class="route">innovation.{{ full_domain }}</p>
+                  <p class="route">{{ full_domain }}/innovation</p>
               </div>
           </div>
+          <script>
+              document.querySelector('.info').innerHTML += '<p style="margin-top: 1rem; font-size: 0.8rem; opacity: 0.6;">Current URL: ' + window.location.href + '</p>';
+          </script>
       </body>
       </html>
     dest: /var/www/placeholder/innovation.html
