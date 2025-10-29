@@ -19,6 +19,17 @@ BACKUP_DIR="${DEPLOY_PATH}.backup"
 FAILED_DIR="${DEPLOY_PATH}.failed"
 ENV_FILE="${DEPLOY_PATH}/.env"
 
+# GitHub authentication (for private repos)
+# Set GITHUB_TOKEN environment variable or create ~/.github_token file
+if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    CURL_AUTH_HEADER="Authorization: token ${GITHUB_TOKEN}"
+elif [[ -f ~/.github_token ]]; then
+    GITHUB_TOKEN=$(cat ~/.github_token)
+    CURL_AUTH_HEADER="Authorization: token ${GITHUB_TOKEN}"
+else
+    CURL_AUTH_HEADER=""
+fi
+
 # Logging functions
 log_info() {
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] [${APP_NAME}] INFO: $*" >&2
@@ -44,7 +55,11 @@ get_current_version() {
 # Get latest GitHub release
 get_latest_release() {
     local release_info
-    release_info=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/latest")
+    if [[ -n "${CURL_AUTH_HEADER}" ]]; then
+        release_info=$(curl -s -H "${CURL_AUTH_HEADER}" "https://api.github.com/repos/${GITHUB_REPO}/releases/latest")
+    else
+        release_info=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/latest")
+    fi
     
     if echo "${release_info}" | jq -e '.tag_name' > /dev/null 2>&1; then
         echo "${release_info}" | jq -r '.tag_name'
@@ -138,7 +153,16 @@ download_release() {
     if [[ "${version}" == "main" ]]; then
         log_info "Cloning from main branch"
         mkdir -p "${temp_dir}/extracted"
-        if git clone --depth 1 "https://github.com/${GITHUB_REPO}.git" "${temp_dir}/extracted/${GITHUB_REPO##*/}"; then
+        
+        # Use token authentication for private repos
+        local git_url
+        if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+            git_url="https://${GITHUB_TOKEN}@github.com/${GITHUB_REPO}.git"
+        else
+            git_url="https://github.com/${GITHUB_REPO}.git"
+        fi
+        
+        if git clone --depth 1 "${git_url}" "${temp_dir}/extracted/${GITHUB_REPO##*/}"; then
             log_success "Cloned repository successfully"
             echo "${temp_dir}"
             return 0
@@ -151,13 +175,22 @@ download_release() {
     
     # Try to get release assets first (uploaded tarballs)
     log_info "Checking for release assets for ${version}"
-    local release_info=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${version}")
+    local release_info
+    if [[ -n "${CURL_AUTH_HEADER}" ]]; then
+        release_info=$(curl -s -H "${CURL_AUTH_HEADER}" "https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${version}")
+    else
+        release_info=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${version}")
+    fi
     local asset_url=$(echo "${release_info}" | jq -r '.assets[] | select(.name | test("\\.tar\\.gz$")) | .browser_download_url' | head -1)
     
     if [[ -n "${asset_url}" && "${asset_url}" != "null" ]]; then
         # Use uploaded release asset
         log_info "Downloading release asset from ${asset_url}"
-        if curl -L -o "${temp_dir}/release.tar.gz" "${asset_url}"; then
+        local curl_cmd="curl -L -o ${temp_dir}/release.tar.gz"
+        [[ -n "${CURL_AUTH_HEADER}" ]] && curl_cmd="${curl_cmd} -H '${CURL_AUTH_HEADER}'"
+        curl_cmd="${curl_cmd} ${asset_url}"
+        
+        if eval "${curl_cmd}"; then
             log_success "Downloaded release asset"
             echo "${temp_dir}"
             return 0
@@ -170,7 +203,11 @@ download_release() {
     local tarball_url="https://github.com/${GITHUB_REPO}/archive/refs/tags/${version}.tar.gz"
     log_info "Downloading source archive from ${tarball_url}"
     
-    if curl -L -o "${temp_dir}/release.tar.gz" "${tarball_url}"; then
+    local curl_cmd="curl -L -o ${temp_dir}/release.tar.gz"
+    [[ -n "${CURL_AUTH_HEADER}" ]] && curl_cmd="${curl_cmd} -H '${CURL_AUTH_HEADER}'"
+    curl_cmd="${curl_cmd} ${tarball_url}"
+    
+    if eval "${curl_cmd}"; then
         log_success "Downloaded source archive"
         echo "${temp_dir}"
         return 0
