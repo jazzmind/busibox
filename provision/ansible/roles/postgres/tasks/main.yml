@@ -147,6 +147,7 @@
     template: template0
   loop: "{{ app_databases | default([]) }}"
   when: app_databases is defined and app_databases | length > 0
+  tags: [postgres]
 
 - name: Create migrations directory
   file:
