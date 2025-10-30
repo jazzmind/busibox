@@ -199,15 +199,46 @@ download_release() {
         fi
     fi
     
-    # Fall back to source archive
-    local tarball_url="https://github.com/${GITHUB_REPO}/archive/refs/tags/${version}.tar.gz"
-    log_info "Downloading source archive from ${tarball_url}"
+    # Fall back to source archive via API (supports authentication)
+    log_info "Downloading source archive via GitHub API"
     
-    local curl_cmd="curl -L -o ${temp_dir}/release.tar.gz"
-    [[ -n "${CURL_AUTH_HEADER}" ]] && curl_cmd="${curl_cmd} -H '${CURL_AUTH_HEADER}'"
-    curl_cmd="${curl_cmd} ${tarball_url}"
+    # Use GitHub API tarball_url which supports authentication
+    local tarball_url
+    if [[ -n "${CURL_AUTH_HEADER}" ]]; then
+        tarball_url=$(curl -s -H "${CURL_AUTH_HEADER}" "https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${version}" | jq -r '.tarball_url')
+    else
+        tarball_url=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${version}" | jq -r '.tarball_url')
+    fi
     
-    if eval "${curl_cmd}"; then
+    # If tarball_url is available from release API, use it
+    if [[ -n "${tarball_url}" && "${tarball_url}" != "null" ]]; then
+        log_info "Using API tarball URL: ${tarball_url}"
+        if [[ -n "${CURL_AUTH_HEADER}" ]]; then
+            if curl -L -H "${CURL_AUTH_HEADER}" -o "${temp_dir}/release.tar.gz" "${tarball_url}"; then
+                log_success "Downloaded source archive via API"
+                echo "${temp_dir}"
+                return 0
+            fi
+        else
+            if curl -L -o "${temp_dir}/release.tar.gz" "${tarball_url}"; then
+                log_success "Downloaded source archive"
+                echo "${temp_dir}"
+                return 0
+            fi
+        fi
+    fi
+    
+    # Final fallback: try direct archive URL with token in URL (for private repos)
+    local archive_url="https://github.com/${GITHUB_REPO}/archive/refs/tags/${version}.tar.gz"
+    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+        # Add token as URL parameter for private repos (GitHub archive URLs don't support Auth header)
+        archive_url="https://${GITHUB_TOKEN}@github.com/${GITHUB_REPO}/archive/refs/tags/${version}.tar.gz"
+        log_info "Downloading source archive with authentication"
+    else
+        log_info "Downloading public source archive from ${archive_url}"
+    fi
+    
+    if curl -L -o "${temp_dir}/release.tar.gz" "${archive_url}"; then
         log_success "Downloaded source archive"
         echo "${temp_dir}"
         return 0
