@@ -95,7 +95,9 @@
   vars:
     app: "{{ item }}"
   no_log: true  # Don't log secrets
-  when: applications | length > 0
+  when: 
+    - applications | length > 0
+    - deploy_app is not defined or deploy_app == item.name
   notify: Restart application
   tags:
     - app_deployer

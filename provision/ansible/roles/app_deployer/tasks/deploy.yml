@@ -55,6 +55,7 @@
     - inventory_hostname is match('.*' + item.container + '.*')
     - force_redeploy is defined
     - force_redeploy | bool
+    - deploy_app is not defined or deploy_app == item.name
   register: forced_deployment
   failed_when: false
   async: 1800
