@@ -18,7 +18,7 @@ log_info "This script will install Python, PyTorch, vLLM, and LiteLLM to test GP
 log_info ""
 log_warning "Prerequisites:"
 log_warning "  - NVIDIA drivers must already be installed on the host"
-log_warning "  - Run 'bash scripts/setup-proxmox-host.sh' first if not done"
+log_warning "  - Run 'bash provision/pct/setup-proxmox-host.sh' first if not done"
 log_info ""
 
 # Step 1: Verify NVIDIA driver is working
@@ -27,7 +27,7 @@ log_info "Step 1: Verifying NVIDIA driver..."
 if ! command -v nvidia-smi &>/dev/null; then
   log_error "nvidia-smi not found!"
   log_error "Please install NVIDIA drivers first:"
-  log_error "  bash scripts/setup-proxmox-host.sh"
+  log_error "  bash provision/pct/setup-proxmox-host.sh"
   exit 1
 fi
 
@@ -35,7 +35,7 @@ if ! nvidia-smi &>/dev/null; then
   log_error "nvidia-smi failed to run!"
   log_error "Driver may not be properly installed or loaded"
   log_error "Try rebooting or reinstalling drivers with:"
-  log_error "  bash scripts/setup-proxmox-host.sh"
+  log_error "  bash provision/pct/setup-proxmox-host.sh"
   exit 1
 fi
 
