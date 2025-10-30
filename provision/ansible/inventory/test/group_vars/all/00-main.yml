@@ -40,9 +40,9 @@ vllm_ip: "{{ network_base_octets }}.209"
 # Domain Configuration - Test
 # ============================================================================
 # Base domain from vault (deployment-specific)
-subdomain: test
+env_suffix: test
 domain: "ai.{{ base_domain }}"
-full_domain: "{{ subdomain }}.{{ domain }}"
+full_domain: "{{ env_suffix }}.{{ domain }}"
 
 # SSL Certificate Mode
 # Options: "letsencrypt", "provisioned", "selfsigned"
@@ -196,7 +196,7 @@ applications:
     build_command: "npm run build"
     routes:
       - type: subdomain
-        subdomain: agents
+        subdomain: agents-test
         websocket: true
       - type: path
         domain: "{{ full_domain }}"
@@ -222,7 +222,7 @@ applications:
     build_command: "npm run build"
     routes:
       - type: subdomain
-        subdomain: docs
+        subdomain: docs-test
       - type: path
         domain: "{{ full_domain }}"
         path: /docs
@@ -248,7 +248,7 @@ applications:
     build_command: "npm run build"
     routes:
       - type: subdomain
-        subdomain: innovation
+        subdomain: innovation-test
       - type: path
         domain: "{{ full_domain }}"
         path: /innovation

@@ -3,13 +3,13 @@
 # Upload SSL Certificate to Ansible Vault
 # 
 # This script helps you securely upload SSL certificates to the Ansible vault
-# without storing them in the git repository.
+# without storing them in the git repository. It MERGES with existing vault content.
 #
 # Usage:
-#   bash scripts/upload-ssl-cert.sh <domain> <cert-file> <key-file> [chain-file]
+#   bash scripts/upload-ssl-cert.sh <cert-file> <key-file> [chain-file]
 #
 # Example:
-#   bash scripts/upload-ssl-cert.sh test.ai.jaycashman.com ./cert.crt ./cert.key ./chain.crt
+#   bash scripts/upload-ssl-cert.sh ./cert.crt ./cert.key ./chain.crt
 #
 
 set -euo pipefail
@@ -43,38 +43,39 @@ warn() {
 
 usage() {
     cat <<EOF
-Usage: $0 <domain> <cert-file> <key-file> [chain-file]
+Usage: $0 <cert-file> <key-file> [chain-file]
 
 Upload SSL certificates to Ansible vault for deployment.
+This script MERGES certificates into the existing vault, preserving all other secrets.
 
 Arguments:
-  domain      Domain name (e.g., test.ai.jaycashman.com)
   cert-file   Path to certificate file (.crt or .pem)
   key-file    Path to private key file (.key or .pem)
   chain-file  Path to certificate chain file (optional)
 
 Example:
-  $0 test.ai.jaycashman.com ./cert.crt ./cert.key ./chain.crt
+  $0 ./cert.crt ./cert.key ./chain.crt
 
 The certificates will be stored in:
   $VAULT_FILE
+  
+Under the path: secrets.ssl_certificates
 
 This file is encrypted with ansible-vault and should NOT be committed unencrypted.
 EOF
 }
 
 # Check arguments
-if [ $# -lt 3 ]; then
+if [ $# -lt 2 ]; then
     error "Missing required arguments"
     echo
     usage
     exit 1
 fi
 
-DOMAIN="$1"
-CERT_FILE="$2"
-KEY_FILE="$3"
-CHAIN_FILE="${4:-}"
+CERT_FILE="$1"
+KEY_FILE="$2"
+CHAIN_FILE="${3:-}"
 
 # Validate files exist
 if [ ! -f "$CERT_FILE" ]; then
@@ -91,6 +92,14 @@ if [ -n "$CHAIN_FILE" ] && [ ! -f "$CHAIN_FILE" ]; then
     error "Chain file not found: $CHAIN_FILE"
     exit 1
 fi
+
+# Check for required tools
+if ! command -v python3 &> /dev/null && ! command -v python &> /dev/null; then
+    error "Python is required but not installed"
+    exit 1
+fi
+
+PYTHON_CMD=$(command -v python3 || command -v python)
 
 # Validate certificate and key match
 info "Validating certificate and key..."
@@ -112,36 +121,30 @@ openssl x509 -in "$CERT_FILE" -noout -subject -issuer -dates
 
 # Check if vault file exists
 if [ ! -f "$VAULT_FILE" ]; then
-    info "Creating new vault file: $VAULT_FILE"
-    mkdir -p "$(dirname "$VAULT_FILE")"
-    echo "---" > "$VAULT_FILE"
-    echo "# Ansible Vault for Secrets" >> "$VAULT_FILE"
-    echo "# This file should be encrypted with: ansible-vault encrypt $VAULT_FILE" >> "$VAULT_FILE"
-    echo "" >> "$VAULT_FILE"
-    echo "secrets:" >> "$VAULT_FILE"
+    error "Vault file not found: $VAULT_FILE"
+    echo "Please create the vault file first following SETUP.md"
+    exit 1
 fi
 
 # Check if vault is encrypted
+WAS_ENCRYPTED=false
 if head -n1 "$VAULT_FILE" | grep -q "^\$ANSIBLE_VAULT"; then
     info "Vault file is encrypted, decrypting temporarily..."
     TEMP_VAULT=$(mktemp)
     trap "rm -f $TEMP_VAULT" EXIT
     
-    if ! ansible-vault decrypt "$VAULT_FILE" --output="$TEMP_VAULT"; then
+    if ! ansible-vault decrypt "$VAULT_FILE" --output="$TEMP_VAULT" 2>/dev/null; then
         error "Failed to decrypt vault file. Do you have the vault password?"
+        rm -f "$TEMP_VAULT"
         exit 1
     fi
     
-    VAULT_FILE="$TEMP_VAULT"
-    NEEDS_REENCRYPT=true
+    WORKING_VAULT="$TEMP_VAULT"
+    WAS_ENCRYPTED=true
 else
     warn "Vault file is not encrypted!"
-    NEEDS_REENCRYPT=false
+    WORKING_VAULT="$VAULT_FILE"
 fi
-
-# Create temporary file for new vault content
-TEMP_NEW_VAULT=$(mktemp)
-trap "rm -f $TEMP_NEW_VAULT $TEMP_VAULT" EXIT
 
 # Read certificate files
 info "Reading certificate files..."
@@ -149,36 +152,88 @@ CERT_CONTENT=$(cat "$CERT_FILE")
 KEY_CONTENT=$(cat "$KEY_FILE")
 if [ -n "$CHAIN_FILE" ]; then
     CHAIN_CONTENT=$(cat "$CHAIN_FILE")
+    HAS_CHAIN=true
 else
     CHAIN_CONTENT=""
+    HAS_CHAIN=false
 fi
 
-# Create new vault content
-cat > "$TEMP_NEW_VAULT" <<EOF
----
-# Ansible Vault for Secrets
-# Encrypted with ansible-vault
+# Create Python script to merge YAML
+info "Merging SSL certificates into vault..."
+TEMP_SCRIPT=$(mktemp)
+trap "rm -f $TEMP_SCRIPT $TEMP_VAULT" EXIT
 
-secrets:
-  ssl_certificates:
-    domain: "$DOMAIN"
-    certificate: |
-$(echo "$CERT_CONTENT" | sed 's/^/      /')
-    private_key: |
-$(echo "$KEY_CONTENT" | sed 's/^/      /')
-EOF
+cat > "$TEMP_SCRIPT" <<'PYTHON_EOF'
+import sys
+import yaml
+from pathlib import Path
 
-if [ -n "$CHAIN_CONTENT" ]; then
-    cat >> "$TEMP_NEW_VAULT" <<EOF
-    chain: |
-$(echo "$CHAIN_CONTENT" | sed 's/^/      /')
-EOF
+def merge_ssl_certs(vault_file, cert_content, key_content, chain_content, has_chain):
+    """Merge SSL certificates into existing vault YAML"""
+    
+    # Load existing vault
+    with open(vault_file, 'r') as f:
+        vault_data = yaml.safe_load(f) or {}
+    
+    # Ensure secrets key exists
+    if 'secrets' not in vault_data:
+        vault_data['secrets'] = {}
+    
+    # Create or update ssl_certificates section
+    vault_data['secrets']['ssl_certificates'] = {
+        'certificate': cert_content,
+        'private_key': key_content
+    }
+    
+    if has_chain:
+        vault_data['secrets']['ssl_certificates']['chain'] = chain_content
+    
+    # Write back to file with proper formatting
+    with open(vault_file, 'w') as f:
+        # Write header comment
+        f.write('---\n')
+        f.write('# Ansible Vault - Encrypted Deployment Configuration\n')
+        f.write('# This file should be encrypted with ansible-vault\n')
+        f.write('#\n')
+        f.write('# SSL certificates updated by upload-ssl-cert.sh\n')
+        f.write('\n')
+        
+        # Write YAML data
+        yaml.dump(vault_data, f, default_flow_style=False, sort_keys=False, width=120)
+    
+    return True
+
+if __name__ == '__main__':
+    vault_file = sys.argv[1]
+    cert_content = sys.argv[2]
+    key_content = sys.argv[3]
+    chain_content = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] else None
+    has_chain = sys.argv[5] == 'true' if len(sys.argv) > 5 else False
+    
+    try:
+        merge_ssl_certs(vault_file, cert_content, key_content, chain_content, has_chain)
+        print("SUCCESS")
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
+PYTHON_EOF
+
+# Run Python script to merge
+if ! $PYTHON_CMD "$TEMP_SCRIPT" "$WORKING_VAULT" "$CERT_CONTENT" "$KEY_CONTENT" "$CHAIN_CONTENT" "$HAS_CHAIN" 2>/dev/null; then
+    error "Failed to merge SSL certificates into vault"
+    exit 1
 fi
 
-# Show preview
-info "Preview of vault content (private key redacted):"
+success "SSL certificates merged into vault"
+
+# Show preview (with redacted private key)
+info "Preview of ssl_certificates section (private key redacted):"
 echo "---"
-cat "$TEMP_NEW_VAULT" | sed '/private_key:/,/^    [a-z]/ { /private_key:/!{ /^    [a-z]/!d; }; s/-----BEGIN.*-----/[REDACTED]/; s/-----END.*-----/[REDACTED]/; }'
+if command -v yq &> /dev/null; then
+    yq '.secrets.ssl_certificates' "$WORKING_VAULT" 2>/dev/null | sed '/private_key:/,/^[a-z]/ { /private_key:/!{ /^[a-z]/!{ s/.*/      [REDACTED]/; }; }; }' || cat "$WORKING_VAULT" | grep -A 20 "ssl_certificates:" | head -25
+else
+    cat "$WORKING_VAULT" | grep -A 20 "ssl_certificates:" | head -25 | sed '/private_key:/,/^  [a-z]/ { /private_key:/!{ /^  [a-z]/!{ s/.*/      [REDACTED]/; }; }; }'
+fi
 echo "---"
 
 # Confirm
@@ -189,26 +244,43 @@ if [ "$CONFIRM" != "yes" ]; then
     exit 0
 fi
 
-# Write to actual vault file
-ACTUAL_VAULT="$PROJECT_ROOT/provision/ansible/roles/secrets/vars/vault.yml"
-cp "$TEMP_NEW_VAULT" "$ACTUAL_VAULT"
-
-if [ "$NEEDS_REENCRYPT" = true ]; then
+# Write back to actual vault file
+if [ "$WAS_ENCRYPTED" = true ]; then
     info "Re-encrypting vault file..."
-    if ! ansible-vault encrypt "$ACTUAL_VAULT"; then
+    # First copy unencrypted content
+    cp "$WORKING_VAULT" "$VAULT_FILE"
+    
+    # Then encrypt in place
+    if ! ansible-vault encrypt "$VAULT_FILE" 2>/dev/null; then
         error "Failed to encrypt vault file"
         exit 1
     fi
+else
+    # Just copy if wasn't encrypted
+    cp "$WORKING_VAULT" "$VAULT_FILE"
+    warn "Vault file is NOT encrypted. You should encrypt it:"
+    echo "  ansible-vault encrypt $VAULT_FILE"
 fi
 
 success "SSL certificates uploaded successfully!"
 echo
 info "Next steps:"
-echo "  1. Deploy to proxy container with: cd provision/ansible && ansible-playbook -i inventory/test/hosts.yml site.yml --tags nginx --ask-vault-pass"
-echo "  2. Verify SSL: curl -v https://$DOMAIN"
+echo "  1. Verify the vault is encrypted:"
+echo "     head -n1 $VAULT_FILE"
 echo
-warn "Remember: This vault file should be encrypted before committing to git"
-if [ "$NEEDS_REENCRYPT" = false ]; then
-    echo "  Run: ansible-vault encrypt $ACTUAL_VAULT"
+echo "  2. View the vault contents:"
+echo "     ansible-vault view $VAULT_FILE | grep -A 20 ssl_certificates"
+echo
+echo "  3. Deploy to proxy container:"
+echo "     cd provision/ansible"
+echo "     ansible-playbook -i inventory/test/hosts.yml site.yml --tags nginx --ask-vault-pass -e placeholder_mode=true"
+echo
+echo "  4. Test SSL:"
+if [ -n "$CHAIN_FILE" ]; then
+    echo "     openssl s_client -connect YOUR_DOMAIN:443 -showcerts"
+else
+    warn "No certificate chain provided. SSL stapling may not work."
+    echo "     You may want to add the intermediate certificate chain."
 fi
+echo
 
