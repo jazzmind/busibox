@@ -144,17 +144,49 @@ lxc.mount.entry: /dev/nvidia-caps dev/nvidia-caps none bind,optional,create=dir
 
 ### 1. Install NVIDIA Drivers in Container
 
-After GPU passthrough is configured, install NVIDIA drivers **inside the container**:
+After GPU passthrough is configured, install NVIDIA **proprietary** drivers inside the container. The driver version **MUST exactly match** the host version to avoid "Driver/library version mismatch" errors.
+
+**⚠️ CRITICAL**: Do NOT use Debian packages (`nvidia-driver-535`) - they will cause version mismatch errors! Use the proprietary NVIDIA installer instead.
+
+#### Automated Installation (Recommended)
 
 ```bash
-# Enter the container
+# From Proxmox host - auto-detects host driver version
+bash provision/pct/install-nvidia-drivers.sh 208
+
+# Or specify driver version explicitly
+bash provision/pct/install-nvidia-drivers.sh 208 580.82
+```
+
+This script automatically installs:
+- ✅ NVIDIA proprietary driver (matching host version)
+- ✅ `nvtop` for interactive GPU monitoring
+- ✅ Required dependencies (libglvnd, etc.)
+
+#### Manual Installation
+
+```bash
+# 1. Check host driver version
+nvidia-smi | grep "Driver Version"
+# Example output: Driver Version: 580.82
+
+# 2. Enter the container
 pct enter 208
 
-# Install NVIDIA drivers (match host driver version)
+# 3. Install prerequisites
 apt update
-apt install -y nvidia-driver-535 nvidia-cuda-toolkit
+apt install -y wget kmod libglvnd0 pkg-config libglvnd-dev
 
-# Verify GPU is accessible
+# 4. Download matching driver version
+DRIVER_VERSION="580.82"  # Use your host version!
+cd /tmp
+wget https://us.download.nvidia.com/XFree86/Linux-x86_64/${DRIVER_VERSION}/NVIDIA-Linux-x86_64-${DRIVER_VERSION}.run
+chmod +x NVIDIA-Linux-x86_64-${DRIVER_VERSION}.run
+
+# 5. Install driver (NO kernel module - container uses host kernel)
+./NVIDIA-Linux-x86_64-${DRIVER_VERSION}.run --no-kernel-module --silent
+
+# 6. Verify
 nvidia-smi
 ```
 
@@ -189,7 +221,36 @@ nvidia-smi
 nvidia-smi --list-gpus
 ```
 
-### 3. Test CUDA (Optional)
+### 3. Monitor GPU Usage
+
+The installation script automatically installs `nvtop` for interactive GPU monitoring:
+
+```bash
+# Enter container for interactive monitoring
+pct enter 208
+
+# Launch nvtop (like htop but for GPUs)
+nvtop
+
+# Shows:
+# - GPU utilization per GPU
+# - Memory usage
+# - Running processes
+# - Temperature
+# - Power consumption
+```
+
+Alternatively, use `nvidia-smi` for quick checks:
+
+```bash
+# One-time check
+pct exec 208 -- nvidia-smi
+
+# Watch mode (updates every 1 second)
+pct exec 208 -- watch -n 1 nvidia-smi
+```
+
+### 4. Test CUDA (Optional)
 
 ```bash
 # Install CUDA toolkit if not already installed
@@ -323,18 +384,37 @@ bash provision/pct/configure-gpu-passthrough.sh 208 2-3 --force
 
 ### Driver Version Mismatch
 
-**Problem**: Host and container have different NVIDIA driver versions
+**Problem**: "Failed to initialize NVML: Driver/library version mismatch"
 
-**Solution**: Match container driver to host driver:
+**Cause**: LXC containers share the host kernel, so driver versions must match exactly. Using Debian packages (`apt install nvidia-driver-535`) installs a different version than the host.
+
+**Solution**: Install the proprietary NVIDIA driver that matches the host version:
 
 ```bash
-# Check host driver version
-nvidia-smi | grep "Driver Version"
+# Method 1: Automated (recommended)
+bash provision/pct/install-nvidia-drivers.sh <container-id>
 
-# Install matching version in container
+# Method 2: Manual
+# Check host version
+nvidia-smi | grep "Driver Version"
+# Example: Driver Version: 580.82
+
+# Install matching proprietary driver in container
 pct enter <container-id>
-apt install -y nvidia-driver-<version>
+cd /tmp
+DRIVER_VERSION="580.82"  # Use YOUR host version
+wget https://us.download.nvidia.com/XFree86/Linux-x86_64/${DRIVER_VERSION}/NVIDIA-Linux-x86_64-${DRIVER_VERSION}.run
+chmod +x NVIDIA-Linux-x86_64-${DRIVER_VERSION}.run
+./NVIDIA-Linux-x86_64-${DRIVER_VERSION}.run --no-kernel-module --silent
+
+# Verify versions match
+nvidia-smi | grep "Driver Version"  # Should match host
 ```
+
+**Key Points**:
+- ❌ Don't use: `apt install nvidia-driver-*` (wrong version)
+- ✅ Do use: Proprietary NVIDIA `.run` installer with `--no-kernel-module`
+- 🔑 Critical flag: `--no-kernel-module` (container uses host kernel)
 
 ### Permission Denied for GPU Devices
 
@@ -358,24 +438,51 @@ After configuration, verify:
 
 - [ ] Container starts successfully: `pct status <container-id>`
 - [ ] GPU devices visible: `pct exec <container-id> -- ls -la /dev/nvidia*`
-- [ ] NVIDIA drivers installed in container: `pct exec <container-id> -- nvidia-smi`
+- [ ] NVIDIA drivers installed: `pct exec <container-id> -- nvidia-smi`
+- [ ] Driver versions match (host vs container): `nvidia-smi | grep "Driver Version"`
+- [ ] `nvtop` works for monitoring: `pct exec <container-id> -- nvtop --version`
 - [ ] CUDA available (if needed): `pct exec <container-id> -- python3 -c "import torch; print(torch.cuda.is_available())"`
 - [ ] Application can use GPU (test your specific workload)
 
 ## Best Practices
 
-1. **Match Driver Versions**: Keep host and container NVIDIA drivers synchronized
+1. **Match Driver Versions**: Container driver MUST exactly match host driver version
+   - Use proprietary NVIDIA installer, not Debian packages
+   - Use `install-nvidia-drivers.sh` script for automated installation
+   
 2. **Backup Configs**: Script automatically creates backups before changes
+
 3. **Test After Changes**: Always verify GPU access after configuration
-4. **Monitor GPU Usage**: Use `nvidia-smi` to monitor GPU utilization
+   - `pct exec <id> -- nvidia-smi` should show GPUs
+   - Driver versions should match: host vs container
+   
+4. **Monitor GPU Usage**: Use `nvtop` or `nvidia-smi` to monitor GPU utilization
+   - `nvtop` - Interactive, user-friendly GPU monitor (installed automatically)
+   - `watch -n 1 nvidia-smi` - Command-line monitoring
+   - Check VRAM usage when sharing GPUs
+   
 5. **Share Carefully**: Multiple containers can share a GPU, but consider VRAM limits
+   - Each container sees the full GPU but shares compute/memory
+   - Monitor for OOM errors when sharing
 
 ## Reference
 
-- Script location: `provision/pct/configure-gpu-passthrough.sh`
+### Scripts
+- GPU passthrough: `provision/pct/configure-gpu-passthrough.sh`
+- Driver installation: `provision/pct/install-nvidia-drivers.sh`
+
+### Configuration Files
 - Container configs: `/etc/pve/lxc/<container-id>.conf`
+- Driver install log: `/var/log/nvidia-installer.log` (in container)
+
+### Device Files
 - Host GPU devices: `/dev/nvidia*`
+- Container GPU devices: `/dev/nvidia*` (bind-mounted from host)
+
+### External Links
+- NVIDIA driver downloads: https://www.nvidia.com/Download/index.aspx
 - NVIDIA driver docs: https://docs.nvidia.com/datacenter/tesla/tesla-installation-notes/
+- NVIDIA container toolkit: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/
 
 ## Related Documentation
 
