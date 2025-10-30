@@ -34,22 +34,33 @@
     state: link
   notify: Reload NGINX
 
-- name: Build subdomain list based on environment
+- name: Build subdomain list based on environment (with env_suffix)
   set_fact:
-    subdomain_placeholders: >-
-      {%- if env_suffix is defined and env_suffix != '' -%}
-      [
-        { 'subdomain': 'agents-{{ env_suffix }}', 'app_name': 'agent-client', 'placeholder_file': 'agents.html' },
-        { 'subdomain': 'docs-{{ env_suffix }}', 'app_name': 'doc-intel', 'placeholder_file': 'docs.html' },
-        { 'subdomain': 'innovation-{{ env_suffix }}', 'app_name': 'innovation', 'placeholder_file': 'innovation.html' }
-      ]
-      {%- else -%}
-      [
-        { 'subdomain': 'agents', 'app_name': 'agent-client', 'placeholder_file': 'agents.html' },
-        { 'subdomain': 'docs', 'app_name': 'doc-intel', 'placeholder_file': 'docs.html' },
-        { 'subdomain': 'innovation', 'app_name': 'innovation', 'placeholder_file': 'innovation.html' }
-      ]
-      {%- endif -%}
+    subdomain_placeholders:
+      - subdomain: "agents-{{ env_suffix }}"
+        app_name: "agent-client"
+        placeholder_file: "agents.html"
+      - subdomain: "docs-{{ env_suffix }}"
+        app_name: "doc-intel"
+        placeholder_file: "docs.html"
+      - subdomain: "innovation-{{ env_suffix }}"
+        app_name: "innovation"
+        placeholder_file: "innovation.html"
+  when: env_suffix is defined and env_suffix != ''
+
+- name: Build subdomain list based on environment (without env_suffix)
+  set_fact:
+    subdomain_placeholders:
+      - subdomain: "agents"
+        app_name: "agent-client"
+        placeholder_file: "agents.html"
+      - subdomain: "docs"
+        app_name: "doc-intel"
+        placeholder_file: "docs.html"
+      - subdomain: "innovation"
+        app_name: "innovation"
+        placeholder_file: "innovation.html"
+  when: env_suffix is not defined or env_suffix == ''
 
 - name: Generate subdomain placeholder vhosts
   template:
