@@ -6,21 +6,23 @@
 # PURPOSE: Add NVIDIA GPU passthrough configuration to LXC containers
 #
 # USAGE:
-#   bash configure-gpu-passthrough.sh <container-id> <gpu-number> [--force]
+#   bash configure-gpu-passthrough.sh <container-id> <gpu-numbers> [--force]
 #
 # EXAMPLES:
 #   # Add GPU 0 to container 208 (ollama)
 #   bash configure-gpu-passthrough.sh 208 0
 #
-#   # Add GPU 1 to container 209 (vLLM)
-#   bash configure-gpu-passthrough.sh 209 1
+#   # Add multiple GPUs to container 209 (vLLM)
+#   bash configure-gpu-passthrough.sh 209 0,1,2
+#
+#   # Add GPU range to container
+#   bash configure-gpu-passthrough.sh 100 0-2  # GPUs 0, 1, and 2
 #
 #   # Force reconfiguration (removes old config first)
-#   bash configure-gpu-passthrough.sh 100 0 --force
+#   bash configure-gpu-passthrough.sh 100 0,1 --force
 #
-#   # Configure multiple containers
+#   # Single GPU to multiple containers (sharing)
 #   bash configure-gpu-passthrough.sh 208 0
-#   bash configure-gpu-passthrough.sh 209 1
 #   bash configure-gpu-passthrough.sh 210 0  # Share GPU 0
 #
 # REQUIREMENTS:
@@ -66,28 +68,35 @@ warn() {
 
 usage() {
     cat <<EOF
-Usage: $0 <container-id> <gpu-number> [--force]
+Usage: $0 <container-id> <gpu-numbers> [--force]
 
 Configure NVIDIA GPU passthrough for an LXC container.
 
 Arguments:
-  container-id  LXC container ID (e.g., 208, 209, 100)
-  gpu-number    GPU device number (0, 1, 2, etc. - check with: nvidia-smi -L)
-  --force       Force reconfiguration (removes old GPU config first)
+  container-id   LXC container ID (e.g., 208, 209, 100)
+  gpu-numbers    GPU device number(s):
+                 - Single GPU: 0
+                 - Multiple GPUs: 0,1,2
+                 - GPU range: 0-2 (expands to 0,1,2)
+                 Check available GPUs: nvidia-smi -L
+  --force        Force reconfiguration (removes old GPU config first)
 
 Examples:
-  # Configure GPU 0 for ollama container
+  # Configure single GPU for container
   $0 208 0
 
-  # Configure GPU 1 for vLLM container
-  $0 209 1
+  # Configure multiple GPUs for container
+  $0 209 0,1,2
 
-  # Share GPU 0 with multiple containers
+  # Configure GPU range
+  $0 100 0-3    # GPUs 0, 1, 2, and 3
+
+  # Share GPU with multiple containers
   $0 208 0
   $0 210 0
 
   # Force reconfiguration
-  $0 208 0 --force
+  $0 208 0,1 --force
 
 After configuration:
   1. Start the container: pct start <container-id>
@@ -107,7 +116,7 @@ if [ $# -lt 2 ]; then
 fi
 
 CONTAINER_ID="$1"
-GPU_NUMBER="$2"
+GPU_SPEC="$2"
 FORCE_MODE=false
 
 if [ "${3:-}" = "--force" ]; then
@@ -120,9 +129,28 @@ if ! [[ "$CONTAINER_ID" =~ ^[0-9]+$ ]]; then
     exit 1
 fi
 
-# Validate GPU number is numeric
-if ! [[ "$GPU_NUMBER" =~ ^[0-9]+$ ]]; then
-    error "GPU number must be numeric: $GPU_NUMBER"
+# Parse GPU specification (supports: 0, 0,1,2, or 0-2)
+GPU_NUMBERS=()
+
+if [[ "$GPU_SPEC" =~ ^[0-9]+-[0-9]+$ ]]; then
+    # Range format: 0-2
+    IFS='-' read -r START END <<< "$GPU_SPEC"
+    for ((i=START; i<=END; i++)); do
+        GPU_NUMBERS+=("$i")
+    done
+    info "Parsed GPU range: ${GPU_NUMBERS[*]}"
+elif [[ "$GPU_SPEC" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+    # Comma-separated format: 0,1,2
+    IFS=',' read -ra GPU_NUMBERS <<< "$GPU_SPEC"
+else
+    error "Invalid GPU specification: $GPU_SPEC"
+    echo "Valid formats: 0 (single), 0,1,2 (multiple), 0-2 (range)"
+    exit 1
+fi
+
+# Validate at least one GPU specified
+if [ ${#GPU_NUMBERS[@]} -eq 0 ]; then
+    error "No GPUs specified"
     exit 1
 fi
 
@@ -130,7 +158,7 @@ echo "=========================================="
 echo "GPU Passthrough Configuration"
 echo "=========================================="
 info "Container: $CONTAINER_ID"
-info "GPU: $GPU_NUMBER"
+info "GPUs: ${GPU_NUMBERS[*]}"
 info "Force mode: $FORCE_MODE"
 echo ""
 
@@ -151,18 +179,22 @@ if ! command -v nvidia-smi &>/dev/null; then
     exit 1
 fi
 
-# Verify GPU exists on host
+# Verify all GPUs exist on host
 info "Checking GPU availability on host..."
-if ! nvidia-smi -L | grep -q "GPU $GPU_NUMBER:"; then
-    error "GPU $GPU_NUMBER not found on host"
-    echo ""
-    echo "Available GPUs:"
-    nvidia-smi -L
-    exit 1
-fi
+for gpu_num in "${GPU_NUMBERS[@]}"; do
+    if ! nvidia-smi -L | grep -q "GPU $gpu_num:"; then
+        error "GPU $gpu_num not found on host"
+        echo ""
+        echo "Available GPUs:"
+        nvidia-smi -L
+        exit 1
+    fi
+done
 
-info "Found GPU $GPU_NUMBER on host:"
-nvidia-smi -L | grep "GPU $GPU_NUMBER:"
+info "Found GPUs on host:"
+for gpu_num in "${GPU_NUMBERS[@]}"; do
+    nvidia-smi -L | grep "GPU $gpu_num:"
+done
 echo ""
 
 # Container config file
@@ -220,14 +252,25 @@ else
 fi
 
 # Add GPU passthrough configuration
-info "Configuring GPU $GPU_NUMBER passthrough for container $CONTAINER_ID..."
+info "Configuring GPU passthrough for container $CONTAINER_ID..."
 
+# Add header comment
 cat >> "$CONF_FILE" << EOF
-# GPU Passthrough: NVIDIA GPU ${GPU_NUMBER}
+# GPU Passthrough: NVIDIA GPUs ${GPU_NUMBERS[*]}
 lxc.cgroup2.devices.allow: c 195:* rwm
 lxc.cgroup2.devices.allow: c 234:* rwm
 lxc.cgroup2.devices.allow: c 508:* rwm
-lxc.mount.entry: /dev/nvidia${GPU_NUMBER} dev/nvidia${GPU_NUMBER} none bind,optional,create=file
+EOF
+
+# Add device mounts for each GPU
+for gpu_num in "${GPU_NUMBERS[@]}"; do
+    cat >> "$CONF_FILE" << EOF
+lxc.mount.entry: /dev/nvidia${gpu_num} dev/nvidia${gpu_num} none bind,optional,create=file
+EOF
+done
+
+# Add common NVIDIA device mounts
+cat >> "$CONF_FILE" << EOF
 lxc.mount.entry: /dev/nvidiactl dev/nvidiactl none bind,optional,create=file
 lxc.mount.entry: /dev/nvidia-modeset dev/nvidia-modeset none bind,optional,create=file
 lxc.mount.entry: /dev/nvidia-uvm dev/nvidia-uvm none bind,optional,create=file
@@ -235,7 +278,7 @@ lxc.mount.entry: /dev/nvidia-uvm-tools dev/nvidia-uvm-tools none bind,optional,c
 lxc.mount.entry: /dev/nvidia-caps dev/nvidia-caps none bind,optional,create=dir
 EOF
 
-success "GPU passthrough configuration added"
+success "GPU passthrough configuration added for GPUs: ${GPU_NUMBERS[*]}"
 
 # Display the configuration
 info "Added configuration:"
@@ -296,10 +339,13 @@ echo ""
 echo "3. Verify GPU is accessible:"
 echo "   nvidia-smi"
 echo ""
-echo "4. If GPU is not visible, check host GPU devices:"
+4. Test with PyTorch (if using ML workloads):"
+echo "   python3 -c 'import torch; print(f\"CUDA available: {torch.cuda.is_available()}\"); print(f\"GPU count: {torch.cuda.device_count()}\")"
+echo ""
+echo "5. If GPUs not visible, check host GPU devices:"
 echo "   ls -la /dev/nvidia*"
 echo ""
-echo "5. View container config:"
+echo "6. View container config:"
 echo "   cat /etc/pve/lxc/${CONTAINER_ID}.conf"
 echo ""
 

@@ -72,25 +72,30 @@ Use the canonical GPU passthrough script: `provision/pct/configure-gpu-passthrou
 ### Basic Usage
 
 ```bash
-# Configure GPU 0 for container 208 (ollama)
+# Configure single GPU for container
 bash provision/pct/configure-gpu-passthrough.sh 208 0
 
-# Configure GPU 1 for container 209 (vLLM)
-bash provision/pct/configure-gpu-passthrough.sh 209 1
+# Configure multiple GPUs for container (comma-separated)
+bash provision/pct/configure-gpu-passthrough.sh 209 0,1,2
 
-# Configure GPU 0 for any container
-bash provision/pct/configure-gpu-passthrough.sh 100 0
+# Configure GPU range for container
+bash provision/pct/configure-gpu-passthrough.sh 100 0-3  # GPUs 0, 1, 2, and 3
 ```
 
 ### Advanced Usage
 
 ```bash
 # Force reconfiguration (removes old GPU config first)
-bash provision/pct/configure-gpu-passthrough.sh 208 0 --force
+bash provision/pct/configure-gpu-passthrough.sh 208 0,1 --force
 
-# Share GPU 0 with multiple containers
+# Share single GPU with multiple containers
 bash provision/pct/configure-gpu-passthrough.sh 208 0  # Ollama
 bash provision/pct/configure-gpu-passthrough.sh 210 0  # Another service
+
+# Configure different GPU combinations
+bash provision/pct/configure-gpu-passthrough.sh 208 0,1    # GPUs 0 and 1
+bash provision/pct/configure-gpu-passthrough.sh 209 2,3    # GPUs 2 and 3
+bash provision/pct/configure-gpu-passthrough.sh 210 0-3    # All 4 GPUs
 ```
 
 ### What the Script Does
@@ -105,12 +110,29 @@ bash provision/pct/configure-gpu-passthrough.sh 210 0  # Another service
 
 The script adds these lines to the container config:
 
+**For single GPU (e.g., GPU 0):**
 ```conf
-# GPU Passthrough: NVIDIA GPU 0
+# GPU Passthrough: NVIDIA GPUs 0
 lxc.cgroup2.devices.allow: c 195:* rwm
 lxc.cgroup2.devices.allow: c 234:* rwm
 lxc.cgroup2.devices.allow: c 508:* rwm
 lxc.mount.entry: /dev/nvidia0 dev/nvidia0 none bind,optional,create=file
+lxc.mount.entry: /dev/nvidiactl dev/nvidiactl none bind,optional,create=file
+lxc.mount.entry: /dev/nvidia-modeset dev/nvidia-modeset none bind,optional,create=file
+lxc.mount.entry: /dev/nvidia-uvm dev/nvidia-uvm none bind,optional,create=file
+lxc.mount.entry: /dev/nvidia-uvm-tools dev/nvidia-uvm-tools none bind,optional,create=file
+lxc.mount.entry: /dev/nvidia-caps dev/nvidia-caps none bind,optional,create=dir
+```
+
+**For multiple GPUs (e.g., GPUs 0, 1, 2):**
+```conf
+# GPU Passthrough: NVIDIA GPUs 0 1 2
+lxc.cgroup2.devices.allow: c 195:* rwm
+lxc.cgroup2.devices.allow: c 234:* rwm
+lxc.cgroup2.devices.allow: c 508:* rwm
+lxc.mount.entry: /dev/nvidia0 dev/nvidia0 none bind,optional,create=file
+lxc.mount.entry: /dev/nvidia1 dev/nvidia1 none bind,optional,create=file
+lxc.mount.entry: /dev/nvidia2 dev/nvidia2 none bind,optional,create=file
 lxc.mount.entry: /dev/nvidiactl dev/nvidiactl none bind,optional,create=file
 lxc.mount.entry: /dev/nvidia-modeset dev/nvidia-modeset none bind,optional,create=file
 lxc.mount.entry: /dev/nvidia-uvm dev/nvidia-uvm none bind,optional,create=file
@@ -138,23 +160,33 @@ nvidia-smi
 
 ### 2. Verify GPU Access
 
-Inside the container, verify the GPU is visible:
+Inside the container, verify the GPUs are visible:
 
 ```bash
 # Check GPU devices
 ls -la /dev/nvidia*
 
-# Should show:
+# For single GPU, should show:
 # /dev/nvidia0
 # /dev/nvidiactl
 # /dev/nvidia-modeset
 # /dev/nvidia-uvm
 # /dev/nvidia-uvm-tools
 
-# Check GPU info
+# For multiple GPUs (e.g., 0,1,2), should show:
+# /dev/nvidia0
+# /dev/nvidia1
+# /dev/nvidia2
+# /dev/nvidiactl
+# ... (common devices)
+
+# Check GPU info and count
 nvidia-smi
 
-# Should show GPU details and memory
+# Should show all configured GPUs with details and memory
+
+# Verify GPU count
+nvidia-smi --list-gpus
 ```
 
 ### 3. Test CUDA (Optional)
@@ -163,9 +195,16 @@ nvidia-smi
 # Install CUDA toolkit if not already installed
 apt install -y nvidia-cuda-toolkit
 
-# Test CUDA
+# Test CUDA availability
 python3 -c "import torch; print(torch.cuda.is_available())"
 # Should output: True
+
+# Check GPU count in PyTorch
+python3 -c "import torch; print(f'GPU count: {torch.cuda.device_count()}')"
+# Should output: GPU count: 3 (if you configured 3 GPUs)
+
+# List all GPUs
+python3 -c "import torch; [print(f'GPU {i}: {torch.cuda.get_device_name(i)}') for i in range(torch.cuda.device_count())]"
 ```
 
 ## Common Scenarios
@@ -180,20 +219,43 @@ bash provision/pct/configure-gpu-passthrough.sh 208 0
 bash provision/pct/configure-gpu-passthrough.sh 209 1
 ```
 
-### Scenario 2: Multiple Containers Share GPU
+### Scenario 2: One Container with Multiple GPUs
 
 ```bash
-# Multiple services share GPU 0
+# vLLM gets all 4 GPUs for distributed inference
+bash provision/pct/configure-gpu-passthrough.sh 209 0,1,2,3
+
+# Or use range notation
+bash provision/pct/configure-gpu-passthrough.sh 209 0-3
+```
+
+### Scenario 3: Multiple Containers Share Single GPU
+
+```bash
+# Multiple services share GPU 0 (good for light workloads)
 bash provision/pct/configure-gpu-passthrough.sh 208 0  # Ollama
 bash provision/pct/configure-gpu-passthrough.sh 210 0  # liteLLM
 bash provision/pct/configure-gpu-passthrough.sh 211 0  # Custom service
 ```
 
-### Scenario 3: Reconfigure GPU Assignment
+### Scenario 4: Split GPUs Between Containers
 
 ```bash
-# Move container from GPU 0 to GPU 1
-bash provision/pct/configure-gpu-passthrough.sh 208 1 --force
+# Container 208 gets GPUs 0 and 1
+bash provision/pct/configure-gpu-passthrough.sh 208 0,1
+
+# Container 209 gets GPUs 2 and 3
+bash provision/pct/configure-gpu-passthrough.sh 209 2,3
+```
+
+### Scenario 5: Reconfigure GPU Assignment
+
+```bash
+# Change from single GPU to multiple GPUs
+bash provision/pct/configure-gpu-passthrough.sh 208 0,1,2 --force
+
+# Move container to different GPUs
+bash provision/pct/configure-gpu-passthrough.sh 208 2-3 --force
 ```
 
 ## Troubleshooting
