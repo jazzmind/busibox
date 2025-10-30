@@ -53,7 +53,7 @@ add_mount() {
     # Check if host path exists
     if [[ ! -d "$host_path" ]]; then
         echo "  ⚠ Host path $host_path does not exist, skipping"
-        echo "    Run: bash scripts/setup-proxmox-host.sh first"
+        echo "    Run: bash provision/pct/setup-proxmox-host.sh first"
         return
     fi
     
