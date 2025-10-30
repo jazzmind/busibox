@@ -96,8 +96,20 @@
 
 - name: Build list of application databases from secrets
   set_fact:
-    app_databases: "{{ secrets.keys() | select('match', '^(agent-server|ai-portal|agent-client|doc-intel|innovation|litellm)$') | map('replace', '-', '_') | list }}"
+    app_databases: []
   when: secrets is defined
+
+- name: Find apps with database_url in secrets
+  set_fact:
+    app_databases: "{{ app_databases + [item.key | replace('-', '_')] }}"
+  loop: "{{ secrets | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: 
+    - secrets is defined
+    - item.value is mapping
+    - item.value.database_url is defined
+  no_log: true
 
 - name: Display databases to be created
   debug:
