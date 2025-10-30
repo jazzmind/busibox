@@ -34,6 +34,23 @@
     state: link
   notify: Reload NGINX
 
+- name: Build subdomain list based on environment
+  set_fact:
+    subdomain_placeholders: >-
+      {%- if env_suffix is defined and env_suffix != '' -%}
+      [
+        { 'subdomain': 'agents-{{ env_suffix }}', 'app_name': 'agent-client', 'placeholder_file': 'agents.html' },
+        { 'subdomain': 'docs-{{ env_suffix }}', 'app_name': 'doc-intel', 'placeholder_file': 'docs.html' },
+        { 'subdomain': 'innovation-{{ env_suffix }}', 'app_name': 'innovation', 'placeholder_file': 'innovation.html' }
+      ]
+      {%- else -%}
+      [
+        { 'subdomain': 'agents', 'app_name': 'agent-client', 'placeholder_file': 'agents.html' },
+        { 'subdomain': 'docs', 'app_name': 'doc-intel', 'placeholder_file': 'docs.html' },
+        { 'subdomain': 'innovation', 'app_name': 'innovation', 'placeholder_file': 'innovation.html' }
+      ]
+      {%- endif -%}
+
 - name: Generate subdomain placeholder vhosts
   template:
     src: vhost-placeholder-subdomain.conf.j2
@@ -43,10 +60,7 @@
     subdomain: "{{ item.subdomain }}"
     app_name: "{{ item.app_name }}"
     placeholder_file: "{{ item.placeholder_file }}"
-  loop:
-    - { subdomain: "agents", app_name: "agent-client", placeholder_file: "agents.html" }
-    - { subdomain: "docs", app_name: "doc-intel", placeholder_file: "docs.html" }
-    - { subdomain: "innovation", app_name: "innovation", placeholder_file: "innovation.html" }
+  loop: "{{ subdomain_placeholders }}"
   notify: Reload NGINX
 
 - name: Enable subdomain placeholder vhosts
@@ -54,10 +68,7 @@
     src: "/etc/nginx/sites-available/placeholder-{{ item.subdomain }}.conf"
     dest: "/etc/nginx/sites-enabled/placeholder-{{ item.subdomain }}.conf"
     state: link
-  loop:
-    - { subdomain: "agents", app_name: "agent-client", placeholder_file: "agents.html" }
-    - { subdomain: "docs", app_name: "doc-intel", placeholder_file: "docs.html" }
-    - { subdomain: "innovation", app_name: "innovation", placeholder_file: "innovation.html" }
+  loop: "{{ subdomain_placeholders }}"
   notify: Reload NGINX
 
 - name: Enable HTTP to HTTPS redirect
@@ -88,14 +99,16 @@
         https://{{ full_domain }}/innovation
       
       Subdomains:
-        https://agents.{{ full_domain }}
-        https://docs.{{ full_domain }}
-        https://innovation.{{ full_domain }}
+      {% for item in subdomain_placeholders %}
+        https://{{ item.subdomain }}.{{ domain }}
+      {% endfor %}
       
       All routes serve placeholder pages from /var/www/placeholder
       SSL Mode: {{ detected_ssl_mode }}
       
       Test with:
         curl -k https://{{ full_domain }}
-        curl -k https://agents.{{ full_domain }}
+      {% for item in subdomain_placeholders %}
+        curl -k https://{{ item.subdomain }}.{{ domain }}
+      {% endfor %}
 
