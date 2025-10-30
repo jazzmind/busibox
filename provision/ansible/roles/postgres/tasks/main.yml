@@ -97,15 +97,18 @@
 - name: Debug - Show vault structure
   debug:
     msg: "Vault loaded. Top-level keys: {{ hostvars[inventory_hostname].keys() | select('match', '^(secrets|network_base|base_domain)') | list }}"
+  tags: [postgres]
 
 - name: Debug - Show secrets keys
   debug:
     msg: "Secrets keys available: {{ secrets.keys() | list }}"
   when: secrets is defined
+  tags: [postgres]
 
 - name: Build list of application databases from secrets
   set_fact:
     app_databases: []
+  tags: [postgres]
 
 - name: Debug - Check each secret entry
   debug:
@@ -114,6 +117,7 @@
   loop_control:
     label: "{{ item.key }}"
   when: secrets is defined
+  tags: [postgres]
 
 - name: Find apps with database_url in secrets
   set_fact:
@@ -125,10 +129,12 @@
     - secrets is defined
     - item.value is mapping
     - item.value.database_url is defined
+  tags: [postgres]
 
 - name: Display databases to be created
   debug:
     msg: "Will create databases: {{ app_databases | default([]) }}"
+  tags: [postgres]
 
 - name: Create application-specific databases
   become_user: postgres
