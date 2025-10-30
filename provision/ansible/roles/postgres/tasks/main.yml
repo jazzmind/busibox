@@ -94,6 +94,10 @@
   no_log: true
   tags: [postgres, secrets]
 
+- name: Debug - Show vault structure
+  debug:
+    msg: "Vault loaded. Top-level keys: {{ hostvars[inventory_hostname].keys() | select('match', '^(secrets|network_base|base_domain)') | list }}"
+
 - name: Debug - Show secrets keys
   debug:
     msg: "Secrets keys available: {{ secrets.keys() | list }}"
@@ -102,7 +106,6 @@
 - name: Build list of application databases from secrets
   set_fact:
     app_databases: []
-  when: secrets is defined
 
 - name: Debug - Check each secret entry
   debug:
