@@ -190,6 +190,15 @@ import sys
 import yaml
 from pathlib import Path
 
+# Custom representer for multi-line strings to use literal block style
+def str_representer(dumper, data):
+    if '\n' in data:
+        # Use literal block style (|) for multi-line strings
+        return dumper.represent_scalar('tag:yaml.org,2002:str', data, style='|')
+    return dumper.represent_scalar('tag:yaml.org,2002:str', data)
+
+yaml.add_representer(str, str_representer)
+
 def merge_ssl_certs(vault_file, cert_content, key_content, chain_content, has_chain):
     """Merge SSL certificates into existing vault YAML"""
     
@@ -200,6 +209,12 @@ def merge_ssl_certs(vault_file, cert_content, key_content, chain_content, has_ch
     # Ensure secrets key exists
     if 'secrets' not in vault_data:
         vault_data['secrets'] = {}
+    
+    # Ensure certificate content ends with newline (standard PEM format)
+    cert_content = cert_content.rstrip() + '\n'
+    key_content = key_content.rstrip() + '\n'
+    if chain_content:
+        chain_content = chain_content.rstrip() + '\n'
     
     # Create or update ssl_certificates section
     vault_data['secrets']['ssl_certificates'] = {
@@ -220,8 +235,8 @@ def merge_ssl_certs(vault_file, cert_content, key_content, chain_content, has_ch
         f.write('# SSL certificates updated by upload-ssl-cert.sh\n')
         f.write('\n')
         
-        # Write YAML data
-        yaml.dump(vault_data, f, default_flow_style=False, sort_keys=False, width=120)
+        # Write YAML data with custom formatting
+        yaml.dump(vault_data, f, default_flow_style=False, sort_keys=False, width=120, allow_unicode=True)
     
     return True
 
