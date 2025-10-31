@@ -16,7 +16,8 @@ EnvironmentFile=/etc/default/litellm
 ExecStart={{ litellm_venv_dir }}/bin/litellm \
   --config {{ litellm_config_dir }}/config.yaml \
   --port {{ litellm_port }} \
-  --host {{ litellm_host }}
+  --host {{ litellm_host }}{% if litellm_enable_database %} \
+  --create_tables{% endif %}
 
 # Restart configuration
 Restart={{ 'always' if litellm_restart_on_failure else 'no' }}
