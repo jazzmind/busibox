@@ -38,20 +38,6 @@
     daemon_reload: yes
   tags: [litellm_configure]
 
-- name: Initialize LiteLLM database schema
-  shell: |
-    source {{ litellm_venv_dir }}/bin/activate
-    export DATABASE_URL="{{ litellm_database_url }}"
-    export LITELLM_MASTER_KEY="{{ litellm_master_key }}"
-    cd {{ litellm_home }}
-    # LiteLLM will auto-create tables on first run, this just ensures DB exists
-    python3 -c "from litellm.proxy.utils import PrismaClient; import asyncio; pc = PrismaClient(database_url='{{ litellm_database_url }}', proxy_logging_obj=None); asyncio.run(pc.connect()); print('Database connected'); asyncio.run(pc.disconnect())"
-  become: yes
-  become_user: "{{ litellm_user }}"
-  when: litellm_enable_database
-  ignore_errors: yes
-  tags: [litellm_configure]
-
 - name: Enable LiteLLM service
   systemd:
     name: litellm

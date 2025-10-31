@@ -94,15 +94,29 @@
 
 - name: Generate Prisma binaries for LiteLLM database support
   shell: |
-    cd {{ litellm_venv_dir }}/lib/python{{ litellm_python_version }}/site-packages/litellm/proxy
-    {{ litellm_venv_dir }}/bin/python -m prisma generate
-  become: true
-  become_user: "{{ litellm_user }}"
+    set -e
+    source {{ litellm_venv_dir }}/bin/activate
+    export DATABASE_URL="{{ litellm_database_url }}"
+    
+    # Navigate to the correct directory where Prisma schema is located
+    PRISMA_DIR=$(python -c "import os, litellm; print(os.path.dirname(litellm.__file__))")/proxy
+    
+    echo "Prisma schema directory: $PRISMA_DIR"
+    cd "$PRISMA_DIR"
+    
+    # Generate Prisma client
+    echo "Running prisma generate..."
+    prisma generate
+    
+    # Push schema to database
+    echo "Running prisma db push..."
+    prisma db push --accept-data-loss
   args:
     executable: /bin/bash
+  become: yes
+  become_user: "{{ litellm_user }}"
+  when: litellm_enable_database
   tags: [litellm_install]
-  register: prisma_generate_result
-  failed_when: false  # Don't fail if this doesn't work - LiteLLM may handle it
 
 - name: Verify LiteLLM installation
   shell: |
