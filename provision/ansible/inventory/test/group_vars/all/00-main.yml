@@ -92,7 +92,7 @@ ollama_initial_models:
 vllm_default_model: "meta-llama/Meta-Llama-3-8B-Instruct"
 
 # LiteLLM Database Configuration
-litellm_enable_database: false  # Disabled until Prisma issues resolved
+litellm_enable_database: true
 
 # ============================================================================
 # Deployment Configuration

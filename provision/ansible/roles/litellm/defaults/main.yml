@@ -23,7 +23,7 @@ litellm_host: "0.0.0.0"
 litellm_port: 4000
 
 # Master Key (should be overridden with vault)
-litellm_master_key: "sk-litellm-master-key-change-me"
+litellm_master_key: "{{ secrets.litellm.master_key | default('sk-litellm-master-key-change-me') }}"
 
 # Backend Configuration
 litellm_backends:
@@ -79,8 +79,8 @@ litellm_memory_limit: "4G"
 litellm_cpu_limit: "2"
 
 # Database (optional - for cost tracking, caching)
-litellm_enable_database: false
-litellm_database_url: "sqlite:///{{ litellm_home }}/litellm.db"
+litellm_enable_database: true
+litellm_database_url: "{{ secrets.litellm.database_url | default('sqlite:///{{ litellm_home }}/litellm.db') }}"
 
 # Proxy Features
 litellm_enable_swagger: true

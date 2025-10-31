@@ -32,6 +32,9 @@ general_settings:
   master_key: "{{ litellm_master_key }}"
 {% if litellm_enable_database %}
   database_url: "{{ litellm_database_url }}"
+  store_model_in_db: true
+  # Enable usage tracking and cost tracking
+  track_cost_callback: true
 {% endif %}
   # Allow unauthenticated access to health endpoint for monitoring
   public_routes: ["/health", "/health/readiness", "/health/liveliness"]
