@@ -59,8 +59,8 @@ add_mount() {
         return
     fi
     
-    # Add mount point
-    echo "mp${mp_num}: ${host_path},mp=${container_path}" >> "$config_file"
+    # Add mount point with proper options
+    echo "mp${mp_num}: ${host_path},mp=${container_path},backup=0,replicate=0" >> "$config_file"
     echo "  ✓ Added bind mount to container $ctid:"
     echo "    Host: ${host_path} -> Container: ${container_path}"
 }
