@@ -12,13 +12,13 @@ echo "=========================================="
 echo ""
 
 # Stop LiteLLM service
-echo "[1/6] Stopping LiteLLM service..."
+echo "[1/7] Stopping LiteLLM service..."
 systemctl stop litellm
 echo "  ✓ Service stopped"
 echo ""
 
 # Activate venv
-echo "[2/6] Activating virtual environment..."
+echo "[2/7] Activating virtual environment..."
 source /opt/litellm/venv/bin/activate
 export DATABASE_URL=$(grep '^DATABASE_URL=' /etc/default/litellm | cut -d'=' -f2-)
 echo "  ✓ Venv activated"
@@ -29,25 +29,31 @@ SCHEMA_DIR=$(python -c "import os, litellm; print(os.path.dirname(litellm.__file
 SCHEMA_FILE="$SCHEMA_DIR/schema.prisma"
 SITE_PACKAGES=$(python -c "import site; print(site.getsitepackages()[0])")
 
-echo "[3/6] Schema location: $SCHEMA_DIR"
+echo "[3/7] Schema location: $SCHEMA_DIR"
 echo ""
 
 # Remove old generated client
-echo "[4/6] Removing old generated client..."
+echo "[4/7] Removing old generated client..."
 rm -rf "$SITE_PACKAGES/prisma"
 rm -rf "$SCHEMA_DIR/.prisma"
 echo "  ✓ Old client removed"
 echo ""
 
+# Reinstall prisma package
+echo "[5/7] Reinstalling Prisma package..."
+pip install --force-reinstall --no-cache-dir prisma
+echo "  ✓ Prisma reinstalled"
+echo ""
+
 # Generate new client
-echo "[5/6] Generating new Prisma client..."
+echo "[6/7] Generating new Prisma client..."
 cd "$SCHEMA_DIR"
 prisma generate --schema="$SCHEMA_FILE"
 echo "  ✓ New client generated"
 echo ""
 
 # Verify generation
-echo "[6/6] Verifying generation..."
+echo "[7/7] Verifying generation..."
 if [ -d "$SITE_PACKAGES/prisma" ]; then
     echo "  ✓ Generated client found at: $SITE_PACKAGES/prisma"
     echo ""
