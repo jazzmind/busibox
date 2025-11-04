@@ -51,17 +51,13 @@ litellm_models:
   #     api_base: "http://{{ ollama_ip }}:{{ ollama_port }}"
   
   # vLLM models (active)
-  - model_name: "qwen-0.5b"
+  - model_name: "qwen3-vl-8b"
     litellm_params:
-      model: "openai/Qwen/Qwen2.5-0.5B-Instruct"
+      model: "openai/Qwen/Qwen3-VL-8B-Instruct"
       api_base: "http://{{ vllm_ip }}:{{ vllm_port }}/v1"
-  - model_name: "qwen-3b"
+  - model_name: "phi-4-multimodal"
     litellm_params:
-      model: "openai/Qwen/Qwen2.5-3B-Instruct"
-      api_base: "http://{{ vllm_ip }}:{{ vllm_port }}/v1"
-  - model_name: "glm-4-9b"
-    litellm_params:
-      model: "openai/THUDM/glm-4-9b-chat"
+      model: "openai/microsoft/Phi-4-multimodal-instruct"
       api_base: "http://{{ vllm_ip }}:{{ vllm_port }}/v1"
 
 # Router Settings
