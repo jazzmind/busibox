@@ -172,8 +172,8 @@ UDEV_EOF
         echo "⚠ Skipping NVIDIA driver installation"
         echo "  Note: GPU passthrough to LXC containers requires NVIDIA drivers on host"
     fi
-else
-    # Drivers already installed, check if udev rule exists
+    
+    # Check if udev rule exists
     if [[ ! -f /etc/udev/rules.d/70-nvidia-caps.rules ]]; then
         echo "  Creating udev rule for NVIDIA capability devices..."
         cat > /etc/udev/rules.d/70-nvidia-caps.rules << 'UDEV_EOF'
