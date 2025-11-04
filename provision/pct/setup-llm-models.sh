@@ -35,6 +35,7 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # Host directory for shared model cache
 HUGGINGFACE_CACHE="/var/lib/huggingface-cache"
+VENV_DIR="/opt/model-downloader"
 
 # Models to pre-download
 MODELS=(
@@ -54,21 +55,34 @@ mkdir -p "${HUGGINGFACE_CACHE}"
 log_success "Directory created: ${HUGGINGFACE_CACHE}"
 echo ""
 
-# Step 2: Install HuggingFace CLI if needed
-log_info "Step 2: Installing HuggingFace CLI..."
-if ! python3 -c "import huggingface_hub" 2>/dev/null; then
-    log_info "Installing Python dependencies..."
+# Step 2: Set up Python virtual environment
+log_info "Step 2: Setting up Python virtual environment..."
+if [ ! -d "${VENV_DIR}" ]; then
+    log_info "Installing Python venv support..."
     apt-get update -qq
-    apt-get install -y python3-pip &>/dev/null
-    pip3 install -q huggingface-hub
+    apt-get install -y python3-venv python3-pip &>/dev/null
+    
+    log_info "Creating virtual environment at ${VENV_DIR}..."
+    python3 -m venv "${VENV_DIR}"
+    log_success "Virtual environment created"
+else
+    log_success "Virtual environment already exists"
+fi
+echo ""
+
+# Step 3: Install HuggingFace CLI in venv
+log_info "Step 3: Installing HuggingFace CLI..."
+if ! "${VENV_DIR}/bin/python3" -c "import huggingface_hub" 2>/dev/null; then
+    log_info "Installing huggingface-hub in virtual environment..."
+    "${VENV_DIR}/bin/pip" install -q huggingface-hub
     log_success "HuggingFace CLI installed"
 else
     log_success "HuggingFace CLI already installed"
 fi
 echo ""
 
-# Step 3: Download models
-log_info "Step 3: Downloading models..."
+# Step 4: Download models
+log_info "Step 4: Downloading models..."
 echo ""
 
 for MODEL in "${MODELS[@]}"; do
@@ -81,7 +95,7 @@ for MODEL in "${MODELS[@]}"; do
         log_info "↓ Downloading ${MODEL}..."
         log_info "  This may take 10-30 minutes depending on model size..."
         
-        HF_HOME="${HUGGINGFACE_CACHE}" python3 << EOF
+        HF_HOME="${HUGGINGFACE_CACHE}" "${VENV_DIR}/bin/python3" << EOF
 from huggingface_hub import snapshot_download
 try:
     snapshot_download('${MODEL}', resume_download=True)
@@ -100,8 +114,8 @@ EOF
 done
 echo ""
 
-# Step 4: Show model sizes
-log_info "Step 4: Model storage summary..."
+# Step 5: Show model sizes
+log_info "Step 5: Model storage summary..."
 echo ""
 du -sh "${HUGGINGFACE_CACHE}" 2>/dev/null | awk '{print "  Total cache size: " $1}'
 echo ""
