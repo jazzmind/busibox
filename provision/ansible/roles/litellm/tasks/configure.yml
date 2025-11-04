@@ -28,7 +28,7 @@
     src: litellm.env.j2
     dest: /etc/default/litellm
     owner: root
-    group: root
+    group: "{{ litellm_group }}"
     mode: '0640'
   notify: restart litellm
   tags: [litellm_configure]
