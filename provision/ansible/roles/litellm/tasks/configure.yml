@@ -78,6 +78,24 @@
     mode: '0755'
   tags: [litellm_configure]
 
+- name: Deploy schema inspection script
+  copy:
+    src: inspect-schema.sh
+    dest: /usr/local/bin/inspect-schema
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [litellm_configure]
+
+- name: Deploy schema relation fix script
+  copy:
+    src: fix-schema-relation.sh
+    dest: /usr/local/bin/fix-schema-relation
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [litellm_configure]
+
 - name: Ensure systemd is reloaded
   systemd:
     daemon_reload: yes
