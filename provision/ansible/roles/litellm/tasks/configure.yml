@@ -51,6 +51,15 @@
     mode: '0755'
   tags: [litellm_configure]
 
+- name: Deploy LiteLLM database test script
+  copy:
+    src: test-litellm-db.sh
+    dest: /usr/local/bin/test-litellm-db
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [litellm_configure]
+
 - name: Ensure systemd is reloaded
   systemd:
     daemon_reload: yes

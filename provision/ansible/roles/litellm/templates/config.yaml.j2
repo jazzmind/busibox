@@ -36,12 +36,10 @@ general_settings:
   ui_access_mode: admin_only
 {% endif %}
 {% if litellm_enable_database %}
-  # Database configuration (optional - for logging/analytics)
+  # Database configuration - full functionality enabled
   database_url: "{{ litellm_database_url }}"
   store_model_in_db: false  # Store models in config, not DB
   database_connection_pool_limit: 10
   database_connection_timeout: 10
-  # Disable automatic spend tracking (causes Prisma errors)
-  disable_spend_logs: true
 {% endif %}
 
