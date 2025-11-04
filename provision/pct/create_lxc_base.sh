@@ -80,6 +80,35 @@ create_ct () {
   echo "    Successfully created and started $NAME"
 }
 
+# Add data mount to container (automatically adds persistent storage bind mounts)
+add_data_mount() {
+  local CTID=$1
+  local HOST_PATH=$2
+  local CONTAINER_PATH=$3
+  local MP_NUM="${4:-0}"
+  
+  local CONFIG_FILE="/etc/pve/lxc/${CTID}.conf"
+  
+  # Check if mount already exists
+  if grep -q "mp${MP_NUM}:" "$CONFIG_FILE"; then
+    echo "    Data mount already configured (mp${MP_NUM})"
+    return 0
+  fi
+  
+  # Check if host path exists
+  if [[ ! -d "$HOST_PATH" ]]; then
+    echo "    WARNING: Host path $HOST_PATH does not exist"
+    echo "    Run: bash provision/pct/setup-proxmox-host.sh first"
+    return 1
+  fi
+  
+  # Add mount point with proper options
+  echo "mp${MP_NUM}: ${HOST_PATH},mp=${CONTAINER_PATH},backup=0,replicate=0" >> "$CONFIG_FILE"
+  echo "    Added data mount: ${HOST_PATH} -> ${CONTAINER_PATH}"
+  
+  return 0
+}
+
 # Apply name prefix for test mode
 PREFIX=""
 if [[ "$MODE" == "test" ]]; then
@@ -119,12 +148,15 @@ if [[ "$MODE" == "test" ]]; then
   
   create_ct "$CT_PG_TEST"     "$IP_PG_TEST"     "${PREFIX}pg-lxc"     unpriv || cleanup_on_error
   CREATED_CONTAINERS+=("$CT_PG_TEST")
+  add_data_mount "$CT_PG_TEST" "/var/lib/data/postgres" "/var/lib/postgresql/data" "0"
   
   create_ct "$CT_MILVUS_TEST" "$IP_MILVUS_TEST" "${PREFIX}milvus-lxc" priv || cleanup_on_error
   CREATED_CONTAINERS+=("$CT_MILVUS_TEST")
+  add_data_mount "$CT_MILVUS_TEST" "/var/lib/data/milvus" "/srv/milvus/data" "0"
     
   create_ct "$CT_FILES_TEST"  "$IP_FILES_TEST"  "${PREFIX}files-lxc"  priv || cleanup_on_error
   CREATED_CONTAINERS+=("$CT_FILES_TEST")
+  add_data_mount "$CT_FILES_TEST" "/var/lib/data/minio" "/srv/minio/data" "0"
   
   create_ct "$CT_INGEST_TEST" "$IP_INGEST_TEST" "${PREFIX}ingest-lxc" unpriv || cleanup_on_error
   CREATED_CONTAINERS+=("$CT_INGEST_TEST")
@@ -134,9 +166,11 @@ if [[ "$MODE" == "test" ]]; then
   
   create_ct "$CT_OLLAMA_TEST" "$IP_OLLAMA_TEST" "${PREFIX}ollama-lxc" priv || cleanup_on_error
   CREATED_CONTAINERS+=("$CT_OLLAMA_TEST")
+  add_data_mount "$CT_OLLAMA_TEST" "/var/lib/llm-models/ollama" "/var/lib/llm-models/ollama" "0"
   
   create_ct "$CT_VLLM_TEST" "$IP_VLLM_TEST" "${PREFIX}vllm-lxc" priv 40 || cleanup_on_error
   CREATED_CONTAINERS+=("$CT_VLLM_TEST")
+  add_data_mount "$CT_VLLM_TEST" "/var/lib/llm-models/huggingface" "/var/lib/llm-models/huggingface" "0"
 
 else
   create_ct "$CT_PROXY" "$IP_PROXY" proxy-lxc unpriv || cleanup_on_error
@@ -150,12 +184,15 @@ else
   
   create_ct "$CT_PG"     "$IP_PG"     pg-lxc     unpriv || cleanup_on_error
   CREATED_CONTAINERS+=("$CT_PG")
+  add_data_mount "$CT_PG" "/var/lib/data/postgres" "/var/lib/postgresql/data" "0"
   
   create_ct "$CT_MILVUS" "$IP_MILVUS" milvus-lxc priv || cleanup_on_error
   CREATED_CONTAINERS+=("$CT_MILVUS")
+  add_data_mount "$CT_MILVUS" "/var/lib/data/milvus" "/srv/milvus/data" "0"
   
   create_ct "$CT_FILES"  "$IP_FILES"  files-lxc  priv || cleanup_on_error
   CREATED_CONTAINERS+=("$CT_FILES")
+  add_data_mount "$CT_FILES" "/var/lib/data/minio" "/srv/minio/data" "0"
   
   create_ct "$CT_INGEST" "$IP_INGEST" ingest-lxc unpriv || cleanup_on_error
   CREATED_CONTAINERS+=("$CT_INGEST")
@@ -165,9 +202,11 @@ else
   
   create_ct "$CT_OLLAMA" "$IP_OLLAMA" ollama-lxc priv || cleanup_on_error
   CREATED_CONTAINERS+=("$CT_OLLAMA")
+  add_data_mount "$CT_OLLAMA" "/var/lib/llm-models/ollama" "/var/lib/llm-models/ollama" "0"
   
   create_ct "$CT_VLLM" "$IP_VLLM" vllm-lxc priv 40 || cleanup_on_error
   CREATED_CONTAINERS+=("$CT_VLLM")
+  add_data_mount "$CT_VLLM" "/var/lib/llm-models/huggingface" "/var/lib/llm-models/huggingface" "0"
 
 fi
 

@@ -3,6 +3,12 @@
 # Add bind mounts for persistent data storage to LXC containers
 # This script adds mount points for ZFS datasets created by setup-proxmox-host.sh
 #
+# NOTE: As of 2025-11-04, data mounts are automatically added during container
+# creation by create_lxc_base.sh. This script is kept for:
+# - Manual mount management
+# - Debugging mount issues
+# - Adding mounts to existing containers created before automation
+#
 # Usage:
 #   bash add-data-mounts.sh [test|production]
 #
