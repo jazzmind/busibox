@@ -86,19 +86,10 @@
       - pyyaml
       - python-dotenv
       - psycopg2-binary  # PostgreSQL adapter
+      - prisma  # Database ORM for LiteLLM
     virtualenv: "{{ litellm_venv_dir }}"
   become: true
   become_user: "{{ litellm_user }}"
-  tags: [litellm_install]
-
-- name: Install Prisma (force reinstall to ensure binaries)
-  pip:
-    name: prisma
-    state: forcereinstall
-    virtualenv: "{{ litellm_venv_dir }}"
-  become: true
-  become_user: "{{ litellm_user }}"
-  when: litellm_enable_database
   tags: [litellm_install]
 
 - name: Generate Prisma binaries for LiteLLM database support
