@@ -90,7 +90,7 @@ ollama_initial_models:
 
 # vLLM Model Configuration (TEST)
 # Use model pre-cached by setup-llm-models.sh
-vllm_default_model: "Qwen/Qwen3-VL-8B-Instruct"
+vllm_default_model: "microsoft/Phi-4-multimodal-instruct"
 
 # LiteLLM Database Configuration
 litellm_enable_database: true

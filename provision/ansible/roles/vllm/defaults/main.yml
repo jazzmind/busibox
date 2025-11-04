@@ -26,12 +26,12 @@ vllm_port: 8000
 
 # Model Configuration
 # Default model should match one pre-cached by setup-llm-models.sh
-vllm_default_model: "Qwen/Qwen3-VL-8B-Instruct"  # Vision-language model (8B parameters)
+vllm_default_model: "microsoft/Phi-4-multimodal-instruct"  # Multimodal model (6B parameters)
 vllm_download_dir: "{{ vllm_cache_dir }}/hub"
 vllm_tensor_parallel_size: 1  # Number of GPUs to use for tensor parallelism
 vllm_gpu_memory_utilization: 0.9  # 90% of GPU memory
 vllm_max_model_len: 4096  # Max sequence length
-vllm_trust_remote_code: true  # Required for Qwen3-VL
+vllm_trust_remote_code: true  # Required for Phi-4
 
 # HuggingFace Configuration
 vllm_hf_token: ""  # Set via secrets or environment for gated models
