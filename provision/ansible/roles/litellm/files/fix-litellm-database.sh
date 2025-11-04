@@ -41,7 +41,25 @@ echo ""
 # Load environment
 if [ -f /etc/default/litellm ]; then
     log_info "Loading environment from /etc/default/litellm"
+    
+    # Check if we have read permission
+    if [ ! -r /etc/default/litellm ]; then
+        log_error "Cannot read /etc/default/litellm (permission denied)"
+        log_info "File permissions:"
+        ls -la /etc/default/litellm
+        exit 1
+    fi
+    
+    # Source with set +e to catch errors
+    set +e
     source /etc/default/litellm
+    SOURCE_EXIT=$?
+    set -e
+    
+    if [ $SOURCE_EXIT -ne 0 ]; then
+        log_error "Failed to source /etc/default/litellm (exit code: $SOURCE_EXIT)"
+        exit 1
+    fi
 else
     log_error "/etc/default/litellm not found"
     exit 1
@@ -49,11 +67,14 @@ fi
 
 # Check DATABASE_URL
 if [ -z "${DATABASE_URL:-}" ]; then
-    log_error "DATABASE_URL not set"
+    log_error "DATABASE_URL not set after sourcing /etc/default/litellm"
+    log_info "Available environment variables:"
+    env | grep -i database || echo "  No DATABASE variables found"
     exit 1
 fi
 
 log_info "Database URL: ${DATABASE_URL%%@*}@***" # Hide password
+log_success "Environment loaded successfully"
 echo ""
 
 # Activate venv
@@ -89,6 +110,7 @@ fi
 
 # Step 2: Generate Prisma client
 log_info "Step 2: Generating Prisma client"
+export DATABASE_URL
 prisma generate 2>&1 | tee /tmp/prisma-generate.log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
@@ -140,6 +162,7 @@ echo ""
 
 # Step 5: Push fresh schema to database
 log_info "Step 5: Creating fresh database schema"
+export DATABASE_URL
 prisma db push --accept-data-loss --skip-generate 2>&1 | tee /tmp/prisma-push.log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
