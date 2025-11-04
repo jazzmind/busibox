@@ -50,14 +50,14 @@ litellm_models:
   #     model: "ollama/gemma:2b"
   #     api_base: "http://{{ ollama_ip }}:{{ ollama_port }}"
   
-  # vLLM models (active)
-  - model_name: "qwen3-vl-8b"
-    litellm_params:
-      model: "openai/Qwen/Qwen3-VL-8B-Instruct"
-      api_base: "http://{{ vllm_ip }}:{{ vllm_port }}/v1"
+  # vLLM models (active) - Phi-4 is primary, Qwen3 is secondary
   - model_name: "phi-4-multimodal"
     litellm_params:
       model: "openai/microsoft/Phi-4-multimodal-instruct"
+      api_base: "http://{{ vllm_ip }}:{{ vllm_port }}/v1"
+  - model_name: "qwen3-vl-8b"
+    litellm_params:
+      model: "openai/Qwen/Qwen3-VL-8B-Instruct"
       api_base: "http://{{ vllm_ip }}:{{ vllm_port }}/v1"
 
 # Router Settings
