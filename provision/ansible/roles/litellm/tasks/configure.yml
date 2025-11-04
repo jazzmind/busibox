@@ -42,10 +42,10 @@
     mode: '0755'
   tags: [litellm_configure]
 
-- name: Deploy LiteLLM database fix script
+- name: Deploy LiteLLM schema update script (non-destructive)
   copy:
-    src: fix-litellm-database.sh
-    dest: /usr/local/bin/fix-litellm-database
+    src: update-litellm-schema.sh
+    dest: /usr/local/bin/update-litellm-schema
     owner: root
     group: root
     mode: '0755'
@@ -65,7 +65,7 @@
     daemon_reload: yes
   tags: [litellm_configure]
 
-- name: Update Prisma schema in database
+- name: Update Prisma schema in database (non-destructive)
   shell: |
     set -e
     source {{ litellm_venv_dir }}/bin/activate
@@ -75,12 +75,12 @@
     PRISMA_DIR=$(python -c "import os, litellm; print(os.path.dirname(litellm.__file__))")/proxy
     cd "$PRISMA_DIR"
     
-    # Regenerate Prisma client and push schema
+    # Regenerate Prisma client and push schema (non-destructive)
     echo "Regenerating Prisma client..."
     prisma generate
     
-    echo "Updating database schema..."
-    prisma db push --accept-data-loss --skip-generate
+    echo "Updating database schema (preserves existing data)..."
+    prisma db push --skip-generate
   args:
     executable: /bin/bash
   become: yes
