@@ -60,12 +60,58 @@
     mode: '0755'
   tags: [litellm_configure]
 
+- name: Deploy Prisma diagnostic script
+  copy:
+    src: check-prisma.sh
+    dest: /usr/local/bin/check-prisma
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [litellm_configure]
+
 - name: Ensure systemd is reloaded
   systemd:
     daemon_reload: yes
   tags: [litellm_configure]
 
-- name: Update Prisma schema in database (non-destructive)
+- name: Generate Prisma client for LiteLLM
+  shell: |
+    set -e
+    source {{ litellm_venv_dir }}/bin/activate
+    export DATABASE_URL="{{ litellm_database_url }}"
+    
+    # Navigate to LiteLLM proxy directory
+    PRISMA_DIR=$(python -c "import os, litellm; print(os.path.dirname(litellm.__file__))")/proxy
+    echo "Prisma directory: $PRISMA_DIR"
+    cd "$PRISMA_DIR"
+    
+    # Generate Prisma client
+    echo "Generating Prisma client..."
+    prisma generate
+    
+    # Verify generation succeeded
+    if [ ! -d ".prisma" ]; then
+      echo "ERROR: Prisma client generation failed - .prisma directory not created"
+      exit 1
+    fi
+    
+    echo "Prisma client generated successfully"
+    ls -la .prisma/
+  args:
+    executable: /bin/bash
+  become: yes
+  become_user: "{{ litellm_user }}"
+  when: litellm_enable_database
+  register: prisma_generate_result
+  tags: [litellm_configure, litellm_db]
+
+- name: Display Prisma generate output
+  debug:
+    var: prisma_generate_result.stdout_lines
+  when: litellm_enable_database and prisma_generate_result is defined
+  tags: [litellm_configure, litellm_db]
+
+- name: Push Prisma schema to database (non-destructive)
   shell: |
     set -e
     source {{ litellm_venv_dir }}/bin/activate
@@ -75,12 +121,11 @@
     PRISMA_DIR=$(python -c "import os, litellm; print(os.path.dirname(litellm.__file__))")/proxy
     cd "$PRISMA_DIR"
     
-    # Regenerate Prisma client and push schema (non-destructive)
-    echo "Regenerating Prisma client..."
-    prisma generate
-    
-    echo "Updating database schema (preserves existing data)..."
+    # Push schema to database (preserves existing data)
+    echo "Updating database schema (non-destructive)..."
     prisma db push --skip-generate
+    
+    echo "Database schema updated successfully"
   args:
     executable: /bin/bash
   become: yes
