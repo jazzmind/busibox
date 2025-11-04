@@ -29,8 +29,9 @@ vllm_port: 8000
 vllm_default_model: "microsoft/Phi-4-multimodal-instruct"  # Multimodal model (6B parameters)
 vllm_download_dir: "{{ vllm_cache_dir }}/hub"
 vllm_tensor_parallel_size: 1  # Number of GPUs to use for tensor parallelism
-vllm_gpu_memory_utilization: 0.9  # 90% of GPU memory
-vllm_max_model_len: 4096  # Max sequence length
+vllm_gpu_memory_utilization: 0.7  # 70% of GPU memory (reduced for multimodal models)
+vllm_max_model_len: 2048  # Max sequence length (reduced to fit in memory)
+vllm_max_num_seqs: 64  # Max concurrent sequences (reduced from default 256)
 vllm_trust_remote_code: true  # Required for Phi-4
 
 # HuggingFace Configuration
