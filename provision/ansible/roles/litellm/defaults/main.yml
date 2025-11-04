@@ -27,30 +27,41 @@ litellm_master_key: "{{ secrets.litellm.master_key | default('sk-litellm-master-
 
 # Backend Configuration
 litellm_backends:
-  ollama:
-    host: "{{ ollama_ip }}"
-    port: "{{ ollama_port }}"
+  # ollama:  # Temporarily disabled
+  #   host: "{{ ollama_ip }}"
+  #   port: "{{ ollama_port }}"
   vllm:
     host: "{{ vllm_ip }}"
     port: "{{ vllm_port }}"
 
-# Model Configuration
+# Model Configuration (vLLM only - Ollama disabled)
 litellm_models:
-  - model_name: "llama3-8b"
+  # Ollama models (temporarily disabled)
+  # - model_name: "llama3-8b"
+  #   litellm_params:
+  #     model: "ollama/llama3:8b"
+  #     api_base: "http://{{ ollama_ip }}:{{ ollama_port }}"
+  # - model_name: "phi3"
+  #   litellm_params:
+  #     model: "ollama/phi3:3.8b"
+  #     api_base: "http://{{ ollama_ip }}:{{ ollama_port }}"
+  # - model_name: "gemma-2b"
+  #   litellm_params:
+  #     model: "ollama/gemma:2b"
+  #     api_base: "http://{{ ollama_ip }}:{{ ollama_port }}"
+  
+  # vLLM models (active)
+  - model_name: "qwen-0.5b"
     litellm_params:
-      model: "ollama/llama3:8b"
-      api_base: "http://{{ ollama_ip }}:{{ ollama_port }}"
-  - model_name: "phi3"
+      model: "openai/Qwen/Qwen2.5-0.5B-Instruct"
+      api_base: "http://{{ vllm_ip }}:{{ vllm_port }}/v1"
+  - model_name: "qwen-3b"
     litellm_params:
-      model: "ollama/phi3:3.8b"
-      api_base: "http://{{ ollama_ip }}:{{ ollama_port }}"
-  - model_name: "gemma-2b"
+      model: "openai/Qwen/Qwen2.5-3B-Instruct"
+      api_base: "http://{{ vllm_ip }}:{{ vllm_port }}/v1"
+  - model_name: "glm-4-9b"
     litellm_params:
-      model: "ollama/gemma:2b"
-      api_base: "http://{{ ollama_ip }}:{{ ollama_port }}"
-  - model_name: "llama3-8b-vllm"
-    litellm_params:
-      model: "openai/meta-llama/Meta-Llama-3-8B-Instruct"
+      model: "openai/THUDM/glm-4-9b-chat"
       api_base: "http://{{ vllm_ip }}:{{ vllm_port }}/v1"
 
 # Router Settings

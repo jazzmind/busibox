@@ -40,11 +40,11 @@
 
 # LLM Services - Deploy backends first, then proxy
 - name: Deploy LLM Inference Backends (can run in parallel)
-  hosts: ollama:vllm
+  hosts: vllm  # Ollama temporarily disabled
   roles:
-    - role: ollama
-      when: "'ollama' in group_names"
-      tags: [llm, ollama]
+    # - role: ollama  # Temporarily disabled - using vLLM only
+    #   when: "'ollama' in group_names"
+    #   tags: [llm, ollama]
     - role: vllm
       when: "'vllm' in group_names"
       tags: [llm, vllm]

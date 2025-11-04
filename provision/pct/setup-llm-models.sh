@@ -1,4 +1,24 @@
 #!/bin/bash
+#
+# Pre-download LLM Models to Proxmox Host
+#
+# EXECUTION CONTEXT: Proxmox host (as root)
+# PURPOSE: Pre-download and cache LLM models to shared storage before container deployment
+#
+# USAGE:
+#   bash setup-llm-models.sh
+#
+# WHAT IT DOES:
+#   1. Creates shared model directories on Proxmox host
+#   2. Downloads models from HuggingFace
+#   3. Models are mounted into LXC containers via bind mounts
+#
+# WHY:
+#   - Avoids downloading large models during container deployment
+#   - Saves bandwidth and time
+#   - Models shared across multiple containers
+#   - Mirrors pattern used for NVIDIA drivers
+#
 set -euo pipefail
 
 # Colors for output
@@ -13,83 +33,102 @@ log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
-# Host directories for shared models
-OLLAMA_MODELS_DIR="/var/lib/ollama-models"
-VLLM_MODELS_DIR="/var/lib/vllm-models"
+# Host directory for shared model cache
 HUGGINGFACE_CACHE="/var/lib/huggingface-cache"
 
-log_info "Setting up shared LLM model storage on Proxmox host..."
+# Models to pre-download
+MODELS=(
+    "Qwen/Qwen2.5-0.5B-Instruct"      # Small test model (0.5B parameters)
+    "Qwen/Qwen2.5-3B-Instruct"        # Production model (3B parameters)
+    "THUDM/glm-4-9b-chat"             # GLM-4 model (9B parameters)
+)
+
+echo "=========================================="
+echo "LLM Model Pre-Download for vLLM"
+echo "=========================================="
+log_info "This will download models to: ${HUGGINGFACE_CACHE}"
 echo ""
 
-# Step 1: Create host directories
-log_info "Step 1: Creating model directories on host..."
-mkdir -p "${OLLAMA_MODELS_DIR}"
-mkdir -p "${VLLM_MODELS_DIR}"
+# Step 1: Create host directory
+log_info "Step 1: Creating model cache directory on host..."
 mkdir -p "${HUGGINGFACE_CACHE}"
-
-log_success "Directories created:"
-log_info "  Ollama models: ${OLLAMA_MODELS_DIR}"
-log_info "  vLLM models:   ${VLLM_MODELS_DIR}"
-log_info "  HuggingFace:   ${HUGGINGFACE_CACHE}"
+log_success "Directory created: ${HUGGINGFACE_CACHE}"
 echo ""
 
-# Step 2: Pre-download Ollama model
-log_info "Step 2: Pre-downloading Ollama test model..."
-
-if [[ ! -f "${OLLAMA_MODELS_DIR}/manifests/registry.ollama.ai/library/qwen2.5/0.5b" ]]; then
-    log_info "Installing Ollama on host (if not already installed)..."
-    if ! command -v ollama &>/dev/null; then
-        curl -fsSL https://ollama.com/install.sh | sh
-    fi
-    
-    log_info "Downloading qwen2.5:0.5b model..."
-    OLLAMA_MODELS="${OLLAMA_MODELS_DIR}" ollama pull qwen2.5:0.5b
-    
-    log_success "Ollama model downloaded"
-else
-    log_success "Ollama model already downloaded"
-fi
-echo ""
-
-# Step 3: Pre-download vLLM/HuggingFace model
-log_info "Step 3: Pre-downloading vLLM test model..."
-
-if [[ ! -d "${HUGGINGFACE_CACHE}/models--Qwen--Qwen2.5-0.5B-Instruct" ]]; then
-    log_info "Installing Python and huggingface-cli..."
+# Step 2: Install HuggingFace CLI if needed
+log_info "Step 2: Installing HuggingFace CLI..."
+if ! python3 -c "import huggingface_hub" 2>/dev/null; then
+    log_info "Installing Python dependencies..."
     apt-get update -qq
-    apt-get install -y python3-pip &>/dev/null || true
-    pip3 install -q huggingface-hub || true
-    
-    log_info "Downloading Qwen/Qwen2.5-0.5B-Instruct model..."
-    HF_HOME="${HUGGINGFACE_CACHE}" python3 -c "
-from huggingface_hub import snapshot_download
-snapshot_download('Qwen/Qwen2.5-0.5B-Instruct')
-"
-    log_success "vLLM model downloaded"
+    apt-get install -y python3-pip &>/dev/null
+    pip3 install -q huggingface-hub
+    log_success "HuggingFace CLI installed"
 else
-    log_success "vLLM model already downloaded"
+    log_success "HuggingFace CLI already installed"
 fi
+echo ""
+
+# Step 3: Download models
+log_info "Step 3: Downloading models..."
+echo ""
+
+for MODEL in "${MODELS[@]}"; do
+    MODEL_DIR=$(echo "$MODEL" | sed 's/\//-/'g)
+    MODEL_PATH="${HUGGINGFACE_CACHE}/models--${MODEL_DIR}"
+    
+    if [[ -d "${MODEL_PATH}" ]]; then
+        log_success "✓ ${MODEL} (already cached)"
+    else
+        log_info "↓ Downloading ${MODEL}..."
+        log_info "  This may take 10-30 minutes depending on model size..."
+        
+        HF_HOME="${HUGGINGFACE_CACHE}" python3 << EOF
+from huggingface_hub import snapshot_download
+try:
+    snapshot_download('${MODEL}', resume_download=True)
+    print("Download completed successfully")
+except Exception as e:
+    print(f"Download failed: {e}")
+    exit(1)
+EOF
+        if [ $? -eq 0 ]; then
+            log_success "✓ ${MODEL} downloaded"
+        else
+            log_error "✗ Failed to download ${MODEL}"
+            exit 1
+        fi
+    fi
+done
 echo ""
 
 # Step 4: Show model sizes
 log_info "Step 4: Model storage summary..."
 echo ""
-log_info "Disk usage:"
-du -sh "${OLLAMA_MODELS_DIR}" 2>/dev/null || echo "  Ollama: 0B"
-du -sh "${HUGGINGFACE_CACHE}" 2>/dev/null || echo "  HuggingFace: 0B"
+du -sh "${HUGGINGFACE_CACHE}" 2>/dev/null | awk '{print "  Total cache size: " $1}'
+echo ""
+log_info "Downloaded models:"
+for MODEL in "${MODELS[@]}"; do
+    MODEL_DIR=$(echo "$MODEL" | sed 's/\//-/'g)
+    SIZE=$(du -sh "${HUGGINGFACE_CACHE}/models--${MODEL_DIR}" 2>/dev/null | awk '{print $1}' || echo "N/A")
+    echo "  - ${MODEL}: ${SIZE}"
+done
 echo ""
 
-log_success "=========================================="
+echo "=========================================="
 log_success "Model pre-download complete!"
-log_success "=========================================="
+echo "=========================================="
 echo ""
 log_info "Next steps:"
-log_info "1. Update Ansible inventory to mount these directories"
-log_info "2. Deploy containers with:"
-log_info "   bash deploy-llm-stack.sh test"
 echo ""
-log_info "Model directories to mount in containers:"
-log_info "  Ollama:  ${OLLAMA_MODELS_DIR} -> /var/lib/ollama/models"
-log_info "  vLLM:    ${HUGGINGFACE_CACHE} -> /root/.cache/huggingface"
+log_info "1. Models are cached at: ${HUGGINGFACE_CACHE}"
+log_info "2. Deploy vLLM containers with Ansible:"
+log_info "   cd provision/ansible"
+log_info "   ansible-playbook -i inventory/test/hosts.yml site.yml --tags vllm"
+echo ""
+log_info "3. Ansible will automatically mount this cache into containers:"
+log_info "   Host: ${HUGGINGFACE_CACHE}"
+log_info "   Container: /root/.cache/huggingface"
+echo ""
+log_info "4. vLLM will use these pre-downloaded models (no re-download needed)"
 echo ""
 

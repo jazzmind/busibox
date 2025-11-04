@@ -41,5 +41,7 @@ general_settings:
   store_model_in_db: false  # Store models in config, not DB
   database_connection_pool_limit: 10
   database_connection_timeout: 10
+  # Disable automatic spend tracking (causes Prisma errors)
+  disable_spend_logs: true
 {% endif %}
 
