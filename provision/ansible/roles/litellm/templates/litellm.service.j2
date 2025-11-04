@@ -11,9 +11,12 @@ WorkingDirectory={{ litellm_home }}
 
 # Environment configuration
 EnvironmentFile=/etc/default/litellm
+Environment="PATH={{ litellm_venv_dir }}/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="VIRTUAL_ENV={{ litellm_venv_dir }}"
+Environment="PYTHONPATH={{ litellm_venv_dir }}/lib/python3.11/site-packages"
 
 # Service execution
-ExecStart={{ litellm_venv_dir }}/bin/litellm \
+ExecStart={{ litellm_venv_dir }}/bin/python3 {{ litellm_venv_dir }}/bin/litellm \
   --config {{ litellm_config_dir }}/config.yaml \
   --port {{ litellm_port }} \
   --host {{ litellm_host }}
