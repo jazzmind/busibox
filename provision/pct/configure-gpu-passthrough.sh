@@ -2,6 +2,14 @@
 #
 # Configure GPU Passthrough for LXC Containers
 #
+# NOTE: As of 2025-11-04, GPU passthrough is automatically configured during
+# container creation by create_lxc_base.sh for vLLM and Ollama containers.
+# This script is kept for:
+# - Manual GPU configuration
+# - Reconfiguring GPUs for existing containers
+# - Adding GPUs to non-LLM containers
+# - Advanced multi-GPU setups
+#
 # EXECUTION CONTEXT: Proxmox host (as root)
 # PURPOSE: Add NVIDIA GPU passthrough configuration to LXC containers
 #

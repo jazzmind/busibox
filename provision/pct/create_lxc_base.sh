@@ -109,6 +109,55 @@ add_data_mount() {
   return 0
 }
 
+# Add GPU passthrough to container (automatically configures NVIDIA GPU access)
+add_gpu_passthrough() {
+  local CTID=$1
+  local GPU_NUM="${2:-1}"  # Default to GPU 1 for test, GPU 0 for production
+  
+  local CONFIG_FILE="/etc/pve/lxc/${CTID}.conf"
+  
+  # Check if GPU passthrough already configured
+  if grep -q "# GPU Passthrough" "$CONFIG_FILE"; then
+    echo "    GPU passthrough already configured"
+    return 0
+  fi
+  
+  # Check if nvidia-smi is available on host
+  if ! command -v nvidia-smi &>/dev/null; then
+    echo "    WARNING: nvidia-smi not found on host"
+    echo "    Run: bash provision/pct/setup-proxmox-host.sh to install NVIDIA drivers"
+    return 1
+  fi
+  
+  # Check if GPU exists on host
+  if ! nvidia-smi -L | grep -q "GPU ${GPU_NUM}:"; then
+    echo "    WARNING: GPU ${GPU_NUM} not found on host"
+    echo "    Available GPUs:"
+    nvidia-smi -L 2>/dev/null || echo "      None detected"
+    return 1
+  fi
+  
+  echo "    Configuring GPU ${GPU_NUM} passthrough..."
+  
+  # Add GPU passthrough configuration
+  cat >> "$CONFIG_FILE" << EOF
+# GPU Passthrough: NVIDIA GPU ${GPU_NUM}
+lxc.cgroup2.devices.allow: c 195:* rwm
+lxc.cgroup2.devices.allow: c 234:* rwm
+lxc.cgroup2.devices.allow: c 508:* rwm
+lxc.mount.entry: /dev/nvidia${GPU_NUM} dev/nvidia${GPU_NUM} none bind,optional,create=file
+lxc.mount.entry: /dev/nvidiactl dev/nvidiactl none bind,optional,create=file
+lxc.mount.entry: /dev/nvidia-modeset dev/nvidia-modeset none bind,optional,create=file
+lxc.mount.entry: /dev/nvidia-uvm dev/nvidia-uvm none bind,optional,create=file
+lxc.mount.entry: /dev/nvidia-uvm-tools dev/nvidia-uvm-tools none bind,optional,create=file
+lxc.mount.entry: /dev/nvidia-caps dev/nvidia-caps none bind,optional,create=dir
+EOF
+  
+  echo "    Added GPU ${GPU_NUM} passthrough"
+  
+  return 0
+}
+
 # Apply name prefix for test mode
 PREFIX=""
 if [[ "$MODE" == "test" ]]; then
@@ -167,10 +216,16 @@ if [[ "$MODE" == "test" ]]; then
   create_ct "$CT_OLLAMA_TEST" "$IP_OLLAMA_TEST" "${PREFIX}ollama-lxc" priv || cleanup_on_error
   CREATED_CONTAINERS+=("$CT_OLLAMA_TEST")
   add_data_mount "$CT_OLLAMA_TEST" "/var/lib/llm-models/ollama" "/var/lib/llm-models/ollama" "0"
+  pct stop "$CT_OLLAMA_TEST" || true
+  add_gpu_passthrough "$CT_OLLAMA_TEST" "0"  # GPU 0 for Ollama
+  pct start "$CT_OLLAMA_TEST" || true
   
   create_ct "$CT_VLLM_TEST" "$IP_VLLM_TEST" "${PREFIX}vllm-lxc" priv 40 || cleanup_on_error
   CREATED_CONTAINERS+=("$CT_VLLM_TEST")
   add_data_mount "$CT_VLLM_TEST" "/var/lib/llm-models/huggingface" "/var/lib/llm-models/huggingface" "0"
+  pct stop "$CT_VLLM_TEST" || true
+  add_gpu_passthrough "$CT_VLLM_TEST" "1"  # GPU 1 for vLLM
+  pct start "$CT_VLLM_TEST" || true
 
 else
   create_ct "$CT_PROXY" "$IP_PROXY" proxy-lxc unpriv || cleanup_on_error
@@ -203,10 +258,16 @@ else
   create_ct "$CT_OLLAMA" "$IP_OLLAMA" ollama-lxc priv || cleanup_on_error
   CREATED_CONTAINERS+=("$CT_OLLAMA")
   add_data_mount "$CT_OLLAMA" "/var/lib/llm-models/ollama" "/var/lib/llm-models/ollama" "0"
+  pct stop "$CT_OLLAMA" || true
+  add_gpu_passthrough "$CT_OLLAMA" "0"  # GPU 0 for Ollama
+  pct start "$CT_OLLAMA" || true
   
   create_ct "$CT_VLLM" "$IP_VLLM" vllm-lxc priv 40 || cleanup_on_error
   CREATED_CONTAINERS+=("$CT_VLLM")
   add_data_mount "$CT_VLLM" "/var/lib/llm-models/huggingface" "/var/lib/llm-models/huggingface" "0"
+  pct stop "$CT_VLLM" || true
+  add_gpu_passthrough "$CT_VLLM" "0"  # GPU 0 for vLLM (production uses same GPU)
+  pct start "$CT_VLLM" || true
 
 fi
 
