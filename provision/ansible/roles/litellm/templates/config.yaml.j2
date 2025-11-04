@@ -30,21 +30,16 @@ litellm_settings:
 
 general_settings:
   master_key: "{{ litellm_master_key }}"
-{% if litellm_enable_database %}
-  database_url: "{{ litellm_database_url }}"
-  store_model_in_db: true  # Ensure LiteLLM maintains an active database connection
-  database_connection_pool_limit: 10
-  # Enable usage tracking and cost tracking  
-  track_cost_callback: true
-  # Use master key authentication, not database-based auth
-  # This allows database to be used for logging/analytics only
-  use_azure_key_vault: false
-{% endif %}
-  # Allow unauthenticated access to health endpoint for monitoring
+  # Allow unauthenticated access to health endpoints for monitoring
   public_routes: ["/health", "/health/readiness", "/health/liveliness"]
-  
-# API Settings
 {% if litellm_enable_swagger %}
   ui_access_mode: admin_only
+{% endif %}
+{% if litellm_enable_database %}
+  # Database configuration (optional - for logging/analytics)
+  database_url: "{{ litellm_database_url }}"
+  store_model_in_db: false  # Store models in config, not DB
+  database_connection_pool_limit: 10
+  database_connection_timeout: 10
 {% endif %}
 
