@@ -55,12 +55,18 @@ echo ""
 
 # Check generated Prisma client
 echo "[6/6] Checking generated Prisma client..."
-if [ -d "$PRISMA_DIR/.prisma" ]; then
-    echo "  ✓ Generated Prisma client exists"
-    ls -la "$PRISMA_DIR/.prisma/" 2>/dev/null || echo "  (cannot list directory)"
+LITELLM_DIR=$(python -c "import os, litellm; print(os.path.dirname(litellm.__file__))")
+PRISMA_CLIENT_DIR="$LITELLM_DIR/prisma"
+
+if [ -d "$PRISMA_CLIENT_DIR" ]; then
+    echo "  ✓ Generated Prisma client exists at: $PRISMA_CLIENT_DIR"
+    echo "  Files:"
+    ls -la "$PRISMA_CLIENT_DIR/" 2>/dev/null | head -10 || echo "  (cannot list directory)"
 else
-    echo "  ✗ Generated Prisma client NOT found at: $PRISMA_DIR/.prisma"
+    echo "  ✗ Generated Prisma client NOT found at: $PRISMA_CLIENT_DIR"
     echo "  Run: prisma generate (in $PRISMA_DIR)"
+    echo ""
+    echo "  Note: Prisma-client-py generates to ../../prisma relative to schema"
 fi
 echo ""
 
