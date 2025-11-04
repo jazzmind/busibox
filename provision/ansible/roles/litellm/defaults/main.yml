@@ -50,15 +50,18 @@ litellm_models:
   #     model: "ollama/gemma:2b"
   #     api_base: "http://{{ ollama_ip }}:{{ ollama_port }}"
   
-  # vLLM models (active) - Phi-4 is primary, Qwen3 is secondary
+  # vLLM models (active) - Only Phi-4 for now
   - model_name: "phi-4-multimodal"
     litellm_params:
       model: "openai/microsoft/Phi-4-multimodal-instruct"
       api_base: "http://{{ vllm_ip }}:{{ vllm_port }}/v1"
-  - model_name: "qwen3-vl-8b"
-    litellm_params:
-      model: "openai/Qwen/Qwen3-VL-8B-Instruct"
-      api_base: "http://{{ vllm_ip }}:{{ vllm_port }}/v1"
+  
+  # Qwen3-VL (disabled - not loaded in vLLM)
+  # To enable: Deploy a second vLLM instance with Qwen3-VL-8B-Instruct
+  # - model_name: "qwen3-vl-8b"
+  #   litellm_params:
+  #     model: "openai/Qwen/Qwen3-VL-8B-Instruct"
+  #     api_base: "http://{{ vllm_ip }}:{{ vllm_port }}/v1"
 
 # Router Settings
 litellm_routing_strategy: "simple-shuffle"
