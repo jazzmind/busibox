@@ -47,6 +47,29 @@
     daemon_reload: yes
   tags: [litellm_configure]
 
+- name: Update Prisma schema in database
+  shell: |
+    set -e
+    source {{ litellm_venv_dir }}/bin/activate
+    export DATABASE_URL="{{ litellm_database_url }}"
+    
+    # Navigate to LiteLLM proxy directory
+    PRISMA_DIR=$(python -c "import os, litellm; print(os.path.dirname(litellm.__file__))")/proxy
+    cd "$PRISMA_DIR"
+    
+    # Regenerate Prisma client and push schema
+    echo "Regenerating Prisma client..."
+    prisma generate
+    
+    echo "Updating database schema..."
+    prisma db push --accept-data-loss --skip-generate
+  args:
+    executable: /bin/bash
+  become: yes
+  become_user: "{{ litellm_user }}"
+  when: litellm_enable_database
+  tags: [litellm_configure, litellm_db]
+
 - name: Enable LiteLLM service
   systemd:
     name: litellm
