@@ -99,6 +99,28 @@ if [ ! -f "schema.prisma" ]; then
 fi
 
 log_success "Found Prisma schema"
+
+# Show schema info for debugging
+log_info "Prisma schema details:"
+echo "  Location: $PRISMA_DIR/schema.prisma"
+echo "  Size: $(wc -c < schema.prisma) bytes"
+echo "  Models defined: $(grep -c '^model ' schema.prisma || echo 0)"
+
+# Check if LiteLLM_BudgetTable model exists in schema
+if grep -q "model LiteLLM_BudgetTable" schema.prisma; then
+    log_success "LiteLLM_BudgetTable model found in schema"
+else
+    log_warn "LiteLLM_BudgetTable model NOT found in schema"
+    log_warn "This may cause 'litellm_budget_table does not exist' errors"
+fi
+
+# Check if litellm_budget_table relation exists
+if grep -q "litellm_budget_table" schema.prisma; then
+    log_success "litellm_budget_table relation found in schema"
+else
+    log_warn "litellm_budget_table relation NOT found in schema"
+fi
+
 echo ""
 
 # Step 1: Clean existing Prisma generated files
@@ -185,6 +207,33 @@ if [ "$TABLE_COUNT" -gt 20 ]; then
     log_success "Database schema looks correct"
 else
     log_warn "Expected more than 20 tables, only found ${TABLE_COUNT}"
+fi
+
+# Step 7: Check for specific critical tables
+log_info "Step 7: Checking for critical tables"
+CRITICAL_TABLES=(
+    "LiteLLM_VerificationToken"
+    "LiteLLM_BudgetTable"
+    "LiteLLM_UserTable"
+    "LiteLLM_TeamTable"
+    "LiteLLM_ProxyModelTable"
+    "LiteLLM_SpendLogs"
+)
+
+MISSING_TABLES=()
+for TABLE in "${CRITICAL_TABLES[@]}"; do
+    if psql "${DATABASE_URL}" -t -c "SELECT EXISTS (SELECT FROM pg_tables WHERE schemaname = 'public' AND tablename = '${TABLE}');" | grep -q 't'; then
+        echo "  ✓ ${TABLE}"
+    else
+        echo "  ✗ ${TABLE} MISSING"
+        MISSING_TABLES+=("$TABLE")
+    fi
+done
+
+if [ ${#MISSING_TABLES[@]} -gt 0 ]; then
+    log_error "Missing critical tables: ${MISSING_TABLES[*]}"
+    log_error "This indicates a Prisma schema mismatch"
+    exit 1
 fi
 
 echo ""
