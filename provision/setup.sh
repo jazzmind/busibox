@@ -561,9 +561,24 @@ step_container_creation() {
     fi
   fi
   
-  # Optional Ollama
+  # Summary of what will be created
   echo ""
-  echo "Ollama LXC Container (optional):"
+  echo "=========================================="
+  echo "Container Creation Summary"
+  echo "=========================================="
+  echo ""
+  echo "Environment: $MODE"
+  echo ""
+  echo "Containers to create/verify:"
+  echo "  - Core services: proxy, apps, agent"
+  echo "  - Data services: postgres, milvus, minio"
+  echo "  - Worker services: ingest, litellm"
+  echo "  - LLM services: vLLM (208/308, all GPUs)"
+  echo ""
+  
+  # Optional Ollama
+  echo "Optional: Ollama LXC Container"
+  echo "  - Container ID: 210 (production) / 310 (test)"
   echo "  - Uses single GPU (GPU 0)"
   echo "  - Alternative to vLLM for some use cases"
   echo "  - Not required (vLLM is primary inference engine)"
@@ -574,22 +589,10 @@ step_container_creation() {
   OLLAMA_FLAG=""
   if [[ $REPLY =~ ^[Yy]$ ]]; then
     OLLAMA_FLAG="--with-ollama"
-    print_info "Ollama will be included"
+    print_info "Will create: vLLM + Ollama"
   else
-    print_info "Ollama will NOT be created (vLLM only)"
+    print_info "Will create: vLLM only (Ollama skipped)"
   fi
-  
-  # Summary
-  echo ""
-  echo "Container creation summary:"
-  echo "  Environment: $MODE"
-  echo "  Ollama: $(if [[ -n "$OLLAMA_FLAG" ]]; then echo "Yes"; else echo "No"; fi)"
-  echo ""
-  echo "Containers to create:"
-  echo "  - Core services: proxy, apps, agent"
-  echo "  - Data services: postgres, milvus, minio"
-  echo "  - Worker services: ingest, litellm"
-  echo "  - LLM services: vLLM (all GPUs)$(if [[ -n "$OLLAMA_FLAG" ]]; then echo ", Ollama (GPU 0)"; fi)"
   echo ""
   read -p "Proceed with container creation? (Y/n): " -n 1 -r
   echo ""
