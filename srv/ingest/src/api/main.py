@@ -41,10 +41,71 @@ logger = structlog.get_logger()
 # Create FastAPI application
 app = FastAPI(
     title="Busibox Ingestion Service API",
-    description="Internal API for document upload, processing, and status tracking",
+    description="""
+## Document Ingestion & Processing API
+
+This API provides endpoints for uploading, processing, and tracking documents through
+the Busibox ingestion pipeline.
+
+### Features
+
+- **File Upload**: Chunked streaming upload with metadata
+- **Real-time Status**: Server-Sent Events (SSE) for processing updates
+- **Hybrid Search**: Dense semantic + sparse BM25 + visual ColPali embeddings
+- **Content Deduplication**: Automatic detection and vector reuse
+- **Health Monitoring**: Service health checks
+
+### Pipeline Stages
+
+1. **Upload** → File stored in MinIO
+2. **Parsing** → Text extraction (Marker, TATR, OCR)
+3. **Classification** → Document type and language detection
+4. **Chunking** → Semantic text chunking (400-800 tokens)
+5. **Embedding** → Dense (text-embedding-3-small) + BM25 + ColPali
+6. **Indexing** → Store in Milvus vector database
+
+### Authentication
+
+All endpoints require `X-User-Id` header for user identification and access control.
+
+### Rate Limits
+
+- Upload: 100 MB max file size
+- Concurrent uploads: 10 per user
+- Status polling: 1 request/second recommended
+
+### Support
+
+For issues or questions, contact the Busibox infrastructure team.
+    """,
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    openapi_tags=[
+        {
+            "name": "Upload",
+            "description": "File upload with chunked streaming and metadata",
+        },
+        {
+            "name": "Status",
+            "description": "Real-time processing status via SSE and polling",
+        },
+        {
+            "name": "Files",
+            "description": "File metadata retrieval and deletion",
+        },
+        {
+            "name": "Health",
+            "description": "Service health checks and diagnostics",
+        },
+    ],
+    contact={
+        "name": "Busibox Infrastructure Team",
+        "email": "infra@busibox.local",
+    },
+    license_info={
+        "name": "Internal Use Only",
+    },
 )
 
 # Add CORS middleware (for internal network access)
@@ -81,10 +142,25 @@ async def shutdown_event():
 
 @app.get("/")
 async def root():
-    """Root endpoint."""
+    """
+    Root endpoint - API information.
+    
+    Returns basic API information and links to documentation.
+    """
     return {
         "service": "busibox-ingestion-api",
         "version": "1.0.0",
-        "status": "running"
+        "status": "running",
+        "documentation": {
+            "swagger_ui": "/docs",
+            "redoc": "/redoc",
+            "openapi_json": "/openapi.json",
+        },
+        "endpoints": {
+            "upload": "/upload",
+            "status": "/status/{file_id}",
+            "files": "/files/{file_id}",
+            "health": "/health",
+        }
     }
 

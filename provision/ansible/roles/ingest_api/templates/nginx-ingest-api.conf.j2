@@ -1,0 +1,94 @@
+# Nginx configuration for Busibox Ingestion API
+# Serves API documentation on port 80
+
+upstream ingest_api {
+    server 127.0.0.1:8000;
+    keepalive 32;
+}
+
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    
+    server_name _;
+    
+    # Logging
+    access_log /var/log/nginx/ingest-api-access.log;
+    error_log /var/log/nginx/ingest-api-error.log;
+    
+    # Client settings
+    client_max_body_size 100M;
+    client_body_timeout 300s;
+    
+    # Root redirect to docs
+    location = / {
+        return 302 /docs;
+    }
+    
+    # Swagger UI (interactive API documentation)
+    location /docs {
+        proxy_pass http://ingest_api;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # WebSocket support (for hot reload in dev)
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+    
+    # ReDoc (alternative API documentation)
+    location /redoc {
+        proxy_pass http://ingest_api;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    
+    # OpenAPI JSON schema
+    location /openapi.json {
+        proxy_pass http://ingest_api;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # Cache the schema
+        proxy_cache_valid 200 1h;
+        add_header Cache-Control "public, max-age=3600";
+    }
+    
+    # API endpoints (proxied to FastAPI)
+    location / {
+        proxy_pass http://ingest_api;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # Timeouts for long-running uploads
+        proxy_connect_timeout 300s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
+        
+        # WebSocket support for SSE
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        
+        # Disable buffering for SSE
+        proxy_buffering off;
+        proxy_cache off;
+    }
+    
+    # Health check endpoint
+    location /health {
+        proxy_pass http://ingest_api;
+        proxy_set_header Host $host;
+        access_log off;
+    }
+}
+

@@ -4,3 +4,8 @@
     name: ingest-api
     state: restarted
 
+- name: Reload nginx
+  systemd:
+    name: nginx
+    state: reloaded
+
