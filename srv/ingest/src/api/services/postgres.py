@@ -140,6 +140,114 @@ class PostgresService:
             
             return file_id
     
+    async def update_status(
+        self,
+        file_id: str,
+        stage: str,
+        progress: int = None,
+        error_message: str = None,
+        chunks_processed: int = None,
+        total_chunks: int = None,
+        pages_processed: int = None,
+        total_pages: int = None,
+    ) -> None:
+        """Update ingestion status for a file."""
+        async with self.pool.acquire() as conn:
+            fields = ["stage = $2", "updated_at = NOW()"]
+            params = [uuid.UUID(file_id), stage]
+            param_num = 3
+            
+            if progress is not None:
+                fields.append(f"progress = ${param_num}")
+                params.append(progress)
+                param_num += 1
+            
+            if error_message is not None:
+                fields.append(f"error_message = ${param_num}")
+                params.append(error_message)
+                param_num += 1
+            
+            if chunks_processed is not None:
+                fields.append(f"chunks_processed = ${param_num}")
+                params.append(chunks_processed)
+                param_num += 1
+            
+            if total_chunks is not None:
+                fields.append(f"total_chunks = ${param_num}")
+                params.append(total_chunks)
+                param_num += 1
+            
+            if pages_processed is not None:
+                fields.append(f"pages_processed = ${param_num}")
+                params.append(pages_processed)
+                param_num += 1
+            
+            if total_pages is not None:
+                fields.append(f"total_pages = ${param_num}")
+                params.append(total_pages)
+                param_num += 1
+            
+            # Set completed_at if stage is completed or failed
+            if stage in ("completed", "failed"):
+                fields.append("completed_at = NOW()")
+            
+            query = f"""
+                UPDATE ingestion_status
+                SET {', '.join(fields)}
+                WHERE file_id = $1
+            """
+            
+            await conn.execute(query, *params)
+
+    async def delete_file(self, file_id: str) -> None:
+        """Delete a file record and all associated data."""
+        async with self.pool.acquire() as conn:
+            # The CASCADE on foreign keys will delete status and chunks automatically
+            await conn.execute(
+                "DELETE FROM ingestion_files WHERE file_id = $1",
+                uuid.UUID(file_id)
+            )
+
+    async def get_file_metadata(self, file_id: str) -> Optional[Dict]:
+        """Get file metadata by file_id."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT 
+                    f.file_id::text,
+                    f.user_id::text,
+                    f.filename,
+                    f.original_filename,
+                    f.mime_type,
+                    f.size_bytes,
+                    f.storage_path,
+                    f.content_hash,
+                    f.document_type,
+                    f.primary_language,
+                    f.detected_languages,
+                    f.classification_confidence,
+                    f.chunk_count,
+                    f.vector_count,
+                    f.processing_duration_seconds,
+                    f.extracted_title,
+                    f.extracted_author,
+                    f.extracted_date,
+                    f.extracted_keywords,
+                    f.metadata,
+                    f.permissions,
+                    f.created_at,
+                    f.updated_at,
+                    s.stage,
+                    s.progress,
+                    s.error_message
+                FROM ingestion_files f
+                LEFT JOIN ingestion_status s ON f.file_id = s.file_id
+                WHERE f.file_id = $1
+            """, uuid.UUID(file_id))
+            
+            if row:
+                return dict(row)
+            return None
+    
     async def reuse_vectors(
         self,
         new_file_id: str,
@@ -151,12 +259,13 @@ class PostgresService:
         
         Creates a new file record linked to existing vectors via content_hash.
         """
+        import json
         async with self.pool.acquire() as conn:
             # Copy file record from existing file
             existing = await conn.fetchrow("""
                 SELECT 
                     filename, original_filename, mime_type, size_bytes,
-                    storage_path, content_hash, metadata
+                    storage_path, content_hash, metadata, chunk_count, vector_count
                 FROM ingestion_files
                 WHERE file_id = $1
             """, uuid.UUID(existing_file_id))
@@ -181,7 +290,7 @@ class PostgresService:
                 existing["storage_path"],
                 existing["content_hash"],
                 existing["metadata"],
-                {"visibility": "private"},
+                json.dumps({"visibility": "private"}),
                 existing.get("chunk_count", 0),
                 existing.get("vector_count", 0),
             )
@@ -203,4 +312,3 @@ class PostgresService:
                 existing_file_id=existing_file_id,
                 user_id=user_id,
             )
-
