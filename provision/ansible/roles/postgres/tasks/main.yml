@@ -88,19 +88,11 @@
     lc_ctype: en_US.UTF-8
     template: template0
 
-- name: Create files database user
-  become_user: postgres
-  postgresql_user:
-    name: "{{ files_user | default('files_user') }}"
-    password: "{{ files_password | default(postgres_password | default('busibox_password_change_me')) }}"
-    role_attr_flags: "LOGIN,CREATEDB"
-    state: present
-
 - name: Create files database
   become_user: postgres
   postgresql_db:
     name: "{{ files_db | default('files') }}"
-    owner: "{{ files_user | default('files_user') }}"
+    owner: "{{ postgres_user }}"
     encoding: UTF8
     lc_collate: en_US.UTF-8
     lc_ctype: en_US.UTF-8
@@ -276,7 +268,7 @@
       ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO {{ postgres_user }};
       ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO {{ postgres_user }};
 
-- name: Grant ownership of all tables to files user (files database)
+- name: Grant ownership of all tables to postgres user (files database)
   become_user: postgres
   postgresql_query:
     db: "{{ files_db | default('files') }}"
@@ -288,7 +280,7 @@
       BEGIN
         FOR tbl IN SELECT tablename FROM pg_tables WHERE schemaname = 'public'
         LOOP
-          EXECUTE 'ALTER TABLE public.' || quote_ident(tbl.tablename) || ' OWNER TO {{ files_user | default("files_user") }}';
+          EXECUTE 'ALTER TABLE public.' || quote_ident(tbl.tablename) || ' OWNER TO {{ postgres_user }}';
         END LOOP;
       END $$;
       
@@ -299,21 +291,21 @@
       BEGIN
         FOR seq IN SELECT sequencename FROM pg_sequences WHERE schemaname = 'public'
         LOOP
-          EXECUTE 'ALTER SEQUENCE public.' || quote_ident(seq.sequencename) || ' OWNER TO {{ files_user | default("files_user") }}';
+          EXECUTE 'ALTER SEQUENCE public.' || quote_ident(seq.sequencename) || ' OWNER TO {{ postgres_user }}';
         END LOOP;
       END $$;
       
       -- Grant schema usage
-      GRANT USAGE ON SCHEMA public TO {{ files_user | default('files_user') }};
-      GRANT CREATE ON SCHEMA public TO {{ files_user | default('files_user') }};
+      GRANT USAGE ON SCHEMA public TO {{ postgres_user }};
+      GRANT CREATE ON SCHEMA public TO {{ postgres_user }};
       
       -- Grant all privileges on all tables
-      GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO {{ files_user | default('files_user') }};
-      GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO {{ files_user | default('files_user') }};
+      GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO {{ postgres_user }};
+      GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO {{ postgres_user }};
       
       -- Set default privileges for future objects
-      ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO {{ files_user | default('files_user') }};
-      ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO {{ files_user | default('files_user') }};
+      ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO {{ postgres_user }};
+      ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO {{ postgres_user }};
 
 - name: Configure peer/md5 authentication for non-postgres users (after migrations)
   lineinfile:
