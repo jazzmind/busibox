@@ -41,6 +41,9 @@
           volumes:
             - /srv/milvus/data:/var/lib/milvus
           command: ["milvus", "run", "standalone"]
+          # Add required sysctls for LXC environment
+          sysctls:
+            - net.ipv4.ip_unprivileged_port_start=0
           healthcheck:
             test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
             interval: 30s
