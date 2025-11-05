@@ -255,14 +255,9 @@ def load_collection(collection):
     """Load collection into memory for querying."""
     print("Loading collection into memory...")
     
-    # is_loaded is now a method in pymilvus 2.6+
-    try:
-        loaded = collection.is_loaded()
-    except TypeError:
-        # Fallback for older versions where is_loaded was a property
-        loaded = collection.is_loaded
-    
-    if loaded:
+    # Use utility.load_state to check if collection is loaded (pymilvus 2.6+)
+    load_state = utility.load_state(collection.name)
+    if load_state.name == "Loaded":
         print("  Collection already loaded")
     else:
         collection.load()
@@ -275,11 +270,10 @@ def verify_setup(collection):
     print(f"  Collection name: {collection.name}")
     print(f"  Schema fields: {len(collection.schema.fields)}")
     print(f"  Current entities: {collection.num_entities}")
-    try:
-        loaded = collection.is_loaded()
-    except TypeError:
-        loaded = collection.is_loaded
-    print(f"  Loaded: {loaded}")
+    
+    # Use utility.load_state to check if collection is loaded
+    load_state = utility.load_state(collection.name)
+    print(f"  Loaded: {load_state.name == 'Loaded'}")
     
     # Display field details
     print("\n  Fields:")
