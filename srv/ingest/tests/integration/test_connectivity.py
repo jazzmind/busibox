@@ -200,7 +200,7 @@ def test_redis_connectivity():
     
     # Redis might be on ingest container or separate
     # Try common locations
-    host = os.getenv("REDIS_HOST", "10.96.201.203")
+    host = os.getenv("REDIS_HOST", "10.96.201.206")
     port = int(os.getenv("REDIS_PORT", "6379"))
     
     logger.info("Testing Redis connectivity", host=host, port=port)
@@ -241,7 +241,7 @@ def test_minio_connectivity():
     # MinIO is on files container
     endpoint = os.getenv("MINIO_ENDPOINT", "10.96.201.205:9000")
     access_key = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
-    secret_key = os.getenv("MINIO_SECRET_KEY", "minioadmin")
+    secret_key = os.getenv("MINIO_SECRET_KEY", "minioadminchange")
     secure = os.getenv("MINIO_SECURE", "false").lower() == "true"
     
     # Parse endpoint
