@@ -184,10 +184,15 @@ def create_indexes(collection):
     """Create indexes for all vector fields."""
     print("Creating indexes...")
     
+    # Get list of existing indexes
+    existing_indexes = collection.indexes
+    existing_index_fields = {idx.field_name for idx in existing_indexes}
+    print(f"  Existing indexed fields: {existing_index_fields if existing_index_fields else 'none'}")
+    
     indexes_created = []
     
     # Index for dense embeddings (HNSW for high recall)
-    if not collection.has_index(field_name="text_dense"):
+    if "text_dense" not in existing_index_fields:
         print("  Creating HNSW index on text_dense...")
         collection.create_index(
             field_name="text_dense",
@@ -203,7 +208,7 @@ def create_indexes(collection):
         print("    Index on text_dense already exists")
     
     # Index for sparse embeddings (SPARSE_INVERTED_INDEX)
-    if not collection.has_index(field_name="text_sparse"):
+    if "text_sparse" not in existing_index_fields:
         print("  Creating SPARSE_INVERTED_INDEX on text_sparse...")
         collection.create_index(
             field_name="text_sparse",
@@ -218,7 +223,7 @@ def create_indexes(collection):
         print("    Index on text_sparse already exists")
     
     # Index for ColPali page vectors (HNSW)
-    if not collection.has_index(field_name="page_vectors"):
+    if "page_vectors" not in existing_index_fields:
         print("  Creating HNSW index on page_vectors...")
         collection.create_index(
             field_name="page_vectors",
@@ -234,7 +239,7 @@ def create_indexes(collection):
         print("    Index on page_vectors already exists")
     
     # Index on user_id for filtering
-    if not collection.has_index(field_name="user_id"):
+    if "user_id" not in existing_index_fields:
         print("  Creating STL_SORT index on user_id...")
         collection.create_index(
             field_name="user_id",
