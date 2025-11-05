@@ -85,6 +85,25 @@ create_ct "$CT_MILVUS" "$IP_MILVUS" "${PREFIX}milvus-lxc" priv || cleanup_on_err
 CREATED_CONTAINERS+=("$CT_MILVUS")
 add_data_mount "$CT_MILVUS" "/var/lib/data/milvus" "/srv/milvus/data" "0"
 
+# Configure Milvus container for Docker sysctls support
+# Docker containers inside need permission to set network sysctls
+CONFIG_FILE="/etc/pve/lxc/${CT_MILVUS}.conf"
+if ! grep -q "# Docker sysctls support" "$CONFIG_FILE"; then
+  echo "    Configuring Docker sysctls support for Milvus..."
+  pct stop "$CT_MILVUS"
+  sleep 2
+  cat >> "$CONFIG_FILE" << 'EOF'
+# Docker sysctls support - allow nested Docker containers to set network sysctls
+lxc.apparmor.profile: unconfined
+lxc.cgroup2.devices.allow: a
+lxc.cap.drop:
+lxc.mount.auto: proc:rw sys:rw
+EOF
+  pct start "$CT_MILVUS"
+  sleep 3
+  echo "    Docker sysctls support configured"
+fi
+
 # Create MinIO container (privileged for storage access)
 create_ct "$CT_FILES" "$IP_FILES" "${PREFIX}files-lxc" priv || cleanup_on_error
 CREATED_CONTAINERS+=("$CT_FILES")
