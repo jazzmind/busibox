@@ -20,7 +20,10 @@
   roles: [minio]
 
 - hosts: ingest
-  roles: [node_common, ingest_worker]
+  roles:
+    - node_common
+    - ingest_api
+    - ingest_worker
 
 - hosts: apps
   roles:

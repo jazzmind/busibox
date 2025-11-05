@@ -1,0 +1,75 @@
+# Python Environment for Ingest API
+- name: Install Python and dependencies
+  apt:
+    name:
+      - python3
+      - python3-pip
+      - python3-venv
+      - python3-dev
+      - build-essential
+    state: present
+
+- name: Create ingest API directory
+  file:
+    path: /srv/ingest-api
+    state: directory
+    mode: "0755"
+
+- name: Create Python virtual environment
+  shell: python3 -m venv /srv/ingest-api/venv
+  args:
+    creates: /srv/ingest-api/venv/bin/python
+
+- name: Copy ingest API source code
+  copy:
+    src: "{{ playbook_dir }}/../../srv/ingest/src/"
+    dest: /srv/ingest-api/src/
+    mode: "0644"
+  notify: Restart ingest API
+
+- name: Copy requirements.txt
+  copy:
+    src: "{{ playbook_dir }}/../../srv/ingest/requirements.txt"
+    dest: /srv/ingest-api/requirements.txt
+    mode: "0644"
+
+- name: Install Python dependencies
+  pip:
+    requirements: /srv/ingest-api/requirements.txt
+    virtualenv: /srv/ingest-api/venv
+  notify: Restart ingest API
+
+- name: Create ingest API environment file
+  template:
+    src: ingest-api.env.j2
+    dest: /srv/ingest-api/.env
+    mode: "0600"
+  notify: Restart ingest API
+
+- name: Create systemd service for ingest API
+  template:
+    src: ingest-api.service.j2
+    dest: /etc/systemd/system/ingest-api.service
+  register: ingest_api_service_file
+  notify: Restart ingest API
+
+- name: Reload systemd daemon if service file changed
+  systemd:
+    daemon_reload: yes
+  when: ingest_api_service_file.changed
+
+- name: Enable and start ingest API service
+  systemd:
+    name: ingest-api
+    enabled: yes
+    state: started
+    daemon_reload: yes
+
+- name: Create ingest API health check script
+  copy:
+    dest: /usr/local/bin/ingest-api-health-check
+    content: |
+      #!/bin/bash
+      curl -f -s http://localhost:8002/health > /dev/null
+    mode: "0755"
+
