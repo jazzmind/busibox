@@ -309,10 +309,10 @@ Create shared Pydantic models and configuration classes used by both API and wor
 - Ensure models match database schema and API contracts
 
 **Acceptance Criteria**:
-- [ ] All Pydantic models defined
-- [ ] Configuration loads from environment
-- [ ] Models validate correctly
-- [ ] Can be imported by both API and worker
+- [X] All Pydantic models defined
+- [X] Configuration loads from environment
+- [X] Models validate correctly
+- [X] Can be imported by both API and worker
 
 **Files Created**:
 - `srv/ingest/src/shared/models.py`
@@ -370,10 +370,10 @@ Create document classifier to identify document type (report, article, email, co
 - Store document type and confidence in database
 
 **Acceptance Criteria**:
-- [ ] Classifies common document types correctly
-- [ ] Confidence scores are meaningful (>80% for common types)
-- [ ] Handles unknown types gracefully
-- [ ] Fast execution (<1 second per document)
+- [X] Classifies common document types correctly
+- [X] Confidence scores are meaningful (>80% for common types)
+- [X] Handles unknown types gracefully
+- [X] Fast execution (<1 second per document)
 
 **Files Created**:
 - `srv/ingest/src/worker/processors/classifier.py`
@@ -397,10 +397,10 @@ Create metadata extractor to pull title, author, date, keywords from documents.
 - Store in `ingestion_files.extracted_*` columns
 
 **Acceptance Criteria**:
-- [ ] Extracts metadata from PDFs with embedded properties
-- [ ] Extracts metadata from DOCX files
-- [ ] Heuristics work for documents without embedded metadata
-- [ ] Missing metadata handled gracefully (null values)
+- [X] Extracts metadata from PDFs with embedded properties
+- [X] Extracts metadata from DOCX files
+- [X] Heuristics work for documents without embedded metadata
+- [X] Missing metadata handled gracefully (null values)
 
 **Files Created**:
 - `srv/ingest/src/worker/processors/metadata_extractor.py`
@@ -423,10 +423,10 @@ Add language detection to identify primary language and all languages in mixed-l
 - Store primary language and array of all detected languages
 
 **Acceptance Criteria**:
-- [ ] Primary language detected correctly (>95% accuracy)
-- [ ] All languages in mixed documents identified (>90% accuracy)
-- [ ] Results stored in primary_language and detected_languages[] columns
-- [ ] Fast execution (<1 second)
+- [X] Primary language detected correctly (>95% accuracy)
+- [X] All languages in mixed documents identified (>90% accuracy)
+- [X] Results stored in primary_language and detected_languages[] columns
+- [X] Fast execution (<1 second)
 
 **Files Modified/Created**:
 - `srv/ingest/src/worker/processors/classifier.py` or new language_detector.py
@@ -508,11 +508,11 @@ Create ColPali embedder to generate visual representations of PDF pages.
 - Store with modality='page_image' in Milvus
 
 **Acceptance Criteria**:
-- [ ] Generates multi-vector embeddings for PDF pages
-- [ ] Embeddings are 128 patches × 128 dims = 16,384 dims total
-- [ ] Links to original page numbers
-- [ ] Handles PDFs without images gracefully
-- [ ] Skipped if ColPali not available (degrades to text-only)
+- [X] Generates multi-vector embeddings for PDF pages
+- [X] Embeddings are 128 patches × 128 dims = 16,384 dims total
+- [X] Links to original page numbers
+- [X] Handles PDFs without images gracefully
+- [X] Skipped if ColPali not available (degrades to text-only)
 
 **Files Created**:
 - `srv/ingest/src/worker/processors/colpali.py`
@@ -565,10 +565,10 @@ Update PostgreSQL service to send NOTIFY events when updating ingestion status.
 - Handle connection errors gracefully
 
 **Acceptance Criteria**:
-- [ ] NOTIFY sent on every status update
-- [ ] Payload includes all relevant fields
-- [ ] Works with PostgreSQL LISTEN in API
-- [ ] Handles connection failures
+- [X] NOTIFY sent on every status update
+- [X] Payload includes all relevant fields
+- [X] Works with PostgreSQL LISTEN in API
+- [X] Handles connection failures
 
 **Files Modified**:
 - `srv/ingest/src/worker/services/postgres_service.py`
@@ -592,11 +592,11 @@ Add duplicate detection at start of worker processing to enable vector reuse.
 - Skip processing pipeline entirely
 
 **Acceptance Criteria**:
-- [ ] Detects duplicate files correctly
-- [ ] Links to existing vectors without reprocessing
-- [ ] Processing completes in <10 seconds for duplicates
-- [ ] Status updated correctly
-- [ ] User gets separate file record
+- [X] Detects duplicate files correctly
+- [X] Links to existing vectors without reprocessing
+- [X] Processing completes in <10 seconds for duplicates
+- [X] Status updated correctly
+- [X] User gets separate file record
 
 **Files Modified**:
 - `srv/ingest/src/worker/main.py`
@@ -620,11 +620,11 @@ Add dynamic timeout calculation based on document size (small=5min, medium=10min
 - Log timeout events for monitoring
 
 **Acceptance Criteria**:
-- [ ] Timeout calculated correctly based on page count
-- [ ] Processing stops at timeout
-- [ ] Status updated with clear timeout message
-- [ ] Timeout events logged
-- [ ] Works for all document sizes
+- [X] Timeout calculated correctly based on page count
+- [X] Processing stops at timeout
+- [X] Status updated with clear timeout message
+- [X] Timeout events logged
+- [X] Works for all document sizes
 
 **Files Modified**:
 - `srv/ingest/src/worker/main.py`

@@ -1,13 +1,13 @@
 """Shared models and configuration for API and worker."""
 
-from shared.models import (
+from .models import (
     Chunk,
     DocumentClassification,
     File,
     Status,
     Vector,
 )
-from shared.config import Config
+from .config import Config
 
 __all__ = [
     "Config",
