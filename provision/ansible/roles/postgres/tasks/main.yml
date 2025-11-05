@@ -208,37 +208,34 @@
   register: migration_result
   changed_when: "'applied successfully' in migration_result.stdout"
 
-- name: Apply files database schema (migration 010)
+- name: Create migrations table in files database
   become_user: postgres
-  shell: |
-    set -e
-    
-    # Create migrations table if it doesn't exist
-    psql -U postgres -d {{ files_db | default('files') }} <<'EOF'
+  postgresql_query:
+    db: "{{ files_db | default('files') }}"
+    query: |
       CREATE TABLE IF NOT EXISTS ansible_migrations (
         version INTEGER PRIMARY KEY,
         name VARCHAR(255) NOT NULL,
         applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
-    EOF
-    
-    # Check if migration 10 has been applied
-    APPLIED=$(psql -U postgres -d {{ files_db | default('files') }} -t -c 'SELECT COUNT(*) FROM ansible_migrations WHERE version = 10' 2>/dev/null || echo "0")
-    
-    if [ "$APPLIED" -eq "0" ]; then
-      echo "Applying ingestion schema to files database"
-      psql -U postgres -d {{ files_db | default('files') }} -f /var/lib/postgresql/migrations/010_ingestion_schema.sql
-      if [ $? -eq 0 ]; then
-        echo "Ingestion schema applied successfully to files database"
-      else
-        echo "Ingestion schema migration failed"
-        exit 1
-      fi
-    else
-      echo "Ingestion schema already applied to files database, skipping"
-    fi
+
+- name: Check if ingestion schema migration has been applied
+  become_user: postgres
+  postgresql_query:
+    db: "{{ files_db | default('files') }}"
+    query: "SELECT COUNT(*) as count FROM ansible_migrations WHERE version = 10"
+  register: migration_check
+  failed_when: false
+
+- name: Apply ingestion schema to files database
+  become_user: postgres
+  command: psql -U postgres -d {{ files_db | default('files') }} -f /var/lib/postgresql/migrations/010_ingestion_schema.sql
+  when: migration_check.query_result is not defined or migration_check.query_result[0].count == 0
   register: files_migration_result
-  changed_when: "'applied successfully' in files_migration_result.stdout"
+
+- name: Display migration result
+  debug:
+    msg: "Ingestion schema migration: {{ 'applied' if files_migration_result.changed else 'already exists' }}"
 
 - name: Grant ownership of all tables to application user (main database)
   become_user: postgres
