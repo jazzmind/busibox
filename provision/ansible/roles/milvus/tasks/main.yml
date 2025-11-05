@@ -28,7 +28,7 @@
       services:
         milvus:
           container_name: milvus-standalone
-          image: milvusdb/milvus:v2.4.15
+          image: milvusdb/milvus:v2.5.4
           restart: unless-stopped
           ports:
             - "19530:19530"
@@ -109,7 +109,7 @@
 
 - name: Install pymilvus in virtual environment
   pip:
-    name: "pymilvus==2.4.9"
+    name: "pymilvus==2.6.3"
     virtualenv: /opt/milvus-tools
     state: present
     extra_args: "--no-deps"  # Don't install dependencies to avoid downgrading marshmallow
