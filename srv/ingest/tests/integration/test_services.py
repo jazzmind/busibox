@@ -157,19 +157,27 @@ async def test_milvus_service(config: Config, test_file_id: str, test_user_id: s
         
         # Test text chunk insertion
         logger.info("Testing text chunk insertion", file_id=test_file_id)
-        test_chunks = [
+        # Prepare test data
+        chunks = [
             {
-                "file_id": test_file_id,
-                "user_id": test_user_id,
-                "content_hash": "test-hash-123",
                 "chunk_index": 0,
                 "text": "This is a test chunk for Milvus integration test.",
-                "dense_embedding": [0.1] * 1536,  # text-embedding-3-small dimension
+                "char_offset": 0,
+                "token_count": 10,
             }
         ]
+        embeddings = [[0.1] * 1536]  # text-embedding-3-small dimension
+        content_hash = "test-hash-123"
         
-        milvus_service.insert_text_chunks(test_chunks)
-        logger.info("Text chunks inserted successfully")
+        # Insert chunks
+        count = milvus_service.insert_text_chunks(
+            file_id=test_file_id,
+            user_id=test_user_id,
+            chunks=chunks,
+            embeddings=embeddings,
+            content_hash=content_hash,
+        )
+        logger.info("Text chunks inserted successfully", count=count)
         
         # Test query (verify insertion)
         logger.info("Testing Milvus query")
