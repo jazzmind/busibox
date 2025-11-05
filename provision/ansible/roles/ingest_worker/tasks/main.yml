@@ -36,6 +36,9 @@
       - python3-venv
       - python3-dev
       - build-essential
+      - poppler-utils  # For pdf2image (PDF page extraction)
+      - tesseract-ocr  # For OCR on scanned PDFs
+      - libtesseract-dev  # Tesseract development libraries
     state: present
 
 - name: Create ingest worker directory
@@ -114,7 +117,7 @@
       # Milvus configuration
       MILVUS_HOST={{ milvus_host | default('10.96.200.27') }}
       MILVUS_PORT={{ milvus_port | default('19530') }}
-      MILVUS_COLLECTION=document_embeddings
+      MILVUS_COLLECTION={{ milvus_collection | default('documents') }}
       
       # MinIO configuration
       MINIO_ENDPOINT={{ minio_endpoint | default('10.96.200.28:9000') }}
@@ -127,9 +130,20 @@
       LITELLM_API_KEY={{ litellm_api_key | default('') }}
       
       # Processing configuration
-      CHUNK_SIZE=512
-      CHUNK_OVERLAP=50
-      EMBEDDING_MODEL=text-embedding-ada-002
+      CHUNK_SIZE_MIN=400
+      CHUNK_SIZE_MAX=800
+      CHUNK_OVERLAP_PCT=0.12
+      EMBEDDING_MODEL={{ embedding_model | default('text-embedding-3-small') }}
+      
+      # Timeout configuration (seconds)
+      TIMEOUT_SMALL=300
+      TIMEOUT_MEDIUM=600
+      TIMEOUT_LARGE=1200
+      
+      # ColPali configuration (optional)
+      COLPALI_BASE_URL={{ colpali_base_url | default('http://10.96.200.31:8000/v1') }}
+      COLPALI_API_KEY={{ colpali_api_key | default('EMPTY') }}
+      COLPALI_ENABLED={{ colpali_enabled | default('true') }}
       
       # Worker configuration
       WORKER_ID={{ ansible_hostname }}

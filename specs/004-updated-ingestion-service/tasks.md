@@ -650,12 +650,12 @@ Add comprehensive error handling with exponential backoff for transient errors a
 - Log all errors with sufficient context
 
 **Acceptance Criteria**:
-- [ ] Transient errors retry automatically (up to 3 times)
-- [ ] Permanent errors don't retry
-- [ ] Partial progress saved
-- [ ] Resume works correctly
-- [ ] Errors logged with full context
-- [ ] Success rate >90% for transient errors after retry
+- [X] Transient errors retry automatically (up to 3 times)
+- [X] Permanent errors don't retry
+- [X] Partial progress saved
+- [X] Resume works correctly
+- [X] Errors logged with full context
+- [X] Success rate >90% for transient errors after retry
 
 **Files Modified**:
 - Multiple worker files
@@ -682,11 +682,11 @@ Create new Ansible role to deploy FastAPI ingestion API service.
 - Add to `provision/ansible/site.yml`
 
 **Acceptance Criteria**:
-- [ ] Role installs all dependencies
-- [ ] Systemd service created and enabled
-- [ ] Service starts successfully
-- [ ] Environment variables configured correctly
-- [ ] Service restarts on code changes
+- [X] Role installs all dependencies
+- [X] Systemd service created and enabled
+- [X] Service starts successfully
+- [X] Environment variables configured correctly
+- [X] Service restarts on code changes
 
 **Files Created**:
 - `provision/ansible/roles/ingest_api/tasks/main.yml`
@@ -713,10 +713,10 @@ Update ingest_worker Ansible role to deploy enhanced worker with new processors.
 - Add system packages (poppler-utils, tesseract-ocr)
 
 **Acceptance Criteria**:
-- [ ] All new dependencies installed
-- [ ] Worker starts successfully
-- [ ] Can import all new modules
-- [ ] System packages available
+- [X] All new dependencies installed
+- [X] Worker starts successfully
+- [X] Can import all new modules
+- [X] System packages available
 
 **Files Modified**:
 - `provision/ansible/roles/ingest_worker/tasks/main.yml`
@@ -740,10 +740,10 @@ Update `srv/ingest/requirements.txt` with all new dependencies.
 - Pin versions for reproducibility
 
 **Acceptance Criteria**:
-- [ ] All dependencies listed
-- [ ] Versions pinned
-- [ ] pip install -r requirements.txt works
-- [ ] No conflicts
+- [X] All dependencies listed
+- [X] Versions pinned
+- [X] pip install -r requirements.txt works
+- [X] No conflicts
 
 **Files Modified**:
 - `srv/ingest/requirements.txt`

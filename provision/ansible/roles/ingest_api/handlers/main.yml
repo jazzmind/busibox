@@ -1,0 +1,6 @@
+---
+- name: Restart ingest API
+  systemd:
+    name: ingest-api
+    state: restarted
+

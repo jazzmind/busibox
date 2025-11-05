@@ -46,6 +46,9 @@ tenacity==8.2.3  # Retry logic
 # Logging
 structlog==24.1.0
 
+# Data Models
+pydantic==2.5.0
+
 # Utilities
 python-dotenv==1.0.0
 
