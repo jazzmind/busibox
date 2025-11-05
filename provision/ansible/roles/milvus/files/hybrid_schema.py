@@ -291,16 +291,17 @@ def verify_setup(collection):
             extra = f", max_length={field.params.get('max_length', 'N/A')}"
         print(f"    - {field.name} ({field_type}{extra})")
     
-    # Display indexes
+    # Display index details
     print("\n  Indexes:")
-    if collection.has_index():
-        indexes = collection.indexes
-        for index in indexes:
-            index_type = index.params.get('index_type', 'unknown')
-            metric = index.params.get('metric_type', 'N/A')
-            print(f"    - {index.field_name}: {index_type} ({metric})")
+    if collection.indexes:
+        for index in collection.indexes:
+            print(f"    - Field: {index.field_name}")
+            print(f"      Index type: {index.params.get('index_type', 'N/A')}")
+            print(f"      Metric type: {index.params.get('metric_type', 'N/A')}")
     else:
-        print("    (No indexes found)")
+        print("    No indexes found")
+
+    print("\n============================================================")
 
 
 def main():
