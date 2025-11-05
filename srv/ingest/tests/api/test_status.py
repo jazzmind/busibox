@@ -29,8 +29,8 @@ async def test_status_stream_success(
     mock_config = Mock()
     mock_load_config.return_value = mock_config
     
-    file_id = "file-test-123"
-    user_id = "user-test-123"
+    file_id = "123e4567-e89b-12d3-a456-426614174000"
+    user_id = "123e4567-e89b-12d3-a456-426614174000"
     
     # Mock status updates stream
     async def mock_stream():
@@ -75,8 +75,8 @@ async def test_status_stream_error(
     mock_config = Mock()
     mock_load_config.return_value = mock_config
     
-    file_id = "file-test-123"
-    user_id = "user-test-123"
+    file_id = "123e4567-e89b-12d3-a456-426614174000"
+    user_id = "123e4567-e89b-12d3-a456-426614174000"
     
     # Mock status service error
     async def mock_stream_error():

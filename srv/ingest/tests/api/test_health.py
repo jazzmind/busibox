@@ -16,19 +16,21 @@ def client():
 
 
 @pytest.mark.asyncio
-@patch("api.routes.health.asyncpg")
+@patch("asyncpg.connect")
 @patch("api.routes.health.load_config")
 @patch("api.routes.health.MinIOService")
 @patch("api.routes.health.RedisService")
-@patch("api.routes.health.connections")
-@patch("api.routes.health.httpx")
+@patch("pymilvus.connections")
+@patch("pymilvus.utility")
+@patch("httpx.AsyncClient")
 async def test_health_all_healthy(
-    mock_httpx,
+    mock_httpx_client,
+    mock_milvus_utility,
     mock_milvus_connections,
     mock_redis_service,
     mock_minio_service,
     mock_load_config,
-    mock_asyncpg,
+    mock_asyncpg_connect,
     client,
 ):
     """Test health check when all services are healthy."""
@@ -49,31 +51,31 @@ async def test_health_all_healthy(
     # Mock PostgreSQL
     mock_conn = AsyncMock()
     mock_conn.close = AsyncMock()
-    mock_asyncpg.connect = AsyncMock(return_value=mock_conn)
+    mock_asyncpg_connect.return_value = mock_conn
     
     # Mock MinIO
-    mock_minio = Mock()
-    mock_minio.check_health = AsyncMock()
-    mock_minio_service.return_value = mock_minio
+    mock_minio_instance = Mock()
+    mock_minio_instance.check_health = AsyncMock()
+    mock_minio_service.return_value = mock_minio_instance
     
     # Mock Redis
-    mock_redis = Mock()
-    mock_redis.check_health = AsyncMock()
-    mock_redis_service.return_value = mock_redis
+    mock_redis_instance = Mock()
+    mock_redis_instance.check_health = AsyncMock()
+    mock_redis_service.return_value = mock_redis_instance
     
     # Mock Milvus
-    mock_milvus_connections.connect = Mock()
-    mock_milvus_connections.disconnect = Mock()
-    mock_utility = Mock()
-    mock_utility.list_collections = Mock(return_value=["collection1", "collection2"])
-    mock_milvus_connections.utility = mock_utility
+    mock_milvus_connections.connect = Mock(return_value=None)
+    mock_milvus_connections.disconnect = Mock(return_value=None)
+    mock_milvus_utility.list_collections = Mock(return_value=["collection1", "collection2"])
     
     # Mock liteLLM
-    mock_client = AsyncMock()
+    mock_client_instance = AsyncMock()
     mock_response = Mock()
     mock_response.raise_for_status = Mock()
-    mock_client.get = AsyncMock(return_value=mock_response)
-    mock_httpx.AsyncClient = Mock(return_value=mock_client)
+    mock_client_instance.get = AsyncMock(return_value=mock_response)
+    mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
+    mock_client_instance.__aexit__ = AsyncMock(return_value=None)
+    mock_httpx_client.return_value = mock_client_instance
     
     # Make request
     response = client.get("/health")
@@ -87,19 +89,21 @@ async def test_health_all_healthy(
 
 
 @pytest.mark.asyncio
-@patch("api.routes.health.asyncpg")
+@patch("asyncpg.connect")
 @patch("api.routes.health.load_config")
 @patch("api.routes.health.MinIOService")
 @patch("api.routes.health.RedisService")
-@patch("api.routes.health.connections")
-@patch("api.routes.health.httpx")
+@patch("pymilvus.connections")
+@patch("pymilvus.utility")
+@patch("httpx.AsyncClient")
 async def test_health_critical_service_down(
-    mock_httpx,
+    mock_httpx_client,
+    mock_milvus_utility,
     mock_milvus_connections,
     mock_redis_service,
     mock_minio_service,
     mock_load_config,
-    mock_asyncpg,
+    mock_asyncpg_connect,
     client,
 ):
     """Test health check when critical service (PostgreSQL) is down."""
@@ -118,7 +122,7 @@ async def test_health_critical_service_down(
     mock_load_config.return_value = mock_config
     
     # Mock PostgreSQL failure
-    mock_asyncpg.connect = AsyncMock(side_effect=Exception("Connection refused"))
+    mock_asyncpg_connect.side_effect = Exception("Connection refused")
     
     # Mock MinIO (healthy)
     mock_minio = Mock()
@@ -138,11 +142,13 @@ async def test_health_critical_service_down(
     mock_milvus_connections.utility = mock_utility
     
     # Mock liteLLM (healthy)
-    mock_client = AsyncMock()
+    mock_client_instance = AsyncMock()
     mock_response = Mock()
     mock_response.raise_for_status = Mock()
-    mock_client.get = AsyncMock(return_value=mock_response)
-    mock_httpx.AsyncClient = Mock(return_value=mock_client)
+    mock_client_instance.get = AsyncMock(return_value=mock_response)
+    mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
+    mock_client_instance.__aexit__ = AsyncMock(return_value=None)
+    mock_httpx_client.return_value = mock_client_instance
     
     # Make request
     response = client.get("/health")
@@ -155,19 +161,21 @@ async def test_health_critical_service_down(
 
 
 @pytest.mark.asyncio
-@patch("api.routes.health.asyncpg")
+@patch("asyncpg.connect")
 @patch("api.routes.health.load_config")
 @patch("api.routes.health.MinIOService")
 @patch("api.routes.health.RedisService")
-@patch("api.routes.health.connections")
-@patch("api.routes.health.httpx")
+@patch("pymilvus.connections")
+@patch("pymilvus.utility")
+@patch("httpx.AsyncClient")
 async def test_health_degraded(
-    mock_httpx,
+    mock_httpx_client,
+    mock_milvus_utility,
     mock_milvus_connections,
     mock_redis_service,
     mock_minio_service,
     mock_load_config,
-    mock_asyncpg,
+    mock_asyncpg_connect,
     client,
 ):
     """Test health check when non-critical service (liteLLM) is down."""
@@ -188,17 +196,17 @@ async def test_health_degraded(
     # Mock PostgreSQL (healthy)
     mock_conn = AsyncMock()
     mock_conn.close = AsyncMock()
-    mock_asyncpg.connect = AsyncMock(return_value=mock_conn)
+    mock_asyncpg_connect.return_value = mock_conn
     
     # Mock MinIO (healthy)
-    mock_minio = Mock()
-    mock_minio.check_health = AsyncMock()
-    mock_minio_service.return_value = mock_minio
+    mock_minio_instance = Mock()
+    mock_minio_instance.check_health = AsyncMock()
+    mock_minio_service.return_value = mock_minio_instance
     
     # Mock Redis (healthy)
-    mock_redis = Mock()
-    mock_redis.check_health = AsyncMock()
-    mock_redis_service.return_value = mock_redis
+    mock_redis_instance = Mock()
+    mock_redis_instance.check_health = AsyncMock()
+    mock_redis_service.return_value = mock_redis_instance
     
     # Mock Milvus (healthy)
     mock_milvus_connections.connect = Mock()
@@ -208,9 +216,11 @@ async def test_health_degraded(
     mock_milvus_connections.utility = mock_utility
     
     # Mock liteLLM failure
-    mock_client = AsyncMock()
-    mock_client.get = AsyncMock(side_effect=Exception("Connection timeout"))
-    mock_httpx.AsyncClient = Mock(return_value=mock_client)
+    mock_client_instance = AsyncMock()
+    mock_client_instance.get = AsyncMock(side_effect=Exception("Connection timeout"))
+    mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
+    mock_client_instance.__aexit__ = AsyncMock(return_value=None)
+    mock_httpx_client.return_value = mock_client_instance
     
     # Make request
     response = client.get("/health")

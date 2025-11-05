@@ -30,7 +30,7 @@ async def test_get_file_metadata_success(
     mock_load_config.return_value = mock_config
     
     file_id = str(uuid.uuid4())
-    user_id = "user-test-123"
+    user_id = "123e4567-e89b-12d3-a456-426614174000"
     
     # Mock PostgreSQL
     mock_postgres = Mock()
@@ -83,7 +83,10 @@ async def test_get_file_metadata_success(
     }.get(key))
     
     mock_conn.fetchrow = AsyncMock(side_effect=[mock_file_row, mock_status_row])
-    mock_pool.acquire = Mock(return_value=mock_conn)
+    mock_acquire = AsyncMock()
+    mock_acquire.__aenter__ = AsyncMock(return_value=mock_conn)
+    mock_acquire.__aexit__ = AsyncMock(return_value=None)
+    mock_pool.acquire = Mock(return_value=mock_acquire)
     mock_postgres.pool = mock_pool
     mock_postgres_service.return_value = mock_postgres
     
@@ -116,7 +119,7 @@ async def test_get_file_metadata_not_found(
     mock_load_config.return_value = mock_config
     
     file_id = str(uuid.uuid4())
-    user_id = "user-test-123"
+    user_id = "123e4567-e89b-12d3-a456-426614174000"
     
     # Mock PostgreSQL
     mock_postgres = Mock()
@@ -125,7 +128,10 @@ async def test_get_file_metadata_not_found(
     mock_pool = Mock()
     mock_conn = AsyncMock()
     mock_conn.fetchrow = AsyncMock(return_value=None)  # File not found
-    mock_pool.acquire = Mock(return_value=mock_conn)
+    mock_acquire = AsyncMock()
+    mock_acquire.__aenter__ = AsyncMock(return_value=mock_conn)
+    mock_acquire.__aexit__ = AsyncMock(return_value=None)
+    mock_pool.acquire = Mock(return_value=mock_acquire)
     mock_postgres.pool = mock_pool
     mock_postgres_service.return_value = mock_postgres
     
@@ -156,8 +162,8 @@ async def test_get_file_metadata_unauthorized(
     mock_load_config.return_value = mock_config
     
     file_id = str(uuid.uuid4())
-    user_id = "user-test-123"
-    other_user_id = "user-other-456"
+    user_id = "123e4567-e89b-12d3-a456-426614174000"
+    other_user_id = "223e4567-e89b-12d3-a456-426614174001"
     
     # Mock PostgreSQL
     mock_postgres = Mock()
@@ -174,7 +180,10 @@ async def test_get_file_metadata_unauthorized(
     }.get(key))
     
     mock_conn.fetchrow = AsyncMock(return_value=mock_file_row)
-    mock_pool.acquire = Mock(return_value=mock_conn)
+    mock_acquire = AsyncMock()
+    mock_acquire.__aenter__ = AsyncMock(return_value=mock_conn)
+    mock_acquire.__aexit__ = AsyncMock(return_value=None)
+    mock_pool.acquire = Mock(return_value=mock_acquire)
     mock_postgres.pool = mock_pool
     mock_postgres_service.return_value = mock_postgres
     
@@ -207,7 +216,7 @@ async def test_delete_file_success(
     mock_load_config.return_value = mock_config
     
     file_id = str(uuid.uuid4())
-    user_id = "user-test-123"
+    user_id = "123e4567-e89b-12d3-a456-426614174000"
     
     # Mock PostgreSQL
     mock_postgres = Mock()
@@ -230,7 +239,10 @@ async def test_delete_file_success(
     
     mock_conn.fetchrow = AsyncMock(side_effect=[mock_file_row, mock_other_files])
     mock_conn.execute = AsyncMock()
-    mock_pool.acquire = Mock(return_value=mock_conn)
+    mock_acquire = AsyncMock()
+    mock_acquire.__aenter__ = AsyncMock(return_value=mock_conn)
+    mock_acquire.__aexit__ = AsyncMock(return_value=None)
+    mock_pool.acquire = Mock(return_value=mock_acquire)
     mock_postgres.pool = mock_pool
     mock_postgres_service.return_value = mock_postgres
     
@@ -273,7 +285,7 @@ async def test_delete_file_shared_vectors(
     mock_load_config.return_value = mock_config
     
     file_id = str(uuid.uuid4())
-    user_id = "user-test-123"
+    user_id = "123e4567-e89b-12d3-a456-426614174000"
     
     # Mock PostgreSQL
     mock_postgres = Mock()
@@ -296,7 +308,10 @@ async def test_delete_file_shared_vectors(
     
     mock_conn.fetchrow = AsyncMock(side_effect=[mock_file_row, mock_other_files])
     mock_conn.execute = AsyncMock()
-    mock_pool.acquire = Mock(return_value=mock_conn)
+    mock_acquire = AsyncMock()
+    mock_acquire.__aenter__ = AsyncMock(return_value=mock_conn)
+    mock_acquire.__aexit__ = AsyncMock(return_value=None)
+    mock_pool.acquire = Mock(return_value=mock_acquire)
     mock_postgres.pool = mock_pool
     mock_postgres_service.return_value = mock_postgres
     
