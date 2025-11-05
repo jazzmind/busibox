@@ -12,6 +12,7 @@ asyncpg==0.29.0
 
 # Vector Database
 pymilvus==2.3.5
+rank-bm25==0.2.2  # BM25 sparse vectors
 
 # Object Storage
 minio==7.2.3
