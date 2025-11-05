@@ -118,6 +118,8 @@ class MilvusService:
             
             # Generate BM25 sparse vector for this chunk
             bm25_scores = bm25.get_scores(tokenized_texts[i])
+            # Ensure non-negative values (Milvus requirement)
+            bm25_scores = [max(0.0, score) for score in bm25_scores]
             # Convert to scipy sparse matrix (required by pymilvus)
             sparse_vector = csr_matrix(bm25_scores)
             
