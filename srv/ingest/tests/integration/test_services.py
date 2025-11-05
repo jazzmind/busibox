@@ -83,8 +83,33 @@ async def test_postgres_service(config: Config, test_user_id: str, test_file_id:
         )
         logger.info("File record created successfully")
         
-        # TODO: Add more tests when additional methods are implemented
-        logger.info("PostgreSQL service test passed")
+        # Test status update
+        logger.info("Testing status update")
+        await postgres_service.update_status(
+            file_id=test_file_id,
+            stage="parsing",
+            progress=10,
+        )
+        logger.info("Status updated successfully")
+        
+        # Test get file metadata
+        logger.info("Testing get file metadata")
+        metadata = await postgres_service.get_file_metadata(file_id=test_file_id)
+        assert metadata is not None, "Should retrieve file metadata"
+        assert metadata["stage"] == "parsing", f"Expected stage 'parsing', got {metadata['stage']}"
+        assert metadata["progress"] == 10, f"Expected progress 10, got {metadata['progress']}"
+        logger.info("File metadata retrieved successfully")
+        
+        # Test duplicate check
+        logger.info("Testing duplicate check")
+        duplicate = await postgres_service.check_duplicate(content_hash="test-hash-123")
+        assert duplicate is not None, "Duplicate check should find the file we just created"
+        logger.info("Duplicate check successful", duplicate_file_id=duplicate["file_id"])
+        
+        # Cleanup
+        logger.info("Cleaning up test data")
+        await postgres_service.delete_file(file_id=test_file_id)
+        logger.info("Test data cleaned up")
         
     finally:
         await postgres_service.disconnect()
