@@ -32,7 +32,7 @@ def test_postgres_connectivity():
     
     host = os.getenv("POSTGRES_HOST", "10.96.201.203")
     port = int(os.getenv("POSTGRES_PORT", "5432"))
-    database = os.getenv("POSTGRES_DB", "busibox_test")
+    database = os.getenv("POSTGRES_DB", "agent_server")
     user = os.getenv("POSTGRES_USER", "busibox_test_user")
     password = os.getenv("POSTGRES_PASSWORD", "")
     
@@ -134,18 +134,22 @@ def test_litellm_connectivity():
     base_url = os.getenv("LITELLM_BASE_URL", "http://10.96.201.207:4000")
     api_key = os.getenv("LITELLM_API_KEY", "")
     
-    logger.info("Testing liteLLM connectivity", base_url=base_url)
+    logger.info("Testing liteLLM connectivity", base_url=base_url, has_api_key=bool(api_key))
     
     async def test_connection():
         try:
+            headers = {}
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+            
             async with httpx.AsyncClient(timeout=5.0) as client:
-                # Test health endpoint
-                health_response = await client.get(f"{base_url}/health")
+                # Test health endpoint with API key if available
+                health_response = await client.get(f"{base_url}/health", headers=headers)
                 health_response.raise_for_status()
                 logger.info("liteLLM health check passed", status=health_response.status_code)
                 
-                # Test models endpoint
-                models_response = await client.get(f"{base_url}/v1/models")
+                # Test models endpoint (with API key if available)
+                models_response = await client.get(f"{base_url}/v1/models", headers=headers)
                 models_response.raise_for_status()
                 models_data = models_response.json()
                 logger.info("liteLLM models endpoint accessible", model_count=len(models_data.get("data", [])))
@@ -234,8 +238,8 @@ def test_minio_connectivity():
     from minio import Minio
     from minio.error import S3Error
     
-    # MinIO might be on files container or separate
-    endpoint = os.getenv("MINIO_ENDPOINT", "10.96.201.203:9000")
+    # MinIO is on files container
+    endpoint = os.getenv("MINIO_ENDPOINT", "10.96.201.205:9000")
     access_key = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
     secret_key = os.getenv("MINIO_SECRET_KEY", "minioadmin")
     secure = os.getenv("MINIO_SECURE", "false").lower() == "true"
