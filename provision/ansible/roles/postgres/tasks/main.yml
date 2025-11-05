@@ -219,10 +219,17 @@
   register: migration_check
   failed_when: false
 
+- name: Debug migration check result
+  debug:
+    msg: "Migration check: {{ migration_check }}"
+
 - name: Apply ingestion schema to files database
   become_user: postgres
   command: psql -U postgres -d {{ files_db | default('files') }} -f /var/lib/postgresql/migrations/010_ingestion_schema.sql
-  when: migration_check.query_result is not defined or migration_check.query_result[0].count == 0
+  when: >
+    migration_check.query_result is not defined or 
+    (migration_check.query_result | length == 0) or
+    (migration_check.query_result[0].count | int == 0)
   register: files_migration_result
 
 - name: Display migration result
