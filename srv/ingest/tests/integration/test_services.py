@@ -100,10 +100,16 @@ async def test_postgres_service(config: Config, test_user_id: str, test_file_id:
         assert metadata["progress"] == 10, f"Expected progress 10, got {metadata['progress']}"
         logger.info("File metadata retrieved successfully")
         
-        # Test duplicate check
+        # Test duplicate check - first mark as completed
         logger.info("Testing duplicate check")
+        await postgres_service.update_status(
+            file_id=test_file_id,
+            stage="completed",
+            progress=100,
+        )
         duplicate = await postgres_service.check_duplicate(content_hash="test-hash-123")
-        assert duplicate is not None, "Duplicate check should find the file we just created"
+        assert duplicate is not None, "Duplicate check should find the completed file"
+        assert duplicate["file_id"] == test_file_id, f"Expected {test_file_id}, got {duplicate['file_id']}"
         logger.info("Duplicate check successful", duplicate_file_id=duplicate["file_id"])
         
         # Cleanup
