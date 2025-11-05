@@ -187,7 +187,7 @@ def create_indexes(collection):
     indexes_created = []
     
     # Index for dense embeddings (HNSW for high recall)
-    if not collection.has_index("text_dense"):
+    if not collection.has_index(field_name="text_dense"):
         print("  Creating HNSW index on text_dense...")
         collection.create_index(
             field_name="text_dense",
@@ -203,7 +203,7 @@ def create_indexes(collection):
         print("    Index on text_dense already exists")
     
     # Index for sparse embeddings (SPARSE_INVERTED_INDEX)
-    if not collection.has_index("text_sparse"):
+    if not collection.has_index(field_name="text_sparse"):
         print("  Creating SPARSE_INVERTED_INDEX on text_sparse...")
         collection.create_index(
             field_name="text_sparse",
