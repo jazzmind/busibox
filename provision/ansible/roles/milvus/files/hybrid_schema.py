@@ -172,21 +172,10 @@ def create_collection(collection_name):
     
     print(f"✓ Collection '{collection_name}' created")
     
-    # Add BM25 function for automatic sparse vector generation
-    print("Registering BM25 function for automatic sparse vector generation...")
-    try:
-        # Note: BM25 function registration may require Milvus 2.6+ with specific API
-        # This is a placeholder - actual implementation depends on pymilvus version
-        # In Milvus 2.6+, BM25 is configured via analyzer on the text field
-        # For now, we'll rely on Milvus's built-in BM25 support when inserting data
-        
-        # Enable analyzer on text field (this enables BM25 tokenization)
-        # The actual BM25 sparse vector generation happens during insert
-        print("  ✓ Text field configured for BM25 analysis")
-        print("  ℹ BM25 sparse vectors will be auto-generated during data insertion")
-    except Exception as e:
-        print(f"  ⚠ BM25 function registration note: {e}")
-        print("  ℹ Sparse vectors will be generated using Milvus's built-in BM25 support")
+    # Note: BM25 automatic functions are only available in Milvus 2.4+
+    # For Milvus 2.3, sparse vectors must be generated client-side
+    print("  Note: Using Milvus 2.3 - BM25 sparse vectors must be generated client-side")
+    print("  (Automatic BM25 function requires Milvus 2.4+)")
     
     return collection
 
