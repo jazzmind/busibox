@@ -1,0 +1,273 @@
+---
+# Deploy placeholder HTML pages for testing routing
+# This helps verify NGINX configuration before apps are deployed
+
+- name: Create placeholder web root directory
+  file:
+    path: /var/www/placeholder
+    state: directory
+    mode: '0755'
+    owner: www-data
+    group: www-data
+
+- name: Deploy main placeholder page (ai-portal/home)
+  copy:
+    content: |
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>AI Portal - Coming Soon</title>
+          <style>
+              body {
+                  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                  display: flex;
+                  justify-content: center;
+                  align-items: center;
+                  min-height: 100vh;
+                  margin: 0;
+                  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                  color: white;
+              }
+              .container {
+                  text-align: center;
+                  padding: 2rem;
+                  background: rgba(255, 255, 255, 0.1);
+                  border-radius: 20px;
+                  backdrop-filter: blur(10px);
+                  box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+              }
+              h1 { font-size: 3rem; margin: 0 0 1rem 0; }
+              p { font-size: 1.2rem; opacity: 0.9; }
+              .info { margin-top: 2rem; font-size: 0.9rem; opacity: 0.7; }
+          </style>
+      </head>
+      <body>
+          <div class="container">
+              <h1>🚀 AI Portal</h1>
+              <p>Coming Soon</p>
+              <div class="info">
+                  <p>This is a placeholder page</p>
+                  <p>Domain: {{ full_domain }}</p>
+                  <p>Path: /</p>
+              </div>
+          </div>
+      </body>
+      </html>
+    dest: /var/www/placeholder/index.html
+    mode: '0644'
+    owner: www-data
+    group: www-data
+
+- name: Deploy agent-client placeholder page
+  copy:
+    content: |
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Agent Client - Coming Soon</title>
+          <style>
+              body {
+                  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                  display: flex;
+                  justify-content: center;
+                  align-items: center;
+                  min-height: 100vh;
+                  margin: 0;
+                  background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+                  color: white;
+              }
+              .container {
+                  text-align: center;
+                  padding: 2rem;
+                  background: rgba(255, 255, 255, 0.1);
+                  border-radius: 20px;
+                  backdrop-filter: blur(10px);
+                  box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+              }
+              h1 { font-size: 3rem; margin: 0 0 1rem 0; }
+              p { font-size: 1.2rem; opacity: 0.9; }
+              .info { margin-top: 2rem; font-size: 0.9rem; opacity: 0.7; }
+              .route { font-family: monospace; background: rgba(255,255,255,0.2); padding: 0.5rem; border-radius: 5px; display: inline-block; margin-top: 0.5rem; }
+          </style>
+      </head>
+      <body>
+          <div class="container">
+              <h1>🤖 Agent Client</h1>
+              <p>Coming Soon</p>
+              <div class="info">
+                  <p>This is a placeholder page</p>
+                  <p class="route">agents.{{ full_domain }}</p>
+                  <p class="route">{{ full_domain }}/agents</p>
+              </div>
+          </div>
+          <script>
+              // Display current URL for debugging
+              document.querySelector('.info').innerHTML += '<p style="margin-top: 1rem; font-size: 0.8rem; opacity: 0.6;">Current URL: ' + window.location.href + '</p>';
+          </script>
+      </body>
+      </html>
+    dest: /var/www/placeholder/agents.html
+    mode: '0644'
+    owner: www-data
+    group: www-data
+
+- name: Deploy doc-intel placeholder page
+  copy:
+    content: |
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Document Intelligence - Coming Soon</title>
+          <style>
+              body {
+                  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                  display: flex;
+                  justify-content: center;
+                  align-items: center;
+                  min-height: 100vh;
+                  margin: 0;
+                  background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+                  color: white;
+              }
+              .container {
+                  text-align: center;
+                  padding: 2rem;
+                  background: rgba(255, 255, 255, 0.1);
+                  border-radius: 20px;
+                  backdrop-filter: blur(10px);
+                  box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+              }
+              h1 { font-size: 3rem; margin: 0 0 1rem 0; }
+              p { font-size: 1.2rem; opacity: 0.9; }
+              .info { margin-top: 2rem; font-size: 0.9rem; opacity: 0.7; }
+              .route { font-family: monospace; background: rgba(255,255,255,0.2); padding: 0.5rem; border-radius: 5px; display: inline-block; margin-top: 0.5rem; }
+          </style>
+      </head>
+      <body>
+          <div class="container">
+              <h1>📄 Document Intelligence</h1>
+              <p>Coming Soon</p>
+              <div class="info">
+                  <p>This is a placeholder page</p>
+                  <p class="route">docs.{{ full_domain }}</p>
+                  <p class="route">{{ full_domain }}/docs</p>
+              </div>
+          </div>
+          <script>
+              document.querySelector('.info').innerHTML += '<p style="margin-top: 1rem; font-size: 0.8rem; opacity: 0.6;">Current URL: ' + window.location.href + '</p>';
+          </script>
+      </body>
+      </html>
+    dest: /var/www/placeholder/docs.html
+    mode: '0644'
+    owner: www-data
+    group: www-data
+
+- name: Deploy innovation placeholder page
+  copy:
+    content: |
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Innovation - Coming Soon</title>
+          <style>
+              body {
+                  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                  display: flex;
+                  justify-content: center;
+                  align-items: center;
+                  min-height: 100vh;
+                  margin: 0;
+                  background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+                  color: white;
+              }
+              .container {
+                  text-align: center;
+                  padding: 2rem;
+                  background: rgba(255, 255, 255, 0.1);
+                  border-radius: 20px;
+                  backdrop-filter: blur(10px);
+                  box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+              }
+              h1 { font-size: 3rem; margin: 0 0 1rem 0; }
+              p { font-size: 1.2rem; opacity: 0.9; }
+              .info { margin-top: 2rem; font-size: 0.9rem; opacity: 0.7; }
+              .route { font-family: monospace; background: rgba(255,255,255,0.2); padding: 0.5rem; border-radius: 5px; display: inline-block; margin-top: 0.5rem; }
+          </style>
+      </head>
+      <body>
+          <div class="container">
+              <h1>💡 Innovation</h1>
+              <p>Coming Soon</p>
+              <div class="info">
+                  <p>This is a placeholder page</p>
+                  <p class="route">innovation.{{ full_domain }}</p>
+                  <p class="route">{{ full_domain }}/innovation</p>
+              </div>
+          </div>
+          <script>
+              document.querySelector('.info').innerHTML += '<p style="margin-top: 1rem; font-size: 0.8rem; opacity: 0.6;">Current URL: ' + window.location.href + '</p>';
+          </script>
+      </body>
+      </html>
+    dest: /var/www/placeholder/innovation.html
+    mode: '0644'
+    owner: www-data
+    group: www-data
+
+- name: Deploy 404 placeholder page
+  copy:
+    content: |
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>404 - Page Not Found</title>
+          <style>
+              body {
+                  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                  display: flex;
+                  justify-content: center;
+                  align-items: center;
+                  min-height: 100vh;
+                  margin: 0;
+                  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                  color: white;
+              }
+              .container {
+                  text-align: center;
+                  padding: 2rem;
+                  background: rgba(255, 255, 255, 0.1);
+                  border-radius: 20px;
+                  backdrop-filter: blur(10px);
+                  box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+              }
+              h1 { font-size: 5rem; margin: 0; }
+              h2 { font-size: 2rem; margin: 1rem 0; }
+              p { font-size: 1.2rem; opacity: 0.9; }
+              a { color: white; text-decoration: underline; }
+          </style>
+      </head>
+      <body>
+          <div class="container">
+              <h1>404</h1>
+              <h2>Page Not Found</h2>
+              <p>The page you're looking for doesn't exist.</p>
+              <p><a href="/">Go Home</a></p>
+          </div>
+      </body>
+      </html>
+    dest: /var/www/placeholder/404.html
+    mode: '0644'
+    owner: www-data
+    group: www-data
+

@@ -41,10 +41,14 @@
       Then encrypt: ansible-vault encrypt provision/ansible/roles/secrets/vars/vault.yml
   no_log: true
 
+- name: Determine certificate domain name
+  set_fact:
+    cert_domain: "{{ full_domain | default(domain) }}"
+
 - name: Deploy SSL certificate
   copy:
     content: "{{ secrets.ssl_certificates.certificate }}"
-    dest: "/etc/ssl/busibox/{{ domain }}.crt"
+    dest: "/etc/ssl/busibox/{{ cert_domain }}.crt"
     mode: "0644"
     owner: root
     group: root
@@ -53,7 +57,7 @@
 - name: Deploy SSL private key
   copy:
     content: "{{ secrets.ssl_certificates.private_key }}"
-    dest: "/etc/ssl/busibox/{{ domain }}.key"
+    dest: "/etc/ssl/busibox/{{ cert_domain }}.key"
     mode: "0600"
     owner: root
     group: root
@@ -62,31 +66,49 @@
 - name: Deploy SSL certificate chain
   copy:
     content: "{{ secrets.ssl_certificates.chain }}"
-    dest: "/etc/ssl/busibox/{{ domain }}-chain.crt"
+    dest: "/etc/ssl/busibox/{{ cert_domain }}-chain.crt"
     mode: "0644"
     owner: root
     group: root
-  when: secrets.ssl_certificates.chain is defined
+  when: 
+    - secrets.ssl_certificates.chain is defined
+    - secrets.ssl_certificates.chain | length > 0
   no_log: true
+
+- name: Check if chain file exists and has content
+  stat:
+    path: "/etc/ssl/busibox/{{ cert_domain }}-chain.crt"
+  register: chain_file_stat
 
 - name: Create fullchain certificate (certificate + chain)
   shell: |
-    cat /etc/ssl/busibox/{{ domain }}.crt /etc/ssl/busibox/{{ domain }}-chain.crt > /etc/ssl/busibox/{{ domain }}-fullchain.crt
-  when: secrets.ssl_certificates.chain is defined
-  args:
-    creates: "/etc/ssl/busibox/{{ domain }}-fullchain.crt"
+    cat /etc/ssl/busibox/{{ cert_domain }}.crt /etc/ssl/busibox/{{ cert_domain }}-chain.crt > /etc/ssl/busibox/{{ cert_domain }}-fullchain.crt
+  when: 
+    - chain_file_stat.stat.exists
+    - chain_file_stat.stat.size > 0
 
-- name: Set SSL certificate paths for NGINX
+- name: Set SSL certificate paths for NGINX (with chain)
   set_fact:
-    ssl_certificate: "/etc/ssl/busibox/{{ domain }}{% if secrets.ssl_certificates.chain is defined %}-fullchain{% endif %}.crt"
-    ssl_certificate_key: "/etc/ssl/busibox/{{ domain }}.key"
+    ssl_certificate: "/etc/ssl/busibox/{{ cert_domain }}-fullchain.crt"
+    ssl_certificate_key: "/etc/ssl/busibox/{{ cert_domain }}.key"
+  when: 
+    - chain_file_stat.stat.exists
+    - chain_file_stat.stat.size > 0
+
+- name: Set SSL certificate paths for NGINX (without chain)
+  set_fact:
+    ssl_certificate: "/etc/ssl/busibox/{{ cert_domain }}.crt"
+    ssl_certificate_key: "/etc/ssl/busibox/{{ cert_domain }}.key"
+  when: not (chain_file_stat.stat.exists and chain_file_stat.stat.size > 0)
 
 - name: Display provisioned certificate summary
   debug:
     msg: |
       ✅ Provisioned SSL certificates deployed
+      - Domain: {{ cert_domain }}
       - Certificate: {{ ssl_certificate }}
       - Private key: {{ ssl_certificate_key }}
+      - Chain included: {{ 'Yes' if (chain_file_stat.stat.exists and chain_file_stat.stat.size > 0) else 'No' }}
       - Mode: Manual management (you must renew certificates manually)
       
       ⚠️ IMPORTANT: Monitor certificate expiration and update vault.yml before expiry

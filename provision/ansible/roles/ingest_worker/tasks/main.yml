@@ -66,11 +66,33 @@
     requirements: /srv/ingest/requirements.txt
     virtualenv: /srv/ingest/venv
 
-- name: Download spaCy English model
-  shell: /srv/ingest/venv/bin/python -m spacy download en_core_web_sm
+- name: Get spaCy version
+  shell: /srv/ingest/venv/bin/python -c "import spacy; print(spacy.__version__)"
+  register: spacy_version
+  changed_when: false
+  failed_when: false
+
+- name: Download spaCy English model (compatible version)
+  shell: |
+    # Extract major.minor version (e.g., "3.7" from "3.7.2")
+    SPACY_VERSION=$(/srv/ingest/venv/bin/python -c "import spacy; v=spacy.__version__.split('.'); print(f'{v[0]}.{v[1]}')")
+    /srv/ingest/venv/bin/python -m spacy download en_core_web_sm-${SPACY_VERSION}.0
   args:
     creates: /srv/ingest/venv/lib/python*/site-packages/en_core_web_sm
   when: not ansible_check_mode  # Skip in check mode (requires network access)
+  register: spacy_download
+  failed_when: false
+
+- name: Try downloading latest compatible spaCy model (fallback)
+  pip:
+    name: https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.0/en_core_web_sm-3.7.0-py3-none-any.whl
+    virtualenv: /srv/ingest/venv
+  when: 
+    - not ansible_check_mode
+    - spacy_download is defined
+    - spacy_download.rc is defined
+    - spacy_download.rc != 0
+  ignore_errors: yes  # Model download is optional - worker will still function
 
 - name: Create ingest worker environment file
   copy:

@@ -1,0 +1,15 @@
+---
+# Main tasks for Next.js app deployment
+
+- name: Include installation tasks
+  include_tasks: install.yml
+  tags: [nextjs_install]
+
+- name: Include configuration tasks
+  include_tasks: configure.yml
+  tags: [nextjs_configure]
+
+- name: Include deployment tasks
+  include_tasks: deploy.yml
+  tags: [nextjs_deploy]
+

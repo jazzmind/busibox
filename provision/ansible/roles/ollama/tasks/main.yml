@@ -1,0 +1,18 @@
+---
+# Ollama Role - Main Tasks
+# Created: 2025-10-16
+# Purpose: Install and configure Ollama for fast LLM inference
+
+- name: Include installation tasks
+  include_tasks: install.yml
+  tags: [ollama, ollama_install]
+
+- name: Include configuration tasks
+  include_tasks: configure.yml
+  tags: [ollama, ollama_configure]
+
+- name: Include model management tasks
+  include_tasks: models.yml
+  tags: [ollama, ollama_models]
+  when: ollama_initial_models | length > 0
+

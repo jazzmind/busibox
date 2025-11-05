@@ -1,0 +1,93 @@
+---
+# Installation tasks for Next.js app
+
+- name: Install required system packages
+  apt:
+    name:
+      - git
+      - build-essential
+      - curl
+    state: present
+    update_cache: yes
+  tags: [nextjs_install]
+
+- name: Check if Node.js {{ nodejs_version }} is installed
+  shell: node --version 2>/dev/null | grep -q "^v{{ nodejs_version }}" && echo "installed" || echo "not_installed"
+  register: nodejs_check
+  changed_when: false
+  failed_when: false
+  tags: [nextjs_install]
+
+- name: Install Node.js {{ nodejs_version }} via NodeSource
+  block:
+    - name: Download NodeSource setup script
+      get_url:
+        url: "https://deb.nodesource.com/setup_{{ nodejs_version }}.x"
+        dest: /tmp/nodesource_setup.sh
+        mode: '0755'
+
+    - name: Run NodeSource setup script
+      command: bash /tmp/nodesource_setup.sh
+      args:
+        creates: /etc/apt/sources.list.d/nodesource.list
+
+    - name: Install Node.js
+      apt:
+        name: nodejs
+        state: present
+        update_cache: yes
+
+    - name: Remove NodeSource setup script
+      file:
+        path: /tmp/nodesource_setup.sh
+        state: absent
+  when: nodejs_check.stdout == "not_installed"
+  tags: [nextjs_install]
+
+- name: Verify Node.js installation
+  command: node --version
+  register: node_version
+  changed_when: false
+  tags: [nextjs_install]
+
+- name: Display Node.js version
+  debug:
+    msg: "Node.js version: {{ node_version.stdout }}"
+  tags: [nextjs_install]
+
+- name: Install PM2 globally
+  npm:
+    name: pm2
+    global: yes
+    state: present
+  tags: [nextjs_install]
+
+- name: Create app group
+  group:
+    name: "{{ app_group }}"
+    system: yes
+  tags: [nextjs_install]
+
+- name: Create app user
+  user:
+    name: "{{ app_user }}"
+    group: "{{ app_group }}"
+    create_home: yes
+    home: "{{ app_home }}"
+    shell: /bin/bash
+    system: yes
+  tags: [nextjs_install]
+
+- name: Create app directory structure
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+    mode: '0755'
+  loop:
+    - "{{ app_home }}"
+    - "{{ app_home }}/logs"
+    - "{{ app_home }}/shared"
+  tags: [nextjs_install]
+

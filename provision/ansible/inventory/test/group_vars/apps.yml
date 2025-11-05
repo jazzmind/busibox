@@ -1,0 +1,23 @@
+---
+# Apps Container Configuration (TEST environment)
+# Created: 2025-10-15
+# Updated: 2025-10-23
+# Purpose: Apps-specific overrides for TEST environment
+#
+# Most configuration is in all.yml. This file contains only apps-specific overrides.
+
+# Legacy application deployment support (deprecated - use applications[] in all.yml)
+# These are kept for backward compatibility with existing roles
+app_user: "appuser"
+app_group: "appuser"
+
+# Node.js version
+nodejs_version: "{{ default_node_version }}"
+
+# PM2 configuration (lower resources for test)
+pm2_instances: 1
+pm2_max_memory_restart: "512M"
+
+# Health check configuration
+app_health_check_timeout: 30
+

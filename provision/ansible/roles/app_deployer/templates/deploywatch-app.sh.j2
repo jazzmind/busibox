@@ -16,11 +16,23 @@ PROCESS_MANAGER="{{ app.process_manager | default('pm2') }}"
 
 VERSION_FILE="${DEPLOY_PATH}/.version"
 BACKUP_DIR="${DEPLOY_PATH}.backup"
+FAILED_DIR="${DEPLOY_PATH}.failed"
 ENV_FILE="${DEPLOY_PATH}/.env"
+
+# GitHub authentication (for private repos)
+# Set GITHUB_TOKEN environment variable or create ~/.github_token file
+if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    CURL_AUTH_HEADER="Authorization: token ${GITHUB_TOKEN}"
+elif [[ -f ~/.github_token ]]; then
+    GITHUB_TOKEN=$(cat ~/.github_token)
+    CURL_AUTH_HEADER="Authorization: token ${GITHUB_TOKEN}"
+else
+    CURL_AUTH_HEADER=""
+fi
 
 # Logging functions
 log_info() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] [${APP_NAME}] INFO: $*"
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] [${APP_NAME}] INFO: $*" >&2
 }
 
 log_error() {
@@ -28,7 +40,7 @@ log_error() {
 }
 
 log_success() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] [${APP_NAME}] SUCCESS: $*"
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] [${APP_NAME}] SUCCESS: $*" >&2
 }
 
 # Get current deployed version
@@ -43,13 +55,18 @@ get_current_version() {
 # Get latest GitHub release
 get_latest_release() {
     local release_info
-    release_info=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/latest")
+    if [[ -n "${CURL_AUTH_HEADER}" ]]; then
+        release_info=$(curl -s -H "${CURL_AUTH_HEADER}" "https://api.github.com/repos/${GITHUB_REPO}/releases/latest")
+    else
+        release_info=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/latest")
+    fi
     
     if echo "${release_info}" | jq -e '.tag_name' > /dev/null 2>&1; then
         echo "${release_info}" | jq -r '.tag_name'
     else
-        log_error "Failed to fetch latest release from GitHub"
-        return 1
+        # No releases found, use main branch
+        log_info "No releases found, using main branch"
+        echo "main"
     fi
 }
 
@@ -91,6 +108,16 @@ backup_current() {
 rollback() {
     log_error "Rolling back to previous version"
     
+    # Save failed deployment for debugging
+    if [[ -d "${DEPLOY_PATH}" ]]; then
+        local timestamp=$(date +'%Y%m%d-%H%M%S')
+        local failed_backup="${FAILED_DIR}.${timestamp}"
+        log_info "Saving failed deployment to ${failed_backup} for debugging"
+        rm -rf "${failed_backup}"
+        cp -a "${DEPLOY_PATH}" "${failed_backup}"
+        log_info "Failed deployment saved - investigate with: ls -la ${failed_backup}"
+    fi
+    
     # Stop current version
     stop_application
     
@@ -120,14 +147,101 @@ rollback() {
 # Download release from GitHub
 download_release() {
     local version=$1
-    local tarball_url="https://github.com/${GITHUB_REPO}/archive/refs/tags/${version}.tar.gz"
     local temp_dir=$(mktemp -d)
     
-    log_info "Downloading release ${version} from ${tarball_url}"
+    # If version is "main", clone from git
+    if [[ "${version}" == "main" ]]; then
+        log_info "Cloning from main branch"
+        mkdir -p "${temp_dir}/extracted"
+        
+        # Use token authentication for private repos
+        local git_url
+        if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+            git_url="https://${GITHUB_TOKEN}@github.com/${GITHUB_REPO}.git"
+        else
+            git_url="https://github.com/${GITHUB_REPO}.git"
+        fi
+        
+        if git clone --depth 1 "${git_url}" "${temp_dir}/extracted/${GITHUB_REPO##*/}"; then
+            log_success "Cloned repository successfully"
+            echo "${temp_dir}"
+            return 0
+        else
+            log_error "Failed to clone repository"
+            rm -rf "${temp_dir}"
+            return 1
+        fi
+    fi
     
-    if curl -L -o "${temp_dir}/release.tar.gz" "${tarball_url}"; then
-        log_success "Download complete"
+    # Try to get release assets first (uploaded tarballs)
+    log_info "Checking for release assets for ${version}"
+    local release_info
+    if [[ -n "${CURL_AUTH_HEADER}" ]]; then
+        release_info=$(curl -s -H "${CURL_AUTH_HEADER}" "https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${version}")
+    else
+        release_info=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${version}")
+    fi
+    local asset_url=$(echo "${release_info}" | jq -r '.assets[] | select(.name | test("\\.tar\\.gz$")) | .browser_download_url' | head -1)
+    
+    if [[ -n "${asset_url}" && "${asset_url}" != "null" ]]; then
+        # Use uploaded release asset
+        log_info "Downloading release asset from ${asset_url}"
+        local curl_cmd="curl -L -o ${temp_dir}/release.tar.gz"
+        [[ -n "${CURL_AUTH_HEADER}" ]] && curl_cmd="${curl_cmd} -H '${CURL_AUTH_HEADER}'"
+        curl_cmd="${curl_cmd} ${asset_url}"
+        
+        if eval "${curl_cmd}"; then
+            log_success "Downloaded release asset"
+            echo "${temp_dir}"
+            return 0
+        else
+            log_error "Failed to download release asset"
+        fi
+    fi
+    
+    # Fall back to source archive via API (supports authentication)
+    log_info "Downloading source archive via GitHub API"
+    
+    # Use GitHub API tarball_url which supports authentication
+    local tarball_url
+    if [[ -n "${CURL_AUTH_HEADER}" ]]; then
+        tarball_url=$(curl -s -H "${CURL_AUTH_HEADER}" "https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${version}" | jq -r '.tarball_url')
+    else
+        tarball_url=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${version}" | jq -r '.tarball_url')
+    fi
+    
+    # If tarball_url is available from release API, use it
+    if [[ -n "${tarball_url}" && "${tarball_url}" != "null" ]]; then
+        log_info "Using API tarball URL: ${tarball_url}"
+        if [[ -n "${CURL_AUTH_HEADER}" ]]; then
+            if curl -L -H "${CURL_AUTH_HEADER}" -o "${temp_dir}/release.tar.gz" "${tarball_url}"; then
+                log_success "Downloaded source archive via API"
+                echo "${temp_dir}"
+                return 0
+            fi
+        else
+            if curl -L -o "${temp_dir}/release.tar.gz" "${tarball_url}"; then
+                log_success "Downloaded source archive"
+                echo "${temp_dir}"
+                return 0
+            fi
+        fi
+    fi
+    
+    # Final fallback: try direct archive URL with token in URL (for private repos)
+    local archive_url="https://github.com/${GITHUB_REPO}/archive/refs/tags/${version}.tar.gz"
+    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+        # Add token as URL parameter for private repos (GitHub archive URLs don't support Auth header)
+        archive_url="https://${GITHUB_TOKEN}@github.com/${GITHUB_REPO}/archive/refs/tags/${version}.tar.gz"
+        log_info "Downloading source archive with authentication"
+    else
+        log_info "Downloading public source archive from ${archive_url}"
+    fi
+    
+    if curl -L -o "${temp_dir}/release.tar.gz" "${archive_url}"; then
+        log_success "Downloaded source archive"
         echo "${temp_dir}"
+        return 0
     else
         log_error "Failed to download release"
         rm -rf "${temp_dir}"
@@ -142,20 +256,34 @@ deploy_application() {
     
     log_info "Deploying ${version} to ${DEPLOY_PATH}"
     
-    # Extract tarball
-    mkdir -p "${DEPLOY_PATH}"
-    tar -xzf "${temp_dir}/release.tar.gz" -C "${temp_dir}"
+    # Extract tarball if it exists (not needed for git clone)
+    if [[ -f "${temp_dir}/release.tar.gz" ]]; then
+        mkdir -p "${temp_dir}/extracted"
+        tar -xzf "${temp_dir}/release.tar.gz" -C "${temp_dir}/extracted"
+    fi
     
     # Find extracted directory (GitHub archives as owner-repo-version/)
-    local extracted_dir=$(find "${temp_dir}" -maxdepth 1 -type d -name "*-*" | head -1)
+    # GitHub creates a subdirectory like "agent-server-0.0.1/" or "agent-server-v0.0.1/"
+    # For git clones, it's just the repo name
+    local extracted_dir=$(find "${temp_dir}/extracted" -mindepth 1 -maxdepth 1 -type d | head -1)
     
     if [[ -z "${extracted_dir}" ]]; then
-        log_error "Could not find extracted directory"
+        log_error "Could not find extracted directory in ${temp_dir}/extracted"
+        ls -la "${temp_dir}/extracted" >&2
         return 1
     fi
     
-    # Copy files to deploy path
-    rsync -a "${extracted_dir}/" "${DEPLOY_PATH}/"
+    log_info "Found extracted directory: ${extracted_dir}"
+    
+    # Create deploy path if it doesn't exist
+    mkdir -p "${DEPLOY_PATH}"
+    
+    # Copy files to deploy path (using cp -a instead of rsync for portability)
+    # Remove existing files first (except .env)
+    find "${DEPLOY_PATH}" -mindepth 1 ! -name '.env' ! -name '.version' -exec rm -rf {} + 2>/dev/null || true
+    
+    # Copy new files
+    cp -a "${extracted_dir}/." "${DEPLOY_PATH}/"
     
     # Restore .env file if it was backed up
     if [[ -f "${BACKUP_DIR}/.env" ]]; then
@@ -168,13 +296,87 @@ deploy_application() {
     log_success "Deployment complete"
 }
 
+# Install dependencies
+install_dependencies() {
+    cd "${DEPLOY_PATH}"
+    
+    # Node.js application
+    if [[ -f "package.json" ]]; then
+        log_info "Installing Node.js dependencies"
+        
+        # Check if we need devDependencies (for migrations, builds, etc.)
+        local needs_dev=false
+        if grep -q '"migrate:up"' package.json || \
+           grep -q '"build"' package.json || \
+           grep -q '"mastra"' package.json; then
+            needs_dev=true
+        fi
+        
+        if [[ "$needs_dev" == "true" ]]; then
+            log_info "Installing all dependencies (including dev) for migrations/build"
+            if npm install 2>&1 | sed 's/^/[npm] /' >&2; then
+                log_success "Dependencies installed successfully"
+                return 0
+            else
+                log_error "Failed to install dependencies"
+                return 1
+            fi
+        else
+            log_info "Installing production dependencies only"
+            if npm install --production 2>&1 | sed 's/^/[npm] /' >&2; then
+                log_success "Dependencies installed successfully"
+                return 0
+            else
+                log_error "Failed to install dependencies"
+                return 1
+            fi
+        fi
+    fi
+    
+    # Python application
+    if [[ -f "requirements.txt" ]]; then
+        log_info "Installing Python dependencies"
+        if pip3 install -r requirements.txt 2>&1 | sed 's/^/[pip] /' >&2; then
+            log_success "Dependencies installed successfully"
+            return 0
+        else
+            log_error "Failed to install dependencies"
+            return 1
+        fi
+    fi
+    
+    log_info "No dependencies to install"
+    return 0
+}
+
 # Run database migrations (if present)
 run_migrations() {
-    local migration_script="${DEPLOY_PATH}/scripts/migrate.sh"
+    cd "${DEPLOY_PATH}"
     
+    # Load environment variables from .env file if it exists
+    if [[ -f ".env" ]]; then
+        log_info "Loading environment variables from .env"
+        set -a  # Automatically export all variables
+        source .env
+        set +a  # Turn off automatic export
+    fi
+    
+    # Check for npm migration script first
+    if [[ -f "package.json" ]] && grep -q '"migrate:up"' package.json; then
+        log_info "Running database migrations via npm"
+        if npm run migrate:up 2>&1 | sed 's/^/[migration] /' >&2; then
+            log_success "Migrations completed successfully"
+            return 0
+        else
+            log_error "Migration failed"
+            return 1
+        fi
+    fi
+    
+    # Check for shell script
+    local migration_script="scripts/migrate.sh"
     if [[ -f "${migration_script}" && -x "${migration_script}" ]]; then
-        log_info "Running database migrations"
-        
+        log_info "Running database migrations via script"
         if bash "${migration_script}"; then
             log_success "Migrations completed successfully"
             return 0
@@ -182,18 +384,25 @@ run_migrations() {
             log_error "Migration failed"
             return 1
         fi
-    else
-        log_info "No migrations to run"
-        return 0
     fi
+    
+    log_info "No migrations to run"
+    return 0
 }
 
 # Build application (if build command specified)
 build_application() {
-{% if app.build_command is defined %}
-    log_info "Running build command: {{ app.build_command }}"
     cd "${DEPLOY_PATH}"
     
+    # Load environment variables from .env file if it exists
+    if [[ -f ".env" ]]; then
+        set -a  # Automatically export all variables
+        source .env
+        set +a  # Turn off automatic export
+    fi
+    
+{% if app.build_command is defined %}
+    log_info "Running build command: {{ app.build_command }}"
     if {{ app.build_command }}; then
         log_success "Build completed successfully"
         return 0
@@ -202,8 +411,20 @@ build_application() {
         return 1
     fi
 {% else %}
-    log_info "No build command specified, skipping build"
-    return 0
+    # Auto-detect build script
+    if [[ -f "package.json" ]] && grep -q '"build"' package.json; then
+        log_info "Running npm build (build script detected in package.json)"
+        if npm run build 2>&1 | sed 's/^/[build] /' >&2; then
+            log_success "Build completed successfully"
+            return 0
+        else
+            log_error "Build failed"
+            return 1
+        fi
+    else
+        log_info "No build command specified, skipping build"
+        return 0
+    fi
 {% endif %}
 }
 
@@ -211,7 +432,10 @@ build_application() {
 stop_application() {
     if [[ "${PROCESS_MANAGER}" == "pm2" ]]; then
         log_info "Stopping application via PM2"
-        pm2 stop "${APP_NAME}" || true
+        # Stop and delete all instances of this app (including old stopped ones)
+        pm2 delete "${APP_NAME}" 2>/dev/null || true
+        # Wait for cleanup
+        sleep 1
     elif [[ "${PROCESS_MANAGER}" == "systemd" ]]; then
         log_info "Stopping application via systemd"
         systemctl stop "${APP_NAME}.service" || true
@@ -225,9 +449,76 @@ start_application() {
     if [[ "${PROCESS_MANAGER}" == "pm2" ]]; then
         log_info "Starting application via PM2"
 {% if app.start_command is defined %}
-        pm2 start "{{ app.start_command }}" --name "${APP_NAME}" || pm2 restart "${APP_NAME}"
+        # Use custom start command
+        pm2 start "{{ app.start_command }}" --name "${APP_NAME}"
 {% else %}
-        pm2 start package.json --name "${APP_NAME}" || pm2 restart "${APP_NAME}"
+        # Auto-detect: package.json (Node.js) or main.py (Python)
+        if [[ -f "package.json" ]]; then
+            log_info "Detected Node.js application (package.json found)"
+            
+            # Debug: Show .mastra directory structure
+            if [[ -d ".mastra" ]]; then
+                log_info "Contents of .mastra directory:"
+                ls -la .mastra/ >&2 || true
+                if [[ -d ".mastra/.build" ]]; then
+                    log_info "Contents of .mastra/.build directory:"
+                    ls -la .mastra/.build/ >&2 || true
+                fi
+            fi
+            
+            # Check if this is a Mastra app (built output in .mastra/output or .mastra/.build)
+            MASTRA_BUILD_DIR=""
+            if [[ -d ".mastra/output" ]]; then
+                MASTRA_BUILD_DIR=".mastra/output"
+                log_info "Found Mastra build at: .mastra/output"
+            elif [[ -d ".mastra/.build" ]]; then
+                MASTRA_BUILD_DIR=".mastra/.build"
+                log_info "Found Mastra build at: .mastra/.build"
+            fi
+            
+            if [[ -n "$MASTRA_BUILD_DIR" ]]; then
+                log_info "Mastra app detected, build found at: $MASTRA_BUILD_DIR"
+                
+                # Mastra apps are started with 'npm start' which runs 'mastra start'
+                # The build output in .mastra/.build is used by the mastra CLI
+                # mastra is a devDependency installed in node_modules
+                log_info "Starting Mastra app with: npm start"
+                
+                # Verify mastra is available
+                if [[ -f "node_modules/.bin/mastra" ]]; then
+                    log_info "✓ mastra CLI found in node_modules/.bin/"
+                else
+                    log_error "✗ mastra CLI not found - check if devDependencies were installed"
+                    ls -la node_modules/.bin/ >&2 || true
+                fi
+                
+                pm2 start npm --name "${APP_NAME}" -- start
+            # Check if this has a start script
+            elif grep -q '"start"' package.json; then
+                log_info "Using npm start (npm script detected)"
+                pm2 start npm --name "${APP_NAME}" -- start
+            else
+                # Try to use package.json directly (works for some apps)
+                pm2 start package.json --name "${APP_NAME}"
+            fi
+        elif [[ -f "main.py" ]]; then
+            log_info "Detected Python application (main.py found)"
+            pm2 start main.py --name "${APP_NAME}" --interpreter python3 || pm2 restart "${APP_NAME}"
+        elif [[ -f "app.py" ]]; then
+            log_info "Detected Python application (app.py found)"
+            pm2 start app.py --name "${APP_NAME}" --interpreter python3 || pm2 restart "${APP_NAME}"
+        elif [[ -f "server.js" ]]; then
+            log_info "Detected Node.js application (server.js found)"
+            pm2 start server.js --name "${APP_NAME}" || pm2 restart "${APP_NAME}"
+        elif [[ -f "index.js" ]]; then
+            log_info "Detected Node.js application (index.js found)"
+            pm2 start index.js --name "${APP_NAME}" || pm2 restart "${APP_NAME}"
+        else
+            log_error "Could not detect application entry point"
+            log_error "Files in ${DEPLOY_PATH}:"
+            ls -la "${DEPLOY_PATH}" >&2
+            return 1
+        fi
 {% endif %}
     elif [[ "${PROCESS_MANAGER}" == "systemd" ]]; then
         log_info "Starting application via systemd"
@@ -270,6 +561,14 @@ main() {
     # Deploy application
     if ! deploy_application "${latest_version}" "${temp_dir}"; then
         log_error "Deployment failed"
+        rm -rf "${temp_dir}"
+        rollback
+        return 1
+    fi
+    
+    # Install dependencies
+    if ! install_dependencies; then
+        log_error "Dependency installation failed, rolling back"
         rm -rf "${temp_dir}"
         rollback
         return 1

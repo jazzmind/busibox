@@ -1,0 +1,100 @@
+---
+# Ollama Configuration Tasks
+# Configure systemd service and environment
+
+- name: Deploy Ollama systemd service file
+  template:
+    src: ollama.service.j2
+    dest: /etc/systemd/system/ollama.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - reload systemd
+    - restart ollama
+  tags: [ollama_configure]
+
+- name: Create Ollama environment file
+  template:
+    src: ollama.env.j2
+    dest: /etc/default/ollama
+    owner: root
+    group: root
+    mode: '0644'
+  notify: restart ollama
+  tags: [ollama_configure]
+
+- name: Ensure systemd is reloaded
+  systemd:
+    daemon_reload: yes
+  tags: [ollama_configure]
+
+- name: Enable Ollama service
+  systemd:
+    name: ollama
+    enabled: "{{ ollama_enable_service }}"
+  when: ollama_enable_service
+  tags: [ollama_configure]
+
+- name: Restart Ollama service to apply environment changes
+  systemd:
+    name: ollama
+    state: restarted
+  when: ollama_start_service
+  tags: [ollama_configure]
+
+- name: Wait for Ollama to fully start
+  pause:
+    seconds: 3
+  tags: [ollama_configure]
+
+- name: Check if Ollama is listening
+  shell: "journalctl -u ollama -n 50 --no-pager"
+  register: ollama_logs
+  changed_when: false
+  failed_when: false
+  tags: [ollama_configure]
+
+- name: Display Ollama service logs
+  debug:
+    msg: "{{ ollama_logs.stdout_lines }}"
+  when: ollama_logs.stdout_lines is defined
+  tags: [ollama_configure]
+
+- name: Wait for Ollama service to be ready
+  wait_for:
+    host: "{{ ollama_host if ollama_host != '0.0.0.0' else 'localhost' }}"
+    port: "{{ ollama_port }}"
+    delay: 5
+    timeout: 60
+  when: ollama_start_service
+  tags: [ollama_configure]
+
+- name: Check Ollama service status
+  systemd:
+    name: ollama
+  register: ollama_service_status
+  tags: [ollama_configure]
+
+- name: Display service status
+  debug:
+    msg: "Ollama service is {{ ollama_service_status.status.ActiveState }}"
+  tags: [ollama_configure]
+
+- name: Test Ollama API endpoint
+  uri:
+    url: "http://{{ ollama_host if ollama_host != '0.0.0.0' else 'localhost' }}:{{ ollama_port }}/api/tags"
+    method: GET
+    status_code: 200
+  register: ollama_api_test
+  retries: 3
+  delay: 2
+  when: ollama_start_service
+  tags: [ollama_configure, ollama_test]
+
+- name: Display API test result
+  debug:
+    msg: "Ollama API is responding correctly"
+  when: ollama_api_test is defined and ollama_api_test.status == 200
+  tags: [ollama_configure, ollama_test]
+

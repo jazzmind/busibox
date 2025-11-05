@@ -1,0 +1,273 @@
+---
+# LiteLLM Configuration Tasks
+
+- name: Deploy LiteLLM configuration file
+  template:
+    src: config.yaml.j2
+    dest: "{{ litellm_config_dir }}/config.yaml"
+    owner: "{{ litellm_user }}"
+    group: "{{ litellm_group }}"
+    mode: '0640'
+  notify: restart litellm
+  tags: [litellm_configure]
+
+- name: Deploy LiteLLM systemd service file
+  template:
+    src: litellm.service.j2
+    dest: /etc/systemd/system/litellm.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - reload systemd
+    - restart litellm
+  tags: [litellm_configure]
+
+- name: Create LiteLLM environment file
+  template:
+    src: litellm.env.j2
+    dest: /etc/default/litellm
+    owner: root
+    group: "{{ litellm_group }}"
+    mode: '0640'
+  notify: restart litellm
+  tags: [litellm_configure]
+
+# Operational Tools (always deployed)
+- name: Deploy venv rebuild script
+  copy:
+    src: rebuild-venv.sh
+    dest: /usr/local/bin/rebuild-litellm-venv
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [litellm_configure]
+
+- name: Deploy restart script
+  copy:
+    src: restart-litellm.sh
+    dest: /usr/local/bin/restart-litellm
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [litellm_configure]
+
+# Debug Tools (only deployed with litellm_debug tag)
+- name: Deploy LiteLLM debug script
+  copy:
+    src: debug-litellm.sh
+    dest: /usr/local/bin/litellm-debug
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [litellm_debug]
+
+- name: Deploy LiteLLM database test script
+  copy:
+    src: test-litellm-db.sh
+    dest: /usr/local/bin/test-litellm-db
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [litellm_debug]
+
+- name: Deploy Prisma diagnostic script
+  copy:
+    src: check-prisma.sh
+    dest: /usr/local/bin/check-prisma
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [litellm_debug]
+
+- name: Deploy LiteLLM API test script
+  copy:
+    src: test-litellm-api.sh
+    dest: /usr/local/bin/test-litellm-api
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [litellm_debug]
+
+- name: Deploy schema inspection script
+  copy:
+    src: inspect-schema.sh
+    dest: /usr/local/bin/inspect-schema
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [litellm_debug]
+
+- name: Deploy Prisma import test script
+  copy:
+    src: test-prisma-import.sh
+    dest: /usr/local/bin/test-prisma-import
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [litellm_debug]
+
+- name: Ensure systemd is reloaded
+  systemd:
+    daemon_reload: yes
+  tags: [litellm_configure]
+
+- name: Generate Prisma client for LiteLLM
+  shell: |
+    set -e
+    source {{ litellm_venv_dir }}/bin/activate
+    export DATABASE_URL="{{ litellm_database_url }}"
+    
+    # Navigate to LiteLLM proxy directory
+    PRISMA_DIR=$(python -c "import os, litellm; print(os.path.dirname(litellm.__file__))")/proxy
+    echo "Prisma schema directory: $PRISMA_DIR"
+    cd "$PRISMA_DIR"
+    
+    # Generate Prisma client
+    echo "Generating Prisma client..."
+    prisma generate
+    
+    # Find where it actually generated to
+    echo ""
+    echo "Searching for generated Prisma client..."
+    
+    # Check possible locations
+    SITE_PACKAGES=$(python -c "import site; print(site.getsitepackages()[0])")
+    echo "Site packages: $SITE_PACKAGES"
+    
+    # Look for prisma directory
+    if [ -d "$SITE_PACKAGES/prisma" ]; then
+      echo "✓ Found at: $SITE_PACKAGES/prisma"
+      ls -la "$SITE_PACKAGES/prisma/" | head -10
+    elif [ -d "$SITE_PACKAGES/litellm/prisma" ]; then
+      echo "✓ Found at: $SITE_PACKAGES/litellm/prisma"
+      ls -la "$SITE_PACKAGES/litellm/prisma/" | head -10
+    else
+      echo "ERROR: Cannot find generated Prisma client"
+      echo "Searched:"
+      echo "  - $SITE_PACKAGES/prisma"
+      echo "  - $SITE_PACKAGES/litellm/prisma"
+      echo ""
+      echo "Finding all prisma directories in site-packages:"
+      find "$SITE_PACKAGES" -type d -name "prisma" 2>/dev/null || echo "  None found"
+      exit 1
+    fi
+  args:
+    executable: /bin/bash
+  become: yes
+  become_user: "{{ litellm_user }}"
+  when: litellm_enable_database
+  register: prisma_generate_result
+  tags: [litellm_configure, litellm_db]
+
+- name: Display Prisma generate output
+  debug:
+    var: prisma_generate_result.stdout_lines
+  when: litellm_enable_database and prisma_generate_result is defined
+  tags: [litellm_configure, litellm_db]
+
+- name: Push Prisma schema to database (non-destructive)
+  shell: |
+    set -e
+    source {{ litellm_venv_dir }}/bin/activate
+    export DATABASE_URL="{{ litellm_database_url }}"
+    
+    # Navigate to LiteLLM proxy directory
+    PRISMA_DIR=$(python -c "import os, litellm; print(os.path.dirname(litellm.__file__))")/proxy
+    cd "$PRISMA_DIR"
+    
+    # Push schema to database (preserves existing data)
+    echo "Updating database schema (non-destructive)..."
+    prisma db push --skip-generate
+    
+    echo "Database schema updated successfully"
+  args:
+    executable: /bin/bash
+  become: yes
+  become_user: "{{ litellm_user }}"
+  when: litellm_enable_database
+  tags: [litellm_configure, litellm_db]
+
+- name: Enable LiteLLM service
+  systemd:
+    name: litellm
+    enabled: "{{ litellm_enable_service }}"
+  when: litellm_enable_service
+  tags: [litellm_configure]
+
+- name: Start LiteLLM service
+  systemd:
+    name: litellm
+    state: started
+  when: litellm_start_service
+  tags: [litellm_configure]
+
+- name: Check LiteLLM service logs
+  command: journalctl -u litellm -n 50 --no-pager
+  register: litellm_logs
+  changed_when: false
+  tags: [litellm_configure]
+
+- name: Display LiteLLM service logs
+  debug:
+    msg: "{{ litellm_logs.stdout_lines }}"
+  tags: [litellm_configure]
+
+- name: Wait for LiteLLM service to be ready
+  wait_for:
+    host: "{{ litellm_host if litellm_host != '0.0.0.0' else 'localhost' }}"
+    port: "{{ litellm_port }}"
+    delay: 5
+    timeout: 60
+  when: litellm_start_service
+  tags: [litellm_configure]
+
+- name: Check LiteLLM service status
+  systemd:
+    name: litellm
+  register: litellm_service_status
+  tags: [litellm_configure]
+
+- name: Display service status
+  debug:
+    msg: "LiteLLM service is {{ litellm_service_status.status.ActiveState }}"
+  tags: [litellm_configure]
+
+- name: Test LiteLLM health endpoint with auth
+  uri:
+    url: "http://{{ litellm_host if litellm_host != '0.0.0.0' else 'localhost' }}:{{ litellm_port }}/health"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ litellm_master_key }}"
+    status_code: 200
+  register: litellm_health_test
+  retries: 3
+  delay: 2
+  when: litellm_start_service
+  tags: [litellm_configure, litellm_test]
+
+- name: Display health check result
+  debug:
+    msg: "LiteLLM health check passed (authenticated)"
+  when: litellm_health_test is defined and litellm_health_test.status == 200
+  tags: [litellm_configure, litellm_test]
+
+- name: Test LiteLLM models endpoint
+  uri:
+    url: "http://{{ litellm_host if litellm_host != '0.0.0.0' else 'localhost' }}:{{ litellm_port }}/models"
+    method: GET
+    status_code: 200
+    headers:
+      Authorization: "Bearer {{ litellm_master_key }}"
+  register: litellm_models_test
+  retries: 3
+  delay: 2
+  when: litellm_start_service
+  tags: [litellm_configure, litellm_test]
+
+- name: Display available models
+  debug:
+    msg: "{{ litellm_models_test.json.data | map(attribute='id') | list if litellm_models_test.json is defined else 'Unable to retrieve models' }}"
+  when: litellm_models_test is defined
+  tags: [litellm_configure, litellm_test]
+

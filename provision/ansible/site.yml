@@ -1,5 +1,9 @@
-- hosts: files
-  roles: [minio]
+# Deployment order optimized for dependencies:
+# 1. PostgreSQL (database - required by many services)
+# 2. Milvus (vector database - standalone, no dependencies)
+# 3. Agent API (provides webhooks for MinIO, uses PostgreSQL)
+# 4. MinIO (file storage - can configure webhook to agent API)
+# 5. Ingest Worker (needs agent API + MinIO + Milvus + PostgreSQL)
 
 - hosts: pg
   roles: [postgres]
@@ -8,13 +12,45 @@
   roles: [milvus]
 
 - hosts: agent
-  roles: [node_common, agent_api, deploywatch, secrets, app_deployer]
+  roles:
+    - node_common
+    - agent_api
+
+- hosts: files
+  roles: [minio]
 
 - hosts: ingest
   roles: [node_common, ingest_worker]
 
 - hosts: apps
-  roles: [node_common, secrets, app_deployer]
+  roles:
+    - node_common
+    - role: secrets
+      tags: [secrets]
+    - role: app_deployer
+      tags: [app_deployer, apps]
+
+- hosts: proxy
+  roles:
+    - role: nginx
+      tags: [proxy, nginx]
 
 - hosts: openwebui
   roles: [nginx]
+
+# LLM Services - Deploy backends first, then proxy
+- name: Deploy LLM Inference Backends (can run in parallel)
+  hosts: vllm  # Ollama temporarily disabled
+  roles:
+    # - role: ollama  # Temporarily disabled - using vLLM only
+    #   when: "'ollama' in group_names"
+    #   tags: [llm, ollama]
+    - role: vllm
+      when: "'vllm' in group_names"
+      tags: [llm, vllm]
+
+- name: Deploy LiteLLM Proxy (depends on backends)
+  hosts: litellm
+  roles:
+    - role: litellm
+      tags: [llm, litellm]

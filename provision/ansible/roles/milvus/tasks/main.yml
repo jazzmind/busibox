@@ -68,15 +68,66 @@
       - python3-venv
     state: present
 
+- name: Check if old marshmallow version exists
+  shell: |
+    if [ -f /opt/milvus-tools/bin/python ]; then
+      /opt/milvus-tools/bin/python -c "import marshmallow; print(marshmallow.__version__)" 2>/dev/null || echo "old"
+    else
+      echo "none"
+    fi
+  register: marshmallow_check
+  changed_when: false
+  failed_when: false
+
+- name: Remove old Python virtual environment if it has incompatible marshmallow
+  file:
+    path: /opt/milvus-tools
+    state: absent
+  when: 
+    - marshmallow_check.stdout is defined
+    - marshmallow_check.stdout in ['old', 'none'] or (marshmallow_check.stdout not in ['old', 'none'] and marshmallow_check.stdout is version('3.13.0', '<'))
+
 - name: Create Python virtual environment for Milvus tools
   shell: python3 -m venv /opt/milvus-tools
   args:
     creates: /opt/milvus-tools/bin/python
 
+- name: Upgrade pip in virtual environment
+  pip:
+    name: pip
+    state: latest
+    virtualenv: /opt/milvus-tools
+
+- name: Install marshmallow first (required version for environs)
+  pip:
+    name: "marshmallow>=3.13.0"
+    virtualenv: /opt/milvus-tools
+    state: present
+
 - name: Install pymilvus in virtual environment
   pip:
-    name: pymilvus==2.3.5
+    name: "pymilvus==2.3.5"
     virtualenv: /opt/milvus-tools
+    state: present
+    extra_args: "--no-deps"  # Don't install dependencies to avoid downgrading marshmallow
+
+- name: Install remaining pymilvus dependencies
+  pip:
+    name:
+      - "grpcio>=1.49.1"
+      - "grpcio-tools>=1.49.1"
+      - "protobuf>=3.20.0"
+      - "environs>=9.5.0"
+      - "ujson>=2.0.0"
+      - "pandas>=1.2.4"
+      - "numpy"
+      - "requests>=2.20.0"
+      - "urllib3>=1.26.0"
+      - "minio>=7.0.0"
+      - "pyarrow>=12.0.0"
+      - "certifi>=2023.0.0"
+    virtualenv: /opt/milvus-tools
+    state: present
 
 - name: Copy Milvus initialization script
   copy:

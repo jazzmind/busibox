@@ -1,0 +1,264 @@
+---
+# Global Variables for Busibox Application Deployment - PRODUCTION
+# Created: 2025-10-15
+# Updated: 2025-10-23
+# Purpose: Centralized configuration for PRODUCTION environment
+#
+# This file contains ONLY production-specific configuration.
+# Secrets are stored in roles/secrets/vars/vault.yml (encrypted)
+
+# ============================================================================
+# Environment Configuration
+# ============================================================================
+busibox_env: production
+
+# ============================================================================
+# Network Configuration - Production
+# ============================================================================
+# Base IP from vault (deployment-specific)
+network_base_octets: "{{ network_base_octets_production }}"
+internal_network: "{{ network_base_octets }}.0/21"
+internal_gateway: "{{ network_base_octets }}.1"
+
+# Container IP Addresses (calculated from base)
+# Infrastructure containers: .200-.209
+proxy_ip: "{{ network_base_octets }}.200"
+apps_ip: "{{ network_base_octets }}.201"
+agent_ip: "{{ network_base_octets }}.202"
+postgres_ip: "{{ network_base_octets }}.203"
+milvus_ip: "{{ network_base_octets }}.204"
+minio_ip: "{{ network_base_octets }}.205"
+ingest_ip: "{{ network_base_octets }}.206"
+
+# LLM Service IPs: .30-.39 (to allow room for more infrastructure)
+litellm_ip: "{{ network_base_octets }}.30"
+ollama_ip: "{{ network_base_octets }}.31"
+vllm_ip: "{{ network_base_octets }}.32"
+
+# ============================================================================
+# Domain Configuration - Production
+# ============================================================================
+# Base domain from vault (deployment-specific)
+# domain and www_domain are calculated from base_domain
+domain: "ai.{{ base_domain }}"
+www_domain: "www.{{ domain }}"
+
+# SSL Certificate Mode
+# Options: "letsencrypt", "provisioned", "selfsigned"
+ssl_mode: provisioned
+# ssl_email comes from vault
+
+# ============================================================================
+# Service Endpoints
+# ============================================================================
+postgres_host: "{{ postgres_ip }}"
+postgres_port: 5432
+postgres_db: busibox
+postgres_user: busibox_user
+
+milvus_host: "{{ milvus_ip }}"
+milvus_port: 19530
+
+minio_host: "{{ minio_ip }}"
+minio_port: 9000
+minio_console_port: 9001
+
+redis_host: "{{ ingest_ip }}"
+redis_port: 6379
+
+agent_api_host: "{{ agent_ip }}"
+agent_api_port: 4111
+
+# LLM Service Endpoints
+litellm_host: "{{ litellm_ip }}"
+litellm_port: 4000
+
+ollama_host: "{{ ollama_ip }}"
+ollama_port: 11434
+
+vllm_host: "{{ vllm_ip }}"
+vllm_port: 8000
+
+# ============================================================================
+# LLM Model Configuration
+# ============================================================================
+# Ollama Models (PRODUCTION - full models)
+ollama_initial_models:
+  - name: "llama3:8b"
+    description: "Fast general-purpose model"
+  - name: "phi3:3.8b"
+    description: "Code and reasoning model"
+  - name: "gemma:2b"
+    description: "Lightweight tasks model"
+
+# vLLM Model Configuration
+vllm_default_model: "meta-llama/Meta-Llama-3-8B-Instruct"
+
+# ============================================================================
+# Deployment Configuration
+# ============================================================================
+deploywatch_check_interval: 3600  # Check for new releases every hour (seconds)
+deploywatch_apps_dir: /srv/deploywatch/apps
+
+# Application Defaults
+default_process_manager: pm2
+default_node_version: "20"
+
+# ============================================================================
+# NGINX Configuration
+# ============================================================================
+nginx_worker_processes: auto
+nginx_worker_connections: 1024
+nginx_client_max_body_size: 100M
+nginx_proxy_timeout: 60s
+
+# ============================================================================
+# Logging & Security
+# ============================================================================
+log_level: info
+structured_logging: true
+hsts_max_age: 63072000  # 2 years in seconds
+
+# ============================================================================
+# Application Definitions
+# ============================================================================
+# All applications deployed in the Busibox environment
+# Schema reference: specs/002-deploy-app-servers/data-model.md
+#
+# Port allocation strategy:
+# - 3000-3099: Public web applications
+# - 4000-4099: Internal API services
+# - 8000-8099: LLM/AI services
+applications:
+  # Internal API Services
+  - name: agent-server
+    github_repo: jazzmind/agent-server
+    container: agent-lxc
+    container_ip: "{{ agent_ip }}"
+    port: 4111
+    deploy_path: /srv/agent
+    health_endpoint: /auth/health
+    routes: []  # Internal only - no NGINX routing
+    secrets:
+      - database_url
+      - minio_access_key
+      - minio_secret_key
+      - redis_url
+      - jwt_secret
+    env:
+      LOG_LEVEL: "{{ log_level }}"
+      MILVUS_HOST: "{{ milvus_ip }}"
+      MILVUS_PORT: "{{ milvus_port }}"
+      MINIO_ENDPOINT: "{{ minio_ip }}:{{ minio_port }}"
+      POSTGRES_HOST: "{{ postgres_ip }}"
+      REDIS_HOST: "{{ ingest_ip }}"
+      TOKEN_SERVICE_URL: "http://{{ agent_ip }}:4111"
+      MASTRA_API_URL: "http://{{ agent_ip }}:4111"
+  
+  # Public Web Applications
+  - name: ai-portal
+    github_repo: jazzmind/ai-portal
+    container: apps-lxc
+    container_ip: "{{ apps_ip }}"
+    port: 3000
+    deploy_path: /srv/apps/ai-portal
+    health_endpoint: /api/health
+    build_command: "npm run build"
+    routes:
+      - type: domain
+        domains:
+          - "{{ domain }}"
+          - "{{ www_domain }}"
+    secrets:
+      - database_url
+      - better_auth_secret
+      - resend_api_key
+      - sso_jwt_secret
+      - litellm_api_key
+    env:
+      NODE_ENV: production
+      LITELLM_BASE_URL: "http://{{ litellm_ip }}:{{ litellm_port }}/v1"
+      BETTER_AUTH_URL: "https://{{ domain }}"
+      EMAIL_FROM: "AI Portal <noreply@{{ base_domain }}>"
+      SSO_TOKEN_EXPIRY: "900"
+      ADMIN_EMAIL: "admin@{{ base_domain }}"
+      ALLOWED_EMAIL_DOMAINS: "{{ base_domain }}"
+      PORT: "3000"
+  
+  - name: agent-client
+    github_repo: jazzmind/agent-client
+    container: apps-lxc
+    container_ip: "{{ apps_ip }}"
+    port: 3001
+    deploy_path: /srv/apps/agent-client
+    health_endpoint: /api/health
+    build_command: "npm run build"
+    routes:
+      - type: subdomain
+        subdomain: agents
+        websocket: true
+      - type: path
+        domain: "{{ domain }}"
+        path: /agents
+        strip_path: false
+    secrets:
+      - database_url
+      - agent_api_key
+      - jwt_secret
+      - session_secret
+    env:
+      NODE_ENV: production
+      AGENT_API_URL: "http://{{ agent_api_host }}:{{ agent_api_port }}"
+      PORT: "3001"
+  
+  - name: doc-intel
+    github_repo: jazzmind/docintel
+    container: apps-lxc
+    container_ip: "{{ apps_ip }}"
+    port: 3002
+    deploy_path: /srv/apps/doc-intel
+    health_endpoint: /api/health
+    build_command: "npm run build"
+    routes:
+      - type: subdomain
+        subdomain: docs
+      - type: path
+        domain: "{{ domain }}"
+        path: /docs
+        strip_path: false
+    secrets:
+      - database_url
+      - openai_api_key
+      - better_auth_secret
+      - jwt_secret
+    env:
+      NODE_ENV: production
+      MILVUS_HOST: "{{ milvus_ip }}"
+      MILVUS_PORT: "{{ milvus_port }}"
+      PORT: "3002"
+  
+  - name: innovation
+    github_repo: jazzmind/innovation
+    container: apps-lxc
+    container_ip: "{{ apps_ip }}"
+    port: 3003
+    deploy_path: /srv/apps/innovation
+    health_endpoint: /api/health
+    build_command: "npm run build"
+    routes:
+      - type: subdomain
+        subdomain: innovation
+      - type: path
+        domain: "{{ domain }}"
+        path: /innovation
+        strip_path: false
+    secrets:
+      - database_url
+      - better_auth_secret
+      - jwt_secret
+      - openai_api_key
+    env:
+      NODE_ENV: production
+      LITELLM_BASE_URL: "http://{{ litellm_ip }}:{{ litellm_port }}/v1"
+      PORT: "3003"
+

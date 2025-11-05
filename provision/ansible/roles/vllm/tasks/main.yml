@@ -1,0 +1,18 @@
+---
+# vLLM Role - Main Tasks
+# Created: 2025-10-16
+# Purpose: Install and configure vLLM for high-performance LLM inference
+
+- name: Include installation tasks
+  include_tasks: install.yml
+  tags: [vllm, vllm_install]
+
+- name: Include configuration tasks
+  include_tasks: configure.yml
+  tags: [vllm, vllm_configure]
+
+- name: Include model download tasks
+  include_tasks: models.yml
+  tags: [vllm, vllm_models]
+  when: vllm_default_model is defined and vllm_default_model != ""
+

@@ -1,0 +1,142 @@
+version: '3.8'
+
+# Local development containers for Ansible provisioning
+# These containers run systemd so Ansible can manage services just like on Proxmox
+# Usage: 
+#   docker compose -f docker-compose.local.yml up -d
+#   ansible-playbook -i inventory/local/hosts.yml site.yml
+
+services:
+  # PostgreSQL - Database
+  local-postgres:
+    image: postgres:16-alpine
+    container_name: local-postgres
+    hostname: local-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: devpassword
+      POSTGRES_DB: cashman
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      local-net:
+        ipv4_address: 172.20.0.10
+
+  # MinIO - Object Storage
+  local-minio:
+    image: debian:12
+    container_name: local-minio
+    hostname: local-minio
+    privileged: true
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - minio_data:/srv/minio/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    networks:
+      local-net:
+        ipv4_address: 172.20.0.11
+    command: /sbin/init
+
+  # Milvus - Vector Database
+  local-milvus:
+    image: debian:12
+    container_name: local-milvus
+    hostname: local-milvus
+    privileged: true
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - milvus_data:/var/lib/milvus
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    networks:
+      local-net:
+        ipv4_address: 172.20.0.12
+    command: /sbin/init
+
+  # Agent API
+  local-agent-api:
+    image: debian:12
+    container_name: local-agent-api
+    hostname: local-agent-api
+    privileged: true
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - ../agent-server:/opt/agent-server:ro
+    ports:
+      - "3001:3001"
+    networks:
+      local-net:
+        ipv4_address: 172.20.0.13
+    command: /sbin/init
+
+  # Ingest Worker
+  local-ingest:
+    image: debian:12
+    container_name: local-ingest
+    hostname: local-ingest
+    privileged: true
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - ../doc-intel:/opt/doc-intel:ro
+    networks:
+      local-net:
+        ipv4_address: 172.20.0.14
+    command: /sbin/init
+
+  # AI Portal (Next.js)
+  local-apps:
+    image: debian:12
+    container_name: local-apps
+    hostname: local-apps
+    privileged: true
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - ../ai-portal:/opt/ai-portal:ro
+    ports:
+      - "3000:3000"
+    networks:
+      local-net:
+        ipv4_address: 172.20.0.15
+    command: /sbin/init
+
+  # Nginx Proxy
+  local-proxy:
+    image: debian:12
+    container_name: local-proxy
+    hostname: local-proxy
+    privileged: true
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      local-net:
+        ipv4_address: 172.20.0.16
+    command: /sbin/init
+
+volumes:
+  postgres_data:
+  minio_data:
+  milvus_data:
+
+networks:
+  local-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+
+
+
+
+
+
+
+
+

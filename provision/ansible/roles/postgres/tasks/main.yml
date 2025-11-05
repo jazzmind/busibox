@@ -73,7 +73,7 @@
 - name: Create busibox database user
   become_user: postgres
   postgresql_user:
-    name: busibox_user
+    name: "{{ postgres_user }}"
     password: "{{ postgres_password | default('busibox_password_change_me') }}"
     role_attr_flags: "LOGIN,CREATEDB"
     state: present
@@ -81,12 +81,73 @@
 - name: Create busibox database
   become_user: postgres
   postgresql_db:
-    name: busibox
-    owner: busibox_user
+    name: "{{ postgres_db }}"
+    owner: "{{ postgres_user }}"
     encoding: UTF8
     lc_collate: en_US.UTF-8
     lc_ctype: en_US.UTF-8
     template: template0
+
+- name: Load secrets to determine which apps need databases
+  include_vars:
+    file: "{{ playbook_dir }}/roles/secrets/vars/vault.yml"
+  no_log: true
+  tags: [postgres, secrets]
+
+- name: Debug - Show vault structure
+  debug:
+    msg: "Vault loaded. Top-level keys: {{ hostvars[inventory_hostname].keys() | select('match', '^(secrets|network_base|base_domain)') | list }}"
+  tags: [postgres]
+
+- name: Debug - Show secrets keys
+  debug:
+    msg: "Secrets keys available: {{ secrets.keys() | list }}"
+  when: secrets is defined
+  tags: [postgres]
+
+- name: Build list of application databases from secrets
+  set_fact:
+    app_databases: []
+  tags: [postgres]
+
+- name: Debug - Check each secret entry
+  debug:
+    msg: "Checking {{ item.key }}: is_mapping={{ item.value is mapping }}, has_database_url={{ (item.value is mapping) and (item.value.database_url is defined) }}"
+  loop: "{{ secrets | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: secrets is defined
+  tags: [postgres]
+
+- name: Find apps with database_url in secrets
+  set_fact:
+    app_databases: "{{ app_databases + [item.key | replace('-', '_')] }}"
+  loop: "{{ secrets | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: 
+    - secrets is defined
+    - item.value is mapping
+    - item.value.database_url is defined
+  tags: [postgres]
+
+- name: Display databases to be created
+  debug:
+    msg: "Will create databases: {{ app_databases | default([]) }}"
+  tags: [postgres]
+
+- name: Create application-specific databases
+  become_user: postgres
+  postgresql_db:
+    name: "{{ item }}"
+    owner: "{{ postgres_user }}"
+    encoding: UTF8
+    lc_collate: en_US.UTF-8
+    lc_ctype: en_US.UTF-8
+    template: template0
+  loop: "{{ app_databases | default([]) }}"
+  when: app_databases is defined and app_databases | length > 0
+  tags: [postgres]
 
 - name: Create migrations directory
   file:
@@ -108,11 +169,11 @@
   become_user: postgres
   shell: |
     # Check if migration {{ item.version }} has been applied
-    APPLIED=$(psql -U postgres -d busibox -t -c "SELECT COUNT(*) FROM schema_migrations WHERE version = {{ item.version }}" 2>/dev/null || echo "0")
+    APPLIED=$(psql -U postgres -d {{ postgres_db }} -t -c "SELECT COUNT(*) FROM ansible_migrations WHERE version = {{ item.version }}" 2>/dev/null || echo "0")
     
     if [ "$APPLIED" -eq "0" ]; then
       echo "Applying migration {{ item.version }}: {{ item.name }}"
-      psql -U postgres -d busibox -f /var/lib/postgresql/migrations/{{ item.file }}
+      psql -U postgres -d {{ postgres_db }} -f /var/lib/postgresql/migrations/{{ item.file }}
       if [ $? -eq 0 ]; then
         echo "Migration {{ item.version }} applied successfully"
       else
@@ -125,8 +186,48 @@
   loop:
     - { version: 1, name: "initial_schema", file: "001_initial_schema.sql" }
     - { version: 2, name: "add_rls_policies", file: "002_add_rls_policies.sql" }
+    - { version: 3, name: "fix_schema_migrations", file: "003_fix_schema_migrations.sql" }
   register: migration_result
   changed_when: "'applied successfully' in migration_result.stdout"
+
+- name: Grant ownership of all tables to application user
+  become_user: postgres
+  postgresql_query:
+    db: "{{ postgres_db }}"
+    query: |
+      -- Grant ownership of all tables in public schema
+      DO $$
+      DECLARE
+        tbl RECORD;
+      BEGIN
+        FOR tbl IN SELECT tablename FROM pg_tables WHERE schemaname = 'public'
+        LOOP
+          EXECUTE 'ALTER TABLE public.' || quote_ident(tbl.tablename) || ' OWNER TO {{ postgres_user }}';
+        END LOOP;
+      END $$;
+      
+      -- Grant ownership of all sequences
+      DO $$
+      DECLARE
+        seq RECORD;
+      BEGIN
+        FOR seq IN SELECT sequencename FROM pg_sequences WHERE schemaname = 'public'
+        LOOP
+          EXECUTE 'ALTER SEQUENCE public.' || quote_ident(seq.sequencename) || ' OWNER TO {{ postgres_user }}';
+        END LOOP;
+      END $$;
+      
+      -- Grant schema usage
+      GRANT USAGE ON SCHEMA public TO {{ postgres_user }};
+      GRANT CREATE ON SCHEMA public TO {{ postgres_user }};
+      
+      -- Grant all privileges on all tables
+      GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO {{ postgres_user }};
+      GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO {{ postgres_user }};
+      
+      -- Set default privileges for future objects
+      ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO {{ postgres_user }};
+      ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO {{ postgres_user }};
 
 - name: Configure peer/md5 authentication for non-postgres users (after migrations)
   lineinfile:

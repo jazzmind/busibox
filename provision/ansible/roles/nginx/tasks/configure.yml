@@ -9,13 +9,23 @@
   no_log: true
   when: detected_ssl_mode == 'provisioned'
 
-- name: Remove existing site configurations
+- name: Find existing site configurations
+  find:
+    paths: /etc/nginx/sites-enabled
+    patterns: "*.conf"
+    file_type: any
+  register: existing_sites
+
+- name: Remove placeholder site configurations
   file:
-    path: /etc/nginx/sites-enabled/{{ item }}
+    path: "{{ item.path }}"
     state: absent
-  with_fileglob:
-    - "/etc/nginx/sites-enabled/*.conf"
-  when: item != 'redirect-to-https.conf'
+  loop: "{{ existing_sites.files }}"
+  when: 
+    - item.path is search('placeholder-')
+    - not item.path is search('redirect-to-https.conf')
+  loop_control:
+    label: "{{ item.path | basename }}"
 
 - name: Collect all applications with routes
   set_fact:

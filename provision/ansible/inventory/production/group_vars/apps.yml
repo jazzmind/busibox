@@ -1,0 +1,25 @@
+---
+# Apps Container Configuration (PRODUCTION environment)
+# Created: 2025-10-15
+# Updated: 2025-10-23
+# Purpose: Apps-specific overrides for PRODUCTION environment
+#
+# ⚠️ NOTE: Active application definitions are now in all.yml
+# This file is kept for apps-specific configuration overrides.
+#
+# Schema Reference: specs/002-deploy-app-servers/data-model.md
+
+# Legacy application deployment support (deprecated - use applications[] in all.yml)
+# These are kept for backward compatibility with existing roles
+app_user: "appuser"
+app_group: "appuser"
+
+# Node.js version
+nodejs_version: "{{ default_node_version }}"
+
+# PM2 configuration (production resources)
+pm2_instances: 2
+pm2_max_memory_restart: "1G"
+
+# Health check configuration
+app_health_check_timeout: 30

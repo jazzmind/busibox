@@ -1,0 +1,71 @@
+[Unit]
+Description=vLLM Model Server - {{ vllm_default_model }}
+Documentation=https://docs.vllm.ai/
+After=network.target
+
+[Service]
+Type=simple
+User={{ vllm_user }}
+Group={{ vllm_group }}
+WorkingDirectory={{ vllm_home }}
+
+# Environment configuration
+EnvironmentFile=/etc/default/vllm
+
+# Service execution
+ExecStart={{ vllm_venv_dir }}/bin/python -m vllm.entrypoints.openai.api_server \
+  --model {{ vllm_default_model }} \
+  --host {{ vllm_host }} \
+  --port {{ vllm_port }} \
+  --tensor-parallel-size {{ vllm_tensor_parallel_size }} \
+  --gpu-memory-utilization {{ vllm_gpu_memory_utilization }} \
+  --max-model-len {{ vllm_max_model_len }} \
+  --max-num-seqs {{ vllm_max_num_seqs }} \
+{% if vllm_max_num_batched_tokens %}
+  --max-num-batched-tokens {{ vllm_max_num_batched_tokens }} \
+{% endif %}
+{% if vllm_enable_prefix_caching %}
+  --enable-prefix-caching \
+{% endif %}
+{% if vllm_trust_remote_code %}
+  --trust-remote-code \
+{% endif %}
+{% if vllm_served_model_name %}
+  --served-model-name {{ vllm_served_model_name }} \
+{% endif %}
+{% if vllm_enable_api_key and vllm_api_key %}
+  --api-key {{ vllm_api_key }} \
+{% endif %}
+{% if vllm_disable_log_stats %}
+  --disable-log-stats
+{% endif %}
+
+# Restart configuration
+Restart={{ 'always' if vllm_restart_on_failure else 'no' }}
+RestartSec={{ vllm_restart_sec }}
+TimeoutStartSec={{ vllm_startup_timeout }}
+
+# Resource limits
+{% if vllm_memory_limit is defined %}
+MemoryMax={{ vllm_memory_limit }}
+{% endif %}
+{% if vllm_cpu_limit is defined %}
+CPUQuota={{ vllm_cpu_limit }}00%
+{% endif %}
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths={{ vllm_home }}
+ReadWritePaths={{ vllm_cache_dir }}
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vllm
+
+[Install]
+WantedBy=multi-user.target
+

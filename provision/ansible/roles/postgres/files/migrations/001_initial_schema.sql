@@ -5,8 +5,12 @@
 -- Enable UUID extension
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
--- Schema migrations tracking table (must be first)
-CREATE TABLE IF NOT EXISTS schema_migrations (
+-- Note: schema_migrations table is created by the application
+-- The application uses a different schema with columns: id, name, executed_at, checksum
+-- We track Ansible migrations separately in ansible_migrations table
+
+-- Ansible migrations tracking table
+CREATE TABLE IF NOT EXISTS ansible_migrations (
     version INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
     applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP

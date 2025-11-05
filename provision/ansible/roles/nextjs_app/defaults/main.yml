@@ -1,0 +1,35 @@
+---
+# Default variables for Next.js app deployment
+
+# App configuration
+app_name: "ai-portal"
+app_user: "appuser"
+app_group: "appuser"
+app_home: "/opt/{{ app_name }}"
+app_port: 3000
+
+# Node.js version
+nodejs_version: "20"
+
+# Git repository
+app_git_repo: ""  # Must be set in inventory
+app_git_branch: "main"
+
+# Environment variables (override in inventory/group_vars)
+app_env_vars: {}
+
+# Database configuration (if needed)
+app_database_url: ""
+
+# PM2 configuration
+pm2_instances: 2
+pm2_max_memory_restart: "1G"
+
+# Build configuration
+app_build_command: "npm run build"
+app_start_command: "npm start"
+
+# Health check
+app_health_check_path: "/api/health"
+app_health_check_timeout: 30
+

@@ -1,0 +1,57 @@
+---
+# Configuration tasks for Next.js app
+
+- name: Debug - Show app_name
+  debug:
+    msg: "App name: {{ app_name }}"
+  tags: [nextjs_configure, debug]
+
+- name: Debug - Show app_secrets list
+  debug:
+    msg: "App secrets list: {{ app_secrets | default([]) }}"
+  tags: [nextjs_configure, debug]
+
+- name: Debug - Show if secrets var is defined
+  debug:
+    msg: "Secrets var is defined: {{ secrets is defined }}"
+  tags: [nextjs_configure, debug]
+
+- name: Debug - Show if app secrets exist in vault
+  debug:
+    msg: "Secrets for '{{ app_name }}' exist in vault: {{ secrets[app_name] is defined }}"
+  when: secrets is defined
+  tags: [nextjs_configure, debug]
+
+- name: Debug - Show secret keys available (no values)
+  debug:
+    msg: "Available secret keys: {{ secrets[app_name].keys() | list }}"
+  when: 
+    - secrets is defined
+    - secrets[app_name] is defined
+  tags: [nextjs_configure, debug]
+  no_log: false  # Just showing keys, not values
+
+
+- name: Deploy PM2 ecosystem file
+  template:
+    src: ecosystem.config.js.j2
+    dest: "{{ app_home }}/ecosystem.config.js"
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+    mode: '0644'
+  notify: restart nextjs app
+  tags: [nextjs_configure]
+
+- name: Setup PM2 startup script
+  command: pm2 startup systemd -u {{ app_user }} --hp {{ app_home }}
+  args:
+    creates: /etc/systemd/system/pm2-{{ app_user }}.service
+  tags: [nextjs_configure]
+
+- name: Enable PM2 service
+  systemd:
+    name: pm2-{{ app_user }}
+    enabled: yes
+    daemon_reload: yes
+  tags: [nextjs_configure]
+

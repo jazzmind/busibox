@@ -1,0 +1,171 @@
+---
+# Deployment tasks for Next.js app
+
+- name: Construct GitHub repository URL with authentication
+  set_fact:
+    git_repo_url: "{% if secrets.github_token is defined and secrets.github_token %}https://{{ secrets.github_token }}@github.com/{{ app_git_repo }}.git{% else %}https://github.com/{{ app_git_repo }}.git{% endif %}"
+  no_log: true  # Don't log the token
+  tags: [nextjs_deploy]
+
+- name: Clone or update git repository
+  git:
+    repo: "{{ git_repo_url }}"
+    dest: "{{ app_home }}/current"
+    version: "{{ app_git_branch }}"
+    force: yes
+    accept_hostkey: yes
+  become: yes
+  become_user: "{{ app_user }}"
+  register: git_clone
+  tags: [nextjs_deploy]
+  no_log: true  # Don't log the repo URL with token
+
+- name: Deploy environment file to current directory
+  template:
+    src: app.env.j2
+    dest: "{{ app_home }}/current/.env"
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+    mode: '0600'
+  tags: [nextjs_deploy]
+
+- name: Install npm dependencies
+  command: npm install
+  args:
+    chdir: "{{ app_home }}/current"
+  become: yes
+  become_user: "{{ app_user }}"
+  tags: [nextjs_deploy]
+
+- name: Build Next.js app
+  command: "{{ app_build_command }}"
+  args:
+    chdir: "{{ app_home }}/current"
+  become: yes
+  become_user: "{{ app_user }}"
+  environment:
+    NODE_ENV: production
+  register: build_result
+  failed_when: build_result.rc != 0
+  tags: [nextjs_deploy]
+
+- name: Display build error only on failure
+  debug:
+    msg: |
+      ❌ Build failed with exit code {{ build_result.rc }}
+      
+      Last 20 lines of error output:
+      {{ (build_result.stderr_lines | default([]))[-20:] | join('\n') if build_result.stderr_lines | default([]) | length > 0 else 'No error output' }}
+  when: build_result.failed | default(false)
+  tags: [nextjs_deploy]
+
+- name: Check if PM2 process exists
+  command: pm2 describe {{ app_name }}
+  become: yes
+  become_user: "{{ app_user }}"
+  register: pm2_check
+  failed_when: false
+  changed_when: false
+  tags: [nextjs_deploy]
+
+- name: Start app with PM2
+  command: pm2 start {{ app_home }}/ecosystem.config.js
+  args:
+    chdir: "{{ app_home }}/current"
+  become: yes
+  become_user: "{{ app_user }}"
+  when: pm2_check.rc != 0
+  tags: [nextjs_deploy]
+
+- name: Reload app with PM2
+  command: pm2 reload {{ app_name }}
+  become: yes
+  become_user: "{{ app_user }}"
+  when: pm2_check.rc == 0 and git_clone.changed
+  tags: [nextjs_deploy]
+
+- name: Save PM2 process list
+  command: pm2 save
+  become: yes
+  become_user: "{{ app_user }}"
+  tags: [nextjs_deploy]
+
+- name: Wait for app to be ready
+  uri:
+    url: "http://localhost:{{ app_port }}{{ app_health_check_path }}"
+    status_code: 200
+    timeout: "{{ app_health_check_timeout }}"
+  register: health_check
+  until: health_check.status == 200
+  retries: 10
+  delay: 3
+  failed_when: false
+  tags: [nextjs_deploy]
+
+- name: Get PM2 process status
+  command: pm2 status
+  become: yes
+  become_user: "{{ app_user }}"
+  register: pm2_status
+  failed_when: false
+  changed_when: false
+  tags: [nextjs_deploy]
+
+- name: Display PM2 status
+  debug:
+    var: pm2_status.stdout_lines
+  tags: [nextjs_deploy]
+
+- name: Get PM2 error logs for troubleshooting
+  command: cat {{ app_home }}/logs/error.log
+  become: yes
+  become_user: "{{ app_user }}"
+  register: pm2_error_logs
+  failed_when: false
+  changed_when: false
+  when: health_check.status is defined and health_check.status != 200
+  tags: [nextjs_deploy]
+
+- name: Get PM2 output logs for troubleshooting
+  command: tail -100 {{ app_home }}/logs/out.log
+  become: yes
+  become_user: "{{ app_user }}"
+  register: pm2_out_logs
+  failed_when: false
+  changed_when: false
+  when: health_check.status is defined and health_check.status != 200
+  tags: [nextjs_deploy]
+
+- name: Get PM2 logs for troubleshooting
+  command: pm2 logs {{ app_name }} --lines 50 --nostream --err
+  become: yes
+  become_user: "{{ app_user }}"
+  register: pm2_logs
+  failed_when: false
+  changed_when: false
+  when: health_check.status is defined and health_check.status != 200
+  tags: [nextjs_deploy]
+
+- name: Display PM2 error log file
+  debug:
+    msg: "{{ pm2_error_logs.stdout_lines | default(['No error log content']) }}"
+  when: pm2_error_logs.stdout_lines is defined
+  tags: [nextjs_deploy]
+
+- name: Display PM2 output log file
+  debug:
+    msg: "{{ pm2_out_logs.stdout_lines | default(['No output log content']) }}"
+  when: pm2_out_logs.stdout_lines is defined
+  tags: [nextjs_deploy]
+
+- name: Display PM2 logs
+  debug:
+    var: pm2_logs.stdout_lines
+  when: pm2_logs.stdout_lines is defined
+  tags: [nextjs_deploy]
+
+- name: Display app status
+  debug:
+    msg: "{{ app_name }} is {{ 'running' if health_check.status == 200 else 'not responding' }}"
+  tags: [nextjs_deploy]
+

@@ -1,0 +1,158 @@
+# Busibox Cursor Rules
+
+## Overview
+
+Busibox is a local LLM infrastructure platform running on Proxmox LXC containers.
+See `CLAUDE.md` for full project documentation.
+
+## Critical: Organization Rules
+
+**ALWAYS** follow these rules when creating or moving files:
+
+### Documentation Organization
+
+Read: `.cursor/rules/001-documentation-organization.md`
+
+**Quick Reference:**
+- Architecture/design → `docs/architecture/`
+- Deployment guides → `docs/deployment/`
+- Configuration → `docs/configuration/`
+- Troubleshooting → `docs/troubleshooting/`
+- Reference/API → `docs/reference/`
+- How-to guides → `docs/guides/`
+- Session notes → `docs/session-notes/`
+
+**Naming:**
+- Use `kebab-case` for all files
+- Include metadata header (created, updated, status, category)
+- Example: `docs/deployment/ai-portal.md`
+
+### Script Organization
+
+Read: `.cursor/rules/002-script-organization.md`
+
+**Quick Reference:**
+- Runs on **Proxmox host** → `provision/pct/`
+  - Uses `pct`, `pvesm` commands
+  - Creates/manages containers
+  
+- Runs from **admin workstation** → `scripts/`
+  - Orchestrates Ansible
+  - Multi-step deployments
+  
+- Runs **inside container (static)** → `provision/ansible/roles/{role}/files/`
+  - No variables needed
+  
+- Runs **inside container (templated)** → `provision/ansible/roles/{role}/templates/`
+  - Uses Ansible variables
+  - Ends in `.j2`
+
+**Naming:**
+- Use descriptive prefixes: `deploy-`, `setup-`, `test-`, `create_`, etc.
+- Include comprehensive header with execution context
+- Use `set -euo pipefail` for error handling
+
+## Decision Trees
+
+### "Where should this doc go?"
+
+```
+What is the primary purpose?
+├─ System design/architecture → docs/architecture/
+├─ Deployment procedure → docs/deployment/
+├─ Setup/configuration → docs/configuration/
+├─ Fixing issues → docs/troubleshooting/
+├─ API/reference → docs/reference/
+├─ Tutorial/guide → docs/guides/
+└─ Session notes → docs/session-notes/
+```
+
+### "Where should this script go?"
+
+```
+Where does this script execute?
+├─ Proxmox host (uses pct/pvesm)
+│  └→ provision/pct/
+├─ Admin workstation (orchestration)
+│  └→ scripts/
+└─ Inside LXC container
+   ├─ Needs Ansible variables?
+   │  ├─ Yes → provision/ansible/roles/{role}/templates/{name}.sh.j2
+   │  └─ No  → provision/ansible/roles/{role}/files/{name}.sh
+```
+
+## Before Creating Any File
+
+1. **Determine category/context** - Where does this belong?
+2. **Check existing files** - Is there similar content?
+3. **Follow naming conventions** - Use `kebab-case`
+4. **Include proper header** - Scripts need execution context, docs need metadata
+5. **Tell the user** - Explain WHY you placed the file there
+
+## Project Structure
+
+```
+busibox/
+├── .cursor/rules/       # Detailed rules (READ THESE)
+├── docs/                # All documentation (by category)
+│   ├── architecture/
+│   ├── deployment/
+│   ├── configuration/
+│   ├── troubleshooting/
+│   ├── reference/
+│   ├── guides/
+│   └── session-notes/
+├── scripts/             # Admin workstation scripts
+├── provision/
+│   ├── pct/            # Proxmox host scripts
+│   └── ansible/        # Ansible IaC
+└── srv/                # Service source code
+```
+
+## Common Mistakes to Avoid
+
+❌ Placing docs in root or flat `docs/` - Use category subdirectories
+❌ Using UPPERCASE filenames - Use `kebab-case`
+❌ Proxmox scripts in `scripts/` - They go in `provision/pct/`
+❌ Missing script headers - Always include execution context
+❌ Hardcoding IPs in scripts - Use variables or templates
+
+## Key Commands
+
+**Container Creation** (on Proxmox host):
+```bash
+cd /root/busibox/provision/pct
+bash create_lxc_base.sh [production|test]
+```
+
+**Deployment** (from workstation):
+```bash
+cd provision/ansible
+make test      # Deploy to test
+make production # Deploy to production
+```
+
+**Testing**:
+```bash
+bash scripts/test-infrastructure.sh
+bash scripts/test-llm-containers.sh
+```
+
+## When Unsure
+
+1. Read the detailed rules in `.cursor/rules/`
+2. Check `CLAUDE.md` for project overview
+3. Look at existing files in the target directory
+4. Ask the user for clarification
+5. Explain your reasoning when placing files
+
+## Related Documentation
+
+- `.cursor/rules/001-documentation-organization.md` - Detailed doc rules
+- `.cursor/rules/002-script-organization.md` - Detailed script rules
+- `CLAUDE.md` - Complete project guide
+- `docs/architecture/architecture.md` - System architecture
+- `provision/ansible/SETUP.md` - Ansible setup
+
+
+

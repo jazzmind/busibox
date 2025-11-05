@@ -1,0 +1,23 @@
+---
+# Ollama Handlers
+
+- name: reload systemd
+  systemd:
+    daemon_reload: yes
+
+- name: restart ollama
+  systemd:
+    name: ollama
+    state: restarted
+  when: ollama_start_service | default(true)
+
+- name: stop ollama
+  systemd:
+    name: ollama
+    state: stopped
+
+- name: start ollama
+  systemd:
+    name: ollama
+    state: started
+

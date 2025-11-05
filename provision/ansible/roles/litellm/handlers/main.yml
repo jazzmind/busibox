@@ -1,0 +1,23 @@
+---
+# LiteLLM Handlers
+
+- name: reload systemd
+  systemd:
+    daemon_reload: yes
+
+- name: restart litellm
+  systemd:
+    name: litellm
+    state: restarted
+  when: litellm_start_service | default(true)
+
+- name: stop litellm
+  systemd:
+    name: litellm
+    state: stopped
+
+- name: start litellm
+  systemd:
+    name: litellm
+    state: started
+

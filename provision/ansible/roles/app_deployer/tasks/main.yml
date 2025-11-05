@@ -18,6 +18,9 @@
   include_vars:
     file: "{{ playbook_dir }}/roles/secrets/vars/vault.yml"
   no_log: true
+  tags:
+    - app_deployer
+    - secrets
 
 - name: Create deploywatch apps directory
   file:
@@ -60,6 +63,24 @@
   loop_control:
     label: "{{ item.name }}: {{ item.deploy_path }}"
   when: applications | length > 0
+  tags:
+    - app_deployer
+    - secrets
+
+- name: Deploy GitHub token for private repository access
+  copy:
+    content: "{{ secrets.github_token }}"
+    dest: "~/.github_token"
+    mode: "0600"
+    owner: root
+    group: root
+  no_log: true
+  when: 
+    - secrets.github_token is defined
+    - secrets.github_token | length > 0
+  tags:
+    - app_deployer
+    - secrets
 
 - name: Deploy application environment files (.env)
   template:
@@ -74,8 +95,13 @@
   vars:
     app: "{{ item }}"
   no_log: true  # Don't log secrets
-  when: applications | length > 0
+  when: 
+    - applications | length > 0
+    - deploy_app is not defined or deploy_app == item.name
   notify: Restart application
+  tags:
+    - app_deployer
+    - secrets
 
 - name: Detect configuration changes
   stat:
@@ -86,18 +112,21 @@
     label: "{{ item.name }}"
   when: applications | length > 0
 
-- name: Display deployment summary
+- name: Display configuration summary
   debug:
     msg: |
       ✅ App deployer configuration complete
       - Applications configured: {{ applications | length }}
       - Deploywatch scripts generated: {{ deploywatch_apps_dir }}
       - Environment files deployed: {{ applications | length }}
-      
-      Next steps:
-      1. Manually trigger deploywatch for initial deployment:
-         for app in {{ deploywatch_apps_dir }}/*.sh; do bash "$app"; done
-      
-      2. Or wait for deploywatch timer to run (every {{ deploywatch_check_interval }}s)
   when: applications | length > 0
 
+- name: Deploy applications
+  include_tasks: deploy.yml
+  when: 
+    - applications is defined
+    - applications | length > 0
+    - deploy_apps is not defined or deploy_apps | bool
+  tags:
+    - app_deployer
+    - deploy

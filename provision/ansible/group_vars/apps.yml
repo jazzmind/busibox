@@ -1,7 +1,10 @@
 ---
-# Application Definitions for Busibox
+# Application Definitions - Schema Reference and Examples
 # Created: 2025-10-15
-# Purpose: Declarative configuration for all deployable applications
+# Purpose: Documentation and examples for application configuration
+#
+# ⚠️ NOTE: Active application definitions are now in group_vars/all.yml
+# This file is kept for schema documentation and examples only.
 #
 # Schema Reference: specs/002-deploy-app-servers/data-model.md
 #
@@ -24,36 +27,18 @@
 # - domain: Multiple domain names pointing to application
 # - subdomain: Subdomain prefix (e.g., "agents" -> agents.ai.jaycashman.com)
 # - path: URL path routing (e.g., "/agents" -> ai.jaycashman.com/agents)
-
-# T016: Agent-server definition (internal-only service)
-applications:
-  - name: agent-server
-    github_repo: jazzmind/agent-server
-    container: agent-lxc
-    container_ip: "{{ agent_ip }}"
-    port: 8000
-    deploy_path: /srv/agent
-    health_endpoint: /health
-    routes: []  # Internal only - no NGINX routing (FR-002)
-    secrets:
-      - database_url
-      - minio_access_key
-      - minio_secret_key
-      - redis_url
-    env:
-      LOG_LEVEL: "{{ log_level }}"
-      MILVUS_HOST: "{{ milvus_host }}"
-      MILVUS_PORT: "{{ milvus_port }}"
-
-# Additional application definitions (add as needed):
+#
+# To add a new application, edit group_vars/all.yml and add to the 'applications' list.
+#
+# Example application definitions:
 #
 # # Example: Public web application (domain routing)
-# - name: cashman-portal
-#   github_repo: jazzmind/cashman
+# - name: ai-portal
+#   github_repo: jazzmind/ai-portal
 #   container: apps-lxc
 #   container_ip: "{{ apps_ip }}"
 #   port: 3000
-#   deploy_path: /srv/apps/cashman
+#   deploy_path: /srv/apps/ai-portal
 #   health_endpoint: /api/health
 #   build_command: "npm run build"
 #   routes:
@@ -72,7 +57,7 @@ applications:
 #     - jwt_secret
 #   env:
 #     NODE_ENV: production
-#     JWT_ISSUER: cashman-portal
+#     JWT_ISSUER: ai-portal
 #
 # # Example: Application with subdomain and path routing
 # - name: agent-client

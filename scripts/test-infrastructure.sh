@@ -103,7 +103,7 @@ record_test() {
 test_provision_containers() {
   log_section "Test 1: Provision Test Containers"
   
-  log_info "Creating test containers with IDs 301-307..."
+  log_info "Creating test containers with IDs 300-309..."
   
   if bash "${PCT_DIR}/create_lxc_base.sh" test; then
     record_test "Container creation" "PASS"
@@ -114,7 +114,7 @@ test_provision_containers() {
   
   # Verify containers exist
   log_info "Verifying containers exist..."
-  local test_ctids=(301 302 303 304 305 306 307)
+  local test_ctids=(300 301 302 303 304 305 306 307 308 309)
   
   for ctid in "${test_ctids[@]}"; do
     if pct status "$ctid" &>/dev/null; then
@@ -128,6 +128,48 @@ test_provision_containers() {
   record_test "Container verification" "PASS"
 }
 
+test_gpu_passthrough() {
+  log_section "Test 1.5: Configure GPU Passthrough for LLM Containers"
+  
+  log_info "Configuring GPU passthrough for Ollama (308) and vLLM (309)..."
+  
+  # Check if GPUs are available on host
+  if ! command -v nvidia-smi &>/dev/null; then
+    log_warning "nvidia-smi not found - skipping GPU passthrough"
+    record_test "GPU passthrough" "PASS" "No GPU available (skipped)"
+    return 0
+  fi
+  
+  # Run GPU passthrough script
+  if bash "${PCT_DIR}/configure-gpu-passthrough.sh" 308 309; then
+    log_success "GPU passthrough configured"
+    record_test "GPU passthrough configuration" "PASS"
+  else
+    log_error "GPU passthrough configuration failed"
+    record_test "GPU passthrough configuration" "FAIL" "Script failed"
+    return 1
+  fi
+  
+  # Verify GPU configuration in LXC configs
+  log_info "Verifying GPU passthrough in container configs..."
+  
+  if grep -q "GPU Passthrough" /etc/pve/lxc/308.conf 2>/dev/null; then
+    log_success "Ollama container (308) has GPU passthrough configured"
+  else
+    record_test "Ollama GPU config verification" "FAIL" "GPU config not found"
+    return 1
+  fi
+  
+  if grep -q "GPU Passthrough" /etc/pve/lxc/309.conf 2>/dev/null; then
+    log_success "vLLM container (309) has GPU passthrough configured"
+  else
+    record_test "vLLM GPU config verification" "FAIL" "GPU config not found"
+    return 1
+  fi
+  
+  record_test "GPU passthrough verification" "PASS"
+}
+
 test_ansible_provisioning() {
   log_section "Test 2: Ansible Service Provisioning"
   
@@ -137,7 +179,7 @@ test_ansible_provisioning() {
   
   # Test ping connectivity
   log_info "Testing Ansible connectivity..."
-  if ansible -i inventory/test-hosts.yml all -m ping; then
+  if ansible -i inventory/test all -m ping; then
     record_test "Ansible connectivity" "PASS"
   else
     record_test "Ansible connectivity" "FAIL" "Ping failed"
@@ -146,7 +188,7 @@ test_ansible_provisioning() {
   
   # Run full provisioning
   log_info "Running full Ansible provisioning..."
-  if ansible-playbook -i inventory/test-hosts.yml site.yml; then
+  if ansible-playbook -i inventory/test site.yml; then
     record_test "Ansible provisioning" "PASS"
   else
     record_test "Ansible provisioning" "FAIL" "Playbook failed"
@@ -164,7 +206,7 @@ test_health_checks() {
   # PostgreSQL
   log_info "Checking PostgreSQL..."
   export PGPASSWORD='busibox_password_change_me'
-  if psql -h 10.96.201.26 -U busibox_user -d busibox -c "SELECT 1" &>/dev/null; then
+  if psql -h 10.96.201.203 -U busibox_user -d busibox -c "SELECT 1" &>/dev/null; then
     record_test "PostgreSQL health" "PASS"
   else
     record_test "PostgreSQL health" "FAIL" "Connection failed"
@@ -181,15 +223,23 @@ test_health_checks() {
   
   # Milvus
   log_info "Checking Milvus..."
-  if curl -f -s http://10.96.201.27:9091/healthz > /dev/null 2>&1; then
+  if curl -f -s http://10.96.201.204:9091/healthz > /dev/null 2>&1; then
     record_test "Milvus health" "PASS"
   else
     record_test "Milvus health" "FAIL" "Health endpoint failed"
   fi
   
+  # MinIO
+  log_info "Checking MinIO..."
+  if curl -f -s http://10.96.201.205:9000/minio/health/live > /dev/null 2>&1; then
+    record_test "MinIO health" "PASS"
+  else
+    record_test "MinIO health" "FAIL" "Health endpoint failed"
+  fi
+  
   # Agent API (may not be deployed yet)
   log_info "Checking Agent API..."
-  if curl -f -s http://10.96.201.30:8000/health/live > /dev/null 2>&1; then
+  if curl -f -s http://10.96.201.202:8000/health/live > /dev/null 2>&1; then
     record_test "Agent API health" "PASS"
   else
     log_warning "Agent API not responding (may not be deployed yet)"
@@ -205,7 +255,7 @@ test_database_schema() {
   export PGPASSWORD='busibox_password_change_me'
   
   # Check tables exist
-  local tables=$(psql -h 10.96.201.26 -U busibox_user -d busibox -t -c "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename;" 2>/dev/null | wc -l)
+  local tables=$(psql -h 10.96.201.203 -U busibox_test_user -d busibox_test -t -c "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename;" 2>/dev/null | wc -l)
   
   if [[ "$tables" -gt 0 ]]; then
     log_success "Found $tables tables in database"
@@ -218,7 +268,7 @@ test_database_schema() {
   
   # Check migrations applied
   log_info "Checking migrations..."
-  local migrations=$(psql -h 10.96.201.26 -U busibox_user -d busibox -t -c "SELECT COUNT(*) FROM schema_migrations;" 2>/dev/null | xargs)
+  local migrations=$(psql -h 10.96.201.203 -U busibox_test_user -d busibox_test -t -c "SELECT COUNT(*) FROM schema_migrations;" 2>/dev/null | xargs)
   
   if [[ "$migrations" -ge 2 ]]; then
     log_success "Found $migrations migrations applied"
@@ -249,7 +299,7 @@ test_idempotency() {
   log_info "Re-running Ansible provisioning (should be idempotent)..."
   
   # Run from ansible directory
-  if ansible-playbook -i "${ANSIBLE_DIR}/inventory/test-hosts.yml" "${ANSIBLE_DIR}/site.yml" --check 2>&1; then
+  if ansible-playbook -i "${ANSIBLE_DIR}/inventory/test" "${ANSIBLE_DIR}/site.yml" --check 2>&1; then
     record_test "Ansible idempotency" "PASS"
   else
     log_warning "Ansible check mode failed (may have changes)"
@@ -337,6 +387,7 @@ cmd_full() {
   log_section "Running Full Test Suite"
   
   test_provision_containers || true
+  test_gpu_passthrough || true
   test_ansible_provisioning || true
   test_health_checks || true
   test_database_schema || true

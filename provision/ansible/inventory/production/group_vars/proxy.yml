@@ -1,0 +1,23 @@
+---
+# Proxy Container Configuration (PRODUCTION environment)
+# Created: 2025-10-23
+# Purpose: Proxy-specific overrides for PRODUCTION environment
+#
+# Most configuration is in all.yml. This file contains only proxy-specific overrides.
+
+# Security headers (same for test and production)
+nginx_security_headers:
+  X-Frame-Options: "SAMEORIGIN"
+  X-Content-Type-Options: "nosniff"
+  X-XSS-Protection: "1; mode=block"
+  Referrer-Policy: "strict-origin-when-cross-origin"
+
+# Rate limiting (stricter for production)
+nginx_rate_limit_enabled: true
+nginx_rate_limit_zone: "api_limit"
+nginx_rate_limit_rate: "10r/s"
+nginx_rate_limit_burst: 20
+
+# Nginx keepalive
+nginx_keepalive_timeout: 65
+

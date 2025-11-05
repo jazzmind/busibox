@@ -1,0 +1,18 @@
+[Unit]
+Description=Ollama Service
+After=network-online.target
+
+[Service]
+ExecStart={{ ollama_install_dir }}/ollama serve
+User={{ ollama_user }}
+Group={{ ollama_group }}
+Restart=always
+RestartSec=3
+Environment="PATH={{ ollama_install_dir }}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# Environment configuration
+EnvironmentFile=-/etc/default/ollama
+
+[Install]
+WantedBy=default.target
+

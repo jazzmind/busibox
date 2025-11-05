@@ -1,0 +1,216 @@
+version: '3.8'
+
+# Local development environment that mirrors Proxmox deployment
+# Usage: docker compose -f docker-compose.dev.yml up -d
+
+services:
+  # PostgreSQL - Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: dev-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: devpassword
+      POSTGRES_DB: cashman
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # MinIO - Object Storage
+  minio:
+    image: minio/minio:latest
+    container_name: dev-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Milvus - Vector Database (standalone mode)
+  etcd:
+    container_name: dev-milvus-etcd
+    image: quay.io/coreos/etcd:v3.5.5
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - etcd_data:/etcd
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  minio-milvus:
+    container_name: dev-milvus-minio
+    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    ports:
+      - "9002:9000"
+      - "9003:9001"
+    volumes:
+      - milvus_minio_data:/minio_data
+    command: minio server /minio_data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  milvus:
+    container_name: dev-milvus
+    image: milvusdb/milvus:v2.3.3
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio-milvus:9000
+    volumes:
+      - milvus_data:/var/lib/milvus
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    depends_on:
+      - etcd
+      - minio-milvus
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      start_period: 90s
+      timeout: 20s
+      retries: 3
+
+  # Agent API - Webhook handler and API
+  agent-api:
+    container_name: dev-agent-api
+    build:
+      context: ../agent-server
+      dockerfile: Dockerfile
+    environment:
+      NODE_ENV: development
+      PORT: 3001
+      DATABASE_URL: postgresql://postgres:devpassword@postgres:5432/cashman
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_USE_SSL: "false"
+      MILVUS_ADDRESS: milvus:19530
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      milvus:
+        condition: service_healthy
+    volumes:
+      - ../agent-server:/app
+      - /app/node_modules
+    command: npm run dev
+
+  # Ingest Worker - Document processing
+  ingest-worker:
+    container_name: dev-ingest-worker
+    build:
+      context: ../doc-intel
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://postgres:devpassword@postgres:5432/cashman
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_USE_SSL: "false"
+      MILVUS_ADDRESS: milvus:19530
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+    depends_on:
+      - postgres
+      - minio
+      - milvus
+      - agent-api
+    volumes:
+      - ../doc-intel:/app
+      - /app/node_modules
+    command: npm run dev
+
+  # AI Portal - Next.js application
+  ai-portal:
+    container_name: dev-ai-portal
+    build:
+      context: ../ai-portal
+      dockerfile: Dockerfile.dev
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      DATABASE_URL: postgresql://postgres:devpassword@postgres:5432/cashman
+      BETTER_AUTH_SECRET: dev-secret-change-in-production
+      BETTER_AUTH_URL: http://localhost:3000
+      RESEND_API_KEY: ${RESEND_API_KEY}
+      EMAIL_FROM: ${EMAIL_FROM:-noreply@localhost}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      SSO_JWT_SECRET: dev-sso-secret
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-1234}
+      LITELLM_BASE_URL: http://litellm:4000
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@localhost}
+      ALLOWED_EMAIL_DOMAINS: ${ALLOWED_EMAIL_DOMAINS:-*}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - postgres
+      - agent-api
+    volumes:
+      - ../ai-portal:/app
+      - /app/node_modules
+      - /app/.next
+    command: npm run dev
+
+  # LiteLLM - LLM Proxy (optional - can point to external)
+  litellm:
+    container_name: dev-litellm
+    image: ghcr.io/berriai/litellm:main-latest
+    environment:
+      LITELLM_MASTER_KEY: sk-1234
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./config/litellm-config.yaml:/app/config.yaml
+    command: --config /app/config.yaml --port 4000
+
+volumes:
+  postgres_data:
+  minio_data:
+  milvus_minio_data:
+  etcd_data:
+  milvus_data:
+
+networks:
+  default:
+    name: dev-cashman-network
+
+
+
+
+
+

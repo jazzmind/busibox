@@ -1,0 +1,125 @@
+---
+# Configure NGINX with placeholder pages
+# Use this BEFORE apps are deployed to verify routing and SSL
+
+- name: Load secrets for SSL certificates
+  include_vars:
+    file: "{{ playbook_dir }}/roles/secrets/vars/vault.yml"
+  no_log: true
+  when: detected_ssl_mode == 'provisioned'
+
+- name: Remove existing site configurations
+  file:
+    path: /etc/nginx/sites-enabled/
+    state: absent
+  notify: Reload NGINX
+
+- name: Recreate sites-enabled directory
+  file:
+    path: /etc/nginx/sites-enabled
+    state: directory
+    mode: '0755'
+
+- name: Generate main domain placeholder vhost
+  template:
+    src: vhost-placeholder-domain.conf.j2
+    dest: /etc/nginx/sites-available/placeholder-main.conf
+    mode: '0644'
+  notify: Reload NGINX
+
+- name: Enable main domain placeholder vhost
+  file:
+    src: /etc/nginx/sites-available/placeholder-main.conf
+    dest: /etc/nginx/sites-enabled/placeholder-main.conf
+    state: link
+  notify: Reload NGINX
+
+- name: Build subdomain list based on environment (with env_suffix)
+  set_fact:
+    subdomain_placeholders:
+      - subdomain: "agents-{{ env_suffix }}"
+        app_name: "agent-client"
+        placeholder_file: "agents.html"
+      - subdomain: "docs-{{ env_suffix }}"
+        app_name: "doc-intel"
+        placeholder_file: "docs.html"
+      - subdomain: "innovation-{{ env_suffix }}"
+        app_name: "innovation"
+        placeholder_file: "innovation.html"
+  when: env_suffix is defined and env_suffix != ''
+
+- name: Build subdomain list based on environment (without env_suffix)
+  set_fact:
+    subdomain_placeholders:
+      - subdomain: "agents"
+        app_name: "agent-client"
+        placeholder_file: "agents.html"
+      - subdomain: "docs"
+        app_name: "doc-intel"
+        placeholder_file: "docs.html"
+      - subdomain: "innovation"
+        app_name: "innovation"
+        placeholder_file: "innovation.html"
+  when: env_suffix is not defined or env_suffix == ''
+
+- name: Generate subdomain placeholder vhosts
+  template:
+    src: vhost-placeholder-subdomain.conf.j2
+    dest: "/etc/nginx/sites-available/placeholder-{{ item.subdomain }}.conf"
+    mode: '0644'
+  vars:
+    subdomain: "{{ item.subdomain }}"
+    app_name: "{{ item.app_name }}"
+    placeholder_file: "{{ item.placeholder_file }}"
+  loop: "{{ subdomain_placeholders }}"
+  notify: Reload NGINX
+
+- name: Enable subdomain placeholder vhosts
+  file:
+    src: "/etc/nginx/sites-available/placeholder-{{ item.subdomain }}.conf"
+    dest: "/etc/nginx/sites-enabled/placeholder-{{ item.subdomain }}.conf"
+    state: link
+  loop: "{{ subdomain_placeholders }}"
+  notify: Reload NGINX
+
+- name: Enable HTTP to HTTPS redirect
+  file:
+    src: /etc/nginx/sites-available/redirect-to-https.conf
+    dest: /etc/nginx/sites-enabled/redirect-to-https.conf
+    state: link
+  notify: Reload NGINX
+
+- name: Test NGINX configuration
+  command: nginx -t
+  changed_when: false
+  register: nginx_test
+
+- name: Display NGINX configuration test result
+  debug:
+    msg: "{{ nginx_test.stderr_lines }}"
+
+- name: Display placeholder configuration summary
+  debug:
+    msg: |
+      ✅ NGINX Placeholder Configuration Complete
+      
+      Main Domain (ai-portal):
+        https://{{ full_domain }}
+        https://{{ full_domain }}/agents
+        https://{{ full_domain }}/docs
+        https://{{ full_domain }}/innovation
+      
+      Subdomains:
+      {% for item in subdomain_placeholders %}
+        https://{{ item.subdomain }}.{{ domain }}
+      {% endfor %}
+      
+      All routes serve placeholder pages from /var/www/placeholder
+      SSL Mode: {{ detected_ssl_mode }}
+      
+      Test with:
+        curl -k https://{{ full_domain }}
+      {% for item in subdomain_placeholders %}
+        curl -k https://{{ item.subdomain }}.{{ domain }}
+      {% endfor %}
+

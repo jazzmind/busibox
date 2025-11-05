@@ -1,0 +1,34 @@
+---
+# Quick playbook to clean up conflicting NVIDIA repository configurations
+# Run this once to fix the apt conflict, then run the main playbook
+#
+# Usage:
+#   ansible-playbook -i inventory/test fix-nvidia-repo.yml
+
+- name: Fix NVIDIA Repository Conflicts
+  hosts: llm_services
+  become: true
+  gather_facts: no
+  
+  tasks:
+    - name: Remove all NVIDIA repository configurations
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/apt/sources.list.d/cuda-debian12-x86_64.list
+        - /etc/apt/sources.list.d/nvidia-cuda-debian12.list
+        - /usr/share/keyrings/cuda-archive-keyring.gpg
+        - /usr/share/keyrings/cuda-archive-keyring.asc
+        - /usr/share/keyrings/nvidia-cuda-keyring.gpg
+      ignore_errors: yes
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+      register: apt_update
+      
+    - name: Show result
+      debug:
+        msg: "NVIDIA repository cleanup complete. You can now run the main playbook."
+
