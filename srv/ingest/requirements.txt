@@ -41,7 +41,7 @@ tiktoken==0.5.1  # Token counting
 
 # LLM Integration (for embeddings)
 litellm==1.17.0
-openai==1.7.2
+openai>=1.65.2  # Required by marker-pdf
 tenacity==8.2.3  # Retry logic
 
 # Logging
