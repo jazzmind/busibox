@@ -130,7 +130,7 @@ class MilvusService:
                 "text": chunk["text"],
                 "text_dense": embedding,
                 "text_sparse": sparse_vector,  # BM25 sparse vector
-                "page_vectors": None,
+                "page_vectors": [0.0] * 128,  # Empty ColPali vector (128 dims)
                 "user_id": user_id,
                 "metadata": {
                     "content_hash": content_hash,
