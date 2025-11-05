@@ -240,13 +240,13 @@ def create_indexes(collection):
     
     # Index on user_id for filtering
     if "user_id" not in existing_index_fields:
-        print("  Creating STL_SORT index on user_id...")
+        print("  Creating INVERTED index on user_id...")
         collection.create_index(
             field_name="user_id",
-            index_params={"index_type": "STL_SORT"}
+            index_params={"index_type": "INVERTED"}
         )
         indexes_created.append("user_id")
-        print("    ✓ STL_SORT index created")
+        print("    ✓ INVERTED index created")
     else:
         print("    Index on user_id already exists")
     
