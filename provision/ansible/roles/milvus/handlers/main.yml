@@ -1,6 +1,9 @@
 ---
 - name: Up Milvus
-  shell: docker compose up -d
+  shell: |
+    docker compose down
+    find /srv/milvus/data -type f -name "LOCK" -delete || true
+    docker compose up -d
   args:
     chdir: /srv/milvus
 
