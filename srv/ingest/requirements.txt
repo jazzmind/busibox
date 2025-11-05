@@ -1,8 +1,14 @@
 # Busibox Ingest Worker Requirements
 # Python 3.11+
 
+# API Framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+sse-starlette==1.6.5
+
 # Database
 psycopg2-binary==2.9.9
+asyncpg==0.29.0
 
 # Vector Database
 pymilvus==2.3.5
@@ -12,6 +18,9 @@ minio==7.2.3
 
 # Queue
 redis==5.0.1
+
+# HTTP Client
+httpx==0.25.0
 
 # Text Extraction
 pdfplumber==0.10.3

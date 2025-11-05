@@ -38,6 +38,7 @@ def load_config() -> Dict[str, any]:
         "minio_access_key": os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
         "minio_secret_key": os.getenv("MINIO_SECRET_KEY", "minioadmin"),
         "minio_secure": os.getenv("MINIO_SECURE", "false").lower() == "true",
+        "minio_bucket": os.getenv("MINIO_BUCKET", "documents"),
         
         # liteLLM configuration
         "litellm_base_url": os.getenv("LITELLM_BASE_URL", "http://localhost:8000"),

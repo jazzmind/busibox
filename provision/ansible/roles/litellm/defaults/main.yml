@@ -63,6 +63,15 @@ litellm_models:
   #   litellm_params:
   #     model: "openai/Qwen/Qwen3-VL-8B-Instruct"
   #     api_base: "http://{{ vllm_ip }}:{{ vllm_port }}/v1"
+  
+  # Embedding models (for ingestion service)
+  - model_name: "text-embedding-3-small"
+    litellm_params:
+      model: "openai/text-embedding-3-small"
+      api_base: "https://api.openai.com/v1"
+      api_key: "{{ secrets.openai.api_key | default('sk-change-me') }}"
+    # Embedding dimension: 1536
+    # Used by ingestion service for dense semantic embeddings
 
 # Router Settings
 litellm_routing_strategy: "simple-shuffle"

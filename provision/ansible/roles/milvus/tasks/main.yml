@@ -150,6 +150,26 @@
     var: milvus_init.stdout_lines
   when: milvus_init.stdout_lines is defined
 
+- name: Copy hybrid search schema script
+  copy:
+    src: files/hybrid_schema.py
+    dest: /root/hybrid_schema.py
+    mode: "0755"
+
+- name: Initialize hybrid search collection
+  shell: |
+    /opt/milvus-tools/bin/python /root/hybrid_schema.py
+  environment:
+    MILVUS_HOST: localhost
+    MILVUS_PORT: "19530"
+  register: hybrid_schema_init
+  ignore_errors: yes
+
+- name: Display hybrid schema initialization result
+  debug:
+    var: hybrid_schema_init.stdout_lines
+  when: hybrid_schema_init.stdout_lines is defined
+
 - name: Create Milvus health check script
   copy:
     dest: /usr/local/bin/milvus-health-check

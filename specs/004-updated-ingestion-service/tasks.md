@@ -36,11 +36,11 @@ Create PostgreSQL migration to add tables for ingestion service: `ingestion_file
 - Create rollback script: `010_rollback.sql`
 
 **Acceptance Criteria**:
-- [ ] Migration script runs without errors
-- [ ] All tables created with correct schema
-- [ ] Indexes created and functional
-- [ ] LISTEN/NOTIFY triggers fire on status updates
-- [ ] Rollback script successfully reverts changes
+- [X] Migration script runs without errors
+- [X] All tables created with correct schema
+- [X] Indexes created and functional
+- [X] LISTEN/NOTIFY triggers fire on status updates
+- [X] Rollback script successfully reverts changes
 
 **Files Modified**:
 - `provision/ansible/roles/postgres/files/migrations/010_ingestion_schema.sql` (new)
@@ -66,11 +66,11 @@ Create Python script to deploy Milvus collection schema with support for dense, 
 - Add Ansible task to run schema script
 
 **Acceptance Criteria**:
-- [ ] Collection created with all required fields
-- [ ] BM25 function configured and working
-- [ ] All indexes created successfully
-- [ ] Collection loaded into memory
-- [ ] Can insert and query test vectors
+- [X] Collection created with all required fields
+- [X] BM25 function configured and working
+- [X] All indexes created successfully
+- [X] Collection loaded into memory
+- [X] Can insert and query test vectors
 
 **Files Modified**:
 - `provision/ansible/roles/milvus/files/hybrid_schema.py` (new)
@@ -94,10 +94,10 @@ Add text-embedding-3-small model configuration to liteLLM for dense embedding ge
 - Update `provision/ansible/roles/litellm/templates/config.yaml.j2` if needed
 
 **Acceptance Criteria**:
-- [ ] Model listed in liteLLM configuration
-- [ ] Can generate embeddings via liteLLM API
-- [ ] Health check passes for embedding endpoint
-- [ ] Embedding dimension is 1536
+- [X] Model listed in liteLLM configuration
+- [X] Can generate embeddings via liteLLM API
+- [X] Health check passes for embedding endpoint
+- [X] Embedding dimension is 1536
 
 **Files Modified**:
 - `provision/ansible/roles/litellm/defaults/main.yml`
@@ -152,10 +152,10 @@ Set up FastAPI application structure under `srv/ingest/src/api/`.
 - Create `api/__init__.py` for exports
 
 **Acceptance Criteria**:
-- [ ] Directory structure created
-- [ ] FastAPI app runs and serves /health endpoint
-- [ ] Middleware configured (CORS, logging, tracing)
-- [ ] Can import and use API modules
+- [X] Directory structure created
+- [X] FastAPI app runs and serves /health endpoint
+- [X] Middleware configured (CORS, logging, tracing)
+- [X] Can import and use API modules
 
 **Files Created**:
 - `srv/ingest/src/api/main.py`
@@ -186,14 +186,14 @@ Implement POST /upload endpoint with chunked upload support and SHA-256 hash cal
 - Return file ID and initial status
 
 **Acceptance Criteria**:
-- [ ] Accepts file uploads of any size
-- [ ] Calculates SHA-256 hash correctly
-- [ ] Detects duplicate files
-- [ ] Stores files in MinIO under correct path (documents/{user_id}/{file_id}/)
-- [ ] Creates database record with all required fields
-- [ ] Queues job for new files
-- [ ] Returns file ID within 2 seconds
-- [ ] Handles upload failures gracefully
+- [X] Accepts file uploads of any size
+- [X] Calculates SHA-256 hash correctly
+- [X] Detects duplicate files
+- [X] Stores files in MinIO under correct path (documents/{user_id}/{file_id}/)
+- [X] Creates database record with all required fields
+- [X] Queues job for new files
+- [X] Returns file ID within 2 seconds
+- [X] Handles upload failures gracefully
 
 **Files Created**:
 - `srv/ingest/src/api/routes/upload.py`
@@ -221,13 +221,13 @@ Implement GET /status/{fileId} endpoint using Server-Sent Events with PostgreSQL
 - Handle client disconnections gracefully
 
 **Acceptance Criteria**:
-- [ ] Establishes SSE connection successfully
-- [ ] Sends current status immediately
-- [ ] Streams updates in real-time (<2s latency)
-- [ ] Closes stream on completion/failure
-- [ ] Handles multiple concurrent connections per file
-- [ ] Validates user ownership before streaming
-- [ ] Includes progress percentage and stage metrics
+- [X] Establishes SSE connection successfully
+- [X] Sends current status immediately
+- [X] Streams updates in real-time (<2s latency)
+- [X] Closes stream on completion/failure
+- [X] Handles multiple concurrent connections per file
+- [X] Validates user ownership before streaming
+- [X] Includes progress percentage and stage metrics
 
 **Files Created**:
 - `srv/ingest/src/api/routes/status.py`
@@ -252,12 +252,12 @@ Implement GET /files/{fileId} and DELETE /files/{fileId} endpoints.
 - Handle cascading deletes properly
 
 **Acceptance Criteria**:
-- [ ] GET returns complete file metadata with current status
-- [ ] DELETE removes file from all storage systems
-- [ ] User ownership validated
-- [ ] Returns 404 for non-existent files
-- [ ] Returns 403 for unauthorized access
-- [ ] Cascading delete works correctly
+- [X] GET returns complete file metadata with current status
+- [X] DELETE removes file from all storage systems
+- [X] User ownership validated
+- [X] Returns 404 for non-existent files
+- [X] Returns 403 for unauthorized access
+- [X] Cascading delete works correctly
 
 **Files Created**:
 - `srv/ingest/src/api/routes/files.py`
@@ -280,11 +280,11 @@ Implement GET /health endpoint with dependency checks.
 - Overall status: healthy (all up), degraded (some down), unhealthy (critical services down)
 
 **Acceptance Criteria**:
-- [ ] Returns 200 when all services healthy
-- [ ] Returns 503 when critical services down
-- [ ] Checks all dependencies
-- [ ] Includes response times
-- [ ] Response format matches OpenAPI spec
+- [X] Returns 200 when all services healthy
+- [X] Returns 503 when critical services down
+- [X] Checks all dependencies
+- [X] Includes response times
+- [X] Response format matches OpenAPI spec
 
 **Files Created**:
 - `srv/ingest/src/api/routes/health.py`
