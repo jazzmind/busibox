@@ -539,9 +539,11 @@ ssh root@10.96.200.30 "journalctl -u ingest-worker -n 100 --no-pager"
 ```
 
 **Common causes**:
-- Missing environment variables (check `/etc/ingest-api/.env`)
+- Missing environment variables (check `/srv/ingest-api/.env`)
 - Dependency service down (check health endpoint)
 - Port already in use (check `netstat -tulpn | grep 8002`)
+- Python dependencies not installed (check `/srv/ingest-api/venv/bin/python -m pip list`)
+- Source code not copied correctly (check `/srv/ingest-api/src/api/main.py` exists)
 
 ---
 
