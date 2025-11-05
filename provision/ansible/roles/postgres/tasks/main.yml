@@ -92,7 +92,7 @@
   become_user: postgres
   postgresql_user:
     name: "{{ files_user | default('files_user') }}"
-    password: "{{ files_password | default(postgres_password) }}"
+    password: "{{ files_password | default(postgres_password | default('busibox_password_change_me')) }}"
     role_attr_flags: "LOGIN,CREATEDB"
     state: present
 
