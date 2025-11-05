@@ -32,7 +32,7 @@ class Config:
         # Milvus configuration
         self.milvus_host = os.getenv("MILVUS_HOST", "10.96.200.27")
         self.milvus_port = int(os.getenv("MILVUS_PORT", "19530"))
-        self.milvus_collection = os.getenv("MILVUS_COLLECTION", "documents")
+        self.milvus_collection = os.getenv("MILVUS_COLLECTION", "document_embeddings")
         
         # MinIO configuration
         self.minio_endpoint = os.getenv("MINIO_ENDPOINT", "10.96.200.28:9000")
