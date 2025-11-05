@@ -341,13 +341,13 @@ Enhance text extraction to use Marker for PDFs, TATR for tables, and extract pag
 - Detect scanned PDFs and trigger OCR
 
 **Acceptance Criteria**:
-- [ ] Extracts text from all supported formats
-- [ ] Marker produces high-quality markdown from PDFs
-- [ ] TATR extracts complex tables accurately
-- [ ] Page images saved for ColPali processing
-- [ ] Fallback to pdfplumber works
-- [ ] OCR triggered for scanned PDFs
-- [ ] Extraction accuracy >95% for standard formats
+- [X] Extracts text from all supported formats
+- [X] Marker produces high-quality markdown from PDFs
+- [X] TATR extracts complex tables accurately
+- [X] Page images saved for ColPali processing
+- [X] Fallback to pdfplumber works
+- [X] OCR triggered for scanned PDFs
+- [X] Extraction accuracy >95% for standard formats
 
 **Files Modified**:
 - `srv/ingest/src/worker/processors/text_extractor.py`
@@ -451,12 +451,12 @@ Update chunking to use 400-800 token range with 10-15% overlap and language-awar
 - Implement language-aware chunking for mixed-language docs (split on language boundaries when feasible)
 
 **Acceptance Criteria**:
-- [ ] Chunks are 400-800 tokens
-- [ ] 10-15% overlap maintained
-- [ ] Semantic boundaries respected (>80% of cases)
-- [ ] Page numbers preserved
-- [ ] Language boundaries respected in mixed-language docs
-- [ ] Metadata (offset, section) stored with chunks
+- [X] Chunks are 400-800 tokens
+- [X] 10-15% overlap maintained
+- [X] Semantic boundaries respected (>80% of cases)
+- [X] Page numbers preserved
+- [X] Language boundaries respected in mixed-language docs
+- [X] Metadata (offset, section) stored with chunks
 
 **Files Modified**:
 - `srv/ingest/src/worker/processors/chunker.py`
@@ -480,11 +480,11 @@ Update embedder to generate dense embeddings via liteLLM and handle multi-vector
 - Store embeddings linked to chunks
 
 **Acceptance Criteria**:
-- [ ] Generates 1536-dim embeddings via liteLLM
-- [ ] Batches requests efficiently (reduce API calls)
-- [ ] Handles rate limits with exponential backoff
-- [ ] Embeddings match chunk content
-- [ ] Fast processing (<30s for 50 chunks)
+- [X] Generates 1536-dim embeddings via liteLLM
+- [X] Batches requests efficiently (reduce API calls)
+- [X] Handles rate limits with exponential backoff
+- [X] Embeddings match chunk content
+- [X] Fast processing (<30s for 50 chunks)
 
 **Files Modified**:
 - `srv/ingest/src/worker/processors/embedder.py`
@@ -537,12 +537,12 @@ Update Milvus service to insert text chunks with dense embeddings and PDF pages 
 - Link all vectors to content_hash for reuse
 
 **Acceptance Criteria**:
-- [ ] Text chunks inserted with dense embeddings
-- [ ] BM25 sparse vectors auto-generated
-- [ ] PDF pages inserted with multi-vectors
-- [ ] All vectors linked to content_hash
-- [ ] Batch insert works efficiently
-- [ ] Can query inserted vectors
+- [X] Text chunks inserted with dense embeddings
+- [X] BM25 sparse vectors auto-generated
+- [X] PDF pages inserted with multi-vectors
+- [X] All vectors linked to content_hash
+- [X] Batch insert works efficiently
+- [X] Can query inserted vectors
 
 **Files Modified**:
 - `srv/ingest/src/worker/services/milvus_service.py`

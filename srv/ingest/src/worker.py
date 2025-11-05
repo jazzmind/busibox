@@ -38,6 +38,7 @@ from typing import List, Optional
 import structlog
 import redis
 from redis.exceptions import RedisError
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from services.file_service import FileService
 from services.postgres_service import PostgresService
@@ -171,6 +172,80 @@ class IngestWorker:
             return self.config.get("timeout_medium", 600)  # 10 minutes
         else:
             return self.config.get("timeout_large", 1200)  # 20 minutes
+    
+    def _is_transient_error(self, error: Exception) -> bool:
+        """
+        Determine if error is transient (should retry) or permanent.
+        
+        Transient errors:
+        - Network timeouts
+        - Service unavailable (503, 502)
+        - Connection errors
+        - Rate limiting (429)
+        - Temporary service failures
+        
+        Permanent errors:
+        - Corrupted files
+        - Unsupported formats
+        - Invalid data
+        - Authentication failures (401)
+        - Permission errors (403)
+        """
+        error_str = str(error).lower()
+        error_type = type(error).__name__
+        
+        # Transient errors
+        transient_indicators = [
+            "timeout",
+            "connection",
+            "unavailable",
+            "temporary",
+            "retry",
+            "rate limit",
+            "429",
+            "502",
+            "503",
+            "504",
+            "network",
+            "socket",
+            "refused",
+        ]
+        
+        if any(indicator in error_str for indicator in transient_indicators):
+            return True
+        
+        # Permanent errors
+        permanent_indicators = [
+            "corrupted",
+            "invalid",
+            "unsupported",
+            "format",
+            "malformed",
+            "parse error",
+            "401",
+            "403",
+            "404",  # File not found is permanent
+            "valueerror",
+            "typeerror",
+        ]
+        
+        if any(indicator in error_str for indicator in permanent_indicators):
+            return False
+        
+        # Check error type
+        transient_types = (
+            ConnectionError,
+            TimeoutError,
+            asyncio.TimeoutError,
+            redis.ConnectionError,
+            redis.TimeoutError,
+        )
+        
+        if isinstance(error, transient_types):
+            return True
+        
+        # Default: assume transient for unknown errors (safer to retry)
+        return True
     
     def _check_duplicate(self, file_id: str, content_hash: str) -> bool:
         """Check if file with same content_hash already processed."""
@@ -516,6 +591,7 @@ class IngestWorker:
             processing_duration = int(time.time() - start_time)
             error_msg = f"Processing exceeded {timeout_seconds}s timeout for {page_count}-page document"
             
+            # Timeout is considered permanent (document too large)
             self.postgres_service.update_status(
                 file_id=file_id,
                 stage="failed",
@@ -533,22 +609,86 @@ class IngestWorker:
         
         except Exception as e:
             error_msg = str(e)
+            is_transient = self._is_transient_error(e)
             
-            self.postgres_service.update_status(
-                file_id=file_id,
-                stage="failed",
-                progress=0,
-                error_message=error_msg,
-            )
+            # Get current retry count
+            conn = self.postgres_service._get_connection()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT retry_count FROM ingestion_status WHERE file_id = %s",
+                        (uuid.UUID(file_id),),
+                    )
+                    result = cur.fetchone()
+                    retry_count = result[0] if result else 0
+            finally:
+                self.postgres_service._return_connection(conn)
             
-            logger.error(
-                "Job processing failed",
-                job_id=job_id,
-                file_id=file_id,
-                error=error_msg,
-                exc_info=True,
-            )
-            raise
+            max_retries = 3
+            
+            if is_transient and retry_count < max_retries:
+                # Transient error - will retry
+                new_retry_count = retry_count + 1
+                self.postgres_service.update_status(
+                    file_id=file_id,
+                    stage="queued",  # Back to queued for retry
+                    progress=0,
+                    error_message=f"Transient error (retry {new_retry_count}/{max_retries}): {error_msg}",
+                    retry_count=new_retry_count,
+                )
+                
+                logger.warning(
+                    "Job processing failed (transient, will retry)",
+                    job_id=job_id,
+                    file_id=file_id,
+                    retry_count=new_retry_count,
+                    max_retries=max_retries,
+                    error=error_msg,
+                    exc_info=True,
+                )
+                
+                # Re-queue job in Redis for retry
+                try:
+                    self.redis_client.xadd(
+                        self.stream_name,
+                        {
+                            "job_id": job_id,
+                            "file_id": file_id,
+                            "user_id": user_id,
+                            "storage_path": storage_path,
+                            "mime_type": mime_type,
+                            "original_filename": original_filename,
+                            "trace_id": trace_id,
+                            "retry_count": str(new_retry_count),
+                        },
+                    )
+                    logger.info("Job re-queued for retry", file_id=file_id, retry_count=new_retry_count)
+                except Exception as requeue_error:
+                    logger.error("Failed to re-queue job", file_id=file_id, error=str(requeue_error))
+                
+                # Don't raise - allow Redis to handle retry
+                return
+            
+            else:
+                # Permanent error or max retries exceeded
+                self.postgres_service.update_status(
+                    file_id=file_id,
+                    stage="failed",
+                    progress=0,
+                    error_message=error_msg if not is_transient else f"Max retries ({max_retries}) exceeded: {error_msg}",
+                    retry_count=retry_count,
+                )
+                
+                logger.error(
+                    "Job processing failed (permanent or max retries)",
+                    job_id=job_id,
+                    file_id=file_id,
+                    retry_count=retry_count,
+                    is_transient=is_transient,
+                    error=error_msg,
+                    exc_info=True,
+                )
+                raise
         
         finally:
             # Cleanup temporary file
