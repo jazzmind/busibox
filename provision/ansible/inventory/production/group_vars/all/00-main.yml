@@ -57,9 +57,9 @@ postgres_db: busibox
 postgres_user: busibox_user
 
 # Files/Ingestion database
-files_db: "{{ secrets.files.db_name }}"
-files_user: "{{ secrets.files.db_user }}"
-files_password: "{{ secrets.files.db_password }}"
+files_db: files
+files_user: "{{ postgres_user }}"
+files_password: "{{ secrets.postgresql.password }}"
 
 milvus_host: "{{ milvus_ip }}"
 milvus_port: 19530
