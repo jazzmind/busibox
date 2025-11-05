@@ -218,7 +218,7 @@ def create_indexes(collection):
         print("    Index on text_sparse already exists")
     
     # Index for ColPali page vectors (HNSW)
-    if not collection.has_index("page_vectors"):
+    if not collection.has_index(field_name="page_vectors"):
         print("  Creating HNSW index on page_vectors...")
         collection.create_index(
             field_name="page_vectors",
