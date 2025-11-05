@@ -22,11 +22,11 @@ class Config:
         self.redis_host = os.getenv("REDIS_HOST", "10.96.200.29")
         self.redis_port = int(os.getenv("REDIS_PORT", "6379"))
         
-        # PostgreSQL configuration
+        # PostgreSQL configuration (files database)
         self.postgres_host = os.getenv("POSTGRES_HOST", "10.96.200.26")
         self.postgres_port = int(os.getenv("POSTGRES_PORT", "5432"))
-        self.postgres_db = os.getenv("POSTGRES_DB", "busibox")
-        self.postgres_user = os.getenv("POSTGRES_USER", "postgres")
+        self.postgres_db = os.getenv("POSTGRES_DB", "files")
+        self.postgres_user = os.getenv("POSTGRES_USER", "files_user")
         self.postgres_password = os.getenv("POSTGRES_PASSWORD", "")
         
         # Milvus configuration
