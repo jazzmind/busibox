@@ -154,7 +154,7 @@
     fi
   args:
     executable: /bin/bash
-  become: yes
+  become: true
   become_user: "{{ litellm_user }}"
   when: litellm_enable_database
   register: prisma_generate_result
@@ -183,7 +183,7 @@
     echo "Database schema updated successfully"
   args:
     executable: /bin/bash
-  become: yes
+  become: true
   become_user: "{{ litellm_user }}"
   when: litellm_enable_database
   tags: [litellm_configure, litellm_db]

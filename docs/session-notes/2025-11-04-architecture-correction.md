@@ -13,11 +13,11 @@ The system specification contains a logical inconsistency with **two agent syste
 
 ## Root Cause
 
-The `srv/agent` FastAPI service was specified but conflicts with the actual working deployment where `agent-lxc` runs:
-- Next.js application (via `nextjs_app` Ansible role)
-- liteLLM gateway (via `litellm` Ansible role)
-
-Functionality in `srv/agent` (file upload, status tracking) actually belongs in the **ingestion service**.
+Multiple misunderstandings about the agent container:
+1. **Incorrect assumption**: `srv/agent` directory contains agent API code
+2. **Reality**: Agent API is deployed from **separate agent-server repository** (Mastra-based)
+3. **Discovery**: Agent-server already has RAG document upload capabilities
+4. **Conflict**: Spec calls for separate ingest service, but agent-server overlaps 40% of functionality
 
 ## Solution
 
@@ -78,22 +78,25 @@ Functionality in `srv/agent` (file upload, status tracking) actually belongs in 
 
 ## Documents Created
 
-1. **`docs/architecture/architecture-correction.md`**
-   - Full architectural analysis
-   - Component responsibilities
-   - Data flows
-   - Migration path
-   - Questions for resolution
+1. **`docs/architecture/architecture-correction.md`** ⚠️ (needs revision)
+   - Initial analysis based on incorrect srv/agent assumption
+   - Still useful for container layout and data flows
 
-2. **`docs/architecture/spec-corrections.md`**
-   - Specific changes needed to spec.md
-   - Updated user stories
-   - New functional requirements
-   - Updated success criteria
-   - Implementation phases
+2. **`docs/architecture/spec-corrections.md`** ⚠️ (needs revision)  
+   - Based on assumption of separate ingest service
+   - Needs update for agent-server extension approach
 
-3. **`docs/session-notes/2025-11-04-architecture-correction.md`** (this file)
-   - Session summary
+3. **`docs/architecture/corrected-architecture-summary.md`** ⚠️ (needs revision)
+   - Quick reference based on initial incorrect assumptions
+
+4. **`docs/architecture/agent-server-vs-ingest-gap-analysis.md`** ✅ **PRIMARY**
+   - Correct understanding of agent-server
+   - Functional gap analysis
+   - Recommendation: Extend agent-server
+   - Implementation plan with phases
+
+5. **`docs/session-notes/2025-11-04-architecture-correction.md`** (this file)
+   - Session summary with corrected understanding
 
 ## Next Steps
 
@@ -178,14 +181,42 @@ Functionality in `srv/agent` (file upload, status tracking) actually belongs in 
 - `.cursor/rules/002-script-organization.md` - Identified need for Ansible role changes
 - Project architecture principles - Maintained clear separation of concerns
 
+## Critical Discovery
+
+**Agent container uses agent-server repository** (not `srv/agent`):
+- Mastra-based TypeScript application
+- Already has RAG database management
+- Already has document upload endpoint
+- Already has basic processing (chunking)
+- Missing: MinIO, Redis queue, SSE status, real embeddings, Milvus integration
+
+## Key Decision Point
+
+**Should we extend agent-server or create separate ingest service?**
+
+### Option A: Extend Agent-Server (RECOMMENDED)
+- ✅ Avoids 40% code duplication
+- ✅ Single service = simpler
+- ✅ Uses existing auth, database, API routes
+- ✅ Mastra has RAG abstractions
+- ⚠️ Adds complexity to agent-server
+
+### Option B: Separate Ingest Service
+- ❌ Duplicates existing functionality
+- ❌ Another service to maintain
+- ❌ Schema duplication
+- ✅ Clear separation
+- ✅ Could use Python
+
+**See**: `docs/architecture/agent-server-vs-ingest-gap-analysis.md` for full analysis
+
 ## User Confirmation Needed
 
-Before proceeding with implementation:
-
-1. ✅ Confirm the corrected architecture is accurate
-2. ❓ Answer authentication strategy question
-3. ❓ Decide on network isolation for ingest API
-4. ❓ Decide where semantic search endpoint should live
-5. ❓ Confirm SSE is acceptable (vs WebSocket)
+1. ✅ **Confirmed**: Agent uses agent-server repo (Mastra-based)
+2. ❓ **Decision**: Extend agent-server vs separate ingest service?
+3. ❓ **If extending**: Worker as separate systemd service or same process?
+4. ❓ **If extending**: Redis inside agent-lxc or separate?
+5. ❓ **Vector store**: Milvus vs pgvector?
+6. ❓ **Authentication**: How should apps-lxc auth to agent API?
 
 
