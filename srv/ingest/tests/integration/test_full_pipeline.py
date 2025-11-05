@@ -85,9 +85,10 @@ async def test_stage_1_upload(
     test_user_id: str,
     client: TestClient,
     test_document_content: bytes,
+    worker_process,
 ):
     """Test Stage 1: Document upload and initial storage."""
-    logger.info("Testing Stage 1: Upload")
+    logger.info("Testing Stage 1: Upload", worker_pid=worker_process.pid)
     
     # Upload document
     response = client.post(
@@ -128,9 +129,10 @@ async def test_stage_2_parsing(
     test_user_id: str,
     client: TestClient,
     test_document_content: bytes,
+    worker_process,
 ):
     """Test Stage 2: Text extraction and parsing."""
-    logger.info("Testing Stage 2: Parsing")
+    logger.info("Testing Stage 2: Parsing", worker_pid=worker_process.pid)
     
     # Upload and wait for parsing
     response = client.post(
@@ -167,6 +169,7 @@ async def test_stage_2_parsing(
 @pytest.mark.asyncio
 @pytest.mark.integration
 async def test_stage_3_classification(
+    worker_process,
     config: Config,
     test_user_id: str,
     client: TestClient,
@@ -216,6 +219,7 @@ async def test_stage_3_classification(
 @pytest.mark.asyncio
 @pytest.mark.integration
 async def test_stage_4_chunking(
+    worker_process,
     config: Config,
     test_user_id: str,
     client: TestClient,
@@ -274,6 +278,7 @@ async def test_stage_4_chunking(
 @pytest.mark.asyncio
 @pytest.mark.integration
 async def test_stage_5_embedding(
+    worker_process,
     config: Config,
     test_user_id: str,
     client: TestClient,
@@ -322,6 +327,7 @@ async def test_stage_5_embedding(
 @pytest.mark.asyncio
 @pytest.mark.integration
 async def test_stage_6_indexing(
+    worker_process,
     config: Config,
     test_user_id: str,
     client: TestClient,
@@ -385,6 +391,7 @@ async def test_stage_6_indexing(
 @pytest.mark.asyncio
 @pytest.mark.integration
 async def test_full_pipeline_with_search(
+    worker_process,
     config: Config,
     test_user_id: str,
     client: TestClient,
