@@ -23,7 +23,7 @@ MINIO_SECRET_KEY=minioadminchange
 MINIO_SECURE=false
 MINIO_BUCKET=documents
 
-# Milvus
+# Milvus - REQUIRED for Milvus tests
 MILVUS_HOST=10.96.201.204
 MILVUS_PORT=19530
 MILVUS_COLLECTION=document_embeddings
