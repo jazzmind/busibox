@@ -99,6 +99,7 @@ class PostgresService:
         Returns:
             file_id
         """
+        import json
         async with self.pool.acquire() as conn:
             await conn.execute("""
                 INSERT INTO ingestion_files (
@@ -115,8 +116,8 @@ class PostgresService:
                 size_bytes,
                 storage_path,
                 content_hash,
-                metadata or {},
-                {"visibility": "private"},
+                json.dumps(metadata) if isinstance(metadata, dict) else (metadata or '{}'),
+                json.dumps({"visibility": "private"}),
             )
             
             # Create initial status record
