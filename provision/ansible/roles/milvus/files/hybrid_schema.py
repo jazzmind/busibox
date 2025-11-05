@@ -234,7 +234,7 @@ def create_indexes(collection):
         print("    Index on page_vectors already exists")
     
     # Index on user_id for filtering
-    if not collection.has_index("user_id"):
+    if not collection.has_index(field_name="user_id"):
         print("  Creating STL_SORT index on user_id...")
         collection.create_index(
             field_name="user_id",
