@@ -88,16 +88,6 @@
     lc_ctype: en_US.UTF-8
     template: template0
 
-- name: Create files database
-  become_user: postgres
-  postgresql_db:
-    name: "{{ files_db | default('files') }}"
-    owner: "{{ postgres_user }}"
-    encoding: UTF8
-    lc_collate: en_US.UTF-8
-    lc_ctype: en_US.UTF-8
-    template: template0
-
 - name: Load secrets to determine which apps need databases
   include_vars:
     file: "{{ playbook_dir }}/roles/secrets/vars/vault.yml"
