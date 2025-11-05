@@ -1,0 +1,158 @@
+---
+# Busibox Ingestion Service
+# Combines API (FastAPI) and Worker (Python) into a single service
+
+# ============================================================================
+# Python Environment Setup
+# ============================================================================
+- name: Install Python and dependencies
+  apt:
+    name:
+      - python3
+      - python3-pip
+      - python3-venv
+      - python3-dev
+      - build-essential
+      - nginx
+    state: present
+
+- name: Create ingest service directory
+  file:
+    path: /srv/ingest
+    state: directory
+    mode: "0755"
+
+- name: Create Python virtual environment
+  shell: python3 -m venv /srv/ingest/venv
+  args:
+    creates: /srv/ingest/venv/bin/python
+
+# ============================================================================
+# Deploy Source Code
+# ============================================================================
+- name: Copy ingest service source code
+  copy:
+    src: "{{ playbook_dir }}/../../srv/ingest/src/"
+    dest: /srv/ingest/src/
+    mode: "0644"
+  notify:
+    - Restart ingest API
+    - Restart ingest worker
+
+- name: Copy requirements.txt
+  copy:
+    src: "{{ playbook_dir }}/../../srv/ingest/requirements.txt"
+    dest: /srv/ingest/requirements.txt
+    mode: "0644"
+
+- name: Install Python dependencies
+  pip:
+    requirements: /srv/ingest/requirements.txt
+    virtualenv: /srv/ingest/venv
+  notify:
+    - Restart ingest API
+    - Restart ingest worker
+
+# ============================================================================
+# Configuration
+# ============================================================================
+- name: Create ingest service environment file
+  template:
+    src: ingest.env.j2
+    dest: /srv/ingest/.env
+    mode: "0600"
+  notify:
+    - Restart ingest API
+    - Restart ingest worker
+
+# ============================================================================
+# API Service (FastAPI on port 8000)
+# ============================================================================
+- name: Create systemd service for ingest API
+  template:
+    src: ingest-api.service.j2
+    dest: /etc/systemd/system/ingest-api.service
+  register: ingest_api_service_file
+  notify: Restart ingest API
+
+- name: Enable and start ingest API service
+  systemd:
+    name: ingest-api
+    enabled: yes
+    state: started
+    daemon_reload: yes
+
+# ============================================================================
+# Worker Service (Background job processor)
+# ============================================================================
+- name: Create systemd service for ingest worker
+  template:
+    src: ingest-worker.service.j2
+    dest: /etc/systemd/system/ingest-worker.service
+  register: ingest_worker_service_file
+  notify: Restart ingest worker
+
+- name: Enable and start ingest worker service
+  systemd:
+    name: ingest-worker
+    enabled: yes
+    state: started
+    daemon_reload: yes
+
+# ============================================================================
+# Nginx Configuration (Port 80 for API docs)
+# ============================================================================
+- name: Create nginx configuration for ingest API
+  template:
+    src: nginx-ingest.conf.j2
+    dest: /etc/nginx/sites-available/ingest
+    mode: "0644"
+  notify: Reload nginx
+
+- name: Enable nginx site
+  file:
+    src: /etc/nginx/sites-available/ingest
+    dest: /etc/nginx/sites-enabled/ingest
+    state: link
+  notify: Reload nginx
+
+- name: Remove default nginx site
+  file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: Reload nginx
+
+- name: Ensure nginx is enabled and started
+  systemd:
+    name: nginx
+    enabled: yes
+    state: started
+
+# ============================================================================
+# Health Check Scripts
+# ============================================================================
+- name: Create ingest API health check script
+  copy:
+    dest: /usr/local/bin/ingest-api-health
+    content: |
+      #!/bin/bash
+      curl -f -s http://localhost:8000/health > /dev/null
+    mode: "0755"
+
+- name: Create ingest worker health check script
+  copy:
+    dest: /usr/local/bin/ingest-worker-health
+    content: |
+      #!/bin/bash
+      systemctl is-active --quiet ingest-worker
+    mode: "0755"
+
+- name: Create combined ingest health check script
+  copy:
+    dest: /usr/local/bin/ingest-health
+    content: |
+      #!/bin/bash
+      # Check both API and worker are healthy
+      /usr/local/bin/ingest-api-health && /usr/local/bin/ingest-worker-health
+    mode: "0755"
+

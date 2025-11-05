@@ -1,0 +1,26 @@
+[Unit]
+Description=Busibox Ingestion Worker
+After=network.target redis-server.service postgresql.service
+Wants=redis-server.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/srv/ingest
+EnvironmentFile=/srv/ingest/.env
+ExecStart=/srv/ingest/venv/bin/python /srv/ingest/src/worker.py
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ingest-worker
+
+# Resource limits
+LimitNOFILE=65536
+MemoryLimit=2G
+
+[Install]
+WantedBy=multi-user.target
+

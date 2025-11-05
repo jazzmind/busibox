@@ -26,8 +26,8 @@
 - hosts: ingest
   roles:
     - node_common
-    - ingest_api
-    - ingest_worker
+    - role: ingest
+      tags: [ingest]
 
 - hosts: apps
   roles:
