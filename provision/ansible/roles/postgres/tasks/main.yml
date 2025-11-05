@@ -88,6 +88,24 @@
     lc_ctype: en_US.UTF-8
     template: template0
 
+- name: Create files database user
+  become_user: postgres
+  postgresql_user:
+    name: "{{ files_user | default('files_user') }}"
+    password: "{{ files_password | default(postgres_password) }}"
+    role_attr_flags: "LOGIN,CREATEDB"
+    state: present
+
+- name: Create files database
+  become_user: postgres
+  postgresql_db:
+    name: "{{ files_db | default('files') }}"
+    owner: "{{ files_user | default('files_user') }}"
+    encoding: UTF8
+    lc_collate: en_US.UTF-8
+    lc_ctype: en_US.UTF-8
+    template: template0
+
 - name: Load secrets to determine which apps need databases
   include_vars:
     file: "{{ playbook_dir }}/roles/secrets/vars/vault.yml"
@@ -165,7 +183,7 @@
     owner: postgres
     group: postgres
 
-- name: Apply database migrations
+- name: Apply database migrations (main database)
   become_user: postgres
   shell: |
     # Check if migration {{ item.version }} has been applied
@@ -187,11 +205,40 @@
     - { version: 1, name: "initial_schema", file: "001_initial_schema.sql" }
     - { version: 2, name: "add_rls_policies", file: "002_add_rls_policies.sql" }
     - { version: 3, name: "fix_schema_migrations", file: "003_fix_schema_migrations.sql" }
-    - { version: 10, name: "ingestion_schema", file: "010_ingestion_schema.sql" }
   register: migration_result
   changed_when: "'applied successfully' in migration_result.stdout"
 
-- name: Grant ownership of all tables to application user
+- name: Apply files database schema (migration 010)
+  become_user: postgres
+  shell: |
+    # Create migrations table if it doesn't exist
+    psql -U postgres -d {{ files_db | default('files') }} -c "
+      CREATE TABLE IF NOT EXISTS ansible_migrations (
+        version INTEGER PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    "
+    
+    # Check if migration 10 has been applied
+    APPLIED=$(psql -U postgres -d {{ files_db | default('files') }} -t -c "SELECT COUNT(*) FROM ansible_migrations WHERE version = 10" 2>/dev/null || echo "0")
+    
+    if [ "$APPLIED" -eq "0" ]; then
+      echo "Applying ingestion schema to files database"
+      psql -U postgres -d {{ files_db | default('files') }} -f /var/lib/postgresql/migrations/010_ingestion_schema.sql
+      if [ $? -eq 0 ]; then
+        echo "Ingestion schema applied successfully to files database"
+      else
+        echo "Ingestion schema migration failed"
+        exit 1
+      fi
+    else
+      echo "Ingestion schema already applied to files database, skipping"
+    fi
+  register: files_migration_result
+  changed_when: "'applied successfully' in files_migration_result.stdout"
+
+- name: Grant ownership of all tables to application user (main database)
   become_user: postgres
   postgresql_query:
     db: "{{ postgres_db }}"
@@ -229,6 +276,45 @@
       -- Set default privileges for future objects
       ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO {{ postgres_user }};
       ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO {{ postgres_user }};
+
+- name: Grant ownership of all tables to files user (files database)
+  become_user: postgres
+  postgresql_query:
+    db: "{{ files_db | default('files') }}"
+    query: |
+      -- Grant ownership of all tables in public schema
+      DO $$
+      DECLARE
+        tbl RECORD;
+      BEGIN
+        FOR tbl IN SELECT tablename FROM pg_tables WHERE schemaname = 'public'
+        LOOP
+          EXECUTE 'ALTER TABLE public.' || quote_ident(tbl.tablename) || ' OWNER TO {{ files_user | default("files_user") }}';
+        END LOOP;
+      END $$;
+      
+      -- Grant ownership of all sequences
+      DO $$
+      DECLARE
+        seq RECORD;
+      BEGIN
+        FOR seq IN SELECT sequencename FROM pg_sequences WHERE schemaname = 'public'
+        LOOP
+          EXECUTE 'ALTER SEQUENCE public.' || quote_ident(seq.sequencename) || ' OWNER TO {{ files_user | default("files_user") }}';
+        END LOOP;
+      END $$;
+      
+      -- Grant schema usage
+      GRANT USAGE ON SCHEMA public TO {{ files_user | default('files_user') }};
+      GRANT CREATE ON SCHEMA public TO {{ files_user | default('files_user') }};
+      
+      -- Grant all privileges on all tables
+      GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO {{ files_user | default('files_user') }};
+      GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO {{ files_user | default('files_user') }};
+      
+      -- Set default privileges for future objects
+      ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO {{ files_user | default('files_user') }};
+      ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO {{ files_user | default('files_user') }};
 
 - name: Configure peer/md5 authentication for non-postgres users (after migrations)
   lineinfile:

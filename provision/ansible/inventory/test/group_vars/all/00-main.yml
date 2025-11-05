@@ -57,6 +57,11 @@ postgres_port: 5432
 postgres_db: busibox_test
 postgres_user: busibox_test_user
 
+# Files/Ingestion database
+files_db: files
+files_user: files_user
+files_password: "{{ secrets.postgresql.password }}"
+
 milvus_host: "{{ milvus_ip }}"
 milvus_port: 19530
 

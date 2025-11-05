@@ -107,12 +107,12 @@
       REDIS_STREAM=jobs:ingestion
       REDIS_CONSUMER_GROUP=workers
       
-      # PostgreSQL configuration
+      # PostgreSQL configuration (files database)
       POSTGRES_HOST={{ postgres_host | default('10.96.200.26') }}
       POSTGRES_PORT={{ postgres_port | default('5432') }}
-      POSTGRES_DB={{ postgres_db | default('busibox') }}
-      POSTGRES_USER={{ postgres_user | default('busibox_user') }}
-      POSTGRES_PASSWORD={{ postgres_password | default('busibox_password_change_me') }}
+      POSTGRES_DB={{ files_db | default('files') }}
+      POSTGRES_USER={{ files_user | default('files_user') }}
+      POSTGRES_PASSWORD={{ files_password | default(postgres_password) | default('busibox_password_change_me') }}
       
       # Milvus configuration
       MILVUS_HOST={{ milvus_host | default('10.96.200.27') }}
