@@ -150,6 +150,26 @@
     var: milvus_init.stdout_lines
   when: milvus_init.stdout_lines is defined
 
+- name: Copy Milvus schema migration script
+  copy:
+    src: files/migrate_schema.py
+    dest: /root/migrate_schema.py
+    mode: "0755"
+
+- name: Run Milvus schema migration
+  shell: |
+    /opt/milvus-tools/bin/python /root/migrate_schema.py
+  environment:
+    MILVUS_HOST: localhost
+    MILVUS_PORT: "19530"
+  register: milvus_migration
+  failed_when: false
+
+- name: Display Milvus migration result
+  debug:
+    var: milvus_migration.stdout_lines
+  when: milvus_migration.stdout_lines is defined
+
 - name: Copy hybrid search schema script
   copy:
     src: files/hybrid_schema.py
