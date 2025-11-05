@@ -24,8 +24,6 @@ from pymilvus import (
     CollectionSchema,
     DataType,
     Collection,
-    Function,
-    FunctionType,
 )
 
 
