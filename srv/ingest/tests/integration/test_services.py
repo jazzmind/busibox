@@ -69,6 +69,7 @@ async def test_postgres_service(config: Config, test_user_id: str, test_file_id:
         
         # Test file record creation
         logger.info("Testing file record creation", file_id=test_file_id)
+        import json
         await postgres_service.create_file_record(
             file_id=test_file_id,
             user_id=test_user_id,
@@ -78,7 +79,7 @@ async def test_postgres_service(config: Config, test_user_id: str, test_file_id:
             size_bytes=100,
             storage_path=f"{test_user_id}/{test_file_id}/test.txt",
             content_hash="test-hash-123",
-            metadata={},
+            metadata=json.dumps({}),
         )
         logger.info("File record created successfully")
         
