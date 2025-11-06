@@ -52,6 +52,26 @@
   tags:
     - deploy
 
+- name: Debug force redeploy conditions
+  debug:
+    msg: |
+      Force redeploy check for {{ item.name }}:
+      - inventory_hostname: {{ inventory_hostname }}
+      - item.container: {{ item.container }}
+      - match result: {{ inventory_hostname is match('.*' + item.container + '.*') }}
+      - force_redeploy defined: {{ force_redeploy is defined }}
+      - force_redeploy value: {{ force_redeploy | default('not set') }}
+      - deploy_app: {{ deploy_app | default('not set') }}
+      - deploy_app matches: {{ deploy_app is not defined or deploy_app == item.name }}
+  loop: "{{ applications }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - force_redeploy is defined
+    - force_redeploy | bool
+  tags:
+    - deploy
+
 - name: Force redeployment if requested
   command: "bash {{ deploywatch_apps_dir }}/{{ item.name }}.sh"
   loop: "{{ applications }}"
@@ -65,9 +85,31 @@
     - force_redeploy | bool
     - deploy_app is not defined or deploy_app == item.name
   register: forced_deployment
-  failed_when: false
+  failed_when: forced_deployment.rc is defined and forced_deployment.rc != 0
   async: 1800
   poll: 10
+  tags:
+    - deploy
+
+- name: Display forced deployment results
+  debug:
+    msg: |
+      Application: {{ item.item.name }}
+      Status: {{ 'Success' if item.rc | default(1) == 0 else 'Failed' }}
+      Return Code: {{ item.rc | default('N/A') }}
+      {% if item.rc | default(1) != 0 %}
+      Error: Check logs at {{ item.item.deploy_path }}/logs/
+      Stdout: {{ item.stdout | default('N/A') }}
+      Stderr: {{ item.stderr | default('N/A') }}
+      {% endif %}
+  loop: "{{ forced_deployment.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when: 
+    - item.item is defined
+    - not item.skipped | default(false)
+  tags:
+    - deploy
 
 - name: Wait for applications to be healthy
   uri:
