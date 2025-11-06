@@ -154,6 +154,7 @@ applications:
       - minio_secret_key
       - redis_url
       - jwt_secret
+      - litellm_api_key
     env:
       LOG_LEVEL: "{{ log_level }}"
       MILVUS_HOST: "{{ milvus_ip }}"
@@ -163,6 +164,7 @@ applications:
       REDIS_HOST: "{{ ingest_ip }}"
       TOKEN_SERVICE_URL: "http://{{ agent_ip }}:4111"
       MASTRA_API_URL: "http://{{ agent_ip }}:4111"
+      OPENAI_BASE_URL: "http://{{ litellm_ip }}:{{ litellm_port }}/v1"
   
   # Public Web Applications
   - name: ai-portal
