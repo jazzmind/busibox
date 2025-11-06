@@ -3,9 +3,9 @@
 # Combines API (FastAPI) and Worker (Python) into a single service
 
 # ============================================================================
-# Python Environment Setup
+# System Dependencies
 # ============================================================================
-- name: Install Python and dependencies
+- name: Install system dependencies
   apt:
     name:
       - python3
@@ -14,7 +14,17 @@
       - python3-dev
       - build-essential
       - nginx
+      - redis-server
+      - poppler-utils  # For pdf2image
+      - tesseract-ocr  # For pytesseract OCR
     state: present
+    update_cache: yes
+
+- name: Ensure Redis is enabled and started
+  systemd:
+    name: redis-server
+    enabled: yes
+    state: started
 
 - name: Create ingest service directory
   file:
@@ -45,10 +55,22 @@
     dest: /srv/ingest/requirements.txt
     mode: "0644"
 
-- name: Install Python dependencies
+- name: Upgrade pip and install wheel in venv
+  pip:
+    name:
+      - pip>=24.0
+      - wheel
+      - setuptools
+    virtualenv: /srv/ingest/venv
+    state: latest
+
+- name: Install Python dependencies (with caching and parallel downloads)
   pip:
     requirements: /srv/ingest/requirements.txt
     virtualenv: /srv/ingest/venv
+    extra_args: "--prefer-binary --no-cache-dir"
+  environment:
+    PIP_DISABLE_PIP_VERSION_CHECK: "1"
   notify:
     - Restart ingest API
     - Restart ingest worker
