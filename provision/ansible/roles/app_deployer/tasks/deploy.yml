@@ -31,7 +31,6 @@
   poll: 10     # Check every 10 seconds
   tags:
     - deploy
-    - "deploy_{{ item.item.name | replace('-', '_') }}"
 
 - name: Display deployment results
   debug:
