@@ -26,17 +26,23 @@
     - not item.skipped | default(false)
     - deploy_app is not defined or deploy_app == item.item.name
   register: initial_deployment
-  failed_when: false
+  failed_when: initial_deployment.rc is defined and initial_deployment.rc != 0
   async: 1800  # 30 minutes timeout for deployment
   poll: 10     # Check every 10 seconds
+  tags:
+    - deploy
+    - "deploy_{{ item.item.name | replace('-', '_') }}"
 
 - name: Display deployment results
   debug:
     msg: |
       Application: {{ item.item.item.name }}
       Status: {{ 'Success' if item.rc | default(1) == 0 else 'Failed' }}
+      Return Code: {{ item.rc | default('N/A') }}
       {% if item.rc | default(1) != 0 %}
       Error: Check logs at {{ item.item.item.deploy_path }}/logs/
+      Stdout: {{ item.stdout | default('N/A') }}
+      Stderr: {{ item.stderr | default('N/A') }}
       {% endif %}
   loop: "{{ initial_deployment.results | default([]) }}"
   loop_control:
@@ -44,6 +50,8 @@
   when: 
     - item.item is defined
     - not item.skipped | default(false)
+  tags:
+    - deploy
 
 - name: Force redeployment if requested
   command: "bash {{ deploywatch_apps_dir }}/{{ item.name }}.sh"
