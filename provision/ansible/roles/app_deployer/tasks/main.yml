@@ -29,6 +29,8 @@
     mode: "0755"
     owner: root
     group: root
+  tags:
+    - always  # Always run for any app deployment
 
 - name: Generate deploywatch scripts for each application
   template:
@@ -43,6 +45,8 @@
   vars:
     app: "{{ item }}"
   when: applications | length > 0
+  tags:
+    - always  # Always run for any app deployment
 
 - name: Deploy deploywatch orchestrator script
   template:
@@ -51,6 +55,8 @@
     mode: "0755"
     owner: root
     group: root
+  tags:
+    - always  # Always run for any app deployment
 
 - name: Create application deploy directories
   file:
@@ -64,8 +70,7 @@
     label: "{{ item.name }}: {{ item.deploy_path }}"
   when: applications | length > 0
   tags:
-    - app_deployer
-    - secrets
+    - always  # Always run for any app deployment
 
 - name: Deploy GitHub token for private repository access
   copy:
@@ -79,8 +84,7 @@
     - secrets.github_token is defined
     - secrets.github_token | length > 0
   tags:
-    - app_deployer
-    - secrets
+    - always  # Always run for any app deployment
 
 - name: Deploy application environment files (.env)
   template:
@@ -100,8 +104,7 @@
     - deploy_app is not defined or deploy_app == item.name
   notify: Restart application
   tags:
-    - app_deployer
-    - secrets
+    - always  # Always run for any app deployment
 
 - name: Detect configuration changes
   stat:
@@ -128,5 +131,4 @@
     - applications | length > 0
     - deploy_apps is not defined or deploy_apps | bool
   tags:
-    - app_deployer
-    - deploy
+    - always  # Allow included tasks' tags to work

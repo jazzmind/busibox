@@ -95,12 +95,8 @@ vllm_port: 8000
 # ============================================================================
 # Ollama Models (PRODUCTION - full models)
 ollama_initial_models:
-  - name: "llama3:8b"
-    description: "Fast general-purpose model"
-  - name: "phi3:3.8b"
-    description: "Code and reasoning model"
-  - name: "gemma:2b"
-    description: "Lightweight tasks model"
+  - name: "phi4:multimodal-instruct"
+    description: "Phi4 is a general-purpose model"
 
 # vLLM Model Configuration
 # Use model pre-cached by setup-llm-models.sh
