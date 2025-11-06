@@ -38,6 +38,9 @@
             - "9001:9001"
           volumes:
             - /srv/minio/data:/data
+          # Required for Docker-in-LXC: allow container to modify sysctls
+          # The privileged flag is needed because LXC restricts sysctl access
+          privileged: true
   notify: Up MinIO
 
 - name: MinIO env

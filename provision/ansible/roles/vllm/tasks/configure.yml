@@ -2,6 +2,30 @@
 # vLLM Configuration Tasks
 # Configure systemd service and environment
 
+- name: Check if vLLM service file exists
+  stat:
+    path: /etc/systemd/system/vllm.service
+  register: vllm_service_file
+  tags: [vllm_configure]
+
+- name: Check current model in service file
+  shell: grep -oP '(?<=--model )[^ ]+' /etc/systemd/system/vllm.service || echo "none"
+  register: current_vllm_model
+  changed_when: false
+  when: vllm_service_file.stat.exists
+  tags: [vllm_configure]
+
+- name: Remove old service file if model changed
+  file:
+    path: /etc/systemd/system/vllm.service
+    state: absent
+  when: 
+    - vllm_service_file.stat.exists
+    - current_vllm_model.stdout != vllm_default_model
+  notify:
+    - reload systemd
+  tags: [vllm_configure]
+
 - name: Deploy vLLM systemd service file
   template:
     src: vllm.service.j2
