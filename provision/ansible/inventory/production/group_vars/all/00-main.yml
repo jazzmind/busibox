@@ -218,6 +218,8 @@ applications:
       - session_secret
     env:
       NODE_ENV: production
+      MASTRA_API_URL: "http://{{ agent_api_host }}:{{ agent_api_port }}"
+      TOKEN_SERVICE_URL: "http://{{ agent_api_host }}:{{ agent_api_port }}"
       AGENT_API_URL: "http://{{ agent_api_host }}:{{ agent_api_port }}"
       PORT: "3001"
   
