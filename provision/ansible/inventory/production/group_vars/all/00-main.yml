@@ -49,6 +49,11 @@ www_domain: "www.{{ domain }}"
 ssl_mode: provisioned
 # ssl_email comes from vault
 
+# Nginx Placeholder Mode
+# Set to true to deploy placeholder pages before apps are ready
+# Set to false to deploy application routing
+placeholder_mode: true
+
 # ============================================================================
 # Service Endpoints
 # ============================================================================
