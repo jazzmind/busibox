@@ -286,7 +286,7 @@ applications:
       PORT: "3003"
   
   - name: project-analysis
-    github_repo: jazzmind/project-analysis
+    github_repo: jazzmind/tabular-bells
     container: apps-lxc
     container_ip: "{{ apps_ip }}"
     port: 3004
