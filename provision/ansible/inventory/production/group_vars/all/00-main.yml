@@ -212,7 +212,7 @@ applications:
       - type: path
         domain: "{{ domain }}"
         path: /agents
-        strip_path: false
+        strip_path: true  # Strip /agents prefix so Next.js receives requests at root
     secrets:
       - database_url
       - agent_api_key
@@ -239,7 +239,7 @@ applications:
       - type: path
         domain: "{{ domain }}"
         path: /docs
-        strip_path: false
+        strip_path: true  # Strip /docs prefix so Next.js receives requests at root
     secrets:
       - database_url
       - openai_api_key
@@ -265,7 +265,7 @@ applications:
       - type: path
         domain: "{{ domain }}"
         path: /innovation
-        strip_path: false
+        strip_path: true  # Strip /innovation prefix so Next.js receives requests at root
     secrets:
       - database_url
       - better_auth_secret
