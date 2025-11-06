@@ -193,8 +193,8 @@ applications:
       BETTER_AUTH_URL: "https://{{ domain }}"
       EMAIL_FROM: "AI Portal <noreply@{{ base_domain }}>"
       SSO_TOKEN_EXPIRY: "900"
-      ADMIN_EMAIL: "admin@{{ base_domain }}"
-      ALLOWED_EMAIL_DOMAINS: "{{ base_domain }}"
+      ADMIN_EMAIL: "{{ secrets.admin_email }}"
+      ALLOWED_EMAIL_DOMAINS: "{{ secrets.allowed_email_domains }}"
       PORT: "3000"
   
   - name: agent-client
