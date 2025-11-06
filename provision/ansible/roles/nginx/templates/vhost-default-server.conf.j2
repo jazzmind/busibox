@@ -41,9 +41,24 @@ server {
     root /var/www/placeholder;
     index index.html;
     
-    # Serve placeholder pages
+    # Path routing for agent-client (exact match)
+    location = /agents {
+        try_files /agents.html =404;
+    }
+    
+    # Path routing for doc-intel (exact match)
+    location = /docs {
+        try_files /docs.html =404;
+    }
+    
+    # Path routing for innovation (exact match)
+    location = /innovation {
+        try_files /innovation.html =404;
+    }
+    
+    # Root / home - ai-portal
     location / {
-        try_files $uri /index.html;
+        try_files /index.html =404;
     }
     
     # Custom 404 page
