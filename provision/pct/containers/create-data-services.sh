@@ -104,10 +104,23 @@ EOF
   echo "    Docker sysctls support configured"
 fi
 
-# Create MinIO container (privileged for storage access)
+# Create MinIO container (privileged for storage access and Docker sysctls)
 create_ct "$CT_FILES" "$IP_FILES" "${PREFIX}files-lxc" priv || cleanup_on_error
 CREATED_CONTAINERS+=("$CT_FILES")
 add_data_mount "$CT_FILES" "/var/lib/data/minio" "/srv/minio/data" "0"
+
+# Configure sysctls support for Docker-in-LXC (MinIO container needs to set sysctls)
+echo "    Configuring Docker sysctl support for ${PREFIX}files-lxc..."
+pct stop "$CT_FILES" 2>/dev/null || true
+sleep 2
+cat >> "/etc/pve/lxc/${CT_FILES}.conf" << EOF
+lxc.cgroup2.devices.allow: a
+lxc.cap.drop:
+lxc.mount.auto: proc:rw sys:rw
+EOF
+pct start "$CT_FILES"
+sleep 3
+echo "    Docker sysctls support configured"
 
 echo ""
 echo "=========================================="
