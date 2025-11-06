@@ -19,23 +19,27 @@
       - tesseract-ocr  # For pytesseract OCR
     state: present
     update_cache: yes
+  tags: [ingest, ingest_install]
 
 - name: Ensure Redis is enabled and started
   systemd:
     name: redis-server
     enabled: yes
     state: started
+  tags: [ingest, ingest_install]
 
 - name: Create ingest service directory
   file:
     path: /srv/ingest
     state: directory
     mode: "0755"
+  tags: [ingest, ingest_install]
 
 - name: Create Python virtual environment
   shell: python3 -m venv /srv/ingest/venv
   args:
     creates: /srv/ingest/venv/bin/python
+  tags: [ingest, ingest_install]
 
 # ============================================================================
 # Deploy Source Code
@@ -48,12 +52,14 @@
   notify:
     - Restart ingest API
     - Restart ingest worker
+  tags: [ingest, ingest_deploy]
 
 - name: Copy requirements.txt
   copy:
     src: "{{ playbook_dir }}/../../srv/ingest/requirements.txt"
     dest: /srv/ingest/requirements.txt
     mode: "0644"
+  tags: [ingest, ingest_deploy]
 
 - name: Upgrade pip and install wheel in venv
   pip:
@@ -63,6 +69,7 @@
       - setuptools
     virtualenv: /srv/ingest/venv
     state: latest
+  tags: [ingest, ingest_deploy]
 
 - name: Install Python dependencies (with caching and parallel downloads)
   pip:
@@ -74,6 +81,7 @@
   notify:
     - Restart ingest API
     - Restart ingest worker
+  tags: [ingest, ingest_deploy]
 
 # ============================================================================
 # Configuration
@@ -86,6 +94,7 @@
   notify:
     - Restart ingest API
     - Restart ingest worker
+  tags: [ingest, ingest_configure]
 
 # ============================================================================
 # API Service (FastAPI on port 8000)
@@ -96,6 +105,7 @@
     dest: /etc/systemd/system/ingest-api.service
   register: ingest_api_service_file
   notify: Restart ingest API
+  tags: [ingest, ingest_configure]
 
 - name: Enable and start ingest API service
   systemd:
@@ -103,6 +113,7 @@
     enabled: yes
     state: started
     daemon_reload: yes
+  tags: [ingest, ingest_start]
 
 # ============================================================================
 # Worker Service (Background job processor)
@@ -113,6 +124,7 @@
     dest: /etc/systemd/system/ingest-worker.service
   register: ingest_worker_service_file
   notify: Restart ingest worker
+  tags: [ingest, ingest_configure]
 
 - name: Enable and start ingest worker service
   systemd:
@@ -120,6 +132,7 @@
     enabled: yes
     state: started
     daemon_reload: yes
+  tags: [ingest, ingest_start]
 
 # ============================================================================
 # Nginx Configuration (Port 80 for API docs)
@@ -130,6 +143,7 @@
     dest: /etc/nginx/sites-available/ingest
     mode: "0644"
   notify: Reload nginx
+  tags: [ingest, ingest_configure]
 
 - name: Enable nginx site
   file:
@@ -137,18 +151,21 @@
     dest: /etc/nginx/sites-enabled/ingest
     state: link
   notify: Reload nginx
+  tags: [ingest, ingest_configure]
 
 - name: Remove default nginx site
   file:
     path: /etc/nginx/sites-enabled/default
     state: absent
   notify: Reload nginx
+  tags: [ingest, ingest_configure]
 
 - name: Ensure nginx is enabled and started
   systemd:
     name: nginx
     enabled: yes
     state: started
+  tags: [ingest, ingest_start]
 
 # ============================================================================
 # Health Check Scripts
@@ -160,6 +177,7 @@
       #!/bin/bash
       curl -f -s http://localhost:8000/health > /dev/null
     mode: "0755"
+  tags: [ingest, ingest_configure]
 
 - name: Create ingest worker health check script
   copy:
@@ -168,6 +186,7 @@
       #!/bin/bash
       systemctl is-active --quiet ingest-worker
     mode: "0755"
+  tags: [ingest, ingest_configure]
 
 - name: Create combined ingest health check script
   copy:
@@ -177,4 +196,5 @@
       # Check both API and worker are healthy
       /usr/local/bin/ingest-api-health && /usr/local/bin/ingest-worker-health
     mode: "0755"
+  tags: [ingest, ingest_configure]
 
