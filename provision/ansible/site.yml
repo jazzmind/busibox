@@ -4,6 +4,8 @@
 # 3. Agent API (provides webhooks for MinIO, uses PostgreSQL)
 # 4. MinIO (file storage - can configure webhook to agent API)
 # 5. Ingest Worker (needs agent API + MinIO + Milvus + PostgreSQL)
+# 6. Proxy (nginx reverse proxy - must be deployed before apps)
+# 7. Apps (Next.js applications - depend on proxy for routing)
 
 - hosts: pg
   roles:
@@ -34,6 +36,11 @@
     - role: ingest
       tags: [ingest, ingest_worker]
 
+- hosts: proxy
+  roles:
+    - role: nginx
+      tags: [proxy, nginx]
+
 - hosts: apps
   roles:
     - role: node_common
@@ -42,11 +49,6 @@
       tags: [apps, secrets]
     - role: app_deployer
       tags: [apps, app_deployer]
-
-- hosts: proxy
-  roles:
-    - role: nginx
-      tags: [proxy, nginx]
 
 - hosts: openwebui
   roles:

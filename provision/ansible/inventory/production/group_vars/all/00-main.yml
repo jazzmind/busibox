@@ -41,6 +41,7 @@ ollama_ip: "{{ network_base_octets }}.210"
 # Base domain from vault (deployment-specific)
 # domain and www_domain are calculated from base_domain
 domain: "ai.{{ base_domain }}"
+full_domain: "{{ domain }}"  # For compatibility with templates that use full_domain
 www_domain: "www.{{ domain }}"
 
 # SSL Certificate Mode
