@@ -3,4 +3,5 @@
   shell: docker compose up -d
   args:
     chdir: /srv/minio
+  tags: [minio, minio_start]
 
