@@ -2,62 +2,61 @@
 # Python 3.11+
 
 # API Framework
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-sse-starlette==1.6.5
+fastapi>=0.104.1,<0.120.0
+uvicorn[standard]>=0.24.0,<0.35.0
+sse-starlette>=1.6.5,<2.0.0
 
 # Database
-psycopg2-binary==2.9.9
-asyncpg==0.29.0
+psycopg2-binary>=2.9.9,<3.0.0
+asyncpg>=0.29.0,<0.30.0
 
 # Vector Database
-pymilvus==2.3.5
-rank-bm25==0.2.2  # BM25 sparse vectors
+pymilvus>=2.3.5,<2.5.0
+rank-bm25>=0.2.2,<0.3.0  # BM25 sparse vectors
 
 # Object Storage
-minio==7.2.3
+minio>=7.2.3,<8.0.0
 
 # Queue
-redis==5.0.1
+redis>=5.0.1,<6.0.0
 
 # HTTP Client
-httpx==0.25.0
+httpx>=0.25.0,<1.0.0
 
 # Text Extraction
-pdfplumber==0.10.3
-PyPDF2==3.0.1
-python-docx==1.1.0
-marker-pdf==1.10.1  # High-quality PDF to markdown
+pdfplumber>=0.10.3,<0.12.0
+PyPDF2>=3.0.1,<4.0.0
+python-docx>=1.1.0,<2.0.0
+marker-pdf>=1.10.1,<2.0.0  # High-quality PDF to markdown
 # tatr - Table extraction (optional, not available on PyPI - would need manual install)
-pdf2image==1.16.3  # PDF page images for ColPali
-pytesseract==0.3.10  # OCR for scanned PDFs
-beautifulsoup4==4.12.2  # HTML parsing
+pdf2image>=1.16.3,<2.0.0  # PDF page images for ColPali
+pytesseract>=0.3.10,<0.4.0  # OCR for scanned PDFs
+beautifulsoup4>=4.12.2,<5.0.0  # HTML parsing
 
 # Text Processing & Chunking
-spacy==3.7.2
+spacy>=3.7.2,<4.0.0
 # Download model: python -m spacy download en_core_web_sm
-langdetect==1.0.9  # Language detection
-tiktoken==0.5.1  # Token counting
+langdetect>=1.0.9,<2.0.0  # Language detection
+tiktoken>=0.5.1,<1.0.0  # Token counting
 
 # LLM Integration (for embeddings)
-litellm==1.17.0
+litellm>=1.17.0,<2.0.0
 openai>=1.65.2  # Required by marker-pdf
-tenacity==8.2.3  # Retry logic
+tenacity>=8.2.3,<9.0.0  # Retry logic
 
 # Logging
-structlog==24.1.0
+structlog>=24.1.0,<25.0.0
 
 # Data Models
-pydantic==2.5.0
+pydantic>=2.5.0,<3.0.0
 
 # Testing
-pytest==7.4.3
-pytest-asyncio==0.21.1
-pytest-cov==4.1.0
-pytest-mock==3.12.0
-httpx==0.25.0  # For async test client
-testcontainers==3.7.1  # For integration tests with containers
+pytest>=7.4.3,<8.0.0
+pytest-asyncio>=0.21.1,<0.24.0
+pytest-cov>=4.1.0,<5.0.0
+pytest-mock>=3.12.0,<4.0.0
+testcontainers>=3.7.1,<4.0.0  # For integration tests with containers
 
 # Utilities
-python-dotenv==1.0.0
+python-dotenv>=1.0.0,<2.0.0
 
