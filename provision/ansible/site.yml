@@ -17,25 +17,31 @@
 
 - hosts: agent
   roles:
-    - node_common
-    - agent_api
+    - role: node_common
+      tags: [agent, node_common]
+    - role: agent_api
+      tags: [agent, agent_api]
 
 - hosts: files
-  roles: [minio]
+  roles:
+    - role: minio
+      tags: [files, minio]
 
 - hosts: ingest
   roles:
-    - node_common
+    - role: node_common
+      tags: [ingest, node_common]
     - role: ingest
-      tags: [ingest]
+      tags: [ingest, ingest_worker]
 
 - hosts: apps
   roles:
-    - node_common
+    - role: node_common
+      tags: [apps, node_common]
     - role: secrets
-      tags: [secrets]
+      tags: [apps, secrets]
     - role: app_deployer
-      tags: [app_deployer, apps]
+      tags: [apps, app_deployer]
 
 - hosts: proxy
   roles:
@@ -43,7 +49,9 @@
       tags: [proxy, nginx]
 
 - hosts: openwebui
-  roles: [nginx]
+  roles:
+    - role: nginx
+      tags: [openwebui, nginx]
 
 # LLM Services - Deploy backends first, then proxy
 - name: Deploy LLM Inference Backends (can run in parallel)

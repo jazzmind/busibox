@@ -8,34 +8,40 @@
       - python3-dev
       - build-essential
     state: present
+  tags: [agent_api, agent_api_install]
 
 - name: Create agent API directory
   file:
     path: /srv/agent
     state: directory
     mode: "0755"
+  tags: [agent_api, agent_api_configure]
 
 - name: Create Python virtual environment
   shell: python3 -m venv /srv/agent/venv
   args:
     creates: /srv/agent/venv/bin/python
+  tags: [agent_api, agent_api_install]
 
 - name: Copy agent API source code
   copy:
     src: "{{ playbook_dir }}/../../srv/agent/src/"
     dest: /srv/agent/src/
     mode: "0644"
+  tags: [agent_api, agent_api_deploy]
 
 - name: Copy requirements.txt
   copy:
     src: "{{ playbook_dir }}/../../srv/agent/requirements.txt"
     dest: /srv/agent/requirements.txt
     mode: "0644"
+  tags: [agent_api, agent_api_deploy]
 
 - name: Install Python dependencies
   pip:
     requirements: /srv/agent/requirements.txt
     virtualenv: /srv/agent/venv
+  tags: [agent_api, agent_api_install]
 
 - name: Create agent API environment file
   copy:
@@ -80,6 +86,7 @@
       JWT_ALGORITHM=HS256
       JWT_EXPIRATION_MINUTES=1440
     mode: "0600"
+  tags: [agent_api, agent_api_configure]
 
 - name: Create systemd service for agent API
   copy:
@@ -104,12 +111,14 @@
       [Install]
       WantedBy=multi-user.target
   notify: Restart agent API
+  tags: [agent_api, agent_api_configure]
 
 - name: Enable agent API service
   systemd:
     name: agent-api
     enabled: yes
     daemon_reload: yes
+  tags: [agent_api, agent_api_start]
 
 - name: Create agent API health check script
   copy:
@@ -118,3 +127,4 @@
       #!/bin/bash
       curl -f -s http://localhost:8000/health/live > /dev/null
     mode: "0755"
+  tags: [agent_api, agent_api_configure]
