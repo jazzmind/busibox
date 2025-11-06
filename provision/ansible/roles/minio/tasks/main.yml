@@ -31,7 +31,7 @@
     content: |
       services:
         minio:
-          image: minio/minio:latest
+          image: minio/minio:RELEASE.2024-10-02T17-50-41Z
           restart: unless-stopped
           environment:
             MINIO_ROOT_USER: ${MINIO_ROOT_USER}
@@ -42,10 +42,9 @@
             - "9001:9001"
           volumes:
             - /srv/minio/data:/data
-          # Disable AppArmor to prevent sysctl permission issues in LXC
-          # MinIO doesn't actually need to modify sysctls to function
-          security_opt:
-            - apparmor=unconfined
+          # Use host network to avoid sysctl issues in LXC
+          # The container still runs isolated, just shares the host's network stack
+          network_mode: host
   notify: Up MinIO
   tags: [minio, minio_configure]
 
