@@ -11,3 +11,19 @@ This repo provisions a role-secured data layer on a Proxmox host using LXC conta
 It also ships a **deploywatch** systemd timer to poll GitHub Releases and redeploy services.
 
 > NOTE: You will execute the `provision/pct/*.sh` from the Proxmox host. The rest is applied inside each container via Ansible.
+
+## For Cursor Users
+
+**Use the Busibox MCP Server** for structured access to documentation and scripts:
+
+```bash
+cd tools/mcp-server && bash setup.sh
+```
+
+The MCP server provides:
+- Browse documentation by category
+- Search documentation by keyword
+- Get script information and usage
+- Guided assistance for common tasks
+
+See [MCP Server Usage Guide](docs/guides/mcp-server-usage.md) for details.
