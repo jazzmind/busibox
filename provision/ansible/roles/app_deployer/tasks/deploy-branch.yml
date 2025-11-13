@@ -1,0 +1,179 @@
+---
+# Deploy Application from Branch
+# Purpose: Deploy an application directly from a GitHub branch without requiring a release
+# This is useful for development/testing and continuous deployment workflows
+
+- name: Set deployment variables
+  set_fact:
+    app_to_deploy: "{{ applications | selectattr('name', 'equalto', deploy_app) | first }}"
+    branch_to_deploy: "{{ deploy_branch | default('main') }}"
+  when: deploy_app is defined
+
+- name: Display deployment information
+  debug:
+    msg: |
+      Deploying {{ app_to_deploy.name }} from branch {{ branch_to_deploy }}
+      Repository: {{ app_to_deploy.github_repo }}
+      Deploy path: {{ app_to_deploy.deploy_path }}
+      Container: {{ app_to_deploy.container_ip }}
+
+- name: Create temporary download directory
+  file:
+    path: "/tmp/{{ app_to_deploy.name }}-{{ branch_to_deploy }}"
+    state: directory
+    mode: '0755'
+  delegate_to: "{{ app_to_deploy.container_ip }}"
+
+- name: Download branch archive from GitHub
+  shell: |
+    if [ -f ~/.github_token ]; then
+      TOKEN=$(cat ~/.github_token)
+      curl -L \
+        -H "Authorization: Bearer $TOKEN" \
+        -H "Accept: application/vnd.github+json" \
+        -H "X-GitHub-Api-Version: 2022-11-28" \
+        -o "/tmp/{{ app_to_deploy.name }}-{{ branch_to_deploy }}/archive.tar.gz" \
+        "https://api.github.com/repos/{{ app_to_deploy.github_repo }}/tarball/{{ branch_to_deploy }}"
+    else
+      curl -L \
+        -o "/tmp/{{ app_to_deploy.name }}-{{ branch_to_deploy }}/archive.tar.gz" \
+        "https://github.com/{{ app_to_deploy.github_repo }}/archive/refs/heads/{{ branch_to_deploy }}.tar.gz"
+    fi
+  delegate_to: "{{ app_to_deploy.container_ip }}"
+  register: download_result
+  failed_when: download_result.rc != 0
+
+- name: Backup current deployment
+  shell: |
+    if [ -d "{{ app_to_deploy.deploy_path }}" ]; then
+      rm -rf {{ app_to_deploy.deploy_path }}.backup
+      cp -r {{ app_to_deploy.deploy_path }} {{ app_to_deploy.deploy_path }}.backup
+      echo "Backup created at {{ app_to_deploy.deploy_path }}.backup"
+    else
+      echo "No existing deployment to backup"
+    fi
+  delegate_to: "{{ app_to_deploy.container_ip }}"
+  register: backup_result
+
+- name: Extract archive
+  shell: |
+    cd /tmp/{{ app_to_deploy.name }}-{{ branch_to_deploy }}
+    tar -xzf archive.tar.gz --strip-components=1
+    rm archive.tar.gz
+  delegate_to: "{{ app_to_deploy.container_ip }}"
+
+- name: Create deploy directory if it doesn't exist
+  file:
+    path: "{{ app_to_deploy.deploy_path }}"
+    state: directory
+    mode: '0755'
+  delegate_to: "{{ app_to_deploy.container_ip }}"
+
+- name: Move extracted files to deploy path
+  shell: |
+    rsync -a --delete /tmp/{{ app_to_deploy.name }}-{{ branch_to_deploy }}/ {{ app_to_deploy.deploy_path }}/
+  delegate_to: "{{ app_to_deploy.container_ip }}"
+
+- name: Clean up temporary directory
+  file:
+    path: "/tmp/{{ app_to_deploy.name }}-{{ branch_to_deploy }}"
+    state: absent
+  delegate_to: "{{ app_to_deploy.container_ip }}"
+
+- name: Install dependencies
+  shell: |
+    cd {{ app_to_deploy.deploy_path }}
+    npm install --production=false
+  delegate_to: "{{ app_to_deploy.container_ip }}"
+  environment:
+    NODE_ENV: "{{ app_to_deploy.env.NODE_ENV | default('production') }}"
+  register: npm_install
+  failed_when: npm_install.rc != 0
+
+- name: Run Prisma generate (if Prisma is used)
+  shell: |
+    cd {{ app_to_deploy.deploy_path }}
+    if [ -f "prisma/schema.prisma" ]; then
+      npx prisma generate
+      echo "Prisma client generated"
+    else
+      echo "No Prisma schema found, skipping"
+    fi
+  delegate_to: "{{ app_to_deploy.container_ip }}"
+  register: prisma_result
+  failed_when: false  # Don't fail if Prisma isn't used
+
+- name: Build application
+  shell: |
+    cd {{ app_to_deploy.deploy_path }}
+    {% if app_to_deploy.build_command is defined %}
+    {{ app_to_deploy.build_command }}
+    {% else %}
+    npm run build
+    {% endif %}
+  delegate_to: "{{ app_to_deploy.container_ip }}"
+  environment: "{{ app_to_deploy.env | default({}) }}"
+  register: build_result
+  failed_when: build_result.rc != 0
+
+- name: Check if PM2 is managing the application
+  shell: pm2 list | grep -q "{{ app_to_deploy.name }}"
+  delegate_to: "{{ app_to_deploy.container_ip }}"
+  register: pm2_check
+  failed_when: false
+  changed_when: false
+
+- name: Restart application with PM2 (if already running)
+  shell: |
+    cd {{ app_to_deploy.deploy_path }}
+    pm2 restart {{ app_to_deploy.name }}
+  delegate_to: "{{ app_to_deploy.container_ip }}"
+  when: pm2_check.rc == 0
+  register: restart_result
+
+- name: Start application with PM2 (if not running)
+  shell: |
+    cd {{ app_to_deploy.deploy_path }}
+    pm2 start npm --name "{{ app_to_deploy.name }}" -- start
+    pm2 save
+  delegate_to: "{{ app_to_deploy.container_ip }}"
+  when: pm2_check.rc != 0
+  register: start_result
+
+- name: Wait for application to start
+  wait_for:
+    host: "{{ app_to_deploy.container_ip }}"
+    port: "{{ app_to_deploy.port }}"
+    state: started
+    delay: 2
+    timeout: 30
+  delegate_to: localhost
+
+- name: Check application health
+  uri:
+    url: "http://{{ app_to_deploy.container_ip }}:{{ app_to_deploy.port }}{{ app_to_deploy.health_endpoint | default('/api/health') }}"
+    status_code: 200
+    timeout: 10
+  register: health_check
+  retries: 3
+  delay: 5
+  until: health_check.status == 200
+  delegate_to: localhost
+  when: app_to_deploy.health_endpoint is defined
+
+- name: Display deployment summary
+  debug:
+    msg: |
+      ✅ Deployment successful!
+      
+      Application: {{ app_to_deploy.name }}
+      Branch: {{ branch_to_deploy }}
+      Deploy path: {{ app_to_deploy.deploy_path }}
+      Status: Running on port {{ app_to_deploy.port }}
+      
+      View logs:
+        ssh root@{{ app_to_deploy.container_ip }} "pm2 logs {{ app_to_deploy.name }}"
+      
+      Health check:
+        curl http://{{ app_to_deploy.container_ip }}:{{ app_to_deploy.port }}{{ app_to_deploy.health_endpoint | default('/api/health') }}
+

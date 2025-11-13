@@ -129,11 +129,21 @@
       - Environment files deployed: {{ applications | length }}
   when: applications | length > 0
 
-- name: Deploy applications
+- name: Deploy application from branch (when requested)
+  include_tasks: deploy-branch.yml
+  when: 
+    - deploy_from_branch is defined
+    - deploy_from_branch | bool
+    - deploy_app is defined
+  tags:
+    - always  # Allow included tasks' tags to work
+
+- name: Deploy applications (standard release deployment)
   include_tasks: deploy.yml
   when: 
     - applications is defined
     - applications | length > 0
     - deploy_apps is not defined or deploy_apps | bool
+    - deploy_from_branch is not defined or not (deploy_from_branch | bool)
   tags:
     - always  # Allow included tasks' tags to work
