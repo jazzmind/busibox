@@ -205,11 +205,18 @@ applications:
       - smtp_secure
       - github_client_id
       - github_client_secret
+      - github_redirect_uri
+      - encryption_key
+      - current_container_ip
+      - apps_container_ip
+      - agent_container_ip
+      - postgres_container_ip
     optional_secrets:
       - resend_api_key
       - microsoft_client_id
       - microsoft_client_secret
       - microsoft_tenant_id
+      - container_ssh_private_key
     env:
       NODE_ENV: production
       LITELLM_BASE_URL: "http://{{ litellm_ip }}:{{ litellm_port }}/v1"
