@@ -3,11 +3,26 @@
 # Purpose: Deploy an application directly from a GitHub branch without requiring a release
 # This is useful for development/testing and continuous deployment workflows
 
+- name: Check if deploy_app is defined
+  assert:
+    that:
+      - deploy_app is defined
+      - deploy_app | length > 0
+    fail_msg: "deploy_app variable is not defined or empty"
+    success_msg: "Deploying app: {{ deploy_app }}"
+
 - name: Set deployment variables
   set_fact:
     app_to_deploy: "{{ applications | selectattr('name', 'equalto', deploy_app) | first }}"
     branch_to_deploy: "{{ deploy_branch | default('main') }}"
-  when: deploy_app is defined
+
+- name: Verify app exists in applications list
+  assert:
+    that:
+      - app_to_deploy is defined
+      - app_to_deploy.name is defined
+    fail_msg: "App '{{ deploy_app }}' not found in applications list"
+    success_msg: "Found app: {{ app_to_deploy.name }}"
 
 - name: Display deployment information
   debug:
