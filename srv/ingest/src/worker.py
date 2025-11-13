@@ -338,7 +338,7 @@ class IngestWorker:
                 with conn.cursor() as cur:
                     cur.execute(
                         "SELECT content_hash FROM ingestion_files WHERE file_id = %s",
-                        (uuid.UUID(file_id),),
+                        (file_id,),  # Pass string directly, not UUID object
                     )
                     result = cur.fetchone()
                     if not result:
@@ -619,7 +619,7 @@ class IngestWorker:
                 with conn.cursor() as cur:
                     cur.execute(
                         "SELECT retry_count FROM ingestion_status WHERE file_id = %s",
-                        (uuid.UUID(file_id),),
+                        (file_id,),  # Pass string directly, not UUID object
                     )
                     result = cur.fetchone()
                     retry_count = result[0] if result else 0
