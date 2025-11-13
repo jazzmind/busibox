@@ -105,7 +105,16 @@
 
 - name: Move extracted files to deploy path
   shell: |
-    rsync -a --delete /tmp/{{ app_to_deploy.name }}-{{ branch_to_deploy }}/ {{ app_to_deploy.deploy_path }}/
+    # Remove old files (except .env and node_modules to preserve state)
+    find {{ app_to_deploy.deploy_path }} -mindepth 1 -maxdepth 1 \
+      ! -name '.env' \
+      ! -name 'node_modules' \
+      ! -name '.deployed-version' \
+      -exec rm -rf {} +
+    
+    # Copy new files
+    cp -r /tmp/{{ app_to_deploy.name }}-{{ branch_to_deploy }}/* {{ app_to_deploy.deploy_path }}/
+    cp -r /tmp/{{ app_to_deploy.name }}-{{ branch_to_deploy }}/.[^.]* {{ app_to_deploy.deploy_path }}/ 2>/dev/null || true
   delegate_to: "{{ app_to_deploy.container_ip }}"
 
 - name: Clean up temporary directory
