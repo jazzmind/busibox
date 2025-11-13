@@ -38,14 +38,14 @@ local-deploy:
 	@echo "📦 Deploying to local containers with Ansible..."
 	cd provision/ansible && \
 	ansible-playbook -i inventory/local/hosts.yml site.yml \
-		--vault-password-file .vault_pass_local
+		--vault-password-file $HOME/.vault_pass
 	@echo "✅ Deployment complete."
 
 local-deploy-apps:
 	@echo "📦 Deploying only ai-portal to local..."
 	cd provision/ansible && \
 	ansible-playbook -i inventory/local/hosts.yml site.yml \
-		--vault-password-file .vault_pass_local \
+		--vault-password-file $HOME/.vault_pass \
 		--limit apps --tags nextjs
 
 local-logs:
