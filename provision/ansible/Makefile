@@ -4,7 +4,7 @@ INV=inventory/production
 
 # Vault password file (optional, can also use --ask-vault-pass)
 # Create with: echo "password" > .vault_pass && chmod 600 .vault_pass
-VAULT_PASS_FILE=$HOME/.vault_pass
+VAULT_PASS_FILE=~/.vault_pass
 VAULT_FLAGS=$(shell [ -f $(VAULT_PASS_FILE) ] && echo "--vault-password-file $(VAULT_PASS_FILE)" || echo "--ask-vault-pass")
 
 ping:
