@@ -92,10 +92,11 @@ echo -e "${BLUE}Starting deployment...${NC}"
 echo ""
 
 # Run ansible playbook with branch deployment
+# Use --tags apps to run the app_deployer role, then filter by deploy_app var
 ansible-playbook \
     -i "$INVENTORY" \
     site.yml \
-    --tags "${APP_NAME}" \
+    --tags "apps" \
     --vault-password-file $HOME/.vault_pass \
     --extra-vars "deploy_app=${APP_NAME}" \
     --extra-vars "deploy_branch=${BRANCH}" \
