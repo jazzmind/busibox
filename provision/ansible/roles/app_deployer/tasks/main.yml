@@ -86,6 +86,11 @@
   tags:
     - always  # Always run for any app deployment
 
+- name: Deploy log viewing scripts
+  include_tasks: "{{ playbook_dir }}/roles/apps/tasks/log-scripts.yml"
+  tags:
+    - always  # Always run for any app deployment
+
 - name: Deploy application environment files (.env)
   template:
     src: "{{ playbook_dir }}/roles/secrets/templates/app.env.j2"
