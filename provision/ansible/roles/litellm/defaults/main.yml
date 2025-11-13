@@ -65,10 +65,10 @@ litellm_models:
   #     api_base: "http://{{ vllm_ip }}:{{ vllm_port }}/v1"
   
   # Embedding models (for ingestion service)
-  # Using Ollama's Qwen 2.5 embedding model for local embeddings
-  - model_name: "qwen2.5-embedding"
+  # Using Ollama's Qwen 3 embedding model for local embeddings
+  - model_name: "qwen3-embedding"
     litellm_params:
-      model: "ollama/qwen2.5-embedding"
+      model: "ollama/qwen3-embedding"
       api_base: "http://{{ ollama_ip }}:{{ ollama_port }}"
     # Embedding dimension: 1024
     # Used by ingestion service for dense semantic embeddings
