@@ -68,7 +68,7 @@ echo ""
 
 # Show table sizes
 echo -e "${BLUE}Table sizes:${NC}"
-ssh -o StrictHostKeyChecking=no "root@$PG_IP" "su - postgres -c 'psql -d $DATABASE -c \"SELECT schemaname, tablename, pg_size_pretty(pg_total_relation_size(schemaname||'\''.'\''||tablename)) AS size FROM pg_tables WHERE schemaname = '\''public'\'' ORDER BY pg_total_relation_size(schemaname||'\''.'\''||tablename) DESC LIMIT 10;\"'"
+ssh -o StrictHostKeyChecking=no "root@$PG_IP" "su - postgres -c 'psql -d $DATABASE -c \"SELECT schemaname, tablename, pg_size_pretty(pg_total_relation_size(quote_ident(schemaname)||'\''.'\''||quote_ident(tablename))) AS size FROM pg_tables WHERE schemaname = '\''public'\'' ORDER BY pg_total_relation_size(quote_ident(schemaname)||'\''.'\''||quote_ident(tablename)) DESC LIMIT 10;\"'"
 echo ""
 
 # Check for Prisma migrations table
