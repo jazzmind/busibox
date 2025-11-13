@@ -96,6 +96,7 @@ ansible-playbook \
     -i "$INVENTORY" \
     site.yml \
     --tags "${APP_NAME}" \
+    --vault-password-file $HOME/.vault_pass \
     --extra-vars "deploy_app=${APP_NAME}" \
     --extra-vars "deploy_branch=${BRANCH}" \
     --extra-vars "deploy_from_branch=true"
