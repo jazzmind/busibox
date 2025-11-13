@@ -133,8 +133,8 @@
       CHUNK_SIZE_MIN=400
       CHUNK_SIZE_MAX=800
       CHUNK_OVERLAP_PCT=0.12
-      EMBEDDING_MODEL={{ embedding_model | default('nomic-embed-text') }}
-      EMBEDDING_DIMENSION={{ embedding_dimension | default('768') }}
+      EMBEDDING_MODEL={{ embedding_model | default('qwen2.5-embedding') }}
+      EMBEDDING_DIMENSION={{ embedding_dimension | default('1024') }}
       
       # Timeout configuration (seconds)
       TIMEOUT_SMALL=300
