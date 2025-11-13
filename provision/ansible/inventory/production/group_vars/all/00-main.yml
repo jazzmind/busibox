@@ -180,6 +180,15 @@ applications:
         domains:
           - "{{ domain }}"
           - "{{ www_domain }}"
+      - type: path
+        domain: "{{ domain }}"
+        path: /home
+        strip_path: false  # Keep /home path for Next.js routing
+      - type: path
+        domain: "{{ domain }}"
+        path: /portal
+        strip_path: true  # Strip /portal prefix so Next.js receives requests at root
+
     secrets:
       - database_url
       - better_auth_secret
