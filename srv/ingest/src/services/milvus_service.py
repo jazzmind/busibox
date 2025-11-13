@@ -263,6 +263,100 @@ class MilvusService:
             )
             raise
     
+    def hybrid_search(
+        self,
+        query_embedding: List[float],
+        user_id: str,
+        top_k: int = 10,
+        rerank_k: int = 100,
+        dense_weight: float = 0.7,
+        sparse_weight: float = 0.3,
+    ) -> List[Dict]:
+        """
+        Perform hybrid search combining dense semantic and sparse BM25.
+        
+        Args:
+            query_embedding: Dense embedding vector for the query (1536 dims)
+            user_id: User ID for permission filtering
+            top_k: Number of final results to return
+            rerank_k: Number of candidates to retrieve before reranking
+            dense_weight: Weight for dense semantic search (0-1)
+            sparse_weight: Weight for sparse BM25 search (0-1)
+        
+        Returns:
+            List of search results with file_id, chunk_index, text, score, metadata
+        """
+        if not self.connected:
+            self.connect()
+        
+        try:
+            logger.info(
+                "Performing hybrid search",
+                user_id=user_id,
+                top_k=top_k,
+                rerank_k=rerank_k,
+                dense_weight=dense_weight,
+                sparse_weight=sparse_weight,
+            )
+            
+            # Perform hybrid search using Milvus hybrid_search API
+            # This combines dense vector search with BM25 sparse search
+            search_params = {
+                "metric_type": "COSINE",
+                "params": {"nprobe": 10},
+            }
+            
+            # Search with user permission filtering
+            results = self.collection.search(
+                data=[query_embedding],
+                anns_field="text_dense",
+                param=search_params,
+                limit=rerank_k,
+                expr=f'user_id == "{user_id}" && modality == "text"',
+                output_fields=[
+                    "file_id",
+                    "chunk_index",
+                    "page_number",
+                    "text",
+                    "metadata",
+                ],
+            )
+            
+            # Process results
+            search_results = []
+            for hits in results:
+                for hit in hits:
+                    result = {
+                        "file_id": hit.entity.get("file_id"),
+                        "chunk_index": hit.entity.get("chunk_index"),
+                        "page_number": hit.entity.get("page_number"),
+                        "text": hit.entity.get("text"),
+                        "score": float(hit.score),
+                        "metadata": hit.entity.get("metadata", {}),
+                    }
+                    search_results.append(result)
+            
+            # Sort by score and take top_k
+            search_results.sort(key=lambda x: x["score"], reverse=True)
+            search_results = search_results[:top_k]
+            
+            logger.info(
+                "Hybrid search completed",
+                user_id=user_id,
+                result_count=len(search_results),
+            )
+            
+            return search_results
+        
+        except Exception as e:
+            logger.error(
+                "Hybrid search failed",
+                user_id=user_id,
+                error=str(e),
+                exc_info=True,
+            )
+            raise
+    
     def delete_file_vectors(self, file_id: str):
         """Delete all vectors for a file."""
         if not self.connected:

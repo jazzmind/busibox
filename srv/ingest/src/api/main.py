@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.middleware.auth import AuthMiddleware
 from api.middleware.logging import LoggingMiddleware
-from api.routes import files, health, status, upload
+from api.routes import files, health, search, status, upload
 
 # Configure structured logging
 structlog.configure(
@@ -87,6 +87,10 @@ For issues or questions, contact the Busibox infrastructure team.
             "description": "File upload with chunked streaming and metadata",
         },
         {
+            "name": "Search",
+            "description": "Semantic document search with hybrid retrieval",
+        },
+        {
             "name": "Status",
             "description": "Real-time processing status via SSE and polling",
         },
@@ -123,6 +127,7 @@ app.add_middleware(AuthMiddleware)
 
 # Include routers
 app.include_router(upload.router, prefix="/upload", tags=["Upload"])
+app.include_router(search.router, prefix="/search", tags=["Search"])
 app.include_router(status.router, prefix="/status", tags=["Status"])
 app.include_router(files.router, prefix="/files", tags=["Files"])
 app.include_router(health.router, prefix="/health", tags=["Health"])
@@ -158,6 +163,7 @@ async def root():
         },
         "endpoints": {
             "upload": "/upload",
+            "search": "/search",
             "status": "/status/{file_id}",
             "files": "/files/{file_id}",
             "health": "/health",
