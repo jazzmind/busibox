@@ -40,6 +40,7 @@ import redis
 from redis.exceptions import RedisError
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
+from shared.config import Config
 from services.file_service import FileService
 from services.postgres_service import PostgresService
 from services.milvus_service import MilvusService
@@ -49,7 +50,6 @@ from processors.embedder import Embedder
 from processors.classifier import DocumentClassifier
 from processors.metadata_extractor import MetadataExtractor
 from processors.colpali import ColPaliEmbedder
-from shared.config import Config
 
 # Configure structured logging
 structlog.configure(
@@ -775,7 +775,7 @@ def main():
     signal.signal(signal.SIGTERM, signal_handler)
     
     # Load configuration
-    config = load_config()
+    config = Config().to_dict()
     
     # Create and start worker
     worker = IngestWorker(config)

@@ -4,6 +4,7 @@
 # API Framework
 fastapi>=0.104.1,<0.120.0
 uvicorn[standard]>=0.24.0,<0.35.0
+python-multipart>=0.0.6,<0.1.0  # Required for file uploads
 sse-starlette>=1.6.5,<2.0.0
 
 # Database
@@ -13,6 +14,7 @@ asyncpg>=0.29.0,<0.30.0
 # Vector Database
 pymilvus>=2.3.5,<2.5.0
 rank-bm25>=0.2.2,<0.3.0  # BM25 sparse vectors
+scipy>=1.11.0,<2.0.0  # Sparse matrix support for BM25
 
 # Object Storage
 minio>=7.2.3,<8.0.0
