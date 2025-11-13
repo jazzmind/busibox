@@ -2,36 +2,41 @@
 # Default to production inventory (can override with: make all INV=inventory/test)
 INV=inventory/production
 
+# Vault password file (optional, can also use --ask-vault-pass)
+# Create with: echo "password" > .vault_pass && chmod 600 .vault_pass
+VAULT_PASS_FILE=.vault_pass
+VAULT_FLAGS=$(shell [ -f $(VAULT_PASS_FILE) ] && echo "--vault-password-file $(VAULT_PASS_FILE)" || echo "--ask-vault-pass")
+
 ping:
 	ansible -i $(INV) all -m ping
 
 all:
-	ansible-playbook -i $(INV) site.yml
+	ansible-playbook -i $(INV) site.yml $(VAULT_FLAGS)
 
 files:
-	ansible-playbook -i $(INV) -l files site.yml
+	ansible-playbook -i $(INV) -l files site.yml $(VAULT_FLAGS)
 
 pg:
-	ansible-playbook -i $(INV) -l pg site.yml
+	ansible-playbook -i $(INV) -l pg site.yml $(VAULT_FLAGS)
 
 milvus:
-	ansible-playbook -i $(INV) -l milvus site.yml
+	ansible-playbook -i $(INV) -l milvus site.yml $(VAULT_FLAGS)
 
 agent:
-	ansible-playbook -i $(INV) -l agent site.yml
+	ansible-playbook -i $(INV) -l agent site.yml $(VAULT_FLAGS)
 
 ingest:
-	ansible-playbook -i $(INV) -l ingest site.yml
+	ansible-playbook -i $(INV) -l ingest site.yml $(VAULT_FLAGS)
 
 apps:
-	ansible-playbook -i $(INV) -l apps site.yml
+	ansible-playbook -i $(INV) -l apps site.yml $(VAULT_FLAGS)
 
 openwebui:
-	ansible-playbook -i $(INV) -l openwebui site.yml
+	ansible-playbook -i $(INV) -l openwebui site.yml $(VAULT_FLAGS)
 
 # T029: Deploy applications (runs app_deployer + secrets roles)
 deploy-apps:
-	ansible-playbook -i $(INV) -l agent,apps --tags app_deployer,secrets site.yml
+	ansible-playbook -i $(INV) -l agent,apps --tags app_deployer,secrets site.yml $(VAULT_FLAGS)
 
 # Verification targets
 verify: verify-health verify-smoke
