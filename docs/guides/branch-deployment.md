@@ -361,6 +361,55 @@ done
 
 ## Monitoring
 
+### Check Deployed Version
+
+**Quick version check:**
+```bash
+bash scripts/check-app-version.sh ai-portal production
+```
+
+**Output example:**
+```
+╔════════════════════════════════════════════════════════════╗
+║         Application Version Info                          ║
+╚════════════════════════════════════════════════════════════╝
+
+App:         ai-portal
+Environment: production
+Container:   10.96.200.10
+Deploy Path: /srv/apps/ai-portal
+
+✓ Deployment version found
+
+Deployment Type: BRANCH
+Branch: main
+Commit: abc123d (abc123def456...)
+Deployed At: 2025-01-13T12:34:56Z
+Deployed By: ansible
+Environment: production
+```
+
+**Manual check:**
+```bash
+# SSH to container and read version file
+ssh root@container-ip "cat /srv/apps/ai-portal/.deployed-version"
+
+# Or use jq for pretty output
+ssh root@container-ip "cat /srv/apps/ai-portal/.deployed-version | jq ."
+```
+
+**Version file format:**
+```json
+{
+  "type": "branch",
+  "branch": "main",
+  "commit": "abc123def456...",
+  "deployed_at": "2025-01-13T12:34:56Z",
+  "deployed_by": "ansible",
+  "environment": "production"
+}
+```
+
 ### Check Deployment Status
 
 ```bash
