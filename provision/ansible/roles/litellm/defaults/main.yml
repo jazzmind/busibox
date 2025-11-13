@@ -65,13 +65,14 @@ litellm_models:
   #     api_base: "http://{{ vllm_ip }}:{{ vllm_port }}/v1"
   
   # Embedding models (for ingestion service)
-  - model_name: "text-embedding-3-small"
+  # Using Ollama's nomic-embed-text for local embeddings
+  - model_name: "nomic-embed-text"
     litellm_params:
-      model: "openai/text-embedding-3-small"
-      api_base: "https://api.openai.com/v1"
-      api_key: "{{ secrets.openai.api_key | default('sk-change-me') }}"
-    # Embedding dimension: 1536
+      model: "ollama/nomic-embed-text"
+      api_base: "http://{{ ollama_ip }}:{{ ollama_port }}"
+    # Embedding dimension: 768
     # Used by ingestion service for dense semantic embeddings
+    # Model will be auto-pulled by Ollama on first use
 
 # Router Settings
 litellm_routing_strategy: "simple-shuffle"
