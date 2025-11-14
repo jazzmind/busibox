@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 from api.services.minio import MinIOService
 from api.services.postgres import PostgresService
-from api.services.milvus import MilvusService
+from services.milvus_service import MilvusService
 from shared.config import Config
 
 logger = structlog.get_logger()
