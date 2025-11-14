@@ -144,7 +144,10 @@ async def search_documents(
         
         # Get file metadata from PostgreSQL to add filenames
         import asyncpg
-        conn = await asyncpg.connect(config.database_url)
+        
+        # Build database URL from config
+        db_url = f"postgresql://{config.postgres_user}:{config.postgres_password}@{config.postgres_host}:{config.postgres_port}/{config.postgres_db}"
+        conn = await asyncpg.connect(db_url)
         
         try:
             # Get unique file IDs
@@ -167,10 +170,10 @@ async def search_documents(
                     file_id=result["file_id"],
                     filename=filename_lookup.get(result["file_id"], "unknown"),
                     chunk_index=result["chunk_index"],
-                    page_number=result.get("page_number"),
+                    page_number=result.get("page_number") or -1,  # Default to -1 for non-PDF
                     text=result["text"],
                     score=result["score"],
-                    metadata=result.get("metadata", {}),
+                    metadata=result.get("metadata") or {},
                 )
                 enriched_results.append(enriched_result)
         finally:
