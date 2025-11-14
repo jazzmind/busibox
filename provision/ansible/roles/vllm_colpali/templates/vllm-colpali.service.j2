@@ -19,9 +19,10 @@ Environment="HF_HUB_CACHE={{ vllm_colpali_cache_dir }}/hub"
 Environment="HF_TOKEN={{ vllm_colpali_hf_token }}"
 {% endif %}
 
-# vLLM Command
+# vLLM Command with LoRA support for ColPali
+# ColPali is a LoRA adapter on top of PaliGemma base model
 ExecStart={{ vllm_colpali_venv_dir }}/bin/python -m vllm.entrypoints.openai.api_server \
-    --model {{ vllm_colpali_model }} \
+    --model google/paligemma-3b-pt-448 \
     --host {{ vllm_colpali_host }} \
     --port {{ vllm_colpali_port }} \
     --tensor-parallel-size {{ vllm_colpali_tensor_parallel_size }} \
@@ -30,6 +31,10 @@ ExecStart={{ vllm_colpali_venv_dir }}/bin/python -m vllm.entrypoints.openai.api_
     --max-num-seqs {{ vllm_colpali_max_num_seqs }} \
     --served-model-name {{ vllm_colpali_served_model_name }} \
     --trust-remote-code \
+    --enable-lora \
+    --max-loras 1 \
+    --max-lora-rank 32 \
+    --lora-modules colpali={{ vllm_colpali_model }} \
     --limit-mm-per-prompt '{"image": 1}' \
 {% if not vllm_colpali_enable_prefix_caching %}
     --disable-frontend-multiprocessing \
