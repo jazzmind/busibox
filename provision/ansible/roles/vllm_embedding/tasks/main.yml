@@ -4,7 +4,7 @@
 
 - name: List cached models on Proxmox host
   find:
-    paths: "/var/lib/llm-models/huggingface"
+    paths: "/var/lib/llm-models/huggingface/hub"
     patterns: "models--*"
     file_type: directory
   register: cached_models
