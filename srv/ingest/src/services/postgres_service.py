@@ -132,31 +132,31 @@ class PostgresService:
                         ),
                     )
                 else:
-                update_query = """
-                    UPDATE ingestion_status
-                    SET stage = %s,
-                        progress = %s,
-                        chunks_processed = %s,
-                        total_chunks = %s,
-                        pages_processed = %s,
-                        total_pages = %s,
-                        error_message = %s,
-                        updated_at = NOW()
-                    WHERE file_id = %s
-                """
-                cur.execute(
-                    update_query,
-                    (
-                        stage,
-                        progress,
-                        chunks_processed,
-                        total_chunks,
-                        pages_processed,
-                        total_pages,
-                        error_message,
+                    update_query = """
+                        UPDATE ingestion_status
+                        SET stage = %s,
+                            progress = %s,
+                            chunks_processed = %s,
+                            total_chunks = %s,
+                            pages_processed = %s,
+                            total_pages = %s,
+                            error_message = %s,
+                            updated_at = NOW()
+                        WHERE file_id = %s
+                    """
+                    cur.execute(
+                        update_query,
+                        (
+                            stage,
+                            progress,
+                            chunks_processed,
+                            total_chunks,
+                            pages_processed,
+                            total_pages,
+                            error_message,
                             file_id,  # Pass string directly, not UUID object
-                    ),
-                )
+                        ),
+                    )
                 
                 # Set started_at if queued -> parsing transition
                 if stage == "parsing":
