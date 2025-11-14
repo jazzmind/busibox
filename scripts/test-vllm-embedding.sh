@@ -5,9 +5,9 @@ set -euo pipefail
 # Run on Proxmox host to verify vLLM embedding and liteLLM integration
 # Usage: bash scripts/test-vllm-embedding.sh
 
-VLLM_HOST="10.96.200.210"
+VLLM_HOST="10.96.200.208"  # vLLM container (not 210 which is old Ollama)
 VLLM_PORT="8001"
-LITELLM_HOST="10.96.200.30"
+LITELLM_HOST="10.96.200.207"  # liteLLM container
 LITELLM_PORT="4000"
 
 echo "========================================"
