@@ -71,22 +71,17 @@
   ignore_errors: yes
 
 - name: Check for RocksDB MANIFEST files indicating corruption
-  shell: |
-    # Check if MANIFEST files exist but referenced .ldb files are missing
-    # This indicates corruption where the manifest points to non-existent files
+  shell: >
     if [ -d /srv/milvus/data/rdb_data_meta_kv ]; then
-      # Check if there are MANIFEST files but the directory seems incomplete
-      manifest_count=$(find /srv/milvus/data/rdb_data_meta_kv -name "MANIFEST-*" 2>/dev/null | wc -l)
-      ldb_count=$(find /srv/milvus/data/rdb_data_meta_kv -name "*.ldb" 2>/dev/null | wc -l)
-      
-      # If we have manifests but very few or no .ldb files, it's likely corrupted
+      manifest_count=$(find /srv/milvus/data/rdb_data_meta_kv -name "MANIFEST-*" 2>/dev/null | wc -l);
+      ldb_count=$(find /srv/milvus/data/rdb_data_meta_kv -name "*.ldb" 2>/dev/null | wc -l);
       if [ "$manifest_count" -gt 0 ] && [ "$ldb_count" -lt 2 ]; then
-        echo "corrupted"
+        echo "corrupted";
       else
-        echo "ok"
-      fi
+        echo "ok";
+      fi;
     else
-      echo "ok"
+      echo "ok";
     fi
   register: rocksdb_check_files
   ignore_errors: yes
