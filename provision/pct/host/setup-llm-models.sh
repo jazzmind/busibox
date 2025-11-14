@@ -19,7 +19,7 @@
 #   - Models shared across multiple containers
 #   - Mirrors pattern used for NVIDIA drivers
 #
-set -euo pipefail
+set -eo pipefail
 
 # Colors for output
 RED='\033[0;31m'
@@ -101,38 +101,49 @@ for MODEL in "${MODELS[@]}"; do
         log_success "✓ ${MODEL} (already cached)"
     else
         log_info "↓ Downloading ${MODEL}..."
-        log_info "  This may take 10-30 minutes depending on model size..."
         
-        # Download and capture the actual cache directory
-        DOWNLOAD_OUTPUT=$(HF_HOME="${HUGGINGFACE_CACHE}" "${VENV_DIR}/bin/python3" << EOF
+        # Show estimated size and time
+        case "${MODEL}" in
+            *"30B"*) log_info "  ~57GB | ETA: 30-60 min (may appear to hang - it's downloading)" ;;
+            *"paligemma"*) log_info "  ~11GB | ETA: 10-20 min (may appear to hang - it's downloading)" ;;
+            *"Embedding"*|*"Phi-4"*|*"Qwen3-VL"*) log_info "  ~12-17GB | ETA: 10-30 min (may appear to hang - it's downloading)" ;;
+            *"colpali"*) log_info "  ~20MB | ETA: 1-2 min" ;;
+        esac
+        
+        # Download with proper error handling
+        DOWNLOAD_OUTPUT=$(HF_HOME="${HUGGINGFACE_CACHE}" "${VENV_DIR}/bin/python3" 2>&1 << EOF || echo "DOWNLOAD_FAILED"
 from huggingface_hub import snapshot_download
 import os
+import sys
+
+model_name = '${MODEL}'
 try:
-    cache_dir = snapshot_download('${MODEL}', resume_download=True)
-    # Find the models-- directory (go up two levels from snapshot)
-    parent_dir = os.path.dirname(cache_dir)  # Remove snapshot hash
-    models_dir = os.path.dirname(parent_dir)  # Remove /snapshots
-    model_name = os.path.basename(models_dir)  # Get models--Org--ModelName
+    cache_dir = snapshot_download(model_name, resume_download=True)
+    parent_dir = os.path.dirname(cache_dir)
+    models_dir = os.path.dirname(parent_dir)
+    model_name_final = os.path.basename(models_dir)
     print(f"CACHE_DIR:{cache_dir}")
-    print(f"MODEL_DIR:{model_name}")
+    print(f"MODEL_DIR:{model_name_final}")
 except Exception as e:
-    print(f"ERROR:{e}")
-    exit(1)
+    print(f"ERROR: {e}", file=sys.stderr)
+    sys.exit(1)
 EOF
 )
         
-        if [ $? -eq 0 ]; then
+        if echo "$DOWNLOAD_OUTPUT" | grep -q "DOWNLOAD_FAILED"; then
+            log_error "✗ Failed to download ${MODEL}"
+            echo "$DOWNLOAD_OUTPUT"
+            exit 1
+        elif echo "$DOWNLOAD_OUTPUT" | grep -q "ERROR:"; then
+            log_error "✗ Failed to download ${MODEL}"
+            echo "$DOWNLOAD_OUTPUT"
+            exit 1
+        else
             log_success "✓ ${MODEL} downloaded"
-            # Extract and display the actual cache location
-            ACTUAL_CACHE=$(echo "$DOWNLOAD_OUTPUT" | grep "CACHE_DIR:" | cut -d: -f2-)
             ACTUAL_MODEL=$(echo "$DOWNLOAD_OUTPUT" | grep "MODEL_DIR:" | cut -d: -f2-)
             if [[ -n "$ACTUAL_MODEL" ]]; then
                 log_info "  Cached as: ${ACTUAL_MODEL}"
             fi
-        else
-            log_error "✗ Failed to download ${MODEL}"
-            log_error "$DOWNLOAD_OUTPUT"
-            exit 1
         fi
     fi
 done
