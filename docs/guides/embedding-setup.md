@@ -50,7 +50,30 @@ Available for search
 
 ## Deployment
 
-### 1. Deploy vLLM Embedding Service
+### 1. Pre-download Models (Required for Fast Startup)
+
+**IMPORTANT:** Pre-download models before deploying vLLM to avoid 30+ minute wait on first start.
+
+```bash
+# SSH to Proxmox host
+ssh root@proxmox-host
+
+# Navigate to model download script
+cd /root/busibox/provision/pct/host
+
+# Run model pre-download
+bash setup-llm-models.sh
+```
+
+This downloads and caches:
+- `microsoft/Phi-4-multimodal-instruct` (~12GB) - for chat on GPU 0
+- `Qwen/Qwen3-Embedding-8B` (~16GB) - for embeddings on GPU 1
+
+Models are stored at `/var/lib/llm-models/huggingface` and mounted into vLLM containers.
+
+**Expected time:** 15-30 minutes (one-time setup)
+
+### 2. Deploy vLLM Embedding Service
 
 ```bash
 cd /Users/wessonnenreich/Code/sonnenreich/busibox/provision/ansible
@@ -58,11 +81,19 @@ cd /Users/wessonnenreich/Code/sonnenreich/busibox/provision/ansible
 # Deploy embedding service to production
 make vllm-embedding INV=inventory/production
 
-# Or deploy all vLLM services
+# Or deploy all vLLM services (chat + embedding)
 make vllm INV=inventory/production
 ```
 
-### 2. Verify vLLM Embedding
+**With pre-cached models:** vLLM starts in ~30 seconds  
+**Without cache:** Deployment will fail with instructions to run step 1
+
+To skip the cache check (not recommended):
+```bash
+make vllm-embedding INV=inventory/production EXTRA_ARGS="-e skip_model_check=true"
+```
+
+### 3. Verify vLLM Embedding
 
 ```bash
 # SSH to vLLM host
@@ -86,14 +117,14 @@ curl http://localhost:8001/v1/embeddings \
   }'
 ```
 
-### 3. Deploy liteLLM (if not already done)
+### 4. Deploy liteLLM (if not already done)
 
 ```bash
 cd /Users/wessonnenreich/Code/sonnenreich/busibox/provision/ansible
 make litellm INV=inventory/production
 ```
 
-### 4. Deploy Ingest Service
+### 5. Deploy Ingest Service
 
 ```bash
 # Deploy ingest worker with updated embedder
@@ -105,9 +136,9 @@ systemctl status ingest-worker
 journalctl -u ingest-worker -f
 ```
 
-### 5. Reinitialize Milvus Collection
+### 6. Reinitialize Milvus Collection
 
-The Milvus collection needs to be recreated for the new 1024-dim embeddings:
+The Milvus collection needs to be recreated for the new 4096-dim embeddings:
 
 ```bash
 ssh root@10.96.200.204

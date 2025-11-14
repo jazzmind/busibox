@@ -40,8 +40,9 @@ VENV_DIR="/opt/model-downloader"
 
 # Models to pre-download
 MODELS=(
-    "Qwen/Qwen3-VL-8B-Instruct"      # Small test model (8B parameters)
-    "microsoft/Phi-4-multimodal-instruct"  # Phi-4 model (6B parameters)
+    "microsoft/Phi-4-multimodal-instruct"  # Phi-4 chat model (6B parameters, GPU 0)
+    "Qwen/Qwen3-Embedding-8B"              # Qwen3 embedding model (8B parameters, 4096 dims, GPU 1)
+    # "Qwen/Qwen3-VL-8B-Instruct"          # Optional: VL model for future use
 )
 
 echo "=========================================="

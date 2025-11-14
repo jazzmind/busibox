@@ -7,6 +7,9 @@ INV=inventory/production
 VAULT_PASS_FILE=~/.vault_pass
 VAULT_FLAGS=$(shell [ -f $(VAULT_PASS_FILE) ] && echo "--vault-password-file $(VAULT_PASS_FILE)" || echo "--ask-vault-pass")
 
+# Extra arguments (can override with: make vllm-embedding EXTRA_ARGS="-e skip_model_check=true")
+EXTRA_ARGS=
+
 ping:
 	ansible -i $(INV) all -m ping
 
@@ -23,10 +26,10 @@ litellm:
 	ansible-playbook -i $(INV) -l litellm site.yml $(VAULT_FLAGS)
 
 vllm:
-	ansible-playbook -i $(INV) -l vllm site.yml --tags vllm $(VAULT_FLAGS)
+	ansible-playbook -i $(INV) -l vllm site.yml --tags vllm $(VAULT_FLAGS) $(EXTRA_ARGS)
 
 vllm-embedding:
-	ansible-playbook -i $(INV) -l vllm site.yml --tags vllm_embedding $(VAULT_FLAGS)
+	ansible-playbook -i $(INV) -l vllm site.yml --tags vllm_embedding $(VAULT_FLAGS) $(EXTRA_ARGS)
 
 milvus:
 	ansible-playbook -i $(INV) -l milvus site.yml $(VAULT_FLAGS)

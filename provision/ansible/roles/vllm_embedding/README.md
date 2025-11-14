@@ -29,6 +29,29 @@ vllm_embedding_served_model_name: "qwen3-embedding"
 
 ## Deployment
 
+### Step 1: Pre-download Models (Recommended)
+
+Pre-downloading models on the Proxmox host ensures instant vLLM startup:
+
+```bash
+# SSH to Proxmox host
+ssh root@proxmox-host
+
+# Run model download script
+cd /root/busibox/provision/pct/host
+bash setup-llm-models.sh
+```
+
+This downloads:
+- `microsoft/Phi-4-multimodal-instruct` (~12GB)
+- `Qwen/Qwen3-Embedding-8B` (~16GB)
+
+Models are cached at `/var/lib/llm-models/huggingface` and shared across containers.
+
+**Without pre-downloading:** vLLM will download on first start (30+ minutes).
+
+### Step 2: Deploy vLLM Services
+
 ```bash
 # Deploy both vLLM instances
 cd provision/ansible
@@ -36,7 +59,13 @@ make vllm INV=inventory/production
 
 # Or deploy just embedding instance
 make vllm-embedding INV=inventory/production
+
+# To skip model cache check (not recommended):
+make vllm-embedding INV=inventory/production EXTRA_ARGS="-e skip_model_check=true"
 ```
+
+**With pre-cached models:** vLLM starts in ~30 seconds  
+**Without cache:** First start takes 30+ minutes to download
 
 ## Integration
 
