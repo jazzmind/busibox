@@ -326,14 +326,14 @@ class MilvusService:
             search_results = []
             for hits in results:
                 for hit in hits:
-                    # Access entity fields as dictionary keys
+                    # Access entity fields using get() without default value
                     result = {
-                        "file_id": hit.entity["file_id"],
-                        "chunk_index": hit.entity["chunk_index"],
-                        "page_number": hit.entity.get("page_number") if isinstance(hit.entity, dict) else None,
-                        "text": hit.entity["text"],
+                        "file_id": hit.entity.get("file_id"),
+                        "chunk_index": hit.entity.get("chunk_index"),
+                        "page_number": hit.entity.get("page_number"),
+                        "text": hit.entity.get("text"),
                         "score": float(hit.score),
-                        "metadata": hit.entity.get("metadata") if isinstance(hit.entity, dict) else {},
+                        "metadata": hit.entity.get("metadata") or {},
                     }
                     search_results.append(result)
             
