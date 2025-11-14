@@ -42,6 +42,29 @@
     - "{{ colpali_home }}"
     - "{{ colpali_home }}/.cache"
 
+- name: Ensure model cache directory exists with proper permissions
+  file:
+    path: "{{ colpali_cache_dir }}"
+    state: directory
+    mode: '0755'
+    recurse: no
+
+- name: Set model cache to be group-writable for vllm group
+  file:
+    path: "{{ colpali_cache_dir }}/hub"
+    state: directory
+    group: vllm
+    mode: '0775'
+    recurse: yes
+  ignore_errors: yes
+  when: colpali_cache_dir is defined
+
+- name: Add ColPali user to vllm group for model cache access
+  user:
+    name: "{{ colpali_user }}"
+    groups: vllm
+    append: yes
+
 - name: Create Python virtual environment
   command: python3 -m venv {{ colpali_venv_dir }}
   args:
