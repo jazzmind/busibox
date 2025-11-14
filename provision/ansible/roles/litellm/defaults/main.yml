@@ -68,9 +68,10 @@ litellm_models:
   # Using vLLM with Qwen3 embedding model
   - model_name: "qwen3-embedding"
     litellm_params:
-      model: "openai/Alibaba-NLP/gte-Qwen2-1.5B-instruct"
+      model: "openai/Qwen/Qwen3-Embedding-8B"
       api_base: "http://{{ vllm_ip }}:8001/v1"
-    # Embedding dimension: 1024
+    # Embedding dimension: 4096
+    # Max sequence length: 32K
     # Used by ingestion service for dense semantic embeddings
     # Requires separate vLLM instance on port 8001
 

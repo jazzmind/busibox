@@ -28,9 +28,9 @@ class Embedder:
         self.litellm_base_url = config.get("litellm_base_url")
         self.litellm_api_key = config.get("litellm_api_key", "")
         
-        # Primary: vLLM via liteLLM (qwen3-embedding, 1024 dims)
+        # Primary: vLLM via liteLLM (Qwen3-Embedding-8B, 4096 dims)
         self.primary_model = config.get("embedding_model", "qwen3-embedding")
-        self.primary_dimension = 1024
+        self.primary_dimension = 4096
         
         # Fallback: FastEmbed (BAAI/bge-base-en-v1.5, 768 dims)
         self.fallback_model = "BAAI/bge-base-en-v1.5"
