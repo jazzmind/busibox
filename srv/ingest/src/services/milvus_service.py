@@ -127,7 +127,7 @@ class MilvusService:
                 "id": vector_id,
                 "file_id": file_id,
                 "chunk_index": chunk.get("chunk_index", i),
-                "page_number": chunk.get("page_number", -1),  # -1 for non-PDF chunks
+                "page_number": chunk.get("page_number") or 0,  # 0 for non-PDF chunks (None -> 0)
                 "modality": "text",
                 "text": chunk["text"],
                 "text_dense": embedding,
