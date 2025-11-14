@@ -70,6 +70,7 @@ litellm_models:
     litellm_params:
       model: "openai/Qwen/Qwen3-Embedding-8B"
       api_base: "http://{{ vllm_ip }}:8001/v1"
+      api_key: "EMPTY"  # vLLM doesn't require auth, but OpenAI provider needs a key
     # Embedding dimension: 4096
     # Max sequence length: 32K
     # Used by ingestion service for dense semantic embeddings
