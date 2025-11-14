@@ -224,10 +224,7 @@ applications:
       NODE_ENV: production
       LITELLM_BASE_URL: "http://{{ litellm_ip }}:{{ litellm_port }}/v1"
       BETTER_AUTH_URL: "https://{{ domain }}"
-      EMAIL_FROM: "AI Portal <noreply@{{ base_domain }}>"
       SSO_TOKEN_EXPIRY: "900"
-      ADMIN_EMAIL: "{{ secrets.admin_email }}"
-      ALLOWED_EMAIL_DOMAINS: "{{ secrets.allowed_email_domains }}"
       PORT: "3000"
   
   - name: agent-client
