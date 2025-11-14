@@ -70,9 +70,9 @@
     - role: vllm_embedding
       when: "'vllm' in group_names"
       tags: [llm, vllm, vllm_embedding]
-    - role: vllm_colpali
+    - role: colpali
       when: "'vllm' in group_names"
-      tags: [llm, vllm, vllm_colpali, colpali]
+      tags: [llm, colpali]
 
 - name: Deploy LiteLLM Proxy (depends on backends)
   hosts: litellm

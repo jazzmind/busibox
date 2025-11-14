@@ -1,0 +1,46 @@
+[Unit]
+Description=ColPali Visual Embedding Server (GPU {{ colpali_cuda_visible_devices }})
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ colpali_user }}
+Group={{ colpali_group }}
+WorkingDirectory={{ colpali_home }}
+
+# Environment
+Environment="CUDA_VISIBLE_DEVICES={{ colpali_cuda_visible_devices }}"
+Environment="HF_HOME={{ colpali_cache_dir }}"
+Environment="TRANSFORMERS_CACHE={{ colpali_cache_dir }}"
+Environment="HF_HUB_CACHE={{ colpali_cache_dir }}/hub"
+{% if colpali_hf_token %}
+Environment="HF_TOKEN={{ colpali_hf_token }}"
+{% endif %}
+
+# ColPali Server Command
+ExecStart={{ colpali_venv_dir }}/bin/python {{ colpali_home }}/colpali_server.py \
+    --model {{ colpali_model }} \
+    --device {{ colpali_device }} \
+    --dtype {{ colpali_dtype }} \
+    --host {{ colpali_host }} \
+    --port {{ colpali_port }}
+
+# Resource Limits
+MemoryLimit={{ colpali_memory_limit }}
+CPUQuota={{ colpali_cpu_limit | int * 100 }}%
+
+# Restart Configuration
+Restart={% if colpali_restart_on_failure %}on-failure{% else %}no{% endif %}
+RestartSec={{ colpali_restart_sec }}
+TimeoutStartSec={{ colpali_startup_timeout }}
+TimeoutStopSec=60
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=colpali
+
+[Install]
+WantedBy=multi-user.target
+
