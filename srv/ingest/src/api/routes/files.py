@@ -425,46 +425,43 @@ async def search_within_document(
                 )
             
             # Search Milvus with file_id filter
-            search_results = milvus_service.hybrid_search(
-                dense_vector=query_embedding,
+            # Note: hybrid_search doesn't support custom filter_expr yet
+            # So we'll get all results for the user and filter client-side
+            all_results = milvus_service.hybrid_search(
+                query_embedding=query_embedding,
                 user_id=user_id,
-                limit=search_request.limit,
-                filter_expr=f'file_id == "{fileId}"'  # Filter to this document only
+                top_k=search_request.limit * 10,  # Get more results to filter
             )
+            
+            # Filter results to only this document
+            search_results = [
+                r for r in all_results 
+                if r.get("file_id") == fileId
+            ][:search_request.limit]
             
             # Get chunk details for results
             if search_results:
-                chunk_ids = [result["chunk_id"] for result in search_results]
+                # Build results directly from search results (they already have all needed fields)
                 chunks = await conn.fetch("""
                     SELECT 
-                        c.chunk_id,
-                        c.file_id,
-                        c.chunk_index,
-                        c.text,
-                        c.page_number,
                         f.filename
-                    FROM ingestion_chunks c
-                    JOIN ingestion_files f ON c.file_id = f.file_id
-                    WHERE c.chunk_id = ANY($1::uuid[])
-                """, chunk_ids)
+                    FROM ingestion_files f
+                    WHERE f.file_id = $1::uuid
+                """, uuid.UUID(fileId))
                 
-                # Build chunk lookup
-                chunk_lookup = {str(c["chunk_id"]): c for c in chunks}
+                filename = chunks[0]["filename"] if chunks else "unknown"
                 
                 # Combine results
                 results = []
                 for result in search_results:
-                    chunk_id = result["chunk_id"]
-                    if chunk_id in chunk_lookup:
-                        chunk = chunk_lookup[chunk_id]
-                        results.append({
-                            "fileId": str(chunk["file_id"]),
-                            "filename": chunk["filename"],
-                            "chunkIndex": chunk["chunk_index"],
-                            "pageNumber": chunk["page_number"],
-                            "text": chunk["text"],
-                            "score": result["score"],
-                        })
+                    results.append({
+                        "fileId": result["file_id"],
+                        "filename": filename,
+                        "chunkIndex": result["chunk_index"],
+                        "pageNumber": result.get("page_number"),
+                        "text": result["text"],
+                        "score": result["score"],
+                    })
                 
                 return JSONResponse(
                     status_code=status.HTTP_200_OK,
