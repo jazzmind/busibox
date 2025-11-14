@@ -27,7 +27,7 @@ ExecStart={{ colpali_venv_dir }}/bin/python {{ colpali_home }}/colpali_server.py
     --port {{ colpali_port }}
 
 # Resource Limits
-MemoryLimit={{ colpali_memory_limit }}
+MemoryMax={{ colpali_memory_limit }}
 CPUQuota={{ colpali_cpu_limit | int * 100 }}%
 
 # Restart Configuration
