@@ -50,5 +50,5 @@ vllm_colpali_cpu_limit: "4"
 vllm_colpali_cuda_visible_devices: "2"
 
 # HuggingFace Configuration
-vllm_colpali_hf_token: ""  # Set via secrets if needed
+vllm_colpali_hf_token: "{{ secrets.huggingface.token | default('') }}"  # Required for gated models
 
