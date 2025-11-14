@@ -1,43 +1,139 @@
 """
-Embedding generation via liteLLM.
+Embedding generation with vLLM primary and FastEmbed fallback.
 
-Generates dense semantic embeddings for text chunks using text-embedding-3-small.
+Tries to use vLLM via liteLLM for embeddings first (better quality, GPU-accelerated).
+Falls back to FastEmbed (local ONNX) if vLLM is unavailable.
 """
 
-import asyncio
 from typing import List, Optional
+import asyncio
 
-import httpx
-import litellm
 import structlog
-from tenacity import retry, stop_after_attempt, wait_exponential
+from fastembed import TextEmbedding
 
 logger = structlog.get_logger()
 
 
 class Embedder:
-    """Generate embeddings for text chunks."""
+    """Generate embeddings with vLLM primary and FastEmbed fallback."""
     
     def __init__(self, config: dict):
         """
         Initialize embedder with configuration.
         
         Args:
-            config: Configuration dictionary with litellm_base_url, embedding_model
+            config: Configuration dictionary
         """
         self.config = config
-        self.litellm_base_url = config.get("litellm_base_url", "http://10.96.200.30:4000")
-        self.embedding_model = config.get("embedding_model", "text-embedding-3-small")
-        self.api_key = config.get("litellm_api_key", "")
+        self.litellm_base_url = config.get("litellm_base_url")
+        self.litellm_api_key = config.get("litellm_api_key", "")
         
-        # Batch configuration
-        self.batch_size = config.get("embedding_batch_size", 50)
-        self.max_retries = config.get("embedding_max_retries", 3)
+        # Primary: vLLM via liteLLM (qwen3-embedding, 1024 dims)
+        self.primary_model = config.get("embedding_model", "qwen3-embedding")
+        self.primary_dimension = 1024
+        
+        # Fallback: FastEmbed (BAAI/bge-base-en-v1.5, 768 dims)
+        self.fallback_model = "BAAI/bge-base-en-v1.5"
+        self.fallback_dimension = 768
+        
+        self.batch_size = config.get("embedding_batch_size", 32)
+        
+        # Track which backend is being used
+        self.using_fallback = False
+        self.fallback_embedder: Optional[TextEmbedding] = None
+        
+        logger.info(
+            "Initializing hybrid embedder",
+            primary_model=self.primary_model,
+            primary_dimension=self.primary_dimension,
+            fallback_model=self.fallback_model,
+            fallback_dimension=self.fallback_dimension,
+            litellm_url=self.litellm_base_url,
+        )
     
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=60),
-    )
+    def _init_fallback(self):
+        """Initialize FastEmbed fallback if not already initialized."""
+        if self.fallback_embedder is None:
+            logger.warning(
+                "Initializing FastEmbed fallback",
+                model=self.fallback_model,
+            )
+            self.fallback_embedder = TextEmbedding(model_name=self.fallback_model)
+            self.using_fallback = True
+    
+    async def _try_litellm_embedding(self, chunks: List[str]) -> Optional[List[List[float]]]:
+        """
+        Try to generate embeddings via liteLLM/vLLM.
+        
+        Returns None if liteLLM is unavailable or fails.
+        """
+        if not self.litellm_base_url:
+            return None
+        
+        try:
+            import litellm
+            
+            # Configure liteLLM to use proxy
+            litellm.api_base = self.litellm_base_url
+            if self.litellm_api_key:
+                litellm.api_key = self.litellm_api_key
+            
+            all_embeddings = []
+            
+            for i in range(0, len(chunks), self.batch_size):
+                batch = chunks[i:i + self.batch_size]
+                
+                # Call liteLLM proxy which routes to vLLM
+                response = await litellm.aembedding(
+                    model=f"openai/{self.primary_model}",
+                    input=batch,
+                    api_base=self.litellm_base_url,
+                    api_key=self.litellm_api_key or "dummy-key",
+                    timeout=30.0,
+                )
+                
+                batch_embeddings = [item["embedding"] for item in response.data]
+                all_embeddings.extend(batch_embeddings)
+            
+            logger.info(
+                "Embeddings generated via vLLM",
+                chunk_count=len(chunks),
+                model=self.primary_model,
+                dimension=len(all_embeddings[0]) if all_embeddings else 0,
+            )
+            
+            return all_embeddings
+            
+        except Exception as e:
+            logger.warning(
+                "vLLM embedding failed, will use FastEmbed fallback",
+                error=str(e),
+                error_type=type(e).__name__,
+            )
+            return None
+    
+    def _fallback_embedding(self, chunks: List[str]) -> List[List[float]]:
+        """Generate embeddings using FastEmbed fallback."""
+        self._init_fallback()
+        
+        logger.info(
+            "Generating embeddings via FastEmbed fallback",
+            chunk_count=len(chunks),
+            model=self.fallback_model,
+        )
+        
+        # FastEmbed handles batching internally
+        embeddings_generator = self.fallback_embedder.embed(chunks, batch_size=self.batch_size)
+        embeddings = [embedding.tolist() for embedding in embeddings_generator]
+        
+        logger.info(
+            "Embeddings generated via FastEmbed",
+            chunk_count=len(chunks),
+            dimension=len(embeddings[0]) if embeddings else 0,
+        )
+        
+        return embeddings
+    
     async def embed_chunks(
         self,
         chunks: List[str],
@@ -45,14 +141,16 @@ class Embedder:
         """
         Generate embeddings for text chunks.
         
+        Tries vLLM first, falls back to FastEmbed if unavailable.
+        
         Args:
             chunks: List of text chunks
         
         Returns:
-            List of embedding vectors (1536 dimensions each)
+            List of embedding vectors
         
         Raises:
-            Exception: If embedding generation fails after retries
+            Exception: If both vLLM and FastEmbed fail
         """
         if not chunks:
             return []
@@ -60,85 +158,32 @@ class Embedder:
         logger.info(
             "Generating embeddings",
             chunk_count=len(chunks),
-            model=self.embedding_model,
+            using_fallback=self.using_fallback,
         )
         
         try:
-            # Configure litellm to use proxy server (OpenAI-compatible API)
-            litellm.api_base = self.litellm_base_url
-            if self.api_key:
-                litellm.api_key = self.api_key
-            
-            # Batch processing
-            all_embeddings = []
-            
-            for i in range(0, len(chunks), self.batch_size):
-                batch = chunks[i:i + self.batch_size]
+            # Try vLLM first (unless we're already using fallback)
+            if not self.using_fallback:
+                embeddings = await self._try_litellm_embedding(chunks)
+                if embeddings is not None:
+                    return embeddings
                 
-                logger.debug(
-                    "Processing embedding batch",
-                    batch_start=i,
-                    batch_size=len(batch),
-                )
-                
-                # Generate embeddings via litellm proxy
-                # When using liteLLM as a proxy, we use openai/ prefix to tell the SDK
-                # to use OpenAI-compatible API format (liteLLM handles the actual routing)
-                response = await litellm.aembedding(
-                    model=f"openai/{self.embedding_model}",
-                    input=batch,
-                    api_base=self.litellm_base_url,
-                    api_key=self.api_key or "dummy-key",
-                )
-                
-                # Extract embeddings
-                batch_embeddings = [item["embedding"] for item in response.data]
-                all_embeddings.extend(batch_embeddings)
-                
-                logger.debug(
-                    "Batch embeddings generated",
-                    batch_start=i,
-                    embeddings_count=len(batch_embeddings),
-                    embedding_dim=len(batch_embeddings[0]) if batch_embeddings else 0,
-                )
+                # vLLM failed, switch to fallback permanently for this session
+                logger.warning("Switching to FastEmbed fallback for remainder of session")
+                self.using_fallback = True
             
-            logger.info(
-                "Embeddings generated successfully",
-                total_chunks=len(chunks),
-                total_embeddings=len(all_embeddings),
-                embedding_dim=len(all_embeddings[0]) if all_embeddings else 0,
-            )
+            # Use FastEmbed fallback
+            return self._fallback_embedding(chunks)
             
-            return all_embeddings
-        
         except Exception as e:
             logger.error(
-                "Embedding generation failed",
+                "All embedding methods failed",
                 error=str(e),
                 chunk_count=len(chunks),
                 exc_info=True,
             )
             raise
     
-    async def embed_single(self, text: str) -> List[float]:
-        """
-        Generate embedding for single text.
-        
-        Args:
-            text: Text to embed
-        
-        Returns:
-            Embedding vector (1536 dimensions)
-        """
-        embeddings = await self.embed_chunks([text])
-        return embeddings[0] if embeddings else []
-    
-    async def check_health(self) -> bool:
-        """Check if embedding service is available."""
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(f"{self.litellm_base_url}/health")
-                return response.status_code == 200
-        except Exception as e:
-            logger.warning("Embedding service health check failed", error=str(e))
-            return False
+    def get_embedding_dimension(self) -> int:
+        """Get the dimension of embeddings being generated."""
+        return self.fallback_dimension if self.using_fallback else self.primary_dimension
