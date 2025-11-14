@@ -40,6 +40,14 @@ HUGGINGFACE_CACHE="/var/lib/llm-models/huggingface"
 MODELS_DIR="${HUGGINGFACE_CACHE}/hub"
 VENV_DIR="/opt/model-downloader"
 
+# HuggingFace token (required for gated models like PaliGemma)
+# Set HF_TOKEN environment variable or create /root/.huggingface/token file
+# Get token from: https://huggingface.co/settings/tokens
+HF_TOKEN="${HF_TOKEN:-}"
+if [[ -z "$HF_TOKEN" ]] && [[ -f "$HOME/.huggingface/token" ]]; then
+    HF_TOKEN=$(cat "$HOME/.huggingface/token")
+fi
+
 # Models to pre-download
 MODELS=(
     "microsoft/Phi-4-multimodal-instruct"  # Phi-4 chat model (6B parameters, GPU 0)
@@ -55,6 +63,25 @@ echo "LLM Model Pre-Download for vLLM"
 echo "=========================================="
 log_info "This will download models to: ${HUGGINGFACE_CACHE}"
 echo ""
+
+# Check for HuggingFace authentication
+if [[ -z "$HF_TOKEN" ]]; then
+    log_warning "No HuggingFace token found!"
+    log_warning "Some models (like PaliGemma) are gated and require authentication."
+    echo ""
+    log_info "To fix this:"
+    log_info "1. Get a token from: https://huggingface.co/settings/tokens"
+    log_info "2. Accept the license at: https://huggingface.co/google/paligemma-3b-pt-448"
+    log_info "3. Run: huggingface-cli login"
+    log_info "   OR set HF_TOKEN environment variable"
+    log_info "   OR create file: $HOME/.huggingface/token"
+    echo ""
+    log_warning "Continuing anyway - gated models will fail..."
+    echo ""
+else
+    log_success "HuggingFace token found (${#HF_TOKEN} characters)"
+    echo ""
+fi
 
 # Step 1: Create host directory
 log_info "Step 1: Creating model cache directory on host..."
@@ -110,15 +137,21 @@ for MODEL in "${MODELS[@]}"; do
             *"colpali"*) log_info "  ~20MB | ETA: 1-2 min" ;;
         esac
         
-        # Download with proper error handling
-        DOWNLOAD_OUTPUT=$(HF_HOME="${HUGGINGFACE_CACHE}" "${VENV_DIR}/bin/python3" 2>&1 << EOF || echo "DOWNLOAD_FAILED"
+        # Download with proper error handling and HF token
+        DOWNLOAD_OUTPUT=$(HF_HOME="${HUGGINGFACE_CACHE}" HF_TOKEN="${HF_TOKEN}" "${VENV_DIR}/bin/python3" 2>&1 << EOF || echo "DOWNLOAD_FAILED"
 from huggingface_hub import snapshot_download
 import os
 import sys
 
 model_name = '${MODEL}'
+hf_token = os.environ.get('HF_TOKEN', None)
+
 try:
-    cache_dir = snapshot_download(model_name, resume_download=True)
+    cache_dir = snapshot_download(
+        model_name, 
+        resume_download=True,
+        token=hf_token if hf_token else None
+    )
     parent_dir = os.path.dirname(cache_dir)
     models_dir = os.path.dirname(parent_dir)
     model_name_final = os.path.basename(models_dir)
