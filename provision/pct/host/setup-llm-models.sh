@@ -131,14 +131,14 @@ for MODEL in "${MODELS[@]}"; do
         
         # Show estimated size and time
         case "${MODEL}" in
-            *"30B"*) log_info "  ~57GB | ETA: 30-60 min (may appear to hang - it's downloading)" ;;
-            *"paligemma"*) log_info "  ~11GB | ETA: 10-20 min (may appear to hang - it's downloading)" ;;
-            *"Embedding"*|*"Phi-4"*|*"Qwen3-VL"*) log_info "  ~12-17GB | ETA: 10-30 min (may appear to hang - it's downloading)" ;;
-            *"colpali"*) log_info "  ~20MB | ETA: 1-2 min" ;;
+            *"30B"*) log_info "  Estimated: ~57GB | ETA: 30-60 min" ;;
+            *"paligemma"*) log_info "  Estimated: ~11GB | ETA: 10-20 min" ;;
+            *"Embedding"*|*"Phi-4"*|*"Qwen3-VL"*) log_info "  Estimated: ~12-17GB | ETA: 10-30 min" ;;
+            *"colpali"*) log_info "  Estimated: ~20MB | ETA: 1-2 min" ;;
         esac
         
-        # Download with proper error handling and HF token
-        DOWNLOAD_OUTPUT=$(HF_HOME="${HUGGINGFACE_CACHE}" HF_TOKEN="${HF_TOKEN}" "${VENV_DIR}/bin/python3" 2>&1 << EOF || echo "DOWNLOAD_FAILED"
+        # Download with HF token - progress bars will show automatically
+        HF_HOME="${HUGGINGFACE_CACHE}" HF_TOKEN="${HF_TOKEN}" "${VENV_DIR}/bin/python3" << EOF
 from huggingface_hub import snapshot_download
 import os
 import sys
@@ -161,22 +161,12 @@ except Exception as e:
     print(f"ERROR: {e}", file=sys.stderr)
     sys.exit(1)
 EOF
-)
         
-        if echo "$DOWNLOAD_OUTPUT" | grep -q "DOWNLOAD_FAILED"; then
-            log_error "✗ Failed to download ${MODEL}"
-            echo "$DOWNLOAD_OUTPUT"
-            exit 1
-        elif echo "$DOWNLOAD_OUTPUT" | grep -q "ERROR:"; then
-            log_error "✗ Failed to download ${MODEL}"
-            echo "$DOWNLOAD_OUTPUT"
-            exit 1
-        else
+        if [ $? -eq 0 ]; then
             log_success "✓ ${MODEL} downloaded"
-            ACTUAL_MODEL=$(echo "$DOWNLOAD_OUTPUT" | grep "MODEL_DIR:" | cut -d: -f2-)
-            if [[ -n "$ACTUAL_MODEL" ]]; then
-                log_info "  Cached as: ${ACTUAL_MODEL}"
-            fi
+        else
+            log_error "✗ Failed to download ${MODEL}"
+            exit 1
         fi
     fi
 done
