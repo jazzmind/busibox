@@ -309,11 +309,10 @@ async def get_file_chunks(
                     chunk_index,
                     text,
                     page_number,
-                    chunk_type,
-                    char_count,
-                    word_count,
+                    char_offset,
                     token_count,
-                    embedding_dense_id,
+                    section_heading,
+                    metadata,
                     created_at
                 FROM ingestion_chunks
                 WHERE file_id = $1
