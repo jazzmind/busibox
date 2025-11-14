@@ -2,11 +2,13 @@
 # vLLM Embedding Service Installation and Configuration
 # Runs on same host as main vLLM but on different GPU and port
 
-- name: Check if model is pre-cached on host
+- name: Check if model is pre-cached on Proxmox host
   stat:
-    path: "{{ vllm_embedding_cache_dir }}/models--Qwen--Qwen3-Embedding-8B"
+    path: "/var/lib/llm-models/huggingface/models--Qwen--Qwen3-Embedding-8B"
   register: model_cache_check
-  delegate_to: "{{ inventory_hostname }}"
+  delegate_to: localhost
+  become: no
+  run_once: true
 
 - name: Display model cache status
   debug:
