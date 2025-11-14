@@ -52,9 +52,30 @@
             start_period: 90s
   notify: Up Milvus
 
-- name: Stop any existing Milvus containers
+- name: Stop any existing Milvus containers (for clean restart)
   shell: docker compose down
   args: { chdir: /srv/milvus }
+  ignore_errors: yes
+
+- name: Check for RocksDB corruption markers
+  shell: |
+    # Check if Milvus logs show corruption errors
+    if docker logs milvus-standalone 2>&1 | grep -q "Corruption:"; then
+      echo "corrupted"
+    else
+      echo "ok"
+    fi
+  register: rocksdb_check
+  ignore_errors: yes
+  changed_when: false
+
+- name: Clean up corrupted RocksDB data (ONLY if corruption detected)
+  shell: |
+    echo "WARNING: RocksDB corruption detected, cleaning up corrupted data..."
+    # Remove corrupted RocksDB directories
+    rm -rf /srv/milvus/data/rdb_data*
+    echo "Corrupted RocksDB data removed. Milvus will rebuild on restart."
+  when: rocksdb_check.stdout is defined and "corrupted" in rocksdb_check.stdout
   ignore_errors: yes
 
 - name: Remove stale RocksDB lock files
