@@ -24,7 +24,6 @@ vllm_colpali_gpu_memory_utilization: 0.90  # Vision models need more memory
 vllm_colpali_max_model_len: 4096  # Context length for vision model
 vllm_colpali_max_num_seqs: 128  # Lower throughput for vision processing
 vllm_colpali_trust_remote_code: true
-vllm_colpali_limit_mm_per_prompt: "image=1"  # One image per request
 
 # Performance Configuration
 vllm_colpali_max_num_batched_tokens: null

@@ -30,7 +30,7 @@ ExecStart={{ vllm_colpali_venv_dir }}/bin/python -m vllm.entrypoints.openai.api_
     --max-num-seqs {{ vllm_colpali_max_num_seqs }} \
     --served-model-name {{ vllm_colpali_served_model_name }} \
     --trust-remote-code \
-    --limit-mm-per-prompt {{ vllm_colpali_limit_mm_per_prompt }} \
+    --limit-mm-per-prompt '{"image": 1}' \
 {% if not vllm_colpali_enable_prefix_caching %}
     --disable-frontend-multiprocessing \
 {% endif %}
