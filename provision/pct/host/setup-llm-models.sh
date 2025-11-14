@@ -44,6 +44,7 @@ VENV_DIR="/opt/model-downloader"
 MODELS=(
     "microsoft/Phi-4-multimodal-instruct"  # Phi-4 chat model (6B parameters, GPU 0)
     "Qwen/Qwen3-Embedding-8B"              # Qwen3 embedding model (8B parameters, 4096 dims, GPU 1)
+    "vidore/colpali-v1.2"                  # ColPali vision model for PDF embeddings (GPU 2)
     "Qwen/Qwen3-VL-8B-Instruct"            # Qwen3 VL model (8B parameters, 4096 dims, GPU 1)
     "Qwen/Qwen3-30B-A3B-Instruct-2507"    # Qwen3 30B model (30B parameters, 4096 dims, GPU 1)
 )

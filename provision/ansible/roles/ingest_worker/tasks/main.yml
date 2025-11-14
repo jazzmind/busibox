@@ -69,33 +69,23 @@
     requirements: /srv/ingest/requirements.txt
     virtualenv: /srv/ingest/venv
 
-- name: Get spaCy version
-  shell: /srv/ingest/venv/bin/python -c "import spacy; print(spacy.__version__)"
-  register: spacy_version
+- name: Check if spaCy model is already installed
+  shell: /srv/ingest/venv/bin/python -c "import en_core_web_sm"
+  register: spacy_model_check
   changed_when: false
   failed_when: false
 
-- name: Download spaCy English model (compatible version)
+- name: Download spaCy English model
   shell: |
-    # Extract major.minor version (e.g., "3.7" from "3.7.2")
-    SPACY_VERSION=$(/srv/ingest/venv/bin/python -c "import spacy; v=spacy.__version__.split('.'); print(f'{v[0]}.{v[1]}')")
-    /srv/ingest/venv/bin/python -m spacy download en_core_web_sm-${SPACY_VERSION}.0
-  args:
-    creates: /srv/ingest/venv/lib/python*/site-packages/en_core_web_sm
-  when: not ansible_check_mode  # Skip in check mode (requires network access)
-  register: spacy_download
-  failed_when: false
-
-- name: Try downloading latest compatible spaCy model (fallback)
-  pip:
-    name: https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.0/en_core_web_sm-3.7.0-py3-none-any.whl
-    virtualenv: /srv/ingest/venv
+    set -e
+    cd /tmp
+    /srv/ingest/venv/bin/python -m spacy download en_core_web_sm --no-cache-dir
   when: 
     - not ansible_check_mode
-    - spacy_download is defined
-    - spacy_download.rc is defined
-    - spacy_download.rc != 0
-  ignore_errors: yes  # Model download is optional - worker will still function
+    - spacy_model_check.rc != 0
+  register: spacy_download
+  failed_when: false
+  ignore_errors: yes
 
 - name: Create ingest worker environment file
   copy:
@@ -141,8 +131,8 @@
       TIMEOUT_MEDIUM=600
       TIMEOUT_LARGE=1200
       
-      # ColPali configuration (optional)
-      COLPALI_BASE_URL={{ colpali_base_url | default('http://10.96.200.31:8000/v1') }}
+      # ColPali configuration (vision embeddings for PDFs)
+      COLPALI_BASE_URL={{ colpali_base_url | default('http://10.96.200.208:8002/v1') }}
       COLPALI_API_KEY={{ colpali_api_key | default('EMPTY') }}
       COLPALI_ENABLED={{ colpali_enabled | default('true') }}
       

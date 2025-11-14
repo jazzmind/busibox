@@ -1,0 +1,55 @@
+---
+# vLLM ColPali Role - Default Variables
+# Purpose: Dedicated vLLM instance for ColPali vision model on separate GPU
+
+# Inherit from main vLLM role but override for ColPali-specific config
+vllm_colpali_version: "0.6.3"
+vllm_colpali_install_dir: /opt/vllm  # Share installation with main vLLM
+vllm_colpali_venv_dir: "{{ vllm_colpali_install_dir }}/venv"
+
+# Service Configuration
+vllm_colpali_user: vllm
+vllm_colpali_group: vllm
+vllm_colpali_home: /var/lib/vllm-colpali
+vllm_colpali_cache_dir: /var/lib/llm-models/huggingface
+
+# Network Configuration
+vllm_colpali_host: "0.0.0.0"
+vllm_colpali_port: 8002  # Different port from main vLLM (8000) and embedding (8001)
+
+# Model Configuration - ColPali v1.2 Vision Model
+vllm_colpali_model: "vidore/colpali-v1.2"  # ColPali vision model for PDF page embeddings
+vllm_colpali_tensor_parallel_size: 1  # Single GPU for ColPali
+vllm_colpali_gpu_memory_utilization: 0.90  # Vision models need more memory
+vllm_colpali_max_model_len: 4096  # Context length for vision model
+vllm_colpali_max_num_seqs: 128  # Lower throughput for vision processing
+vllm_colpali_trust_remote_code: true
+vllm_colpali_limit_mm_per_prompt: "image=1"  # One image per request
+
+# Performance Configuration
+vllm_colpali_max_num_batched_tokens: null
+vllm_colpali_enable_prefix_caching: false
+vllm_colpali_disable_log_stats: false
+
+# API Configuration
+vllm_colpali_served_model_name: "colpali"  # Friendly name for API
+vllm_colpali_api_key: null
+vllm_colpali_enable_api_key: false
+
+# Service Configuration
+vllm_colpali_enable_service: true
+vllm_colpali_start_service: true
+vllm_colpali_restart_on_failure: true
+vllm_colpali_restart_sec: 15
+vllm_colpali_startup_timeout: 600  # 10 minutes (vision models take longer to load)
+
+# Resource Limits
+vllm_colpali_memory_limit: "20G"  # Vision models need more memory
+vllm_colpali_cpu_limit: "4"
+
+# CUDA Configuration - Use GPU 2 (separate from main vLLM on GPU 0 and embedding on GPU 1)
+vllm_colpali_cuda_visible_devices: "2"
+
+# HuggingFace Configuration
+vllm_colpali_hf_token: ""  # Set via secrets if needed
+
