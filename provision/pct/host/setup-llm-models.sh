@@ -44,7 +44,8 @@ VENV_DIR="/opt/model-downloader"
 MODELS=(
     "microsoft/Phi-4-multimodal-instruct"  # Phi-4 chat model (6B parameters, GPU 0)
     "Qwen/Qwen3-Embedding-8B"              # Qwen3 embedding model (8B parameters, 4096 dims, GPU 1)
-    "vidore/colpali-v1.3"                  # ColPali v1.3 vision model for PDF embeddings (GPU 2)
+    "google/paligemma-3b-pt-448"           # PaliGemma-3B base model (required by ColPali)
+    "vidore/colpali-v1.3"                  # ColPali v1.3 LoRA adapters for PDF embeddings (GPU 2)
     "Qwen/Qwen3-VL-8B-Instruct"            # Qwen3 VL model (8B parameters, 4096 dims, GPU 1)
     "Qwen/Qwen3-30B-A3B-Instruct-2507"    # Qwen3 30B model (30B parameters, 4096 dims, GPU 1)
 )
@@ -145,19 +146,23 @@ echo "  Total cache size: ${TOTAL_SIZE}"
 echo ""
 log_info "Downloaded models (requested):"
 for MODEL in "${MODELS[@]}"; do
-    MODEL_DIR=$(echo "$MODEL" | sed 's/\//-/g')
+    # Convert model name to directory format (org/model -> models--org--model)
+    MODEL_DIR=$(echo "$MODEL" | sed 's/\/--/--/g' | sed 's/\//--/g')
     MODEL_PATH="${MODELS_DIR}/models--${MODEL_DIR}"
     
-    if [[ -d "${MODEL_PATH}/snapshots" ]]; then
+    if [[ -d "${MODEL_PATH}" ]]; then
         # Count snapshots
         SNAPSHOTS=$(find "${MODEL_PATH}/snapshots" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
-        # Get size of blobs directory (actual files)
-        if [[ -d "${MODEL_PATH}/blobs" ]]; then
-            SIZE=$(du -sh "${MODEL_PATH}/blobs" 2>/dev/null | awk '{print $1}')
+        # Get size of entire model directory
+        SIZE=$(du -sh "${MODEL_PATH}" 2>/dev/null | awk '{print $1}')
+        
+        # Check if this is a LoRA adapter model (small size indicates adapters only)
+        SIZE_BYTES=$(du -sb "${MODEL_PATH}" 2>/dev/null | awk '{print $1}')
+        if [[ $SIZE_BYTES -lt 100000000 ]]; then  # Less than 100MB
+            echo "  ✓ ${MODEL}: ${SIZE} (${SNAPSHOTS} snapshot(s)) [LoRA adapters only]"
         else
-            SIZE=$(du -sh "${MODEL_PATH}" 2>/dev/null | awk '{print $1}')
+            echo "  ✓ ${MODEL}: ${SIZE} (${SNAPSHOTS} snapshot(s))"
         fi
-        echo "  ✓ ${MODEL}: ${SIZE} (${SNAPSHOTS} snapshot(s))"
     else
         echo "  ✗ ${MODEL}: NOT FOUND"
     fi
