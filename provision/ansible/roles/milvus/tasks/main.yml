@@ -55,7 +55,12 @@
   notify: Up Milvus
 
 - name: Check for RocksDB corruption before stopping
-  shell: docker logs milvus-standalone 2>&1 | grep -q "Corruption:" && echo "corrupted" || echo "ok"
+  shell: |
+    if docker logs milvus-standalone 2>&1 | grep -q "Corruption:"; then
+      echo "corrupted"
+    else
+      echo "ok"
+    fi
   register: rocksdb_check_before
   ignore_errors: yes
   changed_when: false
