@@ -42,7 +42,8 @@ langdetect>=1.0.9,<2.0.0  # Language detection
 tiktoken>=0.5.1,<1.0.0  # Token counting
 
 # LLM Integration (for embeddings)
-litellm>=1.17.0,<2.0.0
+fastembed>=0.4.2,<1.0.0  # Local embeddings (ONNX runtime)
+litellm>=1.17.0,<2.0.0  # For future LLM calls if needed
 openai>=1.65.2  # Required by marker-pdf
 tenacity>=8.2.3,<9.0.0  # Retry logic
 

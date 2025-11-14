@@ -65,14 +65,14 @@ litellm_models:
   #     api_base: "http://{{ vllm_ip }}:{{ vllm_port }}/v1"
   
   # Embedding models (for ingestion service)
-  # Using Ollama's Qwen 3 embedding model for local embeddings
+  # Using vLLM with Qwen3 embedding model
   - model_name: "qwen3-embedding"
     litellm_params:
-      model: "ollama/qwen3-embedding"
-      api_base: "http://{{ ollama_ip }}:{{ ollama_port }}"
+      model: "openai/Alibaba-NLP/gte-Qwen2-1.5B-instruct"
+      api_base: "http://{{ vllm_ip }}:8001/v1"
     # Embedding dimension: 1024
     # Used by ingestion service for dense semantic embeddings
-    # Model will be auto-pulled by Ollama on first use
+    # Requires separate vLLM instance on port 8001
 
 # Router Settings
 litellm_routing_strategy: "simple-shuffle"
