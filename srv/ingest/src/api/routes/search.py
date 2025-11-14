@@ -143,26 +143,38 @@ async def search_documents(
         paginated_results = search_results[search_request.offset:][:search_request.limit]
         
         # Get file metadata from PostgreSQL to add filenames
-        # Use the main PostgresService with connection pool
-        from services.postgres_service import PostgresService
-        postgres_service = PostgresService(config.to_dict())
+        import asyncpg
+        conn = await asyncpg.connect(config.database_url)
         
-        # Enrich results with filenames
-        enriched_results = []
-        for result in paginated_results:
-            # Get file metadata
-            file_metadata = await postgres_service.get_file_metadata(result["file_id"])
+        try:
+            # Get unique file IDs
+            file_ids = list(set(result["file_id"] for result in paginated_results))
             
-            enriched_result = SearchResult(
-                file_id=result["file_id"],
-                filename=file_metadata.get("filename", "unknown") if file_metadata else "unknown",
-                chunk_index=result["chunk_index"],
-                page_number=result.get("page_number"),
-                text=result["text"],
-                score=result["score"],
-                metadata=result.get("metadata", {}),
-            )
-            enriched_results.append(enriched_result)
+            # Fetch filenames for all files
+            file_rows = await conn.fetch("""
+                SELECT file_id, filename
+                FROM ingestion_files
+                WHERE file_id = ANY($1::uuid[])
+            """, file_ids)
+            
+            # Build filename lookup
+            filename_lookup = {str(row["file_id"]): row["filename"] for row in file_rows}
+            
+            # Enrich results with filenames
+            enriched_results = []
+            for result in paginated_results:
+                enriched_result = SearchResult(
+                    file_id=result["file_id"],
+                    filename=filename_lookup.get(result["file_id"], "unknown"),
+                    chunk_index=result["chunk_index"],
+                    page_number=result.get("page_number"),
+                    text=result["text"],
+                    score=result["score"],
+                    metadata=result.get("metadata", {}),
+                )
+                enriched_results.append(enriched_result)
+        finally:
+            await conn.close()
         
         logger.info(
             "Search completed successfully",
