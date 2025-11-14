@@ -82,21 +82,18 @@ class Embedder:
             import litellm
             import os
             
-            # Configure liteLLM to use proxy
-            litellm.api_base = self.litellm_base_url
-            litellm.api_key = self.litellm_api_key
-            
-            # Also set as environment variable (liteLLM sometimes checks this)
-            os.environ["OPENAI_API_KEY"] = self.litellm_api_key
+            # Set API key as environment variable for liteLLM SDK
+            os.environ["LITELLM_API_KEY"] = self.litellm_api_key
             
             all_embeddings = []
             
             for i in range(0, len(chunks), self.batch_size):
                 batch = chunks[i:i + self.batch_size]
                 
-                # Call liteLLM proxy which routes to vLLM
+                # Call liteLLM proxy directly (no openai/ prefix needed)
+                # The proxy is already configured to route qwen3-embedding to vLLM
                 response = await litellm.aembedding(
-                    model=f"openai/{self.primary_model}",
+                    model=self.primary_model,  # Just "qwen3-embedding"
                     input=batch,
                     api_base=self.litellm_base_url,
                     api_key=self.litellm_api_key,
