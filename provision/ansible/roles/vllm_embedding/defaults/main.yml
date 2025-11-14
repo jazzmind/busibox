@@ -18,11 +18,11 @@ vllm_embedding_host: "0.0.0.0"
 vllm_embedding_port: 8001  # Different port from main vLLM
 
 # Model Configuration - Qwen3 Embedding Model
-vllm_embedding_model: "Alibaba-NLP/gte-Qwen2-1.5B-instruct"  # 1.5B params, 1024-dim embeddings
+vllm_embedding_model: "Qwen/Qwen3-Embedding-8B"  # 8B params, 4096-dim embeddings
 vllm_embedding_tensor_parallel_size: 1  # Single GPU for embeddings
-vllm_embedding_gpu_memory_utilization: 0.8  # Conservative for embedding model
-vllm_embedding_max_model_len: 8192  # Max sequence length
-vllm_embedding_max_num_seqs: 512  # High throughput for embedding batches
+vllm_embedding_gpu_memory_utilization: 0.85  # 8B model needs more memory
+vllm_embedding_max_model_len: 32768  # Max sequence length (32K context)
+vllm_embedding_max_num_seqs: 256  # Moderate throughput for larger model
 vllm_embedding_trust_remote_code: true
 
 # Performance Configuration
