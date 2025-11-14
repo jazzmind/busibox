@@ -97,7 +97,7 @@ make vllm-embedding INV=inventory/production EXTRA_ARGS="-e skip_model_check=tru
 
 ```bash
 # SSH to vLLM host
-ssh root@10.96.200.210
+ssh root@10.96.200.208
 
 # Check service status
 systemctl status vllm-embedding

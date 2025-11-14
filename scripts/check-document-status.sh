@@ -6,7 +6,7 @@
 set -e
 
 INGEST_IP="10.96.200.206"
-OLLAMA_IP="10.96.200.210"
+VLLM_IP="10.96.200.208"  # vLLM container (embedding model, not Ollama)
 LITELLM_IP="10.96.200.207"
 
 echo "================================"
@@ -32,12 +32,12 @@ echo "=== Recent Worker Logs (Last 10 lines) ==="
 ssh root@${INGEST_IP} "journalctl -u ingest-worker -n 10 --no-pager | grep -E 'event|error|stage|embedding|chunk' || journalctl -u ingest-worker -n 10 --no-pager"
 
 echo ""
-echo "=== Ollama Status ==="
-ssh root@${OLLAMA_IP} "curl -s http://localhost:11434/api/tags | jq '.models[] | {name: .name, size: .size}' 2>/dev/null || echo 'Ollama not responding or jq not installed'"
+echo "=== vLLM Embedding Status ==="
+ssh root@${VLLM_IP} "curl -s http://localhost:8001/health 2>/dev/null && echo 'vLLM embedding: healthy' || echo 'vLLM embedding: not responding'"
 
 echo ""
-echo "=== Ollama Recent Activity (Last 5 lines) ==="
-ssh root@${OLLAMA_IP} "journalctl -u ollama -n 5 --no-pager || echo 'No Ollama logs'"
+echo "=== vLLM Embedding Recent Activity (Last 5 lines) ==="
+ssh root@${VLLM_IP} "journalctl -u vllm-embedding -n 5 --no-pager || echo 'No vLLM embedding logs'"
 
 echo ""
 echo "=== liteLLM Status ==="
@@ -51,7 +51,7 @@ echo ""
 echo "================================"
 echo "To watch live logs:"
 echo "  Worker:   ssh root@${INGEST_IP} 'journalctl -u ingest-worker -f'"
-echo "  Ollama:   ssh root@${OLLAMA_IP} 'journalctl -u ollama -f'"
+echo "  vLLM Embedding: ssh root@${VLLM_IP} 'journalctl -u vllm-embedding -f'"
 echo "  liteLLM:  ssh root@${LITELLM_IP} 'journalctl -u litellm -f'"
 echo "================================"
 
