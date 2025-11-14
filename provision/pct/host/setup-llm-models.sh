@@ -99,9 +99,16 @@ for MODEL in "${MODELS[@]}"; do
         
         HF_HOME="${HUGGINGFACE_CACHE}" "${VENV_DIR}/bin/python3" << EOF
 from huggingface_hub import snapshot_download
+import os
 try:
-    snapshot_download('${MODEL}', resume_download=True)
-    print("Download completed successfully")
+    cache_dir = snapshot_download('${MODEL}', resume_download=True)
+    print(f"Download completed successfully")
+    print(f"Cached to: {cache_dir}")
+    # Show actual directory name
+    if os.path.exists(cache_dir):
+        parent_dir = os.path.dirname(cache_dir)
+        model_dir = os.path.basename(parent_dir)
+        print(f"Model directory: {model_dir}")
 except Exception as e:
     print(f"Download failed: {e}")
     exit(1)

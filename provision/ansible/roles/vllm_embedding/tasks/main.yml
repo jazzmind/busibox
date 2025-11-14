@@ -5,37 +5,41 @@
 - name: List cached models on Proxmox host
   find:
     paths: "/var/lib/llm-models/huggingface"
-    patterns: "models--Qwen--*"
+    patterns: "models--*"
     file_type: directory
   register: cached_models
   delegate_to: localhost
   become: no
   run_once: true
 
-- name: Check if Qwen3-Embedding-8B is cached
-  stat:
-    path: "/var/lib/llm-models/huggingface/models--Qwen--Qwen3-Embedding-8B"
-  register: model_cache_check
-  delegate_to: localhost
-  become: no
-  run_once: true
+- name: Check if any models are cached
+  set_fact:
+    has_cached_models: "{{ cached_models.matched > 0 }}"
+    cached_model_names: "{{ cached_models.files | map(attribute='path') | map('basename') | list }}"
 
 - name: Display cached models
   debug:
-    msg: "Cached Qwen models: {{ cached_models.files | map(attribute='path') | map('basename') | list }}"
+    msg: |
+      Cached models on Proxmox host:
+      {% if has_cached_models %}
+      {{ cached_model_names | join('\n  - ') | indent(2) }}
+      Total: {{ cached_models.matched }} model(s)
+      {% else %}
+      None found
+      {% endif %}
 
 - name: Display model cache status
   debug:
     msg: >-
-      Model cache status: {{ 'Found - vLLM will start quickly' if model_cache_check.stat.exists 
+      Model cache status: {{ 'Found (' + (cached_models.matched | string) + ' models) - vLLM will start quickly' if has_cached_models 
       else 'NOT FOUND - vLLM will download on first start (may take 30+ minutes)' }}
 
-- name: Warn if model not cached
+- name: Warn if no models cached
   fail:
     msg: |
-      ⚠️  Model Qwen3-Embedding-8B is not pre-cached!
+      ⚠️  No models are pre-cached on Proxmox host!
       
-      vLLM will download the model on first start, which can take 30+ minutes.
+      vLLM will download models on first start, which can take 30+ minutes.
       
       To pre-download models and speed up deployment:
       1. SSH to Proxmox host: ssh root@proxmox-host
@@ -44,9 +48,13 @@
       
       Then re-run this playbook.
       
+      Expected models:
+        - microsoft/Phi-4-multimodal-instruct (for chat)
+        - Qwen/Qwen3-Embedding-8B (for embeddings)
+      
       To continue anyway (with slow first start), add: -e skip_model_check=true
   when: 
-    - not model_cache_check.stat.exists
+    - not has_cached_models
     - skip_model_check is not defined or not skip_model_check
 
 - name: Create vLLM embedding home directory
