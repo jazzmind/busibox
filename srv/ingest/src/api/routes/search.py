@@ -143,8 +143,8 @@ async def search_documents(
         paginated_results = search_results[search_request.offset:][:search_request.limit]
         
         # Get file metadata from PostgreSQL to add filenames
-        # Import here to avoid circular dependency
-        from api.services.postgres import PostgresService
+        # Use the main PostgresService with connection pool
+        from services.postgres_service import PostgresService
         postgres_service = PostgresService(config.to_dict())
         
         # Enrich results with filenames
@@ -157,10 +157,10 @@ async def search_documents(
                 file_id=result["file_id"],
                 filename=file_metadata.get("filename", "unknown") if file_metadata else "unknown",
                 chunk_index=result["chunk_index"],
-                page_number=result["page_number"],
+                page_number=result.get("page_number"),
                 text=result["text"],
                 score=result["score"],
-                metadata=result["metadata"],
+                metadata=result.get("metadata", {}),
             )
             enriched_results.append(enriched_result)
         
