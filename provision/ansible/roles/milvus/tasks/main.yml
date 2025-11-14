@@ -52,20 +52,36 @@
             start_period: 90s
   notify: Up Milvus
 
+- name: Check for RocksDB corruption before stopping
+  shell: docker logs milvus-standalone 2>&1 | grep -q "Corruption:" && echo "corrupted" || echo "ok"
+  register: rocksdb_check_before
+  ignore_errors: yes
+  changed_when: false
+
 - name: Stop any existing Milvus containers (for clean restart)
   shell: docker compose down
   args: { chdir: /srv/milvus }
   ignore_errors: yes
 
-- name: Check for RocksDB corruption markers
+- name: Check for RocksDB MANIFEST files indicating corruption
   shell: |
-    # Check if Milvus logs show corruption errors
-    if docker logs milvus-standalone 2>&1 | grep -q "Corruption:"; then
-      echo "corrupted"
+    # Check if MANIFEST files exist but referenced .ldb files are missing
+    # This indicates corruption where the manifest points to non-existent files
+    if [ -d /srv/milvus/data/rdb_data_meta_kv ]; then
+      # Check if there are MANIFEST files but the directory seems incomplete
+      manifest_count=$(find /srv/milvus/data/rdb_data_meta_kv -name "MANIFEST-*" 2>/dev/null | wc -l)
+      ldb_count=$(find /srv/milvus/data/rdb_data_meta_kv -name "*.ldb" 2>/dev/null | wc -l)
+      
+      # If we have manifests but very few or no .ldb files, it's likely corrupted
+      if [ "$manifest_count" -gt 0 ] && [ "$ldb_count" -lt 2 ]; then
+        echo "corrupted"
+      else
+        echo "ok"
+      fi
     else
       echo "ok"
     fi
-  register: rocksdb_check
+  register: rocksdb_check_files
   ignore_errors: yes
   changed_when: false
 
@@ -75,7 +91,9 @@
     # Remove corrupted RocksDB directories
     rm -rf /srv/milvus/data/rdb_data*
     echo "Corrupted RocksDB data removed. Milvus will rebuild on restart."
-  when: rocksdb_check.stdout is defined and "corrupted" in rocksdb_check.stdout
+  when: >
+    (rocksdb_check_before.stdout is defined and "corrupted" in rocksdb_check_before.stdout) or
+    (rocksdb_check_files.stdout is defined and "corrupted" in rocksdb_check_files.stdout)
   ignore_errors: yes
 
 - name: Remove stale RocksDB lock files
