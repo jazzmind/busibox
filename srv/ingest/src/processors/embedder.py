@@ -79,28 +79,28 @@ class Embedder:
             return None
         
         try:
-            import litellm
-            import os
+            from openai import AsyncOpenAI
             
-            # Set API key as environment variable for liteLLM SDK
-            os.environ["LITELLM_API_KEY"] = self.litellm_api_key
+            # Use OpenAI SDK to call liteLLM proxy (OpenAI-compatible API)
+            client = AsyncOpenAI(
+                base_url=self.litellm_base_url,
+                api_key=self.litellm_api_key,
+            )
             
             all_embeddings = []
             
             for i in range(0, len(chunks), self.batch_size):
                 batch = chunks[i:i + self.batch_size]
                 
-                # Call liteLLM proxy directly (no openai/ prefix needed)
-                # The proxy is already configured to route qwen3-embedding to vLLM
-                response = await litellm.aembedding(
-                    model=self.primary_model,  # Just "qwen3-embedding"
+                # Call liteLLM proxy using OpenAI SDK
+                # The proxy routes qwen3-embedding to vLLM
+                response = await client.embeddings.create(
+                    model=self.primary_model,  # "qwen3-embedding"
                     input=batch,
-                    api_base=self.litellm_base_url,
-                    api_key=self.litellm_api_key,
                     timeout=30.0,
                 )
                 
-                batch_embeddings = [item["embedding"] for item in response.data]
+                batch_embeddings = [item.embedding for item in response.data]
                 all_embeddings.extend(batch_embeddings)
             
             logger.info(
