@@ -19,6 +19,9 @@ files:
 pg:
 	ansible-playbook -i $(INV) -l pg site.yml $(VAULT_FLAGS)
 
+litellm:
+	ansible-playbook -i $(INV) -l litellm site.yml $(VAULT_FLAGS)
+
 milvus:
 	ansible-playbook -i $(INV) -l milvus site.yml $(VAULT_FLAGS)
 
