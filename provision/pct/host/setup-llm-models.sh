@@ -140,29 +140,45 @@ echo ""
 TOTAL_SIZE=$(du -sh "${HUGGINGFACE_CACHE}" 2>/dev/null | awk '{print $1}')
 echo "  Total cache size: ${TOTAL_SIZE}"
 echo ""
-log_info "Downloaded models:"
+log_info "Downloaded models (requested):"
 for MODEL in "${MODELS[@]}"; do
     MODEL_DIR=$(echo "$MODEL" | sed 's/\//-/g')
     MODEL_PATH="${HUGGINGFACE_CACHE}/models--${MODEL_DIR}"
     
-    if [[ -d "${MODEL_PATH}" ]]; then
-        SIZE=$(du -sh "${MODEL_PATH}" 2>/dev/null | awk '{print $1}')
-        SNAPSHOTS=$(ls -1 "${MODEL_PATH}/snapshots" 2>/dev/null | wc -l | tr -d ' ')
-        echo "  - ${MODEL}: ${SIZE} (${SNAPSHOTS} snapshot(s))"
+    if [[ -d "${MODEL_PATH}/snapshots" ]]; then
+        # Count snapshots
+        SNAPSHOTS=$(find "${MODEL_PATH}/snapshots" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+        # Get size of blobs directory (actual files)
+        if [[ -d "${MODEL_PATH}/blobs" ]]; then
+            SIZE=$(du -sh "${MODEL_PATH}/blobs" 2>/dev/null | awk '{print $1}')
+        else
+            SIZE=$(du -sh "${MODEL_PATH}" 2>/dev/null | awk '{print $1}')
+        fi
+        echo "  ✓ ${MODEL}: ${SIZE} (${SNAPSHOTS} snapshot(s))"
     else
-        echo "  - ${MODEL}: NOT FOUND"
+        echo "  ✗ ${MODEL}: NOT FOUND"
     fi
 done
 echo ""
 
-# Step 6: List actual cached directories for verification
-log_info "Step 6: Actual cached model directories:"
+# Step 6: List ALL cached models for verification
+log_info "Step 6: All cached model directories:"
 echo ""
-ls -1d "${HUGGINGFACE_CACHE}"/models--* 2>/dev/null | while read -r dir; do
-    MODEL_NAME=$(basename "$dir" | sed 's/models--//g' | sed 's/--/\//g')
-    SIZE=$(du -sh "$dir" 2>/dev/null | awk '{print $1}')
-    echo "  ✓ ${MODEL_NAME} (${SIZE})"
-done
+if ls -1d "${HUGGINGFACE_CACHE}"/models--* 2>/dev/null | grep -q .; then
+    ls -1d "${HUGGINGFACE_CACHE}"/models--* 2>/dev/null | while read -r dir; do
+        MODEL_NAME=$(basename "$dir" | sed 's/models--//g' | sed 's/--/\//g')
+        # Get size of blobs directory if it exists, otherwise whole directory
+        if [[ -d "${dir}/blobs" ]]; then
+            SIZE=$(du -sh "${dir}/blobs" 2>/dev/null | awk '{print $1}')
+        else
+            SIZE=$(du -sh "$dir" 2>/dev/null | awk '{print $1}')
+        fi
+        SNAPSHOTS=$(find "${dir}/snapshots" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+        echo "  ✓ ${MODEL_NAME}: ${SIZE} (${SNAPSHOTS} snapshot(s))"
+    done
+else
+    log_warning "No models found in ${HUGGINGFACE_CACHE}"
+fi
 echo ""
 
 echo "=========================================="
