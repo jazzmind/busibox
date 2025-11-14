@@ -1,0 +1,93 @@
+---
+# ColPali Visual Embedding Service Deployment
+# Native ColPali implementation using colpali-engine package
+
+- name: Pre-check - Verify ColPali model is cached on host
+  stat:
+    path: "{{ colpali_cache_dir }}/hub/models--vidore--colpali-v1.3"
+  register: colpali_model_cache
+  failed_when: false
+
+- name: Pre-check - Verify PaliGemma base model is cached on host
+  stat:
+    path: "{{ colpali_cache_dir }}/hub/models--google--paligemma-3b-pt-448"
+  register: paligemma_model_cache
+  failed_when: false
+
+- name: Display model cache status
+  debug:
+    msg: |
+      ColPali model cache: {{ 'FOUND' if colpali_model_cache.stat.exists else 'NOT FOUND' }}
+      PaliGemma base model cache: {{ 'FOUND' if paligemma_model_cache.stat.exists else 'NOT FOUND' }}
+      
+      ⚠️  If models are not cached, first-time startup will download ~11GB
+      Run setup-llm-models.sh on Proxmox host to pre-cache models
+
+- name: Create ColPali user
+  user:
+    name: "{{ colpali_user }}"
+    system: yes
+    shell: /bin/bash
+    home: "{{ colpali_home }}"
+    create_home: yes
+
+- name: Create ColPali directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ colpali_user }}"
+    group: "{{ colpali_group }}"
+    mode: '0755'
+  loop:
+    - "{{ colpali_home }}"
+    - "{{ colpali_home }}/.cache"
+
+- name: Create Python virtual environment
+  command: python3 -m venv {{ colpali_venv_dir }}
+  args:
+    creates: "{{ colpali_venv_dir }}/bin/python"
+  become_user: "{{ colpali_user }}"
+
+- name: Upgrade pip in virtual environment
+  pip:
+    name: pip
+    state: latest
+    virtualenv: "{{ colpali_venv_dir }}"
+  become_user: "{{ colpali_user }}"
+
+- name: Install ColPali dependencies
+  pip:
+    name:
+      - "colpali-engine>=0.3.0,<0.4.0"
+      - "fastapi"
+      - "uvicorn[standard]"
+      - "pillow"
+      - "torch"
+    virtualenv: "{{ colpali_venv_dir }}"
+  become_user: "{{ colpali_user }}"
+
+- name: Deploy ColPali server script
+  copy:
+    src: colpali_server.py
+    dest: "{{ colpali_home }}/colpali_server.py"
+    owner: "{{ colpali_user }}"
+    group: "{{ colpali_group }}"
+    mode: '0755'
+  notify: Restart ColPali service
+
+- name: Deploy ColPali systemd service
+  template:
+    src: colpali.service.j2
+    dest: /etc/systemd/system/colpali.service
+    mode: '0644'
+  notify:
+    - Reload systemd
+    - Restart ColPali service
+
+- name: Enable and start ColPali service
+  systemd:
+    name: colpali
+    enabled: yes
+    state: started
+    daemon_reload: yes
+

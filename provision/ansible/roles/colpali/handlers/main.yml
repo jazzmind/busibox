@@ -1,0 +1,12 @@
+---
+# ColPali Service Handlers
+
+- name: Reload systemd
+  systemd:
+    daemon_reload: yes
+
+- name: Restart ColPali service
+  systemd:
+    name: colpali
+    state: restarted
+

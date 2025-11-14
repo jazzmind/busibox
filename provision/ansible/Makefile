@@ -31,8 +31,8 @@ vllm:
 vllm-embedding:
 	ansible-playbook -i $(INV) -l vllm site.yml --tags vllm_embedding $(VAULT_FLAGS) $(EXTRA_ARGS)
 
-vllm-colpali:
-	ansible-playbook -i $(INV) -l vllm site.yml --tags vllm_colpali $(VAULT_FLAGS) $(EXTRA_ARGS)
+colpali:
+	ansible-playbook -i $(INV) -l vllm site.yml --tags colpali $(VAULT_FLAGS) $(EXTRA_ARGS)
 
 milvus:
 	ansible-playbook -i $(INV) -l milvus site.yml $(VAULT_FLAGS)
