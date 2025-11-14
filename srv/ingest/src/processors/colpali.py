@@ -1,8 +1,11 @@
 """
 ColPali PDF page embedder for visual search.
 
-Generates multi-vector embeddings for PDF page images using ColPali v1.2.
+Generates multi-vector embeddings for PDF page images using ColPali v1.3.
+ColPali is based on PaliGemma-3B with ColBERT-style multi-vector representations.
 Each page produces 128 patch embeddings of 128 dimensions each.
+
+Reference: https://huggingface.co/vidore/colpali-v1.3
 """
 
 import os

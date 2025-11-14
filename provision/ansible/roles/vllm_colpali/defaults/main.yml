@@ -17,8 +17,8 @@ vllm_colpali_cache_dir: /var/lib/llm-models/huggingface
 vllm_colpali_host: "0.0.0.0"
 vllm_colpali_port: 8002  # Different port from main vLLM (8000) and embedding (8001)
 
-# Model Configuration - ColPali v1.2 Vision Model
-vllm_colpali_model: "vidore/colpali-v1.2"  # ColPali vision model for PDF page embeddings
+# Model Configuration - ColPali v1.3 Vision Model
+vllm_colpali_model: "vidore/colpali-v1.3"  # ColPali vision model for PDF page embeddings
 vllm_colpali_tensor_parallel_size: 1  # Single GPU for ColPali
 vllm_colpali_gpu_memory_utilization: 0.90  # Vision models need more memory
 vllm_colpali_max_model_len: 4096  # Context length for vision model
