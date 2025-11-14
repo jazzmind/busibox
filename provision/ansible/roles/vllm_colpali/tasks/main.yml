@@ -2,27 +2,23 @@
 # vLLM ColPali - Main Tasks
 # Purpose: Deploy ColPali vision model on dedicated GPU
 
-- name: Pre-check - Verify model is cached on Proxmox host
-  delegate_to: "{{ proxmox_host }}"
-  become: yes
+- name: Check if model cache directory exists
   stat:
     path: "/var/lib/llm-models/huggingface/hub"
-  register: host_cache_status
-  
+  register: cache_dir_check
+
 - name: Check if ColPali model is cached
-  delegate_to: "{{ proxmox_host }}"
-  become: yes
   shell: |
-    find /var/lib/llm-models/huggingface/hub -type d -name "*colpali*" 2>/dev/null | head -1
+    find /var/lib/llm-models/huggingface/hub -type d -name "*colpali*" -o -name "*paligemma*" 2>/dev/null | head -1
   register: colpali_cache_check
   changed_when: false
   failed_when: false
-  when: host_cache_status.stat.exists
+  when: cache_dir_check.stat.exists
 
 - name: Display model cache status
   debug:
-    msg: "Model cache status: {{ 'FOUND' if (colpali_cache_check.stdout | default('') | length > 0) else 'NOT FOUND - will download on first start' }}"
-  when: host_cache_status.stat.exists
+    msg: "Model cache status: {{ 'FOUND' if (colpali_cache_check.stdout | default('') | length > 0) else 'NOT FOUND - will download on first start (may take 10-20 min)' }}"
+  when: cache_dir_check.stat.exists
 
 - name: Create vLLM ColPali home directory
   file:
