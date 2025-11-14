@@ -1,0 +1,54 @@
+---
+# vLLM Embedding Role - Default Variables
+# Purpose: Dedicated vLLM instance for embedding models on separate GPU
+
+# Inherit from main vLLM role but override for embedding-specific config
+vllm_embedding_version: "0.6.3"
+vllm_embedding_install_dir: /opt/vllm  # Share installation with main vLLM
+vllm_embedding_venv_dir: "{{ vllm_embedding_install_dir }}/venv"
+
+# Service Configuration
+vllm_embedding_user: vllm
+vllm_embedding_group: vllm
+vllm_embedding_home: /var/lib/vllm-embedding
+vllm_embedding_cache_dir: /var/lib/llm-models/huggingface
+
+# Network Configuration
+vllm_embedding_host: "0.0.0.0"
+vllm_embedding_port: 8001  # Different port from main vLLM
+
+# Model Configuration - Qwen3 Embedding Model
+vllm_embedding_model: "Alibaba-NLP/gte-Qwen2-1.5B-instruct"  # 1.5B params, 1024-dim embeddings
+vllm_embedding_tensor_parallel_size: 1  # Single GPU for embeddings
+vllm_embedding_gpu_memory_utilization: 0.8  # Conservative for embedding model
+vllm_embedding_max_model_len: 8192  # Max sequence length
+vllm_embedding_max_num_seqs: 512  # High throughput for embedding batches
+vllm_embedding_trust_remote_code: true
+
+# Performance Configuration
+vllm_embedding_max_num_batched_tokens: null
+vllm_embedding_enable_prefix_caching: false  # Not useful for embeddings
+vllm_embedding_disable_log_stats: false
+
+# API Configuration
+vllm_embedding_served_model_name: "qwen3-embedding"  # Friendly name for liteLLM
+vllm_embedding_api_key: null
+vllm_embedding_enable_api_key: false
+
+# Service Configuration
+vllm_embedding_enable_service: true
+vllm_embedding_start_service: true
+vllm_embedding_restart_on_failure: true
+vllm_embedding_restart_sec: 15
+vllm_embedding_startup_timeout: 300  # 5 minutes (embedding models load faster)
+
+# Resource Limits
+vllm_embedding_memory_limit: "16G"  # Less memory needed for embedding model
+vllm_embedding_cpu_limit: "4"
+
+# CUDA Configuration - Use GPU 1 (separate from main vLLM on GPU 0)
+vllm_embedding_cuda_visible_devices: "1"
+
+# HuggingFace Configuration
+vllm_embedding_hf_token: ""  # Set via secrets if needed
+

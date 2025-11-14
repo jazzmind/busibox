@@ -1,0 +1,48 @@
+---
+# vLLM Embedding Service Installation and Configuration
+# Runs on same host as main vLLM but on different GPU and port
+
+- name: Create vLLM embedding home directory
+  file:
+    path: "{{ vllm_embedding_home }}"
+    state: directory
+    owner: "{{ vllm_embedding_user }}"
+    group: "{{ vllm_embedding_group }}"
+    mode: "0755"
+
+- name: Deploy vLLM embedding systemd service
+  template:
+    src: vllm-embedding.service.j2
+    dest: /etc/systemd/system/vllm-embedding.service
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Enable vLLM embedding service
+  systemd:
+    name: vllm-embedding
+    enabled: yes
+    daemon_reload: yes
+  when: vllm_embedding_enable_service
+
+- name: Start vLLM embedding service
+  systemd:
+    name: vllm-embedding
+    state: started
+  when: vllm_embedding_start_service
+
+- name: Wait for vLLM embedding to be ready
+  uri:
+    url: "http://localhost:{{ vllm_embedding_port }}/v1/models"
+    method: GET
+    status_code: 200
+  register: vllm_embedding_health
+  retries: 30
+  delay: 10
+  until: vllm_embedding_health.status == 200
+  when: vllm_embedding_start_service
+  ignore_errors: yes
+
+- name: Display vLLM embedding status
+  debug:
+    msg: "vLLM embedding server is {{ 'ready' if (vllm_embedding_health.status | default(0)) == 200 else 'not responding' }}"
+

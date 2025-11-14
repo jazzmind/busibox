@@ -22,6 +22,12 @@ pg:
 litellm:
 	ansible-playbook -i $(INV) -l litellm site.yml $(VAULT_FLAGS)
 
+vllm:
+	ansible-playbook -i $(INV) -l vllm site.yml --tags vllm $(VAULT_FLAGS)
+
+vllm-embedding:
+	ansible-playbook -i $(INV) -l vllm site.yml --tags vllm_embedding $(VAULT_FLAGS)
+
 milvus:
 	ansible-playbook -i $(INV) -l milvus site.yml $(VAULT_FLAGS)
 
