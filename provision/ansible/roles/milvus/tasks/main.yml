@@ -310,6 +310,11 @@
     dest: /root/hybrid_schema.py
     mode: "0755"
 
+- name: Wait for Milvus to be fully ready before schema initialization
+  pause:
+    seconds: 10
+  when: milvus_health.status == 200
+
 - name: Initialize hybrid search collection
   shell: |
     /opt/milvus-tools/bin/python /root/hybrid_schema.py
@@ -317,12 +322,15 @@
     MILVUS_HOST: localhost
     MILVUS_PORT: "19530"
   register: hybrid_schema_init
-  ignore_errors: yes
+  retries: 3
+  delay: 5
+  until: hybrid_schema_init.rc == 0
+  when: milvus_health.status is defined and milvus_health.status == 200
 
 - name: Display hybrid schema initialization result
   debug:
-    var: hybrid_schema_init.stdout_lines
-  when: hybrid_schema_init.stdout_lines is defined
+    var: hybrid_schema_init
+  when: hybrid_schema_init is defined
 
 - name: Create Milvus health check script
   copy:
