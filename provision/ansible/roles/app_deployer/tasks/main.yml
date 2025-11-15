@@ -91,6 +91,11 @@
   tags:
     - always  # Always run for any app deployment
 
+- name: Setup SSH keys for container-to-container communication
+  include_tasks: "{{ playbook_dir }}/roles/apps/tasks/ssh-keys.yml"
+  tags:
+    - always  # Always run for any app deployment
+
 - name: Deploy application environment files (.env)
   template:
     src: "{{ playbook_dir }}/roles/secrets/templates/app.env.j2"
