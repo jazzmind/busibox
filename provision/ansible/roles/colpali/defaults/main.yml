@@ -15,7 +15,7 @@ colpali_port: 8002
 
 # Model Configuration
 colpali_model: "vidore/colpali-v1.3"
-colpali_device: "cuda:1"  # Use second GPU (first is used by vLLM)
+colpali_device: "cuda:0"  # Device index within CUDA_VISIBLE_DEVICES
 colpali_dtype: "bfloat16"
 
 # HuggingFace Configuration
@@ -31,7 +31,8 @@ colpali_memory_limit: "16G"
 colpali_cpu_limit: "4"
 
 # CUDA Configuration
-colpali_cuda_visible_devices: "1"  # Use second GPU (first is used by vLLM)
+# Use GPU 2 (third GPU) - GPUs 0 and 1 are used by vLLM and embedding services
+colpali_cuda_visible_devices: "2"
 
 # Service Management
 colpali_restart_on_failure: true
