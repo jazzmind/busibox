@@ -100,6 +100,30 @@
   failed_when: spacy_verify.rc != 0
   tags: [ingest, ingest_deploy]
 
+- name: Pre-download Marker models
+  shell: |
+    /srv/ingest/venv/bin/python -c "
+    from marker.models import create_model_dict
+    import structlog
+    
+    logger = structlog.get_logger()
+    logger.info('Pre-downloading Marker models...')
+    
+    # This will download all required models (~1-2GB)
+    # Models are cached in ~/.cache/huggingface/
+    artifact_dict = create_model_dict()
+    
+    logger.info('Marker models downloaded successfully')
+    "
+  args:
+    # Only run if models not already cached
+    creates: /root/.cache/huggingface/hub/models--vikp--surya_det2
+  retries: 3
+  delay: 10
+  register: marker_download
+  until: marker_download.rc == 0
+  tags: [ingest, ingest_deploy]
+
 # ============================================================================
 # Configuration
 # ============================================================================
