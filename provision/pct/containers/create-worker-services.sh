@@ -70,14 +70,14 @@ cleanup_on_error() {
 
 # Create ingest worker container
 # Ingest needs more memory for Marker models (OCR, layout detection, etc.)
-# Override default 16GB with 24GB
-MEM_MB_INGEST=24576
+# With 255GB system RAM available, give it 32GB for comfortable headroom
+MEM_MB_INGEST=32768
 create_ct "$CT_INGEST" "$IP_INGEST" "${PREFIX}ingest-lxc" unpriv || cleanup_on_error
 CREATED_CONTAINERS+=("$CT_INGEST")
 
-# Increase memory allocation for ingest container (needs 24GB for Marker models)
+# Increase memory allocation for ingest container (needs 32GB for Marker models)
 pct set "$CT_INGEST" -memory "$MEM_MB_INGEST"
-echo "  Increased ${PREFIX}ingest-lxc memory to ${MEM_MB_INGEST}MB for ML models"
+echo "  Increased ${PREFIX}ingest-lxc memory to ${MEM_MB_INGEST}MB (32GB) for ML models"
 
 # Create liteLLM container
 create_ct "$CT_LITELLM" "$IP_LITELLM" "${PREFIX}litellm-lxc" unpriv || cleanup_on_error
