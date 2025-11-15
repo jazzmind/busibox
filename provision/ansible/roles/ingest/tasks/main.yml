@@ -61,6 +61,13 @@
     mode: "0644"
   tags: [ingest, ingest_deploy]
 
+- name: Copy test suite
+  copy:
+    src: "{{ playbook_dir }}/../../srv/ingest/tests/"
+    dest: /srv/ingest/tests/
+    mode: "0644"
+  tags: [ingest, ingest_deploy, ingest_tests]
+
 - name: Upgrade pip and install wheel in venv
   pip:
     name:
@@ -238,4 +245,49 @@
       /usr/local/bin/ingest-api-health && /usr/local/bin/ingest-worker-health
     mode: "0755"
   tags: [ingest, ingest_configure]
+
+# ============================================================================
+# Testing Infrastructure
+# ============================================================================
+- name: Create test runner script
+  copy:
+    dest: /usr/local/bin/ingest-test
+    content: |
+      #!/bin/bash
+      # Run ingest service tests
+      cd /srv/ingest
+      source venv/bin/activate
+      
+      # Run tests with options
+      if [ "$1" == "coverage" ]; then
+        python -m pytest tests/ -v --cov=src --cov-report=term --cov-report=html
+        echo "Coverage report generated in /srv/ingest/htmlcov/index.html"
+      elif [ "$1" == "chunker" ]; then
+        python -m pytest tests/test_chunker.py -v
+      elif [ "$1" == "quick" ]; then
+        python -m pytest tests/ -v --tb=short
+      else
+        python -m pytest tests/ -v "$@"
+      fi
+    mode: "0755"
+  tags: [ingest, ingest_configure, ingest_tests]
+
+- name: Create pytest configuration
+  copy:
+    dest: /srv/ingest/pytest.ini
+    content: |
+      [pytest]
+      testpaths = tests
+      python_files = test_*.py
+      python_classes = Test*
+      python_functions = test_*
+      addopts = 
+          -v
+          --tb=short
+          --strict-markers
+      markers =
+          slow: marks tests as slow (deselect with '-m "not slow"')
+          integration: marks tests as integration tests
+    mode: "0644"
+  tags: [ingest, ingest_configure, ingest_tests]
 

@@ -75,14 +75,23 @@ ansible-playbook -i inventory/production/hosts.yml site.yml --tags ingest_worker
 # SSH to ingest container
 ssh root@10.96.200.30  # ingest-lxc IP
 
-# Activate venv and run tests
-cd /srv/ingest
-source venv/bin/activate
-python -m pytest tests/test_chunker.py -v
+# Run chunker tests using the convenience script
+ingest-test chunker
+
+# Or run all tests
+ingest-test
+
+# Or run with coverage
+ingest-test coverage
 
 # Expected output: All tests passing
 # If any tests fail, review the output and fix before proceeding
 ```
+
+The deployment now includes:
+- Test files copied to `/srv/ingest/tests/`
+- Pytest configuration in `/srv/ingest/pytest.ini`
+- Convenience script `/usr/local/bin/ingest-test` for running tests
 
 ### Step 4: Test with Real Document
 
@@ -309,8 +318,15 @@ After successful deployment:
 
 4. **Run Full Test Suite**:
    ```bash
-   cd /srv/ingest
-   python -m pytest tests/ -v --cov=src --cov-report=html
+   # SSH to ingest container
+   ssh root@10.96.200.30
+   
+   # Run tests with coverage
+   ingest-test coverage
+   
+   # View coverage report (if you have a browser on the server)
+   # Or copy it to your local machine:
+   # scp -r root@10.96.200.30:/srv/ingest/htmlcov ./ingest-coverage
    ```
 
 ## Contact
