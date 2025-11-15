@@ -14,7 +14,7 @@ Tests cover:
 """
 
 import pytest
-from processors.chunker import Chunker
+from src.processors.chunker import Chunker
 
 
 @pytest.fixture
