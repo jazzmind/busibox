@@ -8,6 +8,7 @@ Each page produces 128 patch embeddings of 128 dimensions each.
 Reference: https://huggingface.co/vidore/colpali-v1.3
 """
 
+import base64
 import os
 from typing import List, Optional
 
@@ -61,22 +62,83 @@ class ColPaliEmbedder:
                 logger.warning("ColPali service not available, skipping visual embeddings")
                 return None
             
-            # For now, return None - actual ColPali integration requires
-            # vLLM with ColPali model loaded or direct ColPali API
-            # This will be implemented when ColPali is deployed
+            # Read and encode images as base64
+            encoded_images = []
+            for image_path in page_image_paths:
+                try:
+                    with open(image_path, "rb") as f:
+                        image_data = f.read()
+                        encoded_image = base64.b64encode(image_data).decode("utf-8")
+                        encoded_images.append(encoded_image)
+                except Exception as e:
+                    logger.warning(
+                        "Failed to read image file",
+                        image_path=image_path,
+                        error=str(e),
+                    )
+                    return None
             
-            logger.info(
-                "ColPali embedding generation skipped (not yet deployed)",
-                page_count=len(page_image_paths),
-            )
-            
-            return None
+            # Call ColPali API
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(
+                    f"{self.colpali_base_url}/embeddings",
+                    json={
+                        "input": encoded_images,
+                        "model": "colpali",
+                        "encoding_format": "float",
+                    },
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                
+                if response.status_code != 200:
+                    logger.warning(
+                        "ColPali API request failed",
+                        status_code=response.status_code,
+                        response=response.text,
+                    )
+                    return None
+                
+                result = response.json()
+                
+                # Extract embeddings from response
+                # Response format: {"data": [{"embedding": [...], "index": 0}, ...]}
+                embeddings = []
+                for item in sorted(result.get("data", []), key=lambda x: x["index"]):
+                    embedding = item["embedding"]
+                    # ColPali returns flattened multi-vector embeddings
+                    # Reshape to [128 patches, 128 dims]
+                    num_patches = 128
+                    patch_dim = 128
+                    if len(embedding) == num_patches * patch_dim:
+                        reshaped = [
+                            embedding[i * patch_dim : (i + 1) * patch_dim]
+                            for i in range(num_patches)
+                        ]
+                        embeddings.append(reshaped)
+                    else:
+                        logger.warning(
+                            "Unexpected embedding dimension",
+                            expected=num_patches * patch_dim,
+                            actual=len(embedding),
+                        )
+                        return None
+                
+                logger.info(
+                    "ColPali embeddings generated successfully",
+                    page_count=len(embeddings),
+                )
+                
+                return embeddings
         
         except Exception as e:
             logger.warning(
                 "ColPali embedding generation failed",
                 error=str(e),
                 page_count=len(page_image_paths),
+                exc_info=True,
             )
             return None
     
