@@ -47,6 +47,11 @@ class Config:
         self.litellm_api_key = os.getenv("LITELLM_API_KEY", "")
         self.embedding_model = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
         
+        # ColPali configuration (optional visual embeddings)
+        self.colpali_base_url = os.getenv("COLPALI_BASE_URL", "http://10.96.200.208:8002/v1")
+        self.colpali_api_key = os.getenv("COLPALI_API_KEY", "EMPTY")
+        self.colpali_enabled = os.getenv("COLPALI_ENABLED", "true").lower() == "true"
+        
         # Processing configuration
         self.chunk_size_min = int(os.getenv("CHUNK_SIZE_MIN", "400"))
         self.chunk_size_max = int(os.getenv("CHUNK_SIZE_MAX", "800"))
@@ -81,6 +86,9 @@ class Config:
             "litellm_base_url": self.litellm_base_url,
             "litellm_api_key": self.litellm_api_key,
             "embedding_model": self.embedding_model,
+            "colpali_base_url": self.colpali_base_url,
+            "colpali_api_key": self.colpali_api_key,
+            "colpali_enabled": self.colpali_enabled,
             "chunk_size": self.chunk_size_max,  # For backward compatibility
             "chunk_overlap": int(self.chunk_size_max * self.chunk_overlap_pct),
         }
