@@ -219,19 +219,27 @@ class MilvusService:
             # Pad or truncate to match Milvus schema dimension (4096)
             # ColPali returns variable-sized vectors based on image size
             target_dim = 4096
+            original_length = len(flattened_embedding)
+            
             if len(flattened_embedding) < target_dim:
                 # Pad with zeros
                 flattened_embedding.extend([0.0] * (target_dim - len(flattened_embedding)))
+                logger.debug(
+                    "Padded page vector",
+                    page_number=page_number,
+                    original_length=original_length,
+                    padded_length=target_dim,
+                )
             elif len(flattened_embedding) > target_dim:
-                # Truncate (shouldn't happen often, but handle it)
+                # Truncate (should be rare - images are pre-scaled)
                 flattened_embedding = flattened_embedding[:target_dim]
-            
-            logger.debug(
-                "Prepared page vector",
-                page_number=page_number,
-                original_length=len(page_embedding) * 128,
-                padded_length=len(flattened_embedding),
-            )
+                logger.warning(
+                    "Truncated page vector - consider scaling image smaller",
+                    page_number=page_number,
+                    original_length=original_length,
+                    truncated_length=target_dim,
+                    patches_lost=(original_length - target_dim) // 128,
+                )
             
             # Generate zero/empty embeddings for text fields (required by Milvus schema)
             # Page images don't have text embeddings, so use zeros/empty

@@ -199,18 +199,43 @@ class TextExtractor:
             raise
     
     def _extract_pdf_page_images(self, file_path: str) -> List[str]:
-        """Extract page images from PDF for ColPali."""
+        """Extract page images from PDF for ColPali.
+        
+        Images are scaled to ensure ColPali generates at most 32 patches (4096 dims)
+        to avoid truncation and information loss.
+        """
         try:
             from pdf2image import convert_from_path
+            from PIL import Image
             
             logger.info("Extracting PDF page images", file_path=file_path)
             images = convert_from_path(file_path, dpi=150)
+            
+            # ColPali target: 32 patches max (32 * 128 = 4096 dims)
+            # Each patch is roughly 14x14 pixels, so 32 patches ≈ 448x448 pixels
+            # Scale images to max 960x960 to stay under 32 patches
+            max_dimension = 960
             
             # Save images to temp directory
             page_images = []
             base_name = Path(file_path).stem
             
             for i, image in enumerate(images):
+                # Scale down large images to prevent truncation
+                width, height = image.size
+                if width > max_dimension or height > max_dimension:
+                    # Calculate scaling factor to fit within max_dimension
+                    scale = max_dimension / max(width, height)
+                    new_width = int(width * scale)
+                    new_height = int(height * scale)
+                    image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                    logger.debug(
+                        "Scaled page image",
+                        page=i+1,
+                        original_size=f"{width}x{height}",
+                        scaled_size=f"{new_width}x{new_height}",
+                    )
+                
                 image_path = os.path.join(self.temp_dir, f"{base_name}_page_{i+1:03d}.png")
                 image.save(image_path, "PNG")
                 page_images.append(image_path)
