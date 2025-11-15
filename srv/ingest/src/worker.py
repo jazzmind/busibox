@@ -357,17 +357,33 @@ class IngestWorker:
                 return
             
             # Stage 1: Parsing
+            logger.info(
+                "Stage 1: Starting text extraction",
+                file_id=file_id,
+                mime_type=mime_type,
+                filename=original_filename,
+            )
             self.postgres_service.update_status(
                 file_id=file_id,
                 stage="parsing",
                 progress=10,
             )
             
+            logger.debug("Downloading file from storage", file_id=file_id, storage_path=storage_path)
             temp_file_path = self.file_service.download(storage_path)
+            logger.debug("File downloaded", file_id=file_id, temp_path=temp_file_path)
             
+            logger.info("Extracting text and images", file_id=file_id, mime_type=mime_type)
             extraction_result: ExtractionResult = self.text_extractor.extract(
                 temp_file_path,
                 mime_type,
+            )
+            logger.info(
+                "Text extraction complete",
+                file_id=file_id,
+                text_length=len(extraction_result.text),
+                page_count=extraction_result.page_count,
+                table_count=len(extraction_result.tables) if extraction_result.tables else 0,
             )
             
             page_count = extraction_result.page_count or 1
@@ -425,6 +441,11 @@ class IngestWorker:
             )
             
             # Stage 4: Chunking
+            logger.info(
+                "Stage 4: Starting text chunking",
+                file_id=file_id,
+                text_length=len(extraction_result.text),
+            )
             self.postgres_service.update_status(
                 file_id=file_id,
                 stage="chunking",
@@ -438,6 +459,11 @@ class IngestWorker:
             )
             
             total_chunks = len(chunks)
+            logger.info(
+                "Chunking complete",
+                file_id=file_id,
+                chunk_count=total_chunks,
+            )
             
             self.postgres_service.update_status(
                 file_id=file_id,
@@ -452,6 +478,11 @@ class IngestWorker:
             self.postgres_service.insert_chunks(file_id, chunk_dicts)
             
             # Stage 5: Embedding
+            logger.info(
+                "Stage 5: Starting embedding generation",
+                file_id=file_id,
+                chunk_count=total_chunks,
+            )
             self.postgres_service.update_status(
                 file_id=file_id,
                 stage="embedding",
@@ -463,12 +494,18 @@ class IngestWorker:
             # Generate dense embeddings
             chunk_texts = [c.text for c in chunks]
             
+            logger.debug("Generating dense embeddings", file_id=file_id, chunk_count=len(chunk_texts))
             # Run async embedding in sync context
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
                 embeddings = loop.run_until_complete(
                     self.embedder.embed_chunks(chunk_texts)
+                )
+                logger.info(
+                    "Dense embeddings generated",
+                    file_id=file_id,
+                    embedding_count=len(embeddings),
                 )
             finally:
                 loop.close()
@@ -484,6 +521,11 @@ class IngestWorker:
             # Generate ColPali embeddings for PDF pages (if available)
             page_embeddings = None
             if extraction_result.page_images and mime_type == "application/pdf":
+                logger.info(
+                    "Generating ColPali visual embeddings",
+                    file_id=file_id,
+                    page_count=len(extraction_result.page_images),
+                )
                 try:
                     page_image_dicts = [
                         {"page_number": i + 1, "image_path": path}
