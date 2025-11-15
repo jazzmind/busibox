@@ -88,18 +88,41 @@ class TextExtractor:
         
         try:
             # Try Marker first (best quality)
+            # Marker v1.x uses a different API than v0.x
             try:
-                logger.debug("Attempting to import marker.convert")
-                from marker.convert import convert_single_pdf
-                
-                logger.info("Using Marker for PDF extraction", file_path=file_path)
-                markdown_text, images, metadata = convert_single_pdf(file_path)
-                text_content = markdown_text
-                page_count = len(images) if images else 0
-                
-                # Extract page images for ColPali
-                page_images = self._extract_pdf_page_images(file_path)
-                page_count = len(page_images)
+                logger.debug("Attempting to import marker (trying v1.x API first)")
+                try:
+                    # Try marker v1.x API (marker-pdf >= 1.0)
+                    from marker.converters.pdf import PdfConverter
+                    from marker.models import create_model_dict
+                    
+                    logger.info("Using Marker v1.x for PDF extraction", file_path=file_path)
+                    
+                    # Create converter with default models
+                    converter = PdfConverter()
+                    
+                    # Convert PDF to markdown
+                    result = converter(file_path)
+                    markdown_text = result.markdown
+                    text_content = markdown_text
+                    
+                    # Extract page images for ColPali
+                    page_images = self._extract_pdf_page_images(file_path)
+                    page_count = len(page_images)
+                    
+                except ImportError:
+                    # Fall back to marker v0.x API (old marker-pdf)
+                    logger.debug("Marker v1.x not found, trying v0.x API")
+                    from marker.convert import convert_single_pdf
+                    
+                    logger.info("Using Marker v0.x for PDF extraction", file_path=file_path)
+                    markdown_text, images, metadata = convert_single_pdf(file_path)
+                    text_content = markdown_text
+                    page_count = len(images) if images else 0
+                    
+                    # Extract page images for ColPali
+                    page_images = self._extract_pdf_page_images(file_path)
+                    page_count = len(page_images)
                 
             except ImportError as e:
                 logger.warning(
