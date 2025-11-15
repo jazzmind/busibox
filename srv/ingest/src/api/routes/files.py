@@ -716,11 +716,12 @@ async def reprocess_file(fileId: str, request: Request):
             
             try:
                 job_data = {
+                    "job_id": fileId,  # Worker expects job_id field
                     "file_id": fileId,
                     "user_id": user_id,
-                    "filename": filename,
                     "storage_path": storage_path,
-                    "reprocess": True,  # Flag to indicate this is a reprocess
+                    "original_filename": filename,
+                    "reprocess": "true",  # Flag to indicate this is a reprocess
                 }
                 
                 stream_name = config.get("redis_stream", "jobs:ingestion")
