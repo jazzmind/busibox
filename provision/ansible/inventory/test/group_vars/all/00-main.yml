@@ -173,6 +173,8 @@ applications:
     deploy_path: /srv/apps/ai-portal
     health_endpoint: /api/health
     build_command: "npm run build"
+    env:
+      INGEST_API_HOST: "{{ ingest_ip }}"
     routes:
       - type: domain
         domains:
