@@ -1,5 +1,5 @@
 """
-File metadata, download, deletion, and chunk browsing endpoints.
+File metadata, download, deletion, chunk browsing, and reprocessing endpoints.
 
 Handles:
 - GET /files/{fileId}: Retrieve file metadata
@@ -7,11 +7,14 @@ Handles:
 - GET /files/{fileId}/chunks: Retrieve text chunks for a file
 - POST /files/{fileId}/search: Search within a single document
 - DELETE /files/{fileId}: Delete file and all associated data
+- POST /files/{fileId}/reprocess: Reprocess document (delete chunks/vectors, re-run ingestion)
 """
 
+import json
 import uuid
 from typing import Optional, List
 
+import redis.asyncio as redis
 import structlog
 from fastapi import APIRouter, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -598,6 +601,167 @@ async def delete_file(fileId: str, request: Request):
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"error": "Failed to delete file", "details": str(e)}
+        )
+    
+    finally:
+        await postgres_service.disconnect()
+
+
+@router.post("/{fileId}/reprocess")
+async def reprocess_file(fileId: str, request: Request):
+    """
+    Reprocess a document - delete existing chunks/vectors and re-run ingestion.
+    
+    This is useful when:
+    - Chunking strategy has been updated
+    - Embedding model has changed
+    - Document processing failed partially
+    - You want to regenerate embeddings
+    
+    Process:
+    1. Verify file exists and user owns it
+    2. Delete existing chunks from PostgreSQL
+    3. Delete existing vectors from Milvus
+    4. Reset ingestion status to 'queued'
+    5. Add job back to Redis queue for reprocessing
+    
+    Returns:
+        Success message with file_id
+    """
+    user_id = request.state.user_id
+    
+    config = Config().to_dict()
+    postgres_service = PostgresService(config)
+    milvus_service = MilvusService(config)
+    
+    await postgres_service.connect()
+    
+    try:
+        async with postgres_service.pool.acquire() as conn:
+            # Get file record
+            file_row = await conn.fetchrow("""
+                SELECT user_id, filename, storage_path
+                FROM ingestion_files
+                WHERE file_id = $1
+            """, uuid.UUID(fileId))
+            
+            if not file_row:
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content={"error": "File not found"}
+                )
+            
+            # Verify ownership
+            if str(file_row["user_id"]) != user_id:
+                return JSONResponse(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    content={"error": "Unauthorized access"}
+                )
+            
+            filename = file_row["filename"]
+            storage_path = file_row["storage_path"]
+            
+            logger.info(
+                "Starting document reprocessing",
+                file_id=fileId,
+                filename=filename,
+                user_id=user_id,
+            )
+            
+            # Delete existing chunks from PostgreSQL
+            deleted_chunks = await conn.execute("""
+                DELETE FROM ingestion_chunks WHERE file_id = $1
+            """, uuid.UUID(fileId))
+            
+            logger.info(
+                "Deleted existing chunks",
+                file_id=fileId,
+                chunks_deleted=deleted_chunks,
+            )
+            
+            # Delete existing vectors from Milvus
+            try:
+                milvus_service.delete_file_vectors(fileId)
+                logger.info("Deleted Milvus vectors", file_id=fileId)
+            except Exception as e:
+                logger.warning(
+                    "Failed to delete vectors from Milvus (may not exist)",
+                    file_id=fileId,
+                    error=str(e),
+                )
+            
+            # Reset ingestion status to 'queued'
+            await conn.execute("""
+                UPDATE ingestion_status
+                SET 
+                    stage = 'queued',
+                    progress = 0,
+                    chunks_processed = 0,
+                    total_chunks = 0,
+                    pages_processed = 0,
+                    total_pages = 0,
+                    error_message = NULL,
+                    updated_at = NOW()
+                WHERE file_id = $1
+            """, uuid.UUID(fileId))
+            
+            logger.info("Reset ingestion status", file_id=fileId)
+            
+            # Add job back to Redis queue
+            redis_client = redis.Redis(
+                host=config.get("redis_host", "localhost"),
+                port=config.get("redis_port", 6379),
+                decode_responses=True,
+            )
+            
+            try:
+                job_data = {
+                    "file_id": fileId,
+                    "user_id": user_id,
+                    "filename": filename,
+                    "storage_path": storage_path,
+                    "reprocess": True,  # Flag to indicate this is a reprocess
+                }
+                
+                stream_name = config.get("redis_stream", "jobs:ingestion")
+                await redis_client.xadd(stream_name, job_data)
+                
+                logger.info(
+                    "Added reprocess job to queue",
+                    file_id=fileId,
+                    stream=stream_name,
+                )
+            finally:
+                await redis_client.aclose()
+            
+            logger.info(
+                "Document reprocessing initiated",
+                file_id=fileId,
+                filename=filename,
+                user_id=user_id,
+            )
+            
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={
+                    "message": "Document reprocessing initiated",
+                    "fileId": fileId,
+                    "filename": filename,
+                    "status": "queued",
+                }
+            )
+    
+    except Exception as e:
+        logger.error(
+            "Failed to reprocess file",
+            file_id=fileId,
+            user_id=user_id,
+            error=str(e),
+            exc_info=True,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": "Failed to reprocess file", "details": str(e)}
         )
     
     finally:
