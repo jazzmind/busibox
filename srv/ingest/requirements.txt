@@ -35,6 +35,10 @@ pdf2image>=1.16.3,<2.0.0  # PDF page images for ColPali
 pytesseract>=0.3.10,<0.4.0  # OCR for scanned PDFs
 beautifulsoup4>=4.12.2,<5.0.0  # HTML parsing
 
+# Document Export
+markdown>=3.5.0,<4.0.0  # Markdown to HTML conversion
+reportlab>=4.0.0,<5.0.0  # PDF generation
+
 # Text Processing & Chunking
 spacy>=3.7.2,<4.0.0
 # Download model: python -m spacy download en_core_web_sm

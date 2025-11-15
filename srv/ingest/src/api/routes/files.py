@@ -1,5 +1,5 @@
 """
-File metadata, download, deletion, chunk browsing, and reprocessing endpoints.
+File metadata, download, deletion, chunk browsing, reprocessing, and export endpoints.
 
 Handles:
 - GET /files/{fileId}: Retrieve file metadata
@@ -8,16 +8,18 @@ Handles:
 - POST /files/{fileId}/search: Search within a single document
 - DELETE /files/{fileId}: Delete file and all associated data
 - POST /files/{fileId}/reprocess: Reprocess document (delete chunks/vectors, re-run ingestion)
+- GET /files/{fileId}/export: Export document in various formats (markdown, html, text, docx, pdf)
 """
 
+import io
 import json
 import uuid
 from typing import Optional, List
 
 import redis.asyncio as redis
 import structlog
-from fastapi import APIRouter, Request, status
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import APIRouter, Request, Query, status
+from fastapi.responses import JSONResponse, StreamingResponse, Response
 from pydantic import BaseModel, Field
 
 from api.services.minio import MinIOService
@@ -763,6 +765,291 @@ async def reprocess_file(fileId: str, request: Request):
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"error": "Failed to reprocess file", "details": str(e)}
+        )
+    
+    finally:
+        await postgres_service.disconnect()
+
+
+@router.get("/{fileId}/export")
+async def export_file(
+    fileId: str,
+    request: Request,
+    format: str = Query("markdown", regex="^(markdown|html|text|docx|pdf)$")
+):
+    """
+    Export document by reconstructing from markdown chunks.
+    
+    Supports formats:
+    - markdown: Original markdown with preserved structure
+    - html: HTML conversion from markdown
+    - text: Plain text (markdown stripped)
+    - docx: Microsoft Word document
+    - pdf: PDF document
+    
+    Args:
+        fileId: File UUID
+        format: Export format (markdown, html, text, docx, pdf)
+    
+    Returns:
+        File content in requested format
+    """
+    user_id = request.state.user_id
+    
+    config = Config().to_dict()
+    postgres_service = PostgresService(config)
+    
+    await postgres_service.connect()
+    
+    try:
+        async with postgres_service.pool.acquire() as conn:
+            # Get file metadata and verify ownership
+            file_row = await conn.fetchrow("""
+                SELECT file_id, filename, original_filename, user_id
+                FROM ingestion_files
+                WHERE file_id = $1
+            """, uuid.UUID(fileId))
+            
+            if not file_row:
+                logger.warning("File not found for export", file_id=fileId, user_id=user_id)
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content={"error": "File not found"}
+                )
+            
+            if str(file_row["user_id"]) != user_id:
+                logger.warning("Unauthorized export attempt", file_id=fileId, user_id=user_id, owner_id=str(file_row["user_id"]))
+                return JSONResponse(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    content={"error": "Unauthorized"}
+                )
+            
+            filename = file_row["original_filename"] or file_row["filename"]
+            
+            # Get all chunks ordered by chunk_index
+            chunk_rows = await conn.fetch("""
+                SELECT chunk_index, text, page_number
+                FROM ingestion_chunks
+                WHERE file_id = $1
+                ORDER BY chunk_index ASC
+            """, uuid.UUID(fileId))
+            
+            if not chunk_rows:
+                logger.warning("No chunks found for export", file_id=fileId, user_id=user_id)
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content={"error": "No content available for export"}
+                )
+            
+            # Reconstruct document from chunks
+            markdown_content = "\n\n".join([row["text"] for row in chunk_rows])
+            
+            logger.info(
+                "Exporting document",
+                file_id=fileId,
+                filename=filename,
+                format=format,
+                chunk_count=len(chunk_rows),
+                user_id=user_id,
+            )
+            
+            # Convert to requested format
+            if format == "markdown":
+                content = markdown_content.encode("utf-8")
+                media_type = "text/markdown"
+                extension = "md"
+            
+            elif format == "html":
+                # Convert markdown to HTML
+                try:
+                    import markdown
+                    html_body = markdown.markdown(
+                        markdown_content,
+                        extensions=['extra', 'codehilite', 'tables', 'toc']
+                    )
+                    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{filename}</title>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; line-height: 1.6; max-width: 800px; margin: 0 auto; padding: 20px; }}
+        h1, h2, h3 {{ margin-top: 24px; margin-bottom: 16px; }}
+        code {{ background-color: #f4f4f4; padding: 2px 6px; border-radius: 3px; }}
+        pre {{ background-color: #f4f4f4; padding: 16px; border-radius: 6px; overflow-x: auto; }}
+        blockquote {{ border-left: 4px solid #ddd; padding-left: 16px; color: #666; }}
+        table {{ border-collapse: collapse; width: 100%; }}
+        th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+        th {{ background-color: #f4f4f4; }}
+    </style>
+</head>
+<body>
+{html_body}
+</body>
+</html>"""
+                    content = html_content.encode("utf-8")
+                    media_type = "text/html"
+                    extension = "html"
+                except ImportError:
+                    logger.error("markdown library not available for HTML export")
+                    return JSONResponse(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        content={"error": "HTML export not available"}
+                    )
+            
+            elif format == "text":
+                # Strip markdown formatting
+                import re
+                text_content = markdown_content
+                # Remove markdown headers
+                text_content = re.sub(r'^#+\s+', '', text_content, flags=re.MULTILINE)
+                # Remove bold/italic
+                text_content = re.sub(r'\*\*(.+?)\*\*', r'\1', text_content)
+                text_content = re.sub(r'\*(.+?)\*', r'\1', text_content)
+                text_content = re.sub(r'__(.+?)__', r'\1', text_content)
+                text_content = re.sub(r'_(.+?)_', r'\1', text_content)
+                # Remove links but keep text
+                text_content = re.sub(r'\[(.+?)\]\(.+?\)', r'\1', text_content)
+                # Remove inline code
+                text_content = re.sub(r'`(.+?)`', r'\1', text_content)
+                
+                content = text_content.encode("utf-8")
+                media_type = "text/plain"
+                extension = "txt"
+            
+            elif format == "docx":
+                # Convert markdown to DOCX
+                try:
+                    from docx import Document
+                    from docx.shared import Pt, Inches
+                    import re
+                    
+                    doc = Document()
+                    
+                    # Parse markdown and add to document
+                    lines = markdown_content.split('\n')
+                    for line in lines:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        
+                        # Headings
+                        if line.startswith('# '):
+                            doc.add_heading(line[2:], level=1)
+                        elif line.startswith('## '):
+                            doc.add_heading(line[3:], level=2)
+                        elif line.startswith('### '):
+                            doc.add_heading(line[4:], level=3)
+                        # Lists
+                        elif line.startswith('- ') or line.startswith('* '):
+                            doc.add_paragraph(line[2:], style='List Bullet')
+                        elif re.match(r'^\d+\.\s', line):
+                            doc.add_paragraph(re.sub(r'^\d+\.\s', '', line), style='List Number')
+                        # Regular paragraph
+                        else:
+                            doc.add_paragraph(line)
+                    
+                    # Save to bytes
+                    docx_buffer = io.BytesIO()
+                    doc.save(docx_buffer)
+                    content = docx_buffer.getvalue()
+                    media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    extension = "docx"
+                except ImportError:
+                    logger.error("python-docx library not available for DOCX export")
+                    return JSONResponse(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        content={"error": "DOCX export not available"}
+                    )
+            
+            elif format == "pdf":
+                # Convert markdown to PDF
+                try:
+                    from reportlab.lib.pagesizes import letter
+                    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+                    from reportlab.lib.units import inch
+                    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
+                    from reportlab.lib.enums import TA_LEFT
+                    import re
+                    
+                    pdf_buffer = io.BytesIO()
+                    doc = SimpleDocTemplate(pdf_buffer, pagesize=letter, topMargin=0.75*inch, bottomMargin=0.75*inch)
+                    
+                    styles = getSampleStyleSheet()
+                    story = []
+                    
+                    # Parse markdown and add to PDF
+                    lines = markdown_content.split('\n')
+                    for line in lines:
+                        line = line.strip()
+                        if not line:
+                            story.append(Spacer(1, 0.2*inch))
+                            continue
+                        
+                        # Escape HTML entities
+                        line = line.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                        
+                        # Headings
+                        if line.startswith('# '):
+                            story.append(Paragraph(line[2:], styles['Heading1']))
+                        elif line.startswith('## '):
+                            story.append(Paragraph(line[3:], styles['Heading2']))
+                        elif line.startswith('### '):
+                            story.append(Paragraph(line[4:], styles['Heading3']))
+                        # Lists
+                        elif line.startswith('- ') or line.startswith('* '):
+                            story.append(Paragraph(f"• {line[2:]}", styles['BodyText']))
+                        elif re.match(r'^\d+\.\s', line):
+                            story.append(Paragraph(line, styles['BodyText']))
+                        # Regular paragraph
+                        else:
+                            story.append(Paragraph(line, styles['BodyText']))
+                    
+                    doc.build(story)
+                    content = pdf_buffer.getvalue()
+                    media_type = "application/pdf"
+                    extension = "pdf"
+                except ImportError as e:
+                    logger.error("reportlab library not available for PDF export", error=str(e))
+                    return JSONResponse(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        content={"error": "PDF export not available"}
+                    )
+            
+            # Generate filename
+            base_filename = filename.rsplit('.', 1)[0] if '.' in filename else filename
+            export_filename = f"{base_filename}.{extension}"
+            
+            logger.info(
+                "Document exported successfully",
+                file_id=fileId,
+                filename=export_filename,
+                format=format,
+                size_bytes=len(content),
+                user_id=user_id,
+            )
+            
+            return Response(
+                content=content,
+                media_type=media_type,
+                headers={
+                    "Content-Disposition": f'attachment; filename="{export_filename}"'
+                }
+            )
+    
+    except Exception as e:
+        logger.error(
+            "Failed to export file",
+            file_id=fileId,
+            format=format,
+            user_id=user_id,
+            error=str(e),
+            exc_info=True,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": "Failed to export file", "details": str(e)}
         )
     
     finally:
