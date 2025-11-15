@@ -508,17 +508,15 @@ async def delete_file(fileId: str, request: Request):
     
     Deletes:
         - File from MinIO storage
-        - Vectors from Milvus (if not shared via content_hash)
-        - Metadata from PostgreSQL
-    
-    Note: Vectors are shared via content_hash, so deletion only removes
-    this file's reference. Vectors remain if other files reference them.
+        - Vectors from Milvus
+        - Metadata from PostgreSQL (cascades to chunks and status)
     """
     user_id = request.state.user_id
     
     config = Config().to_dict()
     postgres_service = PostgresService(config)
     minio_service = MinIOService(config)
+    milvus_service = MilvusService(config)
     
     await postgres_service.connect()
     
@@ -526,7 +524,7 @@ async def delete_file(fileId: str, request: Request):
         async with postgres_service.pool.acquire() as conn:
             # Get file record
             file_row = await conn.fetchrow("""
-                SELECT user_id, storage_path, content_hash
+                SELECT user_id, storage_path
                 FROM ingestion_files
                 WHERE file_id = $1
             """, uuid.UUID(fileId))
@@ -545,18 +543,22 @@ async def delete_file(fileId: str, request: Request):
                 )
             
             storage_path = file_row["storage_path"]
-            content_hash = file_row["content_hash"]
             
-            # Check if other files share this content_hash
-            other_files = await conn.fetchrow("""
-                SELECT COUNT(*) as count
-                FROM ingestion_files
-                WHERE content_hash = $1 AND file_id != $2
-            """, content_hash, uuid.UUID(fileId))
+            # Delete vectors from Milvus
+            try:
+                milvus_service.delete_file_vectors(fileId)
+                logger.info("Deleted Milvus vectors", file_id=fileId)
+            except Exception as e:
+                logger.warning(
+                    "Failed to delete vectors from Milvus",
+                    file_id=fileId,
+                    error=str(e),
+                )
             
             # Delete file from MinIO
             try:
                 await minio_service.delete_file(storage_path)
+                logger.info("Deleted MinIO file", file_id=fileId, storage_path=storage_path)
             except Exception as e:
                 logger.warning(
                     "Failed to delete file from MinIO",
@@ -570,16 +572,11 @@ async def delete_file(fileId: str, request: Request):
                 DELETE FROM ingestion_files WHERE file_id = $1
             """, uuid.UUID(fileId))
             
-            # Note: Milvus vectors are not deleted here
-            # They remain for other files with same content_hash
-            # If no other files share the hash, vectors can be cleaned up separately
-            
             logger.info(
-                "File deleted",
+                "File deleted successfully",
                 file_id=fileId,
                 user_id=user_id,
                 storage_path=storage_path,
-                shared_content=other_files["count"] > 0 if other_files else False,
             )
             
             return JSONResponse(
@@ -587,7 +584,6 @@ async def delete_file(fileId: str, request: Request):
                 content={
                     "message": "File deleted successfully",
                     "fileId": fileId,
-                    "vectorsShared": other_files["count"] > 0 if other_files else False,
                 }
             )
     
