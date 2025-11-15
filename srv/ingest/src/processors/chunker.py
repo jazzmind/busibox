@@ -137,13 +137,28 @@ class Chunker:
         
         if not nlp:
             # Fallback: simple sentence splitting
+            logger.info(
+                "Using simple chunking (spaCy not available)",
+                text_length=len(text),
+            )
             return self._chunk_simple(text, page_number)
         
-        # Parse document
+        # Parse document with spaCy
+        logger.debug(
+            "Using semantic chunking with spaCy",
+            text_length=len(text),
+            language=primary_lang,
+        )
         doc = nlp(text)
         
         # Group into paragraphs first (for better semantic boundaries)
         paragraphs = self._extract_paragraphs(doc)
+        
+        logger.debug(
+            "Extracted paragraphs from document",
+            paragraph_count=len(paragraphs),
+            text_length=len(text),
+        )
         
         chunks = []
         current_chunk_sentences = []
@@ -396,8 +411,43 @@ class Chunker:
     
     def _chunk_simple(self, text: str, page_number: Optional[int]) -> List[Chunk]:
         """Simple chunking fallback (when spaCy not available)."""
-        # Split by paragraphs
+        # Split by paragraphs - try multiple strategies
+        # First try double newlines (proper paragraphs)
         paragraphs = re.split(r"\n\s*\n", text)
+        
+        logger.debug(
+            "Initial paragraph split",
+            paragraph_count=len(paragraphs),
+            text_length=len(text),
+        )
+        
+        # If we only got 1 paragraph, the text might not have double newlines
+        # Try splitting by single newlines and treating each line as a paragraph
+        if len(paragraphs) == 1 and len(text) > 5000:
+            logger.info(
+                "Text has no paragraph breaks, splitting by sentences",
+                text_length=len(text),
+            )
+            # Split by sentence-ending punctuation followed by space/newline
+            paragraphs = re.split(r'([.!?]+[\s\n]+)', text)
+            # Recombine punctuation with sentences
+            combined = []
+            for i in range(0, len(paragraphs) - 1, 2):
+                if i + 1 < len(paragraphs):
+                    combined.append(paragraphs[i] + paragraphs[i + 1])
+                else:
+                    combined.append(paragraphs[i])
+            if combined:
+                paragraphs = combined
+            else:
+                # Last resort: split into fixed-size chunks
+                chunk_size = 2000  # characters
+                paragraphs = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
+                logger.warning(
+                    "Using fixed-size chunking as fallback",
+                    text_length=len(text),
+                    chunk_count=len(paragraphs),
+                )
         
         chunks = []
         current_chunk = []
