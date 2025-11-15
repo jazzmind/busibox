@@ -249,6 +249,28 @@ class MilvusService:
             # So we create an empty 1D array and convert to sparse
             empty_sparse_embedding = csr_matrix([0.0])  # Minimal sparse vector
             
+            # Verify final dimensions before creating entity
+            final_length = len(flattened_embedding)
+            if final_length != target_dim:
+                logger.error(
+                    "Vector dimension mismatch after padding/truncation",
+                    page_number=page_number,
+                    expected=target_dim,
+                    actual=final_length,
+                )
+                # Force correct length
+                if final_length < target_dim:
+                    flattened_embedding.extend([0.0] * (target_dim - final_length))
+                else:
+                    flattened_embedding = flattened_embedding[:target_dim]
+            
+            logger.debug(
+                "Creating entity for page",
+                page_number=page_number,
+                vector_length=len(flattened_embedding),
+                text_dense_length=len(zero_dense_embedding),
+            )
+            
             entity = {
                 "id": vector_id,
                 "file_id": file_id,
