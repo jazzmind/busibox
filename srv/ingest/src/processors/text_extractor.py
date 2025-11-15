@@ -89,6 +89,7 @@ class TextExtractor:
         try:
             # Try Marker first (best quality)
             try:
+                logger.debug("Attempting to import marker.convert")
                 from marker.convert import convert_single_pdf
                 
                 logger.info("Using Marker for PDF extraction", file_path=file_path)
@@ -100,8 +101,21 @@ class TextExtractor:
                 page_images = self._extract_pdf_page_images(file_path)
                 page_count = len(page_images)
                 
-            except ImportError:
-                logger.warning("Marker not available, falling back to pdfplumber")
+            except ImportError as e:
+                logger.warning(
+                    "Marker not available, falling back to pdfplumber",
+                    error=str(e),
+                    error_type=type(e).__name__,
+                    import_error_details=getattr(e, 'name', 'unknown'),
+                )
+                markdown_text = None
+            except Exception as e:
+                logger.error(
+                    "Marker import succeeded but execution failed",
+                    error=str(e),
+                    error_type=type(e).__name__,
+                    exc_info=True,
+                )
                 markdown_text = None
             
             # Extract tables with TATR if available

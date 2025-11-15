@@ -33,6 +33,13 @@ class ColPaliEmbedder:
         self.colpali_base_url = config.get("colpali_base_url", "http://vllm-lxc:8000/v1")
         self.api_key = config.get("colpali_api_key", "EMPTY")
         self.enabled = config.get("colpali_enabled", True)
+        
+        logger.info(
+            "ColPali embedder initialized",
+            base_url=self.colpali_base_url,
+            enabled=self.enabled,
+            api_key_set=bool(self.api_key and self.api_key != "EMPTY"),
+        )
     
     async def embed_pages(
         self,
@@ -58,9 +65,16 @@ class ColPaliEmbedder:
         
         try:
             # Check if ColPali service is available
-            if not await self.check_health():
-                logger.warning("ColPali service not available, skipping visual embeddings")
+            health_check = await self.check_health()
+            if not health_check:
+                logger.warning(
+                    "ColPali service not available, skipping visual embeddings",
+                    base_url=self.colpali_base_url,
+                    health_endpoint=f"{self.colpali_base_url.replace('/v1', '')}/health",
+                )
                 return None
+            
+            logger.info("ColPali service health check passed", base_url=self.colpali_base_url)
             
             # Read and encode images as base64
             encoded_images = []
@@ -144,12 +158,46 @@ class ColPaliEmbedder:
     
     async def check_health(self) -> bool:
         """Check if ColPali service is available."""
+        health_url = f"{self.colpali_base_url.replace('/v1', '')}/health"
         try:
+            logger.debug("Checking ColPali health", url=health_url)
             async with httpx.AsyncClient(timeout=5.0) as client:
-                # Check vLLM health endpoint
-                response = await client.get(f"{self.colpali_base_url.replace('/v1', '')}/health")
-                return response.status_code == 200
+                response = await client.get(health_url)
+                is_healthy = response.status_code == 200
+                
+                if is_healthy:
+                    logger.debug("ColPali health check succeeded", status_code=response.status_code)
+                else:
+                    logger.warning(
+                        "ColPali health check returned non-200 status",
+                        status_code=response.status_code,
+                        response_text=response.text[:200] if response.text else None,
+                    )
+                
+                return is_healthy
+        except httpx.ConnectError as e:
+            logger.warning(
+                "ColPali health check failed - connection error",
+                url=health_url,
+                error=str(e),
+                error_type="ConnectError",
+            )
+            return False
+        except httpx.TimeoutException as e:
+            logger.warning(
+                "ColPali health check failed - timeout",
+                url=health_url,
+                error=str(e),
+                error_type="TimeoutException",
+            )
+            return False
         except Exception as e:
-            logger.debug("ColPali health check failed", error=str(e))
+            logger.warning(
+                "ColPali health check failed - unexpected error",
+                url=health_url,
+                error=str(e),
+                error_type=type(e).__name__,
+                exc_info=True,
+            )
             return False
 
