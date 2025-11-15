@@ -162,46 +162,41 @@ class TextExtractor:
                 for table in tables:
                     if isinstance(table, dict) and "text" in table:
                         text_content += "\n\n" + table["text"]
-            
             except ImportError:
                 logger.debug("TATR not available, skipping table extraction")
-            
-            # Fallback to pdfplumber if Marker failed or for simple PDFs
-            if not text_content or page_count == 0:
-                logger.info("Using pdfplumber fallback", file_path=file_path)
-                with pdfplumber.open(file_path) as pdf:
-                    page_count = len(pdf.pages)
-                    text_parts = []
-                    
-                    for page in pdf.pages:
-                        page_text = page.extract_text()
-                        if page_text:
-                            text_parts.append(page_text)
-                    
-                    text_content = "\n".join(text_parts)
-                    
-                    # Extract page images if not already done
-                    if not page_images:
-                        page_images = self._extract_pdf_page_images(file_path)
-            
-            # Detect scanned PDFs (no extractable text)
-            if not text_content.strip() and page_count > 0:
-                logger.warning("No text extracted, PDF may be scanned - OCR required", file_path=file_path)
-                # Trigger OCR processing (implemented separately)
-                text_content = self._ocr_pdf(file_path)
-            
-            return ExtractionResult(
-                text=text_content,
-                markdown=markdown_text,
-                page_images=page_images,
-                page_count=page_count,
-                tables=tables,
-                metadata={"extraction_method": "marker" if markdown_text else "pdfplumber"},
-            )
         
-        except Exception as e:
-            logger.error("PDF extraction failed", file_path=file_path, error=str(e), exc_info=True)
-            raise
+        # Fallback to pdfplumber if Marker failed or disabled
+        if not text_content or page_count == 0:
+            logger.info("Using pdfplumber fallback", file_path=file_path)
+            with pdfplumber.open(file_path) as pdf:
+                page_count = len(pdf.pages)
+                text_parts = []
+                
+                for page in pdf.pages:
+                    page_text = page.extract_text()
+                    if page_text:
+                        text_parts.append(page_text)
+                
+                text_content = "\n".join(text_parts)
+                
+                # Extract page images if not already done
+                if not page_images:
+                    page_images = self._extract_pdf_page_images(file_path)
+        
+        # Detect scanned PDFs (no extractable text)
+        if not text_content.strip() and page_count > 0:
+            logger.warning("No text extracted, PDF may be scanned - OCR required", file_path=file_path)
+            # Trigger OCR processing (implemented separately)
+            text_content = self._ocr_pdf(file_path)
+        
+        return ExtractionResult(
+            text=text_content,
+            markdown=markdown_text,
+            page_images=page_images,
+            page_count=page_count,
+            tables=tables,
+            metadata={"extraction_method": "marker" if markdown_text else "pdfplumber"},
+        )
     
     def _extract_pdf_page_images(self, file_path: str) -> List[str]:
         """Extract page images from PDF for ColPali.
