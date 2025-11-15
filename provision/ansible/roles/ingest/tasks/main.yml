@@ -83,6 +83,23 @@
     - Restart ingest worker
   tags: [ingest, ingest_deploy]
 
+- name: Download spaCy language model
+  shell: /srv/ingest/venv/bin/python -m spacy download en_core_web_sm
+  args:
+    creates: /srv/ingest/venv/lib/python3.11/site-packages/en_core_web_sm
+  retries: 3
+  delay: 5
+  register: spacy_download
+  until: spacy_download.rc == 0
+  tags: [ingest, ingest_deploy]
+
+- name: Verify spaCy model installation
+  shell: /srv/ingest/venv/bin/python -m spacy info en_core_web_sm
+  register: spacy_verify
+  changed_when: false
+  failed_when: spacy_verify.rc != 0
+  tags: [ingest, ingest_deploy]
+
 # ============================================================================
 # Configuration
 # ============================================================================
