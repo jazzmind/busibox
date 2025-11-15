@@ -10,11 +10,11 @@ from io import BytesIO
 import pytest
 import structlog
 
-from api.services.minio import MinIOService
-from api.services.postgres import PostgresService
-from api.services.redis import RedisService
-from services.milvus_service import MilvusService
-from shared.config import Config
+from src.api.services.minio import MinIOService
+from src.api.services.postgres import PostgresService
+from src.api.services.redis import RedisService
+from src.services.milvus_service import MilvusService
+from src.shared.config import Config
 
 logger = structlog.get_logger()
 

@@ -23,7 +23,7 @@ else:
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
-from shared.config import Config
+from src.shared.config import Config
 
 
 @pytest.fixture(scope="session")

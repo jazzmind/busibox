@@ -11,10 +11,10 @@ import pytest
 import structlog
 from fastapi.testclient import TestClient
 
-from api.main import app
-from api.services.minio import MinIOService
-from api.services.postgres import PostgresService
-from shared.config import Config
+from src.api.main import app
+from src.api.services.minio import MinIOService
+from src.api.services.postgres import PostgresService
+from src.shared.config import Config
 
 logger = structlog.get_logger()
 

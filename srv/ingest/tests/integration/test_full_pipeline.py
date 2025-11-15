@@ -20,11 +20,11 @@ import pytest
 import structlog
 from fastapi.testclient import TestClient
 
-from api.main import app
-from api.services.minio import MinIOService
-from api.services.postgres import PostgresService
-from api.services.milvus import MilvusService
-from shared.config import Config
+from src.api.main import app
+from src.services.minio_service import MinIOService
+from src.services.postgres_service import PostgresService
+from src.services.milvus_service import MilvusService
+from src.shared.config import Config
 
 logger = structlog.get_logger()
 
