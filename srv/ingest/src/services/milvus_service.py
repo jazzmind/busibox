@@ -219,7 +219,8 @@ class MilvusService:
             # Generate zero/empty embeddings for text fields (required by Milvus schema)
             # Page images don't have text embeddings, so use zeros/empty
             zero_dense_embedding = [0.0] * 1536  # Match text embedding dimension
-            empty_sparse_embedding = {}  # Empty sparse vector (BM25)
+            # Create empty sparse matrix (BM25) - must be csr_matrix, not dict
+            empty_sparse_embedding = csr_matrix((1, 1), dtype=float)
             
             entity = {
                 "id": vector_id,
