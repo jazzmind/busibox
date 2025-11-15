@@ -161,6 +161,16 @@ class Chunker:
                 # Save current chunk with markdown formatting
                 chunk_text = " ".join(current_chunk_sentences)
                 markdown_text = self._convert_to_markdown(chunk_text)
+                
+                # Truncate if too long (safety check for Milvus varchar limit)
+                if len(markdown_text) > 65000:
+                    logger.warning(
+                        "Chunk exceeds Milvus limit, truncating",
+                        original_length=len(markdown_text),
+                        truncated_length=65000,
+                    )
+                    markdown_text = markdown_text[:65000] + "... [truncated]"
+                
                 chunk = Chunk(
                     text=markdown_text,
                     chunk_index=chunk_index,
@@ -191,6 +201,16 @@ class Chunker:
         if current_chunk_sentences:
             chunk_text = " ".join(current_chunk_sentences)
             markdown_text = self._convert_to_markdown(chunk_text)
+            
+            # Truncate if too long (safety check for Milvus varchar limit)
+            if len(markdown_text) > 65000:
+                logger.warning(
+                    "Final chunk exceeds Milvus limit, truncating",
+                    original_length=len(markdown_text),
+                    truncated_length=65000,
+                )
+                markdown_text = markdown_text[:65000] + "... [truncated]"
+            
             chunk = Chunk(
                 text=markdown_text,
                 chunk_index=chunk_index,
@@ -392,10 +412,28 @@ class Chunker:
             
             para_tokens = self._count_tokens(para)
             
-            if current_tokens + para_tokens > self.max_tokens and current_tokens >= self.min_tokens:
+            # Force chunk if we're approaching Milvus varchar limit (65535 chars)
+            # Or if we've exceeded max tokens
+            chunk_text_preview = "\n\n".join(current_chunk)
+            should_chunk = (
+                (current_tokens + para_tokens > self.max_tokens and current_tokens >= self.min_tokens)
+                or len(chunk_text_preview) > 60000  # Safety margin before 65535 limit
+            )
+            
+            if should_chunk:
                 # Save chunk with markdown formatting
                 chunk_text = "\n\n".join(current_chunk)
                 markdown_text = self._convert_to_markdown(chunk_text)
+                
+                # Truncate if still too long (safety check)
+                if len(markdown_text) > 65000:
+                    logger.warning(
+                        "Chunk exceeds Milvus limit, truncating",
+                        original_length=len(markdown_text),
+                        truncated_length=65000,
+                    )
+                    markdown_text = markdown_text[:65000] + "... [truncated]"
+                
                 chunk = Chunk(
                     text=markdown_text,
                     chunk_index=chunk_index,
@@ -422,6 +460,16 @@ class Chunker:
         if current_chunk:
             chunk_text = "\n\n".join(current_chunk)
             markdown_text = self._convert_to_markdown(chunk_text)
+            
+            # Truncate if too long (safety check)
+            if len(markdown_text) > 65000:
+                logger.warning(
+                    "Final chunk exceeds Milvus limit, truncating",
+                    original_length=len(markdown_text),
+                    truncated_length=65000,
+                )
+                markdown_text = markdown_text[:65000] + "... [truncated]"
+            
             chunk = Chunk(
                 text=markdown_text,
                 chunk_index=chunk_index,
