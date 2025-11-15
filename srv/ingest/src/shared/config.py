@@ -52,6 +52,9 @@ class Config:
         self.colpali_api_key = os.getenv("COLPALI_API_KEY", "EMPTY")
         self.colpali_enabled = os.getenv("COLPALI_ENABLED", "true").lower() == "true"
         
+        # Marker configuration (optional - can disable to save memory)
+        self.marker_enabled = os.getenv("MARKER_ENABLED", "false").lower() == "true"
+        
         # Processing configuration
         self.chunk_size_min = int(os.getenv("CHUNK_SIZE_MIN", "400"))
         self.chunk_size_max = int(os.getenv("CHUNK_SIZE_MAX", "800"))
@@ -89,6 +92,7 @@ class Config:
             "colpali_base_url": self.colpali_base_url,
             "colpali_api_key": self.colpali_api_key,
             "colpali_enabled": self.colpali_enabled,
+            "marker_enabled": self.marker_enabled,
             "chunk_size": self.chunk_size_max,  # For backward compatibility
             "chunk_overlap": int(self.chunk_size_max * self.chunk_overlap_pct),
         }

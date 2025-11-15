@@ -48,6 +48,7 @@ class TextExtractor:
         """Initialize text extractor."""
         self.config = config
         self.temp_dir = config.get("temp_dir", "/tmp/ingest")
+        self.marker_enabled = config.get("marker_enabled", True)  # Can disable to save memory
         os.makedirs(self.temp_dir, exist_ok=True)
     
     def extract(self, file_path: str, mime_type: str) -> ExtractionResult:
@@ -86,7 +87,11 @@ class TextExtractor:
         tables = []
         page_count = 0
         
-        try:
+        # Check if Marker is enabled (can be disabled to save memory)
+        if not self.marker_enabled:
+            logger.info("Marker disabled, using pdfplumber fallback", file_path=file_path)
+            markdown_text = None  # Skip Marker, go straight to pdfplumber
+        else:
             # Try Marker first (best quality)
             # Marker v1.x uses a different API than v0.x
             try:
