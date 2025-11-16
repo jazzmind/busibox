@@ -160,6 +160,15 @@ class Chunker:
             text_length=len(text),
         )
         
+        # If we only got 1 paragraph and the text is large, fall back to simple chunking
+        # This handles documents without proper paragraph breaks
+        if len(paragraphs) == 1 and len(text) > 5000:
+            logger.info(
+                "Only 1 paragraph detected in large document, using simple chunking",
+                text_length=len(text),
+            )
+            return self._chunk_simple(text, page_number)
+        
         chunks = []
         current_chunk_sentences = []
         current_tokens = 0
@@ -250,18 +259,30 @@ class Chunker:
         """Extract paragraphs with sentence boundaries."""
         paragraphs = []
         current_para = {"sentences": [], "text": ""}
+        prev_sent_end = 0
         
         for sent in doc.sents:
             sent_text = sent.text.strip()
             if not sent_text:
                 continue
             
-            # Check for paragraph break (double newline or heading)
-            if self._is_paragraph_break(sent):
-                if current_para["sentences"]:
-                    current_para["text"] = " ".join(s["text"] for s in current_para["sentences"])
-                    paragraphs.append(current_para)
-                    current_para = {"sentences": [], "text": ""}
+            # Check for paragraph break by looking at whitespace between sentences
+            # If there are 2+ newlines between previous sentence and this one, it's a new paragraph
+            between_text = doc.text[prev_sent_end:sent.start_char]
+            newline_count = between_text.count('\n')
+            
+            # Start new paragraph if:
+            # 1. Multiple newlines between sentences (paragraph break)
+            # 2. Special heading/section marker
+            should_break = (
+                newline_count >= 2 or
+                self._is_paragraph_break(sent)
+            )
+            
+            if should_break and current_para["sentences"]:
+                current_para["text"] = " ".join(s["text"] for s in current_para["sentences"])
+                paragraphs.append(current_para)
+                current_para = {"sentences": [], "text": ""}
             
             sent_tokens = self._count_tokens(sent_text)
             current_para["sentences"].append({
@@ -270,6 +291,8 @@ class Chunker:
                 "start_char": sent.start_char,
                 "end_char": sent.end_char,
             })
+            
+            prev_sent_end = sent.end_char
         
         # Add final paragraph
         if current_para["sentences"]:
