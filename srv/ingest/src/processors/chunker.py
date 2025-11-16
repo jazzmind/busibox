@@ -450,8 +450,8 @@ class Chunker:
         )
         
         # If we only got 1 paragraph, the text might not have double newlines
-        # Try splitting by single newlines and treating each line as a paragraph
-        if len(paragraphs) == 1 and len(text) > 5000:
+        # Try splitting by sentences if the text is substantial
+        if len(paragraphs) == 1 and len(text) > 1000:
             logger.info(
                 "Text has no paragraph breaks, splitting by sentences",
                 text_length=len(text),

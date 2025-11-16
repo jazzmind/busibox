@@ -12,9 +12,9 @@ EXTRA_ARGS=
 
 # Get container IPs from inventory (with fallback to defaults)
 # Try to get from inventory, if that fails use production defaults
-INGEST_IP ?= 10.96.200.30
-AGENT_IP ?= 10.96.200.31
-APPS_IP ?= 10.96.200.25
+INGEST_IP ?= 10.96.200.206
+AGENT_IP ?= 10.96.200.202
+APPS_IP ?= 10.96.200.201
 
 ping:
 	ansible -i $(INV) all -m ping
