@@ -99,18 +99,10 @@ class TestBasicChunking:
 class TestHeadingDetection:
     """Test heading detection and markdown conversion."""
     
-    @pytest.mark.skip(reason="Test uses unrealistic input - spaCy joins sentences without preserving newlines")
     def test_all_caps_heading(self, chunker):
         """Test detection of ALL CAPS headings."""
-        text = """
-        INTRODUCTION
-        
-        This is the introduction paragraph. It explains the topic.
-        
-        METHODOLOGY
-        
-        This paragraph describes the methodology used in the study.
-        """
+        # Use proper newlines that will be preserved
+        text = "INTRODUCTION\n\nThis is the introduction paragraph. It explains the topic.\n\nMETHODOLOGY\n\nThis paragraph describes the methodology used in the study."
         
         chunks = chunker.chunk(text)
         
@@ -137,14 +129,10 @@ class TestHeadingDetection:
         assert "Chapter 1" in combined_text
         assert "Section 2" in combined_text
     
-    @pytest.mark.skip(reason="Test uses unrealistic input - spaCy joins sentences without preserving newlines")
     def test_section_heading_extraction(self, chunker):
         """Test that section headings are extracted to chunk metadata."""
-        text = """
-        BACKGROUND
-        
-        This is background information about the topic.
-        """
+        # Use proper newlines that will be preserved
+        text = "BACKGROUND:\n\nThis is background information about the topic."
         
         chunks = chunker.chunk(text)
         
