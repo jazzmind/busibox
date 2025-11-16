@@ -160,14 +160,19 @@ class Chunker:
             text_length=len(text),
         )
         
-        # If we only got 1 paragraph and the text is large, fall back to simple chunking
+        # If we only got 1 paragraph, check if it needs to be split
         # This handles documents without proper paragraph breaks
-        if len(paragraphs) == 1 and len(text) > 5000:
-            logger.info(
-                "Only 1 paragraph detected in large document, using simple chunking",
-                text_length=len(text),
-            )
-            return self._chunk_simple(text, page_number)
+        if len(paragraphs) == 1:
+            para_tokens = self._count_tokens(paragraphs[0]["text"])
+            # If the single paragraph exceeds max tokens, fall back to simple chunking
+            if para_tokens > self.max_tokens or len(text) > 5000:
+                logger.info(
+                    "Only 1 paragraph detected but exceeds limits, using simple chunking",
+                    text_length=len(text),
+                    tokens=para_tokens,
+                    max_tokens=self.max_tokens,
+                )
+                return self._chunk_simple(text, page_number)
         
         chunks = []
         current_chunk_sentences = []
