@@ -368,8 +368,10 @@ class Chunker:
         Convert semantic structures in text to markdown format.
         
         Converts:
-        - ALL CAPS HEADINGS: → # Heading
-        - Chapter/Section markers → ## Heading
+        - Document titles (first line, centered) → #
+        - Author bylines (second line, centered) → *Author*
+        - ALL CAPS HEADINGS: → ##
+        - Chapter/Section markers → ##
         - Numbered lists (1., 2.) → 1. Item
         - Bullet points (•, -, *) → - Item
         - Multiple blank lines → Single blank line
@@ -383,6 +385,11 @@ class Chunker:
         lines = text.split("\n")
         markdown_lines = []
         
+        # Track if we're at the start of the document (for title/byline detection)
+        is_document_start = True
+        found_title = False
+        found_byline = False
+        
         for i, line in enumerate(lines):
             stripped = line.strip()
             
@@ -390,17 +397,53 @@ class Chunker:
                 # Preserve single blank lines, remove multiple
                 if not markdown_lines or markdown_lines[-1] != "":
                     markdown_lines.append("")
+                # After first blank line, we're no longer at document start
+                if is_document_start and markdown_lines:
+                    is_document_start = False
                 continue
             
+            # Detect document title (first non-empty line, often centered)
+            # Characteristics: Short (< 100 chars), not all caps, at start
+            if is_document_start and not found_title and len(stripped) < 100:
+                # Check if next non-empty line looks like an author name
+                next_line_idx = i + 1
+                while next_line_idx < len(lines) and not lines[next_line_idx].strip():
+                    next_line_idx += 1
+                
+                if next_line_idx < len(lines):
+                    next_line = lines[next_line_idx].strip()
+                    # If next line is short and looks like a name (2-4 words, capitalized)
+                    words = next_line.split()
+                    if (len(words) >= 2 and len(words) <= 4 and 
+                        all(w[0].isupper() for w in words if w) and
+                        len(next_line) < 50):
+                        # This is likely a title followed by author
+                        markdown_lines.append(f"# {stripped}")
+                        markdown_lines.append("")
+                        found_title = True
+                        continue
+            
+            # Detect author byline (follows title, short, looks like a name)
+            if found_title and not found_byline and len(stripped) < 50:
+                words = stripped.split()
+                # Name pattern: 2-4 capitalized words
+                if len(words) >= 2 and len(words) <= 4 and all(w[0].isupper() for w in words if w):
+                    markdown_lines.append(f"*{stripped}*")
+                    markdown_lines.append("")
+                    found_byline = True
+                    is_document_start = False
+                    continue
+            
+            # After title/byline, we're no longer at document start
+            if found_title or found_byline:
+                is_document_start = False
+            
             # Convert ALL CAPS headings to markdown
-            if len(stripped) < 100 and stripped.isupper():
+            if len(stripped) < 100 and stripped.isupper() and not stripped.isdigit():
                 # Remove trailing colon if present
                 heading_text = stripped.rstrip(":")
-                # Determine heading level based on context
-                if any(word in heading_text.lower() for word in ["chapter", "part"]):
-                    markdown_lines.append(f"# {heading_text}")
-                else:
-                    markdown_lines.append(f"## {heading_text}")
+                # Use ## for section headings (# reserved for document title)
+                markdown_lines.append(f"## {heading_text}")
                 markdown_lines.append("")  # Blank line after heading
                 continue
             
