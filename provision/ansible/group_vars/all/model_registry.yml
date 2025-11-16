@@ -116,5 +116,6 @@ model_purposes:
 model_registry_path: "/etc/ingest/model_registry.json"
 
 # LLM cleanup configuration
-llm_cleanup_enabled: false  # Disabled by default (memory intensive)
+# Enabled by default to fix text quality issues (smashed words, spacing, etc.)
+llm_cleanup_enabled: true
 
