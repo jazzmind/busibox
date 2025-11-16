@@ -31,17 +31,13 @@ def test_extraction_and_chunking(pdf_path: str):
         "temp_dir": "/tmp/ingest_test",
         "marker_enabled": False,  # Use pdfplumber for faster testing
         "colpali_enabled": False,
-        "max_chunk_tokens": 512,
-        "min_chunk_tokens": 100,
+        "chunk_size_max": 512,
+        "chunk_size_min": 100,
         "chunk_overlap_pct": 0.1,
     }
     
     extractor = TextExtractor(config)
-    chunker = Chunker(
-        max_tokens=config["max_chunk_tokens"],
-        min_tokens=config["min_chunk_tokens"],
-        overlap_pct=config["chunk_overlap_pct"],
-    )
+    chunker = Chunker(config)
     
     # Extract text
     print("1. EXTRACTING TEXT")
@@ -116,7 +112,7 @@ def test_extraction_and_chunking(pdf_path: str):
         for i, chunk in enumerate(chunks):
             if len(chunk.text) > 60000:
                 issues.append(f"Chunk {i+1}: Exceeds safe size ({len(chunk.text)} chars)")
-            if chunk.token_count > config["max_chunk_tokens"] * 1.5:
+            if chunk.token_count > config["chunk_size_max"] * 1.5:
                 issues.append(f"Chunk {i+1}: Exceeds token limit ({chunk.token_count} tokens)")
         
         if issues:

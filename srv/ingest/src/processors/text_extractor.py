@@ -173,13 +173,8 @@ class TextExtractor:
                 text_parts = []
                 
                 for page in pdf.pages:
-                    # Use layout=True to preserve spacing and structure
-                    # x_tolerance and y_tolerance help with word/line detection
-                    page_text = page.extract_text(
-                        layout=True,
-                        x_tolerance=3,
-                        y_tolerance=3,
-                    )
+                    # Default extraction works best - layout=True adds too much whitespace
+                    page_text = page.extract_text()
                     if page_text:
                         text_parts.append(page_text)
                 
