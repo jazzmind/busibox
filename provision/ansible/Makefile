@@ -10,10 +10,11 @@ VAULT_FLAGS=$(shell [ -f $(VAULT_PASS_FILE) ] && echo "--vault-password-file $(V
 # Extra arguments (can override with: make vllm-embedding EXTRA_ARGS="-e skip_model_check=true")
 EXTRA_ARGS=
 
-# Get container IPs from inventory
-INGEST_IP=$(shell ansible-inventory -i $(INV) --host ingest-lxc 2>/dev/null | grep -o '"ansible_host": "[^"]*"' | cut -d'"' -f4 || echo "10.96.200.30")
-AGENT_IP=$(shell ansible-inventory -i $(INV) --host agent-lxc 2>/dev/null | grep -o '"ansible_host": "[^"]*"' | cut -d'"' -f4 || echo "10.96.200.31")
-APPS_IP=$(shell ansible-inventory -i $(INV) --host apps-lxc 2>/dev/null | grep -o '"ansible_host": "[^"]*"' | cut -d'"' -f4 || echo "10.96.200.25")
+# Get container IPs from inventory (with fallback to defaults)
+# Try to get from inventory, if that fails use production defaults
+INGEST_IP ?= 10.96.200.30
+AGENT_IP ?= 10.96.200.31
+APPS_IP ?= 10.96.200.25
 
 ping:
 	ansible -i $(INV) all -m ping
@@ -112,6 +113,11 @@ test-ingest:
 	@echo "Running ingest service tests..."
 	@echo "Container: ingest-lxc ($(INGEST_IP))"
 	@echo ""
+	@if [ -z "$(INGEST_IP)" ] || [ "$(INGEST_IP)" = " " ]; then \
+		echo "ERROR: Could not resolve ingest-lxc IP address"; \
+		echo "Check inventory: $(INV)/hosts.yml"; \
+		exit 1; \
+	fi
 	@echo "=== Ingest Chunker Tests ==="
 	@ssh root@$(INGEST_IP) 'ingest-test' || (echo "Ingest tests FAILED" && exit 1)
 	@echo "✓ Ingest tests passed"
