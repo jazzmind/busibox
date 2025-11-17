@@ -91,15 +91,26 @@
     owner: "{{ search_api_user }}"
     group: "{{ search_api_user }}"
     mode: "0644"
+  register: requirements_changed
 
-- name: Install Python dependencies
+- name: Upgrade Python dependencies when requirements change
+  pip:
+    requirements: /opt/search/requirements.txt
+    virtualenv: "{{ search_api_venv_path }}"
+    state: latest
+  become: yes
+  become_user: "{{ search_api_user }}"
+  when: requirements_changed.changed
+  notify: Restart search-api
+
+- name: Install Python dependencies (initial install only)
   pip:
     requirements: /opt/search/requirements.txt
     virtualenv: "{{ search_api_venv_path }}"
     state: present
   become: yes
   become_user: "{{ search_api_user }}"
-  notify: Restart search-api
+  when: not requirements_changed.changed
 
 - name: Install test dependencies
   pip:
