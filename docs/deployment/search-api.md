@@ -69,21 +69,31 @@ enable_caching: false
 
 ### 3. Deploy with Ansible
 
-Deploy the search API role:
+Deploy search services (Milvus + Search API):
 
 ```bash
 cd provision/ansible
 
+# Deploy both Milvus and Search API (recommended)
+make search
+
+# Or deploy just Search API (if Milvus already deployed)
+make search_api
+
+# With test environment
+make search INV=inventory/test
+make search_api INV=inventory/test
+```
+
+Alternative: using ansible-playbook directly:
+
+```bash
 # Deploy to production
 ansible-playbook -i inventory/production/hosts.yml site.yml --tags search_api
 
 # Deploy to test
 ansible-playbook -i inventory/test/hosts.yml site.yml --tags search_api
-```
 
-Or deploy all milvus services:
-
-```bash
 # Deploy everything to milvus-lxc
 ansible-playbook -i inventory/production/hosts.yml site.yml --limit milvus
 ```

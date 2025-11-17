@@ -13,6 +13,16 @@
     daemon_reload: yes
   tags: [ingest, ingest_start]
 
+- name: restart ingest services
+  systemd:
+    name: "{{ item }}"
+    state: restarted
+    daemon_reload: yes
+  loop:
+    - ingest-api
+    - ingest-worker
+  tags: [ingest, ingest_start]
+
 - name: Reload nginx
   systemd:
     name: nginx
