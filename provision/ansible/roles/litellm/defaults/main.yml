@@ -35,45 +35,31 @@ litellm_backends:
     port: "{{ vllm_port }}"
 
 # Model Configuration (vLLM only - Ollama disabled)
+# References model_registry.yml for model names and configurations
 litellm_models:
-  # Ollama models (temporarily disabled)
-  # - model_name: "llama3-8b"
-  #   litellm_params:
-  #     model: "ollama/llama3:8b"
-  #     api_base: "http://{{ ollama_ip }}:{{ ollama_port }}"
-  # - model_name: "phi3"
-  #   litellm_params:
-  #     model: "ollama/phi3:3.8b"
-  #     api_base: "http://{{ ollama_ip }}:{{ ollama_port }}"
-  # - model_name: "gemma-2b"
-  #   litellm_params:
-  #     model: "ollama/gemma:2b"
-  #     api_base: "http://{{ ollama_ip }}:{{ ollama_port }}"
-  
-  # vLLM models (active) - Only Phi-4 for now
-  - model_name: "phi-4-multimodal"
+  # Fast/default chat model - references model_purposes.fast
+  - model_name: "{{ model_purposes.fast.model }}"
     litellm_params:
-      model: "openai/microsoft/Phi-4-multimodal-instruct"
+      model: "openai/{{ model_purposes.fast.model_name }}"
       api_base: "http://{{ vllm_ip }}:{{ vllm_port }}/v1"
       api_key: "EMPTY"  # vLLM doesn't require authentication
   
-  # Qwen3-VL (disabled - not loaded in vLLM)
-  # To enable: Deploy a second vLLM instance with Qwen3-VL-8B-Instruct
-  # - model_name: "qwen3-vl-8b"
+  # Vision model (disabled - not loaded in vLLM)
+  # To enable: Deploy a second vLLM instance with vision model
+  # - model_name: "{{ model_purposes.vision.model }}"
   #   litellm_params:
-  #     model: "openai/Qwen/Qwen3-VL-8B-Instruct"
+  #     model: "openai/{{ model_purposes.vision.model_name }}"
   #     api_base: "http://{{ vllm_ip }}:{{ vllm_port }}/v1"
   
-  # Embedding models (for ingestion service)
-  # Using vLLM with Qwen3 embedding model
-  - model_name: "qwen3-embedding"
+  # Embedding model - references model_purposes.embedding
+  # Using vLLM with separate embedding service on port 8001
+  - model_name: "{{ model_purposes.embedding.model }}"
     litellm_params:
-      model: "openai/qwen3-embedding"  # Use vLLM's served-model-name, not HF model path
+      model: "openai/{{ model_purposes.embedding.model }}"  # Use vLLM's served-model-name
       api_base: "http://{{ vllm_ip }}:8001/v1"
       api_key: "EMPTY"  # vLLM doesn't require auth, but OpenAI provider needs a key
-    # Embedding dimension: 4096
-    # Max sequence length: 32K
-    # Used by ingestion service for dense semantic embeddings
+    # Model details: {{ model_purposes.embedding.description }}
+    # Dimension: 4096, Max sequence: 32K
     # Requires separate vLLM instance on port 8001
 
 # Router Settings

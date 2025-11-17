@@ -98,7 +98,8 @@ ollama_initial_models:
 
 # vLLM Model Configuration (TEST)
 # Use model pre-cached by setup-llm-models.sh
-vllm_default_model: "microsoft/Phi-4-multimodal-instruct"
+# Reference model registry for default chat model
+vllm_default_model: "{{ model_purposes.fast.model_name }}"
 
 # LiteLLM Database Configuration
 litellm_enable_database: true

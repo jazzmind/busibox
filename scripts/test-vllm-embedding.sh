@@ -4,11 +4,21 @@ set -euo pipefail
 # Test vLLM Embedding Service
 # Run on Proxmox host to verify vLLM embedding and liteLLM integration
 # Usage: bash scripts/test-vllm-embedding.sh
+#
+# Model Configuration:
+# This script tests the embedding model defined in model_registry.yml
+# Default: Qwen3-Embedding-8B (model: "qwen3-embedding", 4096 dimensions)
+# To test a different model, update model_registry.yml and redeploy
 
 VLLM_HOST="10.96.200.208"  # vLLM container (not 210 which is old Ollama)
 VLLM_PORT="8001"
 LITELLM_HOST="10.96.200.207"  # liteLLM container
 LITELLM_PORT="4000"
+
+# Model configuration from registry (can be overridden via environment variables)
+EMBEDDING_MODEL="${EMBEDDING_MODEL:-qwen3-embedding}"       # model_purposes.embedding.model
+EMBEDDING_MODEL_NAME="${EMBEDDING_MODEL_NAME:-Qwen3-Embedding-8B}"  # model_purposes.embedding.model_name (short form)
+EMBEDDING_DIMENSION="${EMBEDDING_DIMENSION:-4096}"           # Expected embedding dimension
 
 # liteLLM API key (set via environment variable or use default for testing)
 # To set: export LITELLM_API_KEY="your-key-here"
@@ -61,12 +71,13 @@ if echo "$MODELS" | jq -e '.data[0].id' &>/dev/null; then
     MODEL_ID=$(echo "$MODELS" | jq -r '.data[0].id')
     echo -e "${GREEN}✓ Model loaded: ${MODEL_ID}${NC}"
     
-    # Check if it's the correct model
-    if [[ "$MODEL_ID" == *"Qwen3-Embedding-8B"* ]] || [[ "$MODEL_ID" == "qwen3-embedding" ]]; then
-        echo -e "${GREEN}✓ Correct model: Qwen3-Embedding-8B${NC}"
+    # Check if it's the correct model (from registry)
+    if [[ "$MODEL_ID" == *"${EMBEDDING_MODEL_NAME}"* ]] || [[ "$MODEL_ID" == "${EMBEDDING_MODEL}" ]]; then
+        echo -e "${GREEN}✓ Correct model: ${EMBEDDING_MODEL} (${EMBEDDING_MODEL_NAME})${NC}"
     else
         echo -e "${YELLOW}⚠ Unexpected model: ${MODEL_ID}${NC}"
-        echo "  Expected: Qwen3-Embedding-8B or qwen3-embedding"
+        echo "  Expected: ${EMBEDDING_MODEL} or ${EMBEDDING_MODEL_NAME}"
+        echo "  (Set by model_purposes.embedding in model_registry.yml)"
     fi
 else
     echo -e "${RED}✗ Failed to list models${NC}"
@@ -79,20 +90,20 @@ echo ""
 echo "5. Testing embedding generation (direct to vLLM)..."
 EMBED_RESPONSE=$(curl -sf http://${VLLM_HOST}:${VLLM_PORT}/v1/embeddings \
     -H "Content-Type: application/json" \
-    -d '{
-        "model": "qwen3-embedding",
-        "input": "This is a test document for semantic search."
-    }')
+    -d "{
+        \"model\": \"${EMBEDDING_MODEL}\",
+        \"input\": \"This is a test document for semantic search.\"
+    }")
 
 if echo "$EMBED_RESPONSE" | jq -e '.data[0].embedding' &>/dev/null; then
     EMBEDDING_DIM=$(echo "$EMBED_RESPONSE" | jq '.data[0].embedding | length')
     echo -e "${GREEN}✓ Embedding generated successfully${NC}"
     echo "  Embedding dimension: ${EMBEDDING_DIM}"
     
-    if [ "$EMBEDDING_DIM" -eq 4096 ]; then
-        echo -e "${GREEN}✓ Correct dimension: 4096${NC}"
+    if [ "$EMBEDDING_DIM" -eq "${EMBEDDING_DIMENSION}" ]; then
+        echo -e "${GREEN}✓ Correct dimension: ${EMBEDDING_DIMENSION}${NC}"
     else
-        echo -e "${YELLOW}⚠ Unexpected dimension: ${EMBEDDING_DIM} (expected 4096)${NC}"
+        echo -e "${YELLOW}⚠ Unexpected dimension: ${EMBEDDING_DIM} (expected ${EMBEDDING_DIMENSION})${NC}"
     fi
     
     # Show first 5 values
@@ -124,18 +135,18 @@ if [ -n "$LITELLM_API_KEY" ]; then
     LITELLM_RESPONSE=$(curl -sf http://${LITELLM_HOST}:${LITELLM_PORT}/v1/embeddings \
         -H "Content-Type: application/json" \
         -H "Authorization: Bearer ${LITELLM_API_KEY}" \
-        -d '{
-            "model": "qwen3-embedding",
-            "input": "Testing liteLLM proxy routing to vLLM embedding service."
-        }')
+        -d "{
+            \"model\": \"${EMBEDDING_MODEL}\",
+            \"input\": \"Testing liteLLM proxy routing to vLLM embedding service.\"
+        }")
 else
     echo -e "${YELLOW}⚠ No LITELLM_API_KEY set, trying without authentication${NC}"
     LITELLM_RESPONSE=$(curl -sf http://${LITELLM_HOST}:${LITELLM_PORT}/v1/embeddings \
         -H "Content-Type: application/json" \
-        -d '{
-            "model": "qwen3-embedding",
-            "input": "Testing liteLLM proxy routing to vLLM embedding service."
-        }')
+        -d "{
+            \"model\": \"${EMBEDDING_MODEL}\",
+            \"input\": \"Testing liteLLM proxy routing to vLLM embedding service.\"
+        }")
 fi
 
 if echo "$LITELLM_RESPONSE" | jq -e '.data[0].embedding' &>/dev/null; then
@@ -143,17 +154,17 @@ if echo "$LITELLM_RESPONSE" | jq -e '.data[0].embedding' &>/dev/null; then
     echo -e "${GREEN}✓ liteLLM proxy routing works${NC}"
     echo "  Embedding dimension: ${LITELLM_DIM}"
     
-    if [ "$LITELLM_DIM" -eq 4096 ]; then
-        echo -e "${GREEN}✓ Correct dimension: 4096${NC}"
+    if [ "$LITELLM_DIM" -eq "${EMBEDDING_DIMENSION}" ]; then
+        echo -e "${GREEN}✓ Correct dimension: ${EMBEDDING_DIMENSION}${NC}"
     else
-        echo -e "${YELLOW}⚠ Unexpected dimension: ${LITELLM_DIM} (expected 4096)${NC}"
+        echo -e "${YELLOW}⚠ Unexpected dimension: ${LITELLM_DIM} (expected ${EMBEDDING_DIMENSION})${NC}"
     fi
 else
     echo -e "${RED}✗ liteLLM proxy routing failed${NC}"
     echo "$LITELLM_RESPONSE"
     echo ""
     echo "Check liteLLM config:"
-    echo "  ssh root@${LITELLM_HOST} 'cat /opt/litellm/config.yaml | grep -A 10 qwen3-embedding'"
+    echo "  ssh root@${LITELLM_HOST} 'cat /opt/litellm/config.yaml | grep -A 10 ${EMBEDDING_MODEL}'"
     exit 1
 fi
 echo ""
@@ -162,16 +173,16 @@ echo ""
 echo "8. Testing batch embedding (5 texts)..."
 BATCH_RESPONSE=$(curl -sf http://${VLLM_HOST}:${VLLM_PORT}/v1/embeddings \
     -H "Content-Type: application/json" \
-    -d '{
-        "model": "qwen3-embedding",
-        "input": [
-            "First document about machine learning",
-            "Second document about artificial intelligence",
-            "Third document about neural networks",
-            "Fourth document about deep learning",
-            "Fifth document about natural language processing"
+    -d "{
+        \"model\": \"${EMBEDDING_MODEL}\",
+        \"input\": [
+            \"First document about machine learning\",
+            \"Second document about artificial intelligence\",
+            \"Third document about neural networks\",
+            \"Fourth document about deep learning\",
+            \"Fifth document about natural language processing\"
         ]
-    }')
+    }")
 
 if echo "$BATCH_RESPONSE" | jq -e '.data | length' &>/dev/null; then
     BATCH_COUNT=$(echo "$BATCH_RESPONSE" | jq '.data | length')
@@ -196,7 +207,7 @@ START_TIME=$(date +%s.%N)
 for i in {1..10}; do
     curl -sf http://${VLLM_HOST}:${VLLM_PORT}/v1/embeddings \
         -H "Content-Type: application/json" \
-        -d "{\"model\": \"qwen3-embedding\", \"input\": \"Performance test document number $i\"}" \
+        -d "{\"model\": \"${EMBEDDING_MODEL}\", \"input\": \"Performance test document number $i\"}" \
         > /dev/null
 done
 END_TIME=$(date +%s.%N)
@@ -222,9 +233,12 @@ echo "========================================"
 echo ""
 echo "Summary:"
 echo "  - vLLM embedding service: Running on ${VLLM_HOST}:${VLLM_PORT}"
-echo "  - Model: Qwen3-Embedding-8B (4096 dimensions)"
+echo "  - Model: ${EMBEDDING_MODEL} (${EMBEDDING_MODEL_NAME}, ${EMBEDDING_DIMENSION} dimensions)"
 echo "  - liteLLM proxy: Routing correctly on ${LITELLM_HOST}:${LITELLM_PORT}"
 echo "  - Average latency: ${AVG_TIME}s per embedding"
+echo ""
+echo "Note: Model configuration from model_registry.yml"
+echo "  To change: Update model_purposes.embedding and redeploy"
 echo ""
 echo "Next steps:"
 echo "  1. Deploy ingest service: cd provision/ansible && make ingest"

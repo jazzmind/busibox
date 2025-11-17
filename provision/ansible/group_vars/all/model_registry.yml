@@ -14,6 +14,7 @@ model_purposes:
   # Actual model: Qwen/Qwen3-Embedding-8B (8B parameters, 4096 dims, GPU 1)
   embedding:
     model: "qwen3-embedding"
+    model_name: "Qwen/Qwen3-Embedding-8B"
     description: "Text embedding generation"
     max_tokens: 8192
     provider: "litellm"
@@ -21,17 +22,19 @@ model_purposes:
     
   # Visual document embedding
   # Actual model: vidore/colpali-v1.3 (LoRA adapters on PaliGemma-3B, GPU 2)
-  visual:
+  visual-embedding:
     model: "colpali-v1.3"
+    model_name: "vidore/colpali-v1.3"
     description: "Visual document embedding"
     max_tokens: 4096
     provider: "colpali"
     endpoint: "/v1/embeddings"
-    
+  
   # Vision-language model for image understanding
   # Actual model: Qwen/Qwen3-VL-8B-Instruct (8B parameters, GPU 1)
   vision:
     model: "qwen3-vl-8b"
+    model_name: "Qwen/Qwen3-VL-8B-Instruct"
     description: "Vision-language model for image understanding"
     max_tokens: 4096
     temperature: 0.7
@@ -42,6 +45,7 @@ model_purposes:
   # Actual model: microsoft/Phi-4-multimodal-instruct (6B parameters, GPU 0)
   fast:
     model: "phi-4"
+    model_name: "microsoft/Phi-4-multimodal-instruct"
     description: "Fast model for quick operations"
     max_tokens: 4096
     temperature: 0.7
@@ -52,6 +56,7 @@ model_purposes:
   # Actual model: Qwen/Qwen3-30B-A3B-Instruct-2507 (30B parameters, GPU 1)
   default:
     model: "qwen3-30b-instruct"
+    model_name: "Qwen/Qwen3-30B-A3B-Instruct-2507"
     description: "General purpose agent model"
     max_tokens: 32768
     temperature: 0.7
@@ -61,6 +66,7 @@ model_purposes:
   # Text cleanup and formatting
   cleanup:
     model: "phi-4"
+    model_name: "microsoft/Phi-4-multimodal-instruct"
     description: "Text cleanup and formatting"
     max_tokens: 32768
     temperature: 0.1
@@ -70,6 +76,7 @@ model_purposes:
   # General chat and Q&A
   chat:
     model: "qwen3-30b-instruct"
+    model_name: "Qwen/Qwen3-30B-A3B-Instruct-2507"
     description: "General chat and Q&A"
     max_tokens: 32768
     temperature: 0.7
@@ -79,6 +86,7 @@ model_purposes:
   # Document classification
   classify:
     model: "phi-4"
+    model_name: "microsoft/Phi-4-multimodal-instruct"
     description: "Document classification"
     max_tokens: 4096
     temperature: 0.1
@@ -88,6 +96,7 @@ model_purposes:
   # Research and analysis
   research:
     model: "qwen3-30b-instruct"
+    model_name: "Qwen/Qwen3-30B-A3B-Instruct-2507"
     description: "Research and analysis"
     max_tokens: 32768
     temperature: 0.7
@@ -97,6 +106,7 @@ model_purposes:
   # Data analysis
   analysis:
     model: "qwen3-30b-instruct"
+    model_name: "Qwen/Qwen3-30B-A3B-Instruct-2507"
     description: "Data analysis"
     max_tokens: 32768
     temperature: 0.5
@@ -106,6 +116,7 @@ model_purposes:
   # Document parsing and structure extraction
   parsing:
     model: "phi-4"
+    model_name: "microsoft/Phi-4-multimodal-instruct"
     description: "Document parsing and structure extraction"
     max_tokens: 8192
     temperature: 0.1

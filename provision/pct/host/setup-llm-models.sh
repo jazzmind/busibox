@@ -49,13 +49,15 @@ if [[ -z "$HF_TOKEN" ]] && [[ -f "$HOME/.huggingface/token" ]]; then
 fi
 
 # Models to pre-download
+# These should match the model_registry.yml in provision/ansible/group_vars/all/
+# Update model_registry.yml to change which models are used for which purposes
 MODELS=(
-    "microsoft/Phi-4-multimodal-instruct"  # Phi-4 chat model (6B parameters, GPU 0)
-    "Qwen/Qwen3-Embedding-8B"              # Qwen3 embedding model (8B parameters, 4096 dims, GPU 1)
-    "google/paligemma-3b-pt-448"           # PaliGemma-3B base model (required by ColPali)
-    "vidore/colpali-v1.3"                  # ColPali v1.3 LoRA adapters for PDF embeddings (GPU 2)
-    "Qwen/Qwen3-VL-8B-Instruct"            # Qwen3 VL model (8B parameters, 4096 dims, GPU 1)
-    "Qwen/Qwen3-30B-A3B-Instruct-2507"    # Qwen3 30B model (30B parameters, 4096 dims, GPU 1)
+    "microsoft/Phi-4-multimodal-instruct"  # fast.model_name - Fast chat model (6B parameters, GPU 0)
+    "Qwen/Qwen3-Embedding-8B"              # embedding.model_name - Text embeddings (8B parameters, 4096 dims, GPU 1)
+    "google/paligemma-3b-pt-448"           # Required by ColPali - PaliGemma-3B base model
+    "vidore/colpali-v1.3"                  # visual-embedding.model_name - ColPali LoRA adapters for PDF embeddings (GPU 2)
+    "Qwen/Qwen3-VL-8B-Instruct"            # vision.model_name - Vision-language model (8B parameters, GPU 1)
+    "Qwen/Qwen3-30B-A3B-Instruct-2507"     # default.model_name - General purpose chat (30B parameters, GPU 1)
 )
 
 echo "=========================================="

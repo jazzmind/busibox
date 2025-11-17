@@ -14,7 +14,7 @@ colpali_host: "0.0.0.0"
 colpali_port: 8002
 
 # Model Configuration
-colpali_model: "vidore/colpali-v1.3"
+colpali_model: "{{ model_purposes['visual-embedding'].model_name | default('vidore/colpali-v1.3') }}"
 colpali_device: "cuda:0"  # Device index within CUDA_VISIBLE_DEVICES
 colpali_dtype: "bfloat16"
 

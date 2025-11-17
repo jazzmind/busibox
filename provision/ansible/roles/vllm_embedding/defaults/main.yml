@@ -17,11 +17,13 @@ vllm_embedding_cache_dir: /var/lib/llm-models/huggingface
 vllm_embedding_host: "0.0.0.0"
 vllm_embedding_port: 8001  # Different port from main vLLM
 
-# Model Configuration - Qwen3 Embedding Model
-vllm_embedding_model: "Qwen/Qwen3-Embedding-8B"  # 8B params, 4096-dim embeddings
+# Model Configuration - References model_registry.yml
+# Note: model_purposes is loaded from group_vars/all/model_registry.yml
+# This allows changing embedding models without modifying this file
+vllm_embedding_model: "{{ model_purposes.embedding.model_name | default('Qwen/Qwen3-Embedding-8B') }}"
 vllm_embedding_tensor_parallel_size: 1  # Single GPU for embeddings
 vllm_embedding_gpu_memory_utilization: 0.85  # 8B model needs more memory
-vllm_embedding_max_model_len: 32768  # Max sequence length (32K context)
+vllm_embedding_max_model_len: "{{ model_purposes.embedding.max_tokens | default(32768) }}"
 vllm_embedding_max_num_seqs: 256  # Moderate throughput for larger model
 vllm_embedding_trust_remote_code: true
 
@@ -30,8 +32,8 @@ vllm_embedding_max_num_batched_tokens: null
 vllm_embedding_enable_prefix_caching: false  # Not useful for embeddings
 vllm_embedding_disable_log_stats: false
 
-# API Configuration
-vllm_embedding_served_model_name: "qwen3-embedding"  # Friendly name for liteLLM
+# API Configuration - References model_registry.yml
+vllm_embedding_served_model_name: "{{ model_purposes.embedding.model }}"  # Friendly name for liteLLM
 vllm_embedding_api_key: null
 vllm_embedding_enable_api_key: false
 
