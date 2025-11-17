@@ -16,6 +16,7 @@ postgres_host: "{{ hostvars[groups['pg'][0]]['ansible_host'] }}"
 postgres_port: 5432
 postgres_db: busibox
 postgres_user: app_user
+# postgres_password is defined in inventory group_vars
 
 # Embedding service (litellm)
 embedding_service_url: "http://{{ hostvars[groups['litellm'][0]]['ansible_host'] }}:8000"
