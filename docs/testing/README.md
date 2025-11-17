@@ -34,6 +34,12 @@ This directory contains all testing documentation for the Busibox platform.
   - Image encoding tests
   - Performance metrics
 
+- **[Environment Selection](environment-selection.md)** - Running tests in different environments
+  - Production vs test environments
+  - Automatic IP detection
+  - Environment-aware make targets
+  - CI/CD integration
+
 ## Test Locations
 
 ### Infrastructure Tests
