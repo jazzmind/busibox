@@ -157,22 +157,23 @@
     ls -la package.json || echo "package.json not found"
     
     # Load .env if it exists to get DATABASE_URL
-    # Use a safer method that handles syntax errors gracefully
+    # Prisma can read .env files directly, but we also export for npm scripts
     if [ -f .env ]; then
       echo "Loading environment from .env..."
-      # Read .env file line by line and export variables
+      # Use eval to properly parse KEY="VALUE" format (handles quotes correctly)
       set -a
       while IFS= read -r line || [ -n "$line" ]; do
         # Skip comments and empty lines
         [[ "$line" =~ ^[[:space:]]*# ]] && continue
         [[ -z "${line// }" ]] && continue
-        # Export the variable (handles KEY=VALUE format)
-        if [[ "$line" =~ ^[[:space:]]*([^=]+)=(.*)$ ]]; then
-          export "${BASH_REMATCH[1]}"="${BASH_REMATCH[2]}"
-        fi
+        # Use eval to properly handle quoted values
+        eval "export $line" 2>/dev/null || true
       done < .env
       set +a
       echo "DATABASE_URL is set: ${DATABASE_URL:+yes}"
+      if [ -n "$DATABASE_URL" ]; then
+        echo "DATABASE_URL starts with: ${DATABASE_URL:0:12}"
+      fi
     else
       echo "No .env file found"
     fi
