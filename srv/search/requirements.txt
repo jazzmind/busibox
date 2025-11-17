@@ -1,6 +1,7 @@
 # Fix for environs/marshmallow compatibility - MUST BE FIRST
 # pymilvus depends on environs which needs marshmallow>=3.13
-marshmallow==3.20.1
+# Using latest 4.x series for best compatibility
+marshmallow==4.1.0
 
 # Core API
 fastapi==0.104.1
