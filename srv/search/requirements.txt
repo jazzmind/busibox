@@ -6,6 +6,8 @@ pydantic-settings==2.0.3
 
 # Vector database
 pymilvus==2.4.0
+# Fix for environs/marshmallow compatibility issue
+marshmallow>=3.13.0
 
 # Database
 asyncpg==0.29.0
