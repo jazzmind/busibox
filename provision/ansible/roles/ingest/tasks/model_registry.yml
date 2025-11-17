@@ -1,0 +1,33 @@
+---
+# Deploy model registry configuration to ingest service
+
+- name: Create ingest config directory
+  file:
+    path: /etc/ingest
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+  tags: [ingest, ingest_configure, model_registry]
+
+- name: Deploy model registry configuration
+  template:
+    src: model_registry.json.j2
+    dest: "{{ model_registry_path }}"
+    mode: '0644'
+    owner: root
+    group: root
+  notify: restart ingest services
+  tags: [ingest, ingest_configure, model_registry]
+
+- name: Verify model registry file
+  stat:
+    path: "{{ model_registry_path }}"
+  register: registry_file
+  tags: [ingest, ingest_configure, model_registry]
+
+- name: Display model registry status
+  debug:
+    msg: "Model registry deployed: {{ registry_file.stat.exists }}"
+  tags: [ingest, ingest_configure, model_registry]
+

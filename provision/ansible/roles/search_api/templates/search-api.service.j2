@@ -1,0 +1,52 @@
+[Unit]
+Description=Busibox Search API
+Documentation=https://github.com/sonnenreich/busibox
+After=network.target milvus.target
+Wants=milvus.target
+
+[Service]
+Type=simple
+User={{ search_api_user }}
+Group={{ search_api_user }}
+WorkingDirectory={{ search_api_src_path }}
+
+# Environment
+EnvironmentFile=/opt/search/.env
+
+# Python path to include src directory
+Environment="PYTHONPATH={{ search_api_src_path }}"
+
+# Uvicorn command
+ExecStart={{ search_api_venv_path }}/bin/uvicorn \
+    api.main:app \
+    --host 0.0.0.0 \
+    --port {{ search_api_port }} \
+    --log-level info \
+    --no-access-log
+
+# Restart policy
+Restart=always
+RestartSec=10
+StartLimitInterval=300
+StartLimitBurst=5
+
+# Resource limits
+LimitNOFILE=65536
+MemoryMax=4G
+CPUQuota=200%
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=search-api
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths={{ search_api_log_path }} /opt/search /tmp
+
+[Install]
+WantedBy=multi-user.target
+

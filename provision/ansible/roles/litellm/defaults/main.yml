@@ -63,6 +63,18 @@ litellm_models:
   #   litellm_params:
   #     model: "openai/Qwen/Qwen3-VL-8B-Instruct"
   #     api_base: "http://{{ vllm_ip }}:{{ vllm_port }}/v1"
+  
+  # Embedding models (for ingestion service)
+  # Using vLLM with Qwen3 embedding model
+  - model_name: "qwen3-embedding"
+    litellm_params:
+      model: "openai/qwen3-embedding"  # Use vLLM's served-model-name, not HF model path
+      api_base: "http://{{ vllm_ip }}:8001/v1"
+      api_key: "EMPTY"  # vLLM doesn't require auth, but OpenAI provider needs a key
+    # Embedding dimension: 4096
+    # Max sequence length: 32K
+    # Used by ingestion service for dense semantic embeddings
+    # Requires separate vLLM instance on port 8001
 
 # Router Settings
 litellm_routing_strategy: "simple-shuffle"

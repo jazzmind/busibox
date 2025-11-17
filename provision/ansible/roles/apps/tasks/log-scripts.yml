@@ -1,0 +1,34 @@
+---
+# Log viewing scripts deployment
+# Install log viewing utilities on apps container
+
+- name: Create log scripts directory
+  file:
+    path: /usr/local/bin
+    state: directory
+    mode: '0755'
+
+- name: Deploy view-app-logs.sh script
+  copy:
+    src: "{{ playbook_dir }}/../../scripts/view-app-logs.sh"
+    dest: /usr/local/bin/view-app-logs.sh
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Deploy tail-app-logs.sh script
+  copy:
+    src: "{{ playbook_dir }}/../../scripts/tail-app-logs.sh"
+    dest: /usr/local/bin/tail-app-logs.sh
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Create log directory with proper permissions
+  file:
+    path: /var/log/pm2
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+

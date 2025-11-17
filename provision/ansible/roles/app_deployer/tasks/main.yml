@@ -29,6 +29,8 @@
     mode: "0755"
     owner: root
     group: root
+  tags:
+    - always  # Always run for any app deployment
 
 - name: Generate deploywatch scripts for each application
   template:
@@ -43,6 +45,8 @@
   vars:
     app: "{{ item }}"
   when: applications | length > 0
+  tags:
+    - always  # Always run for any app deployment
 
 - name: Deploy deploywatch orchestrator script
   template:
@@ -51,6 +55,8 @@
     mode: "0755"
     owner: root
     group: root
+  tags:
+    - always  # Always run for any app deployment
 
 - name: Create application deploy directories
   file:
@@ -64,8 +70,7 @@
     label: "{{ item.name }}: {{ item.deploy_path }}"
   when: applications | length > 0
   tags:
-    - app_deployer
-    - secrets
+    - always  # Always run for any app deployment
 
 - name: Deploy GitHub token for private repository access
   copy:
@@ -79,8 +84,17 @@
     - secrets.github_token is defined
     - secrets.github_token | length > 0
   tags:
-    - app_deployer
-    - secrets
+    - always  # Always run for any app deployment
+
+- name: Deploy log viewing scripts
+  include_tasks: "{{ playbook_dir }}/roles/apps/tasks/log-scripts.yml"
+  tags:
+    - always  # Always run for any app deployment
+
+- name: Setup SSH keys for container-to-container communication
+  include_tasks: "{{ playbook_dir }}/roles/apps/tasks/ssh-keys.yml"
+  tags:
+    - always  # Always run for any app deployment
 
 - name: Deploy application environment files (.env)
   template:
@@ -100,8 +114,7 @@
     - deploy_app is not defined or deploy_app == item.name
   notify: Restart application
   tags:
-    - app_deployer
-    - secrets
+    - always  # Always run for any app deployment
 
 - name: Detect configuration changes
   stat:
@@ -121,12 +134,21 @@
       - Environment files deployed: {{ applications | length }}
   when: applications | length > 0
 
-- name: Deploy applications
+- name: Deploy application from branch (when requested)
+  include_tasks: deploy-branch.yml
+  when: 
+    - deploy_from_branch is defined
+    - deploy_from_branch | bool
+    - deploy_app is defined
+  tags:
+    - always  # Allow included tasks' tags to work
+
+- name: Deploy applications (standard release deployment)
   include_tasks: deploy.yml
   when: 
     - applications is defined
     - applications | length > 0
     - deploy_apps is not defined or deploy_apps | bool
+    - deploy_from_branch is not defined or not (deploy_from_branch | bool)
   tags:
-    - app_deployer
-    - deploy
+    - always  # Allow included tasks' tags to work

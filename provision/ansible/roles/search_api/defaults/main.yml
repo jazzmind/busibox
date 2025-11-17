@@ -1,0 +1,38 @@
+---
+# Default variables for search_api role
+
+search_api_port: 8003
+search_api_user: search
+search_api_venv_path: /opt/search/venv
+search_api_src_path: /opt/search/src
+search_api_log_path: /var/log/search
+
+# Milvus connection (local)
+milvus_host: localhost
+milvus_port: 19530
+
+# PostgreSQL connection
+postgres_host: "{{ hostvars[groups['pg'][0]]['ansible_host'] }}"
+postgres_port: 5432
+postgres_db: busibox
+postgres_user: app_user
+
+# Embedding service (litellm)
+embedding_service_url: "http://{{ hostvars[groups['litellm'][0]]['ansible_host'] }}:8000"
+embedding_model: text-embedding-3-small
+
+# Reranking settings
+reranker_model: "BAAI/bge-reranker-v2-m3"
+reranker_device: cpu
+enable_reranking: true
+
+# Redis (optional)
+redis_host: "{{ hostvars[groups['ingest'][0]]['ansible_host'] if 'ingest' in groups else '' }}"
+redis_port: 6379
+enable_caching: false
+
+# Performance
+default_search_limit: 10
+default_rerank_k: 100
+max_search_limit: 100
+

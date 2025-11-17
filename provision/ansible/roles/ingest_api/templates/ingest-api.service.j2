@@ -1,0 +1,20 @@
+[Unit]
+Description=Busibox Ingestion API Server
+After=network-online.target postgresql.service redis-server.service
+Wants=network-online.target
+Requires=postgresql.service redis-server.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/srv/ingest-api/src
+EnvironmentFile=/srv/ingest-api/.env
+ExecStart=/srv/ingest-api/venv/bin/uvicorn api.main:app --host 0.0.0.0 --port 8002
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+

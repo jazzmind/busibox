@@ -1,0 +1,13 @@
+---
+# Handlers for search_api role
+
+- name: Reload systemd
+  systemd:
+    daemon_reload: yes
+
+- name: Restart search-api
+  systemd:
+    name: search-api
+    state: restarted
+  when: not ansible_check_mode
+

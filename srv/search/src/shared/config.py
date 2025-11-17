@@ -1,0 +1,74 @@
+"""
+Configuration management for Search Service.
+"""
+
+import os
+from typing import Optional
+from pydantic_settings import BaseSettings
+
+
+class Config(BaseSettings):
+    """Search service configuration."""
+    
+    # Service
+    service_name: str = "search-api"
+    service_port: int = 8003
+    log_level: str = "INFO"
+    
+    # Milvus
+    milvus_host: str = "localhost"
+    milvus_port: int = 19530
+    milvus_collection: str = "document_embeddings"
+    
+    # PostgreSQL
+    postgres_host: str = os.getenv("POSTGRES_HOST", "10.96.200.26")
+    postgres_port: int = int(os.getenv("POSTGRES_PORT", "5432"))
+    postgres_db: str = os.getenv("POSTGRES_DB", "busibox")
+    postgres_user: str = os.getenv("POSTGRES_USER", "app_user")
+    postgres_password: str = os.getenv("POSTGRES_PASSWORD", "")
+    
+    # Redis (optional caching)
+    redis_host: Optional[str] = os.getenv("REDIS_HOST", None)
+    redis_port: int = int(os.getenv("REDIS_PORT", "6379"))
+    redis_password: Optional[str] = os.getenv("REDIS_PASSWORD", None)
+    enable_caching: bool = os.getenv("ENABLE_CACHING", "false").lower() == "true"
+    cache_ttl: int = 300  # 5 minutes
+    
+    # Embedding service
+    embedding_service_url: str = os.getenv("EMBEDDING_SERVICE_URL", "http://10.96.200.30:8000")
+    embedding_model: str = "text-embedding-3-small"
+    embedding_dim: int = 1536
+    
+    # Reranking
+    reranker_model: str = "BAAI/bge-reranker-v2-m3"
+    reranker_device: str = "cpu"  # or "cuda"
+    enable_reranking: bool = True
+    
+    # Search defaults
+    default_search_limit: int = 10
+    default_rerank_k: int = 100
+    max_search_limit: int = 100
+    
+    # Highlighting
+    highlight_fragment_size: int = 200
+    highlight_num_fragments: int = 3
+    highlight_pre_tag: str = "<mark>"
+    highlight_post_tag: str = "</mark>"
+    
+    # Performance
+    enable_query_cache: bool = True
+    query_cache_ttl: int = 300  # 5 minutes
+    max_concurrent_searches: int = 50
+    
+    class Config:
+        env_file = ".env"
+        case_sensitive = False
+    
+    def to_dict(self):
+        """Convert config to dictionary."""
+        return self.model_dump()
+
+
+# Global config instance
+config = Config()
+

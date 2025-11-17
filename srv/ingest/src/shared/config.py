@@ -1,0 +1,109 @@
+"""
+Shared configuration loader.
+
+Loads configuration from environment variables for both API and worker.
+"""
+
+import os
+from typing import Dict
+
+
+class Config:
+    """Configuration class with environment variable loading."""
+    
+    def __init__(self):
+        """Load configuration from environment variables."""
+        # Worker configuration
+        self.worker_id = os.getenv("WORKER_ID", "")
+        self.stream_name = os.getenv("REDIS_STREAM", "jobs:ingestion")
+        self.consumer_group = os.getenv("REDIS_CONSUMER_GROUP", "workers")
+        
+        # Redis configuration
+        self.redis_host = os.getenv("REDIS_HOST", "10.96.200.29")
+        self.redis_port = int(os.getenv("REDIS_PORT", "6379"))
+        
+        # PostgreSQL configuration (files database)
+        self.postgres_host = os.getenv("POSTGRES_HOST", "10.96.200.26")
+        self.postgres_port = int(os.getenv("POSTGRES_PORT", "5432"))
+        self.postgres_db = os.getenv("POSTGRES_DB", "files")
+        self.postgres_user = os.getenv("POSTGRES_USER", "busibox_user")
+        self.postgres_password = os.getenv("POSTGRES_PASSWORD", "")
+        
+        # Milvus configuration
+        self.milvus_host = os.getenv("MILVUS_HOST", "10.96.200.27")
+        self.milvus_port = int(os.getenv("MILVUS_PORT", "19530"))
+        self.milvus_collection = os.getenv("MILVUS_COLLECTION", "documents")
+        
+        # MinIO configuration
+        self.minio_endpoint = os.getenv("MINIO_ENDPOINT", "10.96.200.28:9000")
+        # Support both MINIO_ACCESS_KEY and MINIO_USER for compatibility
+        self.minio_access_key = os.getenv("MINIO_ACCESS_KEY") or os.getenv("MINIO_USER", "minioadmin")
+        self.minio_secret_key = os.getenv("MINIO_SECRET_KEY") or os.getenv("MINIO_PASS", "minioadmin")
+        self.minio_secure = os.getenv("MINIO_SECURE", "false").lower() == "true"
+        self.minio_bucket = os.getenv("MINIO_BUCKET", "documents")
+        
+        # liteLLM configuration
+        self.litellm_base_url = os.getenv("LITELLM_BASE_URL", "http://10.96.200.30:4000")
+        self.litellm_api_key = os.getenv("LITELLM_API_KEY", "")
+        self.embedding_model = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+        
+        # ColPali configuration (optional visual embeddings)
+        self.colpali_base_url = os.getenv("COLPALI_BASE_URL", "http://10.96.200.208:8002/v1")
+        self.colpali_api_key = os.getenv("COLPALI_API_KEY", "EMPTY")
+        self.colpali_enabled = os.getenv("COLPALI_ENABLED", "true").lower() == "true"
+        
+        # Marker configuration (optional - can disable to save memory)
+        self.marker_enabled = os.getenv("MARKER_ENABLED", "false").lower() == "true"
+        
+        # Multi-flow processing (optional - enables parallel strategy comparison)
+        self.multi_flow_enabled = os.getenv("MULTI_FLOW_ENABLED", "false").lower() == "true"
+        self.max_parallel_strategies = int(os.getenv("MAX_PARALLEL_STRATEGIES", "3"))
+        
+        # Processing configuration
+        self.chunk_size_min = int(os.getenv("CHUNK_SIZE_MIN", "400"))
+        self.chunk_size_max = int(os.getenv("CHUNK_SIZE_MAX", "800"))
+        self.chunk_overlap_pct = float(os.getenv("CHUNK_OVERLAP_PCT", "0.12"))  # 12% overlap
+        
+        # Timeout configuration (in seconds)
+        self.timeout_small = int(os.getenv("TIMEOUT_SMALL", "300"))  # 5 minutes
+        self.timeout_medium = int(os.getenv("TIMEOUT_MEDIUM", "600"))  # 10 minutes
+        self.timeout_large = int(os.getenv("TIMEOUT_LARGE", "1200"))  # 20 minutes
+    
+    def to_dict(self) -> Dict:
+        """Convert config to dictionary (for compatibility with existing code)."""
+        return {
+            "worker_id": self.worker_id,
+            "stream_name": self.stream_name,
+            "consumer_group": self.consumer_group,
+            "redis_host": self.redis_host,
+            "redis_port": self.redis_port,
+            "postgres_host": self.postgres_host,
+            "postgres_port": self.postgres_port,
+            "postgres_db": self.postgres_db,
+            "postgres_user": self.postgres_user,
+            "postgres_password": self.postgres_password,
+            "milvus_host": self.milvus_host,
+            "milvus_port": self.milvus_port,
+            "milvus_collection": self.milvus_collection,
+            "minio_endpoint": self.minio_endpoint,
+            "minio_access_key": self.minio_access_key,
+            "minio_secret_key": self.minio_secret_key,
+            "minio_secure": self.minio_secure,
+            "minio_bucket": self.minio_bucket,
+            "litellm_base_url": self.litellm_base_url,
+            "litellm_api_key": self.litellm_api_key,
+            "embedding_model": self.embedding_model,
+            "colpali_base_url": self.colpali_base_url,
+            "colpali_api_key": self.colpali_api_key,
+            "colpali_enabled": self.colpali_enabled,
+            "marker_enabled": self.marker_enabled,
+            "multi_flow_enabled": self.multi_flow_enabled,
+            "max_parallel_strategies": self.max_parallel_strategies,
+            "chunk_size": self.chunk_size_max,  # For backward compatibility
+            "chunk_overlap": int(self.chunk_size_max * self.chunk_overlap_pct),
+            "chunk_size_min": self.chunk_size_min,
+            "chunk_size_max": self.chunk_size_max,
+            "chunk_overlap_pct": self.chunk_overlap_pct,
+            "temp_dir": "/tmp/ingest",
+        }
+

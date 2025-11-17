@@ -93,7 +93,7 @@ Expected output:
 
 | Service | URL | Credentials |
 |---------|-----|-------------|
-| **MinIO Console** | http://10.96.200.28:9001 | minioadmin / minioadminchange |
+| **MinIO Console** | http://10.96.200.28:9001 | minioadmin /  |
 | **PostgreSQL** | 10.96.200.26:5432 | busibox_user / (see Ansible vars) |
 | **Milvus** | 10.96.200.27:19530 | (no auth) |
 | **Agent API** | http://10.96.200.30:8000/docs | (JWT required) |
