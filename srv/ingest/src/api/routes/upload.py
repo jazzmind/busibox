@@ -48,6 +48,7 @@ async def upload_file(
     request: Request,
     file: UploadFile = File(...),
     metadata: Optional[str] = Form(None),
+    processing_config: Optional[str] = Form(None),
 ):
     """
     Upload a document for processing.
@@ -61,6 +62,7 @@ async def upload_file(
     Body:
         file: Document file (multipart/form-data)
         metadata: Optional JSON metadata string
+        processing_config: Optional JSON processing configuration string
     
     Returns:
         fileId: UUID for tracking status
@@ -167,6 +169,26 @@ async def upload_file(
                 )
                 parsed_metadata = {}
         
+        # Parse processing config if provided
+        parsed_processing_config = {}
+        if processing_config:
+            try:
+                parsed_processing_config = json.loads(processing_config)
+                if not isinstance(parsed_processing_config, dict):
+                    logger.warning(
+                        "Processing config is not a JSON object, using empty dict",
+                        file_id=file_id,
+                        config_type=type(parsed_processing_config).__name__,
+                    )
+                    parsed_processing_config = {}
+            except json.JSONDecodeError as e:
+                logger.warning(
+                    "Failed to parse processing config JSON, using empty dict",
+                    file_id=file_id,
+                    error=str(e),
+                )
+                parsed_processing_config = {}
+        
         # New file - create record and queue job
         await postgres_service.create_file_record(
             file_id=file_id,
@@ -180,7 +202,7 @@ async def upload_file(
             metadata=parsed_metadata,
         )
         
-        # Queue job in Redis
+        # Queue job in Redis with processing config
         await redis_service.ensure_consumer_group()
         await redis_service.add_job(
             file_id=file_id,
@@ -188,6 +210,7 @@ async def upload_file(
             storage_path=storage_path,
             mime_type=file.content_type,
             original_filename=file.filename,
+            processing_config=parsed_processing_config,
         )
         
         logger.info(

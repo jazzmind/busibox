@@ -88,6 +88,7 @@ class RedisService:
         mime_type: str,
         original_filename: str,
         metadata: Optional[Dict] = None,
+        processing_config: Optional[Dict] = None,
     ) -> str:
         """
         Add job to Redis Streams queue.
@@ -99,6 +100,7 @@ class RedisService:
             mime_type: MIME type of the file
             original_filename: Original filename
             metadata: Optional metadata dict
+            processing_config: Optional processing configuration dict
         
         Returns:
             Message ID (stream entry ID)
@@ -118,6 +120,9 @@ class RedisService:
         
         if metadata:
             job_data["metadata"] = json.dumps(metadata)
+        
+        if processing_config:
+            job_data["processing_config"] = json.dumps(processing_config)
         
         try:
             message_id = await self.client.xadd(

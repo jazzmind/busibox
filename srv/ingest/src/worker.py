@@ -323,6 +323,27 @@ class IngestWorker:
         mime_type = job_data.get("mime_type")
         original_filename = job_data.get("original_filename", "unknown")
         
+        # Parse processing configuration if provided
+        processing_config = {}
+        processing_config_str = job_data.get("processing_config")
+        if processing_config_str:
+            try:
+                processing_config = json.loads(processing_config_str)
+                logger.info(
+                    "Using custom processing configuration",
+                    file_id=file_id,
+                    llm_cleanup=processing_config.get("llm_cleanup_enabled"),
+                    multi_flow=processing_config.get("multi_flow_enabled"),
+                    marker=processing_config.get("marker_enabled"),
+                    colpali=processing_config.get("colpali_enabled"),
+                )
+            except json.JSONDecodeError as e:
+                logger.warning(
+                    "Failed to parse processing config, using defaults",
+                    file_id=file_id,
+                    error=str(e),
+                )
+        
         start_time = time.time()
         temp_file_path = None
         
@@ -455,11 +476,42 @@ class IngestWorker:
                 progress=40,
             )
             
+            # Apply custom chunking config if provided
+            if processing_config:
+                chunk_size_min = processing_config.get("chunk_size_min")
+                chunk_size_max = processing_config.get("chunk_size_max")
+                chunk_overlap_pct = processing_config.get("chunk_overlap_pct")
+                
+                # Temporarily override chunker config
+                if chunk_size_min is not None:
+                    original_min = self.chunker.min_chars
+                    self.chunker.min_chars = chunk_size_min
+                    logger.info(f"Using custom chunk_size_min: {chunk_size_min}")
+                
+                if chunk_size_max is not None:
+                    original_max = self.chunker.max_chars
+                    self.chunker.max_chars = chunk_size_max
+                    logger.info(f"Using custom chunk_size_max: {chunk_size_max}")
+                
+                if chunk_overlap_pct is not None:
+                    original_overlap = self.chunker.overlap
+                    self.chunker.overlap = chunk_overlap_pct
+                    logger.info(f"Using custom chunk_overlap_pct: {chunk_overlap_pct}")
+            
             chunks: List[Chunk] = self.chunker.chunk(
                 extraction_result.text,
                 page_number=None,  # Will be set per chunk if available
                 detected_languages=detected_languages,
             )
+            
+            # Restore original chunker config
+            if processing_config:
+                if chunk_size_min is not None:
+                    self.chunker.min_chars = original_min
+                if chunk_size_max is not None:
+                    self.chunker.max_chars = original_max
+                if chunk_overlap_pct is not None:
+                    self.chunker.overlap = original_overlap
             
             total_chunks = len(chunks)
             logger.info(
@@ -477,7 +529,11 @@ class IngestWorker:
             )
             
             # Stage 4.5: LLM Cleanup (optional)
-            if self.llm_cleanup and self.llm_cleanup.enabled:
+            # Check if LLM cleanup is enabled via config override or default setting
+            llm_cleanup_enabled = processing_config.get("llm_cleanup_enabled", False) if processing_config else False
+            llm_cleanup_enabled = llm_cleanup_enabled or (self.llm_cleanup and self.llm_cleanup.enabled)
+            
+            if llm_cleanup_enabled and self.llm_cleanup:
                 logger.info(
                     "Stage 4.5: Starting LLM cleanup",
                     file_id=file_id,
@@ -661,7 +717,67 @@ class IngestWorker:
                 processing_duration_seconds=processing_duration,
             )
             
-            # Stage 7: Completed
+            # Stage 7: Multi-Flow Processing (optional, non-blocking)
+            if processing_config and processing_config.get("multi_flow_enabled", False):
+                logger.info(
+                    "Stage 7: Starting multi-flow comparison",
+                    file_id=file_id,
+                    marker_enabled=processing_config.get("marker_enabled", False),
+                    colpali_enabled=processing_config.get("colpali_enabled", True),
+                )
+                
+                try:
+                    from processors.multi_flow_processor import MultiFlowProcessor
+                    
+                    multi_flow = MultiFlowProcessor(
+                        config=self.config,
+                        text_extractor=self.text_extractor,
+                        chunker=self.chunker,
+                        embedder=self.embedder,
+                        classifier=self.classifier,
+                        colpali_embedder=self.colpali,
+                    )
+                    
+                    # Process with multiple strategies for comparison
+                    max_strategies = processing_config.get("max_parallel_strategies", 3)
+                    results = multi_flow.process_with_strategies(
+                        file_path=temp_file_path,
+                        mime_type=mime_type,
+                        file_id=file_id,
+                        user_id=user_id,
+                        max_strategies=max_strategies,
+                        marker_enabled=processing_config.get("marker_enabled", False),
+                        colpali_enabled=processing_config.get("colpali_enabled", True),
+                    )
+                    
+                    logger.info(
+                        "Multi-flow comparison completed",
+                        file_id=file_id,
+                        strategies_run=len(results),
+                        results_summary={
+                            strategy.value: {
+                                "success": result.success,
+                                "chunk_count": len(result.chunks) if result.success else 0,
+                                "processing_time": result.processing_time_seconds,
+                            }
+                            for strategy, result in results.items()
+                        },
+                    )
+                    
+                except ImportError as e:
+                    logger.warning(
+                        "Multi-flow requested but MultiFlowProcessor not available",
+                        error=str(e),
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Multi-flow comparison failed (non-fatal)",
+                        file_id=file_id,
+                        error=str(e),
+                        exc_info=True,
+                    )
+            
+            # Stage 8: Completed
             self.postgres_service.update_status(
                 file_id=file_id,
                 stage="completed",
@@ -679,6 +795,7 @@ class IngestWorker:
                 processing_time_seconds=processing_duration,
                 chunk_count=total_chunks,
                 vector_count=vector_count,
+                multi_flow_enabled=processing_config.get("multi_flow_enabled", False) if processing_config else False,
             )
         
         except asyncio.TimeoutError:
