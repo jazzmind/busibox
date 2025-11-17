@@ -1,3 +1,7 @@
+# Fix for environs/marshmallow compatibility - MUST BE FIRST
+# pymilvus depends on environs which needs marshmallow>=3.13
+marshmallow==3.20.1
+
 # Core API
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
@@ -6,8 +10,6 @@ pydantic-settings==2.0.3
 
 # Vector database
 pymilvus==2.4.0
-# Fix for environs/marshmallow compatibility issue
-marshmallow>=3.13.0
 
 # Database
 asyncpg==0.29.0
