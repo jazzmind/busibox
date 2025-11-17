@@ -36,6 +36,9 @@ SUPPORTED_MIME_TYPES = {
     "text/csv",
     "application/json",
     "video/mp4",  # Video files (stored but not processed)
+    "image/jpeg",  # Image files (for video posters, stored but not processed)
+    "image/png",   # Image files (for video posters, stored but not processed)
+    "image/webp",  # Image files (for video posters, stored but not processed)
 }
 
 
@@ -203,10 +206,11 @@ async def upload_file(
             metadata=parsed_metadata,
         )
         
-        # Skip processing queue for video files (they're stored but not processed)
+        # Skip processing queue for video and image files (they're stored but not processed)
         is_video = file.content_type and file.content_type.startswith("video/")
+        is_image = file.content_type and file.content_type.startswith("image/")
         
-        if not is_video:
+        if not is_video and not is_image:
             # Queue job in Redis with processing config for non-video files
             await redis_service.ensure_consumer_group()
             await redis_service.add_job(
@@ -235,9 +239,10 @@ async def upload_file(
                 }
             )
         else:
-            # Video files are stored but not processed
+            # Video and image files are stored but not processed
+            file_type = "Video" if is_video else "Image"
             logger.info(
-                "Video file uploaded and stored",
+                f"{file_type} file uploaded and stored",
                 file_id=file_id,
                 user_id=user_id,
                 content_hash=content_hash,
@@ -249,7 +254,7 @@ async def upload_file(
                     "fileId": file_id,
                     "status": "completed",
                     "duplicate": False,
-                    "message": "Video file uploaded and stored",
+                    "message": f"{file_type} file uploaded and stored",
                 }
             )
     
