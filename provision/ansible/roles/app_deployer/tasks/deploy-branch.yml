@@ -156,11 +156,12 @@
     echo "Checking for package.json..."
     ls -la package.json || echo "package.json not found"
     
-    # Source .env if it exists to load DATABASE_URL
+    # Load .env if it exists to get DATABASE_URL
     if [ -f .env ]; then
       echo "Loading environment from .env..."
+      # Use . instead of source for sh compatibility
       set -a
-      source .env
+      . .env
       set +a
       echo "DATABASE_URL is set: ${DATABASE_URL:+yes}"
     else
@@ -179,6 +180,8 @@
     else
       echo "No migrate:up script found in package.json, skipping migrations"
     fi
+  args:
+    executable: /bin/bash
   delegate_to: "{{ app_to_deploy.container_ip }}"
   environment: "{{ app_to_deploy.env | default({}) }}"
   register: migration_result
