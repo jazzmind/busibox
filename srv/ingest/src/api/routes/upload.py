@@ -35,6 +35,7 @@ SUPPORTED_MIME_TYPES = {
     "text/markdown",
     "text/csv",
     "application/json",
+    "video/mp4",  # Video files (stored but not processed)
 }
 
 
@@ -189,7 +190,7 @@ async def upload_file(
                 )
                 parsed_processing_config = {}
         
-        # New file - create record and queue job
+        # New file - create record
         await postgres_service.create_file_record(
             file_id=file_id,
             user_id=user_id,
@@ -202,33 +203,55 @@ async def upload_file(
             metadata=parsed_metadata,
         )
         
-        # Queue job in Redis with processing config
-        await redis_service.ensure_consumer_group()
-        await redis_service.add_job(
-            file_id=file_id,
-            user_id=user_id,
-            storage_path=storage_path,
-            mime_type=file.content_type,
-            original_filename=file.filename,
-            processing_config=parsed_processing_config,
-        )
+        # Skip processing queue for video files (they're stored but not processed)
+        is_video = file.content_type and file.content_type.startswith("video/")
         
-        logger.info(
-            "File uploaded and queued",
-            file_id=file_id,
-            user_id=user_id,
-            content_hash=content_hash,
-        )
-        
-        return JSONResponse(
-            status_code=status.HTTP_200_OK,
-            content={
-                "fileId": file_id,
-                "status": "queued",
-                "duplicate": False,
-                "message": "File uploaded and queued for processing",
-            }
-        )
+        if not is_video:
+            # Queue job in Redis with processing config for non-video files
+            await redis_service.ensure_consumer_group()
+            await redis_service.add_job(
+                file_id=file_id,
+                user_id=user_id,
+                storage_path=storage_path,
+                mime_type=file.content_type,
+                original_filename=file.filename,
+                processing_config=parsed_processing_config,
+            )
+            
+            logger.info(
+                "File uploaded and queued",
+                file_id=file_id,
+                user_id=user_id,
+                content_hash=content_hash,
+            )
+            
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={
+                    "fileId": file_id,
+                    "status": "queued",
+                    "duplicate": False,
+                    "message": "File uploaded and queued for processing",
+                }
+            )
+        else:
+            # Video files are stored but not processed
+            logger.info(
+                "Video file uploaded and stored",
+                file_id=file_id,
+                user_id=user_id,
+                content_hash=content_hash,
+            )
+            
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={
+                    "fileId": file_id,
+                    "status": "completed",
+                    "duplicate": False,
+                    "message": "Video file uploaded and stored",
+                }
+            )
     
     except Exception as e:
         logger.error(
