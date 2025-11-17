@@ -188,7 +188,7 @@ class Chunker:
             # Check if adding paragraph would exceed max tokens
             if current_tokens + para_tokens > self.max_tokens and current_tokens >= self.min_tokens:
                 # Save current chunk with markdown formatting
-                chunk_text = " ".join(current_chunk_sentences)
+                chunk_text = " ".join([s["text"] if isinstance(s, dict) else s for s in current_chunk_sentences])
                 markdown_text = self._convert_to_markdown(chunk_text)
                 
                 # Truncate if too long (safety check for Milvus varchar limit)
@@ -220,15 +220,15 @@ class Chunker:
                     char_offset,
                 )
             
-            # Add paragraph sentences
+            # Add paragraph sentences (store full sent_info for overlap calculation)
             for sent_info in para_sentences:
-                current_chunk_sentences.append(sent_info["text"])
+                current_chunk_sentences.append(sent_info)
                 current_tokens += sent_info["tokens"]
                 char_offset = sent_info["end_char"]
         
         # Add final chunk with markdown formatting
         if current_chunk_sentences:
-            chunk_text = " ".join(current_chunk_sentences)
+            chunk_text = " ".join([s["text"] if isinstance(s, dict) else s for s in current_chunk_sentences])
             markdown_text = self._convert_to_markdown(chunk_text)
             
             # Truncate if too long (safety check for Milvus varchar limit)
