@@ -53,13 +53,25 @@ STRATEGY_CONFIGS = {
         enabled=True,  # Always enabled as fallback
         description="Basic text extraction using standard libraries",
         supported_mimetypes=[
+            # PDF
             "application/pdf",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "text/plain",
-            "text/html",
-            "text/markdown",
-            "text/csv",
-            "application/json",
+            # Microsoft Office
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",  # DOCX
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",  # PPTX
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",  # XLSX
+            # OpenDocument
+            "application/vnd.oasis.opendocument.text",  # ODT
+            "application/vnd.oasis.opendocument.presentation",  # ODP
+            "application/vnd.oasis.opendocument.spreadsheet",  # ODS
+            # Text formats
+            "text/plain",  # TXT
+            "text/html",  # HTML
+            "text/xml",  # XML
+            "application/xml",  # XML
+            "text/markdown",  # Markdown
+            # Data formats
+            "text/csv",  # CSV
+            "application/json",  # JSON
         ],
         requires_gpu=False,
         average_speed="fast",
@@ -67,7 +79,11 @@ STRATEGY_CONFIGS = {
             "Simple text documents",
             "Well-formatted PDFs",
             "Text files",
+            "Office documents",
+            "Spreadsheets",
+            "Presentations",
             "Markdown",
+            "XML/HTML",
         ],
     ),
     

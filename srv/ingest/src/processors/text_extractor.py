@@ -4,7 +4,10 @@ Text extraction from various file formats.
 Supports:
 - PDF: Marker (primary), TATR (tables), pdfplumber (fallback)
 - DOCX: python-docx
-- TXT, HTML, Markdown, CSV, JSON: Direct parsing
+- PPTX: python-pptx
+- XLSX: openpyxl
+- ODT: odfpy
+- TXT, HTML, XML, Markdown, CSV, JSON: Direct parsing
 - Page image extraction for ColPali (PDFs only)
 """
 
@@ -62,20 +65,42 @@ class TextExtractor:
         Returns:
             ExtractionResult with text, markdown, page images, etc.
         """
+        # PDF
         if mime_type == "application/pdf":
             return self._extract_pdf(file_path)
+        
+        # Microsoft Office formats
         elif mime_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
             return self._extract_docx(file_path)
+        elif mime_type == "application/vnd.openxmlformats-officedocument.presentationml.presentation":
+            return self._extract_pptx(file_path)
+        elif mime_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+            return self._extract_xlsx(file_path)
+        
+        # OpenDocument formats
+        elif mime_type == "application/vnd.oasis.opendocument.text":
+            return self._extract_odt(file_path)
+        elif mime_type == "application/vnd.oasis.opendocument.presentation":
+            return self._extract_odp(file_path)
+        elif mime_type == "application/vnd.oasis.opendocument.spreadsheet":
+            return self._extract_ods(file_path)
+        
+        # Text formats
         elif mime_type == "text/plain":
             return self._extract_txt(file_path)
         elif mime_type == "text/html":
             return self._extract_html(file_path)
+        elif mime_type in ("text/xml", "application/xml"):
+            return self._extract_xml(file_path)
         elif mime_type == "text/markdown":
             return self._extract_markdown(file_path)
+        
+        # Data formats
         elif mime_type == "text/csv":
             return self._extract_csv(file_path)
         elif mime_type == "application/json":
             return self._extract_json(file_path)
+        
         else:
             raise ValueError(f"Unsupported MIME type: {mime_type}")
     
@@ -396,4 +421,269 @@ class TextExtractor:
         
         except Exception as e:
             logger.error("JSON extraction failed", file_path=file_path, error=str(e), exc_info=True)
+            raise
+    
+    def _extract_xml(self, file_path: str) -> ExtractionResult:
+        """Extract text from XML file."""
+        try:
+            from lxml import etree
+            
+            # Parse XML
+            tree = etree.parse(file_path)
+            root = tree.getroot()
+            
+            # Extract all text content
+            text_parts = []
+            for element in root.iter():
+                if element.text and element.text.strip():
+                    text_parts.append(element.text.strip())
+                if element.tail and element.tail.strip():
+                    text_parts.append(element.tail.strip())
+            
+            text = "\n".join(text_parts)
+            
+            return ExtractionResult(
+                text=text,
+                page_count=1,
+                metadata={"extraction_method": "lxml"},
+            )
+        
+        except ImportError:
+            # Fallback to built-in xml.etree
+            import xml.etree.ElementTree as ET
+            
+            tree = ET.parse(file_path)
+            root = tree.getroot()
+            
+            text_parts = []
+            for element in root.iter():
+                if element.text and element.text.strip():
+                    text_parts.append(element.text.strip())
+            
+            text = "\n".join(text_parts)
+            
+            return ExtractionResult(
+                text=text,
+                page_count=1,
+                metadata={"extraction_method": "xml.etree"},
+            )
+        
+        except Exception as e:
+            logger.error("XML extraction failed", file_path=file_path, error=str(e), exc_info=True)
+            raise
+    
+    def _extract_pptx(self, file_path: str) -> ExtractionResult:
+        """Extract text from PowerPoint (PPTX) file."""
+        try:
+            from pptx import Presentation
+            
+            prs = Presentation(file_path)
+            text_parts = []
+            slide_count = 0
+            
+            for slide in prs.slides:
+                slide_count += 1
+                slide_text = []
+                
+                # Extract text from shapes
+                for shape in slide.shapes:
+                    if hasattr(shape, "text") and shape.text.strip():
+                        slide_text.append(shape.text.strip())
+                
+                if slide_text:
+                    text_parts.append(f"=== Slide {slide_count} ===")
+                    text_parts.extend(slide_text)
+                    text_parts.append("")  # Empty line between slides
+            
+            text = "\n".join(text_parts)
+            
+            return ExtractionResult(
+                text=text,
+                page_count=slide_count,
+                metadata={
+                    "extraction_method": "python-pptx",
+                    "slide_count": slide_count,
+                },
+            )
+        
+        except ImportError:
+            logger.error("python-pptx not installed", file_path=file_path)
+            raise ValueError("python-pptx library required for PPTX extraction")
+        except Exception as e:
+            logger.error("PPTX extraction failed", file_path=file_path, error=str(e), exc_info=True)
+            raise
+    
+    def _extract_xlsx(self, file_path: str) -> ExtractionResult:
+        """Extract text from Excel (XLSX) file."""
+        try:
+            from openpyxl import load_workbook
+            
+            wb = load_workbook(file_path, read_only=True, data_only=True)
+            text_parts = []
+            sheet_count = 0
+            
+            for sheet_name in wb.sheetnames:
+                sheet = wb[sheet_name]
+                sheet_count += 1
+                
+                text_parts.append(f"=== Sheet: {sheet_name} ===")
+                
+                # Extract cell values row by row
+                for row in sheet.iter_rows(values_only=True):
+                    # Filter out empty cells and convert to strings
+                    row_values = [str(cell) for cell in row if cell is not None]
+                    if row_values:
+                        text_parts.append(" | ".join(row_values))
+                
+                text_parts.append("")  # Empty line between sheets
+            
+            wb.close()
+            text = "\n".join(text_parts)
+            
+            return ExtractionResult(
+                text=text,
+                page_count=sheet_count,
+                metadata={
+                    "extraction_method": "openpyxl",
+                    "sheet_count": sheet_count,
+                },
+            )
+        
+        except ImportError:
+            logger.error("openpyxl not installed", file_path=file_path)
+            raise ValueError("openpyxl library required for XLSX extraction")
+        except Exception as e:
+            logger.error("XLSX extraction failed", file_path=file_path, error=str(e), exc_info=True)
+            raise
+    
+    def _extract_odt(self, file_path: str) -> ExtractionResult:
+        """Extract text from OpenDocument Text (ODT) file."""
+        try:
+            from odf import text, teletype
+            from odf.opendocument import load
+            
+            doc = load(file_path)
+            text_parts = []
+            
+            # Extract all text elements
+            for paragraph in doc.getElementsByType(text.P):
+                para_text = teletype.extractText(paragraph)
+                if para_text.strip():
+                    text_parts.append(para_text)
+            
+            # Extract text from tables
+            for table in doc.getElementsByType(text.Table):
+                for row in table.getElementsByType(text.TableRow):
+                    row_text = []
+                    for cell in row.getElementsByType(text.TableCell):
+                        cell_text = teletype.extractText(cell).strip()
+                        if cell_text:
+                            row_text.append(cell_text)
+                    if row_text:
+                        text_parts.append(" | ".join(row_text))
+            
+            text_content = "\n".join(text_parts)
+            
+            return ExtractionResult(
+                text=text_content,
+                page_count=len(text_parts) // 20,  # Estimate pages
+                metadata={"extraction_method": "odfpy"},
+            )
+        
+        except ImportError:
+            logger.error("odfpy not installed", file_path=file_path)
+            raise ValueError("odfpy library required for ODT extraction")
+        except Exception as e:
+            logger.error("ODT extraction failed", file_path=file_path, error=str(e), exc_info=True)
+            raise
+    
+    def _extract_odp(self, file_path: str) -> ExtractionResult:
+        """Extract text from OpenDocument Presentation (ODP) file."""
+        try:
+            from odf import text, teletype
+            from odf.opendocument import load
+            
+            doc = load(file_path)
+            text_parts = []
+            slide_count = 0
+            
+            # ODP presentations have draw:page elements
+            from odf.draw import Page
+            for page in doc.getElementsByType(Page):
+                slide_count += 1
+                slide_text = []
+                
+                # Extract text from all text elements on the slide
+                for paragraph in page.getElementsByType(text.P):
+                    para_text = teletype.extractText(paragraph)
+                    if para_text.strip():
+                        slide_text.append(para_text)
+                
+                if slide_text:
+                    text_parts.append(f"=== Slide {slide_count} ===")
+                    text_parts.extend(slide_text)
+                    text_parts.append("")
+            
+            text_content = "\n".join(text_parts)
+            
+            return ExtractionResult(
+                text=text_content,
+                page_count=slide_count,
+                metadata={
+                    "extraction_method": "odfpy",
+                    "slide_count": slide_count,
+                },
+            )
+        
+        except ImportError:
+            logger.error("odfpy not installed", file_path=file_path)
+            raise ValueError("odfpy library required for ODP extraction")
+        except Exception as e:
+            logger.error("ODP extraction failed", file_path=file_path, error=str(e), exc_info=True)
+            raise
+    
+    def _extract_ods(self, file_path: str) -> ExtractionResult:
+        """Extract text from OpenDocument Spreadsheet (ODS) file."""
+        try:
+            from odf import table, teletype
+            from odf.opendocument import load
+            
+            doc = load(file_path)
+            text_parts = []
+            sheet_count = 0
+            
+            # Extract text from all tables (sheets)
+            for spreadsheet_table in doc.getElementsByType(table.Table):
+                sheet_count += 1
+                sheet_name = spreadsheet_table.getAttribute("name")
+                text_parts.append(f"=== Sheet: {sheet_name} ===")
+                
+                # Extract rows
+                for row in spreadsheet_table.getElementsByType(table.TableRow):
+                    row_text = []
+                    for cell in row.getElementsByType(table.TableCell):
+                        cell_text = teletype.extractText(cell).strip()
+                        if cell_text:
+                            row_text.append(cell_text)
+                    if row_text:
+                        text_parts.append(" | ".join(row_text))
+                
+                text_parts.append("")
+            
+            text_content = "\n".join(text_parts)
+            
+            return ExtractionResult(
+                text=text_content,
+                page_count=sheet_count,
+                metadata={
+                    "extraction_method": "odfpy",
+                    "sheet_count": sheet_count,
+                },
+            )
+        
+        except ImportError:
+            logger.error("odfpy not installed", file_path=file_path)
+            raise ValueError("odfpy library required for ODS extraction")
+        except Exception as e:
+            logger.error("ODS extraction failed", file_path=file_path, error=str(e), exc_info=True)
             raise
