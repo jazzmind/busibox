@@ -1,0 +1,82 @@
+{
+  "purposes": {
+    "embedding": {
+      "model": "qwen-3-embedding",
+      "description": "Text embedding generation",
+      "max_tokens": 8192,
+      "provider": "litellm",
+      "endpoint": "/embeddings"
+    },
+    "visual": {
+      "model": "colpali-v1.3",
+      "description": "Visual document embedding",
+      "max_tokens": 4096,
+      "provider": "colpali",
+      "endpoint": "/v1/embeddings"
+    },
+    "cleanup": {
+      "model": "qwen-2.5-32b",
+      "description": "Text cleanup and formatting",
+      "max_tokens": 32768,
+      "temperature": 0.1,
+      "provider": "litellm",
+      "endpoint": "/chat/completions"
+    },
+    "chat": {
+      "model": "qwen-2.5-72b",
+      "description": "General chat and Q&A",
+      "max_tokens": 32768,
+      "temperature": 0.7,
+      "provider": "litellm",
+      "endpoint": "/chat/completions"
+    },
+    "classify": {
+      "model": "phi-4",
+      "description": "Document classification",
+      "max_tokens": 4096,
+      "temperature": 0.1,
+      "provider": "litellm",
+      "endpoint": "/chat/completions"
+    },
+    "reranking": {
+      "model": "bge-reranker-v2-m3",
+      "description": "Search result reranking",
+      "max_tokens": 512,
+      "provider": "litellm",
+      "endpoint": "/rerank"
+    },
+    "research": {
+      "model": "qwen-2.5-72b",
+      "description": "Research and analysis",
+      "max_tokens": 32768,
+      "temperature": 0.7,
+      "provider": "litellm",
+      "endpoint": "/chat/completions"
+    },
+    "calculation": {
+      "model": "deepseek-r1",
+      "description": "Mathematical reasoning",
+      "max_tokens": 8192,
+      "temperature": 0.1,
+      "provider": "litellm",
+      "endpoint": "/chat/completions"
+    },
+    "analysis": {
+      "model": "qwen-2.5-72b",
+      "description": "Data analysis",
+      "max_tokens": 32768,
+      "temperature": 0.5,
+      "provider": "litellm",
+      "endpoint": "/chat/completions"
+    },
+    "parsing": {
+      "model": "phi-4",
+      "description": "Document parsing and structure extraction",
+      "max_tokens": 8192,
+      "temperature": 0.1,
+      "provider": "litellm",
+      "endpoint": "/chat/completions"
+    }
+  }
+}
+

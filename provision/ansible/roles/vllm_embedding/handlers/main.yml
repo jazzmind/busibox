@@ -1,0 +1,12 @@
+---
+# vLLM Embedding Handlers
+
+- name: Reload systemd
+  systemd:
+    daemon_reload: yes
+
+- name: Restart vLLM embedding
+  systemd:
+    name: vllm-embedding
+    state: restarted
+

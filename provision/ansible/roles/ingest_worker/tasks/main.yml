@@ -36,6 +36,9 @@
       - python3-venv
       - python3-dev
       - build-essential
+      - poppler-utils  # For pdf2image (PDF page extraction)
+      - tesseract-ocr  # For OCR on scanned PDFs
+      - libtesseract-dev  # Tesseract development libraries
     state: present
 
 - name: Create ingest worker directory
@@ -66,33 +69,29 @@
     requirements: /srv/ingest/requirements.txt
     virtualenv: /srv/ingest/venv
 
-- name: Get spaCy version
-  shell: /srv/ingest/venv/bin/python -c "import spacy; print(spacy.__version__)"
-  register: spacy_version
+- name: Check if spaCy model is already installed
+  shell: /srv/ingest/venv/bin/python -c "import en_core_web_sm; print('OK')"
+  register: spacy_model_check
   changed_when: false
   failed_when: false
 
-- name: Download spaCy English model (compatible version)
+- name: Download spaCy English model
   shell: |
-    # Extract major.minor version (e.g., "3.7" from "3.7.2")
-    SPACY_VERSION=$(/srv/ingest/venv/bin/python -c "import spacy; v=spacy.__version__.split('.'); print(f'{v[0]}.{v[1]}')")
-    /srv/ingest/venv/bin/python -m spacy download en_core_web_sm-${SPACY_VERSION}.0
-  args:
-    creates: /srv/ingest/venv/lib/python*/site-packages/en_core_web_sm
-  when: not ansible_check_mode  # Skip in check mode (requires network access)
-  register: spacy_download
-  failed_when: false
-
-- name: Try downloading latest compatible spaCy model (fallback)
-  pip:
-    name: https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.0/en_core_web_sm-3.7.0-py3-none-any.whl
-    virtualenv: /srv/ingest/venv
+    set -e
+    /srv/ingest/venv/bin/python -m spacy download en_core_web_sm --no-cache-dir
   when: 
     - not ansible_check_mode
-    - spacy_download is defined
-    - spacy_download.rc is defined
-    - spacy_download.rc != 0
-  ignore_errors: yes  # Model download is optional - worker will still function
+    - spacy_model_check.rc != 0
+  register: spacy_download
+  retries: 3
+  delay: 5
+  until: spacy_download.rc == 0
+
+- name: Verify spaCy model installation
+  shell: /srv/ingest/venv/bin/python -c "import en_core_web_sm; nlp = en_core_web_sm.load(); print('spaCy model loaded successfully')"
+  register: spacy_verify
+  changed_when: false
+  when: not ansible_check_mode
 
 - name: Create ingest worker environment file
   copy:
@@ -104,32 +103,44 @@
       REDIS_STREAM=jobs:ingestion
       REDIS_CONSUMER_GROUP=workers
       
-      # PostgreSQL configuration
+      # PostgreSQL configuration (files database)
       POSTGRES_HOST={{ postgres_host | default('10.96.200.26') }}
       POSTGRES_PORT={{ postgres_port | default('5432') }}
-      POSTGRES_DB={{ postgres_db | default('busibox') }}
-      POSTGRES_USER={{ postgres_user | default('busibox_user') }}
-      POSTGRES_PASSWORD={{ postgres_password | default('busibox_password_change_me') }}
+      POSTGRES_DB={{ files_db | default('files') }}
+      POSTGRES_USER={{ postgres_user }}
+      POSTGRES_PASSWORD={{ secrets.postgresql.password }}
       
       # Milvus configuration
       MILVUS_HOST={{ milvus_host | default('10.96.200.27') }}
       MILVUS_PORT={{ milvus_port | default('19530') }}
-      MILVUS_COLLECTION=document_embeddings
+      MILVUS_COLLECTION={{ milvus_collection | default('documents') }}
       
       # MinIO configuration
-      MINIO_ENDPOINT={{ minio_endpoint | default('10.96.200.28:9000') }}
+      MINIO_ENDPOINT={{ minio_host | default(minio_ip) }}:{{ minio_port | default('9000') }}
       MINIO_ACCESS_KEY={{ minio_root_user | default('minioadmin') }}
       MINIO_SECRET_KEY={{ minio_root_password | default('minioadminchange') }}
       MINIO_SECURE=false
       
       # liteLLM configuration
       LITELLM_BASE_URL={{ litellm_base_url | default('http://10.96.200.30:8000') }}
-      LITELLM_API_KEY={{ litellm_api_key | default('') }}
+      LITELLM_API_KEY={{ secrets.litellm.master_key | default('') }}
       
       # Processing configuration
-      CHUNK_SIZE=512
-      CHUNK_OVERLAP=50
-      EMBEDDING_MODEL=text-embedding-ada-002
+      CHUNK_SIZE_MIN=400
+      CHUNK_SIZE_MAX=800
+      CHUNK_OVERLAP_PCT=0.12
+      EMBEDDING_MODEL={{ embedding_model | default('qwen3-embedding') }}
+      EMBEDDING_DIMENSION={{ embedding_dimension | default('4096') }}
+      
+      # Timeout configuration (seconds)
+      TIMEOUT_SMALL=300
+      TIMEOUT_MEDIUM=600
+      TIMEOUT_LARGE=1200
+      
+      # ColPali configuration (vision embeddings for PDFs)
+      COLPALI_BASE_URL={{ colpali_base_url | default('http://10.96.200.208:8002/v1') }}
+      COLPALI_API_KEY={{ colpali_api_key | default('EMPTY') }}
+      COLPALI_ENABLED={{ colpali_enabled | default('true') }}
       
       # Worker configuration
       WORKER_ID={{ ansible_hostname }}

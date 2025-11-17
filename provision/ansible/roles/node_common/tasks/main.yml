@@ -8,6 +8,7 @@
       - git
       - jq
       - build-essential
+      - ffmpeg  # For video poster frame extraction in ai-portal
     state: present
     update_cache: yes
 

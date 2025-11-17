@@ -50,7 +50,7 @@ echo "📦 Installing Python dependencies..."
 pip3 install docker --quiet || true
 
 # Create vault password file
-VAULT_PASS_FILE="provision/ansible/.vault_pass_local"
+VAULT_PASS_FILE="$HOME/.vault_pass"
 if [[ ! -f "$VAULT_PASS_FILE" ]]; then
     echo "🔐 Creating local vault password file..."
     echo "local-dev-password" > "$VAULT_PASS_FILE"
@@ -112,6 +112,7 @@ echo "     AI Portal:      http://localhost:3000"
 echo "     MinIO Console:  http://localhost:9001"
 echo ""
 echo "See docs/LOCAL_DEVELOPMENT.md for more details."
+
 
 
 

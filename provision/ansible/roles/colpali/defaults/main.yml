@@ -1,0 +1,41 @@
+---
+# ColPali Service Configuration
+# Native ColPali implementation using colpali-engine package
+# Runs on dedicated GPU for visual document embeddings
+
+# Service Configuration
+colpali_user: "colpali"
+colpali_group: "colpali"
+colpali_home: "/opt/colpali"
+colpali_venv_dir: "{{ colpali_home }}/venv"
+
+# Network Configuration
+colpali_host: "0.0.0.0"
+colpali_port: 8002
+
+# Model Configuration
+colpali_model: "vidore/colpali-v1.3"
+colpali_device: "cuda:0"  # Device index within CUDA_VISIBLE_DEVICES
+colpali_dtype: "bfloat16"
+
+# HuggingFace Configuration
+colpali_hf_token: "{{ secrets.huggingface.token | default('') }}"
+colpali_cache_dir: "/var/lib/llm-models/huggingface"
+
+# Performance Configuration
+colpali_batch_size: 4
+colpali_max_workers: 2
+
+# Resource Limits
+colpali_memory_limit: "16G"
+colpali_cpu_limit: "4"
+
+# CUDA Configuration
+# Use GPU 2 (third GPU) - GPUs 0 and 1 are used by vLLM and embedding services
+colpali_cuda_visible_devices: "2"
+
+# Service Management
+colpali_restart_on_failure: true
+colpali_restart_sec: 10
+colpali_startup_timeout: 300
+

@@ -22,10 +22,11 @@
     state: absent
   loop: "{{ existing_sites.files }}"
   when: 
-    - item.path is search('placeholder-')
+    - item.path is search('placeholder-') or item.path is search('default-server')
     - not item.path is search('redirect-to-https.conf')
   loop_control:
     label: "{{ item.path | basename }}"
+  notify: Reload NGINX
 
 - name: Collect all applications with routes
   set_fact:

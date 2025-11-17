@@ -48,6 +48,37 @@ bash scripts/test-infrastructure.sh
 bash scripts/test-llm-containers.sh
 ```
 
+### MCP Server for Cursor
+
+**Busibox MCP Server** provides structured access to documentation and scripts for Cursor:
+
+```bash
+# Quick setup (shows Cursor configuration):
+cd tools/mcp-server
+bash setup.sh
+
+# Or install manually:
+npm install && npm run build
+```
+
+**What it provides:**
+- Browse documentation by category
+- Search documentation by keyword
+- Get script information and usage
+- Find scripts by execution context
+- Guided assistance for common tasks (deployment, troubleshooting, etc.)
+
+**Usage in Cursor:**
+- "Show me the architecture documentation"
+- "Search docs for GPU passthrough"
+- "Tell me about deploy-ai-portal.sh"
+- "How do I deploy agent-lxc to test?"
+
+**Documentation:**
+- Setup: `tools/mcp-server/README.md`
+- Reference: `docs/reference/mcp-server.md`
+- Usage Guide: `docs/guides/mcp-server-usage.md`
+
 ## AI Agent Rules
 
 This project uses structured rules to ensure consistency. **All rules are in `.cursor/rules/`**:

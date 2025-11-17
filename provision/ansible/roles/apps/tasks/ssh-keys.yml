@@ -1,0 +1,53 @@
+---
+# SSH key setup for container-to-container communication
+# Enables apps container to SSH to ingest container for log viewing
+
+- name: Generate SSH key pair on apps container for root user
+  openssh_keypair:
+    path: /root/.ssh/id_rsa
+    type: rsa
+    size: 4096
+    state: present
+    force: false  # Don't overwrite existing key
+  delegate_to: "{{ apps_ip }}"
+  register: ssh_key_result
+  tags: [apps, apps_ssh]
+
+- name: Read public key from apps container
+  slurp:
+    src: /root/.ssh/id_rsa.pub
+  delegate_to: "{{ apps_ip }}"
+  register: apps_public_key
+  tags: [apps, apps_ssh]
+
+- name: Ensure .ssh directory exists on ingest container
+  file:
+    path: /root/.ssh
+    state: directory
+    mode: '0700'
+    owner: root
+    group: root
+  delegate_to: "{{ ingest_ip }}"
+  tags: [apps, apps_ssh]
+
+- name: Add apps container public key to ingest container authorized_keys
+  authorized_key:
+    user: root
+    key: "{{ apps_public_key.content | b64decode }}"
+    state: present
+  delegate_to: "{{ ingest_ip }}"
+  tags: [apps, apps_ssh]
+
+- name: Test SSH connection from apps to ingest
+  shell: ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{{ ingest_ip }} "echo 'SSH connection successful'"
+  delegate_to: "{{ apps_ip }}"
+  register: ssh_test
+  changed_when: false
+  failed_when: false
+  tags: [apps, apps_ssh]
+
+- name: Display SSH test result
+  debug:
+    msg: "SSH test result: {{ ssh_test.stdout | default('FAILED: ' + (ssh_test.stderr | default('Unknown error'))) }}"
+  tags: [apps, apps_ssh]
+

@@ -33,8 +33,8 @@ ingest_ip: "{{ network_base_octets }}.206"
 
 # LLM Service IPs: .30-.39 (to allow room for more infrastructure)
 litellm_ip: "{{ network_base_octets }}.207"
-ollama_ip: "{{ network_base_octets }}.208"
-vllm_ip: "{{ network_base_octets }}.209"
+vllm_ip: "{{ network_base_octets }}.208"
+ollama_ip: "{{ network_base_octets }}.210"
 
 # ============================================================================
 # Domain Configuration - Test
@@ -57,12 +57,20 @@ postgres_port: 5432
 postgres_db: busibox_test
 postgres_user: busibox_test_user
 
+# Files/Ingestion database
+files_db: files
+files_user: "{{ postgres_user }}"
+files_password: "{{ secrets.postgresql.password }}"
+
 milvus_host: "{{ milvus_ip }}"
 milvus_port: 19530
 
 minio_host: "{{ minio_ip }}"
 minio_port: 9000
 minio_console_port: 9001
+minio_bucket: documents
+minio_root_user: "{{ secrets.minio.root_user }}"
+minio_root_password: "{{ secrets.minio.root_password }}"
 
 redis_host: "{{ ingest_ip }}"
 redis_port: 6379
@@ -173,19 +181,38 @@ applications:
       - database_url
       - better_auth_secret
       - better_auth_url
-      - resend_api_key
       - email_from
       - openai_api_key
       - sso_jwt_secret
       - litellm_api_key
       - admin_email
       - allowed_email_domains
+      - smtp_host
+      - smtp_port
+      - smtp_user
+      - smtp_password
+      - smtp_secure
+      - github_client_id
+      - github_client_secret
+      - github_redirect_uri
+      - encryption_key
+      - current_container_ip
+      - apps_container_ip
+      - agent_container_ip
+      - postgres_container_ip
+    optional_secrets:
+      - resend_api_key
+      - microsoft_client_id
+      - microsoft_client_secret
+      - microsoft_tenant_id
+      - container_ssh_private_key
     env:
       NODE_ENV: development
       LITELLM_BASE_URL: "http://{{ litellm_ip }}:{{ litellm_port }}/v1"
       BETTER_AUTH_URL: "https://{{ full_domain }}"
       SSO_TOKEN_EXPIRY: "900"
       PORT: "3000"
+      INGEST_API_HOST: "{{ ingest_ip }}"
   
   - name: agent-client
     github_repo: jazzmind/agent-client
@@ -238,28 +265,3 @@ applications:
       MILVUS_HOST: "{{ milvus_ip }}"
       MILVUS_PORT: "{{ milvus_port }}"
       PORT: "3002"
-  
-  - name: innovation
-    github_repo: jazzmind/innovation
-    container: apps-lxc
-    container_ip: "{{ apps_ip }}"
-    port: 3003
-    deploy_path: /srv/apps/innovation
-    health_endpoint: /api/health
-    build_command: "npm run build"
-    routes:
-      - type: subdomain
-        subdomain: innovation-test
-      - type: path
-        domain: "{{ full_domain }}"
-        path: /innovation
-        strip_path: false
-    secrets:
-      - database_url
-      - better_auth_secret
-      - jwt_secret
-      - openai_api_key
-    env:
-      NODE_ENV: development
-      LITELLM_BASE_URL: "http://{{ litellm_ip }}:{{ litellm_port }}/v1"
-      PORT: "3003"

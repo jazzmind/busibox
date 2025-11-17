@@ -20,6 +20,20 @@
     state: directory
     mode: '0755'
 
+- name: Generate default server vhost (for IP access)
+  template:
+    src: vhost-default-server.conf.j2
+    dest: /etc/nginx/sites-available/default-server.conf
+    mode: '0644'
+  notify: Reload NGINX
+
+- name: Enable default server vhost
+  file:
+    src: /etc/nginx/sites-available/default-server.conf
+    dest: /etc/nginx/sites-enabled/00-default-server.conf
+    state: link
+  notify: Reload NGINX
+
 - name: Generate main domain placeholder vhost
   template:
     src: vhost-placeholder-domain.conf.j2
@@ -103,6 +117,10 @@
     msg: |
       ✅ NGINX Placeholder Configuration Complete
       
+      Access via IP (default server):
+        https://{{ proxy_ip }}
+        http://{{ proxy_ip }} (redirects to HTTPS)
+      
       Main Domain (ai-portal):
         https://{{ full_domain }}
         https://{{ full_domain }}/agents
@@ -118,6 +136,7 @@
       SSL Mode: {{ detected_ssl_mode }}
       
       Test with:
+        curl -k https://{{ proxy_ip }}
         curl -k https://{{ full_domain }}
       {% for item in subdomain_placeholders %}
         curl -k https://{{ item.subdomain }}.{{ domain }}

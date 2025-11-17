@@ -3,14 +3,17 @@
     name: [ca-certificates, curl, gnupg]
     state: present
     update_cache: yes
+  tags: [minio, minio_install]
 
-- shell: |
+- name: Install Docker repository and packages
+  shell: |
     install -m 0755 -d /etc/apt/keyrings
     curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
     chmod a+r /etc/apt/keyrings/docker.gpg
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list
     apt update && apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
   args: { executable: /bin/bash }
+  tags: [minio, minio_install]
 
 - name: Create MinIO directories
   file:
@@ -20,6 +23,7 @@
   loop:
     - /srv/minio
     - /srv/minio/data
+  tags: [minio, minio_configure]
 
 - name: Deploy MinIO compose
   copy:
@@ -33,12 +37,13 @@
             MINIO_ROOT_USER: ${MINIO_ROOT_USER}
             MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
           command: server /data --console-address ":9001"
-          ports:
-            - "9000:9000"
-            - "9001:9001"
           volumes:
             - /srv/minio/data:/data
+          # Use host network to avoid sysctl issues in LXC
+          # The container still runs isolated, just shares the host's network stack
+          network_mode: host
   notify: Up MinIO
+  tags: [minio, minio_configure]
 
 - name: MinIO env
   copy:
@@ -47,10 +52,12 @@
       MINIO_ROOT_USER={{ minio_root_user | default('minioadmin') }}
       MINIO_ROOT_PASSWORD={{ minio_root_password | default('minioadminchange') }}
     mode: "0600"
+  tags: [minio, minio_configure]
 
 - name: Start MinIO
   shell: docker compose up -d
   args: { chdir: /srv/minio }
+  tags: [minio, minio_start]
 
 - name: Wait for MinIO to be ready
   wait_for:
@@ -58,6 +65,7 @@
     port: 9000
     delay: 5
     timeout: 60
+  tags: [minio, minio_start]
 
 - name: Install MinIO client (mc)
   shell: |
@@ -65,12 +73,14 @@
     chmod +x /usr/local/bin/mc
   args:
     creates: /usr/local/bin/mc
+  tags: [minio, minio_configure]
 
 - name: Configure MinIO client alias
   shell: |
     mc alias set local http://localhost:9000 {{ minio_root_user | default('minioadmin') }} {{ minio_root_password | default('minioadminchange') }}
   environment:
     MC_HOST_local: "http://{{ minio_root_user | default('minioadmin') }}:{{ minio_root_password | default('minioadminchange') }}@localhost:9000"
+  tags: [minio, minio_configure]
 
 - name: Create documents bucket
   shell: |
@@ -78,6 +88,7 @@
     mc anonymous set download local/documents  # Allow presigned URL downloads
   environment:
     MC_HOST_local: "http://{{ minio_root_user | default('minioadmin') }}:{{ minio_root_password | default('minioadminchange') }}@localhost:9000"
+  tags: [minio, minio_configure]
 
 - name: Check if agent API is accessible
   uri:
@@ -89,6 +100,7 @@
   failed_when: false
   changed_when: false
   when: agent_api_host is defined
+  tags: [minio, minio_webhook]
 
 - name: Display agent API status
   debug:
@@ -99,6 +111,7 @@
         ansible-playbook -i inventory/{{ busibox_env }}/hosts.yml site.yml --limit files --tags minio
       {% endif %}
   when: agent_api_host is defined
+  tags: [minio, minio_webhook]
 
 - name: Configure bucket event notification (webhook to agent API)
   shell: |
@@ -137,6 +150,7 @@
     - agent_health_check.status == 200
   register: webhook_config
   failed_when: false
+  tags: [minio, minio_webhook]
 
 - name: Display webhook configuration result
   debug:
@@ -153,6 +167,7 @@
       ℹ️  MinIO webhook not configured
       {% endif %}
   when: agent_api_host is defined
+  tags: [minio, minio_webhook]
 
 - name: Display webhook stdout (if any)
   debug:
@@ -161,6 +176,7 @@
     - agent_api_host is defined
     - webhook_config.stdout_lines is defined
     - webhook_config.stdout_lines | length > 0
+  tags: [minio, minio_webhook]
 
 - name: Display webhook stderr (if any errors)
   debug:
@@ -171,6 +187,7 @@
     - agent_api_host is defined
     - webhook_config.stderr is defined
     - webhook_config.stderr | length > 0
+  tags: [minio, minio_webhook]
 
 - name: Create MinIO health check script
   copy:
@@ -179,3 +196,4 @@
       #!/bin/bash
       curl -f -s http://localhost:9000/minio/health/live > /dev/null
     mode: "0755"
+  tags: [minio, minio_configure]

@@ -1,0 +1,181 @@
+#!/usr/bin/env bash
+#
+# Search API Test Runner
+#
+# Description:
+#   Convenient test runner for Search API, deployed to milvus-lxc.
+#   Can be called from Proxmox host via: ssh root@milvus-lxc 'search-test'
+#
+# Execution Context: milvus-lxc container
+# Dependencies: pytest, pytest-asyncio, pytest-mock
+#
+# Usage:
+#   search-test [mode] [options]
+#
+# Modes:
+#   (default)      Run unit tests (fast, ~10 seconds)
+#   unit           Run unit tests only
+#   integration    Run integration tests (requires services)
+#   all            Run all tests (unit + integration)
+#   coverage       Run with coverage report
+#
+# Options:
+#   -v, --verbose  Verbose output
+#   -vv            Very verbose output
+#   -s             Show print statements
+#
+# Examples:
+#   search-test                    # Quick unit tests
+#   search-test all                # All tests
+#   search-test coverage           # With coverage
+#   search-test unit -v            # Verbose unit tests
+#   search-test integration        # Integration only
+
+set -euo pipefail
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Paths
+SEARCH_DIR="/opt/search"
+SRC_DIR="${SEARCH_DIR}/src"
+TESTS_DIR="${SEARCH_DIR}/tests"
+VENV_DIR="${SEARCH_DIR}/venv"
+
+# Parse arguments
+MODE="${1:-unit}"  # Default to unit tests
+shift || true
+PYTEST_ARGS="$@"
+
+# Add verbose flag if not specified
+if [[ ! "$PYTEST_ARGS" =~ "-v" ]]; then
+    PYTEST_ARGS="-v $PYTEST_ARGS"
+fi
+
+# Check if we're in the search container
+if [ ! -d "$SEARCH_DIR" ]; then
+    echo -e "${RED}ERROR: Search service not found at $SEARCH_DIR${NC}"
+    echo "This script should run on milvus-lxc where search service is deployed"
+    exit 1
+fi
+
+# Activate virtual environment
+if [ ! -f "$VENV_DIR/bin/activate" ]; then
+    echo -e "${RED}ERROR: Virtual environment not found at $VENV_DIR${NC}"
+    echo "Please deploy search service first: make search_api"
+    exit 1
+fi
+
+source "$VENV_DIR/bin/activate"
+
+# Set PYTHONPATH
+export PYTHONPATH="${SRC_DIR}:${PYTHONPATH:-}"
+
+# Change to search directory
+cd "$SEARCH_DIR"
+
+# Run tests based on mode
+case "$MODE" in
+    unit)
+        echo -e "${BLUE}=== Running Search API Unit Tests ===${NC}"
+        echo "Testing: Milvus search, highlighting, reranking"
+        echo ""
+        pytest -m unit $PYTEST_ARGS tests/unit/ || exit 1
+        echo ""
+        echo -e "${GREEN}✓ Unit tests passed${NC}"
+        ;;
+    
+    integration)
+        echo -e "${BLUE}=== Running Search API Integration Tests ===${NC}"
+        echo "Testing: Full API endpoints, search pipeline"
+        echo ""
+        echo -e "${YELLOW}⚠️  Requires: Milvus, PostgreSQL, embedding service${NC}"
+        echo ""
+        pytest -m integration $PYTEST_ARGS tests/integration/ || exit 1
+        echo ""
+        echo -e "${GREEN}✓ Integration tests passed${NC}"
+        ;;
+    
+    all)
+        echo -e "${BLUE}=== Running All Search API Tests ===${NC}"
+        echo ""
+        
+        echo "1/2: Unit tests..."
+        pytest -m unit $PYTEST_ARGS tests/unit/ || exit 1
+        echo -e "${GREEN}✓ Unit tests passed${NC}"
+        echo ""
+        
+        echo "2/2: Integration tests..."
+        echo -e "${YELLOW}⚠️  Requires: Milvus, PostgreSQL, embedding service${NC}"
+        pytest -m integration $PYTEST_ARGS tests/integration/ || exit 1
+        echo -e "${GREEN}✓ Integration tests passed${NC}"
+        echo ""
+        
+        echo -e "${GREEN}✓ All tests passed${NC}"
+        ;;
+    
+    coverage)
+        echo -e "${BLUE}=== Running Tests with Coverage ===${NC}"
+        echo ""
+        pytest $PYTEST_ARGS \
+            --cov=src \
+            --cov-report=html \
+            --cov-report=term-missing \
+            tests/ || exit 1
+        echo ""
+        echo -e "${GREEN}✓ Tests passed with coverage${NC}"
+        echo ""
+        echo "Coverage report: ${SEARCH_DIR}/htmlcov/index.html"
+        echo "View with: scp -r root@milvus-lxc:${SEARCH_DIR}/htmlcov/ ."
+        ;;
+    
+    fast)
+        echo -e "${BLUE}=== Running Fast Tests (skip slow) ===${NC}"
+        echo ""
+        pytest -m "unit and not slow" $PYTEST_ARGS tests/ || exit 1
+        echo ""
+        echo -e "${GREEN}✓ Fast tests passed${NC}"
+        ;;
+    
+    --help|-h|help)
+        echo "Search API Test Runner"
+        echo ""
+        echo "Usage: search-test [mode] [options]"
+        echo ""
+        echo "Modes:"
+        echo "  (default)      Run unit tests (fast, ~10 seconds)"
+        echo "  unit           Run unit tests only"
+        echo "  integration    Run integration tests (requires services)"
+        echo "  all            Run all tests"
+        echo "  coverage       Run with coverage report"
+        echo "  fast           Skip slow tests"
+        echo ""
+        echo "Options:"
+        echo "  -v, --verbose  Verbose output"
+        echo "  -vv            Very verbose output"
+        echo "  -s             Show print statements"
+        echo ""
+        echo "Examples:"
+        echo "  search-test                # Quick unit tests"
+        echo "  search-test all            # All tests"
+        echo "  search-test coverage       # With coverage"
+        echo "  search-test unit -vv       # Very verbose"
+        exit 0
+        ;;
+    
+    *)
+        echo -e "${RED}ERROR: Unknown mode: $MODE${NC}"
+        echo "Valid modes: unit, integration, all, coverage, fast"
+        echo "Run 'search-test --help' for usage"
+        exit 1
+        ;;
+esac
+
+exit 0
+
+
+

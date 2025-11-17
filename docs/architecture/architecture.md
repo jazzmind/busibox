@@ -32,10 +32,10 @@ The platform is built on 7 core principles defined in [`.specify/memory/constitu
 │                                                              │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │
 │  │  files-lxc   │  │   pg-lxc     │  │ milvus-lxc   │     │
-│  │   (MinIO)    │  │ (PostgreSQL) │  │  (Milvus)    │     │
-│  │              │  │              │  │              │     │
-│  │ S3 Storage   │  │ Users/Roles  │  │ Vector Store │     │
-│  │ Webhooks     │  │ File Metadata│  │ Embeddings   │     │
+│  │   (MinIO)    │  │ (PostgreSQL) │  │ (Milvus +    │     │
+│  │              │  │              │  │  Search API) │     │
+│  │ S3 Storage   │  │ Users/Roles  │  │ Vector DB    │     │
+│  │ Webhooks     │  │ File Metadata│  │ Hybrid Search│     │
 │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘     │
 │         │                 │                 │              │
 │         │                 │                 │              │
@@ -74,7 +74,7 @@ The platform is built on 7 core principles defined in [`.specify/memory/constitu
 |-----------|------|----|----------|---------|-----------|
 | **files-lxc** | 205 | 10.96.200.28 | MinIO | S3-compatible file storage | Privileged |
 | **pg-lxc** | 203 | 10.96.200.26 | PostgreSQL 15+ | Relational database with RLS | Unprivileged |
-| **milvus-lxc** | 204 | 10.96.200.27 | Milvus (Docker) | Vector database for embeddings | Privileged (Docker-in-LXC) |
+| **milvus-lxc** | 204 | 10.96.200.27 | Milvus (Docker), Search API | Vector database + search service | Privileged (Docker-in-LXC) |
 | **agent-lxc** | 207 | 10.96.200.30 | FastAPI, liteLLM | API gateway, auth, agent operations | Unprivileged |
 | **ingest-lxc** | 206 | 10.96.200.29 | Python worker, Redis | File processing, job queue | Unprivileged |
 | **apps-lxc** | 202 | 10.96.200.25 | nginx, Node apps | Application hosting, reverse proxy | Unprivileged |

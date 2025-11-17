@@ -1,0 +1,177 @@
+---
+# Main tasks for search_api role
+
+- name: Create search user
+  user:
+    name: "{{ search_api_user }}"
+    system: yes
+    home: /opt/search
+    shell: /bin/bash
+
+- name: Create search directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ search_api_user }}"
+    group: "{{ search_api_user }}"
+    mode: "0755"
+  loop:
+    - /opt/search
+    - "{{ search_api_src_path }}"
+    - "{{ search_api_log_path }}"
+    - /opt/search/models
+
+- name: Install system dependencies
+  apt:
+    name:
+      - python3
+      - python3-pip
+      - python3-venv
+      - python3-dev
+      - build-essential
+      - git
+      - rsync
+    state: present
+    update_cache: yes
+
+- name: Create Python virtual environment
+  command: python3 -m venv "{{ search_api_venv_path }}"
+  args:
+    creates: "{{ search_api_venv_path }}/bin/python"
+  become: yes
+  become_user: "{{ search_api_user }}"
+
+- name: Upgrade pip in venv
+  pip:
+    name: pip
+    state: latest
+    virtualenv: "{{ search_api_venv_path }}"
+  become: yes
+  become_user: "{{ search_api_user }}"
+
+- name: Copy search service source code
+  synchronize:
+    src: "{{ playbook_dir }}/../../srv/search/src/"
+    dest: "{{ search_api_src_path }}/"
+    delete: yes
+    rsync_opts:
+      - "--exclude=__pycache__"
+      - "--exclude=*.pyc"
+      - "--exclude=.pytest_cache"
+  become: yes
+  become_user: "{{ search_api_user }}"
+  notify: Restart search-api
+
+- name: Copy search service tests
+  synchronize:
+    src: "{{ playbook_dir }}/../../srv/search/tests/"
+    dest: /opt/search/tests/
+    delete: yes
+    rsync_opts:
+      - "--exclude=__pycache__"
+      - "--exclude=*.pyc"
+      - "--exclude=.pytest_cache"
+      - "--exclude=htmlcov"
+      - "--exclude=.coverage"
+  become: yes
+  become_user: "{{ search_api_user }}"
+
+- name: Copy pytest configuration
+  copy:
+    src: "{{ playbook_dir }}/../../srv/search/pytest.ini"
+    dest: /opt/search/pytest.ini
+    owner: "{{ search_api_user }}"
+    group: "{{ search_api_user }}"
+    mode: "0644"
+
+- name: Copy requirements.txt
+  copy:
+    src: "{{ playbook_dir }}/../../srv/search/requirements.txt"
+    dest: /opt/search/requirements.txt
+    owner: "{{ search_api_user }}"
+    group: "{{ search_api_user }}"
+    mode: "0644"
+
+- name: Install Python dependencies
+  pip:
+    requirements: /opt/search/requirements.txt
+    virtualenv: "{{ search_api_venv_path }}"
+    state: present
+  become: yes
+  become_user: "{{ search_api_user }}"
+  notify: Restart search-api
+
+- name: Install test dependencies
+  pip:
+    name:
+      - pytest
+      - pytest-asyncio
+      - pytest-mock
+      - pytest-cov
+    virtualenv: "{{ search_api_venv_path }}"
+    state: present
+  become: yes
+  become_user: "{{ search_api_user }}"
+
+- name: Download NLTK data
+  shell: |
+    {{ search_api_venv_path }}/bin/python -c "
+    import nltk
+    nltk.download('punkt', quiet=True)
+    nltk.download('stopwords', quiet=True)
+    "
+  args:
+    creates: /opt/search/.nltk_downloaded
+  become: yes
+  become_user: "{{ search_api_user }}"
+
+- name: Mark NLTK data as downloaded
+  file:
+    path: /opt/search/.nltk_downloaded
+    state: touch
+    owner: "{{ search_api_user }}"
+    group: "{{ search_api_user }}"
+
+- name: Deploy search service environment file
+  template:
+    src: search-api.env.j2
+    dest: /opt/search/.env
+    owner: "{{ search_api_user }}"
+    group: "{{ search_api_user }}"
+    mode: "0600"
+  notify: Restart search-api
+
+- name: Deploy search service systemd unit
+  template:
+    src: search-api.service.j2
+    dest: /etc/systemd/system/search-api.service
+    mode: "0644"
+  notify:
+    - Reload systemd
+    - Restart search-api
+
+- name: Enable and start search service
+  systemd:
+    name: search-api
+    enabled: yes
+    state: started
+    daemon_reload: yes
+
+- name: Deploy search-test script
+  copy:
+    src: search-test
+    dest: /usr/local/bin/search-test
+    mode: "0755"
+    owner: root
+    group: root
+
+- name: Wait for search service to be ready
+  uri:
+    url: "http://localhost:{{ search_api_port }}/health"
+    status_code: [200, 503]  # 503 is degraded but operational
+    timeout: 30
+  retries: 12
+  delay: 5
+  register: health_check
+  until: health_check is success
+

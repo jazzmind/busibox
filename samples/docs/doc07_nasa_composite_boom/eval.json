@@ -1,0 +1,38 @@
+{
+  "id": "doc07_nasa_composite_boom",
+  "title": "A Multifunctional Bistable Ultrathin Composite Boom for In-Space Monitoring of Deployment Dynamics",
+  "type": "Technical Conference Paper / Presentation-like PDF",
+  "source_url": "https://ntrs.nasa.gov/api/citations/20220018348/downloads/A%20Multifunctional%20Bistable%20Ultrathin%20Composite%20Boom%20for%20In-Space%20Monitoring_AIAA%20Scitech%202023_revA.pdf",
+  "expected_content_elements": [
+    "Title, author list, affiliations (NASA and partners)",
+    "Abstract",
+    "Sections on motivation, concept, design, experimental setup, and results",
+    "Figures showing boom geometry, deployment, and sensor layout",
+    "Graphs of deployment dynamics and sensor measurements"
+  ],
+  "key_details": [
+    "Presents a deployable ultrathin composite boom with integrated flexible electronics for CubeSats.",
+    "Describes mechanical design, bistability characteristics, and embedded sensing for deployment monitoring.",
+    "Includes experimental data and planned/actual on-orbit demonstration details."
+  ],
+  "semantic_themes": [
+    "Aerospace structures",
+    "Deployable/bistable composites",
+    "Structural health monitoring with embedded sensors"
+  ],
+  "layout_features": [
+    "Conference-paper style layout, possibly single-column but dense with figures.",
+    "Numbered sections with engineering-focused text.",
+    "Numerous figure callouts and references to equations or models."
+  ],
+  "images_and_diagrams_description": "Contains photographs of the composite boom prototype, schematic drawings of the boom cross-section and deployment configuration, and plots of measured responses vs time.",
+  "tables_description": "May include small tables summarizing material properties or test conditions, but the document is figure-heavy.",
+  "extraction_checklist": [
+    "Did the extractor maintain association between figure captions and the corresponding images?",
+    "Were all section headings captured cleanly?",
+    "Were any equations or symbols (e.g., Greek letters, strain notation) preserved correctly?",
+    "Are numeric values from any tables or bullet lists correctly extracted?",
+    "Is the abstract clearly separated from the main body?"
+  ],
+  "difficulty_rating": "high"
+}
