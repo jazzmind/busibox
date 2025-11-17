@@ -10,12 +10,20 @@ VAULT_FLAGS=$(shell [ -f $(VAULT_PASS_FILE) ] && echo "--vault-password-file $(V
 # Extra arguments (can override with: make vllm-embedding EXTRA_ARGS="-e skip_model_check=true")
 EXTRA_ARGS=
 
-# Get container IPs from inventory (with fallback to defaults)
-# Try to get from inventory, if that fails use production defaults
-INGEST_IP ?= 10.96.200.206
-AGENT_IP ?= 10.96.200.202
-APPS_IP ?= 10.96.200.201
-MILVUS_IP ?= 10.96.200.204
+# Dynamically get container IPs from inventory based on environment
+# This allows tests to work in both production and test environments
+INGEST_IP = $(shell ansible-inventory -i $(INV) --host ingest-lxc 2>/dev/null | grep -oP '"ansible_host":\s*"\K[^"]+' || \
+	ansible-inventory -i $(INV) --host TEST-ingest-lxc 2>/dev/null | grep -oP '"ansible_host":\s*"\K[^"]+' || \
+	echo "10.96.200.206")
+AGENT_IP = $(shell ansible-inventory -i $(INV) --host agent-lxc 2>/dev/null | grep -oP '"ansible_host":\s*"\K[^"]+' || \
+	ansible-inventory -i $(INV) --host TEST-agent-lxc 2>/dev/null | grep -oP '"ansible_host":\s*"\K[^"]+' || \
+	echo "10.96.200.202")
+APPS_IP = $(shell ansible-inventory -i $(INV) --host apps-lxc 2>/dev/null | grep -oP '"ansible_host":\s*"\K[^"]+' || \
+	ansible-inventory -i $(INV) --host TEST-apps-lxc 2>/dev/null | grep -oP '"ansible_host":\s*"\K[^"]+' || \
+	echo "10.96.200.201")
+MILVUS_IP = $(shell ansible-inventory -i $(INV) --host milvus-lxc 2>/dev/null | grep -oP '"ansible_host":\s*"\K[^"]+' || \
+	ansible-inventory -i $(INV) --host TEST-milvus-lxc 2>/dev/null | grep -oP '"ansible_host":\s*"\K[^"]+' || \
+	echo "10.96.200.204")
 
 ping:
 	ansible -i $(INV) all -m ping
