@@ -15,8 +15,8 @@ python-jose[cryptography]==3.3.0
 # Database
 psycopg2-binary==2.9.9
 
-# Vector Database - match server version (Milvus v2.6.5)
-pymilvus==2.6.7
+# Vector Database - compatible with Milvus v2.6.x
+pymilvus>=2.6.7,<2.7.0
 
 # Object Storage
 minio==7.2.3
