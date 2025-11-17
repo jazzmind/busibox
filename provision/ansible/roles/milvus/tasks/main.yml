@@ -28,7 +28,7 @@
       services:
         milvus:
           container_name: milvus-standalone
-          image: milvusdb/milvus:v2.5.4
+          image: milvusdb/milvus:v2.6.5
           restart: unless-stopped
           # Give Milvus enough time to flush RocksDB and shutdown cleanly
           stop_grace_period: 60s
@@ -239,7 +239,7 @@
 
 - name: Install pymilvus in virtual environment
   pip:
-    name: "pymilvus==2.6.3"
+    name: "pymilvus==2.6.7"
     virtualenv: /opt/milvus-tools
     state: present
     extra_args: "--no-deps"  # Don't install dependencies to avoid downgrading marshmallow

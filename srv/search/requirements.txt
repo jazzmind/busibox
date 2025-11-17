@@ -9,8 +9,8 @@ uvicorn[standard]==0.24.0
 pydantic==2.4.2
 pydantic-settings==2.0.3
 
-# Vector database - match server version (Milvus v2.5.4)
-pymilvus==2.5.7
+# Vector database - match server version (Milvus v2.6.5)
+pymilvus==2.6.7
 
 # Database
 asyncpg==0.29.0
