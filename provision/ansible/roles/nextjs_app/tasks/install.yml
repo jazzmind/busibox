@@ -7,6 +7,7 @@
       - git
       - build-essential
       - curl
+      - ffmpeg  # For video poster frame extraction
     state: present
     update_cache: yes
   tags: [nextjs_install]
