@@ -1,69 +1,82 @@
 # Busibox Testing Guide
 
+## 📘 Complete Testing Documentation
+
+For comprehensive testing documentation, see:
+
+**[docs/testing/master-guide.md](docs/testing/master-guide.md)** - Complete testing guide with:
+- Testing architecture overview
+- All test levels (infrastructure, service, integration)
+- Running tests from Proxmox host
+- Service-specific testing guides
+- Environment configuration
+- CI/CD integration
+- Troubleshooting
+
+## Quick Reference
+
+### Infrastructure Testing
+
+```bash
+# On Proxmox host
+cd /root/busibox
+bash scripts/test-infrastructure.sh full
+```
+
+### Service Testing (from Host)
+
+```bash
+# On Proxmox host or workstation
+cd /root/busibox/provision/ansible
+
+# All tests
+make test-all
+
+# Individual services
+make test-ingest
+make test-search
+make test-agent
+make test-apps
+
+# Health checks
+make verify
+```
+
+### Direct Container Testing
+
+```bash
+# Ingest tests
+ssh root@10.96.200.206
+ingest-test
+
+# Search tests
+ssh root@10.96.200.204
+search-test
+```
+
+## Documentation Index
+
+- **[Master Guide](docs/testing/master-guide.md)** - Complete testing guide
+- **[Testing Strategy](docs/testing/testing-strategy.md)** - Infrastructure tests
+- **[Makefile Targets](docs/testing/makefile-test-targets.md)** - Make commands
+- **[Search API Testing](docs/testing/search-api-testing.md)** - Search tests
+- **[ColPali Testing](docs/testing/colpali-testing.md)** - ColPali tests
+
+---
+
 ## ⚠️ Important: Where to Run Tests
 
-The infrastructure tests **must run on a Proxmox host**, not on your local workstation.
+Infrastructure tests **must run on a Proxmox host**, not on your local workstation.
 
 ### Why?
 
-The test infrastructure requires:
+The infrastructure tests require:
 - **Proxmox VE** with `pct` command for LXC containers
 - **LXC storage** (e.g., `local-lvm`)
 - **Network access** to create containers on the Proxmox network
 - **Ansible** for service provisioning
 
-Your Mac workstation doesn't have these dependencies.
-
----
-
-## Quick Testing on Proxmox
-
-### Step 1: Copy Repository to Proxmox
-
-```bash
-# On your Mac
-rsync -av --exclude '.git' \
-  /Users/wessonnenreich/Code/sonnenreich/busibox/ \
-  root@your-proxmox-host:/root/busibox/
-```
-
-Or use git:
-
-```bash
-# On Proxmox host
-cd /root
-git clone https://github.com/jazzmind/busibox.git
-cd busibox
-git checkout 001-create-an-initial
-```
-
-### Step 2: Configure Test Environment
-
-```bash
-# On Proxmox host
-cd /root/busibox/provision/pct
-
-# Review test configuration
-cat test-vars.env
-
-# Adjust if needed (storage, template path, etc.)
-vim test-vars.env
-```
-
-### Step 3: Run Tests
-
-```bash
-# On Proxmox host
-cd /root/busibox
-
-# Full automated test
-bash test-infrastructure.sh full
-
-# Or step-by-step
-bash test-infrastructure.sh provision  # Create test containers
-bash test-infrastructure.sh verify     # Run health checks
-bash test-infrastructure.sh cleanup    # Clean up
-```
+Service-level tests can be run from the host using make targets (SSH to containers automatically).
 
 ---
 
