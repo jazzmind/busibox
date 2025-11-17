@@ -146,6 +146,32 @@
   register: prisma_result
   failed_when: false  # Don't fail if Prisma isn't used
 
+- name: Run database migrations (if migrate:up script exists)
+  shell: |
+    cd {{ app_to_deploy.deploy_path }}
+    # Source .env if it exists to load DATABASE_URL
+    if [ -f .env ]; then
+      export $(grep -v '^#' .env | xargs)
+    fi
+    
+    # Check if migrate:up script exists in package.json
+    if [ -f "package.json" ] && grep -q '"migrate:up"' package.json; then
+      echo "Running database migrations..."
+      npm run migrate:up
+      echo "Migrations completed"
+    else
+      echo "No migrate:up script found, skipping migrations"
+    fi
+  delegate_to: "{{ app_to_deploy.container_ip }}"
+  environment: "{{ app_to_deploy.env | default({}) }}"
+  register: migration_result
+  failed_when: false  # Don't fail if no migrations
+
+- name: Display migration output
+  debug:
+    msg: "{{ migration_result.stdout_lines }}"
+  when: migration_result.stdout_lines is defined
+
 - name: Build application
   shell: |
     cd {{ app_to_deploy.deploy_path }}
