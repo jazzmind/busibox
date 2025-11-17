@@ -422,3 +422,5 @@ pytest tests/
 - **Search API Docs**: `docs/architecture/search-service.md`
 - **Deployment Guide**: `docs/deployment/search-api.md`
 
+
+
