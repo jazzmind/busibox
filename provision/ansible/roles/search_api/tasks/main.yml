@@ -30,6 +30,7 @@
       - python3-dev
       - build-essential
       - git
+      - rsync
     state: present
     update_cache: yes
 
