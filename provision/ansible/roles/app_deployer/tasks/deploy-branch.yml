@@ -148,29 +148,46 @@
 
 - name: Run database migrations (if migrate:up script exists)
   shell: |
+    set -e
     cd {{ app_to_deploy.deploy_path }}
+    
+    echo "=== Migration Debug Info ==="
+    echo "Current directory: $(pwd)"
+    echo "Checking for package.json..."
+    ls -la package.json || echo "package.json not found"
+    
     # Source .env if it exists to load DATABASE_URL
     if [ -f .env ]; then
-      export $(grep -v '^#' .env | xargs)
+      echo "Loading environment from .env..."
+      set -a
+      source .env
+      set +a
+      echo "DATABASE_URL is set: ${DATABASE_URL:+yes}"
+    else
+      echo "No .env file found"
     fi
     
     # Check if migrate:up script exists in package.json
     if [ -f "package.json" ] && grep -q '"migrate:up"' package.json; then
+      echo "Found migrate:up script in package.json"
       echo "Running database migrations..."
-      npm run migrate:up
-      echo "Migrations completed"
+      npm run migrate:up 2>&1 || {
+        echo "Migration failed with exit code $?"
+        exit 1
+      }
+      echo "Migrations completed successfully"
     else
-      echo "No migrate:up script found, skipping migrations"
+      echo "No migrate:up script found in package.json, skipping migrations"
     fi
   delegate_to: "{{ app_to_deploy.container_ip }}"
   environment: "{{ app_to_deploy.env | default({}) }}"
   register: migration_result
-  failed_when: false  # Don't fail if no migrations
+  failed_when: migration_result.rc != 0 and 'No migrate:up script found' not in migration_result.stdout
 
 - name: Display migration output
   debug:
-    msg: "{{ migration_result.stdout_lines }}"
-  when: migration_result.stdout_lines is defined
+    msg: "{{ migration_result.stdout_lines + migration_result.stderr_lines }}"
+  when: migration_result is defined
 
 - name: Build application
   shell: |
