@@ -171,6 +171,15 @@
     find /srv/milvus/data -type f -name "LOCK" -delete
   ignore_errors: yes
 
+- name: Stop and remove any existing Milvus containers
+  shell: |
+    # Stop any running docker compose services
+    docker compose down 2>/dev/null || true
+    # Remove any orphaned containers with the same names
+    docker rm -f milvus-standalone milvus-etcd milvus-minio 2>/dev/null || true
+  args: { chdir: /srv/milvus }
+  ignore_errors: yes
+
 - name: Start Milvus
   shell: docker compose up -d
   args: { chdir: /srv/milvus }
