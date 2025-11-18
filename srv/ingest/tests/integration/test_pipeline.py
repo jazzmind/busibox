@@ -12,7 +12,7 @@ import structlog
 from fastapi.testclient import TestClient
 
 from src.api.main import app
-from src.api.services.minio import MinIOService
+from src.api.services.minio_service import MinIOService
 from src.api.services.postgres import PostgresService
 from src.shared.config import Config
 

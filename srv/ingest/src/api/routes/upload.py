@@ -17,9 +17,9 @@ import structlog
 from fastapi import APIRouter, File, Form, Request, UploadFile, status
 from fastapi.responses import JSONResponse
 
-from api.services.minio import MinIOService
+from api.services.minio_service import MinIOService
 from api.services.postgres import PostgresService
-from api.services.redis import RedisService
+from api.services.redis_service import RedisService
 from shared.config import Config
 
 logger = structlog.get_logger()

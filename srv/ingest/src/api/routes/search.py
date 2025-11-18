@@ -8,7 +8,7 @@ import structlog
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from api.services.minio import MinIOService
+from api.services.minio_service import MinIOService
 from processors.embedder import Embedder
 from services.milvus_service import MilvusService
 from shared.config import Config
