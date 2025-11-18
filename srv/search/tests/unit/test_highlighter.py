@@ -109,9 +109,9 @@ class TestHighlightingService:
         text = "Running quickly through algorithms"
         tokens = service._tokenize_and_stem(text)
         
-        # Should be stemmed
+        # Should be stemmed (Porter stemmer produces stems, not always root words)
         assert "run" in tokens  # running -> run
-        assert "quick" in tokens  # quickly -> quick
+        assert "quickli" in tokens  # quickly -> quickli (Porter stemmer)
         assert "algorithm" in tokens  # algorithms -> algorithm
     
     def test_find_matches(self, mock_config):
