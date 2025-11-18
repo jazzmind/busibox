@@ -72,13 +72,15 @@ The platform is built on 7 core principles defined in [`.specify/memory/constitu
 
 | Container | CTID | IP | Services | Purpose | Privilege |
 |-----------|------|----|----------|---------|-----------|
-| **files-lxc** | 205 | 10.96.200.28 | MinIO | S3-compatible file storage | Privileged |
-| **pg-lxc** | 203 | 10.96.200.26 | PostgreSQL 15+ | Relational database with RLS | Unprivileged |
-| **milvus-lxc** | 204 | 10.96.200.27 | Milvus (Docker), Search API | Vector database + search service | Privileged (Docker-in-LXC) |
-| **agent-lxc** | 207 | 10.96.200.30 | FastAPI, liteLLM | API gateway, auth, agent operations | Unprivileged |
-| **ingest-lxc** | 206 | 10.96.200.29 | Python worker, Redis | File processing, job queue | Unprivileged |
-| **apps-lxc** | 202 | 10.96.200.25 | nginx, Node apps | Application hosting, reverse proxy | Unprivileged |
-| **openwebui-lxc** | 201 | 10.96.200.24 | OpenWebUI | LLM chat interface | Unprivileged |
+| **proxy-lxc** | 200 | 10.96.200.200 | nginx | Main reverse proxy | Unprivileged |
+| **apps-lxc** | 201 | 10.96.200.201 | Node.js apps | Application hosting | Unprivileged |
+| **agent-lxc** | 202 | 10.96.200.202 | FastAPI | API gateway, auth, agent operations | Unprivileged |
+| **pg-lxc** | 203 | 10.96.200.203 | PostgreSQL 15+ | Relational database with RLS | Unprivileged |
+| **milvus-lxc** | 204 | 10.96.200.204 | Milvus (Docker) | Vector database + hybrid search | Privileged (Docker-in-LXC) |
+| **files-lxc** | 205 | 10.96.200.205 | MinIO | S3-compatible file storage | Privileged |
+| **ingest-lxc** | 206 | 10.96.200.206 | Python worker, Redis | File processing, job queue | Unprivileged |
+| **litellm-lxc** | 207 | 10.96.200.207 | liteLLM | LLM gateway and routing | Unprivileged |
+| **vllm-lxc** | 208 | 10.96.200.208 | vLLM | Local LLM inference | Unprivileged |
 
 ### Network Configuration
 
@@ -440,7 +442,7 @@ make all
 # Applied via Ansible task (check schema_migrations table for status)
 
 # Manual execution (if needed)
-psql -h 10.96.200.26 -U postgres -d busibox -f migrations/001_initial_schema.sql
+psql -h 10.96.200.203 -U postgres -d busibox -f migrations/001_initial_schema.sql
 ```
 
 ---
@@ -538,7 +540,7 @@ journalctl -u <service> -n 50
 
 **Database connection errors**:
 ```bash
-psql -h 10.96.200.26 -U postgres -d busibox -c "SELECT version();"
+psql -h 10.96.200.203 -U postgres -d busibox -c "SELECT version();"
 # Check connection pool limits
 ```
 
@@ -554,7 +556,7 @@ docker logs milvus-standalone
 - **Logs**: `journalctl -u <service> -f`
 - **Health checks**: `curl http://<container-ip>:<port>/health`
 - **Database**: `psql`, `pgAdmin`
-- **Object storage**: MinIO console (http://10.96.200.28:9001)
+- **Object storage**: MinIO console (http://10.96.200.205:9001)
 - **Vector DB**: `pymilvus` client, Milvus dashboard
 - **Network**: `ping`, `telnet`, `nc`, `tcpdump`
 

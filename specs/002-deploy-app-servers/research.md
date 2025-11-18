@@ -67,7 +67,7 @@ systemctl status certbot.timer
    # vault.yml (encrypted with ansible-vault)
    secrets:
      agent_server:
-       database_url: "postgresql://user:pass@10.96.200.26/busibox"
+       database_url: "postgresql://user:pass@10.96.200.203/busibox"
        minio_access_key: "AKIAIOSFODNN7EXAMPLE"
        minio_secret_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
      cashman_portal:
@@ -126,7 +126,7 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/ai.jaycashman.com/privkey.pem;
 
     location / {
-        proxy_pass http://10.96.200.25:3001;  # agent-client on apps-lxc
+        proxy_pass http://10.96.200.201:3001;  # agent-client on apps-lxc
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -146,14 +146,14 @@ server {
 
     # Main portal (root path)
     location / {
-        proxy_pass http://10.96.200.25:3000;  # cashman portal on apps-lxc
+        proxy_pass http://10.96.200.201:3000;  # cashman portal on apps-lxc
         proxy_set_header Host $host;
         # ... same proxy headers
     }
 
     # Agent client (sub-path)
     location /agents {
-        proxy_pass http://10.96.200.25:3001;  # agent-client on apps-lxc
+        proxy_pass http://10.96.200.201:3001;  # agent-client on apps-lxc
         proxy_set_header Host $host;
         # ... same proxy headers
     }
@@ -201,7 +201,7 @@ applications:
   - name: agent-server
     github_repo: jazzmind/agent-server
     container: agent-lxc
-    container_ip: 10.96.200.30
+    container_ip: 10.96.200.202
     port: 8000
     deploy_path: /srv/agent
     health_endpoint: /health
@@ -214,7 +214,7 @@ applications:
   - name: cashman-portal
     github_repo: jazzmind/cashman
     container: apps-lxc
-    container_ip: 10.96.200.25
+    container_ip: 10.96.200.201
     port: 3000
     deploy_path: /srv/apps/cashman
     health_endpoint: /api/health
@@ -232,7 +232,7 @@ applications:
   - name: agent-client
     github_repo: jazzmind/agent-client
     container: apps-lxc
-    container_ip: 10.96.200.25
+    container_ip: 10.96.200.201
     port: 3001
     deploy_path: /srv/apps/agent-client
     health_endpoint: /health
@@ -243,7 +243,7 @@ applications:
         domain: ai.jaycashman.com
         path: /agents
     env:
-      AGENT_API_URL: http://10.96.200.30:8000
+      AGENT_API_URL: http://10.96.200.202:8000
     secrets:
       - agent_api_key
 ```
@@ -428,7 +428,7 @@ location / {
 ```nginx
 location = /auth {
     internal;
-    proxy_pass http://10.96.200.25:3000/api/validate-session;
+    proxy_pass http://10.96.200.201:3000/api/validate-session;
     proxy_pass_request_body off;
     proxy_set_header Content-Length "";
     proxy_set_header X-Original-URI $request_uri;
@@ -436,7 +436,7 @@ location = /auth {
 
 location /agents {
     auth_request /auth;
-    proxy_pass http://10.96.200.25:3001;
+    proxy_pass http://10.96.200.201:3001;
 }
 ```
 
@@ -478,7 +478,7 @@ location /agents {
 - jq (JSON processing in bash scripts)
 
 **Configuration Prerequisites**:
-- DNS records: `ai.jaycashman.com` and `*.ai.jaycashman.com` → NGINX IP (10.96.200.24)
+- DNS records: `ai.jaycashman.com` and `*.ai.jaycashman.com` → NGINX IP (10.96.200.200)
 - DNS provider API credentials (for Let's Encrypt DNS-01 challenge)
 - Ansible vault password (for secrets encryption)
 

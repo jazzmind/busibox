@@ -41,7 +41,7 @@ This will:
 
 ```bash
 # SSH into milvus-lxc
-ssh root@10.96.200.24
+ssh root@10.96.200.204
 
 # Check collection exists
 python3 << 'EOF'
@@ -170,10 +170,10 @@ This will:
 
 ```bash
 # Check service status
-ssh root@10.96.200.30 "systemctl status ingest-api"
+ssh root@10.96.200.206 "systemctl status ingest-api"
 
 # Test health endpoint
-curl http://10.96.200.30:8002/health
+curl http://10.96.200.206:8002/health
 ```
 
 Expected response:
@@ -210,17 +210,17 @@ This will:
 
 ```bash
 # Check worker status
-ssh root@10.96.200.30 "systemctl status ingest-worker"
+ssh root@10.96.200.206 "systemctl status ingest-worker"
 
 # Check worker logs
-ssh root@10.96.200.30 "journalctl -u ingest-worker -n 50 --no-pager"
+ssh root@10.96.200.206 "journalctl -u ingest-worker -n 50 --no-pager"
 ```
 
 Expected log output:
 ```
 Nov 05 10:00:00 ingest-lxc python[12345]: [INFO] Worker started (PID: 12345)
-Nov 05 10:00:00 ingest-lxc python[12345]: [INFO] Connected to Redis at redis://10.96.200.30:6379
-Nov 05 10:00:00 ingest-lxc python[12345]: [INFO] Connected to PostgreSQL at postgresql://10.96.200.13:5432
+Nov 05 10:00:00 ingest-lxc python[12345]: [INFO] Connected to Redis at redis://10.96.200.206:6379
+Nov 05 10:00:00 ingest-lxc python[12345]: [INFO] Connected to PostgreSQL at postgresql://10.96.200.203:5432
 Nov 05 10:00:00 ingest-lxc python[12345]: [INFO] Waiting for jobs...
 ```
 
@@ -241,7 +241,7 @@ echo "Test document for ingestion" > /tmp/test.txt
 **Upload via API**:
 
 ```bash
-curl -X POST http://10.96.200.30:8002/upload \
+curl -X POST http://10.96.200.206:8002/upload \
   -H "X-User-Id: user-test-123" \
   -F "file=@/tmp/test.txt"
 ```
@@ -272,7 +272,7 @@ FILE_ID="file-abc123..."
 
 ```bash
 curl -N -H "X-User-Id: user-test-123" \
-  http://10.96.200.30:8002/status/$FILE_ID
+  http://10.96.200.206:8002/status/$FILE_ID
 ```
 
 Expected output (streamed):
@@ -306,7 +306,7 @@ data: {"message":"Processing complete"}
 **Check PostgreSQL**:
 
 ```bash
-ssh root@10.96.200.13 "psql -U busibox -d busibox -c \"
+ssh root@10.96.200.203 "psql -U busibox -d busibox -c \"
   SELECT file_id, filename, document_type, chunk_count 
   FROM ingestion_files 
   WHERE file_id = '$FILE_ID';
@@ -323,7 +323,7 @@ Expected output:
 **Check Milvus**:
 
 ```bash
-ssh root@10.96.200.24 "python3 << 'EOF'
+ssh root@10.96.200.204 "python3 << 'EOF'
 from pymilvus import connections, Collection
 connections.connect(host='localhost', port='19530')
 collection = Collection('documents')
@@ -343,7 +343,7 @@ Found 1 vectors for file
 **Check MinIO**:
 
 ```bash
-ssh root@10.96.200.25 "mc ls minio/documents/user-test-123/$FILE_ID/"
+ssh root@10.96.200.205 "mc ls minio/documents/user-test-123/$FILE_ID/"
 ```
 
 Expected output:
@@ -359,7 +359,7 @@ Expected output:
 
 ```bash
 # This will be implemented in the agent-server, but you can test directly with Milvus
-ssh root@10.96.200.24 "python3 << 'EOF'
+ssh root@10.96.200.204 "python3 << 'EOF'
 from pymilvus import connections, Collection
 import litellm
 
@@ -372,7 +372,7 @@ query = 'test document'
 embedding = litellm.embedding(
     model='text-embedding-3-small',
     input=query,
-    api_base='http://10.96.200.28:4000'
+    api_base='http://10.96.200.207:4000'
 )
 query_vector = embedding['data'][0]['embedding']
 
@@ -405,7 +405,7 @@ Search results:
 **Delete the test file**:
 
 ```bash
-curl -X DELETE http://10.96.200.30:8002/files/$FILE_ID \
+curl -X DELETE http://10.96.200.206:8002/files/$FILE_ID \
   -H "X-User-Id: user-test-123"
 ```
 
@@ -415,12 +415,12 @@ Expected response: `204 No Content`
 
 ```bash
 # Check PostgreSQL (should be empty)
-ssh root@10.96.200.13 "psql -U busibox -d busibox -c \"
+ssh root@10.96.200.203 "psql -U busibox -d busibox -c \"
   SELECT COUNT(*) FROM ingestion_files WHERE file_id = '$FILE_ID';
 \""
 
 # Check Milvus (should return 0)
-ssh root@10.96.200.24 "python3 << 'EOF'
+ssh root@10.96.200.204 "python3 << 'EOF'
 from pymilvus import connections, Collection
 connections.connect(host='localhost', port='19530')
 collection = Collection('documents')
@@ -429,7 +429,7 @@ print(f'Vectors remaining: {len(results)}')
 EOF"
 
 # Check MinIO (should be gone)
-ssh root@10.96.200.25 "mc ls minio/documents/user-test-123/$FILE_ID/ 2>&1"
+ssh root@10.96.200.205 "mc ls minio/documents/user-test-123/$FILE_ID/ 2>&1"
 ```
 
 Expected outputs:
@@ -456,7 +456,7 @@ Apps (Next.js in apps-lxc) need to know about the ingestion API endpoint.
 ```yaml
 # provision/ansible/inventory/test/group_vars/apps.yml
 app_env:
-  INGEST_API_URL: "http://10.96.200.30:8002"
+  INGEST_API_URL: "http://10.96.200.206:8002"
 ```
 
 **Redeploy apps**:
@@ -534,8 +534,8 @@ export async function GET(
 
 **Check logs**:
 ```bash
-ssh root@10.96.200.30 "journalctl -u ingest-api -n 100 --no-pager"
-ssh root@10.96.200.30 "journalctl -u ingest-worker -n 100 --no-pager"
+ssh root@10.96.200.206 "journalctl -u ingest-api -n 100 --no-pager"
+ssh root@10.96.200.206 "journalctl -u ingest-worker -n 100 --no-pager"
 ```
 
 **Common causes**:
@@ -551,7 +551,7 @@ ssh root@10.96.200.30 "journalctl -u ingest-worker -n 100 --no-pager"
 
 **Check Redis queue**:
 ```bash
-ssh root@10.96.200.30 "redis-cli XLEN jobs:ingestion"
+ssh root@10.96.200.206 "redis-cli XLEN jobs:ingestion"
 ```
 
 If queue is growing but worker isn't processing:
@@ -569,13 +569,13 @@ journalctl -u ingest-worker -f
 
 **Test liteLLM directly**:
 ```bash
-curl -X POST http://10.96.200.28:4000/embeddings \
+curl -X POST http://10.96.200.207:4000/embeddings \
   -H "Content-Type: application/json" \
   -d '{"model": "text-embedding-3-small", "input": "test"}'
 ```
 
 If this fails:
-- Check liteLLM logs: `ssh root@10.96.200.28 "journalctl -u litellm -n 100"`
+- Check liteLLM logs: `ssh root@10.96.200.207 "journalctl -u litellm -n 100"`
 - Verify API key in liteLLM environment
 - Check network connectivity to OpenAI (if using cloud)
 
@@ -585,7 +585,7 @@ If this fails:
 
 **Check Milvus connection**:
 ```bash
-ssh root@10.96.200.24 "python3 << 'EOF'
+ssh root@10.96.200.204 "python3 << 'EOF'
 from pymilvus import connections, utility
 connections.connect(host='localhost', port='19530')
 print('Server version:', utility.get_server_version())
@@ -608,7 +608,7 @@ To process more files concurrently, increase worker count:
 
 **Edit systemd service**:
 ```bash
-ssh root@10.96.200.30
+ssh root@10.96.200.206
 nano /etc/systemd/system/ingest-worker@.service
 ```
 

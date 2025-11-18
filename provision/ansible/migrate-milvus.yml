@@ -236,9 +236,7 @@
                         - "19530:19530"
                         - "9091:9091"
                       environment:
-                        ETCD_USE_EMBED: "true"
-                        MINIO_USE_EMBED: "true"
-                        ROCKSMQ_USE_EMBED: "true"
+                        ETCD_USE_EMBED: "false"
                         COMMON_STORAGETYPE: local
                       volumes:
                         - /srv/milvus/data:/var/lib/milvus

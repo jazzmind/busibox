@@ -11,7 +11,7 @@
 The Busibox testing framework provides **isolated, safe testing** of the entire infrastructure provisioning process without affecting production containers. Test containers use:
 
 - **Container IDs**: 301-307 (Production IDs + 100)
-- **IP Range**: 10.96.201.24-30 (Different subnet from production)
+- **IP Range**: 10.96.201.200-209 (Different subnet from production)
 - **Name Prefix**: TEST- (e.g., TEST-pg-lxc)
 - **Database**: busibox_test (separate from production)
 
@@ -93,13 +93,15 @@ bash test-infrastructure.sh cleanup
 
 | Production | Test | Name | IP |
 |-----------|------|------|-----|
-| 201 | **301** | TEST-openwebui-lxc | 10.96.201.24 |
-| 202 | **302** | TEST-apps-lxc | 10.96.201.25 |
-| 203 | **303** | TEST-pg-lxc | 10.96.201.26 |
-| 204 | **304** | TEST-milvus-lxc | 10.96.201.27 |
-| 205 | **305** | TEST-files-lxc | 10.96.201.28 |
-| 206 | **306** | TEST-ingest-lxc | 10.96.201.29 |
-| 207 | **307** | TEST-agent-lxc | 10.96.201.30 |
+| 200 | **300** | TEST-proxy-lxc | 10.96.201.200 |
+| 201 | **301** | TEST-apps-lxc | 10.96.201.201 |
+| 202 | **302** | TEST-agent-lxc | 10.96.201.202 |
+| 203 | **303** | TEST-pg-lxc | 10.96.201.203 |
+| 204 | **304** | TEST-milvus-lxc | 10.96.201.204 |
+| 205 | **305** | TEST-files-lxc | 10.96.201.205 |
+| 206 | **306** | TEST-ingest-lxc | 10.96.201.206 |
+| 207 | **307** | TEST-litellm-lxc | 10.96.201.207 |
+| 208 | **308** | TEST-vllm-lxc | 10.96.201.208 |
 
 ### Test Configuration Files
 
@@ -206,17 +208,17 @@ bash test-infrastructure.sh verify
 bash test-infrastructure.sh provision
 
 # 2. Test database connectivity
-psql -h 10.96.201.26 -U busibox_test_user -d busibox_test -c "SELECT 1"
+psql -h 10.96.201.203 -U busibox_test_user -d busibox_test -c "SELECT 1"
 
 # 3. Test MinIO connectivity
-curl http://10.96.201.28:9000/minio/health/live
+curl http://10.96.201.205:9000/minio/health/live
 
 # 4. Test Milvus connectivity
-curl http://10.96.201.27:9091/healthz
+curl http://10.96.201.204:9091/healthz
 
 # 5. Test Python service can connect to all dependencies
 # (requires agent API to be deployed)
-curl http://10.96.201.30:8000/health
+curl http://10.96.201.202:8000/health
 ```
 
 **Success Criteria**:
@@ -350,7 +352,7 @@ bash test-infrastructure.sh provision
 
 ```bash
 # Check SSH connectivity
-ssh root@10.96.201.26
+ssh root@10.96.201.203
 
 # Check containers are running
 pct status 301
@@ -385,7 +387,7 @@ pct exec 303 -- netstat -tlnp | grep 5432
 pct exec 303 -- cat /etc/postgresql/*/main/pg_hba.conf | grep "10.96.201"
 
 # Test connection from another container
-pct exec 307 -- psql -h 10.96.201.26 -U busibox_test_user -d busibox_test -c "SELECT 1"
+pct exec 307 -- psql -h 10.96.201.203 -U busibox_test_user -d busibox_test -c "SELECT 1"
 ```
 
 ---

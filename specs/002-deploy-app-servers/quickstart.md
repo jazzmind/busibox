@@ -28,8 +28,8 @@ Ensure the following from spec 001 are complete:
 **New requirements for spec 002:**
 
 - DNS records configured:
-  - `ai.jaycashman.com` → NGINX IP (10.96.200.24)
-  - `*.ai.jaycashman.com` → NGINX IP (10.96.200.24)
+  - `ai.jaycashman.com` → NGINX IP (10.96.200.200)
+  - `*.ai.jaycashman.com` → NGINX IP (10.96.200.200)
 - DNS provider API credentials (for Let's Encrypt wildcard cert)
 - Ansible vault password file
 
@@ -49,7 +49,7 @@ applications:
   - name: my-new-app
     github_repo: myorg/my-app
     container: apps-lxc
-    container_ip: 10.96.200.25
+    container_ip: 10.96.200.201
     port: 3002
     deploy_path: /srv/apps/my-new-app
     health_endpoint: /health
@@ -62,7 +62,7 @@ applications:
         path: /myapp
     env:
       NODE_ENV: "production"
-      API_URL: "http://10.96.200.30:8000"
+      API_URL: "http://10.96.200.202:8000"
     secrets:
       - database_url
       - api_key
@@ -83,7 +83,7 @@ Add to vault.yml:
 ```yaml
 secrets:
   my_new_app:  # Must match 'name' in apps.yml
-    database_url: "postgresql://busibox_user:password@10.96.200.26/busibox"
+    database_url: "postgresql://busibox_user:password@10.96.200.203/busibox"
     api_key: "your-secret-api-key-here"
 ```
 
@@ -98,7 +98,7 @@ cd provision/ansible
 make deploy-apps
 
 # Trigger immediate deployment (don't wait for deploywatch timer)
-ssh root@10.96.200.25 "bash /srv/deploywatch/apps/my-new-app.sh"
+ssh root@10.96.200.201 "bash /srv/deploywatch/apps/my-new-app.sh"
 ```
 
 ### Step 4: Verify
@@ -108,10 +108,10 @@ ssh root@10.96.200.25 "bash /srv/deploywatch/apps/my-new-app.sh"
 curl https://myapp.ai.jaycashman.com/health
 
 # Check deployment log
-ssh root@10.96.200.25 "journalctl -u deploywatch.service -n 50"
+ssh root@10.96.200.201 "journalctl -u deploywatch.service -n 50"
 
 # Check application process
-ssh root@10.96.200.25 "pm2 list"
+ssh root@10.96.200.201 "pm2 list"
 ```
 
 ---
@@ -239,7 +239,7 @@ Result: Both `https://agents.ai.jaycashman.com` and `https://ai.jaycashman.com/a
 
 1. Install certbot with DNS plugin:
    ```bash
-   ssh root@10.96.200.24  # NGINX container
+   ssh root@10.96.200.200  # NGINX (proxy-lxc) container
    apt-get install certbot python3-certbot-nginx python3-certbot-dns-cloudflare
    ```
 
@@ -268,13 +268,13 @@ Automatic via certbot systemd timer (runs twice daily):
 
 ```bash
 # Check renewal timer status
-ssh root@10.96.200.24 "systemctl status certbot.timer"
+ssh root@10.96.200.200 "systemctl status certbot.timer"
 
 # Manually test renewal (dry run)
-ssh root@10.96.200.24 "certbot renew --dry-run"
+ssh root@10.96.200.200 "certbot renew --dry-run"
 
 # Force renewal
-ssh root@10.96.200.24 "certbot renew --force-renewal"
+ssh root@10.96.200.200 "certbot renew --force-renewal"
 ```
 
 Certbot automatically reloads NGINX after renewal.
@@ -301,7 +301,7 @@ Force immediate deployment:
 
 ```bash
 # SSH to target container
-ssh root@10.96.200.25  # apps-lxc
+ssh root@10.96.200.201  # apps-lxc
 
 # Run deploywatch script for specific app
 bash /srv/deploywatch/apps/cashman-portal.sh
@@ -317,13 +317,13 @@ pm2 restart cashman-portal
 
 ```bash
 # Check deploywatch logs
-ssh root@10.96.200.25 "journalctl -u deploywatch.service -n 100"
+ssh root@10.96.200.201 "journalctl -u deploywatch.service -n 100"
 
 # Check application logs
-ssh root@10.96.200.25 "pm2 logs cashman-portal --lines 50"
+ssh root@10.96.200.201 "pm2 logs cashman-portal --lines 50"
 
 # Check current version
-ssh root@10.96.200.25 "cat /srv/apps/cashman/.version"
+ssh root@10.96.200.201 "cat /srv/apps/cashman/.version"
 
 # Check health endpoint
 curl -f https://ai.jaycashman.com/api/health || echo "Health check failed"
@@ -340,16 +340,16 @@ curl -f https://ai.jaycashman.com/api/health || echo "Health check failed"
 **Diagnosis**:
 ```bash
 # Check application is running
-ssh root@10.96.200.25 "pm2 list"
+ssh root@10.96.200.201 "pm2 list"
 
 # Check application logs
-ssh root@10.96.200.25 "pm2 logs cashman-portal --lines 50"
+ssh root@10.96.200.201 "pm2 logs cashman-portal --lines 50"
 
 # Check if port is listening
-ssh root@10.96.200.25 "netstat -tlnp | grep 3000"
+ssh root@10.96.200.201 "netstat -tlnp | grep 3000"
 
 # Check NGINX error log
-ssh root@10.96.200.24 "tail -f /var/log/nginx/error.log"
+ssh root@10.96.200.200 "tail -f /var/log/nginx/error.log"
 ```
 
 **Solutions**:
@@ -366,10 +366,10 @@ ssh root@10.96.200.24 "tail -f /var/log/nginx/error.log"
 **Diagnosis**:
 ```bash
 # Check certificate expiration
-ssh root@10.96.200.24 "certbot certificates"
+ssh root@10.96.200.200 "certbot certificates"
 
 # Check NGINX is using correct cert
-ssh root@10.96.200.24 "nginx -T | grep ssl_certificate"
+ssh root@10.96.200.200 "nginx -T | grep ssl_certificate"
 ```
 
 **Solutions**:
@@ -386,13 +386,13 @@ ssh root@10.96.200.24 "nginx -T | grep ssl_certificate"
 **Diagnosis**:
 ```bash
 # Check .env file exists and has correct permissions
-ssh root@10.96.200.25 "ls -la /srv/apps/cashman/.env"
+ssh root@10.96.200.201 "ls -la /srv/apps/cashman/.env"
 
 # Check .env content (as root)
-ssh root@10.96.200.25 "cat /srv/apps/cashman/.env"
+ssh root@10.96.200.201 "cat /srv/apps/cashman/.env"
 
 # Check PM2 is loading environment file
-ssh root@10.96.200.25 "pm2 show cashman-portal"
+ssh root@10.96.200.201 "pm2 show cashman-portal"
 ```
 
 **Solutions**:
@@ -409,22 +409,22 @@ ssh root@10.96.200.25 "pm2 show cashman-portal"
 **Diagnosis**:
 ```bash
 # Check deploywatch timer status
-ssh root@10.96.200.25 "systemctl status deploywatch.timer"
+ssh root@10.96.200.201 "systemctl status deploywatch.timer"
 
 # Check last run
-ssh root@10.96.200.25 "journalctl -u deploywatch.service | tail -20"
+ssh root@10.96.200.201 "journalctl -u deploywatch.service | tail -20"
 ```
 
 **Solutions**:
 ```bash
 # Start/enable timer
-ssh root@10.96.200.25 "systemctl enable --now deploywatch.timer"
+ssh root@10.96.200.201 "systemctl enable --now deploywatch.timer"
 
 # Manually trigger run
-ssh root@10.96.200.25 "systemctl start deploywatch.service"
+ssh root@10.96.200.201 "systemctl start deploywatch.service"
 
 # Check for errors in script
-ssh root@10.96.200.25 "bash -x /srv/deploywatch/deploywatch.sh"
+ssh root@10.96.200.201 "bash -x /srv/deploywatch/deploywatch.sh"
 ```
 
 ---
@@ -436,21 +436,21 @@ ssh root@10.96.200.25 "bash -x /srv/deploywatch/deploywatch.sh"
 **Diagnosis**:
 ```bash
 # Test NGINX configuration
-ssh root@10.96.200.24 "nginx -t"
+ssh root@10.96.200.200 "nginx -t"
 
 # Check NGINX error log
-ssh root@10.96.200.24 "tail -50 /var/log/nginx/error.log"
+ssh root@10.96.200.200 "tail -50 /var/log/nginx/error.log"
 ```
 
 **Solutions**:
 ```bash
 # Fix configuration error shown in nginx -t output
 # Then reload
-ssh root@10.96.200.24 "nginx -s reload"
+ssh root@10.96.200.200 "nginx -s reload"
 
 # If broken, restore previous config
-ssh root@10.96.200.24 "cp /etc/nginx/sites-available/myapp.conf.backup /etc/nginx/sites-available/myapp.conf"
-ssh root@10.96.200.24 "nginx -t && nginx -s reload"
+ssh root@10.96.200.200 "cp /etc/nginx/sites-available/myapp.conf.backup /etc/nginx/sites-available/myapp.conf"
+ssh root@10.96.200.200 "nginx -t && nginx -s reload"
 ```
 
 ---
@@ -492,7 +492,7 @@ ssh root@10.96.200.24 "nginx -t && nginx -s reload"
 
 4. Restart application:
    ```bash
-   ssh root@10.96.200.25 "pm2 restart myapp"
+   ssh root@10.96.200.201 "pm2 restart myapp"
    ```
 
 ### Remove an Application
@@ -506,8 +506,8 @@ ssh root@10.96.200.24 "nginx -t && nginx -s reload"
 
 3. Manually stop and remove from container:
    ```bash
-   ssh root@10.96.200.25 "pm2 delete myapp"
-   ssh root@10.96.200.25 "rm -rf /srv/apps/myapp"
+   ssh root@10.96.200.201 "pm2 delete myapp"
+   ssh root@10.96.200.201 "rm -rf /srv/apps/myapp"
    ```
 
 ---

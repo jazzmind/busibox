@@ -204,8 +204,8 @@ async def health_check():
 # Makefile verify target
 make verify:
     @echo "Checking service health..."
-    @curl -f http://10.96.200.24:3001/health || exit 1
-    @curl -f http://10.96.200.25:3002/health || exit 1
+    @curl -f http://10.96.200.202:8000/health || exit 1
+    @curl -f http://10.96.200.206:8002/health || exit 1
     @echo "All services healthy"
 ```
 
@@ -229,17 +229,17 @@ model_list:
   - model_name: llama2-7b
     litellm_params:
       model: ollama/llama2
-      api_base: http://10.96.200.30:11434
+      api_base: http://10.96.200.208:11434
   
   - model_name: codellama-13b
     litellm_params:
       model: ollama/codellama
-      api_base: http://10.96.200.30:11434
+      api_base: http://10.96.200.208:11434
   
   - model_name: mistral-7b
     litellm_params:
       model: vllm/mistral-7b-instruct
-      api_base: http://10.96.200.31:8000
+      api_base: http://10.96.200.208:8000
 ```
 
 ### Rationale
@@ -298,7 +298,7 @@ MinIO bucket notifications trigger webhook to agent API, which enqueues ingestio
 **MinIO Configuration** (via Ansible):
 ```bash
 mc admin config set myminio notify_webhook:1 \
-  endpoint="http://10.96.200.24:3001/webhooks/minio" \
+  endpoint="http://10.96.200.202:8000/webhooks/minio" \
   queue_limit="100" \
   queue_dir="/tmp/minio-events"
 
@@ -569,11 +569,11 @@ verify-quick:
 set -e
 
 SERVICES=(
-    "10.96.200.21:9000:minio"
-    "10.96.200.22:5432:postgres"
-    "10.96.200.23:19530:milvus"
-    "10.96.200.24:3001:agent-api"
-    "10.96.200.25:3002:ingest-worker"
+    "10.96.200.205:9000:minio"
+    "10.96.200.203:5432:postgres"
+    "10.96.200.204:19530:milvus"
+    "10.96.200.202:8000:agent-api"
+    "10.96.200.206:8002:ingest-worker"
 )
 
 echo "Checking service health..."

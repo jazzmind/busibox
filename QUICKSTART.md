@@ -39,13 +39,15 @@ bash create_lxc_base.sh
 ```
 
 **Creates 7 containers**:
-- `201` - openwebui-lxc (10.96.200.24)
-- `202` - apps-lxc (10.96.200.25)
-- `203` - pg-lxc (10.96.200.26)
-- `204` - milvus-lxc (10.96.200.27)
-- `205` - files-lxc (10.96.200.28)
-- `206` - ingest-lxc (10.96.200.29)
-- `207` - agent-lxc (10.96.200.30)
+- `200` - proxy-lxc (10.96.200.200)
+- `201` - apps-lxc (10.96.200.201)
+- `202` - agent-lxc (10.96.200.202)
+- `203` - pg-lxc (10.96.200.203)
+- `204` - milvus-lxc (10.96.200.204)
+- `205` - files-lxc (10.96.200.205)
+- `206` - ingest-lxc (10.96.200.206)
+- `207` - litellm-lxc (10.96.200.207)
+- `208` - vllm-lxc (10.96.200.208)
 
 ### 2. Deploy Services (Admin Workstation)
 
