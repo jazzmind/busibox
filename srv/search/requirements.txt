@@ -10,7 +10,7 @@ pydantic==2.4.2
 pydantic-settings==2.0.3
 
 # Vector database - compatible with Milvus v2.6.x
-pymilvus>=2.6.7,<2.7.0
+pymilvus>=2.6.0,<2.7.0
 
 # Database
 asyncpg==0.29.0
