@@ -3,17 +3,24 @@
 # This playbook safely upgrades Milvus while preserving data
 #
 # Usage:
+#   # Auto-detect data version:
 #   ansible-playbook -i inventory/production/hosts.yml migrate-milvus.yml
-#   ansible-playbook -i inventory/test/hosts.yml migrate-milvus.yml
+#   
+#   # Manually specify data version (if auto-detection fails):
+#   ansible-playbook -i inventory/production/hosts.yml migrate-milvus.yml -e force_data_version=v2.5.4
+#   
+#   # Force migration even if versions appear the same:
+#   ansible-playbook -i inventory/production/hosts.yml migrate-milvus.yml -e force_migration=true -e force_data_version=v2.5.4
 #
 # What it does:
-#   1. Rolls back to Milvus 2.5.4 (if needed to read existing data)
-#   2. Starts Milvus 2.5.4 and waits for it to be healthy
-#   3. Backs up current Milvus data using milvus-backup
-#   4. Stops Milvus 2.5
-#   5. Upgrades to Milvus 2.6.5
-#   6. Starts Milvus 2.6.5 and waits for it to be healthy
-#   7. Restores data from backup
+#   1. Detects data version (or uses force_data_version)
+#   2. Rolls back to data version (if needed to read existing data)
+#   3. Starts Milvus at data version and waits for it to be healthy
+#   4. Backs up current Milvus data using milvus-backup
+#   5. Stops Milvus at data version
+#   6. Upgrades to target version
+#   7. Starts Milvus at target version and waits for it to be healthy
+#   8. Restores data from backup
 #
 # Recovery:
 #   If migration fails, backup is at /srv/milvus/backup-{timestamp}
@@ -25,6 +32,8 @@
     backup_dir: "/srv/milvus/backup-{{ ansible_date_time.iso8601_basic_short }}"
     milvus_host: "localhost"
     milvus_port: "19530"
+    force_migration: "{{ force_migration | default(false) }}"
+    force_data_version: "{{ force_data_version | default('') }}"
     
   tasks:
     # Determine target version from milvus role
@@ -71,7 +80,28 @@
       changed_when: false
       failed_when: false
       
-    - name: Get version from existing docker-compose.yml
+    - name: Check for Milvus version metadata in data directory
+      shell: |
+        # Try to find version info in etcd data
+        if [ -d /srv/milvus/data/etcd ]; then
+          # Check if there's version info we can extract
+          # Milvus 2.5 has different etcd structure than 2.6
+          if [ -f /srv/milvus/data/etcd/member/snap/db ]; then
+            strings /srv/milvus/data/etcd/member/snap/db 2>/dev/null | grep -o "2\.[0-9]\.[0-9]" | head -1 || echo "unknown"
+          else
+            echo "unknown"
+          fi
+        elif [ -d /srv/milvus/data ]; then
+          # If data exists but we can't determine version, it's likely from previous deployment
+          echo "unknown"
+        else
+          echo "none"
+        fi
+      register: data_version_check
+      changed_when: false
+      failed_when: false
+      
+    - name: Get last known version from docker-compose.yml as fallback
       shell: |
         if [ -f /srv/milvus/docker-compose.yml ]; then
           grep "image: milvusdb/milvus:" /srv/milvus/docker-compose.yml | head -1 | sed 's/.*milvusdb\/milvus://' | tr -d ' '
@@ -83,14 +113,41 @@
       
     - name: Determine data version (version that created the data)
       set_fact:
-        data_version: "{{ compose_version.stdout if compose_version.stdout != 'none' else 'v2.5.4' }}"
+        data_version: >-
+          {% if force_data_version != '' %}{{ force_data_version }}
+          {% elif data_version_check.stdout not in ['unknown', 'none', ''] %}v{{ data_version_check.stdout }}
+          {% elif compose_version.stdout not in ['none', ''] %}{{ compose_version.stdout }}
+          {% else %}v2.5.4{% endif %}
+        data_version_method: >-
+          {% if force_data_version != '' %}manually_specified
+          {% elif data_version_check.stdout not in ['unknown', 'none', ''] %}detected_from_data
+          {% elif compose_version.stdout not in ['none', ''] %}from_docker_compose
+          {% else %}assumed_default{% endif %}
         
     - name: Display detected versions
       debug:
         msg: |
-          Running version: {{ running_version.stdout | default('not_running') }}
-          Data version (from docker-compose.yml): {{ data_version }}
-          Target version (from milvus role): {{ target_version }}
+          ╔══════════════════════════════════════════════════════════╗
+          ║            VERSION DETECTION                             ║
+          ╚══════════════════════════════════════════════════════════╝
+          
+          Running version:     {{ running_version.stdout | default('not_running') }}
+          Data version:        {{ data_version }} ({{ data_version_method }})
+          Target version:      {{ target_version }}
+          Force migration:     {{ force_migration }}
+          
+          {% if data_version_method == 'from_docker_compose' %}
+          ⚠️  WARNING: Could not detect data version from data directory.
+          Using docker-compose.yml version as fallback ({{ data_version }}).
+          
+          If Milvus is failing to start, run with:
+            -e force_data_version=v2.5.4 -e force_migration=true
+          {% elif data_version_method == 'assumed_default' %}
+          ⚠️  WARNING: Could not detect data version, assuming v2.5.4.
+          
+          If this is incorrect, run with:
+            -e force_data_version=vX.Y.Z
+          {% endif %}
         
     - name: Parse version numbers for comparison
       set_fact:
@@ -102,6 +159,7 @@
     - name: Check if upgrade is needed
       set_fact:
         needs_migration: "{{ 
+          force_migration | bool or
           (data_version_major|int < target_version_major|int) or
           (data_version_major|int == target_version_major|int and data_version_minor|int < target_version_minor|int)
         }}"
@@ -114,7 +172,12 @@
       block:
         - name: Already on target version
           debug:
-            msg: "Milvus data is already at {{ data_version }}, target is {{ target_version }}. No migration needed."
+            msg: |
+              Milvus data is already at {{ data_version }}, target is {{ target_version }}.
+              No migration needed.
+              
+              If you believe the data is from an older version, run with:
+                -e force_data_version=v2.5.4 -e force_migration=true
         - meta: end_play
       when: not needs_migration
       
