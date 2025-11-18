@@ -82,17 +82,13 @@
       
     - name: Check for Milvus version metadata in data directory
       shell: |
-        # Try to find version info in etcd data
         if [ -d /srv/milvus/data/etcd ]; then
-          # Check if there's version info we can extract
-          # Milvus 2.5 has different etcd structure than 2.6
           if [ -f /srv/milvus/data/etcd/member/snap/db ]; then
             strings /srv/milvus/data/etcd/member/snap/db 2>/dev/null | grep -o "2\.[0-9]\.[0-9]" | head -1 || echo "unknown"
           else
             echo "unknown"
           fi
         elif [ -d /srv/milvus/data ]; then
-          # If data exists but we can't determine version, it's likely from previous deployment
           echo "unknown"
         else
           echo "none"
