@@ -37,18 +37,32 @@
       
     - name: Display current version
       debug:
-        msg: "Current Milvus version: {{ current_version.stdout }}"
+        msg: "Current Milvus version: {{ current_version.stdout | default('empty') }}"
         
     - name: Check if upgrade is needed
       set_fact:
-        needs_migration: "{{ current_version.stdout is version('2.6.0', '<') and current_version.stdout not in ['unknown', 'not_running'] }}"
+        needs_migration: "{{ 
+          (current_version.stdout | default('') | length > 0) and 
+          (current_version.stdout not in ['unknown', 'not_running', '']) and 
+          (current_version.stdout is version('2.6.0', '<')) 
+        }}"
         
     - name: Skip migration if already on 2.6+
       debug:
         msg: "Milvus is already on version {{ current_version.stdout }}, skipping migration"
-      when: not needs_migration
+      when: 
+        - not needs_migration
+        - current_version.stdout not in ['not_running', 'unknown', '']
+        
+    - name: Handle non-running or unknown Milvus
+      debug:
+        msg: |
+          Milvus is not running or version is unknown.
+          Will skip backup and do clean installation.
+          If you have data to preserve, manually start Milvus first.
+      when: current_version.stdout in ['not_running', 'unknown', '']
       
-    - name: Perform migration
+    - name: Perform migration with backup
       when: needs_migration
       block:
         - name: Create backup directory
