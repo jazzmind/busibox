@@ -22,7 +22,7 @@ from fastapi import APIRouter, Request, Query, status
 from fastapi.responses import JSONResponse, StreamingResponse, Response
 from pydantic import BaseModel, Field
 
-from api.services.minio import MinIOService
+from api.services.minio_service import MinIOService
 from api.services.postgres import PostgresService
 from services.milvus_service import MilvusService
 from shared.config import Config

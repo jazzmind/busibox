@@ -10,9 +10,9 @@ from io import BytesIO
 import pytest
 import structlog
 
-from src.api.services.minio import MinIOService
+from src.api.services.minio_service import MinIOService
 from src.api.services.postgres import PostgresService
-from src.api.services.redis import RedisService
+from src.api.services.redis_service import RedisService
 from src.services.milvus_service import MilvusService
 from src.shared.config import Config
 
