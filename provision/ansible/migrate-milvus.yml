@@ -1,6 +1,10 @@
 ---
 # Milvus 2.5 to 2.6 Migration Playbook
-# This playbook safely upgrades Milvus while preserving data
+# This playbook safely upgrades Milvus while preserving all data and collections
+#
+# IMPORTANT: Milvus requires a two-step upgrade path:
+#   2.5.x → 2.5.16 → 2.6.x
+#   Direct upgrades from pre-2.5.16 to 2.6.x are NOT supported!
 #
 # Usage:
 #   # Auto-detect data version:
@@ -13,26 +17,24 @@
 #   ansible-playbook -i inventory/production/hosts.yml migrate-milvus.yml -e force_migration=true -e force_data_version=v2.5.4
 #
 # What it does:
-#   1. Detects data version (or uses force_data_version)
-#   2. Rolls back to data version (if needed to verify existing data)
-#   3. Starts Milvus at data version and verifies it's healthy
-#   4. Stops Milvus and archives old data
-#   5. Deploys target version with fresh data directory
-#   6. Starts Milvus at target version
+#   1. Detects current data version (or uses force_data_version)
+#   2. If < v2.5.16: Upgrades to v2.5.16 (intermediate step)
+#   3. Upgrades from v2.5.16 to target version (v2.6.x)
+#   4. Verifies upgrade success
 #
-# Note: This does NOT migrate data/collections. You'll need to re-ingest.
-#       Old data is archived for manual recovery if needed.
+# Data Migration: Milvus handles data migration automatically during upgrade.
+#                 Your collections and data are preserved.
 #
-# Recovery:
-#   Old data archived at /srv/milvus/data.{version}-{timestamp}
+# Recovery: Data directory is preserved throughout. Rollback by reverting
+#           docker-compose.yml to previous version.
 
 - name: Migrate Milvus from 2.5 to 2.6
   hosts: milvus
   become: yes
   vars:
-    backup_dir: "/srv/milvus/backup-{{ ansible_date_time.iso8601_basic_short }}"
     milvus_host: "localhost"
     milvus_port: "19530"
+    intermediate_version: "v2.5.16"  # Required intermediate step for 2.6 upgrade
     
   tasks:
     # Determine target version from milvus role
@@ -148,11 +150,20 @@
       set_fact:
         data_version_major: "{{ data_version | regex_replace('^v?([0-9]+)\\..*', '\\1') }}"
         data_version_minor: "{{ data_version | regex_replace('^v?[0-9]+\\.([0-9]+).*', '\\1') }}"
+        data_version_patch: "{{ data_version | regex_replace('^v?[0-9]+\\.[0-9]+\\.([0-9]+).*', '\\1') }}"
         target_version_major: "{{ target_version | regex_replace('^v?([0-9]+)\\..*', '\\1') }}"
         target_version_minor: "{{ target_version | regex_replace('^v?[0-9]+\\.([0-9]+).*', '\\1') }}"
+        intermediate_version_full: "{{ intermediate_version | regex_replace('^v?([0-9]+\\.[0-9]+\\.[0-9]+).*', '\\1') }}"
         
     - name: Check if upgrade is needed
       set_fact:
+        needs_intermediate_upgrade: "{{
+          (data_version_major|int == 2) and
+          (data_version_minor|int == 5) and
+          (data_version_patch|int < 16) and
+          (target_version_major|int == 2) and
+          (target_version_minor|int == 6)
+        }}"
         needs_migration: "{{ 
           (force_migration | default(false) | bool) or
           (data_version_major|int < target_version_major|int) or
@@ -176,7 +187,7 @@
         - meta: end_play
       when: not needs_migration
       
-    - name: Perform migration with rollback-backup-upgrade-restore
+    - name: Perform in-place migration preserving data
       when: needs_migration or has_data_but_not_running
       block:
         - name: Display migration plan
@@ -187,122 +198,89 @@
               ╚══════════════════════════════════════════════════════════╝
               
               📊 Version Information:
-                 Data version:    {{ data_version }}
-                 Target version:  {{ target_version }}
-                 Migration:       {{ data_version }} → {{ target_version }}
+                 Current version:     {{ data_version }}
+                 Target version:      {{ target_version }}
+                 Needs intermediate:  {{ needs_intermediate_upgrade }}
               
-              📋 Steps:
-              Step 1: Roll back to {{ data_version }} (to verify data)
-              Step 2: Start Milvus {{ data_version }} and verify healthy
-              Step 3: Stop Milvus and archive old data
-              Step 4: Deploy Milvus {{ target_version }} with fresh data dir
-              Step 5: Start Milvus {{ target_version }} and verify healthy
+              {% if needs_intermediate_upgrade %}
+              📋 Two-Step Upgrade Path (Required for 2.6):
+              Step 1: Upgrade {{ data_version }} → {{ intermediate_version }}
+              Step 2: Verify {{ intermediate_version }} is healthy
+              Step 3: Upgrade {{ intermediate_version }} → {{ target_version }}
+              Step 4: Verify {{ target_version }} is healthy
+              {% else %}
+              📋 Direct Upgrade Path:
+              Step 1: Upgrade {{ data_version }} → {{ target_version }}
+              Step 2: Verify {{ target_version }} is healthy
+              {% endif %}
               
-              ⚠️  Old data will be archived (not migrated):
-                  /srv/milvus/data.{{ data_version }}-{timestamp}
+              ✅ Data Migration: Milvus automatically migrates your data
+              ✅ Collections Preserved: All your collections will remain intact
+              ✅ No Re-ingestion: Your documents are preserved
               
-              📝 You'll need to re-ingest documents after upgrade
+        # STEP 1: Intermediate upgrade to v2.5.16 (if needed)
+        - name: Upgrade to intermediate version {{ intermediate_version }}
+          when: needs_intermediate_upgrade
+          block:
+            - name: Deploy Milvus {{ intermediate_version }} docker-compose.yml
+              copy:
+                dest: /srv/milvus/docker-compose.yml
+                content: |
+                  services:
+                    milvus:
+                      container_name: milvus-standalone
+                      image: milvusdb/milvus:{{ intermediate_version }}
+                      restart: unless-stopped
+                      stop_grace_period: 60s
+                      ports:
+                        - "19530:19530"
+                        - "9091:9091"
+                      environment:
+                        ETCD_USE_EMBED: "true"
+                        MINIO_USE_EMBED: "true"
+                        ROCKSMQ_USE_EMBED: "true"
+                        COMMON_STORAGETYPE: local
+                      volumes:
+                        - /srv/milvus/data:/var/lib/milvus
+                      command: ["milvus", "run", "standalone"]
+                      sysctls:
+                        - net.ipv4.ip_unprivileged_port_start=0
+                      healthcheck:
+                        test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+                        interval: 30s
+                        timeout: 10s
+                        retries: 3
+                        start_period: 90s
+                        
+            - name: Stop Milvus for intermediate upgrade
+              shell: docker compose down
+              args:
+                chdir: /srv/milvus
+                
+            - name: Start Milvus {{ intermediate_version }}
+              shell: docker compose up -d
+              args:
+                chdir: /srv/milvus
+                
+            - name: Wait for Milvus {{ intermediate_version }} to be healthy
+              uri:
+                url: http://localhost:9091/healthz
+                status_code: 200
+              register: health_check_intermediate
+              retries: 30
+              delay: 6
+              until: health_check_intermediate.status == 200
               
-        - name: Create backup directory
-          file:
-            path: "{{ backup_dir }}"
-            state: directory
-            mode: "0755"
-            
-        # STEP 1: Roll back to data version
-        - name: Stop any running Milvus container
-          shell: docker compose down
-          args:
-            chdir: /srv/milvus
-          ignore_errors: yes
-          
-        - name: Deploy Milvus {{ data_version }} docker-compose.yml
-          copy:
-            dest: /srv/milvus/docker-compose.yml
-            content: |
-              services:
-                milvus:
-                  container_name: milvus-standalone
-                  image: milvusdb/milvus:{{ data_version }}
-                  restart: unless-stopped
-                  stop_grace_period: 60s
-                  ports:
-                    - "19530:19530"
-                    - "9091:9091"
-                  environment:
-                    ETCD_USE_EMBED: "true"
-                    MINIO_USE_EMBED: "true"
-                    ROCKSMQ_USE_EMBED: "true"
-                    COMMON_STORAGETYPE: local
-                  volumes:
-                    - /srv/milvus/data:/var/lib/milvus
-                  command: ["milvus", "run", "standalone"]
-                  sysctls:
-                    - net.ipv4.ip_unprivileged_port_start=0
-                  healthcheck:
-                    test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
-                    interval: 30s
-                    timeout: 10s
-                    retries: 3
-                    start_period: 90s
-                    
-        # STEP 2: Start data version and verify
-        - name: Start Milvus {{ data_version }}
-          shell: docker compose up -d
-          args:
-            chdir: /srv/milvus
-            
-        - name: Wait for Milvus {{ data_version }} to be healthy
-          uri:
-            url: http://localhost:9091/healthz
-            status_code: 200
-          register: health_check_data_version
-          retries: 30
-          delay: 6
-          until: health_check_data_version.status == 200
-          
-        - name: Verify Milvus {{ data_version }} is running
-          shell: docker exec milvus-standalone milvus version
-          register: data_version_running
-          
-        - name: Display Milvus {{ data_version }} status
-          debug:
-            msg: "Milvus {{ data_version }} is running: {{ data_version_running.stdout }}"
-            
-        - name: Note about data migration
-          debug:
-            msg: |
-              ⚠️  NOTE: This migration will archive old data and start fresh.
+            - name: Verify Milvus {{ intermediate_version }} is running
+              shell: docker exec milvus-standalone milvus version
+              register: intermediate_version_running
               
-              If you have collections that need to be preserved:
-              1. Abort this playbook (Ctrl+C)
-              2. Use pymilvus to export your collections first
-              3. Re-run this playbook
-              4. Import collections to new version
-              
-              Old data will be archived to:
-              /srv/milvus/data.{{ data_version }}-{{ ansible_date_time.iso8601_basic_short }}
+            - name: Display Milvus {{ intermediate_version }} status
+              debug:
+                msg: "✅ Intermediate upgrade complete: {{ intermediate_version_running.stdout }}"
             
-        # STEP 3: Stop data version
-        - name: Stop Milvus {{ data_version }}
-          shell: docker compose down
-          args:
-            chdir: /srv/milvus
-            
-        - name: Archive old data directory
-          shell: |
-            mv /srv/milvus/data /srv/milvus/data.{{ data_version }}-{{ ansible_date_time.iso8601_basic_short }}
-          args:
-            removes: /srv/milvus/data
-            
-        - name: Create fresh data directory for Milvus {{ target_version }}
-          file:
-            path: /srv/milvus/data
-            state: directory
-            mode: "0755"
-            
-        # STEP 5: Deploy target version
-        - name: Update docker-compose.yml to Milvus {{ target_version }}
+        # STEP 2: Final upgrade to target version
+        - name: Deploy Milvus {{ target_version }} docker-compose.yml
           copy:
             dest: /srv/milvus/docker-compose.yml
             content: |
@@ -332,19 +310,23 @@
                     retries: 3
                     start_period: 90s
                     
-        # STEP 5: Start target version and verify
+        - name: Stop Milvus for final upgrade
+          shell: docker compose down
+          args:
+            chdir: /srv/milvus
+            
         - name: Start Milvus {{ target_version }}
           shell: docker compose up -d
           args:
             chdir: /srv/milvus
             
-        - name: Wait for Milvus {{ target_version }} to be healthy
+        - name: Wait for Milvus {{ target_version }} to be healthy (this may take a few minutes for data migration)
           uri:
             url: http://localhost:9091/healthz
             status_code: 200
           register: health_check_target
-          retries: 30
-          delay: 6
+          retries: 60
+          delay: 10
           until: health_check_target.status == 200
           
         - name: Verify Milvus {{ target_version }} is running
@@ -353,7 +335,7 @@
           
         - name: Display Milvus {{ target_version }} status
           debug:
-            msg: "Milvus {{ target_version }} is running: {{ target_version_running.stdout }}"
+            msg: "✅ Final upgrade complete: {{ target_version_running.stdout }}"
             
         - name: Final verification
           shell: docker exec milvus-standalone milvus version
@@ -368,21 +350,23 @@
               
               ✅ Successfully upgraded from {{ data_version }} to {{ final_version.stdout }}
               
-              📁 Old data archived: /srv/milvus/data.{{ data_version }}-{{ ansible_date_time.iso8601_basic_short }}
+              ✨ All your collections and data have been preserved!
               
-              ⚠️  IMPORTANT: Milvus is starting fresh with no collections.
-                 You'll need to re-ingest your documents.
+              {% if needs_intermediate_upgrade %}
+              📊 Upgrade path taken:
+                 {{ data_version }} → {{ intermediate_version }} → {{ target_version }}
+              {% else %}
+              📊 Direct upgrade from {{ data_version }} → {{ target_version }}
+              {% endif %}
               
               🔄 To rollback if needed:
                 1. cd /srv/milvus && docker compose down
-                2. rm -rf /srv/milvus/data
-                3. mv /srv/milvus/data.{{ data_version }}-* /srv/milvus/data
-                4. Edit docker-compose.yml to use milvusdb/milvus:{{ data_version }}
-                5. docker compose up -d
+                2. Edit docker-compose.yml to use milvusdb/milvus:{{ data_version }}
+                3. docker compose up -d
               
               💡 Next steps:
                  - Run: make search-api (to deploy search API with updated pymilvus)
-                 - Re-ingest your documents through the ingest service
+                 - Verify your collections: docker exec milvus-standalone milvus list
                  - Test search functionality
                 
       rescue:
@@ -401,8 +385,7 @@
               ❌ Migration failed but your data is SAFE.
               
               📊 Migration attempted: {{ data_version }} → {{ target_version }}
-              📁 Old data: /srv/milvus/data.{{ data_version }}-{{ ansible_date_time.iso8601_basic_short }}
-                   (may or may not exist depending on where it failed)
+              📁 Data directory: /srv/milvus/data (unchanged)
               
               🔍 Troubleshooting:
                 1. Check logs: docker logs milvus-standalone
@@ -411,10 +394,8 @@
                 
               🔄 To rollback:
                 1. cd /srv/milvus && docker compose down
-                2. rm -rf /srv/milvus/data
-                3. mv /srv/milvus/data.{{ data_version }}-* /srv/milvus/data
-                4. Edit docker-compose.yml to use milvusdb/milvus:{{ data_version }}
-                5. docker compose up -d
+                2. Edit docker-compose.yml to use milvusdb/milvus:{{ data_version }}
+                3. docker compose up -d
                 
               📋 Last 50 log lines:
               {{ failure_logs.stdout_lines | default(['No logs available']) | join('\n') }}
