@@ -47,9 +47,9 @@
       Proceeding will attempt automatic upgrade...
   when: 
     - current_milvus_version.stdout is defined
+    - current_milvus_version.stdout | length > 0
+    - current_milvus_version.stdout not in ['none', 'unknown', '']
     - current_milvus_version.stdout is version('2.6.0', '<')
-    - current_milvus_version.stdout != 'none'
-    - current_milvus_version.stdout != 'unknown'
 
 - name: Deploy Milvus standalone
   copy:
