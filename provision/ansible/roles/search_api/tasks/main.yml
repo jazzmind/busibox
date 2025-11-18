@@ -96,7 +96,10 @@
   pip:
     requirements: /opt/search/requirements.txt
     virtualenv: "{{ search_api_venv_path }}"
-    state: latest
+    state: present
+    # Only upgrade if requirements.txt version constraints require it
+    # Using 'present' instead of 'latest' prevents unnecessary upgrades
+    # that consume large amounts of disk space (e.g., PyTorch/CUDA packages)
   become: yes
   become_user: "{{ search_api_user }}"
   notify: Restart search-api
