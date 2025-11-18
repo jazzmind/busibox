@@ -21,6 +21,36 @@
     - /srv/milvus
     - /srv/milvus/data
 
+- name: Check current Milvus version
+  shell: |
+    if docker ps | grep -q milvus-standalone; then
+      docker exec milvus-standalone milvus version 2>/dev/null | grep "Milvus version" | awk '{print $3}' || echo "unknown"
+    else
+      echo "none"
+    fi
+  register: current_milvus_version
+  changed_when: false
+  failed_when: false
+
+- name: Warn about Milvus 2.5 to 2.6 upgrade
+  debug:
+    msg: |
+      WARNING: Upgrading from Milvus 2.5 to 2.6 requires data migration.
+      Current version: {{ current_milvus_version.stdout }}
+      Target version: 2.6.5
+      
+      Milvus 2.6 has breaking changes. Your options:
+      1. Clear data directory (DATA LOSS): rm -rf /srv/milvus/data/* 
+      2. Back up and manually migrate data
+      3. Abort this deployment
+      
+      Proceeding will attempt automatic upgrade...
+  when: 
+    - current_milvus_version.stdout is defined
+    - current_milvus_version.stdout is version('2.6.0', '<')
+    - current_milvus_version.stdout != 'none'
+    - current_milvus_version.stdout != 'unknown'
+
 - name: Deploy Milvus standalone
   copy:
     dest: /srv/milvus/docker-compose.yml
@@ -52,6 +82,7 @@
             timeout: 10s
             retries: 3
             start_period: 90s
+  register: milvus_compose_changed
   notify: Up Milvus
 
 - name: Check for RocksDB corruption before stopping
