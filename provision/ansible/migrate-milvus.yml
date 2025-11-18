@@ -1,0 +1,230 @@
+---
+# Milvus 2.5 to 2.6 Migration Playbook
+# This playbook safely upgrades Milvus while preserving data
+#
+# Usage:
+#   ansible-playbook -i inventory/production/hosts.yml migrate-milvus.yml
+#   ansible-playbook -i inventory/test/hosts.yml migrate-milvus.yml
+#
+# What it does:
+#   1. Backs up current Milvus data using milvus-backup
+#   2. Stops Milvus 2.5
+#   3. Clears old data directory
+#   4. Starts Milvus 2.6
+#   5. Restores data from backup
+#
+# Recovery:
+#   If migration fails, backup is at /srv/milvus/backup-{timestamp}
+
+- name: Migrate Milvus from 2.5 to 2.6
+  hosts: milvus
+  become: yes
+  vars:
+    backup_dir: "/srv/milvus/backup-{{ ansible_date_time.iso8601_basic_short }}"
+    milvus_host: "localhost"
+    milvus_port: "19530"
+    
+  tasks:
+    - name: Check current Milvus version
+      shell: |
+        if docker ps | grep -q milvus-standalone; then
+          docker exec milvus-standalone milvus version 2>/dev/null | grep -i "milvus version" | awk '{print $3}' || echo "unknown"
+        else
+          echo "not_running"
+        fi
+      register: current_version
+      changed_when: false
+      
+    - name: Display current version
+      debug:
+        msg: "Current Milvus version: {{ current_version.stdout }}"
+        
+    - name: Check if upgrade is needed
+      set_fact:
+        needs_migration: "{{ current_version.stdout is version('2.6.0', '<') and current_version.stdout not in ['unknown', 'not_running'] }}"
+        
+    - name: Skip migration if already on 2.6+
+      debug:
+        msg: "Milvus is already on version {{ current_version.stdout }}, skipping migration"
+      when: not needs_migration
+      
+    - name: Perform migration
+      when: needs_migration
+      block:
+        - name: Create backup directory
+          file:
+            path: "{{ backup_dir }}"
+            state: directory
+            mode: "0755"
+            
+        - name: Install milvus-backup tool
+          block:
+            - name: Download milvus-backup
+              get_url:
+                url: https://github.com/zilliztech/milvus-backup/releases/latest/download/milvus-backup_Linux_x86_64.tar.gz
+                dest: /tmp/milvus-backup.tar.gz
+                mode: "0644"
+                
+            - name: Extract milvus-backup
+              unarchive:
+                src: /tmp/milvus-backup.tar.gz
+                dest: /usr/local/bin/
+                remote_src: yes
+                
+            - name: Make milvus-backup executable
+              file:
+                path: /usr/local/bin/milvus-backup
+                mode: "0755"
+                
+        - name: Create milvus-backup configuration
+          copy:
+            dest: /tmp/backup.yaml
+            content: |
+              # Milvus Backup Configuration
+              milvus:
+                address: {{ milvus_host }}
+                port: {{ milvus_port }}
+                authorizationEnabled: false
+                
+              minio:
+                # Use embedded MinIO (same as Milvus standalone)
+                address: {{ milvus_host }}
+                port: 9000
+                accessKeyID: minioadmin
+                secretAccessKey: minioadmin
+                useSSL: false
+                bucketName: milvus-bucket
+                
+              backup:
+                maxSegmentGroupSize: 2G
+                parallelism:
+                  backupCollection: 4
+                  copyData: 128
+                  
+        - name: Create backup of all collections
+          shell: |
+            /usr/local/bin/milvus-backup create \
+              --config /tmp/backup.yaml \
+              --backup-name migration-{{ ansible_date_time.iso8601_basic_short }} \
+              --backup-dir {{ backup_dir }}
+          register: backup_result
+          failed_when: backup_result.rc != 0
+          
+        - name: Display backup result
+          debug:
+            var: backup_result.stdout_lines
+            
+        - name: Stop Milvus
+          shell: docker compose down
+          args:
+            chdir: /srv/milvus
+            
+        - name: Archive old data directory
+          shell: |
+            mv /srv/milvus/data /srv/milvus/data.v2.5-{{ ansible_date_time.iso8601_basic_short }}
+          args:
+            removes: /srv/milvus/data
+            
+        - name: Create fresh data directory
+          file:
+            path: /srv/milvus/data
+            state: directory
+            mode: "0755"
+            
+        - name: Update docker-compose.yml to Milvus 2.6.5
+          copy:
+            dest: /srv/milvus/docker-compose.yml
+            content: |
+              services:
+                milvus:
+                  container_name: milvus-standalone
+                  image: milvusdb/milvus:v2.6.5
+                  restart: unless-stopped
+                  stop_grace_period: 60s
+                  ports:
+                    - "19530:19530"
+                    - "9091:9091"
+                  environment:
+                    ETCD_USE_EMBED: "true"
+                    MINIO_USE_EMBED: "true"
+                    ROCKSMQ_USE_EMBED: "true"
+                    COMMON_STORAGETYPE: local
+                  volumes:
+                    - /srv/milvus/data:/var/lib/milvus
+                  command: ["milvus", "run", "standalone"]
+                  sysctls:
+                    - net.ipv4.ip_unprivileged_port_start=0
+                  healthcheck:
+                    test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+                    interval: 30s
+                    timeout: 10s
+                    retries: 3
+                    start_period: 90s
+                    
+        - name: Start Milvus 2.6.5
+          shell: docker compose up -d
+          args:
+            chdir: /srv/milvus
+            
+        - name: Wait for Milvus to be healthy
+          uri:
+            url: http://localhost:9091/healthz
+            status_code: 200
+          register: health_check
+          retries: 30
+          delay: 6
+          until: health_check.status == 200
+          
+        - name: Restore data from backup
+          shell: |
+            /usr/local/bin/milvus-backup restore \
+              --config /tmp/backup.yaml \
+              --backup-name migration-{{ ansible_date_time.iso8601_basic_short }} \
+              --backup-dir {{ backup_dir }}
+          register: restore_result
+          failed_when: restore_result.rc != 0
+          
+        - name: Display restore result
+          debug:
+            var: restore_result.stdout_lines
+            
+        - name: Verify Milvus 2.6 is running
+          shell: docker exec milvus-standalone milvus version
+          register: new_version
+          
+        - name: Display new version
+          debug:
+            msg: "Successfully upgraded to: {{ new_version.stdout }}"
+            
+        - name: Display backup location
+          debug:
+            msg: |
+              Migration complete!
+              
+              Backup location: {{ backup_dir }}
+              Old data: /srv/milvus/data.v2.5-{{ ansible_date_time.iso8601_basic_short }}
+              
+              To rollback:
+                1. docker compose down
+                2. rm -rf /srv/milvus/data
+                3. mv /srv/milvus/data.v2.5-* /srv/milvus/data
+                4. Update docker-compose.yml to v2.5.4
+                5. docker compose up -d
+                
+      rescue:
+        - name: Migration failed
+          debug:
+            msg: |
+              Migration failed! Your data is safe.
+              
+              Backup: {{ backup_dir }}
+              Old data: /srv/milvus/data.v2.5-*
+              
+              To recover:
+                1. Check logs: docker logs milvus-standalone
+                2. Restore manually if needed
+                
+        - name: Fail playbook
+          fail:
+            msg: "Milvus migration failed. See above for recovery instructions."
+
