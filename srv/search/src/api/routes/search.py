@@ -67,10 +67,10 @@ async def search(
             limit=search_request.limit,
         )
         
-        # Prepare filters
+        # Prepare filters (exclude None values)
         filters = None
         if search_request.filters:
-            filters = search_request.filters.dict()
+            filters = search_request.filters.dict(exclude_none=True)
         
         # Execute search based on mode
         if search_request.mode == "keyword":
