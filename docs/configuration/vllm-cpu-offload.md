@@ -137,7 +137,30 @@ vllm_embedding_memory_limit: "70G"
 
 ## Deployment
 
-### Step 1: Verify System Resources
+### Step 1: Verify Container Memory Allocation
+
+**CRITICAL**: The Proxmox container must have enough RAM allocated to support CPU offloading.
+
+```bash
+# On Proxmox host, check container memory allocation
+pct config 208 | grep memory
+# Should show: memory: 204800  (200GB)
+
+# If memory is insufficient (e.g., 16384 = 16GB), update it:
+pct set 208 -memory 204800  # 200GB in MB
+pct reboot 208
+
+# Or use the check script:
+bash provision/pct/host/check-container-memory.sh production
+```
+
+**Memory Requirements**:
+- **Container allocation**: 200GB (204800MB) minimum
+- **Main vLLM service**: 180GB systemd limit
+- **vLLM Embedding service**: 70GB systemd limit
+- Both services run in the same container, so container needs 200GB total
+
+### Step 2: Verify System Resources
 
 ```bash
 # SSH to vLLM container
@@ -145,14 +168,14 @@ ssh root@10.96.200.208
 
 # Check available RAM
 free -h
-# Should show ~256GB total, with plenty free
+# Should show ~200GB total (container limit), with plenty free
 
 # Check current vLLM memory usage
 systemctl status vllm
 # Note current memory limit
 ```
 
-### Step 2: Update Configuration
+### Step 3: Update Configuration
 
 The configuration is already set with recommended values:
 
@@ -170,7 +193,7 @@ To adjust, edit:
 - `provision/ansible/inventory/production/group_vars/all.yml` (override defaults)
 - Or environment-specific files in `inventory/production/group_vars/`
 
-### Step 3: Deploy
+### Step 4: Deploy
 
 ```bash
 cd provision/ansible
@@ -185,7 +208,7 @@ make vllm-embedding INV=inventory/production
 ansible-playbook -i inventory/production/hosts.yml site.yml --tags vllm
 ```
 
-### Step 4: Verify Configuration
+### Step 5: Verify Configuration
 
 ```bash
 # Check vLLM service
@@ -364,7 +387,9 @@ journalctl -u vllm -n 50
 
 - **RAM**: 32GB system RAM (16GB for OS + 16GB for offload)
 - **vLLM version**: 0.6.0 or later
-- **Container memory**: Match systemd `MemoryMax` to `vllm_memory_limit`
+- **Container memory**: **200GB minimum** (204800MB) - Must be allocated at Proxmox level
+  - Check with: `pct config <CTID> | grep memory`
+  - Update with: `pct set <CTID> -memory 204800`
 
 ### Recommended
 

@@ -51,6 +51,15 @@ validate_env || exit 1
 # Create container (privileged for GPU access, 40GB disk)
 create_ct "$CTID" "$IP" "$NAME" priv 40 || exit 1
 
+# Increase memory allocation for vLLM container
+# vLLM needs significant RAM for CPU offloading of KV cache:
+# - Main vLLM service: 180GB (vllm_memory_limit)
+# - vLLM Embedding service: 70GB (vllm_embedding_memory_limit)
+# Allocate 200GB to support both services + overhead
+MEM_MB_VLLM=204800  # 200GB in MB
+pct set "$CTID" -memory "$MEM_MB_VLLM"
+echo "  Increased ${NAME} memory to ${MEM_MB_VLLM}MB (200GB) for CPU offloading"
+
 # Add model storage mount
 add_data_mount "$CTID" "/var/lib/llm-models/huggingface" "/var/lib/llm-models/huggingface" "0" || {
   echo "ERROR: Failed to add model storage mount"
@@ -111,6 +120,7 @@ echo "vLLM container created successfully!"
 echo "Container ID: $CTID"
 echo "IP Address: $IP"
 echo "Name: $NAME"
+echo "Memory: ${MEM_MB_VLLM}MB (200GB) - supports CPU offloading"
 if command -v nvidia-smi &>/dev/null; then
   GPU_COUNT=$(nvidia-smi -L | wc -l)
   if [[ "$GPU_COUNT" -gt 1 ]]; then
