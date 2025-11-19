@@ -304,24 +304,23 @@ class MilvusService:
             empty_sparse_embedding = csr_matrix([0.0])  # Minimal sparse vector
             
             # Verify final dimensions before creating entity
-            final_length = len(flattened_embedding)
-            if final_length != target_dim:
+            if len(page_vector) != target_dim:
                 logger.error(
-                    "Vector dimension mismatch after padding/truncation",
+                    "Page vector dimension mismatch",
                     page_number=page_number,
                     expected=target_dim,
-                    actual=final_length,
+                    actual=len(page_vector),
                 )
                 # Force correct length
-                if final_length < target_dim:
-                    flattened_embedding.extend([0.0] * (target_dim - final_length))
+                if len(page_vector) < target_dim:
+                    page_vector.extend([0.0] * (target_dim - len(page_vector)))
                 else:
-                    flattened_embedding = flattened_embedding[:target_dim]
+                    page_vector = page_vector[:target_dim]
             
             logger.debug(
                 "Creating entity for page",
                 page_number=page_number,
-                vector_length=len(flattened_embedding),
+                page_vector_length=len(page_vector),
                 text_dense_length=len(zero_dense_embedding),
             )
             
@@ -332,9 +331,9 @@ class MilvusService:
                 "page_number": page_number,
                 "modality": "page_image",
                 "text": f"Page {page_number}",  # Placeholder text
-                "text_dense": zero_dense_embedding,  # Zero vector (page images don't have text embeddings)
+                "text_dense": zero_dense_embedding,  # Zero vector (4096 dims) - page images don't have text embeddings
                 "text_sparse": empty_sparse_embedding,  # Empty sparse vector (no BM25 for images)
-                "page_vectors": flattened_embedding,
+                "page_vectors": page_vector,  # Single patch (128 dims) matching schema
                 "user_id": user_id,
                 "metadata": {
                     "content_hash": content_hash,
