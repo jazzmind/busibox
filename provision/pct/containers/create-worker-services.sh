@@ -84,12 +84,13 @@ echo "==> Stopping container to configure GPU passthrough"
 pct stop "$CT_INGEST" || true
 sleep 2
 
-# Add GPU 0 passthrough for Marker PDF extraction
-# GPU 0 is dedicated to ingest (Marker uses ~3.5GB per task, can handle multiple tasks)
-add_gpu_passthrough "$CT_INGEST" 0 || {
+# Add ALL GPUs passthrough for ingest container
+# All GPUs are passed through, but services default to GPU 0 via CUDA_VISIBLE_DEVICES
+# This allows flexibility to use other GPUs if needed
+add_all_gpus "$CT_INGEST" || {
   echo "WARNING: Failed to configure GPU passthrough for ingest container"
   echo "  GPU passthrough can be configured manually later:"
-  echo "  bash provision/pct/host/configure-gpu-passthrough.sh $CT_INGEST 0"
+  echo "  bash provision/pct/host/configure-gpu-passthrough.sh $CT_INGEST"
 }
 
 # Restart container

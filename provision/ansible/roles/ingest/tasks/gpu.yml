@@ -64,19 +64,19 @@
   when: "'No NVIDIA devices' not in gpu_devices_check.stdout"
   tags: [ingest, ingest_gpu, ingest_configure]
 
-- name: Test PyTorch CUDA availability
+- name: Test PyTorch CUDA availability (all GPUs visible)
   shell: |
     {{ ingest_venv_dir | default('/srv/ingest/venv') }}/bin/python -c "
     import os
     print('LD_LIBRARY_PATH:', os.environ.get('LD_LIBRARY_PATH', 'NOT SET'))
-    print('CUDA_VISIBLE_DEVICES:', os.environ.get('CUDA_VISIBLE_DEVICES', 'NOT SET'))
+    print('CUDA_VISIBLE_DEVICES (for test):', os.environ.get('CUDA_VISIBLE_DEVICES', 'ALL GPUS'))
     try:
         import torch
         print('PyTorch version:', torch.__version__)
         print('CUDA available:', torch.cuda.is_available())
         if torch.cuda.is_available():
             print('CUDA version:', torch.version.cuda)
-            print('GPU count:', torch.cuda.device_count())
+            print('GPU count (all visible):', torch.cuda.device_count())
             for i in range(torch.cuda.device_count()):
                 print(f'GPU {i}: {torch.cuda.get_device_name(i)}')
     except ImportError:
@@ -86,7 +86,8 @@
     executable: /bin/bash
   environment:
     LD_LIBRARY_PATH: "/usr/local/cuda/targets/x86_64-linux/lib:/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu"
-    CUDA_VISIBLE_DEVICES: "{{ ingest_cuda_visible_devices | default('0') }}"
+    # Don't set CUDA_VISIBLE_DEVICES here - we want to see all GPUs in the test
+    # Services will use CUDA_VISIBLE_DEVICES from .env file (defaults to GPU 0)
   register: pytorch_cuda_test
   changed_when: false
   failed_when: false
