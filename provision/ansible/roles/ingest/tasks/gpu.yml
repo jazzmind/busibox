@@ -21,24 +21,29 @@
   failed_when: false
   tags: [ingest, ingest_gpu, ingest_install]
 
-- name: Warn if drivers not installed or version mismatch
-  debug:
-    msg: |
-      ⚠️  NVIDIA drivers must be installed using install-nvidia-drivers.sh
-      This ensures driver version matches the Proxmox host (prevents version mismatch errors).
-      
-      To install drivers:
-      1. SSH to Proxmox host: ssh root@proxmox-host
-      2. Run: bash /root/busibox/provision/pct/host/install-nvidia-drivers.sh {{ ansible_host | regex_replace('.*@', '') | regex_replace(':.*', '') }}
-      
-      Or use setup.sh GPU configuration step which does this automatically.
-  when: "'NOT_INSTALLED' in nvidia_drivers_check.stdout or 'Driver/library version mismatch' in nvidia_drivers_check.stderr"
+- name: Install NVIDIA drivers using install-nvidia-drivers.sh (on Proxmox host)
+  shell: "bash /root/busibox/provision/pct/host/install-nvidia-drivers.sh {{ container_id }}"
+  delegate_to: localhost
+  become: false
+  when: 
+    - "'No NVIDIA devices' not in gpu_devices_check.stdout"
+    - ("'NOT_INSTALLED' in nvidia_drivers_check.stdout" or "'Driver/library version mismatch' in nvidia_drivers_check.stderr")
+  register: driver_install_result
+  changed_when: driver_install_result.rc == 0
+  failed_when: driver_install_result.rc != 0
   tags: [ingest, ingest_gpu, ingest_install]
 
-- name: Display nvidia-smi output if drivers are working
+- name: Verify drivers after installation
+  shell: "nvidia-smi 2>&1"
+  register: nvidia_drivers_verify
+  changed_when: false
+  failed_when: "'Driver/library version mismatch' in nvidia_drivers_verify.stderr"
+  tags: [ingest, ingest_gpu, ingest_install]
+
+- name: Display nvidia-smi output
   debug:
-    msg: "{{ nvidia_drivers_check.stdout_lines }}"
-  when: "'NOT_INSTALLED' not in nvidia_drivers_check.stdout and 'Driver/library version mismatch' not in nvidia_drivers_check.stderr"
+    msg: "{{ nvidia_drivers_verify.stdout_lines }}"
+  when: "'Driver/library version mismatch' not in nvidia_drivers_verify.stderr"
   tags: [ingest, ingest_gpu, ingest_install]
 
     - name: Set LD_LIBRARY_PATH for CUDA libraries
