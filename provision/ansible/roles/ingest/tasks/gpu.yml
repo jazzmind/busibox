@@ -27,7 +27,7 @@
   become: false
   when: 
     - "'No NVIDIA devices' not in gpu_devices_check.stdout"
-    - ("'NOT_INSTALLED' in nvidia_drivers_check.stdout" or "'Driver/library version mismatch' in nvidia_drivers_check.stderr")
+    - (nvidia_drivers_check.stdout is defined and 'NOT_INSTALLED' in nvidia_drivers_check.stdout) or (nvidia_drivers_check.stderr is defined and 'Driver/library version mismatch' in nvidia_drivers_check.stderr)
   register: driver_install_result
   changed_when: driver_install_result.rc == 0
   failed_when: driver_install_result.rc != 0
