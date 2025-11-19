@@ -338,10 +338,19 @@ update_routing_script() {
 
 # Main execution
 main() {
-    echo "=========================================="
-    echo "Model Configuration Updater"
-    echo "=========================================="
-    echo ""
+    # If called non-interactively (from setup-llm-models.sh), skip prompts
+    local interactive=true
+    if [ "${1:-}" = "--non-interactive" ]; then
+        interactive=false
+        shift
+    fi
+    
+    if [ "$interactive" = true ]; then
+        echo "=========================================="
+        echo "Model Configuration Updater"
+        echo "=========================================="
+        echo ""
+    fi
     
     # Check if specific model provided
     if [ $# -gt 0 ]; then
@@ -350,22 +359,34 @@ main() {
         local model_path="${MODELS_DIR}/models--${model_dir}"
         
         if [ ! -d "$model_path" ]; then
-            error "Model not found: $model_path"
-            error "Run setup-llm-models.sh to download models first"
-            exit 1
+            if [ "$interactive" = true ]; then
+                error "Model not found: $model_path"
+                error "Run setup-llm-models.sh to download models first"
+                exit 1
+            else
+                # Non-interactive: just return silently
+                return 1
+            fi
         fi
         
-        info "Analyzing model: $model_name"
+        if [ "$interactive" = true ]; then
+            info "Analyzing model: $model_name"
+        fi
         local config_line=$(analyze_model "$model_name" "$model_path")
         
         if [ -n "$config_line" ]; then
-            echo ""
-            info "Configuration: $config_line"
-            echo ""
-            read -p "Update MODEL_CONFIG in routing script? (Y/n): " -n 1 -r
-            echo ""
-            if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-                update_routing_script "$model_name" "$config_line"
+            if [ "$interactive" = true ]; then
+                echo ""
+                info "Configuration: $config_line"
+                echo ""
+                read -p "Update MODEL_CONFIG in routing script? (Y/n): " -n 1 -r
+                echo ""
+                if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+                    update_routing_script "$model_name" "$config_line"
+                fi
+            else
+                # Non-interactive: auto-update
+                update_routing_script "$model_name" "$config_line" 2>/dev/null || true
             fi
         fi
     else

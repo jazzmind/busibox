@@ -131,6 +131,11 @@ for MODEL in "${MODELS[@]}"; do
     # Check if model exists by looking for any snapshots directory
     if [[ -d "${MODEL_PATH}/snapshots" ]] && [[ -n "$(ls -A ${MODEL_PATH}/snapshots 2>/dev/null)" ]]; then
         log_success "✓ ${MODEL} (already cached)"
+        
+        # Update model configuration database for cached models too (non-interactive)
+        if [ -f "${SCRIPT_DIR}/update-model-config.sh" ]; then
+            "${SCRIPT_DIR}/update-model-config.sh" --non-interactive "${MODEL}" 2>/dev/null || true
+        fi
     else
         log_info "↓ Downloading ${MODEL}..."
         
@@ -170,10 +175,10 @@ EOF
         if [ $? -eq 0 ]; then
             log_success "✓ ${MODEL} downloaded"
             
-            # Update model configuration database
+            # Update model configuration database (non-interactive mode)
             if [ -f "${SCRIPT_DIR}/update-model-config.sh" ]; then
                 log_info "  Analyzing model configuration..."
-                "${SCRIPT_DIR}/update-model-config.sh" "${MODEL}" || log_warning "  Failed to analyze model (non-fatal)"
+                "${SCRIPT_DIR}/update-model-config.sh" --non-interactive "${MODEL}" 2>/dev/null || log_warning "  Failed to analyze model (non-fatal)"
             fi
         else
             log_error "✗ Failed to download ${MODEL}"
