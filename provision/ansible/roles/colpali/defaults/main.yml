@@ -32,14 +32,13 @@ colpali_cpu_limit: "4"
 
 # CUDA Configuration
 # GPU allocation strategy:
-# - GPU 0: Ingest container (Marker PDF extraction)
+# - GPU 0: Ingest container (Marker PDF extraction + ColPali visual embeddings)
 # - GPU 1+: vLLM container (LLM inference)
-# - GPU 2: ColPali (visual embeddings) - if 3+ GPUs available
-# - GPU 0: ColPali (shares with Marker) - if only 2 GPUs available
 # 
-# Default: GPU 2 (assumes 3+ GPUs)
-# For 2 GPU systems, set to "0" to share with Marker
-colpali_cuda_visible_devices: "2"
+# ColPali shares GPU 0 with Marker by default.
+# Memory is managed automatically - Marker uses ~3.5GB per task, ColPali uses ~15GB.
+# Future: Will support multi-GPU ColPali for larger workloads.
+colpali_cuda_visible_devices: "0"
 
 # Service Management
 colpali_restart_on_failure: true
