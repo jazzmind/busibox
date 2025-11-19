@@ -70,6 +70,112 @@ declare -A MODEL_NAMES=(
 # GPU memory sizes
 declare -A GPU_MEMORY=()
 
+# Estimate vLLM memory requirements
+# Returns memory breakdown in GB
+estimate_vllm_memory() {
+    local params_billions="$1"
+    local max_seq_length="${2:-8192}"
+    local max_concurrent_seqs="${3:-256}"
+    local precision="${4:-fp16}"
+    
+    # Bytes per parameter
+    local bytes_per_param
+    case "$precision" in
+        fp32) bytes_per_param=4 ;;
+        fp16) bytes_per_param=2 ;;
+        int8) bytes_per_param=1 ;;
+        int4) bytes_per_param=0.5 ;;
+        *) bytes_per_param=2 ;; # Default to fp16
+    esac
+    
+    # Model weights (GB)
+    local model_weights=$(echo "$params_billions * $bytes_per_param" | bc -l)
+    
+    # KV cache per token (rough estimate: ~0.0005 GB per token)
+    local kv_per_token_gb=0.0005
+    
+    # KV cache total
+    local kv_cache=$(echo "$max_seq_length * $max_concurrent_seqs * $kv_per_token_gb" | bc -l)
+    
+    # Activations overhead (15%)
+    local activations=$(echo "($model_weights + $kv_cache) * 0.15" | bc -l)
+    
+    # vLLM engine overhead (5%)
+    local overhead=$(echo "($model_weights + $kv_cache) * 0.05" | bc -l)
+    
+    # Total
+    local total=$(echo "$model_weights + $kv_cache + $activations + $overhead" | bc -l)
+    
+    echo "$model_weights|$kv_cache|$activations|$overhead|$total"
+}
+
+# Get model parameter count (billions)
+get_model_params() {
+    local model_full="$1"
+    
+    case "$model_full" in
+        *Phi-4*|*phi-4*)
+            echo "6"
+            ;;
+        *Qwen3-Embedding*|*qwen3-embedding*)
+            echo "8"
+            ;;
+        *Qwen3-30B*|*qwen3-30b*)
+            echo "30"
+            ;;
+        *Qwen3-VL-8B*|*qwen3-vl-8b*)
+            echo "8"
+            ;;
+        *colpali*)
+            echo "15"
+            ;;
+        *)
+            # Try to extract from MODEL_SIZES (rough estimate: size * 0.2 for params)
+            if [ -n "${MODEL_SIZES[$model_full]:-}" ]; then
+                local size="${MODEL_SIZES[$model_full]}"
+                echo "$size" | awk '{printf "%.0f", $1 * 0.2}'
+            else
+                echo "7" # Default estimate
+            fi
+            ;;
+    esac
+}
+
+# Display model memory estimates
+show_model_memory_estimates() {
+    section "Model Memory Estimates (vLLM)"
+    
+    echo "Memory requirements for each model (FP16, 8K context, 256 concurrent):"
+    echo ""
+    
+    printf "%-25s %10s %12s %12s %12s %12s\n" "Model" "Params(B)" "Weights(GB)" "KV Cache(GB)" "Overhead(GB)" "Total(GB)"
+    echo "────────────────────────────────────────────────────────────────────────────────────────────"
+    
+    for model_short in "${!MODEL_NAMES[@]}"; do
+        local model_full="${MODEL_NAMES[$model_short]}"
+        local params=$(get_model_params "$model_full")
+        
+        local memory_breakdown=$(estimate_vllm_memory "$params" 8192 256 fp16)
+        IFS='|' read -r weights kv_cache activations overhead total <<< "$memory_breakdown"
+        
+        printf "%-25s %10s %12.1f %12.1f %12.1f %12.1f\n" \
+            "$model_short" \
+            "${params}B" \
+            "$weights" \
+            "$kv_cache" \
+            "$(echo "$activations + $overhead" | bc -l)" \
+            "$total"
+    done
+    
+    echo ""
+    echo "Note: These are estimates. Actual memory usage depends on:"
+    echo "  - Sequence length (longer = more KV cache)"
+    echo "  - Concurrent requests (more = more KV cache)"
+    echo "  - Precision (fp16/int8/int4)"
+    echo "  - Tensor parallelism (splits model across GPUs)"
+    echo ""
+}
+
 info() {
     echo -e "${BLUE}[INFO]${NC} $1"
 }
@@ -182,14 +288,26 @@ calculate_model_size() {
     echo "20"
 }
 
-# Check if model fits on GPU(s)
+# Check if model fits on GPU(s) using vLLM memory estimation
 check_model_fits() {
-    local model_name="$1"
+    local model_full="$1"
     local gpu_list="$2"
     local tensor_parallel="${3:-1}"
+    local max_seq_length="${4:-8192}"
+    local max_concurrent_seqs="${5:-256}"
     
-    local model_size=$(calculate_model_size "$model_name")
-    info "Model $model_name requires ~${model_size}GB"
+    # Get model parameters
+    local params=$(get_model_params "$model_full")
+    
+    # Estimate memory requirements
+    local memory_breakdown=$(estimate_vllm_memory "$params" "$max_seq_length" "$max_concurrent_seqs" fp16)
+    IFS='|' read -r weights kv_cache activations overhead total <<< "$memory_breakdown"
+    
+    # Account for tensor parallelism (model weights are split, but KV cache is per GPU)
+    local weights_per_gpu=$(echo "$weights / $tensor_parallel" | bc -l)
+    local total_per_gpu=$(echo "$weights_per_gpu + $kv_cache + $activations + $overhead" | bc -l)
+    
+    info "Model requires ~$(printf "%.1f" "$total_per_gpu")GB per GPU (with tensor parallelism $tensor_parallel)"
     
     # Parse GPU list
     local gpus=()
@@ -204,26 +322,29 @@ check_model_fits() {
         gpus=("$gpu_list")
     fi
     
-    # Calculate total GPU memory
-    local total_memory=0
+    # Check each GPU has enough memory
+    local all_fit=true
     for gpu in "${gpus[@]}"; do
         if [ -z "${GPU_MEMORY[$gpu]:-}" ]; then
             error "GPU $gpu not found in vLLM container"
             return 1
         fi
-        total_memory=$((total_memory + ${GPU_MEMORY[$gpu]}))
+        
+        local gpu_memory="${GPU_MEMORY[$gpu]}"
+        local required=$(printf "%.0f" "$total_per_gpu")
+        local available=$((gpu_memory * 90 / 100))  # 90% usable
+        
+        if [ "$required" -le "$available" ]; then
+            success "GPU $gpu has ${gpu_memory}GB (${available}GB usable, needs ${required}GB) ✓"
+        else
+            error "GPU $gpu has ${gpu_memory}GB (${available}GB usable) but needs ${required}GB ✗"
+            all_fit=false
+        fi
     done
     
-    local available_memory=$((total_memory * 90 / 100))
-    
-    info "Total GPU memory: ${total_memory}GB (${available_memory}GB usable)"
-    info "Tensor parallelism: $tensor_parallel GPU(s)"
-    
-    if [ "$model_size" -le "$available_memory" ]; then
-        success "Model fits on GPU(s) ${gpu_list}"
+    if [ "$all_fit" = true ]; then
         return 0
     else
-        error "Model ($model_size GB) does not fit on GPU(s) ${gpu_list} (${available_memory}GB available)"
         return 1
     fi
 }
@@ -424,6 +545,9 @@ generate_routing_config() {
 # Interactive routing configuration
 interactive_routing() {
     section "Interactive Model Routing"
+    
+    # Show model memory estimates upfront
+    show_model_memory_estimates
     
     detect_vllm_gpus
     
