@@ -114,24 +114,48 @@
   failed_when: spacy_verify.rc != 0
   tags: [ingest, ingest_deploy]
 
-- name: Pre-download Marker models
+- name: Pre-download Marker models (CPU only - just downloading, not running inference)
   shell: |
-    /srv/ingest/venv/bin/python -c "
+    CUDA_VISIBLE_DEVICES="" /srv/ingest/venv/bin/python -c "
+    import os
+    import sys
+    
+    # Force CPU for model download (GPU not needed, and ColPali may be using GPU 0)
+    os.environ['TORCH_DEVICE'] = 'cpu'
+    os.environ['CUDA_VISIBLE_DEVICES'] = ''
+    
+    # Use shared HuggingFace cache from host
+    hf_home = os.environ.get('HF_HOME', '/var/lib/llm-models/huggingface')
+    os.environ['HF_HOME'] = hf_home
+    os.environ['TRANSFORMERS_CACHE'] = hf_home
+    os.environ['HF_HUB_CACHE'] = os.path.join(hf_home, 'hub')
+    
     from marker.models import create_model_dict
     import structlog
     
     logger = structlog.get_logger()
-    logger.info('Pre-downloading Marker models...')
+    logger.info('Pre-downloading Marker models (CPU mode - GPU not needed for download)...')
+    logger.info(f'Using HF_HOME: {hf_home}')
     
     # This will download all required models (~1-2GB)
-    # Models are cached in ~/.cache/huggingface/
-    artifact_dict = create_model_dict()
-    
-    logger.info('Marker models downloaded successfully')
+    # Models are cached in HF_HOME (shared with LLM models)
+    # Force CPU device for download (no GPU needed for download)
+    try:
+        artifact_dict = create_model_dict(device='cpu')
+        logger.info('Marker models downloaded successfully')
+    except Exception as e:
+        logger.error(f'Failed to download Marker models: {e}')
+        sys.exit(1)
     "
+  environment:
+    CUDA_VISIBLE_DEVICES: ""
+    TORCH_DEVICE: "cpu"
+    HF_HOME: "{{ ingest_huggingface_cache | default('/var/lib/llm-models/huggingface') }}"
+    TRANSFORMERS_CACHE: "{{ ingest_huggingface_cache | default('/var/lib/llm-models/huggingface') }}"
+    HF_HUB_CACHE: "{{ ingest_huggingface_cache | default('/var/lib/llm-models/huggingface') }}/hub"
   args:
     # Only run if models not already cached
-    creates: /root/.cache/huggingface/hub/models--vikp--surya_det2
+    creates: "{{ ingest_huggingface_cache | default('/var/lib/llm-models/huggingface') }}/hub/models--vikp--surya_det2"
   retries: 3
   delay: 10
   register: marker_download

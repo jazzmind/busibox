@@ -61,12 +61,16 @@ MODELS=(
     "vidore/colpali-v1.3"                  # visual-embedding.model_name - ColPali LoRA adapters for PDF embeddings (GPU 2)
     "Qwen/Qwen3-VL-8B-Instruct"            # vision.model_name - Vision-language model (8B parameters, GPU 1)
     "Qwen/Qwen3-30B-A3B-Instruct-2507"     # default.model_name - General purpose chat (30B parameters, GPU 1)
+    # Marker/Surya models for PDF extraction
+    "vikp/surya_det2"                     # Marker layout detection model (~1.4GB)
+    "vikp/surya_ocr"                       # Marker OCR model (~500MB)
 )
 
 echo "=========================================="
-echo "LLM Model Pre-Download for vLLM"
+echo "LLM and Marker Model Pre-Download"
 echo "=========================================="
 log_info "This will download models to: ${HUGGINGFACE_CACHE}"
+log_info "Includes: LLM models (vLLM) and Marker/Surya models (PDF extraction)"
 echo ""
 
 # Check for HuggingFace authentication
@@ -145,6 +149,8 @@ for MODEL in "${MODELS[@]}"; do
             *"paligemma"*) log_info "  Estimated: ~11GB | ETA: 10-20 min" ;;
             *"Embedding"*|*"Phi-4"*|*"Qwen3-VL"*) log_info "  Estimated: ~12-17GB | ETA: 10-30 min" ;;
             *"colpali"*) log_info "  Estimated: ~20MB | ETA: 1-2 min" ;;
+            *"surya_det2"*) log_info "  Estimated: ~1.4GB | ETA: 2-5 min" ;;
+            *"surya_ocr"*) log_info "  Estimated: ~500MB | ETA: 1-3 min" ;;
         esac
         
         # Download with HF token - progress bars will show automatically
