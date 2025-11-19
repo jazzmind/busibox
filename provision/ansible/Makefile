@@ -188,7 +188,7 @@ test-extraction-llm:
 		echo "Check inventory: $(INV)/hosts.yml"; \
 		exit 1; \
 	fi
-	@ssh root@$(INGEST_IP) 'cd /srv/ingest && source venv/bin/activate && python -m pytest tests/test_pdf_extraction_llm.py -v --tb=short' || (echo "LLM cleanup tests FAILED" && exit 1)
+	@ssh root@$(INGEST_IP) 'cd /srv/ingest && source venv/bin/activate && python -m pytest tests/test_llm_cleanup.py -v --tb=short' || (echo "LLM cleanup tests FAILED" && exit 1)
 	@echo "✓ LLM cleanup tests passed"
 	@echo ""
 
@@ -223,7 +223,7 @@ test-extraction-colpali:
 		echo "Check inventory: $(INV)/hosts.yml"; \
 		exit 1; \
 	fi
-	@ssh root@$(INGEST_IP) 'cd /srv/ingest && source venv/bin/activate && python -m pytest tests/test_colpali_extraction.py -v --tb=short' || (echo "ColPali extraction tests FAILED" && exit 1)
+	@ssh root@$(INGEST_IP) 'cd /srv/ingest && source venv/bin/activate && python -m pytest tests/test_colpali.py -v --tb=short' || (echo "ColPali extraction tests FAILED" && exit 1)
 	@echo "✓ ColPali extraction tests passed"
 	@echo ""
 
