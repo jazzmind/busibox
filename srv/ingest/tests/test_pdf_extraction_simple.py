@@ -41,9 +41,14 @@ TEST_DOCUMENTS = [
 def test_pdf_extraction():
     """Test basic PDF extraction on all documents."""
     
-    # Get samples directory
-    repo_root = Path(__file__).parent.parent.parent.parent
-    samples_dir = repo_root / "samples" / "docs"
+    # Get samples directory - use env var if set (from Makefile), otherwise find repo root
+    samples_dir_env = os.environ.get("SAMPLES_DIR")
+    if samples_dir_env:
+        samples_dir = Path(samples_dir_env)
+    else:
+        # Try to find repo root (go up from tests -> src -> srv -> busibox)
+        repo_root = Path(__file__).parent.parent.parent.parent
+        samples_dir = repo_root / "samples" / "docs"
     
     print("\n" + "="*80)
     print("PDF EXTRACTION TEST - SIMPLE STRATEGY")
