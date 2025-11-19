@@ -165,10 +165,15 @@ def test_pdf_extraction():
     print("="*80)
     print()
     
-    return passed == len(TEST_DOCUMENTS)
+    # Assert all documents passed
+    assert passed == len(TEST_DOCUMENTS), f"Only {passed}/{len(TEST_DOCUMENTS)} documents passed extraction"
 
 
 if __name__ == "__main__":
-    success = test_pdf_extraction()
-    sys.exit(0 if success else 1)
+    try:
+        test_pdf_extraction()
+        sys.exit(0)
+    except AssertionError as e:
+        print(f"\n❌ Test failed: {e}")
+        sys.exit(1)
 
