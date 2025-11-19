@@ -1,0 +1,117 @@
+---
+# GPU and CUDA Support for Ingest Container
+# Installs NVIDIA CUDA toolkit for GPU-accelerated Marker PDF extraction
+
+- name: Check if GPU devices are present in container
+  shell: "ls -la /dev/nvidia* 2>/dev/null || echo 'No NVIDIA devices'"
+  register: gpu_devices_check
+  changed_when: false
+  failed_when: false
+  tags: [ingest, ingest_gpu, ingest_install]
+
+- name: Display GPU device status
+  debug:
+    msg: "{{ gpu_devices_check.stdout_lines }}"
+  tags: [ingest, ingest_gpu, ingest_install]
+
+- name: Install NVIDIA userspace drivers and CUDA toolkit for LXC
+  block:
+    - name: Add NVIDIA CUDA repository
+      block:
+        - name: Download CUDA keyring
+          get_url:
+            url: https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-keyring_1.1-1_all.deb
+            dest: /tmp/cuda-keyring.deb
+            mode: '0644'
+
+        - name: Install CUDA keyring
+          apt:
+            deb: /tmp/cuda-keyring.deb
+            state: present
+
+        - name: Remove keyring deb file
+          file:
+            path: /tmp/cuda-keyring.deb
+            state: absent
+
+        - name: Update apt cache
+          apt:
+            update_cache: yes
+
+    - name: Install NVIDIA drivers and CUDA toolkit (userspace only in LXC)
+      apt:
+        name:
+          - cuda-drivers
+          - cuda-toolkit
+        state: present
+        install_recommends: no
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+      register: nvidia_drivers_install
+      tags: [ingest, ingest_gpu, ingest_install]
+
+    - name: Verify nvidia-smi is available
+      command: nvidia-smi
+      register: nvidia_smi_check
+      changed_when: false
+      failed_when: false
+      tags: [ingest, ingest_gpu, ingest_install]
+
+    - name: Display nvidia-smi output
+      debug:
+        msg: "{{ nvidia_smi_check.stdout_lines }}"
+      when: nvidia_smi_check.rc == 0
+      tags: [ingest, ingest_gpu, ingest_install]
+
+    - name: Set LD_LIBRARY_PATH for CUDA libraries
+      lineinfile:
+        path: /srv/ingest/.env
+        regexp: '^LD_LIBRARY_PATH='
+        line: 'LD_LIBRARY_PATH=/usr/local/cuda/targets/x86_64-linux/lib:/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH}'
+        state: present
+      tags: [ingest, ingest_gpu, ingest_configure]
+
+    - name: Set CUDA_VISIBLE_DEVICES for ingest services
+      lineinfile:
+        path: /srv/ingest/.env
+        regexp: '^CUDA_VISIBLE_DEVICES='
+        line: 'CUDA_VISIBLE_DEVICES={{ ingest_cuda_visible_devices | default("0") }}'
+        state: present
+      tags: [ingest, ingest_gpu, ingest_configure]
+
+  when: "'No NVIDIA devices' not in gpu_devices_check.stdout"
+  tags: [ingest, ingest_gpu, ingest_install]
+
+- name: Test PyTorch CUDA availability
+  shell: |
+    {{ ingest_venv_dir | default('/srv/ingest/venv') }}/bin/python -c "
+    import os
+    print('LD_LIBRARY_PATH:', os.environ.get('LD_LIBRARY_PATH', 'NOT SET'))
+    print('CUDA_VISIBLE_DEVICES:', os.environ.get('CUDA_VISIBLE_DEVICES', 'NOT SET'))
+    try:
+        import torch
+        print('PyTorch version:', torch.__version__)
+        print('CUDA available:', torch.cuda.is_available())
+        if torch.cuda.is_available():
+            print('CUDA version:', torch.version.cuda)
+            print('GPU count:', torch.cuda.device_count())
+            for i in range(torch.cuda.device_count()):
+                print(f'GPU {i}: {torch.cuda.get_device_name(i)}')
+    except ImportError:
+        print('PyTorch not installed yet')
+    "
+  args:
+    executable: /bin/bash
+  environment:
+    LD_LIBRARY_PATH: "/usr/local/cuda/targets/x86_64-linux/lib:/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu"
+    CUDA_VISIBLE_DEVICES: "{{ ingest_cuda_visible_devices | default('0') }}"
+  register: pytorch_cuda_test
+  changed_when: false
+  failed_when: false
+  tags: [ingest, ingest_gpu, ingest_install]
+
+- name: Display PyTorch CUDA test results
+  debug:
+    msg: "{{ pytorch_cuda_test.stdout_lines }}"
+  tags: [ingest, ingest_gpu, ingest_install]
+

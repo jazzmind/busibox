@@ -1,0 +1,11 @@
+---
+# Ingest Service Default Variables
+
+# GPU Configuration
+# CUDA_VISIBLE_DEVICES for ingest container (default: GPU 0)
+# Marker and ColPali share GPU 0 by default
+ingest_cuda_visible_devices: "0"
+
+# Virtual environment directory
+ingest_venv_dir: "/srv/ingest/venv"
+

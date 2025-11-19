@@ -28,6 +28,13 @@
     state: started
   tags: [ingest, ingest_install]
 
+# ============================================================================
+# GPU and CUDA Support (for Marker PDF extraction)
+# ============================================================================
+- name: Install GPU and CUDA support
+  include_tasks: gpu.yml
+  tags: [ingest, ingest_gpu, ingest_install]
+
 - name: Create ingest service directory
   file:
     path: /srv/ingest
