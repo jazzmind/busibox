@@ -33,6 +33,9 @@ log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
+# Get script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Host directory for shared model cache
 # IMPORTANT: Must match the path created by setup-proxmox-host.sh
 HUGGINGFACE_CACHE="/var/lib/llm-models/huggingface"
@@ -166,6 +169,12 @@ EOF
         
         if [ $? -eq 0 ]; then
             log_success "✓ ${MODEL} downloaded"
+            
+            # Update model configuration database
+            if [ -f "${SCRIPT_DIR}/update-model-config.sh" ]; then
+                log_info "  Analyzing model configuration..."
+                "${SCRIPT_DIR}/update-model-config.sh" "${MODEL}" || log_warning "  Failed to analyze model (non-fatal)"
+            fi
         else
             log_error "✗ Failed to download ${MODEL}"
             exit 1
@@ -240,6 +249,10 @@ log_info "3. Configure bind mount (run on Proxmox host):"
 log_info "   bash provision/pct/add-data-mounts.sh [test|production]"
 log_info "   This mounts: Host ${HUGGINGFACE_CACHE} -> Container ${HUGGINGFACE_CACHE}"
 echo ""
-log_info "4. vLLM will use these pre-downloaded models (no re-download needed)"
+log_info "4. Update model configuration database (optional but recommended):"
+log_info "   bash ${SCRIPT_DIR}/update-model-config.sh"
+log_info "   This analyzes downloaded models and updates memory estimation config"
+echo ""
+log_info "5. vLLM will use these pre-downloaded models (no re-download needed)"
 echo ""
 
