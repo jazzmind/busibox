@@ -607,8 +607,17 @@ generate_routing_config() {
 interactive_routing() {
     section "Interactive Model Routing"
     
-    # Show model memory estimates upfront
-    show_model_memory_estimates
+    # Get CPU offload configuration
+    local default_cpu_offload=150
+    echo "CPU Offload Configuration:"
+    echo "  This allows KV cache to be offloaded to system RAM, dramatically increasing"
+    echo "  concurrent request capacity (20-40x improvement) with +100-200ms latency for cache misses."
+    echo ""
+    read -p "CPU offload capacity (GB, default: ${default_cpu_offload}): " cpu_offload_input
+    local cpu_offload="${cpu_offload_input:-$default_cpu_offload}"
+    
+    # Show model memory estimates upfront (with CPU offloading)
+    show_model_memory_estimates "$cpu_offload"
     
     detect_vllm_gpus
     
@@ -640,8 +649,8 @@ interactive_routing() {
         
         # Small models on GPU 1
         if [ -n "${GPU_MEMORY[1]:-}" ]; then
-            check_model_fits "${MODEL_NAMES[phi-4]}" "1" "1" && generate_routing_config "phi-4" "1" "1" "8000" "$should_update"
-            check_model_fits "${MODEL_NAMES[qwen3-embedding]}" "1" "1" && generate_routing_config "qwen3-embedding" "1" "1" "8001" "$should_update"
+            check_model_fits "${MODEL_NAMES[phi-4]}" "1" "1" "8192" "256" "$cpu_offload" && generate_routing_config "phi-4" "1" "1" "8000" "$should_update"
+            check_model_fits "${MODEL_NAMES[qwen3-embedding]}" "1" "1" "8192" "256" "$cpu_offload" && generate_routing_config "qwen3-embedding" "1" "1" "8001" "$should_update"
         fi
         
         # Large models on multiple GPUs
@@ -650,7 +659,7 @@ interactive_routing() {
             if [ ${#GPU_MEMORY[@]} -ge 3 ]; then
                 gpu_list="2,3"
             fi
-            check_model_fits "${MODEL_NAMES[qwen3-30b-instruct]}" "$gpu_list" "2" && generate_routing_config "qwen3-30b-instruct" "$gpu_list" "2" "8000" "$should_update"
+            check_model_fits "${MODEL_NAMES[qwen3-30b-instruct]}" "$gpu_list" "2" "8192" "256" "$cpu_offload" && generate_routing_config "qwen3-30b-instruct" "$gpu_list" "2" "8000" "$should_update"
         fi
     else
         # Configure single model
