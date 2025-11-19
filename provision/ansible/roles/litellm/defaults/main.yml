@@ -62,6 +62,27 @@ litellm_models:
     # Dimension: 4096, Max sequence: 32K
     # Requires separate vLLM instance on port 8001
 
+  # AWS Bedrock - Claude Sonnet 4.5
+  # Requires AWS credentials configured via environment variables or AWS config
+  - model_name: "claude-sonnet-4.5"
+    litellm_params:
+      model: "bedrock/anthropic.claude-sonnet-4-20250514-v1:0"  # Claude Sonnet 4.5 (adjust version as needed)
+      aws_access_key_id: "{{ secrets.bedrock_api_key.split(':')[0] if secrets.bedrock_api_key and ':' in secrets.bedrock_api_key else '' }}"
+      aws_secret_access_key: "{{ secrets.bedrock_api_key.split(':')[1] if secrets.bedrock_api_key and ':' in secrets.bedrock_api_key else secrets.bedrock_api_key }}"
+      aws_region_name: "{{ secrets.bedrock_region | default('us-east-1') }}"
+    # Note: If bedrock_api_key is in format "ACCESS_KEY:SECRET_KEY", it will be split
+    # Otherwise, it's assumed to be the secret key and access key should be in AWS config
+    # Model ID format: bedrock/anthropic.claude-sonnet-4-{version}:{variant}
+    # Check AWS Bedrock console for exact model ID
+
+  # OpenAI - GPT-4o (latest GPT model)
+  # Uses OpenAI API directly
+  - model_name: "gpt-4o"
+    litellm_params:
+      model: "openai/gpt-4o"  # Latest GPT-4o model
+      api_key: "{{ secrets.openai.api_key }}"
+    # Note: Update model name when GPT-5.1 becomes available
+
 # Router Settings
 litellm_routing_strategy: "simple-shuffle"
 litellm_allowed_fails: 3

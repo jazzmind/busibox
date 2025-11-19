@@ -6,9 +6,20 @@ model_list:
   - model_name: {{ model.model_name }}
     litellm_params:
       model: {{ model.litellm_params.model }}
+{% if model.litellm_params.api_base is defined %}
       api_base: {{ model.litellm_params.api_base }}
+{% endif %}
 {% if model.litellm_params.api_key is defined %}
       api_key: {{ model.litellm_params.api_key }}
+{% endif %}
+{% if model.litellm_params.aws_access_key_id is defined and model.litellm_params.aws_access_key_id %}
+      aws_access_key_id: {{ model.litellm_params.aws_access_key_id }}
+{% endif %}
+{% if model.litellm_params.aws_secret_access_key is defined and model.litellm_params.aws_secret_access_key %}
+      aws_secret_access_key: {{ model.litellm_params.aws_secret_access_key }}
+{% endif %}
+{% if model.litellm_params.aws_region_name is defined %}
+      aws_region_name: {{ model.litellm_params.aws_region_name }}
 {% endif %}
 {% endfor %}
 
