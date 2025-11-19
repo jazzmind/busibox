@@ -161,9 +161,9 @@ test-ingest-coverage:
 	@echo "Coverage report: ssh root@$(INGEST_IP) and view /srv/ingest/htmlcov/index.html"
 	@echo ""
 
-# Get busibox root directory (parent of provision/)
-BUSIBOX_ROOT = $(shell cd $(dir $(lastword $(MAKEFILE_LIST))).. && pwd)
-SAMPLES_DIR = $(BUSIBOX_ROOT)/samples/docs
+# Samples directory - relative to Makefile location (provision/ansible/)
+# Makefile is at provision/ansible/Makefile, so ../../samples/docs is busibox root
+SAMPLES_DIR = ../../samples/docs
 
 # Extraction strategy tests
 test-extraction-simple:
@@ -178,7 +178,8 @@ test-extraction-simple:
 	fi
 	@if [ ! -d "$(SAMPLES_DIR)" ]; then \
 		echo "ERROR: Samples directory not found: $(SAMPLES_DIR)"; \
-		echo "Expected samples/docs/ directory in busibox root"; \
+		echo "Expected samples/docs/ directory in busibox root (relative to provision/ansible/)"; \
+		echo "Current directory: $$(pwd)"; \
 		exit 1; \
 	fi
 	@echo "📦 Copying test samples from workstation to server..."
