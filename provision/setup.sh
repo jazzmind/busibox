@@ -576,9 +576,8 @@ step_container_creation() {
   echo "  - LLM services: vLLM (GPUs 1+, requires 2+ GPUs)"
   echo ""
   echo "GPU Allocation Strategy:"
-  echo "  - GPU 0: Ingest container (Marker PDF extraction)"
+  echo "  - GPU 0: Ingest container (Marker PDF extraction + ColPali visual embeddings)"
   echo "  - GPUs 1+: vLLM container (LLM inference with tensor parallelism)"
-  echo "  - GPU 2: ColPali service (visual embeddings, if 3+ GPUs)"
   echo ""
   
   # Optional Ollama

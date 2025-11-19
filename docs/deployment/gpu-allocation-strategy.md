@@ -10,19 +10,18 @@ Busibox uses a strategic GPU allocation to optimize performance across different
 
 ## GPU Allocation
 
-### Standard Allocation (3+ GPUs)
+### Standard Allocation (2+ GPUs)
 
 | GPU | Service | Purpose | Memory Usage |
 |-----|---------|---------|--------------|
-| GPU 0 | Ingest Container | Marker PDF extraction | ~3.5GB per task |
+| GPU 0 | Ingest Container | Marker PDF extraction + ColPali visual embeddings | Marker: ~3.5GB/task, ColPali: ~15GB |
 | GPU 1+ | vLLM Container | LLM inference (tensor parallelism) | Model-dependent |
-| GPU 2 | ColPali Service | Visual embeddings | ~15GB (model + processing) |
 
 ### Minimum Configuration (2 GPUs)
 
 | GPU | Service | Purpose | Notes |
 |-----|---------|---------|-------|
-| GPU 0 | Ingest Container | Marker PDF extraction | Can share with ColPali if needed |
+| GPU 0 | Ingest Container | Marker PDF extraction + ColPali | Shares GPU 0, memory managed automatically |
 | GPU 1 | vLLM Container | LLM inference | Limited tensor parallelism |
 
 **Note**: With only 2 GPUs, vLLM performance will be reduced. Consider disabling GPU for ingest if vLLM is the priority.
@@ -113,18 +112,19 @@ nvidia-smi
 
 ### ColPali Service
 
-**GPU**: GPU 2 (or GPU 0 if sharing with Marker)  
+**GPU**: GPU 0 (shares with Marker)  
 **Purpose**: Visual document embeddings  
 **Memory**: ~15GB (model + processing)
 
 **Configuration**:
 - Set via `CUDA_VISIBLE_DEVICES` environment variable
-- Configured in Ansible: `colpali_cuda_visible_devices: "2"`
+- Configured in Ansible: `colpali_cuda_visible_devices: "0"` (default)
 - Runs as systemd service in ingest container
 
 **Current Setup**:
-- ColPali uses GPU 2 (separate from Marker on GPU 0)
-- If only 2 GPUs available, ColPali can share GPU 0 with Marker
+- ColPali shares GPU 0 with Marker by default
+- Memory is managed automatically (Marker: ~3.5GB/task, ColPali: ~15GB)
+- Future: Will support multi-GPU ColPali for larger workloads
 
 ## Automatic Configuration
 
@@ -132,7 +132,7 @@ GPU passthrough is configured automatically during container creation:
 
 1. **Ingest Container**: `create-worker-services.sh` adds GPU 0
 2. **vLLM Container**: `create-vllm.sh` adds GPUs 1+
-3. **ColPali**: Configured via Ansible (uses GPU 2 by default)
+3. **ColPali**: Configured via Ansible (uses GPU 0 by default, shares with Marker)
 
 ## Manual GPU Reconfiguration
 
