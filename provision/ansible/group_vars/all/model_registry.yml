@@ -75,8 +75,8 @@ model_purposes:
     
   # General chat and Q&A
   chat:
-    model: "qwen3-30b-instruct"
-    model_name: "Qwen/Qwen3-30B-A3B-Instruct-2507"
+    model: "phi-4"
+    model_name: "microsoft/Phi-4-multimodal-instruct"
     description: "General chat and Q&A"
     max_tokens: 32768
     temperature: 0.7

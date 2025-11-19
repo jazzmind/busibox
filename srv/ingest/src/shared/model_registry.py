@@ -1,7 +1,7 @@
 """
 Model Purpose Registry
 
-Central registry for model purposes. Maps abstract purposes (embedding, cleanup, chat)
+Central registry for model purposes. Maps abstract purposes (embedding, cleanup, analysis)
 to actual model names. Allows easy model swapping without code changes.
 
 Usage:
@@ -24,7 +24,7 @@ class ModelRegistry:
     """
     Central registry for model purposes.
     
-    Maps abstract purposes (embedding, cleanup, chat) to actual model names.
+    Maps abstract purposes (embedding, cleanup, analysis) to actual model names.
     Allows easy model swapping without code changes.
     """
     
@@ -36,7 +36,7 @@ class ModelRegistry:
         "embedding": {"model": "qwen-3-embedding", "provider": "litellm"},
         "cleanup": {"model": "phi-4", "provider": "litellm", "temperature": 0.1, "max_tokens": 32768},
         "parsing": {"model": "phi-4", "provider": "litellm", "temperature": 0.1, "max_tokens": 8192},
-        "chat": {"model": "qwen-2.5-72b", "provider": "litellm", "temperature": 0.7},
+        "analysis": {"model": "qwen-2.5-72b", "provider": "litellm", "temperature": 0.7},
     }
     
     def __init__(self, config_path: Optional[str] = None):
@@ -104,7 +104,7 @@ class ModelRegistry:
         Get model name for a purpose.
         
         Args:
-            purpose: Model purpose (e.g., "embedding", "cleanup", "chat")
+            purpose: Model purpose (e.g., "embedding", "cleanup", "analysis")
             
         Returns:
             Model name (e.g., "qwen-3-embedding")
