@@ -61,34 +61,9 @@
   when: "'NOT_INSTALLED' not in nvidia_drivers_check.stdout and 'Driver/library version mismatch' not in nvidia_drivers_check.stderr"
   tags: [vllm_install, vllm_gpu]
       
-    - name: Skip reboot (drivers installed via setup script, not Ansible)
-      block:
-        - name: Reboot container
-          shell: "sleep 2 && reboot"
-          async: 1
-          poll: 0
-          ignore_errors: true
-          
-        - name: Wait for container to go down
-          wait_for_connection:
-            delay: 5
-            timeout: 30
-          ignore_errors: true
-          
-        - name: Wait for container to come back up
-          wait_for_connection:
-            delay: 10
-            timeout: 120
-            
-        - name: Verify nvidia-smi after reboot
-          command: nvidia-smi
-          register: nvidia_smi_after_reboot
-          changed_when: false
-          
-        - name: Display nvidia-smi after reboot
-          debug:
-            msg: "{{ nvidia_smi_after_reboot.stdout_lines }}"
-      when: nvidia_drivers_install.changed
+    # Note: Drivers are installed via setup.sh GPU configuration step
+    # using install-nvidia-drivers.sh, not via Ansible apt packages.
+    # This ensures driver version matches the Proxmox host.
 
   when: "'No NVIDIA devices' not in gpu_devices_check.stdout"
   tags: [vllm_install, vllm_gpu]
