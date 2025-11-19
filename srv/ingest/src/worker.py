@@ -399,10 +399,25 @@ class IngestWorker:
             logger.debug("File downloaded", file_id=file_id, temp_path=temp_file_path)
             
             logger.info("Extracting text and images", file_id=file_id, mime_type=mime_type)
+            
+            # Override marker_enabled from processing_config if provided
+            original_marker_enabled = self.text_extractor.marker_enabled
+            if processing_config and "marker_enabled" in processing_config:
+                self.text_extractor.marker_enabled = processing_config["marker_enabled"]
+                logger.info(
+                    "Overriding marker_enabled from processing_config",
+                    file_id=file_id,
+                    marker_enabled=self.text_extractor.marker_enabled,
+                )
+            
             extraction_result: ExtractionResult = self.text_extractor.extract(
                 temp_file_path,
                 mime_type,
             )
+            
+            # Restore original marker_enabled setting
+            if processing_config and "marker_enabled" in processing_config:
+                self.text_extractor.marker_enabled = original_marker_enabled
             logger.info(
                 "Text extraction complete",
                 file_id=file_id,

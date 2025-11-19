@@ -1,4 +1,4 @@
-.PHONY: ping all files pg milvus search search-api agent ingest ingest-api ingest-worker ingest-update-tests apps openwebui deploy-apps verify verify-health verify-smoke test test-ingest test-ingest-all test-ingest-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-apps test-all
+.PHONY: ping all files pg milvus search search-api agent ingest ingest-api ingest-worker ingest-update-tests apps openwebui deploy-apps verify verify-health verify-smoke test test-menu test-ingest test-ingest-all test-ingest-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-apps test-all
 # Default to production inventory (can override with: make all INV=inventory/test)
 INV=inventory/production
 
@@ -129,7 +129,12 @@ verify-smoke:
 	@echo ""
 
 # Test targets - run tests on remote containers
-test: test-ingest
+test: test-menu
+
+test-menu:
+	@./test-menu.sh
+
+test-all-targets: test-ingest test-search test-agent test-apps
 	@echo "================================"
 	@echo "All tests passed!"
 	@echo "================================"
@@ -187,14 +192,19 @@ test-extraction-simple:
 		echo "Current directory: $$(pwd)"; \
 		exit 1; \
 	fi
-	@echo "📦 Copying test samples from workstation to server..."
-	@echo "   Source: $(SAMPLES_DIR)"
-	@echo "   Destination: root@$(INGEST_IP):/tmp/test_samples/"
-	@ssh root@$(INGEST_IP) 'rm -rf /tmp/test_samples && mkdir -p /tmp/test_samples'
-	@scp -r -q "$(SAMPLES_DIR)"/* root@$(INGEST_IP):/tmp/test_samples/ || \
-		(echo "ERROR: Failed to copy samples to server" && exit 1)
-	@ssh root@$(INGEST_IP) 'chmod -R 755 /tmp/test_samples'
-	@echo "✓ Samples copied successfully"
+	@echo "📦 Checking test samples on server..."
+	@if ssh root@$(INGEST_IP) '[ -d /tmp/test_samples ] && [ -f /tmp/test_samples/doc01_rfp_project_management/source.pdf ]' 2>/dev/null; then \
+		echo "✓ Samples already exist on server, skipping copy"; \
+	else \
+		echo "📦 Copying test samples from workstation to server..."; \
+		echo "   Source: $(SAMPLES_DIR)"; \
+		echo "   Destination: root@$(INGEST_IP):/tmp/test_samples/"; \
+		ssh root@$(INGEST_IP) 'rm -rf /tmp/test_samples && mkdir -p /tmp/test_samples'; \
+		scp -r -q "$(SAMPLES_DIR)"/* root@$(INGEST_IP):/tmp/test_samples/ || \
+			(echo "ERROR: Failed to copy samples to server" && exit 1); \
+		ssh root@$(INGEST_IP) 'chmod -R 755 /tmp/test_samples'; \
+		echo "✓ Samples copied successfully"; \
+	fi
 	@echo ""
 	@ssh root@$(INGEST_IP) 'cd /srv/ingest && source venv/bin/activate && SAMPLES_DIR=/tmp/test_samples python -m pytest tests/test_pdf_extraction_simple.py -v --tb=short --capture=no' || (echo "SIMPLE extraction tests FAILED" && exit 1)
 	@echo "✓ SIMPLE extraction tests passed"
@@ -216,11 +226,19 @@ test-extraction-llm:
 		echo "ERROR: Samples directory not found: $(SAMPLES_DIR)"; \
 		exit 1; \
 	fi
-	@echo "📦 Copying test samples from workstation to server..."
-	@ssh root@$(INGEST_IP) 'rm -rf /tmp/test_samples && mkdir -p /tmp/test_samples'
-	@scp -r -q "$(SAMPLES_DIR)"/* root@$(INGEST_IP):/tmp/test_samples/ || \
-		(echo "ERROR: Failed to copy samples to server" && exit 1)
-	@ssh root@$(INGEST_IP) 'chmod -R 755 /tmp/test_samples'
+	@echo "📦 Checking test samples on server..."
+	@if ssh root@$(INGEST_IP) '[ -d /tmp/test_samples ] && [ -f /tmp/test_samples/doc01_rfp_project_management/source.pdf ]' 2>/dev/null; then \
+		echo "✓ Samples already exist on server, skipping copy"; \
+	else \
+		echo "📦 Copying test samples from workstation to server..."; \
+		echo "   Source: $(SAMPLES_DIR)"; \
+		echo "   Destination: root@$(INGEST_IP):/tmp/test_samples/"; \
+		ssh root@$(INGEST_IP) 'rm -rf /tmp/test_samples && mkdir -p /tmp/test_samples'; \
+		scp -r -q "$(SAMPLES_DIR)"/* root@$(INGEST_IP):/tmp/test_samples/ || \
+			(echo "ERROR: Failed to copy samples to server" && exit 1); \
+		ssh root@$(INGEST_IP) 'chmod -R 755 /tmp/test_samples'; \
+		echo "✓ Samples copied successfully"; \
+	fi
 	@ssh root@$(INGEST_IP) 'cd /srv/ingest && source venv/bin/activate && SAMPLES_DIR=/tmp/test_samples python -m pytest tests/test_llm_cleanup.py -v --tb=short --capture=no' || (echo "LLM cleanup tests FAILED" && exit 1)
 	@echo "✓ LLM cleanup tests passed"
 	@echo ""
@@ -244,11 +262,19 @@ test-extraction-marker:
 		echo "ERROR: Samples directory not found: $(SAMPLES_DIR)"; \
 		exit 1; \
 	fi
-	@echo "📦 Copying test samples from workstation to server..."
-	@ssh root@$(INGEST_IP) 'rm -rf /tmp/test_samples && mkdir -p /tmp/test_samples'
-	@scp -r -q "$(SAMPLES_DIR)"/* root@$(INGEST_IP):/tmp/test_samples/ || \
-		(echo "ERROR: Failed to copy samples to server" && exit 1)
-	@ssh root@$(INGEST_IP) 'chmod -R 755 /tmp/test_samples'
+	@echo "📦 Checking test samples on server..."
+	@if ssh root@$(INGEST_IP) '[ -d /tmp/test_samples ] && [ -f /tmp/test_samples/doc01_rfp_project_management/source.pdf ]' 2>/dev/null; then \
+		echo "✓ Samples already exist on server, skipping copy"; \
+	else \
+		echo "📦 Copying test samples from workstation to server..."; \
+		echo "   Source: $(SAMPLES_DIR)"; \
+		echo "   Destination: root@$(INGEST_IP):/tmp/test_samples/"; \
+		ssh root@$(INGEST_IP) 'rm -rf /tmp/test_samples && mkdir -p /tmp/test_samples'; \
+		scp -r -q "$(SAMPLES_DIR)"/* root@$(INGEST_IP):/tmp/test_samples/ || \
+			(echo "ERROR: Failed to copy samples to server" && exit 1); \
+		ssh root@$(INGEST_IP) 'chmod -R 755 /tmp/test_samples'; \
+		echo "✓ Samples copied successfully"; \
+	fi
 	@ssh root@$(INGEST_IP) 'cd /srv/ingest && source venv/bin/activate && SAMPLES_DIR=/tmp/test_samples python -m pytest tests/test_pdf_extraction_marker.py -v --tb=short --capture=no' || (echo "Marker extraction tests FAILED (may be expected on low-resource systems)" && exit 1)
 	@echo "✓ Marker extraction tests passed"
 	@echo ""
@@ -269,11 +295,19 @@ test-extraction-colpali:
 		echo "ERROR: Samples directory not found: $(SAMPLES_DIR)"; \
 		exit 1; \
 	fi
-	@echo "📦 Copying test samples from workstation to server..."
-	@ssh root@$(INGEST_IP) 'rm -rf /tmp/test_samples && mkdir -p /tmp/test_samples'
-	@scp -r -q "$(SAMPLES_DIR)"/* root@$(INGEST_IP):/tmp/test_samples/ || \
-		(echo "ERROR: Failed to copy samples to server" && exit 1)
-	@ssh root@$(INGEST_IP) 'chmod -R 755 /tmp/test_samples'
+	@echo "📦 Checking test samples on server..."
+	@if ssh root@$(INGEST_IP) '[ -d /tmp/test_samples ] && [ -f /tmp/test_samples/doc01_rfp_project_management/source.pdf ]' 2>/dev/null; then \
+		echo "✓ Samples already exist on server, skipping copy"; \
+	else \
+		echo "📦 Copying test samples from workstation to server..."; \
+		echo "   Source: $(SAMPLES_DIR)"; \
+		echo "   Destination: root@$(INGEST_IP):/tmp/test_samples/"; \
+		ssh root@$(INGEST_IP) 'rm -rf /tmp/test_samples && mkdir -p /tmp/test_samples'; \
+		scp -r -q "$(SAMPLES_DIR)"/* root@$(INGEST_IP):/tmp/test_samples/ || \
+			(echo "ERROR: Failed to copy samples to server" && exit 1); \
+		ssh root@$(INGEST_IP) 'chmod -R 755 /tmp/test_samples'; \
+		echo "✓ Samples copied successfully"; \
+	fi
 	@ssh root@$(INGEST_IP) 'cd /srv/ingest && source venv/bin/activate && SAMPLES_DIR=/tmp/test_samples python -m pytest tests/test_colpali.py -v --tb=short --capture=no' || (echo "ColPali extraction tests FAILED" && exit 1)
 	@echo "✓ ColPali extraction tests passed"
 	@echo ""

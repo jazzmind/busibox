@@ -45,22 +45,27 @@ def test_pdf_extraction():
     samples_dir_env = os.environ.get("SAMPLES_DIR")
     if samples_dir_env:
         samples_dir = Path(samples_dir_env)
+        print(f"Using SAMPLES_DIR from environment: {samples_dir}")
     else:
         # Try to find repo root (go up from tests -> src -> srv -> busibox)
         repo_root = Path(__file__).parent.parent.parent.parent
         samples_dir = repo_root / "samples" / "docs"
+        print(f"Using repo root path: {samples_dir}")
     
     print("\n" + "="*80)
     print("PDF EXTRACTION TEST - SIMPLE STRATEGY")
     print("="*80)
+    print(f"Samples directory: {samples_dir}")
+    print(f"Samples directory exists: {samples_dir.exists()}")
     print()
     
-    # Create config
+    # Create config - explicitly disable Marker to use SIMPLE strategy
     config = {
         "temp_dir": "/tmp/ingest",
         "chunk_size_min": 400,
         "chunk_size_max": 800,
         "chunk_overlap_pct": 0.12,
+        "marker_enabled": False,  # Force SIMPLE strategy (pdfplumber only)
     }
     
     # Create extractor
