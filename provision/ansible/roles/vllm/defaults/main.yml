@@ -43,6 +43,12 @@ vllm_max_num_batched_tokens: null  # Auto-calculate based on model
 vllm_enable_prefix_caching: true  # Enable KV cache sharing for repeated prompts
 vllm_disable_log_stats: false
 
+# CPU Offloading Configuration
+# Offload KV cache to system RAM when GPU VRAM is full
+# With 256GB system RAM, we can significantly increase concurrent request capacity
+# Tradeoff: +100-200ms latency for requests that need to be swapped from RAM to GPU
+vllm_cpu_offload_gb: 150  # Offload 150GB of KV cache to system RAM (conservative)
+
 # API Configuration
 vllm_served_model_name: null  # Override model name in API (null = use actual name)
 vllm_api_key: null  # Optional API key for authentication
@@ -58,7 +64,8 @@ vllm_restart_sec: 15
 vllm_log_level: info  # debug, info, warning, error
 
 # Resource Limits (systemd)
-vllm_memory_limit: "32G"
+# Increased to support CPU offloading of KV cache to system RAM
+vllm_memory_limit: "180G"  # Allow vLLM to use up to 180GB (model + CPU offload + overhead)
 vllm_cpu_limit: "8"
 
 # Health Check

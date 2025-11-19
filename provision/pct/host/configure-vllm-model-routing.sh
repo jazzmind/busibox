@@ -49,13 +49,27 @@ else
     IP_VLLM="10.96.200.208"
 fi
 
-# Model size database (same as configure-gpu-allocation.sh)
-declare -A MODEL_SIZES=(
-    ["microsoft/Phi-4-multimodal-instruct"]="12"
-    ["Qwen/Qwen3-Embedding-8B"]="16"
-    ["Qwen/Qwen3-30B-A3B-Instruct-2507"]="60"
-    ["Qwen/Qwen3-VL-8B-Instruct"]="16"
-    ["vidore/colpali-v1.3"]="15"
+# Model configuration database
+# Format: model_path|params_billions|precision|quantization|actual_gpu_size_gb|notes
+# precision: fp32, fp16, bf16, int8, int4
+# quantization: none, gptq, awq, bitsandbytes, gguf
+declare -A MODEL_CONFIG=(
+    # Phi-4: 6B params, FP16/BF16, no quantization
+    ["microsoft/Phi-4-multimodal-instruct"]="6|fp16|none|12|6B params, FP16/BF16, ~12GB GPU"
+    
+    # Qwen3-Embedding-8B: 8B params, check if quantized
+    # Note: May be quantized (int8/int4) - check actual deployment
+    ["Qwen/Qwen3-Embedding-8B"]="8|fp16|none|16|8B params, FP16 default (verify quantization)"
+    
+    # Qwen3-30B-A3B-Instruct-2507: 30B params, likely quantized for 24GB GPU
+    # A3B suggests it might be optimized/quantized - verify actual format
+    ["Qwen/Qwen3-30B-A3B-Instruct-2507"]="30|fp16|none|60|30B params, verify if quantized (int8/int4)"
+    
+    # Qwen3-VL-8B-Instruct: 8B params, vision-language model
+    ["Qwen/Qwen3-VL-8B-Instruct"]="8|fp16|none|16|8B params, vision-language, FP16"
+    
+    # ColPali: LoRA adapter on PaliGemma-3B base
+    ["vidore/colpali-v1.3"]="3|bf16|none|15|PaliGemma-3B base + LoRA, BF16, ~15GB GPU"
 )
 
 # Model name mappings (short name -> full HuggingFace path)
@@ -65,6 +79,15 @@ declare -A MODEL_NAMES=(
     ["qwen3-30b-instruct"]="Qwen/Qwen3-30B-A3B-Instruct-2507"
     ["qwen3-vl-8b"]="Qwen/Qwen3-VL-8B-Instruct"
     ["colpali-v1.3"]="vidore/colpali-v1.3"
+)
+
+# Model size database (for backward compatibility - uses MODEL_CONFIG)
+declare -A MODEL_SIZES=(
+    ["microsoft/Phi-4-multimodal-instruct"]="12"
+    ["Qwen/Qwen3-Embedding-8B"]="16"
+    ["Qwen/Qwen3-30B-A3B-Instruct-2507"]="60"
+    ["Qwen/Qwen3-VL-8B-Instruct"]="16"
+    ["vidore/colpali-v1.3"]="15"
 )
 
 # GPU memory sizes
@@ -142,36 +165,70 @@ estimate_vllm_memory() {
     echo "$model_weights|$gpu_kv_cache|$activations|$overhead|$ram_kv_cache|$gpu_total|$ram_total|$combined_total"
 }
 
+# Get model configuration
+# Returns: params|precision|quantization|actual_gpu_size|notes
+get_model_config() {
+    local model_full="$1"
+    
+    if [ -n "${MODEL_CONFIG[$model_full]:-}" ]; then
+        echo "${MODEL_CONFIG[$model_full]}"
+    else
+        # Fallback: try to extract from model name
+        case "$model_full" in
+            *Phi-4*|*phi-4*)
+                echo "6|fp16|none|12|6B params, FP16"
+                ;;
+            *Qwen3-Embedding*|*qwen3-embedding*)
+                echo "8|fp16|none|16|8B params, verify quantization"
+                ;;
+            *Qwen3-30B*|*qwen3-30b*)
+                echo "30|fp16|none|60|30B params, verify quantization"
+                ;;
+            *Qwen3-VL-8B*|*qwen3-vl-8b*)
+                echo "8|fp16|none|16|8B params, FP16"
+                ;;
+            *colpali*)
+                echo "3|bf16|none|15|PaliGemma-3B + LoRA, BF16"
+                ;;
+            *)
+                # Generic fallback
+                warn "Unknown model: $model_full, using default estimates"
+                echo "7|fp16|none|14|Default estimate - verify model config"
+                ;;
+        esac
+    fi
+}
+
 # Get model parameter count (billions)
 get_model_params() {
     local model_full="$1"
-    
-    case "$model_full" in
-        *Phi-4*|*phi-4*)
-            echo "6"
-            ;;
-        *Qwen3-Embedding*|*qwen3-embedding*)
-            echo "8"
-            ;;
-        *Qwen3-30B*|*qwen3-30b*)
-            echo "30"
-            ;;
-        *Qwen3-VL-8B*|*qwen3-vl-8b*)
-            echo "8"
-            ;;
-        *colpali*)
-            echo "15"
-            ;;
-        *)
-            # Try to extract from MODEL_SIZES (rough estimate: size * 0.2 for params)
-            if [ -n "${MODEL_SIZES[$model_full]:-}" ]; then
-                local size="${MODEL_SIZES[$model_full]}"
-                echo "$size" | awk '{printf "%.0f", $1 * 0.2}'
-            else
-                echo "7" # Default estimate
-            fi
-            ;;
-    esac
+    local config=$(get_model_config "$model_full")
+    IFS='|' read -r params precision quantization actual_size notes <<< "$config"
+    echo "$params"
+}
+
+# Get model precision (fp16, int8, int4, etc.)
+get_model_precision() {
+    local model_full="$1"
+    local config=$(get_model_config "$model_full")
+    IFS='|' read -r params precision quantization actual_size notes <<< "$config"
+    echo "$precision"
+}
+
+# Get model quantization method
+get_model_quantization() {
+    local model_full="$1"
+    local config=$(get_model_config "$model_full")
+    IFS='|' read -r params precision quantization actual_size notes <<< "$config"
+    echo "$quantization"
+}
+
+# Get actual GPU size (GB) - accounts for quantization
+get_model_gpu_size() {
+    local model_full="$1"
+    local config=$(get_model_config "$model_full")
+    IFS='|' read -r params precision quantization actual_size notes <<< "$config"
+    echo "$actual_size"
 }
 
 # Display model memory estimates with CPU offloading
@@ -182,30 +239,44 @@ show_model_memory_estimates() {
     local default_cpu_offload=150  # Default from vllm/defaults/main.yml
     local cpu_offload="${1:-$default_cpu_offload}"
     
-    echo "Memory requirements for each model (FP16, 8K context, 256 concurrent):"
+    echo "Memory requirements for each model (8K context, 256 concurrent):"
     echo "CPU Offload: ${cpu_offload}GB to system RAM"
     echo ""
     
-    printf "%-25s %8s %10s %10s %10s %10s %10s %10s\n" \
-        "Model" "Params" "GPU(GB)" "RAM(GB)" "Total(GB)" "GPU KV" "RAM KV" "Weights"
-    echo "────────────────────────────────────────────────────────────────────────────────────────────"
+    printf "%-25s %8s %8s %10s %10s %10s %10s %10s %10s\n" \
+        "Model" "Params" "Precision" "GPU(GB)" "RAM(GB)" "Total(GB)" "GPU KV" "RAM KV" "Weights"
+    echo "────────────────────────────────────────────────────────────────────────────────────────────────────────────"
     
     for model_short in "${!MODEL_NAMES[@]}"; do
         local model_full="${MODEL_NAMES[$model_short]}"
-        local params=$(get_model_params "$model_full")
+        local config=$(get_model_config "$model_full")
+        IFS='|' read -r params precision quantization actual_size notes <<< "$config"
         
-        local memory_breakdown=$(estimate_vllm_memory "$params" 8192 256 fp16 "$cpu_offload")
+        # Use actual precision from config
+        local memory_breakdown=$(estimate_vllm_memory "$params" 8192 256 "$precision" "$cpu_offload")
         IFS='|' read -r weights gpu_kv_cache activations overhead ram_kv_cache gpu_total ram_total combined_total <<< "$memory_breakdown"
         
-        printf "%-25s %8s %10.1f %10.1f %10.1f %10.1f %10.1f %10.1f\n" \
+        # Show quantization indicator
+        local precision_display="$precision"
+        if [ "$quantization" != "none" ]; then
+            precision_display="${precision} (${quantization})"
+        fi
+        
+        printf "%-25s %8s %8s %10.1f %10.1f %10.1f %10.1f %10.1f %10.1f\n" \
             "$model_short" \
             "${params}B" \
+            "$precision_display" \
             "$gpu_total" \
             "$ram_total" \
             "$combined_total" \
             "$gpu_kv_cache" \
             "$ram_kv_cache" \
             "$weights"
+        
+        # Show notes if available
+        if [ -n "$notes" ] && [ "$notes" != "none" ]; then
+            echo "  └─ $notes"
+        fi
     done
     
     echo ""
@@ -213,11 +284,15 @@ show_model_memory_estimates() {
     echo "  GPU: Model weights + Hot KV cache (active requests) + Activations + Overhead"
     echo "  RAM: Cold KV cache (queued requests, offloaded from GPU)"
     echo ""
+    echo "⚠️  IMPORTANT: Verify quantization settings match your actual deployment!"
+    echo "   - Check vLLM service configuration for --quantization flags"
+    echo "   - Qwen models may be quantized (int8/int4) - update MODEL_CONFIG if needed"
+    echo ""
     echo "Note: These estimates assume CPU offloading is enabled."
     echo "Actual memory usage depends on:"
     echo "  - Sequence length (longer = more KV cache)"
     echo "  - Concurrent requests (more = more KV cache)"
-    echo "  - Precision (fp16/int8/int4)"
+    echo "  - Precision/Quantization (fp16/int8/int4)"
     echo "  - Tensor parallelism (splits model weights across GPUs)"
     echo "  - CPU offload capacity (more RAM = more concurrent requests)"
     echo ""
@@ -347,11 +422,21 @@ check_model_fits() {
     local max_concurrent_seqs="${5:-256}"
     local cpu_offload_gb="${6:-150}"  # Default CPU offload from vLLM config
     
-    # Get model parameters
-    local params=$(get_model_params "$model_full")
+    # Get model configuration (includes precision and quantization)
+    local config=$(get_model_config "$model_full")
+    IFS='|' read -r params precision quantization actual_size notes <<< "$config"
     
-    # Estimate memory requirements (with CPU offloading)
-    local memory_breakdown=$(estimate_vllm_memory "$params" "$max_seq_length" "$max_concurrent_seqs" fp16 "$cpu_offload_gb")
+    # Show model info
+    info "Model: $model_full"
+    info "  Parameters: ${params}B"
+    info "  Precision: $precision"
+    if [ "$quantization" != "none" ]; then
+        info "  Quantization: $quantization"
+    fi
+    info "  Actual GPU size: ${actual_size}GB"
+    
+    # Estimate memory requirements (with CPU offloading, using actual precision)
+    local memory_breakdown=$(estimate_vllm_memory "$params" "$max_seq_length" "$max_concurrent_seqs" "$precision" "$cpu_offload_gb")
     IFS='|' read -r weights gpu_kv_cache activations overhead ram_kv_cache gpu_total ram_total combined_total <<< "$memory_breakdown"
     
     # Account for tensor parallelism (model weights are split, but KV cache is per GPU)

@@ -26,6 +26,9 @@ ExecStart={{ vllm_embedding_venv_dir }}/bin/python -m vllm.entrypoints.openai.ap
   --gpu-memory-utilization {{ vllm_embedding_gpu_memory_utilization }} \
   --max-model-len {{ vllm_embedding_max_model_len }} \
   --max-num-seqs {{ vllm_embedding_max_num_seqs }} \
+{% if vllm_embedding_cpu_offload_gb is defined and vllm_embedding_cpu_offload_gb > 0 %}
+  --cpu-offload-gb {{ vllm_embedding_cpu_offload_gb }} \
+{% endif %}
 {% if vllm_embedding_max_num_batched_tokens %}
   --max-num-batched-tokens {{ vllm_embedding_max_num_batched_tokens }} \
 {% endif %}

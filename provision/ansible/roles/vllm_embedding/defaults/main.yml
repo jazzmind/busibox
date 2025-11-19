@@ -32,6 +32,10 @@ vllm_embedding_max_num_batched_tokens: null
 vllm_embedding_enable_prefix_caching: false  # Not useful for embeddings
 vllm_embedding_disable_log_stats: false
 
+# CPU Offloading Configuration
+# Embedding models can benefit from CPU offload for high-throughput scenarios
+vllm_embedding_cpu_offload_gb: 50  # Offload 50GB for embeddings (less than main model)
+
 # API Configuration - References model_registry.yml
 vllm_embedding_served_model_name: "{{ model_purposes.embedding.model }}"  # Friendly name for liteLLM
 vllm_embedding_api_key: null
@@ -45,7 +49,8 @@ vllm_embedding_restart_sec: 15
 vllm_embedding_startup_timeout: 300  # 5 minutes (embedding models load faster)
 
 # Resource Limits
-vllm_embedding_memory_limit: "16G"  # Less memory needed for embedding model
+# Increased to support CPU offloading
+vllm_embedding_memory_limit: "70G"  # Model + CPU offload + overhead
 vllm_embedding_cpu_limit: "4"
 
 # CUDA Configuration - Use GPU 1 (separate from main vLLM on GPU 0)
