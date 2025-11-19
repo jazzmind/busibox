@@ -218,35 +218,53 @@ check_model_fits() {
     fi
 }
 
-# Generate vLLM routing configuration
+# Generate vLLM and LiteLLM routing configuration
 generate_routing_config() {
     local model_short="$1"
     local gpu_list="$2"
     local tensor_parallel="${3:-1}"
+    local vllm_port="${4:-8000}"  # Default vLLM port, can be overridden for separate instances
     
     local model_full="${MODEL_NAMES[$model_short]:-$model_short}"
     
     echo ""
-    info "vLLM Configuration for $model_short:"
+    info "Configuration for $model_short:"
     echo "  Model: $model_full"
     echo "  GPUs: $gpu_list"
     echo "  Tensor Parallelism: $tensor_parallel"
+    echo "  vLLM Port: $vllm_port"
     echo ""
-    echo "Ansible Variables:"
-    echo "  # In inventory/*/group_vars/all/00-main.yml"
-    echo "  vllm_cuda_visible_devices: \"$gpu_list\""
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "1. vLLM Configuration (Ansible Variables)"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "# In inventory/*/group_vars/all/00-main.yml"
     echo ""
-    echo "  # For separate vLLM instances (if using multiple):"
-    echo "  vllm_${model_short}_cuda_visible_devices: \"$gpu_list\""
-    echo "  vllm_${model_short}_tensor_parallel_size: $tensor_parallel"
+    echo "# For main vLLM instance (if this is the primary model):"
+    echo "vllm_cuda_visible_devices: \"$gpu_list\""
+    echo "vllm_tensor_parallel_size: $tensor_parallel"
     echo ""
-    echo "LiteLLM Configuration:"
-    echo "  # In roles/litellm/defaults/main.yml"
+    echo "# OR for separate vLLM instances (if using multiple models):"
+    echo "# Create separate vLLM service on different port:"
+    echo "vllm_${model_short}_cuda_visible_devices: \"$gpu_list\""
+    echo "vllm_${model_short}_tensor_parallel_size: $tensor_parallel"
+    echo "vllm_${model_short}_port: $vllm_port"
+    echo ""
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "2. LiteLLM Configuration (REQUIRED - LiteLLM does NOT auto-discover)"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "# In provision/ansible/roles/litellm/defaults/main.yml"
+    echo "# Add to litellm_models list:"
+    echo ""
     echo "  - model_name: \"$model_short\""
     echo "    litellm_params:"
     echo "      model: \"openai/$model_full\""
-    echo "      api_base: \"http://{{ vllm_ip }}:{{ vllm_port }}/v1\""
-    echo "      api_key: \"EMPTY\""
+    echo "      api_base: \"http://{{ vllm_ip }}:${vllm_port}/v1\""
+    echo "      api_key: \"EMPTY\"  # vLLM doesn't require authentication"
+    echo ""
+    echo "# IMPORTANT: LiteLLM must be manually configured for each model."
+    echo "# vLLM serves the model, but LiteLLM needs explicit routing configuration."
     echo ""
 }
 
