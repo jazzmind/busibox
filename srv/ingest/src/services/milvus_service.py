@@ -93,7 +93,7 @@ class MilvusService:
             file_id: File identifier
             user_id: User identifier
             chunks: List of chunk dictionaries with text, chunk_index, page_number, etc.
-            embeddings: List of dense embedding vectors (1536 dims)
+            embeddings: List of dense embedding vectors (variable dims, will be padded/truncated to 4096)
             content_hash: Content hash for vector reuse
         
         Returns:
@@ -123,6 +123,50 @@ class MilvusService:
             # Convert to scipy sparse matrix (required by pymilvus)
             sparse_vector = csr_matrix(bm25_scores)
             
+            # Pad or truncate text_dense embedding to match Milvus schema dimension (4096)
+            # Milvus expects 4096 dims (Qwen3-Embedding-8B), but embeddings may be:
+            # - 1536 dims (OpenAI text-embedding-3-small)
+            # - 768 dims (FastEmbed fallback)
+            # - 4096 dims (Qwen3-Embedding-8B primary)
+            target_dim = 4096
+            original_length = len(embedding)
+            
+            if original_length < target_dim:
+                # Pad with zeros
+                padded_embedding = list(embedding) + ([0.0] * (target_dim - original_length))
+                logger.debug(
+                    "Padded text_dense embedding",
+                    chunk_index=chunk.get("chunk_index", i),
+                    original_length=original_length,
+                    padded_length=len(padded_embedding),
+                )
+            elif original_length > target_dim:
+                # Truncate
+                padded_embedding = list(embedding[:target_dim])
+                logger.warning(
+                    "Truncated text_dense embedding",
+                    chunk_index=chunk.get("chunk_index", i),
+                    original_length=original_length,
+                    truncated_length=len(padded_embedding),
+                )
+            else:
+                # Exact match - ensure it's a list
+                padded_embedding = list(embedding)
+            
+            # Verify final dimension
+            if len(padded_embedding) != target_dim:
+                logger.error(
+                    "Text dense embedding dimension mismatch after padding/truncation",
+                    chunk_index=chunk.get("chunk_index", i),
+                    expected=target_dim,
+                    actual=len(padded_embedding),
+                )
+                # Force correct length
+                if len(padded_embedding) < target_dim:
+                    padded_embedding.extend([0.0] * (target_dim - len(padded_embedding)))
+                else:
+                    padded_embedding = padded_embedding[:target_dim]
+            
             entity = {
                 "id": vector_id,
                 "file_id": file_id,
@@ -130,7 +174,7 @@ class MilvusService:
                 "page_number": chunk.get("page_number") or 0,  # 0 for non-PDF chunks (None -> 0)
                 "modality": "text",
                 "text": chunk["text"],
-                "text_dense": embedding,
+                "text_dense": padded_embedding,  # Padded/truncated to 4096 dims
                 "text_sparse": sparse_vector,  # BM25 sparse vector
                 "page_vectors": [0.0] * 128,  # Empty ColPali vector (128 dims)
                 "user_id": user_id,
