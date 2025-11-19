@@ -29,9 +29,12 @@ class ModelRegistry:
     """
     
     # Minimal fallback models (should be configured via Ansible)
+    # These are fallbacks if model_registry.json is not found
+    # Actual models are configured via Ansible in model_registry.json
     DEFAULT_MODELS = {
         "embedding": {"model": "qwen-3-embedding", "provider": "litellm"},
-        "cleanup": {"model": "qwen-2.5-32b", "provider": "litellm", "temperature": 0.1},
+        "cleanup": {"model": "phi-4", "provider": "litellm", "temperature": 0.1, "max_tokens": 32768},
+        "parsing": {"model": "phi-4", "provider": "litellm", "temperature": 0.1, "max_tokens": 8192},
         "chat": {"model": "qwen-2.5-72b", "provider": "litellm", "temperature": 0.7},
     }
     
