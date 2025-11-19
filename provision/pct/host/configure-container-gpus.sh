@@ -148,7 +148,7 @@ fi
 # Check if GPU passthrough already configured
 if grep -q "# GPU Passthrough" "$CONFIG_FILE"; then
     # Count how many GPUs are currently configured
-    local configured_gpus=$(grep -c "^lxc.mount.entry: /dev/nvidia[0-9]" "$CONFIG_FILE" || echo "0")
+    configured_gpus=$(grep -c "^lxc.mount.entry: /dev/nvidia[0-9]" "$CONFIG_FILE" || echo "0")
     
     # Check if all GPUs are already configured
     if [[ "$configured_gpus" -eq "$GPU_COUNT" ]]; then
