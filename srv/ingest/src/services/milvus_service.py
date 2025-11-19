@@ -254,44 +254,50 @@ class MilvusService:
             page_number = page_info.get("page_number", 1)
             vector_id = f"{file_id}-page-{page_number}"
             
-            # Flatten multi-vector (variable patches × 128 dims)
-            # Note: Milvus expects single vector, so we flatten
-            flattened_embedding = []
-            for patch in page_embedding:
-                flattened_embedding.extend(patch)
+            # Milvus schema expects page_vectors to be 128 dimensions (single patch)
+            # ColPali returns multiple patches (typically 128+ patches × 128 dims each)
+            # For now, we use the first patch as a representative embedding
+            # TODO: Consider schema redesign to store all patches (16384 dims) or use multi-vector storage
+            target_dim = 128  # Match Milvus schema dimension
+            num_patches = len(page_embedding)
             
-            # Pad or truncate to match Milvus schema dimension (4096)
-            # ColPali returns variable-sized vectors based on image size
-            target_dim = 4096
-            original_length = len(flattened_embedding)
-            
-            # CRITICAL: Create a new list to avoid reference issues
-            if len(flattened_embedding) < target_dim:
-                # Pad with zeros - create new list
-                flattened_embedding = flattened_embedding + ([0.0] * (target_dim - len(flattened_embedding)))
-                logger.debug(
-                    "Padded page vector",
-                    page_number=page_number,
-                    original_length=original_length,
-                    padded_length=len(flattened_embedding),
-                )
-            elif len(flattened_embedding) > target_dim:
-                # Truncate - create new list slice
-                flattened_embedding = list(flattened_embedding[:target_dim])
+            if num_patches == 0:
                 logger.warning(
-                    "Truncated page vector - consider scaling image smaller",
+                    "No patches in page embedding",
                     page_number=page_number,
-                    original_length=original_length,
-                    truncated_length=len(flattened_embedding),
-                    patches_lost=(original_length - target_dim) // 128,
                 )
+                # Use zero vector if no patches
+                page_vector = [0.0] * target_dim
             else:
-                # Exact match - still create new list to avoid reference issues
-                flattened_embedding = list(flattened_embedding)
+                # Use first patch (128 dims)
+                first_patch = page_embedding[0]
+                if len(first_patch) != target_dim:
+                    logger.error(
+                        "Patch dimension mismatch",
+                        page_number=page_number,
+                        expected=target_dim,
+                        actual=len(first_patch),
+                    )
+                    # Pad or truncate first patch to match schema
+                    if len(first_patch) < target_dim:
+                        page_vector = list(first_patch) + ([0.0] * (target_dim - len(first_patch)))
+                    else:
+                        page_vector = list(first_patch[:target_dim])
+                else:
+                    page_vector = list(first_patch)
+                
+                if num_patches > 1:
+                    logger.debug(
+                        "Using first patch as representative (storing only 1 of N patches)",
+                        page_number=page_number,
+                        total_patches=num_patches,
+                        stored_patch_dims=len(page_vector),
+                    )
             
             # Generate zero/empty embeddings for text fields (required by Milvus schema)
             # Page images don't have text embeddings, so use zeros/empty
-            zero_dense_embedding = [0.0] * 1536  # Match text embedding dimension
+            # Note: text_dense is now 4096 dims (padded), but we use zeros for page images
+            zero_dense_embedding = [0.0] * 4096  # Match text_dense dimension (4096)
             # Create empty sparse matrix (BM25) - must match format used for text chunks
             # Text chunks use: csr_matrix(bm25_scores) where bm25_scores is a 1D array
             # So we create an empty 1D array and convert to sparse
