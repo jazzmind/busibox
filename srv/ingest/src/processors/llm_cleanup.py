@@ -62,7 +62,8 @@ Output clean, well-formatted markdown."""
         """
         self.config = config
         self.enabled = config.get("llm_cleanup_enabled", False)
-        self.litellm_base_url = config.get("litellm_base_url", "http://litellm-lxc:4000")
+        # Default to production IP, will be overridden by config
+        self.litellm_base_url = config.get("litellm_base_url", "http://10.96.200.207:4000")
         
         # Get model from registry
         try:
@@ -168,7 +169,7 @@ Output clean, well-formatted markdown."""
     
     def _needs_cleanup(self, text: str) -> bool:
         """
-        Check if text needs cleanup (has long words indicating smashed text).
+        Check if text needs cleanup (has long words or missing spaces).
         
         Args:
             text: Text to check
@@ -176,14 +177,19 @@ Output clean, well-formatted markdown."""
         Returns:
             True if text needs cleanup, False otherwise
         """
-        # Find words longer than 40 characters (likely smashed)
-        long_words = re.findall(r'\b\w{40,}\b', text)
+        # Check 1: Find words longer than 20 characters (likely smashed words)
+        # Common smashed words are 20-40 chars: "actuallyunderstood" (20), "actuallyunderstoodsmashed" (28)
+        long_words = re.findall(r'\b\w{20,}\b', text)
         
-        if long_words:
+        # Check 2: Missing spaces after punctuation (e.g., "word.Another" or "sentence.Yetanother")
+        missing_spaces = re.findall(r'[.!?][A-Za-z]', text)
+        
+        if long_words or missing_spaces:
             logger.debug(
                 "Text needs cleanup",
                 long_word_count=len(long_words),
-                examples=long_words[:3]
+                missing_space_count=len(missing_spaces),
+                examples=long_words[:3] if long_words else None
             )
             return True
         

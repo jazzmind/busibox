@@ -249,8 +249,8 @@ class TestCleanupChunks:
         from processors.chunker import Chunk
         
         chunks = [
-            Chunk(text="Chunk 1 with actuallyunderstoodsmashed", chunk_index=0, token_count=10),
-            Chunk(text="Chunk 2 with moresmashedwords", chunk_index=1, token_count=10),
+            Chunk(text="Chunk 1 with actuallyunderstoodsmashed", chunk_index=0, token_count=10, char_offset=0),
+            Chunk(text="Chunk 2 with moresmashedwords", chunk_index=1, token_count=10, char_offset=50),
         ]
         
         result = await cleanup_processor_disabled.cleanup_chunks(chunks)
@@ -264,8 +264,8 @@ class TestCleanupChunks:
         from processors.chunker import Chunk
         
         chunks = [
-            Chunk(text="Chunk 1 with actuallyunderstoodsmashed words", chunk_index=0, token_count=10),
-            Chunk(text="Chunk 2 is clean", chunk_index=1, token_count=10),
+            Chunk(text="Chunk 1 with actuallyunderstoodsmashed words", chunk_index=0, token_count=10, char_offset=0),
+            Chunk(text="Chunk 2 is clean", chunk_index=1, token_count=10, char_offset=50),
         ]
         
         # Mock cleanup_chunk to return cleaned text for first chunk
