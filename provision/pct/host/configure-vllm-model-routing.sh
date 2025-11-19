@@ -70,13 +70,15 @@ declare -A MODEL_NAMES=(
 # GPU memory sizes
 declare -A GPU_MEMORY=()
 
-# Estimate vLLM memory requirements
-# Returns memory breakdown in GB
+# Estimate vLLM memory requirements with CPU offloading support
+# Returns memory breakdown in GB (GPU|RAM|total)
+# Format: gpu_weights|gpu_kv_cache|gpu_activations|gpu_overhead|ram_kv_cache|gpu_total|ram_total|combined_total
 estimate_vllm_memory() {
     local params_billions="$1"
     local max_seq_length="${2:-8192}"
     local max_concurrent_seqs="${3:-256}"
     local precision="${4:-fp16}"
+    local cpu_offload_gb="${5:-0}"  # CPU offload capacity (0 = no offload)
     
     # Bytes per parameter
     local bytes_per_param
@@ -88,25 +90,56 @@ estimate_vllm_memory() {
         *) bytes_per_param=2 ;; # Default to fp16
     esac
     
-    # Model weights (GB)
+    # Model weights (GB) - always on GPU
     local model_weights=$(echo "$params_billions * $bytes_per_param" | bc -l)
     
     # KV cache per token (rough estimate: ~0.0005 GB per token)
     local kv_per_token_gb=0.0005
     
-    # KV cache total
-    local kv_cache=$(echo "$max_seq_length * $max_concurrent_seqs * $kv_per_token_gb" | bc -l)
+    # Total KV cache needed (all concurrent requests)
+    local total_kv_cache=$(echo "$max_seq_length * $max_concurrent_seqs * $kv_per_token_gb" | bc -l)
     
-    # Activations overhead (15%)
-    local activations=$(echo "($model_weights + $kv_cache) * 0.15" | bc -l)
+    # Split KV cache between GPU and RAM if CPU offload is enabled
+    local gpu_kv_cache
+    local ram_kv_cache
     
-    # vLLM engine overhead (5%)
-    local overhead=$(echo "($model_weights + $kv_cache) * 0.05" | bc -l)
+    if [ "$(echo "$cpu_offload_gb > 0" | bc -l)" -eq 1 ]; then
+        # With CPU offload: GPU holds hot cache, RAM holds cold cache
+        # Estimate: GPU holds ~10-20% of total KV cache (hot requests)
+        # The rest goes to RAM (up to cpu_offload_gb limit)
+        local gpu_kv_percent=0.15  # 15% on GPU for hot requests
+        gpu_kv_cache=$(echo "$total_kv_cache * $gpu_kv_percent" | bc -l)
+        
+        # RAM KV cache is limited by cpu_offload_gb, but can't exceed total needed
+        local ram_needed=$(echo "$total_kv_cache - $gpu_kv_cache" | bc -l)
+        if [ "$(echo "$ram_needed > $cpu_offload_gb" | bc -l)" -eq 1 ]; then
+            ram_kv_cache="$cpu_offload_gb"
+            warn "KV cache exceeds CPU offload capacity. Some requests may be queued."
+        else
+            ram_kv_cache="$ram_needed"
+        fi
+    else
+        # No CPU offload: all KV cache on GPU
+        gpu_kv_cache="$total_kv_cache"
+        ram_kv_cache=0
+    fi
     
-    # Total
-    local total=$(echo "$model_weights + $kv_cache + $activations + $overhead" | bc -l)
+    # Activations overhead (15%) - on GPU
+    local activations=$(echo "($model_weights + $gpu_kv_cache) * 0.15" | bc -l)
     
-    echo "$model_weights|$kv_cache|$activations|$overhead|$total"
+    # vLLM engine overhead (5%) - on GPU
+    local overhead=$(echo "($model_weights + $gpu_kv_cache) * 0.05" | bc -l)
+    
+    # GPU total (weights + GPU KV cache + activations + overhead)
+    local gpu_total=$(echo "$model_weights + $gpu_kv_cache + $activations + $overhead" | bc -l)
+    
+    # RAM total (just the offloaded KV cache)
+    local ram_total="$ram_kv_cache"
+    
+    # Combined total (for display purposes)
+    local combined_total=$(echo "$gpu_total + $ram_total" | bc -l)
+    
+    echo "$model_weights|$gpu_kv_cache|$activations|$overhead|$ram_kv_cache|$gpu_total|$ram_total|$combined_total"
 }
 
 # Get model parameter count (billions)
@@ -141,38 +174,55 @@ get_model_params() {
     esac
 }
 
-# Display model memory estimates
+# Display model memory estimates with CPU offloading
 show_model_memory_estimates() {
-    section "Model Memory Estimates (vLLM)"
+    section "Model Memory Estimates (vLLM with CPU Offloading)"
+    
+    # Get CPU offload configuration (default from vLLM role)
+    local default_cpu_offload=150  # Default from vllm/defaults/main.yml
+    local cpu_offload="${1:-$default_cpu_offload}"
     
     echo "Memory requirements for each model (FP16, 8K context, 256 concurrent):"
+    echo "CPU Offload: ${cpu_offload}GB to system RAM"
     echo ""
     
-    printf "%-25s %10s %12s %12s %12s %12s\n" "Model" "Params(B)" "Weights(GB)" "KV Cache(GB)" "Overhead(GB)" "Total(GB)"
+    printf "%-25s %8s %10s %10s %10s %10s %10s %10s\n" \
+        "Model" "Params" "GPU(GB)" "RAM(GB)" "Total(GB)" "GPU KV" "RAM KV" "Weights"
     echo "────────────────────────────────────────────────────────────────────────────────────────────"
     
     for model_short in "${!MODEL_NAMES[@]}"; do
         local model_full="${MODEL_NAMES[$model_short]}"
         local params=$(get_model_params "$model_full")
         
-        local memory_breakdown=$(estimate_vllm_memory "$params" 8192 256 fp16)
-        IFS='|' read -r weights kv_cache activations overhead total <<< "$memory_breakdown"
+        local memory_breakdown=$(estimate_vllm_memory "$params" 8192 256 fp16 "$cpu_offload")
+        IFS='|' read -r weights gpu_kv_cache activations overhead ram_kv_cache gpu_total ram_total combined_total <<< "$memory_breakdown"
         
-        printf "%-25s %10s %12.1f %12.1f %12.1f %12.1f\n" \
+        printf "%-25s %8s %10.1f %10.1f %10.1f %10.1f %10.1f %10.1f\n" \
             "$model_short" \
             "${params}B" \
-            "$weights" \
-            "$kv_cache" \
-            "$(echo "$activations + $overhead" | bc -l)" \
-            "$total"
+            "$gpu_total" \
+            "$ram_total" \
+            "$combined_total" \
+            "$gpu_kv_cache" \
+            "$ram_kv_cache" \
+            "$weights"
     done
     
     echo ""
-    echo "Note: These are estimates. Actual memory usage depends on:"
+    echo "Memory Breakdown:"
+    echo "  GPU: Model weights + Hot KV cache (active requests) + Activations + Overhead"
+    echo "  RAM: Cold KV cache (queued requests, offloaded from GPU)"
+    echo ""
+    echo "Note: These estimates assume CPU offloading is enabled."
+    echo "Actual memory usage depends on:"
     echo "  - Sequence length (longer = more KV cache)"
     echo "  - Concurrent requests (more = more KV cache)"
     echo "  - Precision (fp16/int8/int4)"
-    echo "  - Tensor parallelism (splits model across GPUs)"
+    echo "  - Tensor parallelism (splits model weights across GPUs)"
+    echo "  - CPU offload capacity (more RAM = more concurrent requests)"
+    echo ""
+    echo "With ${cpu_offload}GB CPU offload, you can handle 20-40x more concurrent requests"
+    echo "with only +100-200ms latency for requests swapped from RAM to GPU."
     echo ""
 }
 
@@ -288,26 +338,31 @@ calculate_model_size() {
     echo "20"
 }
 
-# Check if model fits on GPU(s) using vLLM memory estimation
+# Check if model fits on GPU(s) using vLLM memory estimation with CPU offloading
 check_model_fits() {
     local model_full="$1"
     local gpu_list="$2"
     local tensor_parallel="${3:-1}"
     local max_seq_length="${4:-8192}"
     local max_concurrent_seqs="${5:-256}"
+    local cpu_offload_gb="${6:-150}"  # Default CPU offload from vLLM config
     
     # Get model parameters
     local params=$(get_model_params "$model_full")
     
-    # Estimate memory requirements
-    local memory_breakdown=$(estimate_vllm_memory "$params" "$max_seq_length" "$max_concurrent_seqs" fp16)
-    IFS='|' read -r weights kv_cache activations overhead total <<< "$memory_breakdown"
+    # Estimate memory requirements (with CPU offloading)
+    local memory_breakdown=$(estimate_vllm_memory "$params" "$max_seq_length" "$max_concurrent_seqs" fp16 "$cpu_offload_gb")
+    IFS='|' read -r weights gpu_kv_cache activations overhead ram_kv_cache gpu_total ram_total combined_total <<< "$memory_breakdown"
     
     # Account for tensor parallelism (model weights are split, but KV cache is per GPU)
     local weights_per_gpu=$(echo "$weights / $tensor_parallel" | bc -l)
-    local total_per_gpu=$(echo "$weights_per_gpu + $kv_cache + $activations + $overhead" | bc -l)
+    local gpu_kv_per_gpu="$gpu_kv_cache"  # KV cache is per GPU, not split
+    local gpu_total_per_gpu=$(echo "$weights_per_gpu + $gpu_kv_per_gpu + $activations + $overhead" | bc -l)
     
-    info "Model requires ~$(printf "%.1f" "$total_per_gpu")GB per GPU (with tensor parallelism $tensor_parallel)"
+    info "Model GPU requirements: ~$(printf "%.1f" "$gpu_total_per_gpu")GB per GPU (tensor parallelism: $tensor_parallel)"
+    if [ "$(echo "$cpu_offload_gb > 0" | bc -l)" -eq 1 ]; then
+        info "Model RAM requirements: ~$(printf "%.1f" "$ram_total")GB system RAM (CPU offload)"
+    fi
     
     # Parse GPU list
     local gpus=()
@@ -331,16 +386,22 @@ check_model_fits() {
         fi
         
         local gpu_memory="${GPU_MEMORY[$gpu]}"
-        local required=$(printf "%.0f" "$total_per_gpu")
+        local required=$(printf "%.0f" "$gpu_total_per_gpu")
         local available=$((gpu_memory * 90 / 100))  # 90% usable
         
         if [ "$required" -le "$available" ]; then
-            success "GPU $gpu has ${gpu_memory}GB (${available}GB usable, needs ${required}GB) ✓"
+            success "GPU $gpu: ${gpu_memory}GB total (${available}GB usable, needs ${required}GB) ✓"
         else
-            error "GPU $gpu has ${gpu_memory}GB (${available}GB usable) but needs ${required}GB ✗"
+            error "GPU $gpu: ${gpu_memory}GB total (${available}GB usable) but needs ${required}GB ✗"
             all_fit=false
         fi
     done
+    
+    # Note about RAM requirements (informational, not blocking)
+    if [ "$(echo "$cpu_offload_gb > 0" | bc -l)" -eq 1 ] && [ "$(echo "$ram_total > 0" | bc -l)" -eq 1 ]; then
+        local ram_required=$(printf "%.0f" "$ram_total")
+        info "System RAM: Needs ~${ram_required}GB for KV cache offloading (check container has enough RAM)"
+    fi
     
     if [ "$all_fit" = true ]; then
         return 0
@@ -625,7 +686,7 @@ interactive_routing() {
             fi
         fi
         
-        check_model_fits "$model_full" "$gpu_list" "$tensor_parallel" && generate_routing_config "$selected_model" "$gpu_list" "$tensor_parallel" "$vllm_port" "$should_update"
+        check_model_fits "$model_full" "$gpu_list" "$tensor_parallel" "8192" "256" "$cpu_offload" && generate_routing_config "$selected_model" "$gpu_list" "$tensor_parallel" "$vllm_port" "$should_update"
     fi
 }
 
