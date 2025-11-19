@@ -255,10 +255,9 @@ update_litellm_config() {
     info "Updating LiteLLM config file automatically..."
     
     # Use Python to edit YAML (preserves Jinja2 templates)
-    python3 << 'PYTHON_EOF'
+    python3 << PYTHON_EOF
 import yaml
 import re
-import sys
 from pathlib import Path
 
 config_file = Path("${LITELLM_CONFIG}")
@@ -266,100 +265,96 @@ model_short = "${model_short}"
 model_full = "${model_full}"
 vllm_port = "${vllm_port}"
 
-# Read existing config as text to preserve Jinja2 templates
+# Read existing config as text to preserve structure
 with open(config_file, 'r') as f:
-    content = f.read()
-    lines = content.split('\n')
+    lines = f.readlines()
 
-# Parse YAML (Jinja2 templates will be treated as strings, which is fine)
-config = yaml.safe_load(content)
-
-# Find or create litellm_models list
-if 'litellm_models' not in config or config['litellm_models'] is None:
-    config['litellm_models'] = []
-
-# Check if model already exists (by model_name)
-model_exists = False
-model_index = -1
-for i, model in enumerate(config['litellm_models']):
-    if isinstance(model, dict):
-        # Check both literal strings and Jinja2 template strings
-        model_name = model.get('model_name', '')
-        if model_name == model_short or (isinstance(model_name, str) and model_short in str(model_name)):
-            model_index = i
-            model_exists = True
-            break
-
-# Create new model entry
-new_model = {
-    'model_name': model_short,
-    'litellm_params': {
-        'model': f"openai/{model_full}",
-        'api_base': f"http://{{{{ vllm_ip }}}}:{vllm_port}/v1",
-        'api_key': 'EMPTY'
-    }
-}
-
-# Update or add model
-if model_exists and model_index >= 0:
-    config['litellm_models'][model_index] = new_model
-    action = "updated"
-else:
-    config['litellm_models'].append(new_model)
-    action = "added"
-
-# Find the litellm_models section in the file
-litellm_models_start = -1
-litellm_models_end = -1
-in_litellm_models = False
-indent_level = 0
+# Find litellm_models section
+litellm_start = -1
+litellm_end = -1
+base_indent = 0
 
 for i, line in enumerate(lines):
-    # Find start of litellm_models
     if re.match(r'^litellm_models:', line):
-        litellm_models_start = i
-        in_litellm_models = True
-        indent_level = len(line) - len(line.lstrip())
-        continue
+        litellm_start = i
+        base_indent = len(line) - len(line.lstrip())
+        # Find end of litellm_models section (next top-level key or end of file)
+        for j in range(i + 1, len(lines)):
+            stripped = lines[j].lstrip()
+            # Check if this is a new top-level key (starts at column 0, not a list item or comment)
+            if stripped and not lines[j].startswith(' ') and not lines[j].startswith('#'):
+                if not stripped.startswith('-'):
+                    litellm_end = j
+                    break
+        if litellm_end == -1:
+            litellm_end = len(lines)
+        break
+
+if litellm_start == -1:
+    # litellm_models section doesn't exist, append it
+    lines.append('\n')
+    lines.append('litellm_models:\n')
+    litellm_start = len(lines) - 1
+    litellm_end = len(lines)
+    base_indent = 0
+
+# Check if model already exists in the section
+model_exists = False
+model_line_start = -1
+model_line_end = -1
+in_model_entry = False
+entry_indent = base_indent + 2
+
+for i in range(litellm_start + 1, litellm_end):
+    line = lines[i]
+    stripped = line.lstrip()
     
-    if in_litellm_models:
-        # Check if we've left the litellm_models section (new top-level key)
-        stripped = line.lstrip()
-        if stripped and not line.startswith(' ') and not line.startswith('#'):
-            if not stripped.startswith('-') and not stripped.startswith('#'):
-                litellm_models_end = i
+    # Check if this line starts a model entry
+    if stripped.startswith('- model_name:'):
+        # Check if this is our model
+        if f'"{model_short}"' in line or f"'{model_short}'" in line or model_short in line:
+            model_exists = True
+            model_line_start = i
+            in_model_entry = True
+            entry_indent = len(line) - len(line.lstrip())
+            continue
+    
+    if in_model_entry:
+        # Check if we've reached the end of this model entry
+        if stripped and not line.startswith(' ' * (entry_indent + 1)):
+            if not stripped.startswith('#') and not stripped.startswith('-'):
+                model_line_end = i
                 break
+        # If we hit the next model entry, this one ends
+        if stripped.startswith('- model_name:'):
+            model_line_end = i
+            break
 
-if litellm_models_end == -1:
-    litellm_models_end = len(lines)
+if model_line_end == -1 and in_model_entry:
+    model_line_end = litellm_end
 
-# Build new model entry as YAML string
-model_yaml = yaml.dump([new_model], default_flow_style=False, sort_keys=False)
-# Indent the model entry
-indent = ' ' * (indent_level + 2)
-model_lines = [indent + line if line.strip() else '' for line in model_yaml.split('\n') if line.strip()]
-model_entry = '\n'.join(model_lines)
+# Build new model entry
+new_entry_lines = [
+    ' ' * entry_indent + f'- model_name: "{model_short}"\n',
+    ' ' * (entry_indent + 2) + 'litellm_params:\n',
+    ' ' * (entry_indent + 4) + f'model: "openai/{model_full}"\n',
+    ' ' * (entry_indent + 4) + f'api_base: "http://{{{{ vllm_ip }}}}:{vllm_port}/v1"\n',
+    ' ' * (entry_indent + 4) + "api_key: \"EMPTY\"  # vLLM doesn't require authentication\n"
+]
 
-# Insert or replace model entry
-if model_exists and model_index >= 0:
-    # Find the existing model entry and replace it
-    # This is complex - simpler approach: rebuild the section
-    # For now, we'll append and let user clean up duplicates
-    # Insert before the end of litellm_models section
-    lines.insert(litellm_models_end - 1, model_entry)
+# Insert or replace
+if model_exists and model_line_start >= 0 and model_line_end >= 0:
+    # Replace existing entry
+    lines[model_line_start:model_line_end] = new_entry_lines
+    action = "updated"
 else:
-    # Append new model
-    if litellm_models_end > 0:
-        lines.insert(litellm_models_end, model_entry)
-    else:
-        # litellm_models section doesn't exist, create it
-        lines.append('')
-        lines.append('litellm_models:')
-        lines.append(model_entry)
+    # Insert before end of litellm_models section
+    lines[litellm_end:litellm_end] = new_entry_lines
+    action = "added"
 
 # Write back
 with open(config_file, 'w') as f:
-    f.write('\n'.join(lines))
+    f.writelines(lines)
 
 print(f"✓ {action.capitalize()} model '{model_short}' in LiteLLM config")
 PYTHON_EOF
