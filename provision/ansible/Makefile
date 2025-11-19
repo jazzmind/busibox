@@ -215,7 +215,7 @@ test-extraction-llm:
 	@echo "Running PDF extraction WITH LLM cleanup"
 	@echo "Container: ingest-lxc ($(INGEST_IP))"
 	@echo ""
-	@echo "⚠️  Requires: LiteLLM service running on agent-lxc"
+	@echo "⚠️  Requires: LiteLLM service running on litellm-lxc"
 	@echo ""
 	@if [ -z "$(INGEST_IP)" ] || [ "$(INGEST_IP)" = " " ]; then \
 		echo "ERROR: Could not resolve ingest-lxc IP address"; \
