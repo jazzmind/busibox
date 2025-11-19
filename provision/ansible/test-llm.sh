@@ -12,6 +12,62 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
+# Check and install jq if needed
+check_jq() {
+    if ! command -v jq &> /dev/null; then
+        echo -e "${YELLOW}⚠ jq not found. Installing...${NC}"
+        
+        # Detect OS and install jq
+        if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+            # Linux - try apt first, then yum
+            if command -v apt-get &> /dev/null; then
+                sudo apt-get update -qq > /dev/null 2>&1
+                sudo apt-get install -y jq > /dev/null 2>&1 || {
+                    echo -e "${RED}✗ Failed to install jq via apt-get${NC}"
+                    echo "  Please install jq manually: sudo apt-get install jq"
+                    return 1
+                }
+            elif command -v yum &> /dev/null; then
+                sudo yum install -y jq > /dev/null 2>&1 || {
+                    echo -e "${RED}✗ Failed to install jq via yum${NC}"
+                    echo "  Please install jq manually: sudo yum install jq"
+                    return 1
+                }
+            else
+                echo -e "${RED}✗ Cannot determine package manager${NC}"
+                echo "  Please install jq manually"
+                return 1
+            fi
+        elif [[ "$OSTYPE" == "darwin"* ]]; then
+            # macOS - use Homebrew
+            if command -v brew &> /dev/null; then
+                brew install jq > /dev/null 2>&1 || {
+                    echo -e "${RED}✗ Failed to install jq via brew${NC}"
+                    echo "  Please install jq manually: brew install jq"
+                    return 1
+                }
+            else
+                echo -e "${RED}✗ Homebrew not found${NC}"
+                echo "  Please install jq manually: brew install jq"
+                return 1
+            fi
+        else
+            echo -e "${RED}✗ Unsupported OS: $OSTYPE${NC}"
+            echo "  Please install jq manually"
+            return 1
+        fi
+        
+        echo -e "${GREEN}✓ jq installed successfully${NC}"
+    fi
+    return 0
+}
+
+# Install jq on script load
+check_jq || {
+    echo -e "${RED}✗ jq is required for LLM testing${NC}"
+    exit 1
+}
+
 # Get inventory from environment or default to test
 INV="${INV:-inventory/test}"
 
