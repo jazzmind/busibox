@@ -18,19 +18,94 @@ echo -e "${BLUE}║     Busibox Test Runner Menu          ║${NC}"
 echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
 echo ""
 
+# Source LLM test functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/test-llm.sh"
+
 # Main menu
 echo "Select service to test:"
-echo "  1) Ingest Service"
-echo "  2) Search Service"
-echo "  3) Agent Service"
-echo "  4) Apps (AI Portal)"
-echo "  5) All Services"
+echo "  1) LLM Models (LiteLLM/vLLM)"
+echo "  2) Ingest Service"
+echo "  3) Search Service"
+echo "  4) Agent Service"
+echo "  5) Apps (AI Portal)"
+echo "  6) All Services"
 echo "  Q) Quit"
 echo ""
 read -p "Choice: " main_choice
 
 case "$main_choice" in
     1)
+        echo ""
+        echo -e "${BLUE}LLM Model Tests${NC}"
+        echo "Select test type:"
+        echo "  1) List models by purpose"
+        echo "  2) Test fast model (quick chat)"
+        echo "  3) Test embedding"
+        echo "  4) Test analysis (math/physics problem)"
+        echo "  5) Test default model"
+        echo "  6) Test chat model"
+        echo "  7) Test research model"
+        echo "  8) Test cleanup model"
+        echo "  9) Test parsing model"
+        echo " 10) Test classify model"
+        echo " 11) Test vision model"
+        echo " 12) Test AWS Bedrock (if configured)"
+        echo " 13) Test OpenAI (if configured)"
+        echo " 14) Back to main menu"
+        echo ""
+        read -p "Choice: " llm_choice
+        
+        case "$llm_choice" in
+            1)
+                list_models_by_purpose
+                ;;
+            2)
+                test_fast
+                ;;
+            3)
+                test_purpose_embedding
+                ;;
+            4)
+                test_analysis
+                ;;
+            5)
+                test_purpose "default"
+                ;;
+            6)
+                test_purpose "chat"
+                ;;
+            7)
+                test_purpose "research"
+                ;;
+            8)
+                test_purpose "cleanup"
+                ;;
+            9)
+                test_purpose "parsing"
+                ;;
+            10)
+                test_purpose "classify"
+                ;;
+            11)
+                test_purpose "vision"
+                ;;
+            12)
+                test_bedrock
+                ;;
+            13)
+                test_openai
+                ;;
+            14)
+                exec "$0" "$@"
+                ;;
+            *)
+                echo -e "${RED}Invalid choice${NC}"
+                exit 1
+                ;;
+        esac
+        ;;
+    2)
         echo ""
         echo -e "${BLUE}Ingest Service Tests${NC}"
         echo "Select test type:"
@@ -82,7 +157,7 @@ case "$main_choice" in
                 ;;
         esac
         ;;
-    2)
+    3)
         echo ""
         echo -e "${BLUE}Search Service Tests${NC}"
         echo "Select test type:"
@@ -115,15 +190,15 @@ case "$main_choice" in
                 ;;
         esac
         ;;
-    3)
+    4)
         echo -e "${GREEN}Running agent service tests...${NC}"
         make test-agent INV="$INV"
         ;;
-    4)
+    5)
         echo -e "${GREEN}Running apps (AI Portal) tests...${NC}"
         make test-apps INV="$INV"
         ;;
-    5)
+    6)
         echo -e "${GREEN}Running all service tests...${NC}"
         make test-all INV="$INV"
         ;;
