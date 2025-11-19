@@ -34,53 +34,34 @@
     msg: "{{ gpu_devices_check.stdout_lines }}"
   tags: [vllm_install, vllm_gpu]
 
-- name: Install NVIDIA userspace drivers for LXC
-  block:
-    - name: Add NVIDIA CUDA repository
-      block:
-        - name: Download CUDA keyring
-          get_url:
-            url: https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-keyring_1.1-1_all.deb
-            dest: /tmp/cuda-keyring.deb
-            mode: '0644'
+- name: Check if NVIDIA drivers are installed (must match host version)
+  shell: "nvidia-smi 2>&1 || echo 'NOT_INSTALLED'"
+  register: nvidia_drivers_check
+  changed_when: false
+  failed_when: false
+  tags: [vllm_install, vllm_gpu]
 
-        - name: Install CUDA keyring
-          apt:
-            deb: /tmp/cuda-keyring.deb
-            state: present
-
-        - name: Remove keyring deb file
-          file:
-            path: /tmp/cuda-keyring.deb
-            state: absent
-
-        - name: Update apt cache
-          apt:
-            update_cache: yes
-
-    - name: Install NVIDIA drivers and CUDA toolkit (userspace only in LXC)
-      apt:
-        name:
-          - cuda-drivers
-          - cuda-toolkit
-        state: present
-        install_recommends: no
-      environment:
-        DEBIAN_FRONTEND: noninteractive
-      register: nvidia_drivers_install
-
-    - name: Verify nvidia-smi is available
-      command: nvidia-smi
-      register: nvidia_smi_check
-      changed_when: false
-      failed_when: false
-
-    - name: Display nvidia-smi output
-      debug:
-        msg: "{{ nvidia_smi_check.stdout_lines }}"
-      when: nvidia_smi_check.rc == 0
+- name: Warn if drivers not installed or version mismatch
+  debug:
+    msg: |
+      ⚠️  NVIDIA drivers must be installed using install-nvidia-drivers.sh
+      This ensures driver version matches the Proxmox host (prevents version mismatch errors).
       
-    - name: Reboot container if drivers were just installed
+      To install drivers:
+      1. SSH to Proxmox host: ssh root@proxmox-host
+      2. Run: bash /root/busibox/provision/pct/host/install-nvidia-drivers.sh {{ ansible_host | regex_replace('.*@', '') | regex_replace(':.*', '') }}
+      
+      Or use setup.sh GPU configuration step which does this automatically.
+  when: "'NOT_INSTALLED' in nvidia_drivers_check.stdout or 'Driver/library version mismatch' in nvidia_drivers_check.stderr"
+  tags: [vllm_install, vllm_gpu]
+
+- name: Display nvidia-smi output if drivers are working
+  debug:
+    msg: "{{ nvidia_drivers_check.stdout_lines }}"
+  when: "'NOT_INSTALLED' not in nvidia_drivers_check.stdout and 'Driver/library version mismatch' not in nvidia_drivers_check.stderr"
+  tags: [vllm_install, vllm_gpu]
+      
+    - name: Skip reboot (drivers installed via setup script, not Ansible)
       block:
         - name: Reboot container
           shell: "sleep 2 && reboot"

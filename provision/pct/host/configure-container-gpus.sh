@@ -227,43 +227,38 @@ if pct exec "$CONTAINER_ID" -- nvidia-smi &>/dev/null; then
     exit 0
 fi
 
-# Drivers not installed - install them
+# Drivers not installed - install them using install-nvidia-drivers.sh
 warn "NVIDIA drivers not found in container"
-info "Installing CUDA toolkit in container..."
+info "Installing NVIDIA drivers matching host version..."
 
-# Install CUDA repository and drivers
-pct exec "$CONTAINER_ID" -- bash -c "
-    # Add NVIDIA CUDA repository
-    apt-get update
-    apt-get install -y wget gnupg
-    
-    # Add CUDA repository
-    wget -qO - https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/3bf863cc.pub | apt-key add -
-    echo 'deb https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/ /' > /etc/apt/sources.list.d/cuda.list
-    
-    apt-get update
-    
-    # Install CUDA drivers and toolkit
-    apt-get install -y cuda-drivers cuda-toolkit
-    
-    # Verify installation
-    if command -v nvidia-smi &>/dev/null; then
-        echo 'SUCCESS: NVIDIA drivers installed'
-        nvidia-smi -L
-    else
-        echo 'WARNING: nvidia-smi not found after installation'
-        exit 1
-    fi
-"
+# Get script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALL_SCRIPT="${SCRIPT_DIR}/install-nvidia-drivers.sh"
 
-if pct exec "$CONTAINER_ID" -- nvidia-smi &>/dev/null; then
-    success "NVIDIA drivers installed successfully"
+# Check if install-nvidia-drivers.sh exists
+if [ ! -f "$INSTALL_SCRIPT" ]; then
+    error "install-nvidia-drivers.sh not found at $INSTALL_SCRIPT"
+    echo ""
+    echo "This script is required to install drivers matching the host version."
+    echo "It prevents 'Driver/library version mismatch' errors."
+    exit 1
+fi
+
+# Make sure script is executable
+chmod +x "$INSTALL_SCRIPT"
+
+# Run install-nvidia-drivers.sh to install matching driver version
+info "Running install-nvidia-drivers.sh to match host driver version..."
+if bash "$INSTALL_SCRIPT" "$CONTAINER_ID"; then
+    success "NVIDIA drivers installed successfully (matching host version)"
     pct exec "$CONTAINER_ID" -- nvidia-smi -L
 else
     error "Failed to install NVIDIA drivers"
-    echo "You may need to install drivers manually:"
-    echo "  pct exec $CONTAINER_ID -- bash"
-    echo "  # Then install CUDA toolkit inside container"
+    echo ""
+    echo "Troubleshooting:"
+    echo "  1. Check host has NVIDIA drivers: nvidia-smi"
+    echo "  2. Check container has GPU passthrough configured"
+    echo "  3. Try manual installation: bash $INSTALL_SCRIPT $CONTAINER_ID"
     exit 1
 fi
 
