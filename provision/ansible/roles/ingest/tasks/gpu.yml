@@ -46,24 +46,23 @@
   when: "'Driver/library version mismatch' not in nvidia_drivers_verify.stderr"
   tags: [ingest, ingest_gpu, ingest_install]
 
-    - name: Set LD_LIBRARY_PATH for CUDA libraries
-      lineinfile:
-        path: /srv/ingest/.env
-        regexp: '^LD_LIBRARY_PATH='
-        line: 'LD_LIBRARY_PATH=/usr/local/cuda/targets/x86_64-linux/lib:/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH}'
-        state: present
-      tags: [ingest, ingest_gpu, ingest_configure]
-
-    - name: Set CUDA_VISIBLE_DEVICES for ingest services
-      lineinfile:
-        path: /srv/ingest/.env
-        regexp: '^CUDA_VISIBLE_DEVICES='
-        line: 'CUDA_VISIBLE_DEVICES={{ ingest_cuda_visible_devices | default("0") }}'
-        state: present
-      tags: [ingest, ingest_gpu, ingest_configure]
-
+- name: Set LD_LIBRARY_PATH for CUDA libraries
+  lineinfile:
+    path: /srv/ingest/.env
+    regexp: '^LD_LIBRARY_PATH='
+    line: 'LD_LIBRARY_PATH=/usr/local/cuda/targets/x86_64-linux/lib:/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH}'
+    state: present
   when: "'No NVIDIA devices' not in gpu_devices_check.stdout"
-  tags: [ingest, ingest_gpu, ingest_install]
+  tags: [ingest, ingest_gpu, ingest_configure]
+
+- name: Set CUDA_VISIBLE_DEVICES for ingest services
+  lineinfile:
+    path: /srv/ingest/.env
+    regexp: '^CUDA_VISIBLE_DEVICES='
+    line: 'CUDA_VISIBLE_DEVICES={{ ingest_cuda_visible_devices | default("0") }}'
+    state: present
+  when: "'No NVIDIA devices' not in gpu_devices_check.stdout"
+  tags: [ingest, ingest_gpu, ingest_configure]
 
 - name: Test PyTorch CUDA availability
   shell: |
