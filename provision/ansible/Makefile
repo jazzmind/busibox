@@ -1,4 +1,4 @@
-.PHONY: ping all files pg milvus search search-api agent ingest ingest-api ingest-worker apps openwebui deploy-apps verify verify-health verify-smoke test test-ingest test-ingest-all test-ingest-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-apps test-all
+.PHONY: ping all files pg milvus search search-api agent ingest ingest-api ingest-worker ingest-update-tests apps openwebui deploy-apps verify verify-health verify-smoke test test-ingest test-ingest-all test-ingest-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-apps test-all
 # Default to production inventory (can override with: make all INV=inventory/test)
 INV=inventory/production
 
@@ -74,6 +74,11 @@ ingest-api:
 
 ingest-worker:
 	ansible-playbook -i $(INV) -l ingest site.yml --tags ingest_worker $(VAULT_FLAGS)
+
+ingest-update-tests:
+	@echo "Updating ingest test files..."
+	ansible-playbook -i $(INV) -l ingest site.yml --tags ingest_update_tests $(VAULT_FLAGS)
+	@echo "✓ Test files updated"
 
 apps:
 	ansible-playbook -i $(INV) -l apps site.yml $(VAULT_FLAGS)
@@ -191,7 +196,7 @@ test-extraction-simple:
 	@ssh root@$(INGEST_IP) 'chmod -R 755 /tmp/test_samples'
 	@echo "✓ Samples copied successfully"
 	@echo ""
-	@ssh root@$(INGEST_IP) 'cd /srv/ingest && source venv/bin/activate && SAMPLES_DIR=/tmp/test_samples python -m pytest tests/test_pdf_extraction_simple.py -v --tb=short' || (echo "SIMPLE extraction tests FAILED" && exit 1)
+	@ssh root@$(INGEST_IP) 'cd /srv/ingest && source venv/bin/activate && SAMPLES_DIR=/tmp/test_samples python -m pytest tests/test_pdf_extraction_simple.py -v --tb=short --capture=no' || (echo "SIMPLE extraction tests FAILED" && exit 1)
 	@echo "✓ SIMPLE extraction tests passed"
 	@echo ""
 
@@ -216,7 +221,7 @@ test-extraction-llm:
 	@scp -r -q "$(SAMPLES_DIR)"/* root@$(INGEST_IP):/tmp/test_samples/ || \
 		(echo "ERROR: Failed to copy samples to server" && exit 1)
 	@ssh root@$(INGEST_IP) 'chmod -R 755 /tmp/test_samples'
-	@ssh root@$(INGEST_IP) 'cd /srv/ingest && source venv/bin/activate && SAMPLES_DIR=/tmp/test_samples python -m pytest tests/test_llm_cleanup.py -v --tb=short' || (echo "LLM cleanup tests FAILED" && exit 1)
+	@ssh root@$(INGEST_IP) 'cd /srv/ingest && source venv/bin/activate && SAMPLES_DIR=/tmp/test_samples python -m pytest tests/test_llm_cleanup.py -v --tb=short --capture=no' || (echo "LLM cleanup tests FAILED" && exit 1)
 	@echo "✓ LLM cleanup tests passed"
 	@echo ""
 
@@ -244,7 +249,7 @@ test-extraction-marker:
 	@scp -r -q "$(SAMPLES_DIR)"/* root@$(INGEST_IP):/tmp/test_samples/ || \
 		(echo "ERROR: Failed to copy samples to server" && exit 1)
 	@ssh root@$(INGEST_IP) 'chmod -R 755 /tmp/test_samples'
-	@ssh root@$(INGEST_IP) 'cd /srv/ingest && source venv/bin/activate && SAMPLES_DIR=/tmp/test_samples python -m pytest tests/test_pdf_extraction_marker.py -v --tb=short' || (echo "Marker extraction tests FAILED (may be expected on low-resource systems)" && exit 1)
+	@ssh root@$(INGEST_IP) 'cd /srv/ingest && source venv/bin/activate && SAMPLES_DIR=/tmp/test_samples python -m pytest tests/test_pdf_extraction_marker.py -v --tb=short --capture=no' || (echo "Marker extraction tests FAILED (may be expected on low-resource systems)" && exit 1)
 	@echo "✓ Marker extraction tests passed"
 	@echo ""
 
@@ -269,7 +274,7 @@ test-extraction-colpali:
 	@scp -r -q "$(SAMPLES_DIR)"/* root@$(INGEST_IP):/tmp/test_samples/ || \
 		(echo "ERROR: Failed to copy samples to server" && exit 1)
 	@ssh root@$(INGEST_IP) 'chmod -R 755 /tmp/test_samples'
-	@ssh root@$(INGEST_IP) 'cd /srv/ingest && source venv/bin/activate && SAMPLES_DIR=/tmp/test_samples python -m pytest tests/test_colpali.py -v --tb=short' || (echo "ColPali extraction tests FAILED" && exit 1)
+	@ssh root@$(INGEST_IP) 'cd /srv/ingest && source venv/bin/activate && SAMPLES_DIR=/tmp/test_samples python -m pytest tests/test_colpali.py -v --tb=short --capture=no' || (echo "ColPali extraction tests FAILED" && exit 1)
 	@echo "✓ ColPali extraction tests passed"
 	@echo ""
 
