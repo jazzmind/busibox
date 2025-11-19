@@ -20,17 +20,17 @@ echo ""
 
 # Main menu
 echo "Select service to test:"
-echo "  A) Ingest Service"
-echo "  B) Search Service"
-echo "  C) Agent Service"
-echo "  D) Apps (AI Portal)"
-echo "  E) All Services"
+echo "  1) Ingest Service"
+echo "  2) Search Service"
+echo "  3) Agent Service"
+echo "  4) Apps (AI Portal)"
+echo "  5) All Services"
 echo "  Q) Quit"
 echo ""
 read -p "Choice: " main_choice
 
 case "$main_choice" in
-    A|a)
+    1)
         echo ""
         echo -e "${BLUE}Ingest Service Tests${NC}"
         echo "Select test type:"
@@ -82,7 +82,7 @@ case "$main_choice" in
                 ;;
         esac
         ;;
-    B|b)
+    2)
         echo ""
         echo -e "${BLUE}Search Service Tests${NC}"
         echo "Select test type:"
@@ -115,15 +115,15 @@ case "$main_choice" in
                 ;;
         esac
         ;;
-    C|c)
+    3)
         echo -e "${GREEN}Running agent service tests...${NC}"
         make test-agent INV="$INV"
         ;;
-    D|d)
+    4)
         echo -e "${GREEN}Running apps (AI Portal) tests...${NC}"
         make test-apps INV="$INV"
         ;;
-    E|e)
+    5)
         echo -e "${GREEN}Running all service tests...${NC}"
         make test-all INV="$INV"
         ;;
