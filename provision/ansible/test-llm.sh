@@ -85,17 +85,19 @@ get_litellm_key() {
     # Try to get from vault, otherwise use default
     if [[ -f "${INV}/group_vars/all/vault.yml" ]]; then
         # Determine vault password flags
-        local vault_flags=""
         if [[ -f ~/.vault_pass ]]; then
-            vault_flags="--vault-password-file ~/.vault_pass"
+            # Use vault password file (non-interactive)
+            ansible-vault view --vault-password-file ~/.vault_pass "${INV}/group_vars/all/vault.yml" 2>/dev/null | \
+                grep -i "litellm.*key" | head -1 | sed 's/.*: *"\(.*\)".*/\1/' || \
+                echo "sk-litellm-master-key-change-me"
         else
-            vault_flags="--ask-vault-pass"
+            # Prompt for vault password (interactive)
+            # Note: This will prompt, which may not work well in scripts
+            # Consider creating ~/.vault_pass for non-interactive use
+            ansible-vault view --ask-vault-pass "${INV}/group_vars/all/vault.yml" 2>/dev/null | \
+                grep -i "litellm.*key" | head -1 | sed 's/.*: *"\(.*\)".*/\1/' || \
+                echo "sk-litellm-master-key-change-me"
         fi
-        
-        # Try to extract from vault (requires ansible-vault)
-        ansible-vault view ${vault_flags} "${INV}/group_vars/all/vault.yml" 2>/dev/null | \
-            grep -i "litellm.*key" | head -1 | sed 's/.*: *"\(.*\)".*/\1/' || \
-            echo "sk-litellm-master-key-change-me"
     else
         echo "sk-litellm-master-key-change-me"
     fi
