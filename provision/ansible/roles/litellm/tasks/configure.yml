@@ -8,6 +8,24 @@
   delegate_to: localhost
   tags: [litellm_configure]
 
+- name: Warning if model_config.yml does not exist
+  debug:
+    msg:
+      - "=========================================="
+      - "WARNING: model_config.yml not found!"
+      - "=========================================="
+      - "No models will be configured in LiteLLM."
+      - ""
+      - "To generate model_config.yml on Proxmox host:"
+      - "  1. cd /root/busibox/provision/pct/host"
+      - "  2. bash update-model-config.sh"
+      - "  3. bash configure-vllm-model-routing.sh --interactive"
+      - ""
+      - "Then re-run this deployment."
+      - "=========================================="
+  when: not model_config_file.stat.exists
+  tags: [litellm_configure]
+
 - name: Load model_config.yml if it exists
   include_vars:
     file: "{{ playbook_dir }}/group_vars/all/model_config.yml"
