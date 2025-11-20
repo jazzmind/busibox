@@ -62,6 +62,13 @@
 # LLM Services - Deploy backends first, then proxy
 - name: Deploy LLM Inference Backends (can run in parallel)
   hosts: vllm  # Ollama temporarily disabled
+  pre_tasks:
+    - name: Stop all existing vLLM services to free GPU memory
+      systemd:
+        name: "vllm-{{ item }}"
+        state: stopped
+      loop: [8000, 8001, 8002, 8003, 8004, 8005]
+      failed_when: false
   roles:
     # - role: ollama  # Temporarily disabled - using vLLM only
     #   when: "'ollama' in group_names"
