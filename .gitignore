@@ -52,3 +52,6 @@ secrets.yaml
 provision/ansible/roles/secrets/vars/vault.yml
 provision/ansible/inventory/*/group_vars/all/vault.yml
 ssl
+
+# Machine-generated model configuration
+provision/ansible/group_vars/all/model_config.yml

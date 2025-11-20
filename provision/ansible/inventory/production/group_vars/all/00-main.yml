@@ -103,11 +103,6 @@ vllm_port: 8000
 # ============================================================================
 # LLM Model Configuration
 # ============================================================================
-# Ollama Models (PRODUCTION - full models)
-ollama_initial_models:
-  - name: "phi4:multimodal-instruct"
-    description: "Phi4 is a general-purpose model"
-
 # vLLM Model Configuration
 # Use model pre-cached by setup-llm-models.sh
 # Reference model registry for default chat model
@@ -175,8 +170,8 @@ applications:
       REDIS_HOST: "{{ ingest_ip }}"
       TOKEN_SERVICE_URL: "http://{{ agent_ip }}:4111"
       MASTRA_API_URL: "http://{{ agent_ip }}:4111"
-      OPENAI_BASE_URL: "http://{{ litellm_ip }}:{{ litellm_port }}/v1"
-  
+      LITELLM_BASE_URL: "http://{{ litellm_ip }}:{{ litellm_port }}/v1"
+ 
   # Public Web Applications
   - name: ai-portal
     github_repo: jazzmind/ai-portal
@@ -205,7 +200,6 @@ applications:
       - better_auth_secret
       - sso_jwt_secret
       - litellm_api_key
-      - openai_api_key
       - admin_email
       - allowed_email_domains
       - email_from
@@ -284,7 +278,7 @@ applications:
         strip_path: true  # Strip /docs prefix so Next.js receives requests at root
     secrets:
       - database_url
-      - openai_api_key
+      - litellm_api_key
       - better_auth_secret
       - jwt_secret
       - sso_jwt_secret
@@ -295,4 +289,5 @@ applications:
       MILVUS_PORT: "{{ milvus_port }}"
       AI_PORTAL_URL: "https://{{ domain }}"
       PORT: "3002"
+      LITELLM_BASE_URL: "http://{{ litellm_ip }}:{{ litellm_port }}/v1"
 

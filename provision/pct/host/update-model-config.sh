@@ -6,10 +6,16 @@
 # PURPOSE: Inspect downloaded models and update MODEL_CONFIG database
 #
 # This script analyzes downloaded models to detect:
-# - Quantization (GPTQ, AWQ, BitsAndBytes)
+# - Quantization (GPTQ, AWQ, BitsAndBytes, GGUF)
 # - Precision (fp32, fp16, bf16, int8, int4)
 # - Actual GPU memory requirements
 # - Parameter counts
+#
+# IMPROVED DETECTION:
+# - Uses HuggingFace API for accurate model metadata
+# - Analyzes config.json for quantization settings
+# - Inspects file names and sizes for quantization hints
+# - Falls back to intelligent size-based estimation
 #
 # USAGE:
 #   bash update-model-config.sh [model_path]
@@ -24,7 +30,11 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
+
+# Debug mode (set by --debug flag)
+DEBUG=false
 
 info() {
     echo -e "${BLUE}[INFO]${NC} $1" >&2
@@ -40,6 +50,12 @@ warn() {
 
 error() {
     echo -e "${RED}[ERROR]${NC} $1" >&2
+}
+
+debug() {
+    if [ "$DEBUG" = true ]; then
+        echo -e "${CYAN}[DEBUG]${NC} $1" >&2
+    fi
 }
 
 # Paths
@@ -78,6 +94,7 @@ analyze_model() {
     local model_path="$2"
     
     info "Analyzing: $model_name" >&2
+    debug "Model path: $model_path" >&2
     
     # Find the actual model files
     # HuggingFace cache structure: models--org--model/snapshots/<hash>/
@@ -85,6 +102,7 @@ analyze_model() {
     
     if [ -z "$snapshot_dir" ]; then
         warn "No snapshot directory found for $model_name" >&2
+        debug "Snapshots path: $model_path/snapshots" >&2
         warn "  Model path: $model_path" >&2
         warn "  Snapshots dir exists: $([ -d "$model_path/snapshots" ] && echo "yes" || echo "no")" >&2
         if [ -d "$model_path/snapshots" ]; then
@@ -94,6 +112,10 @@ analyze_model() {
     fi
     
     info "  Snapshot directory: $snapshot_dir" >&2
+    debug "Listing snapshot contents:" >&2
+    if [ "$DEBUG" = true ]; then
+        ls -lh "$snapshot_dir" 2>/dev/null | head -20 >&2
+    fi
     
     # Detect quantization and precision
     local quantization="none"
@@ -303,136 +325,232 @@ PYTHON_EOF
         info "  Model size: ${model_size_bytes} bytes (${model_size_gb}GB)" >&2
     fi
     
-    # Try to get parameters from HuggingFace API/model card first (most reliable)
+    # Try to get comprehensive model info from HuggingFace API first (most reliable)
     local params_from_hf=0
     local hf_model_size_gb=0
+    local hf_quantization=""
+    local hf_precision=""
     
     # Check if huggingface_hub is available
     if "${VENV_DIR}/bin/python3" -c "import huggingface_hub" 2>/dev/null; then
         info "  Fetching model info from HuggingFace API..." >&2
-        params_from_hf=$("${VENV_DIR}/bin/python3" << PYTHON_EOF
+        
+        # Get comprehensive model metadata from HuggingFace in one call
+        local hf_result=$("${VENV_DIR}/bin/python3" << PYTHON_EOF
 import json
 import os
 import sys
+import re
 
 model_name = "${model_name}"
 
 try:
-    from huggingface_hub import model_info, HfApi
+    from huggingface_hub import model_info, hf_hub_download
     
-    # Try to get model info from HuggingFace
+    result = {
+        'params': 0,
+        'size_gb': 0,
+        'quantization': '',
+        'precision': '',
+        'error': ''
+    }
+    
     try:
-        info = model_info(model_name, token=os.environ.get('HF_TOKEN'))
+        info = model_info(model_name, token=os.environ.get('HF_TOKEN'), files_metadata=True)
         
-        # Get parameter count from model card
+        # 1. Get parameter count from multiple sources
         params = None
         
-        # Try various fields in model card
-        if hasattr(info, 'config') and info.config:
+        # Try model name parsing (e.g., "Qwen3-30B" -> 30B)
+        name_match = re.search(r'(\d+\.?\d*)B', model_name, re.IGNORECASE)
+        if name_match:
+            params = float(name_match.group(1)) * 1_000_000_000
+        
+        # Try tags (often most reliable for parameter count)
+        if hasattr(info, 'tags') and info.tags:
+            for tag in info.tags:
+                tag_lower = tag.lower()
+                # Look for tags like "30b", "6.7b", "70b-instruct"
+                tag_match = re.search(r'(\d+\.?\d*)b', tag_lower)
+                if tag_match:
+                    params = float(tag_match.group(1)) * 1_000_000_000
+                    break
+        
+        # Try config from model card
+        if not params and hasattr(info, 'config') and info.config:
             config = info.config
-            params = config.get('num_parameters', None)
-            if not params:
-                params = config.get('num_parameters_total', None)
-            if not params:
-                params = config.get('parameters', None)
+            for key in ['num_parameters', 'num_parameters_total', 'parameters', 'n_params']:
+                if key in config and config[key]:
+                    params = config[key]
+                    break
         
-        # Also check model card metadata
+        # Try cardData
         if not params and hasattr(info, 'cardData') and info.cardData:
-            card_data = info.cardData
-            if isinstance(card_data, dict):
-                # Some model cards have parameter info in metadata
-                metadata = card_data.get('model-index', {})
-                if metadata:
-                    for item in metadata.get('results', []):
-                        if 'metrics' in item:
-                            for metric in item['metrics']:
-                                if metric.get('name') == 'Parameters':
-                                    params_str = str(metric.get('value', ''))
-                                    # Parse "6.5B" or "6500000000" format
-                                    if 'B' in params_str.upper():
-                                        params = float(params_str.upper().replace('B', '')) * 1_000_000_000
-                                    elif params_str.isdigit():
-                                        params = int(params_str)
-                                    break
+            card_data = info.cardData if isinstance(info.cardData, dict) else {}
+            # Check for parameter count in various places
+            for key in ['parameters', 'model_parameters', 'num_parameters']:
+                if key in card_data:
+                    val = card_data[key]
+                    if isinstance(val, (int, float)):
+                        params = val
+                        break
+                    elif isinstance(val, str):
+                        # Parse strings like "6.7B" or "6700000000"
+                        val_match = re.search(r'(\d+\.?\d*)\s*([BMK])?', val, re.IGNORECASE)
+                        if val_match:
+                            num = float(val_match.group(1))
+                            unit = val_match.group(2).upper() if val_match.group(2) else ''
+                            if unit == 'B':
+                                params = num * 1_000_000_000
+                            elif unit == 'M':
+                                params = num * 1_000_000
+                            elif unit == 'K':
+                                params = num * 1_000
+                            else:
+                                params = num
+                            break
         
-        # Convert to billions and return
         if params and params > 0:
-            params_billions = params / 1_000_000_000
-            print(f"{params_billions:.1f}")
-        else:
-            print("0")
-    except Exception as e:
-        # API call failed, return 0 to fall back to other methods
-        print(f"ERROR: {e}", file=sys.stderr)
-        print("0")
-except ImportError:
-    # huggingface_hub not available
-    print("ERROR: huggingface_hub not available", file=sys.stderr)
-    print("0")
-except Exception as e:
-    print(f"ERROR: {e}", file=sys.stderr)
-    print("0")
-PYTHON_EOF
-)
+            result['params'] = params / 1_000_000_000  # Convert to billions
         
-        # Check if we got a valid result
-        if [ -z "$params_from_hf" ] || ! [[ "$params_from_hf" =~ ^[0-9]+\.?[0-9]*$ ]]; then
-            params_from_hf=0
-        fi
-        
-        # Also try to get model size from HuggingFace
-        if "${VENV_DIR}/bin/python3" -c "import huggingface_hub" 2>/dev/null; then
-            info "  Fetching model size from HuggingFace API..." >&2
-            hf_model_size_gb=$("${VENV_DIR}/bin/python3" << PYTHON_EOF
-import os
-import sys
-
-model_name = "${model_name}"
-
-try:
-    from huggingface_hub import model_info
-    
-    try:
-        info = model_info(model_name, token=os.environ.get('HF_TOKEN'))
-        
-        # Get model size from siblings (file sizes)
+        # 2. Get file sizes and detect quantization from filenames
         total_size_bytes = 0
+        quantization_hints = set()
+        precision_hints = set()
+        
         if hasattr(info, 'siblings') and info.siblings:
             for sibling in info.siblings:
                 if hasattr(sibling, 'rfilename') and sibling.rfilename:
-                    # Only count model files, not config/tokenizer
-                    if any(ext in sibling.rfilename.lower() for ext in ['.safetensors', '.bin', '.pt', '.pth', '.gguf', '.onnx']):
+                    filename = sibling.rfilename.lower()
+                    
+                    # Count model file sizes
+                    if any(ext in filename for ext in ['.safetensors', '.bin', '.pt', '.pth', '.gguf', '.onnx']):
                         if hasattr(sibling, 'size') and sibling.size:
                             total_size_bytes += sibling.size
+                    
+                    # Detect quantization from filenames
+                    if any(q in filename for q in ['gptq', 'gptq-int4', 'gptq-4bit']):
+                        quantization_hints.add('gptq')
+                    if any(q in filename for q in ['awq', 'awq-int4', 'awq-4bit']):
+                        quantization_hints.add('awq')
+                    if 'gguf' in filename:
+                        quantization_hints.add('gguf')
+                    if any(q in filename for q in ['bnb', 'bitsandbytes', '8bit', '4bit']):
+                        quantization_hints.add('bitsandbytes')
+                    
+                    # Detect precision from filenames
+                    if any(p in filename for p in ['int4', '4bit', 'q4_']):
+                        precision_hints.add('int4')
+                    elif any(p in filename for p in ['int8', '8bit', 'q8_']):
+                        precision_hints.add('int8')
+                    elif 'fp16' in filename or 'float16' in filename:
+                        precision_hints.add('fp16')
+                    elif 'bf16' in filename or 'bfloat16' in filename:
+                        precision_hints.add('bf16')
+                    elif 'fp32' in filename or 'float32' in filename:
+                        precision_hints.add('fp32')
         
         if total_size_bytes > 0:
-            size_gb = total_size_bytes / (1024 ** 3)
-            print(f"{size_gb:.2f}")
-        else:
-            print("0")
+            result['size_gb'] = total_size_bytes / (1024 ** 3)
+        
+        # 3. Check tags for quantization info
+        if hasattr(info, 'tags') and info.tags:
+            for tag in info.tags:
+                tag_lower = tag.lower()
+                if 'gptq' in tag_lower:
+                    quantization_hints.add('gptq')
+                if 'awq' in tag_lower:
+                    quantization_hints.add('awq')
+                if 'gguf' in tag_lower:
+                    quantization_hints.add('gguf')
+                if 'quantized' in tag_lower or '4bit' in tag_lower or '8bit' in tag_lower:
+                    if 'gptq' not in tag_lower and 'awq' not in tag_lower and 'gguf' not in tag_lower:
+                        quantization_hints.add('bitsandbytes')
+        
+        # 4. Set quantization (prefer most specific)
+        if quantization_hints:
+            # Priority: GPTQ > AWQ > GGUF > BitsAndBytes
+            if 'gptq' in quantization_hints:
+                result['quantization'] = 'gptq'
+            elif 'awq' in quantization_hints:
+                result['quantization'] = 'awq'
+            elif 'gguf' in quantization_hints:
+                result['quantization'] = 'gguf'
+            elif 'bitsandbytes' in quantization_hints:
+                result['quantization'] = 'bitsandbytes'
+        
+        # 5. Set precision
+        if precision_hints:
+            # Priority: int4 > int8 > fp16 > bf16 > fp32
+            if 'int4' in precision_hints:
+                result['precision'] = 'int4'
+            elif 'int8' in precision_hints:
+                result['precision'] = 'int8'
+            elif 'fp16' in precision_hints:
+                result['precision'] = 'fp16'
+            elif 'bf16' in precision_hints:
+                result['precision'] = 'bf16'
+            elif 'fp32' in precision_hints:
+                result['precision'] = 'fp32'
+        
+        # Output JSON result
+        print(json.dumps(result))
+        
     except Exception as e:
-        print(f"ERROR: {e}", file=sys.stderr)
-        print("0")
+        result['error'] = str(e)
+        print(json.dumps(result))
+        
+except ImportError as e:
+    print(json.dumps({'error': 'huggingface_hub not available', 'params': 0, 'size_gb': 0, 'quantization': '', 'precision': ''}))
 except Exception as e:
-    print(f"ERROR: {e}", file=sys.stderr)
-    print("0")
+    print(json.dumps({'error': str(e), 'params': 0, 'size_gb': 0, 'quantization': '', 'precision': ''}))
 PYTHON_EOF
 )
+        
+        # Parse JSON result
+        if [ -n "$hf_result" ]; then
+            debug "Raw HuggingFace API result: $hf_result" >&2
             
-            # Validate the result
+            # Try to parse JSON result
+            params_from_hf=$(echo "$hf_result" | "${VENV_DIR}/bin/python3" -c "import json, sys; data=json.load(sys.stdin); print(data.get('params', 0))" 2>/dev/null || echo "0")
+            hf_model_size_gb=$(echo "$hf_result" | "${VENV_DIR}/bin/python3" -c "import json, sys; data=json.load(sys.stdin); print(data.get('size_gb', 0))" 2>/dev/null || echo "0")
+            hf_quantization=$(echo "$hf_result" | "${VENV_DIR}/bin/python3" -c "import json, sys; data=json.load(sys.stdin); print(data.get('quantization', ''))" 2>/dev/null || echo "")
+            hf_precision=$(echo "$hf_result" | "${VENV_DIR}/bin/python3" -c "import json, sys; data=json.load(sys.stdin); print(data.get('precision', ''))" 2>/dev/null || echo "")
+            local hf_error=$(echo "$hf_result" | "${VENV_DIR}/bin/python3" -c "import json, sys; data=json.load(sys.stdin); print(data.get('error', ''))" 2>/dev/null || echo "")
+            
+            if [ -n "$hf_error" ]; then
+                warn "  HuggingFace API: $hf_error" >&2
+            fi
+            
+            # Validate numeric results
+            if [ -z "$params_from_hf" ] || ! [[ "$params_from_hf" =~ ^[0-9]+\.?[0-9]*$ ]]; then
+                params_from_hf=0
+            fi
             if [ -z "$hf_model_size_gb" ] || ! [[ "$hf_model_size_gb" =~ ^[0-9]+\.?[0-9]*$ ]]; then
                 hf_model_size_gb=0
             fi
-        else
-            warn "  huggingface_hub not available - install with: ${VENV_DIR}/bin/pip install huggingface-hub" >&2
+            
+            # Report findings
+            if [ "$(echo "$params_from_hf > 0" | bc -l)" -eq 1 ]; then
+                info "  ✓ Parameters from HuggingFace: ${params_from_hf}B" >&2
+            fi
+            if [ "$(echo "$hf_model_size_gb > 0" | bc -l)" -eq 1 ]; then
+                info "  ✓ Model size from HuggingFace: ${hf_model_size_gb}GB" >&2
+            fi
+            if [ -n "$hf_quantization" ]; then
+                info "  ✓ Quantization detected from HF: $hf_quantization" >&2
+                quantization="$hf_quantization"
+            fi
+            if [ -n "$hf_precision" ]; then
+                info "  ✓ Precision detected from HF: $hf_precision" >&2
+                precision="$hf_precision"
+            fi
+            
+            debug "After HF API: quantization=$quantization, precision=$precision" >&2
         fi
-        
-        if [ -n "$params_from_hf" ] && [ "$(echo "$params_from_hf > 0" | bc -l)" -eq 1 ]; then
-            info "  Parameters from HuggingFace API: ${params_from_hf}B" >&2
-        fi
-        if [ -n "$hf_model_size_gb" ] && [ "$(echo "$hf_model_size_gb > 0" | bc -l)" -eq 1 ]; then
-            info "  Model size from HuggingFace API: ${hf_model_size_gb}GB" >&2
-        fi
+    else
+        warn "  huggingface_hub not available - install with: ${VENV_DIR}/bin/pip install huggingface-hub" >&2
+        debug "Skipping HuggingFace API analysis" >&2
     fi
     
     # Try to get parameters from config.json as fallback
@@ -471,9 +589,14 @@ PYTHON_EOF
         fi
     fi
     
-    # Estimate parameters based on size and precision
+    # Determine final parameter count from best available source
     local params_billions=0
     local bytes_per_param=2  # Default to fp16
+    
+    # Update precision based on HuggingFace findings if not already set by config
+    if [ -n "$hf_precision" ] && [ "$precision" = "fp16" ]; then
+        precision="$hf_precision"
+    fi
     
     case "$precision" in
         fp32) bytes_per_param=4 ;;
@@ -482,52 +605,114 @@ PYTHON_EOF
         int4) bytes_per_param=0.5 ;;
     esac
     
-    # Use HuggingFace API first, then config.json, then estimate from size
+    # Priority: HuggingFace API > config.json > size-based estimation
     if [ -n "$params_from_hf" ] && [ "$(echo "$params_from_hf > 0" | bc -l)" -eq 1 ]; then
         params_billions=$(printf "%.0f" "$params_from_hf")
-        info "  Parameters from HuggingFace API: ${params_billions}B" >&2
-        # Use HF model size if available, otherwise use local disk size
+        info "  → Using parameters from HuggingFace API: ${params_billions}B" >&2
+        
+        # Prefer HF model size if available (more accurate for quantized models)
         if [ -n "$hf_model_size_gb" ] && [ "$(echo "$hf_model_size_gb > 0" | bc -l)" -eq 1 ]; then
             model_size_gb="$hf_model_size_gb"
-            info "  Model size from HuggingFace API: ${model_size_gb}GB" >&2
+            info "  → Using model size from HuggingFace API: ${model_size_gb}GB" >&2
         fi
     elif [ -n "$params_from_config" ] && [ "$(echo "$params_from_config > 0" | bc -l)" -eq 1 ]; then
         params_billions=$(printf "%.0f" "$params_from_config")
-        info "  Parameters from config.json: ${params_billions}B" >&2
+        info "  → Using parameters from config.json: ${params_billions}B" >&2
     elif [ -n "$model_size_gb" ] && [ "$(echo "$model_size_gb > 0" | bc -l)" -eq 1 ]; then
-        # Rough estimate: model_size_gb / bytes_per_param = params_billions
-        # Account for overhead (tokenizer, config, etc.) - assume 15% overhead
-        params_billions=$(echo "scale=1; ($model_size_gb / $bytes_per_param) * 0.85" | bc -l)
-        params_billions=$(printf "%.0f" "$params_billions")
-        info "  Estimated parameters from size: ${params_billions}B (size: ${model_size_gb}GB)" >&2
+        # Estimate from size: For quantized models, this is less accurate
+        # but better than nothing
+        if [ "$quantization" != "none" ] && [ -n "$quantization" ]; then
+            # For quantized models, estimate conservatively
+            # Quantized model size ≈ params * bytes_per_param * compression_ratio
+            # We reverse this to estimate params
+            params_billions=$(echo "scale=1; ($model_size_gb / $bytes_per_param) * 0.9" | bc -l)
+            params_billions=$(printf "%.0f" "$params_billions")
+            info "  → Estimated parameters from quantized size: ~${params_billions}B (${quantization}, ${model_size_gb}GB)" >&2
+        else
+            # For non-quantized models, more straightforward calculation
+            # Account for overhead (tokenizer, config, etc.) - assume 15% overhead
+            params_billions=$(echo "scale=1; ($model_size_gb / $bytes_per_param) * 0.85" | bc -l)
+            params_billions=$(printf "%.0f" "$params_billions")
+            info "  → Estimated parameters from size: ${params_billions}B (${precision}, ${model_size_gb}GB)" >&2
+        fi
     else
-        warn "  Could not estimate parameters - no size or parameter data available" >&2
+        warn "  Could not determine parameters - no size or parameter data available" >&2
         params_billions=0
     fi
     
-    # Estimate GPU size (model weights + overhead)
-    # For quantized models, use actual size; for FP16, add overhead
+    # Estimate GPU memory requirements more accurately
+    # Factors: model weights + KV cache + activation memory + CUDA kernels
     local gpu_size_gb
-    if [ "$quantization" != "none" ]; then
-        # Quantized: actual size + 20% overhead
-        gpu_size_gb=$(echo "scale=1; $model_size_gb * 1.2" | bc -l)
-    else
-        # FP16: model weights + KV cache estimate + overhead
-        gpu_size_gb=$(echo "scale=1; $model_size_gb * 1.3" | bc -l)
+    
+    if [ -z "$model_size_gb" ] || [ "$(echo "$model_size_gb == 0" | bc -l)" -eq 1 ]; then
+        # Fallback: estimate from params and precision
+        if [ "$(echo "$params_billions > 0" | bc -l)" -eq 1 ]; then
+            model_size_gb=$(echo "scale=2; $params_billions * $bytes_per_param" | bc -l)
+            info "  → Calculated model size from params: ${model_size_gb}GB" >&2
+        else
+            gpu_size_gb=0
+        fi
     fi
     
-    # Round GPU size
-    gpu_size_gb=$(printf "%.0f" "$gpu_size_gb")
+    if [ "$(echo "$model_size_gb > 0" | bc -l)" -eq 1 ]; then
+        # Quantized models need less overhead
+        if [ "$quantization" != "none" ] && [ -n "$quantization" ]; then
+            case "$quantization" in
+                gptq|awq|gguf)
+                    # Quantized models: weights + 15% overhead (KV cache, activations)
+                    gpu_size_gb=$(echo "scale=1; $model_size_gb * 1.15" | bc -l)
+                    ;;
+                bitsandbytes)
+                    # BitsAndBytes has slightly more overhead due to dynamic dequantization
+                    gpu_size_gb=$(echo "scale=1; $model_size_gb * 1.20" | bc -l)
+                    ;;
+                *)
+                    # Unknown quantization, be conservative
+                    gpu_size_gb=$(echo "scale=1; $model_size_gb * 1.25" | bc -l)
+                    ;;
+            esac
+        else
+            # Non-quantized models need more memory
+            case "$precision" in
+                fp32)
+                    # FP32: weights + 40% overhead (larger KV cache, activations)
+                    gpu_size_gb=$(echo "scale=1; $model_size_gb * 1.40" | bc -l)
+                    ;;
+                bf16|fp16)
+                    # FP16/BF16: weights + 30% overhead
+                    gpu_size_gb=$(echo "scale=1; $model_size_gb * 1.30" | bc -l)
+                    ;;
+                *)
+                    # Unknown precision, use conservative estimate
+                    gpu_size_gb=$(echo "scale=1; $model_size_gb * 1.35" | bc -l)
+                    ;;
+            esac
+        fi
+        
+        # Round up to nearest GB (always round up for safety)
+        gpu_size_gb=$(echo "$gpu_size_gb" | awk '{print int($1 + 0.99)}')
+    else
+        gpu_size_gb=0
+    fi
     
-    # Build notes
+    # Build descriptive notes
     local notes=""
-    if [ "$quantization" != "none" ]; then
-        notes="${quantization} ${precision}, ~${gpu_size_gb}GB GPU"
+    if [ "$quantization" != "none" ] && [ -n "$quantization" ]; then
+        # Quantized model
+        notes="${params_billions}B params, ${quantization^^} ${precision}, ~${gpu_size_gb}GB GPU"
     else
-        notes="${params_billions}B params, ${precision}, ~${gpu_size_gb}GB GPU"
+        # Non-quantized model
+        notes="${params_billions}B params, ${precision^^}, ~${gpu_size_gb}GB GPU"
     fi
     
-    # Output configuration line
+    # Add model size to notes if available
+    if [ "$(echo "$model_size_gb > 0" | bc -l)" -eq 1 ]; then
+        notes="${notes} (${model_size_gb}GB disk)"
+    fi
+    
+    debug "Final values: params=$params_billions, precision=$precision, quant=$quantization, gpu=$gpu_size_gb, size=$model_size_gb" >&2
+    
+    # Output configuration line: params|precision|quantization|gpu_size|notes
     echo "${params_billions}|${precision}|${quantization}|${gpu_size_gb}|${notes}"
 }
 
@@ -618,12 +803,51 @@ PYTHON_EOF
 
 # Main execution
 main() {
-    # If called non-interactively (from setup-llm-models.sh), skip prompts
+    # Parse options
     local interactive=true
-    if [ "${1:-}" = "--non-interactive" ]; then
-        interactive=false
-        shift
-    fi
+    local force=false
+    
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --non-interactive)
+                interactive=false
+                shift
+                ;;
+            --force)
+                force=true
+                shift
+                ;;
+            --debug)
+                DEBUG=true
+                shift
+                ;;
+            --help|-h)
+                echo "Usage: $0 [OPTIONS] [MODEL_NAME]"
+                echo ""
+                echo "Options:"
+                echo "  --non-interactive    Run without prompts (auto-update)"
+                echo "  --force              Force re-analysis even if model already configured"
+                echo "  --debug              Enable debug output"
+                echo "  --help, -h           Show this help message"
+                echo ""
+                echo "Examples:"
+                echo "  $0                                     # Analyze all models (interactive)"
+                echo "  $0 Qwen/Qwen3-30B-Instruct            # Analyze specific model"
+                echo "  $0 --force Qwen/Qwen3-30B-Instruct    # Force re-analysis"
+                echo "  $0 --non-interactive                   # Auto-analyze all"
+                echo "  $0 --debug Qwen/Qwen3-30B-Instruct    # Debug mode"
+                exit 0
+                ;;
+            -*)
+                error "Unknown option: $1"
+                echo "Use --help for usage information"
+                exit 1
+                ;;
+            *)
+                break
+                ;;
+        esac
+    done
     
     if [ "$interactive" = true ]; then
         echo "=========================================="
@@ -667,12 +891,17 @@ main() {
             
             if [ "$interactive" = true ]; then
                 echo ""
-                info "Configuration: $config_line"
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                info "Model Configuration Summary"
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                echo "  Model: $model_name"
                 echo "  Parameters: ${params}B"
-                echo "  Precision: $precision"
-                echo "  Quantization: $quantization"
-                echo "  GPU Size: ${gpu_size}GB"
-                echo "  Notes: $notes"
+                echo "  Precision: ${precision^^}"
+                echo "  Quantization: ${quantization}"
+                echo "  Estimated GPU Memory: ${gpu_size}GB"
+                echo ""
+                echo "  Full Notes: $notes"
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 echo ""
                 read -p "Update model_configs in model_registry.yml? (Y/n): " -n 1 -r
                 echo ""
@@ -682,6 +911,10 @@ main() {
             else
                 # Non-interactive: auto-update
                 update_model_registry "$model_name" "$params" "$precision" "$quantization" "$gpu_size" "$notes" 2>/dev/null || true
+            fi
+        else
+            if [ "$interactive" = true ]; then
+                error "Failed to analyze model"
             fi
         fi
     else
