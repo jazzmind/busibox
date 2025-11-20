@@ -260,7 +260,7 @@ try:
             # MODEL_CONFIG uses model_name (full HuggingFace path) as key
             # Format: params|precision|quantization|gpu_size|notes
             config_line = f"{params}|{precision_escaped}|{quantization_escaped}|{gpu_size}|{notes_escaped}"
-            output_lines.append(f'MODEL_CONFIG["{model_name_escaped}"]="{config_line}"')
+            output_lines.append(f'MODEL_CONFIGS["{model_name_escaped}"]="{config_line}"')
             output_lines.append(f'MODEL_SIZES["{model_name_escaped}"]="{gpu_size}"')
             
             vllm_models_found.append(model_key)
@@ -301,7 +301,7 @@ PYTHON_EOF
     echo "[INFO] Loaded ${#MODEL_NAMES[@]} vLLM model(s) from model_config.yml" >&2
     
     # Check if model configs were empty
-    if [ ${#MODEL_CONFIG[@]} -eq 0 ]; then
+    if [ ${#MODEL_CONFIGS[@]} -eq 0 ]; then
         warn "No model technical details found. Run update-model-config.sh to analyze models."
         warn "Script will use fallback estimates for model configurations."
     fi
@@ -309,7 +309,8 @@ PYTHON_EOF
 
 # Pre-declare arrays as global associative arrays BEFORE calling load_model_registry
 # Note: Using declare -A (not -gA) at global scope to ensure compatibility
-declare -A MODEL_CONFIG=()
+# Note: MODEL_CONFIGS (plural) to avoid conflict with MODEL_CONFIG file path variable
+declare -A MODEL_CONFIGS=()
 declare -A MODEL_NAMES=()
 declare -A MODEL_SIZES=()
 
@@ -396,8 +397,8 @@ estimate_vllm_memory() {
 get_model_config() {
     local model_full="$1"
     
-    if [ -n "${MODEL_CONFIG[$model_full]:-}" ]; then
-        echo "${MODEL_CONFIG[$model_full]}"
+    if [ -n "${MODEL_CONFIGS[$model_full]:-}" ]; then
+        echo "${MODEL_CONFIGS[$model_full]}"
     else
         # Fallback: try to extract from model name (for models not yet analyzed)
         warn "Model $model_full not found in model_configs. Using fallback estimates."
