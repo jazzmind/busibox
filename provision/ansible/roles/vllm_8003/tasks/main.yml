@@ -2,6 +2,13 @@
 # vLLM Port 8000 Role - Main Tasks
 # Checks model_config.yml for model assigned to port 8000
 
+- name: Stop existing vLLM service to free GPU memory
+  systemd:
+    name: "vllm-{{ vllm_port }}"
+    state: stopped
+  failed_when: false
+  when: inventory_hostname in groups['vllm']
+
 - name: Check if model_config.yml exists
   stat:
     path: "{{ playbook_dir }}/group_vars/all/model_config.yml"
