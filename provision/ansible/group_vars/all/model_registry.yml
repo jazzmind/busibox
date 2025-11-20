@@ -21,7 +21,7 @@ available_models:
   "qwen3-embedding":
     provider: "vllm"
     model: "qwen3-embedding"
-    model_name: "Qwen/Qwen3-Embedding-8B" 
+    model_name: "Qwen/Qwen3-Embedding-8B"
     description: "Text embedding generation"
 
   "phi-4":
@@ -29,7 +29,7 @@ available_models:
     model: "phi-4"
     model_name: "microsoft/Phi-4-multimodal-instruct"
     description: "Fast model for quick operations"
-
+    
   "qwen3-30b-instruct":
     provider: "vllm"
     model: "qwen3-30b-instruct"

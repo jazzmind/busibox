@@ -557,34 +557,34 @@ PYTHON_EOF
     # Try to get parameters from config.json as fallback
     local params_from_config=0
     if [ -z "$params_from_hf" ] || [ "$(echo "$params_from_hf == 0" | bc -l)" -eq 1 ]; then
-        if [ -f "$config_file" ]; then
-            params_from_config=$("${VENV_DIR}/bin/python3" << PYTHON_EOF
+    if [ -f "$config_file" ]; then
+        params_from_config=$("${VENV_DIR}/bin/python3" << PYTHON_EOF
 import json
 import os
 
 config_file = "${config_file}"
 if os.path.exists(config_file):
     try:
-        with open(config_file, 'r') as f:
-            config = json.load(f)
-        
-        # Try various parameter count fields
-        params = config.get('num_parameters', 0)
-        if not params:
-            params = config.get('num_parameters_total', 0)
-        if not params:
-            params = config.get('parameters', 0)
-        
-        # Convert to billions
+    with open(config_file, 'r') as f:
+        config = json.load(f)
+    
+    # Try various parameter count fields
+    params = config.get('num_parameters', 0)
+    if not params:
+        params = config.get('num_parameters_total', 0)
+    if not params:
+        params = config.get('parameters', 0)
+    
+    # Convert to billions
         if params and params > 0:
-            params_billions = params / 1_000_000_000
-            print(f"{params_billions:.1f}")
+        params_billions = params / 1_000_000_000
+        print(f"{params_billions:.1f}")
         else:
             print("0")
     except Exception as e:
         print("0")
-else:
-    print("0")
+    else:
+        print("0")
 PYTHON_EOF
 )
         fi
@@ -631,9 +631,9 @@ PYTHON_EOF
             info "  → Estimated parameters from quantized size: ~${params_billions}B (${quantization}, ${model_size_gb}GB)" >&2
         else
             # For non-quantized models, more straightforward calculation
-            # Account for overhead (tokenizer, config, etc.) - assume 15% overhead
-            params_billions=$(echo "scale=1; ($model_size_gb / $bytes_per_param) * 0.85" | bc -l)
-            params_billions=$(printf "%.0f" "$params_billions")
+        # Account for overhead (tokenizer, config, etc.) - assume 15% overhead
+        params_billions=$(echo "scale=1; ($model_size_gb / $bytes_per_param) * 0.85" | bc -l)
+        params_billions=$(printf "%.0f" "$params_billions")
             info "  → Estimated parameters from size: ${params_billions}B (${precision}, ${model_size_gb}GB)" >&2
         fi
     else
@@ -688,8 +688,8 @@ PYTHON_EOF
                     gpu_size_gb=$(echo "scale=1; $model_size_gb * 1.35" | bc -l)
                     ;;
             esac
-        fi
-        
+    fi
+    
         # Round up to nearest GB (always round up for safety)
         gpu_size_gb=$(echo "$gpu_size_gb" | awk '{print int($1 + 0.99)}')
     else
@@ -963,8 +963,8 @@ main() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --non-interactive)
-                interactive=false
-                shift
+        interactive=false
+        shift
                 ;;
             --force)
                 force=true

@@ -253,7 +253,7 @@ try:
             precision_escaped = precision.replace('"', '\\"')
             quantization_escaped = quantization.replace('"', '\\"')
             notes_escaped = notes.replace('"', '\\"')
-            
+
             # MODEL_NAMES uses model_key -> model_name mapping
             output_lines.append(f'MODEL_NAMES["{model_key_escaped}"]="{model_name_escaped}"')
             
@@ -887,22 +887,7 @@ generate_routing_config() {
     echo "  GPUs: $gpu_list"
     echo "  Tensor Parallelism: $tensor_parallel"
     echo "  vLLM Port: $vllm_port"
-    echo ""
-    
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "1. vLLM Configuration (Ansible Variables)"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "# In inventory/*/group_vars/all/00-main.yml"
-    echo ""
-    echo "# For main vLLM instance (if this is the primary model):"
-    echo "vllm_cuda_visible_devices: \"$gpu_list\""
-    echo "vllm_tensor_parallel_size: $tensor_parallel"
-    echo ""
-    echo "# OR for separate vLLM instances (if using multiple models):"
-    echo "# Create separate vLLM service on different port:"
-    echo "vllm_${model_short}_cuda_visible_devices: \"$gpu_list\""
-    echo "vllm_${model_short}_tensor_parallel_size: $tensor_parallel"
-    echo "vllm_${model_short}_port: $vllm_port"
+    echo "  Status: Configuration saved to model_config.yml"
     echo ""
     
     # Update LiteLLM config automatically if requested
