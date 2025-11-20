@@ -141,14 +141,14 @@ PYTHON_EOF
 # This replaces hardcoded MODEL_CONFIG, MODEL_NAMES, and MODEL_SIZES arrays
 load_model_registry() {
     if [ ! -f "$MODEL_REGISTRY" ]; then
-        error "Model registry not found: $MODEL_REGISTRY"
-        error "Current directory: $(pwd)"
-        error "REPO_ROOT: $REPO_ROOT"
-        error "Run this script from the busibox repository root"
+        echo "ERROR: Model registry not found: $MODEL_REGISTRY" >&2
+        echo "ERROR: Current directory: $(pwd)" >&2
+        echo "ERROR: REPO_ROOT: $REPO_ROOT" >&2
+        echo "ERROR: Run this script from the busibox repository root" >&2
         exit 1
     fi
     
-    info "Loading model registry from: $MODEL_REGISTRY" >&2
+    echo "[INFO] Loading model registry from: $MODEL_REGISTRY" >&2
     
     # Check if Python venv exists (for YAML parsing)
     if [ ! -d "$VENV_DIR" ] || ! "${VENV_DIR}/bin/python3" -c "import yaml" 2>/dev/null; then
