@@ -140,9 +140,6 @@ PYTHON_EOF
 # Load model configuration from model_registry.yml
 # This replaces hardcoded MODEL_CONFIG, MODEL_NAMES, and MODEL_SIZES arrays
 load_model_registry() {
-    echo "[DEBUG] Entering load_model_registry function..." >&2
-    echo "[DEBUG] Checking if file exists: $MODEL_REGISTRY" >&2
-    
     if [ ! -f "$MODEL_REGISTRY" ]; then
         echo "ERROR: Model registry not found: $MODEL_REGISTRY" >&2
         echo "ERROR: Current directory: $(pwd)" >&2
@@ -152,7 +149,6 @@ load_model_registry() {
     fi
     
     echo "[INFO] Loading model registry from: $MODEL_REGISTRY" >&2
-    echo "[INFO] File exists and is readable" >&2
     
     # Ensure stderr (fd 2) goes to terminal for debug output
     # Python will output debug to stderr, array definitions to stdout
@@ -166,64 +162,32 @@ load_model_registry() {
     fi
     
     # Use Python to parse YAML and populate bash arrays
-    # Debug output goes to stderr (terminal), array definitions go to stdout (captured)
     local python_output
-    echo "[DEBUG] Running Python script to parse model registry..." >&2
-    echo "[DEBUG] Registry file: $MODEL_REGISTRY" >&2
-    echo "[DEBUG] File exists: $([ -f "$MODEL_REGISTRY" ] && echo "yes" || echo "no")" >&2
-    
-    # Run Python with explicit stderr redirection to ensure debug output is visible
-    # stderr goes to terminal (fd 2), stdout (array defs) gets captured
-    echo "[DEBUG] About to run Python script..." >&2
     python_output=$("${VENV_DIR}/bin/python3" << PYTHON_EOF 2>&2
 import yaml
 import sys
 import os
-import json
-
-# Force unbuffered output
-sys.stdout.reconfigure(line_buffering=True)
-sys.stderr.reconfigure(line_buffering=True)
-
-print("DEBUG: Python script started", file=sys.stderr, flush=True)
 
 registry_file = "${MODEL_REGISTRY}"
-print(f"DEBUG: Registry file path: {registry_file}", file=sys.stderr, flush=True)
-
 if not os.path.exists(registry_file):
-    print("ERROR: Registry file not found", file=sys.stderr, flush=True)
+    print("ERROR: Registry file not found", file=sys.stderr)
     sys.exit(1)
 
-print(f"DEBUG: Registry file exists", file=sys.stderr, flush=True)
-
 try:
-    print("DEBUG: Opening registry file", file=sys.stderr, flush=True)
     with open(registry_file, 'r') as f:
         data = yaml.safe_load(f)
-    
-    print("DEBUG: YAML loaded successfully", file=sys.stderr, flush=True)
     
     # Ensure data is a dict (handle None or empty file)
     if data is None:
         data = {}
     
-    print(f"DEBUG: YAML data keys: {list(data.keys()) if isinstance(data, dict) else 'NOT A DICT'}", file=sys.stderr, flush=True)
-    
-    # Initialize arrays
+    # Initialize output
     output_lines = []
-    output_lines.append("declare -A MODEL_CONFIG")
-    output_lines.append("declare -A MODEL_NAMES")
-    output_lines.append("declare -A MODEL_SIZES")
     
     # Load available_models and model_purposes
-    # New structure: available_models contains full config, model_purposes maps purpose -> model key
-    # Ensure we always have dicts, not None
     available_models = data.get('available_models') or {}
     purposes = data.get('model_purposes') or {}
     api_providers = {'bedrock', 'openai', 'anthropic'}
-    
-    print(f"DEBUG: available_models type: {type(available_models)}", file=sys.stderr, flush=True)
-    print(f"DEBUG: available_models keys: {list(available_models.keys()) if isinstance(available_models, dict) else 'NOT A DICT'}", file=sys.stderr, flush=True)
     
     # Ensure available_models is a dict
     if not isinstance(available_models, dict):
@@ -231,32 +195,22 @@ try:
     
     # Build MODEL_NAMES from available_models (only vLLM models)
     vllm_models_found = []
-    print(f"DEBUG: Processing {len(available_models)} models from available_models", file=sys.stderr, flush=True)
     for model_key, model_config in available_models.items():
-        print(f"DEBUG: Examining model_key: {model_key}", file=sys.stderr, flush=True)
-        
         # Ensure model_config is a dict
         if not isinstance(model_config, dict):
-            print(f"DEBUG: Skipping {model_key} - not a dict (type: {type(model_config)})", file=sys.stderr, flush=True)
             continue
             
         provider = model_config.get('provider', '').lower()
         model_name = model_config.get('model_name', '')
         
-        print(f"DEBUG: {model_key}: provider='{provider}', model_name='{model_name}'", file=sys.stderr, flush=True)
-        
         # Only include models that use vLLM (not API-based providers)
         # Accept both 'vllm' and 'litellm' as providers for local models
-        # (LiteLLM is the API gateway, vLLM is the inference engine)
         if provider in ('vllm', 'litellm') and model_name:
             # Escape quotes in values
             model_key_escaped = model_key.replace('"', '\\"')
             model_name_escaped = model_name.replace('"', '\\"')
             output_lines.append(f'MODEL_NAMES["{model_key_escaped}"]="{model_name_escaped}"')
             vllm_models_found.append(model_key)
-            print(f"DEBUG: *** ADDED vLLM model: {model_key} -> {model_name} ***", file=sys.stderr, flush=True)
-        else:
-            print(f"DEBUG: SKIPPED {model_key}: provider='{provider}' (not vllm/litellm) or model_name='{model_name}' empty", file=sys.stderr, flush=True)
     
     # Load model_configs (technical details)
     # Ensure we always have a dict, not None
@@ -286,40 +240,17 @@ try:
         output_lines.append(f'MODEL_CONFIG["{model_name_escaped}"]="{config_line}"')
         output_lines.append(f'MODEL_SIZES["{model_name_escaped}"]="{gpu_size}"')
     
-    # Separate stdout (array definitions) from stderr (debug messages)
-    # Array definitions go to stdout, debug goes to stderr
-    array_output = []
-    debug_output = []
-    
-    # Collect array definitions
-    for line in output_lines:
-        array_output.append(line)
-    
-    # Collect debug messages
+    # Output warnings if needed
     if configs_empty:
-        debug_output.append("WARNING: model_configs section is empty. Run update-model-config.sh to populate it.")
+        print("WARNING: model_configs section is empty. Run update-model-config.sh to populate it.", file=sys.stderr)
     
-    # Debug: Count models found
+    # Check model count
     model_count = len(vllm_models_found)
     if model_count == 0:
-        debug_output.append("WARNING: No vLLM models found in available_models. Check provider field.")
-        debug_output.append(f"DEBUG: Found {len(available_models)} models in available_models")
-        for key, config in available_models.items():
-            if isinstance(config, dict):
-                provider = config.get('provider', '')
-                model_name = config.get('model_name', '')
-                debug_output.append(f"DEBUG: {key}: provider='{provider}', model_name='{model_name}'")
-            else:
-                debug_output.append(f"DEBUG: {key}: not a dict (type: {type(config)})")
-    else:
-        debug_output.append(f"DEBUG: Found {model_count} vLLM model(s): {', '.join(vllm_models_found)}")
+        print("WARNING: No vLLM models found in available_models. Check provider field.", file=sys.stderr)
     
-    # Output debug to stderr (will be shown on terminal)
-    for msg in debug_output:
-        print(msg, file=sys.stderr)
-    
-    # Output array definitions to stdout (will be captured)
-    for line in array_output:
+    # Output array assignments to stdout (will be captured and eval'd)
+    for line in output_lines:
         print(line)
     
 except Exception as e:
@@ -328,28 +259,16 @@ except Exception as e:
     print(f"Traceback: {traceback.format_exc()}", file=sys.stderr)
     sys.exit(1)
 PYTHON_EOF
-    ) 2>&2  # Explicitly redirect stderr to terminal (fd 2)
+    ) 2>&2
     
     local python_exit=$?
-    echo "[DEBUG] Python script completed with exit code: $python_exit" >&2
-    
     if [ $python_exit -ne 0 ]; then
         echo "ERROR: Failed to load model registry (Python exit code: $python_exit)" >&2
         exit 1
     fi
     
-    echo "[DEBUG] Python output captured, length: ${#python_output} chars" >&2
-    echo "[DEBUG] First few lines of Python output:" >&2
-    echo "$python_output" | head -5 >&2
-    
     # Evaluate the Python output to populate arrays
-    # Note: Python outputs array definitions to stdout (captured in python_output)
-    #       Debug messages go to stderr and should appear on terminal automatically
-    echo "[DEBUG] Evaluating Python output to declare arrays..." >&2
     eval "$python_output"
-    
-    echo "[DEBUG] After eval, checking MODEL_NAMES..." >&2
-    echo "[DEBUG] MODEL_NAMES is declared: $(declare -p MODEL_NAMES 2>/dev/null || echo 'NOT DECLARED')" >&2
     
     # Check if any models were loaded
     if [ ${#MODEL_NAMES[@]} -eq 0 ]; then
@@ -371,16 +290,13 @@ PYTHON_EOF
 }
 
 # Pre-declare arrays as global associative arrays BEFORE calling load_model_registry
-declare -gA MODEL_CONFIG
-declare -gA MODEL_NAMES  
-declare -gA MODEL_SIZES
+# Note: Using declare -A (not -gA) at global scope to ensure compatibility
+declare -A MODEL_CONFIG=()
+declare -A MODEL_NAMES=()
+declare -A MODEL_SIZES=()
 
 # Load model registry at script startup
-echo "[DEBUG] About to call load_model_registry..." >&2
-echo "[DEBUG] MODEL_REGISTRY variable: $MODEL_REGISTRY" >&2
 load_model_registry
-echo "[DEBUG] load_model_registry completed" >&2
-echo "[DEBUG] MODEL_NAMES array size: ${#MODEL_NAMES[@]}" >&2
 
 # GPU memory sizes
 declare -A GPU_MEMORY=()
