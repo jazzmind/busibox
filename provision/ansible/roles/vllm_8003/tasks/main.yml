@@ -15,18 +15,42 @@
   when: model_config_file.stat.exists
   delegate_to: localhost
 
-- name: Find model assigned to port {{ vllm_port }}
+- name: Find model assigned to port {{ vllm_port }} using Python
+  shell: |
+    python3 << 'PYTHON_EOF'
+    import yaml
+    from pathlib import Path
+    
+    config_file = Path("{{ playbook_dir }}/group_vars/all/model_config.yml")
+    
+    if not config_file.exists():
+        print("")
+        exit(0)
+    
+    with open(config_file, 'r') as f:
+        model_config = yaml.safe_load(f) or {}
+    
+    models = model_config.get('models', {})
+    target_port = {{ vllm_port }}
+    
+    for model_name, config in models.items():
+        port = config.get('port')
+        assigned = config.get('assigned', False)
+        
+        if port == target_port and assigned:
+            print(model_name)
+            exit(0)
+    
+    print("")
+    PYTHON_EOF
+  register: model_lookup
+  delegate_to: localhost
+  changed_when: false
+  when: model_config_file.stat.exists
+
+- name: Set vllm_assigned_model from Python output
   set_fact:
-    vllm_assigned_model: >-
-      {% set assigned_model = '' %}
-      {% if model_config_data is defined and model_config_data.models is defined %}
-        {% for model_name, config in model_config_data.models.items() %}
-          {% if config.port is defined and config.port|int == vllm_port|int and config.assigned | default(false) %}
-            {% set assigned_model = model_name %}
-          {% endif %}
-        {% endfor %}
-      {% endif %}
-      {{ assigned_model }}
+    vllm_assigned_model: "{{ model_lookup.stdout | trim }}"
   when: model_config_file.stat.exists
 
 - name: Set vllm_assigned_model to empty if no model_config
@@ -36,11 +60,11 @@
 
 - name: Debug - Show model assignment for port {{ vllm_port }}
   debug:
-    msg: "Port {{ vllm_port }}: {{ 'Assigned to ' + vllm_assigned_model if vllm_assigned_model != '' else 'No model assigned - skipping deployment' }}"
+    msg: "Port {{ vllm_port }}: {{ 'Assigned to ' + vllm_assigned_model if vllm_assigned_model|length > 0 else 'No model assigned - skipping deployment' }}"
 
 - name: End play for this host if no model assigned
   meta: end_host
-  when: vllm_assigned_model is not defined or vllm_assigned_model == "" or vllm_assigned_model is none
+  when: vllm_assigned_model is not defined or vllm_assigned_model|length == 0
 
 - name: Set model configuration from model_config.yml
   set_fact:
