@@ -36,9 +36,10 @@
     for model_name, config in models.items():
         port = config.get('port')
         assigned = config.get('assigned', False)
+        provider = config.get('provider', 'vllm')
         
-        # Skip colpali models - they have their own dedicated service
-        if 'colpali' in model_name.lower():
+        # Only process vLLM models - skip colpali, marker, bedrock, etc.
+        if provider != 'vllm':
             continue
         
         if port == target_port and assigned:
