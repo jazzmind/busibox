@@ -76,7 +76,7 @@
     vllm_default_model: "{{ vllm_assigned_model }}"
     vllm_tensor_parallel_size: "{{ model_config_data.models[vllm_assigned_model].tensor_parallel | default(1) }}"
     vllm_cuda_visible_devices: "{{ model_config_data.models[vllm_assigned_model].gpu | default('') }}"
-    vllm_max_model_len: "{{ model_config_data.models[vllm_assigned_model].max_tokens | default(8192) }}"
+    vllm_max_model_len: 8192
   when: vllm_assigned_model != ""
 
 - name: Include installation tasks
