@@ -27,19 +27,19 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+    echo -e "${BLUE}[INFO]${NC} $1" >&2
 }
 
 success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
+    echo -e "${GREEN}[SUCCESS]${NC} $1" >&2
 }
 
 warn() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
+    echo -e "${YELLOW}[WARNING]${NC} $1" >&2
 }
 
 error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+    echo -e "${RED}[ERROR]${NC} $1" >&2
 }
 
 # Paths
@@ -63,7 +63,7 @@ analyze_model() {
     local model_name="$1"
     local model_path="$2"
     
-    info "Analyzing: $model_name"
+    info "Analyzing: $model_name" >&2
     
     # Find the actual model files
     local snapshot_dir=$(find "$model_path/snapshots" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
@@ -271,13 +271,13 @@ PYTHON_EOF
     # Use config if available, otherwise estimate from size
     if [ "$(echo "$params_from_config > 0" | bc -l)" -eq 1 ]; then
         params_billions=$(printf "%.0f" "$params_from_config")
-        info "  Parameters from config.json: ${params_billions}B"
+        info "  Parameters from config.json: ${params_billions}B" >&2
     else
         # Rough estimate: model_size_gb / bytes_per_param = params_billions
         # Account for overhead (tokenizer, config, etc.) - assume 15% overhead
         params_billions=$(echo "scale=1; ($model_size_gb / $bytes_per_param) * 0.85" | bc -l)
         params_billions=$(printf "%.0f" "$params_billions")
-        info "  Estimated parameters from size: ${params_billions}B"
+        info "  Estimated parameters from size: ${params_billions}B" >&2
     fi
     
     # Estimate GPU size (model weights + overhead)
@@ -427,7 +427,14 @@ main() {
         if [ "$interactive" = true ]; then
             info "Analyzing model: $model_name"
         fi
+        # Capture only stdout (config line), stderr (info messages) goes to terminal
+        # Command substitution only captures stdout by default, so stderr from info() won't be captured
+        # Capture stdout only (config line), stderr (info messages) goes to terminal
+        # Command substitution only captures stdout by default, stderr goes to terminal
         local config_line=$(analyze_model "$model_name" "$model_path")
+        
+        # Filter out any non-config lines (safety check - should not be needed)
+        config_line=$(echo "$config_line" | grep -E '^[0-9]+\|[^|]+\|[^|]+\|[0-9]+\|' | head -1)
         
         if [ -n "$config_line" ]; then
             # Parse config line: params|precision|quantization|gpu_size|notes
@@ -464,7 +471,12 @@ main() {
             fi
             
             local model_name=$(basename "$model_dir" | sed 's/models--//g' | sed 's/--/\//g')
+            # Capture stdout only (config line), stderr (info messages) goes to terminal
+            # Command substitution only captures stdout by default, stderr goes to terminal
             local config_line=$(analyze_model "$model_name" "$model_dir")
+            
+            # Filter out any non-config lines (safety check - should not be needed)
+            config_line=$(echo "$config_line" | grep -E '^[0-9]+\|[^|]+\|[^|]+\|[0-9]+\|' | head -1)
             
             if [ -n "$config_line" ]; then
                 # Parse config line: params|precision|quantization|gpu_size|notes
