@@ -105,12 +105,19 @@
     litellm_models: "{{ models_json_output.stdout | from_json }}"
   tags: [litellm_configure]
 
-- name: Debug - Display Python script output
+- name: Debug - Display model configuration details
   debug:
     msg:
-      - "Python script stdout: {{ models_json_output.stdout }}"
-      - "Parsed litellm_models: {{ litellm_models }}"
-      - "Number of models: {{ litellm_models | length }}"
+      - "=========================================="
+      - "Model Configuration Details"
+      - "=========================================="
+      - "Number of models configured: {{ litellm_models | length }}"
+      - ""
+      - "{% for model in litellm_models %}Model: {{ model.model_name }}"
+      - "  Backend: {{ model.litellm_params.model }}"
+      - "  {% if model.litellm_params.api_base is defined %}API Base: {{ model.litellm_params.api_base }}{% endif %}"
+      - "{% endfor %}"
+      - "=========================================="
   tags: [litellm_configure, litellm_debug]
 
 - name: Deploy LiteLLM configuration file
@@ -390,8 +397,47 @@
 
 - name: Display available models
   debug:
-    msg: "{{ litellm_models_test.json.data | map(attribute='id') | list if litellm_models_test.json is defined else 'Unable to retrieve models' }}"
+    msg: 
+      - "=========================================="
+      - "Available Models in LiteLLM"
+      - "=========================================="
+      - "{{ litellm_models_test.json.data | map(attribute='id') | list if litellm_models_test.json is defined else 'Unable to retrieve models' }}"
+      - "=========================================="
   when: litellm_models_test is defined
+  tags: [litellm_configure, litellm_test]
+
+- name: Check vLLM backend health for fast model
+  uri:
+    url: "{{ litellm_models | selectattr('model_name', 'equalto', 'fast') | map(attribute='litellm_params.api_base') | first | default('') }}/health"
+    method: GET
+    status_code: 200
+    timeout: 5
+  register: fast_backend_health
+  failed_when: false
+  when: litellm_start_service and (litellm_models | selectattr('model_name', 'equalto', 'fast') | list | length > 0)
+  tags: [litellm_configure, litellm_test]
+
+- name: Display fast backend health
+  debug:
+    msg: "Fast model vLLM backend at {{ litellm_models | selectattr('model_name', 'equalto', 'fast') | map(attribute='litellm_params.api_base') | first | default('N/A') }}: {{ 'HEALTHY' if fast_backend_health.status == 200 else 'UNHEALTHY - Status: ' + (fast_backend_health.status | string) }}"
+  when: fast_backend_health is defined
+  tags: [litellm_configure, litellm_test]
+
+- name: Check vLLM backend health for analysis model
+  uri:
+    url: "{{ litellm_models | selectattr('model_name', 'equalto', 'analysis') | map(attribute='litellm_params.api_base') | first | default('') }}/health"
+    method: GET
+    status_code: 200
+    timeout: 5
+  register: analysis_backend_health
+  failed_when: false
+  when: litellm_start_service and (litellm_models | selectattr('model_name', 'equalto', 'analysis') | list | length > 0)
+  tags: [litellm_configure, litellm_test]
+
+- name: Display analysis backend health
+  debug:
+    msg: "Analysis model vLLM backend at {{ litellm_models | selectattr('model_name', 'equalto', 'analysis') | map(attribute='litellm_params.api_base') | first | default('N/A') }}: {{ 'HEALTHY' if analysis_backend_health.status == 200 else 'UNHEALTHY - Status: ' + (analysis_backend_health.status | string) }}"
+  when: analysis_backend_health is defined
   tags: [litellm_configure, litellm_test]
 
 - name: Test embedding model
