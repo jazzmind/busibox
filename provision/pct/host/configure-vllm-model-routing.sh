@@ -923,13 +923,313 @@ interactive_routing() {
     
     detect_vllm_gpus
     
-    echo "Available models:"
-    for model in "${!MODEL_NAMES[@]}"; do
-        local size=$(calculate_model_size "${MODEL_NAMES[$model]}")
-        echo "  $model (~${size}GB)"
-    done
-    echo ""
+    # Initialize routing assignments
+    declare -A MODEL_GPU_ASSIGNMENTS
+    declare -A MODEL_PORT_ASSIGNMENTS
+    declare -A MODEL_TP_ASSIGNMENTS
     
+    # Interactive assignment loop
+    local done=false
+    while [ "$done" = false ]; do
+        echo ""
+        section "Current GPU Assignments"
+        show_gpu_allocation_table
+        
+        echo ""
+        echo "Options:"
+        echo "  1) Assign model to GPU"
+        echo "  2) Remove model from GPU"
+        echo "  3) Auto-assign all models"
+        echo "  4) Save and exit"
+        echo "  5) Exit without saving"
+        echo ""
+        read -p "Select option [1-5]: " option
+        
+        case "$option" in
+            1)
+                assign_model_to_gpu
+                ;;
+            2)
+                remove_model_from_gpu
+                ;;
+            3)
+                auto_assign_all_models "$cpu_offload"
+                ;;
+            4)
+                save_routing_configuration "$cpu_offload"
+                done=true
+                ;;
+            5)
+                info "Exiting without saving changes"
+                exit 0
+                ;;
+            *)
+                error "Invalid option"
+                ;;
+        esac
+    done
+}
+
+# Show current GPU allocation in a table
+show_gpu_allocation_table() {
+    echo ""
+    printf "%-8s %-10s %-25s %-10s %-8s %-8s\n" "GPU" "Memory" "Model" "Size(GB)" "Port" "TP"
+    echo "────────────────────────────────────────────────────────────────────────────────────"
+    
+    # Show each GPU
+    for gpu_id in $(seq 0 $((${#GPU_MEMORY[@]} - 1))); do
+        local gpu_mem="${GPU_MEMORY[$gpu_id]:-0}"
+        local gpu_used=0
+        local models_on_gpu=""
+        
+        # Find models assigned to this GPU
+        for model in "${!MODEL_GPU_ASSIGNMENTS[@]}"; do
+            local assigned_gpus="${MODEL_GPU_ASSIGNMENTS[$model]}"
+            if [[ ",$assigned_gpus," == *",$gpu_id,"* ]]; then
+                local model_full="${MODEL_NAMES[$model]}"
+                local model_size=$(calculate_model_size "$model_full")
+                local port="${MODEL_PORT_ASSIGNMENTS[$model]:-unset}"
+                local tp="${MODEL_TP_ASSIGNMENTS[$model]:-1}"
+                
+                if [ -z "$models_on_gpu" ]; then
+                    printf "%-8s %-10s %-25s %-10s %-8s %-8s\n" \
+                        "GPU $gpu_id" "${gpu_mem}GB" "$model" "${model_size}GB" "$port" "$tp"
+                    models_on_gpu="$model"
+                else
+                    printf "%-8s %-10s %-25s %-10s %-8s %-8s\n" \
+                        "" "" "$model" "${model_size}GB" "$port" "$tp"
+                    models_on_gpu="$models_on_gpu,$model"
+                fi
+                gpu_used=$(echo "$gpu_used + $model_size" | bc -l)
+            fi
+        done
+        
+        # Show empty GPU
+        if [ -z "$models_on_gpu" ]; then
+            printf "%-8s %-10s %-25s %-10s %-8s %-8s\n" \
+                "GPU $gpu_id" "${gpu_mem}GB" "(empty)" "-" "-" "-"
+        else
+            # Show usage summary for this GPU
+            local usage_pct=$(echo "scale=1; $gpu_used / $gpu_mem * 100" | bc -l)
+            printf "%-8s %-10s %-25s %-10s\n" \
+                "" "" "  └─ Total:" "${gpu_used}GB / ${gpu_mem}GB (${usage_pct}%)"
+        fi
+    done
+    
+    # Show unassigned models
+    echo ""
+    echo "Unassigned models:"
+    local has_unassigned=false
+    for model in "${!MODEL_NAMES[@]}"; do
+        if [ -z "${MODEL_GPU_ASSIGNMENTS[$model]:-}" ]; then
+            local model_full="${MODEL_NAMES[$model]}"
+            local model_size=$(calculate_model_size "$model_full")
+            echo "  - $model (~${model_size}GB)"
+            has_unassigned=true
+        fi
+    done
+    
+    if [ "$has_unassigned" = false ]; then
+        echo "  (none)"
+    fi
+}
+
+# Assign a model to GPU(s)
+assign_model_to_gpu() {
+    echo ""
+    echo "Available models:"
+    local i=1
+    local model_list=()
+    for model in "${!MODEL_NAMES[@]}"; do
+        local model_full="${MODEL_NAMES[$model]}"
+        local model_size=$(calculate_model_size "$model_full")
+        local assigned="${MODEL_GPU_ASSIGNMENTS[$model]:-unassigned}"
+        echo "  $i) $model (~${model_size}GB) [currently: $assigned]"
+        model_list+=("$model")
+        ((i++))
+    done
+    
+    echo ""
+    read -p "Select model number [1-${#model_list[@]}]: " model_num
+    
+    if ! [[ "$model_num" =~ ^[0-9]+$ ]] || [ "$model_num" -lt 1 ] || [ "$model_num" -gt "${#model_list[@]}" ]; then
+        error "Invalid model number"
+        return
+    fi
+    
+    local selected_model="${model_list[$((model_num - 1))]}"
+    local model_full="${MODEL_NAMES[$selected_model]}"
+    local model_size=$(calculate_model_size "$model_full")
+    
+    echo ""
+    info "Model: $selected_model (~${model_size}GB)"
+    echo ""
+    echo "Available GPUs:"
+    for gpu_id in $(seq 0 $((${#GPU_MEMORY[@]} - 1))); do
+        echo "  GPU $gpu_id: ${GPU_MEMORY[$gpu_id]}GB"
+    done
+    
+    echo ""
+    read -p "GPU(s) for this model (e.g., '1' or '2,3' for tensor parallelism): " gpu_list
+    read -p "vLLM port (e.g., 8000, 8001, 8002): " port
+    
+    # Calculate tensor parallelism from GPU list
+    local tp=1
+    if [[ "$gpu_list" == *","* ]]; then
+        tp=$(echo "$gpu_list" | tr ',' '\n' | wc -l)
+    fi
+    
+    MODEL_GPU_ASSIGNMENTS["$selected_model"]="$gpu_list"
+    MODEL_PORT_ASSIGNMENTS["$selected_model"]="$port"
+    MODEL_TP_ASSIGNMENTS["$selected_model"]="$tp"
+    
+    success "Assigned $selected_model to GPU(s) $gpu_list (port $port, TP=$tp)"
+}
+
+# Remove a model from GPU assignment
+remove_model_from_gpu() {
+    echo ""
+    echo "Currently assigned models:"
+    local i=1
+    local assigned_models=()
+    for model in "${!MODEL_GPU_ASSIGNMENTS[@]}"; do
+        local gpus="${MODEL_GPU_ASSIGNMENTS[$model]}"
+        local port="${MODEL_PORT_ASSIGNMENTS[$model]:-unset}"
+        echo "  $i) $model (GPU: $gpus, Port: $port)"
+        assigned_models+=("$model")
+        ((i++))
+    done
+    
+    if [ "${#assigned_models[@]}" -eq 0 ]; then
+        warn "No models currently assigned"
+        return
+    fi
+    
+    echo ""
+    read -p "Select model number to remove [1-${#assigned_models[@]}]: " model_num
+    
+    if ! [[ "$model_num" =~ ^[0-9]+$ ]] || [ "$model_num" -lt 1 ] || [ "$model_num" -gt "${#assigned_models[@]}" ]; then
+        error "Invalid model number"
+        return
+    fi
+    
+    local selected_model="${assigned_models[$((model_num - 1))]}"
+    unset MODEL_GPU_ASSIGNMENTS["$selected_model"]
+    unset MODEL_PORT_ASSIGNMENTS["$selected_model"]
+    unset MODEL_TP_ASSIGNMENTS["$selected_model"]
+    
+    success "Removed $selected_model from GPU assignment"
+}
+
+# Auto-assign all models based on GPU memory
+auto_assign_all_models() {
+    local cpu_offload="$1"
+    
+    info "Auto-assigning models based on GPU memory..."
+    
+    # Clear existing assignments
+    MODEL_GPU_ASSIGNMENTS=()
+    MODEL_PORT_ASSIGNMENTS=()
+    MODEL_TP_ASSIGNMENTS=()
+    
+    local port_counter=8000
+    
+    # Strategy: Put small models on GPU 0/1, large models on remaining GPUs with TP
+    # Sort models by size
+    local small_models=()
+    local large_models=()
+    
+    for model in "${!MODEL_NAMES[@]}"; do
+        local model_full="${MODEL_NAMES[$model]}"
+        local params=$(get_model_params "$model_full")
+        
+        if [ "$(echo "$params < 10" | bc -l)" -eq 1 ]; then
+            small_models+=("$model")
+        else
+            large_models+=("$model")
+        fi
+    done
+    
+    # Assign small models to GPU 1 (if available)
+    local small_gpu=0
+    if [ "${#GPU_MEMORY[@]}" -gt 1 ]; then
+        small_gpu=1
+    fi
+    
+    for model in "${small_models[@]}"; do
+        MODEL_GPU_ASSIGNMENTS["$model"]="$small_gpu"
+        MODEL_PORT_ASSIGNMENTS["$model"]="$port_counter"
+        MODEL_TP_ASSIGNMENTS["$model"]="1"
+        ((port_counter++))
+        success "Assigned $model to GPU $small_gpu (port $port_counter)"
+    done
+    
+    # Assign large models with tensor parallelism
+    if [ "${#GPU_MEMORY[@]}" -ge 2 ]; then
+        local large_gpu_start=0
+        if [ "${#GPU_MEMORY[@]}" -gt 2 ]; then
+            large_gpu_start=2
+        fi
+        
+        for model in "${large_models[@]}"; do
+            if [ "${#GPU_MEMORY[@]}" -ge 3 ]; then
+                # Use GPUs 2,3 for large models with TP
+                MODEL_GPU_ASSIGNMENTS["$model"]="2,3"
+                MODEL_TP_ASSIGNMENTS["$model"]="2"
+            else
+                # Use remaining GPU
+                MODEL_GPU_ASSIGNMENTS["$model"]="$large_gpu_start"
+                MODEL_TP_ASSIGNMENTS["$model"]="1"
+            fi
+            MODEL_PORT_ASSIGNMENTS["$model"]="$port_counter"
+            ((port_counter++))
+            success "Assigned $model to GPU(s) ${MODEL_GPU_ASSIGNMENTS[$model]} (port $port_counter, TP=${MODEL_TP_ASSIGNMENTS[$model]})"
+        done
+    fi
+}
+
+# Save routing configuration
+save_routing_configuration() {
+    local cpu_offload="$1"
+    
+    section "Saving Configuration"
+    
+    # Determine auto-update behavior
+    local should_update="$AUTO_UPDATE"
+    if [ -z "$should_update" ]; then
+        echo ""
+        read -p "Update LiteLLM config file? (Y/n): " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+            should_update="true"
+        else
+            should_update="false"
+        fi
+    fi
+    
+    echo ""
+    read -p "Update model registry with GPU and port assignments? (Y/n): " -n 1 -r
+    echo
+    local update_registry="false"
+    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+        update_registry="true"
+    fi
+    
+    # Save each assignment
+    for model in "${!MODEL_GPU_ASSIGNMENTS[@]}"; do
+        local gpus="${MODEL_GPU_ASSIGNMENTS[$model]}"
+        local port="${MODEL_PORT_ASSIGNMENTS[$model]}"
+        local tp="${MODEL_TP_ASSIGNMENTS[$model]}"
+        
+        info "Generating routing config for $model..."
+        generate_routing_config "$model" "$gpus" "$tp" "$port" "$should_update" "$update_registry"
+    done
+    
+    success "Configuration saved"
+}
+
+# Legacy "configure all" or single model mode - keeping for backwards compatibility
+interactive_routing_legacy() {
     read -p "Select model to configure (or 'all' for all models): " selected_model
     
     if [ "$selected_model" = "all" ]; then
