@@ -156,6 +156,8 @@ try:
         model_name = model_config.get('model_name')
         
         # Only include models that need to be downloaded (not API-based)
+        # Accept both 'vllm' and 'litellm' as providers for local models
+        # (LiteLLM is the API gateway, vLLM is the inference engine)
         if model_name and provider not in api_providers:
             models.add(model_name)
     

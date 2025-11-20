@@ -196,19 +196,30 @@ try:
         available_models = {}
     
     # Build MODEL_NAMES from available_models (only vLLM models)
+    vllm_models_found = []
+    print(f"DEBUG: Processing {len(available_models)} models from available_models", file=sys.stderr)
     for model_key, model_config in available_models.items():
         # Ensure model_config is a dict
         if not isinstance(model_config, dict):
+            print(f"DEBUG: Skipping {model_key} - not a dict", file=sys.stderr)
             continue
         provider = model_config.get('provider', '').lower()
         model_name = model_config.get('model_name', '')
         
+        print(f"DEBUG: Checking {model_key}: provider='{provider}', model_name='{model_name}'", file=sys.stderr)
+        
         # Only include models that use vLLM (not API-based providers)
-        if provider == 'vllm' and model_name:
+        # Accept both 'vllm' and 'litellm' as providers for local models
+        # (LiteLLM is the API gateway, vLLM is the inference engine)
+        if provider in ('vllm', 'litellm') and model_name:
             # Escape quotes in values
             model_key_escaped = model_key.replace('"', '\\"')
             model_name_escaped = model_name.replace('"', '\\"')
             output_lines.append(f'MODEL_NAMES["{model_key_escaped}"]="{model_name_escaped}"')
+            vllm_models_found.append(model_key)
+            print(f"DEBUG: Added vLLM model: {model_key} -> {model_name}", file=sys.stderr)
+        else:
+            print(f"DEBUG: Skipping {model_key}: provider='{provider}' (not 'vllm') or model_name empty", file=sys.stderr)
     
     # Load model_configs (technical details)
     # Ensure we always have a dict, not None
@@ -247,13 +258,19 @@ try:
         print("WARNING: model_configs section is empty. Run update-model-config.sh to populate it.", file=sys.stderr)
     
     # Debug: Count models found
-    model_count = sum(1 for line in output_lines if line.startswith('MODEL_NAMES['))
+    model_count = len(vllm_models_found)
     if model_count == 0:
         print("WARNING: No vLLM models found in available_models. Check provider field.", file=sys.stderr)
         print(f"DEBUG: Found {len(available_models)} models in available_models", file=sys.stderr)
         for key, config in available_models.items():
-            provider = config.get('provider', '') if isinstance(config, dict) else ''
-            print(f"DEBUG: {key}: provider={provider}", file=sys.stderr)
+            if isinstance(config, dict):
+                provider = config.get('provider', '')
+                model_name = config.get('model_name', '')
+                print(f"DEBUG: {key}: provider='{provider}', model_name='{model_name}'", file=sys.stderr)
+            else:
+                print(f"DEBUG: {key}: not a dict (type: {type(config)})", file=sys.stderr)
+    else:
+        print(f"DEBUG: Found {model_count} vLLM model(s): {', '.join(vllm_models_found)}", file=sys.stderr)
     
 except Exception as e:
     import traceback
@@ -269,15 +286,21 @@ PYTHON_EOF
     fi
     
     # Evaluate the Python output to populate arrays
+    # Note: Python outputs array definitions to stdout (captured in python_output)
+    #       Debug messages go to stderr and should appear on terminal automatically
     eval "$python_output"
     
     # Check if any models were loaded
     if [ ${#MODEL_NAMES[@]} -eq 0 ]; then
-        error "No vLLM models found in model registry!"
-        error "Check that available_models entries have provider: 'vllm'"
-        error "Registry file: $MODEL_REGISTRY"
+        echo "ERROR: No vLLM models found in model registry!" >&2
+        echo "ERROR: Check that available_models entries have provider: 'vllm'" >&2
+        echo "ERROR: Registry file: $MODEL_REGISTRY" >&2
+        echo "ERROR: Found ${#MODEL_NAMES[@]} models in MODEL_NAMES array" >&2
+        echo "ERROR: Run with bash -x to see debug output" >&2
         exit 1
     fi
+    
+    echo "[INFO] Loaded ${#MODEL_NAMES[@]} vLLM model(s) from registry" >&2
     
     # Check if model_configs was empty (warning already printed by Python)
     if [ ${#MODEL_CONFIG[@]} -eq 0 ]; then
