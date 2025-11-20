@@ -165,10 +165,10 @@
   changed_when: false
   tags: [vllm_install, vllm_gpu]
 
-- name: Display CUDA libraries check
-  debug:
-    msg: "{{ cuda_libs_check.stdout_lines }}"
-  tags: [vllm_install, vllm_gpu]
+# - name: Display CUDA libraries check
+#   debug:
+#     msg: "{{ cuda_libs_check.stdout_lines }}"
+#   tags: [vllm_install, vllm_gpu]
 
 - name: Test PyTorch CUDA availability
   shell: |
