@@ -51,6 +51,13 @@ HUGGINGFACE_CACHE="/var/lib/llm-models/huggingface"
 MODELS_DIR="${HUGGINGFACE_CACHE}/hub"
 VENV_DIR="/opt/model-downloader"
 
+# HuggingFace token (optional, but helps with gated models and API access)
+HF_TOKEN="${HF_TOKEN:-}"
+if [[ -z "$HF_TOKEN" ]] && [[ -f "$HOME/.huggingface/token" ]]; then
+    HF_TOKEN=$(cat "$HOME/.huggingface/token")
+fi
+export HF_TOKEN
+
 # Check if Python venv exists
 if [ ! -d "$VENV_DIR" ]; then
     error "Model downloader venv not found: $VENV_DIR"
@@ -66,12 +73,20 @@ analyze_model() {
     info "Analyzing: $model_name" >&2
     
     # Find the actual model files
+    # HuggingFace cache structure: models--org--model/snapshots/<hash>/
     local snapshot_dir=$(find "$model_path/snapshots" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
     
     if [ -z "$snapshot_dir" ]; then
-        warn "No snapshot directory found for $model_name"
+        warn "No snapshot directory found for $model_name" >&2
+        warn "  Model path: $model_path" >&2
+        warn "  Snapshots dir exists: $([ -d "$model_path/snapshots" ] && echo "yes" || echo "no")" >&2
+        if [ -d "$model_path/snapshots" ]; then
+            warn "  Snapshots found: $(ls -1 "$model_path/snapshots" 2>/dev/null | wc -l | tr -d ' ')" >&2
+        fi
         return 1
     fi
+    
+    info "  Snapshot directory: $snapshot_dir" >&2
     
     # Detect quantization and precision
     local quantization="none"
@@ -97,7 +112,52 @@ analyze_model() {
         gguf_files=($(find "$snapshot_dir" -name "*.gguf" -type f 2>/dev/null))
         
         # Calculate total model size
+        # HuggingFace cache structure: models--org--model/snapshots/<hash>/ contains model files
+        # Use du -sb to get actual disk usage (follows symlinks if needed)
         model_size_bytes=$(du -sb "$snapshot_dir" 2>/dev/null | awk '{print $1}')
+        
+        # If du failed or returned 0/empty, try alternative methods
+        if [ -z "$model_size_bytes" ] || [ "$model_size_bytes" = "0" ] || ! [[ "$model_size_bytes" =~ ^[0-9]+$ ]]; then
+            # Method 2: Sum individual model files (safetensors, bin, etc.)
+            # Use stat -f%z on macOS, stat -c%s on Linux
+            if stat -f%z "$snapshot_dir" >/dev/null 2>&1; then
+                # macOS
+                model_size_bytes=$(find "$snapshot_dir" -type f \( -name "*.safetensors" -o -name "*.bin" -o -name "*.pt" -o -name "*.pth" -o -name "*.gguf" -o -name "*.onnx" \) -exec stat -f%z {} \; 2>/dev/null | awk '{sum+=$1} END {print sum+0}')
+            else
+                # Linux
+                model_size_bytes=$(find "$snapshot_dir" -type f \( -name "*.safetensors" -o -name "*.bin" -o -name "*.pt" -o -name "*.pth" -o -name "*.gguf" -o -name "*.onnx" \) -exec stat -c%s {} \; 2>/dev/null | awk '{sum+=$1} END {print sum+0}')
+            fi
+        fi
+        
+        # If still 0, try summing ALL files in snapshot directory
+        if [ -z "$model_size_bytes" ] || [ "$model_size_bytes" = "0" ] || ! [[ "$model_size_bytes" =~ ^[0-9]+$ ]]; then
+            if stat -f%z "$snapshot_dir" >/dev/null 2>&1; then
+                # macOS - sum all files
+                model_size_bytes=$(find "$snapshot_dir" -type f -exec stat -f%z {} \; 2>/dev/null | awk '{sum+=$1} END {print sum+0}')
+            else
+                # Linux - sum all files
+                model_size_bytes=$(find "$snapshot_dir" -type f -exec stat -c%s {} \; 2>/dev/null | awk '{sum+=$1} END {print sum+0}')
+            fi
+        fi
+        
+        # Debug output if still 0
+        if [ -z "$model_size_bytes" ] || [ "$model_size_bytes" = "0" ] || ! [[ "$model_size_bytes" =~ ^[0-9]+$ ]]; then
+            warn "  Warning: Could not determine model size for $model_name" >&2
+            warn "  Snapshot dir: $snapshot_dir" >&2
+            warn "  Directory exists: $([ -d "$snapshot_dir" ] && echo "yes" || echo "no")" >&2
+            local file_count=$(find "$snapshot_dir" -type f 2>/dev/null | wc -l | tr -d ' ')
+            warn "  Files found: $file_count" >&2
+            if [ "$file_count" -gt 0 ]; then
+                warn "  Sample files:" >&2
+                find "$snapshot_dir" -type f -name "*.safetensors" -o -name "*.bin" 2>/dev/null | head -3 | while read -r f; do
+                    if [ -f "$f" ]; then
+                        local fsize=$(stat -f%z "$f" 2>/dev/null || stat -c%s "$f" 2>/dev/null || echo "unknown")
+                        warn "    $(basename "$f"): ${fsize} bytes" >&2
+                    fi
+                done
+            fi
+            model_size_bytes=0
+        fi
     fi
     
     # Check config.json for quantization info
@@ -226,35 +286,160 @@ PYTHON_EOF
     fi
     
     # Estimate parameters from model size
-    local model_size_gb=$(echo "scale=2; $model_size_bytes / 1024 / 1024 / 1024" | bc -l)
+    # Ensure model_size_bytes is a valid number
+    if [ -z "$model_size_bytes" ] || ! [[ "$model_size_bytes" =~ ^[0-9]+$ ]] || [ "$model_size_bytes" -eq 0 ]; then
+        model_size_bytes=0
+        model_size_gb=0
+        warn "  Model size calculation failed or returned 0 - will try to estimate from config.json" >&2
+    else
+        model_size_gb=$(echo "scale=2; $model_size_bytes / 1024 / 1024 / 1024" | bc -l)
+        info "  Model size: ${model_size_bytes} bytes (${model_size_gb}GB)" >&2
+    fi
     
-    # Try to get parameters from config.json first
+    # Try to get parameters from HuggingFace API/model card first (most reliable)
+    local params_from_hf=0
+    local hf_model_size_gb=0
+    
+    # Check if huggingface_hub is available
+    if "${VENV_DIR}/bin/python3" -c "import huggingface_hub" 2>/dev/null; then
+        params_from_hf=$("${VENV_DIR}/bin/python3" << PYTHON_EOF
+import json
+import os
+import sys
+
+model_name = "${model_name}"
+
+try:
+    from huggingface_hub import model_info, HfApi
+    
+    # Try to get model info from HuggingFace
+    try:
+        info = model_info(model_name, token=os.environ.get('HF_TOKEN'))
+        
+        # Get parameter count from model card
+        params = None
+        
+        # Try various fields in model card
+        if hasattr(info, 'config') and info.config:
+            config = info.config
+            params = config.get('num_parameters', None)
+            if not params:
+                params = config.get('num_parameters_total', None)
+            if not params:
+                params = config.get('parameters', None)
+        
+        # Also check model card metadata
+        if not params and hasattr(info, 'cardData') and info.cardData:
+            card_data = info.cardData
+            if isinstance(card_data, dict):
+                # Some model cards have parameter info in metadata
+                metadata = card_data.get('model-index', {})
+                if metadata:
+                    for item in metadata.get('results', []):
+                        if 'metrics' in item:
+                            for metric in item['metrics']:
+                                if metric.get('name') == 'Parameters':
+                                    params_str = str(metric.get('value', ''))
+                                    # Parse "6.5B" or "6500000000" format
+                                    if 'B' in params_str.upper():
+                                        params = float(params_str.upper().replace('B', '')) * 1_000_000_000
+                                    elif params_str.isdigit():
+                                        params = int(params_str)
+                                    break
+        
+        # Convert to billions and return
+        if params and params > 0:
+            params_billions = params / 1_000_000_000
+            print(f"{params_billions:.1f}")
+        else:
+            print("0")
+    except Exception as e:
+        # API call failed, return 0 to fall back to other methods
+        print("0")
+except ImportError:
+    # huggingface_hub not available
+    print("0")
+except Exception as e:
+    print("0")
+PYTHON_EOF
+)
+        
+        # Also try to get model size from HuggingFace
+        if "${VENV_DIR}/bin/python3" -c "import huggingface_hub" 2>/dev/null; then
+            hf_model_size_gb=$("${VENV_DIR}/bin/python3" << PYTHON_EOF
+import os
+import sys
+
+model_name = "${model_name}"
+
+try:
+    from huggingface_hub import model_info
+    
+    try:
+        info = model_info(model_name, token=os.environ.get('HF_TOKEN'))
+        
+        # Get model size from siblings (file sizes)
+        total_size_bytes = 0
+        if hasattr(info, 'siblings') and info.siblings:
+            for sibling in info.siblings:
+                if hasattr(sibling, 'rfilename') and sibling.rfilename:
+                    # Only count model files, not config/tokenizer
+                    if any(ext in sibling.rfilename.lower() for ext in ['.safetensors', '.bin', '.pt', '.pth', '.gguf', '.onnx']):
+                        if hasattr(sibling, 'size') and sibling.size:
+                            total_size_bytes += sibling.size
+        
+        if total_size_bytes > 0:
+            size_gb = total_size_bytes / (1024 ** 3)
+            print(f"{size_gb:.2f}")
+        else:
+            print("0")
+    except Exception:
+        print("0")
+except Exception:
+    print("0")
+PYTHON_EOF
+)
+        fi
+        
+        if [ -n "$params_from_hf" ] && [ "$(echo "$params_from_hf > 0" | bc -l)" -eq 1 ]; then
+            info "  Parameters from HuggingFace API: ${params_from_hf}B" >&2
+        fi
+    fi
+    
+    # Try to get parameters from config.json as fallback
     local params_from_config=0
-    if [ -f "$config_file" ]; then
-        params_from_config=$("${VENV_DIR}/bin/python3" << PYTHON_EOF
+    if [ -z "$params_from_hf" ] || [ "$(echo "$params_from_hf == 0" | bc -l)" -eq 1 ]; then
+        if [ -f "$config_file" ]; then
+            params_from_config=$("${VENV_DIR}/bin/python3" << PYTHON_EOF
 import json
 import os
 
 config_file = "${config_file}"
 if os.path.exists(config_file):
-    with open(config_file, 'r') as f:
-        config = json.load(f)
-    
-    # Try various parameter count fields
-    params = config.get('num_parameters', 0)
-    if not params:
-        params = config.get('num_parameters_total', 0)
-    if not params:
-        params = config.get('parameters', 0)
-    
-    # Convert to billions
-    if params:
-        params_billions = params / 1_000_000_000
-        print(f"{params_billions:.1f}")
-    else:
+    try:
+        with open(config_file, 'r') as f:
+            config = json.load(f)
+        
+        # Try various parameter count fields
+        params = config.get('num_parameters', 0)
+        if not params:
+            params = config.get('num_parameters_total', 0)
+        if not params:
+            params = config.get('parameters', 0)
+        
+        # Convert to billions
+        if params and params > 0:
+            params_billions = params / 1_000_000_000
+            print(f"{params_billions:.1f}")
+        else:
+            print("0")
+    except Exception as e:
         print("0")
+else:
+    print("0")
 PYTHON_EOF
 )
+        fi
     fi
     
     # Estimate parameters based on size and precision
@@ -268,16 +453,27 @@ PYTHON_EOF
         int4) bytes_per_param=0.5 ;;
     esac
     
-    # Use config if available, otherwise estimate from size
-    if [ "$(echo "$params_from_config > 0" | bc -l)" -eq 1 ]; then
+    # Use HuggingFace API first, then config.json, then estimate from size
+    if [ -n "$params_from_hf" ] && [ "$(echo "$params_from_hf > 0" | bc -l)" -eq 1 ]; then
+        params_billions=$(printf "%.0f" "$params_from_hf")
+        info "  Parameters from HuggingFace API: ${params_billions}B" >&2
+        # Use HF model size if available, otherwise use local disk size
+        if [ -n "$hf_model_size_gb" ] && [ "$(echo "$hf_model_size_gb > 0" | bc -l)" -eq 1 ]; then
+            model_size_gb="$hf_model_size_gb"
+            info "  Model size from HuggingFace API: ${model_size_gb}GB" >&2
+        fi
+    elif [ -n "$params_from_config" ] && [ "$(echo "$params_from_config > 0" | bc -l)" -eq 1 ]; then
         params_billions=$(printf "%.0f" "$params_from_config")
         info "  Parameters from config.json: ${params_billions}B" >&2
-    else
+    elif [ -n "$model_size_gb" ] && [ "$(echo "$model_size_gb > 0" | bc -l)" -eq 1 ]; then
         # Rough estimate: model_size_gb / bytes_per_param = params_billions
         # Account for overhead (tokenizer, config, etc.) - assume 15% overhead
         params_billions=$(echo "scale=1; ($model_size_gb / $bytes_per_param) * 0.85" | bc -l)
         params_billions=$(printf "%.0f" "$params_billions")
-        info "  Estimated parameters from size: ${params_billions}B" >&2
+        info "  Estimated parameters from size: ${params_billions}B (size: ${model_size_gb}GB)" >&2
+    else
+        warn "  Could not estimate parameters - no size or parameter data available" >&2
+        params_billions=0
     fi
     
     # Estimate GPU size (model weights + overhead)
