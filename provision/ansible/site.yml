@@ -69,6 +69,17 @@
         state: stopped
       loop: [8000, 8001, 8002, 8003, 8004, 8005]
       failed_when: false
+    
+    - name: Wait for vLLM processes to fully terminate
+      wait_for:
+        timeout: 10
+      delegate_to: localhost
+    
+    - name: Kill any remaining vLLM processes
+      shell: |
+        pkill -9 -f "vllm.entrypoints.openai.api_server" || true
+        sleep 2
+      failed_when: false
   roles:
     # - role: ollama  # Temporarily disabled - using vLLM only
     #   when: "'ollama' in group_names"
