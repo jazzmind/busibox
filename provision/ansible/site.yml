@@ -66,12 +66,26 @@
     # - role: ollama  # Temporarily disabled - using vLLM only
     #   when: "'ollama' in group_names"
     #   tags: [llm, ollama]
-    - role: vllm
+    # Port-based vLLM roles - each checks model_config.yml for assigned models
+    - role: vllm_8000
       when: "'vllm' in group_names"
-      tags: [llm, vllm]
-    - role: vllm_embedding
+      tags: [llm, vllm, vllm_8000]
+    - role: vllm_8001
       when: "'vllm' in group_names"
-      tags: [llm, vllm, vllm_embedding]
+      tags: [llm, vllm, vllm_8001]
+    - role: vllm_8002
+      when: "'vllm' in group_names"
+      tags: [llm, vllm, vllm_8002]
+    - role: vllm_8003
+      when: "'vllm' in group_names"
+      tags: [llm, vllm, vllm_8003]
+    - role: vllm_8004
+      when: "'vllm' in group_names"
+      tags: [llm, vllm, vllm_8004]
+    - role: vllm_8005
+      when: "'vllm' in group_names"
+      tags: [llm, vllm, vllm_8005]
+    # ColPali has its own service (not vLLM-based)
     - role: colpali
       when: "'vllm' in group_names"
       tags: [llm, colpali]

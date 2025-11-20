@@ -86,7 +86,8 @@ ollama_host: "{{ ollama_ip }}"
 ollama_port: 11434
 
 vllm_host: "{{ vllm_ip }}"
-vllm_port: 8000
+# Note: vLLM ports are now configured via model_config.yml
+# Port-based roles (vllm_8000, vllm_8001, etc.) read assignments from model_config.yml
 
 # ============================================================================
 # LLM Model Configuration
