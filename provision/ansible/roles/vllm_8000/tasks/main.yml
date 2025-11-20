@@ -1,0 +1,40 @@
+---
+# vLLM Port 8000 Role - Main Tasks
+# Checks model_config.yml for model assigned to port 8000
+
+- name: Find model assigned to port {{ vllm_port }}
+  set_fact:
+    vllm_assigned_model: >-
+      {% set assigned_model = '' %}
+      {% if model_config is defined and model_config.models is defined %}
+        {% for model_name, config in model_config.models.items() %}
+          {% if config.port == vllm_port and config.assigned | default(false) %}
+            {% set assigned_model = model_name %}
+          {% endif %}
+        {% endfor %}
+      {% endif %}
+      {{ assigned_model }}
+
+- name: Set model configuration from model_config.yml
+  set_fact:
+    vllm_default_model: "{{ model_config.models[vllm_assigned_model].model_name | default(vllm_assigned_model) }}"
+    vllm_tensor_parallel_size: "{{ model_config.models[vllm_assigned_model].tensor_parallel | default(1) }}"
+    vllm_cuda_visible_devices: "{{ model_config.models[vllm_assigned_model].gpu | default('') }}"
+    vllm_max_model_len: "{{ model_config.models[vllm_assigned_model].max_tokens | default(8192) }}"
+  when: vllm_assigned_model != ""
+
+- name: Skip if no model assigned to port {{ vllm_port }}
+  debug:
+    msg: "No model assigned to port {{ vllm_port }} in model_config.yml, skipping vLLM service deployment"
+  when: vllm_assigned_model == ""
+
+- name: Include installation tasks
+  include_tasks: install.yml
+  when: vllm_assigned_model != ""
+  tags: [vllm, vllm_install, vllm_{{ vllm_port }}]
+
+- name: Include configuration tasks
+  include_tasks: configure.yml
+  when: vllm_assigned_model != ""
+  tags: [vllm, vllm_configure, vllm_{{ vllm_port }}]
+
