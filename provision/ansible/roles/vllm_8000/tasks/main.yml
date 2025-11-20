@@ -37,6 +37,10 @@
         port = config.get('port')
         assigned = config.get('assigned', False)
         
+        # Skip colpali models - they have their own dedicated service
+        if 'colpali' in model_name.lower():
+            continue
+        
         if port == target_port and assigned:
             print(model_name)
             exit(0)
