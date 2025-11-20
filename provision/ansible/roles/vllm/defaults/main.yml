@@ -22,12 +22,14 @@ vllm_cache_dir: /var/lib/llm-models/huggingface
 
 # Network Configuration
 vllm_host: "0.0.0.0"
-vllm_port: 8000
+# Port is set below from model registry (for fast model)
 
 # Model Configuration
 # Default model should match one pre-cached by setup-llm-models.sh
 # Optimized for 24GB GPUs (RTX 3090/4090, A5000/A6000)
-vllm_default_model: "microsoft/Phi-4-multimodal-instruct"  # Multimodal model (6B parameters)
+# New structure: model_purposes.fast -> model key, lookup in available_models
+vllm_default_model: "{{ available_models[model_purposes.fast].model_name | default('microsoft/Phi-4-multimodal-instruct') }}"
+vllm_port: "{{ available_models[model_purposes.fast].port | default(8000) }}"
 vllm_download_dir: "{{ vllm_cache_dir }}/hub"
 vllm_tensor_parallel_size: 1  # Number of GPUs to use for tensor parallelism
 vllm_gpu_memory_utilization: 0.9  # 90% of GPU memory (24GB * 0.9 = ~21.6GB available)
@@ -73,6 +75,7 @@ vllm_health_check_enabled: true
 vllm_health_check_interval: 60  # seconds
 vllm_startup_timeout: 600  # 10 minutes for model loading
 
-# CUDA Configuration
-vllm_cuda_visible_devices: "0"  # GPU device ID (override from inventory)
+# CUDA Configuration - Read from model registry
+# New structure: model_purposes.fast -> model key, lookup in available_models
+vllm_cuda_visible_devices: "{{ available_models[model_purposes.fast].gpu | default('0') }}"  # GPU device ID (override from inventory)
 

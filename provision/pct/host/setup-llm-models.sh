@@ -51,20 +51,6 @@ if [[ -z "$HF_TOKEN" ]] && [[ -f "$HOME/.huggingface/token" ]]; then
     HF_TOKEN=$(cat "$HOME/.huggingface/token")
 fi
 
-# Models to pre-download
-# These should match the model_registry.yml in provision/ansible/group_vars/all/
-# Update model_registry.yml to change which models are used for which purposes
-MODELS=(
-    "microsoft/Phi-4-multimodal-instruct"  # fast.model_name - Fast chat model (6B parameters, GPU 0)
-    "Qwen/Qwen3-Embedding-8B"              # embedding.model_name - Text embeddings (8B parameters, 4096 dims, GPU 1)
-    "google/paligemma-3b-pt-448"           # Required by ColPali - PaliGemma-3B base model
-    "vidore/colpali-v1.3"                  # visual-embedding.model_name - ColPali LoRA adapters for PDF embeddings (GPU 2)
-    "Qwen/Qwen3-VL-8B-Instruct"            # vision.model_name - Vision-language model (8B parameters, GPU 1)
-    "Qwen/Qwen3-30B-A3B-Instruct-2507"     # default.model_name - General purpose chat (30B parameters, GPU 1)
-    # Note: Marker/Surya models are downloaded automatically by Marker's create_model_dict()
-    # They will be cached in the same HF_HOME directory when Marker runs
-)
-
 echo "=========================================="
 echo "LLM Model Pre-Download for vLLM"
 echo "=========================================="
@@ -112,8 +98,8 @@ else
 fi
 echo ""
 
-# Step 3: Install HuggingFace CLI in venv
-log_info "Step 3: Installing HuggingFace CLI..."
+# Step 3: Install HuggingFace CLI and PyYAML in venv
+log_info "Step 3: Installing HuggingFace CLI and PyYAML..."
 if ! "${VENV_DIR}/bin/python3" -c "import huggingface_hub" 2>/dev/null; then
     log_info "Installing huggingface-hub in virtual environment..."
     "${VENV_DIR}/bin/pip" install -q huggingface-hub
@@ -121,6 +107,82 @@ if ! "${VENV_DIR}/bin/python3" -c "import huggingface_hub" 2>/dev/null; then
 else
     log_success "HuggingFace CLI already installed"
 fi
+
+if ! "${VENV_DIR}/bin/python3" -c "import yaml" 2>/dev/null; then
+    log_info "Installing PyYAML in virtual environment..."
+    "${VENV_DIR}/bin/pip" install -q pyyaml
+    log_success "PyYAML installed"
+else
+    log_success "PyYAML already installed"
+fi
+echo ""
+
+# Step 3.5: Read models from model_registry.yml
+log_info "Step 3.5: Reading models from model_registry.yml..."
+read_models_from_registry() {
+    local registry_file="${SCRIPT_DIR}/../../ansible/group_vars/all/model_registry.yml"
+    
+    if [ ! -f "$registry_file" ]; then
+        log_error "Model registry not found: $registry_file"
+        log_error "Run this script from the busibox repository root"
+        exit 1
+    fi
+    
+    # Use Python to parse YAML and extract unique model_name values
+    "${VENV_DIR}/bin/python3" << PYTHON_EOF
+import yaml
+import sys
+import os
+
+registry_file = "${registry_file}"
+if not os.path.exists(registry_file):
+    print("ERROR: Registry file not found", file=sys.stderr)
+    sys.exit(1)
+
+try:
+    with open(registry_file, 'r') as f:
+        data = yaml.safe_load(f)
+    
+    # Extract unique model_name values from available_models
+    # Skip API-based providers (bedrock, openai, etc.) - only download local models
+    models = set()
+    available_models = data.get('available_models', {})
+    
+    # Providers that don't require local model downloads
+    api_providers = {'bedrock', 'openai', 'anthropic'}
+    
+    for model_key, model_config in available_models.items():
+        provider = model_config.get('provider', '').lower()
+        model_name = model_config.get('model_name')
+        
+        # Only include models that need to be downloaded (not API-based)
+        if model_name and provider not in api_providers:
+            models.add(model_name)
+    
+    # Add PaliGemma base model (required by ColPali)
+    # Check if ColPali is configured in available_models
+    for model_key, model_config in available_models.items():
+        if model_config.get('model_name') == 'vidore/colpali-v1.3':
+            models.add('google/paligemma-3b-pt-448')
+            break
+    
+    # Output models, one per line
+    for model in sorted(models):
+        print(model)
+except Exception as e:
+    print(f"ERROR: Failed to parse registry: {e}", file=sys.stderr)
+    sys.exit(1)
+PYTHON_EOF
+}
+
+MODELS=($(read_models_from_registry))
+
+if [ ${#MODELS[@]} -eq 0 ]; then
+    log_error "No models found in model_registry.yml"
+    exit 1
+fi
+
+log_success "Found ${#MODELS[@]} model(s) to download"
 echo ""
 
 # Step 4: Download models

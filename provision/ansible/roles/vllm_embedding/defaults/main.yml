@@ -15,15 +15,15 @@ vllm_embedding_cache_dir: /var/lib/llm-models/huggingface
 
 # Network Configuration
 vllm_embedding_host: "0.0.0.0"
-vllm_embedding_port: 8001  # Different port from main vLLM
+# Port is set below from model registry
 
 # Model Configuration - References model_registry.yml
-# Note: model_purposes is loaded from group_vars/all/model_registry.yml
+# New structure: model_purposes.embedding -> model key, lookup in available_models
 # This allows changing embedding models without modifying this file
-vllm_embedding_model: "{{ model_purposes.embedding.model_name | default('Qwen/Qwen3-Embedding-8B') }}"
+vllm_embedding_model: "{{ available_models[model_purposes.embedding].model_name | default('Qwen/Qwen3-Embedding-8B') }}"
 vllm_embedding_tensor_parallel_size: 1  # Single GPU for embeddings
 vllm_embedding_gpu_memory_utilization: 0.85  # 8B model needs more memory
-vllm_embedding_max_model_len: "{{ model_purposes.embedding.max_tokens | default(32768) }}"
+vllm_embedding_max_model_len: "{{ available_models[model_purposes.embedding].max_tokens | default(32768) }}"
 vllm_embedding_max_num_seqs: 256  # Moderate throughput for larger model
 vllm_embedding_trust_remote_code: true
 
@@ -37,7 +37,11 @@ vllm_embedding_disable_log_stats: false
 vllm_embedding_cpu_offload_gb: 50  # Offload 50GB for embeddings (less than main model)
 
 # API Configuration - References model_registry.yml
-vllm_embedding_served_model_name: "{{ model_purposes.embedding.model }}"  # Friendly name for liteLLM
+vllm_embedding_served_model_name: "{{ available_models[model_purposes.embedding].model }}"  # Friendly name for liteLLM
+
+# GPU and Port Configuration - Read from model registry
+vllm_embedding_cuda_visible_devices: "{{ available_models[model_purposes.embedding].gpu | default('1') }}"
+vllm_embedding_port: "{{ available_models[model_purposes.embedding].port | default(8001) }}"
 vllm_embedding_api_key: null
 vllm_embedding_enable_api_key: false
 
@@ -53,8 +57,7 @@ vllm_embedding_startup_timeout: 300  # 5 minutes (embedding models load faster)
 vllm_embedding_memory_limit: "70G"  # Model + CPU offload + overhead
 vllm_embedding_cpu_limit: "4"
 
-# CUDA Configuration - Use GPU 1 (separate from main vLLM on GPU 0)
-vllm_embedding_cuda_visible_devices: "1"
+# CUDA Configuration - Set above from model registry
 
 # HuggingFace Configuration
 vllm_embedding_hf_token: ""  # Set via secrets if needed

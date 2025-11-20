@@ -90,7 +90,8 @@ litellm_port: 4000
 
 # Embedding Configuration (for ingest service)
 # Reference model registry for embedding model configuration
-embedding_model: "{{ model_purposes.embedding.model }}"
+# New structure: model_purposes.embedding -> model key, lookup in available_models
+embedding_model: "{{ available_models[model_purposes.embedding].model }}"
 embedding_dimension: 4096  # Qwen3-Embedding-8B output dimension
 
 ollama_host: "{{ ollama_ip }}"
@@ -110,7 +111,8 @@ ollama_initial_models:
 # vLLM Model Configuration
 # Use model pre-cached by setup-llm-models.sh
 # Reference model registry for default chat model
-vllm_default_model: "{{ model_purposes.fast.model_name }}"
+# New structure: model_purposes.fast -> model key, lookup in available_models
+vllm_default_model: "{{ available_models[model_purposes.fast].model_name }}"
 
 # ============================================================================
 # Deployment Configuration

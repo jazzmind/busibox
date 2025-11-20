@@ -99,7 +99,8 @@ ollama_initial_models:
 # vLLM Model Configuration (TEST)
 # Use model pre-cached by setup-llm-models.sh
 # Reference model registry for default chat model
-vllm_default_model: "{{ model_purposes.fast.model_name }}"
+# New structure: model_purposes.fast -> model key, lookup in available_models
+vllm_default_model: "{{ available_models[model_purposes.fast].model_name }}"
 
 # LiteLLM Database Configuration
 litellm_enable_database: true

@@ -8,120 +8,73 @@
 #   - Services reference purposes, not model names
 #   - Change models here without touching code
 #   - Environment-specific overrides in inventory/*/group_vars/
+available_models:
+  "claude-sonnet-4-5":
+    provider: "bedrock"
+    model: "anthropic.claude-sonnet-4-5"
+    model_name: "anthropic.claude-sonnet-4-5"
+    description: "Frontier model"
+    max_tokens: 32768
+    temperature: 0.7
+    endpoint: "/chat/completions"
 
-model_purposes:
-  # Text embedding generation
-  # Actual model: Qwen/Qwen3-Embedding-8B (8B parameters, 4096 dims, GPU 1)
-  embedding:
-    model: "qwen3-embedding"
-    model_name: "Qwen/Qwen3-Embedding-8B"
-    description: "Text embedding generation"
-    max_tokens: 8192
-    provider: "litellm"
-    endpoint: "/embeddings"
-    
-  # Visual document embedding
-  # Actual model: vidore/colpali-v1.3 (LoRA adapters on PaliGemma-3B, GPU 2)
-  visual-embedding:
+  "colpali-v1.3":
+    provider: "colpali"
     model: "colpali-v1.3"
     model_name: "vidore/colpali-v1.3"
     description: "Visual document embedding"
     max_tokens: 4096
-    provider: "colpali"
-    endpoint: "/v1/embeddings"
-  
-  # Vision-language model for image understanding
-  # Actual model: Qwen/Qwen3-VL-8B-Instruct (8B parameters, GPU 1)
-  vision:
-    model: "qwen3-vl-8b"
-    model_name: "Qwen/Qwen3-VL-8B-Instruct"
-    description: "Vision-language model for image understanding"
-    max_tokens: 4096
     temperature: 0.7
-    provider: "litellm"
-    endpoint: "/chat/completions"
-    
-  # Fast model for quick operations
-  # Actual model: microsoft/Phi-4-multimodal-instruct (6B parameters, GPU 0)
-  fast:
+    endpoint: "/v1/embeddings"
+    gpu: 0
+    port: 8000
+
+  "qwen3-embedding":
+    provider: "vllm"
+    model: "qwen3-embedding"
+    model_name: "Qwen/Qwen3-Embedding-8B" 
+    description: "Text embedding generation"
+    max_tokens: 8192
+    temperature: 0.7
+    endpoint: "/embeddings"
+    gpu: 1
+    port: 8001
+
+  "phi-4":
+    provider: "vllm"
     model: "phi-4"
     model_name: "microsoft/Phi-4-multimodal-instruct"
     description: "Fast model for quick operations"
     max_tokens: 4096
     temperature: 0.7
-    provider: "litellm"
     endpoint: "/chat/completions"
-    
-  # General purpose agent model (default for most tasks)
-  # Actual model: Qwen/Qwen3-30B-A3B-Instruct-2507 (30B parameters, GPU 1)
-  default:
+    gpu: 1
+    port: 8002
+
+  "qwen3-30b-instruct":
+    provider: "vllm"
     model: "qwen3-30b-instruct"
     model_name: "Qwen/Qwen3-30B-A3B-Instruct-2507"
     description: "General purpose agent model"
     max_tokens: 32768
     temperature: 0.7
-    provider: "litellm"
     endpoint: "/chat/completions"
-    
-  # Text cleanup and formatting
-  cleanup:
-    model: "phi-4"
-    model_name: "microsoft/Phi-4-multimodal-instruct"
-    description: "Text cleanup and formatting"
-    max_tokens: 32768
-    temperature: 0.1
-    provider: "litellm"
-    endpoint: "/chat/completions"
-    
-  # General chat and Q&A
-  chat:
-    model: "phi-4"
-    model_name: "microsoft/Phi-4-multimodal-instruct"
-    description: "General chat and Q&A"
-    max_tokens: 32768
-    temperature: 0.7
-    provider: "litellm"
-    endpoint: "/chat/completions"
-    
-  # Document classification
-  classify:
-    model: "phi-4"
-    model_name: "microsoft/Phi-4-multimodal-instruct"
-    description: "Document classification"
-    max_tokens: 4096
-    temperature: 0.1
-    provider: "litellm"
-    endpoint: "/chat/completions"
-    
-  # Research and analysis
-  research:
-    model: "qwen3-30b-instruct"
-    model_name: "Qwen/Qwen3-30B-A3B-Instruct-2507"
-    description: "Research and analysis"
-    max_tokens: 32768
-    temperature: 0.7
-    provider: "litellm"
-    endpoint: "/chat/completions"
-    
-  # Data analysis
-  analysis:
-    model: "qwen3-30b-instruct"
-    model_name: "Qwen/Qwen3-30B-A3B-Instruct-2507"
-    description: "Data analysis"
-    max_tokens: 32768
-    temperature: 0.5
-    provider: "litellm"
-    endpoint: "/chat/completions"
-    
-  # Document parsing and structure extraction
-  parsing:
-    model: "phi-4"
-    model_name: "microsoft/Phi-4-multimodal-instruct"
-    description: "Document parsing and structure extraction"
-    max_tokens: 8192
-    temperature: 0.1
-    provider: "litellm"
-    endpoint: "/chat/completions"
+    gpu: 2
+    port: 8003
+
+model_purposes:
+  default: "qwen3-30b-instruct"   # General purpose agent model (default for most tasks)
+  frontier: "claude-sonnet-4-5"   # Frontier model
+  vision: "qwen3-30b-instruct"   # Vision-language model for image understanding
+  research: "qwen3-30b-instruct"   # Research and analysis
+  analysis: "qwen3-30b-instruct"   # Data analysis
+  fast: "phi-4"   # Fast model for quick operations
+  cleanup: "phi-4"   # Text cleanup and formatting  
+  chat: "phi-4"   # General chat and Q&A
+  classify: "phi-4"   # Document classification
+  parsing: "phi-4"   # Document parsing and structure extraction
+  embedding: "qwen3-embedding"   # Text embedding generation
+  visual-embedding: "colpali-v1.3"   # Visual document embedding
 
 # Model registry file path (deployed to containers)
 model_registry_path: "/etc/ingest/model_registry.json"
@@ -129,4 +82,16 @@ model_registry_path: "/etc/ingest/model_registry.json"
 # LLM cleanup configuration
 # Enabled by default to fix text quality issues (smashed words, spacing, etc.)
 llm_cleanup_enabled: true
+
+# Model technical configurations
+# This section is populated by update-model-config.sh after analyzing downloaded models
+# Format: model_name (HuggingFace path) -> technical details
+model_configs:
+  # Example structure (will be populated by analysis):
+  # "microsoft/Phi-4-multimodal-instruct":
+  #   params_billions: 6
+  #   precision: "fp16"  # fp32, fp16, bf16, int8, int4
+  #   quantization: "none"  # none, gptq, awq, bitsandbytes, gguf
+  #   gpu_size_gb: 12  # Estimated GPU memory requirement
+  #   notes: "6B params, FP16/BF16, ~12GB GPU"
 

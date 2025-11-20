@@ -37,7 +37,9 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PCT_DIR="$(dirname "$SCRIPT_DIR")"
 REPO_ROOT="$(cd "${PCT_DIR}/../.." && pwd)"
+MODEL_REGISTRY="${REPO_ROOT}/provision/ansible/group_vars/all/model_registry.yml"
 LITELLM_CONFIG="${REPO_ROOT}/provision/ansible/roles/litellm/defaults/main.yml"
+VENV_DIR="/opt/model-downloader"
 
 # Source container IDs
 if [ -f "${PCT_DIR}/vars.env" ]; then
@@ -49,46 +51,190 @@ else
     IP_VLLM="10.96.200.208"
 fi
 
-# Model configuration database
-# Format: model_path|params_billions|precision|quantization|actual_gpu_size_gb|notes
-# precision: fp32, fp16, bf16, int8, int4
-# quantization: none, gptq, awq, bitsandbytes, gguf
-declare -A MODEL_CONFIG=(
-    # Phi-4: 6B params, FP16/BF16, no quantization
-    ["microsoft/Phi-4-multimodal-instruct"]="6|fp16|none|12|6B params, FP16/BF16, ~12GB GPU"
+# Update model registry with GPU and port configuration
+update_model_registry_gpu_port() {
+    local model_key="$1"  # Model key in available_models (e.g., "phi-4")
+    local gpu_list="$2"    # GPU(s) for model (e.g., "1" or "2,3")
+    local port="$3"        # vLLM port (e.g., 8000)
     
-    # Qwen3-Embedding-8B: 8B params, check if quantized
-    # Note: May be quantized (int8/int4) - check actual deployment
-    ["Qwen/Qwen3-Embedding-8B"]="8|fp16|none|16|8B params, FP16 default (verify quantization)"
+    if [ ! -f "$MODEL_REGISTRY" ]; then
+        warn "Model registry not found: $MODEL_REGISTRY"
+        return 1
+    fi
     
-    # Qwen3-30B-A3B-Instruct-2507: 30B params, likely quantized for 24GB GPU
-    # A3B suggests it might be optimized/quantized - verify actual format
-    ["Qwen/Qwen3-30B-A3B-Instruct-2507"]="30|fp16|none|60|30B params, verify if quantized (int8/int4)"
-    
-    # Qwen3-VL-8B-Instruct: 8B params, vision-language model
-    ["Qwen/Qwen3-VL-8B-Instruct"]="8|fp16|none|16|8B params, vision-language, FP16"
-    
-    # ColPali: LoRA adapter on PaliGemma-3B base
-    ["vidore/colpali-v1.3"]="3|bf16|none|15|PaliGemma-3B base + LoRA, BF16, ~15GB GPU"
-)
+    # Use Python to update YAML (preserves structure and comments)
+    "${VENV_DIR}/bin/python3" << PYTHON_EOF
+import yaml
+import sys
+import os
+from pathlib import Path
 
-# Model name mappings (short name -> full HuggingFace path)
-declare -A MODEL_NAMES=(
-    ["phi-4"]="microsoft/Phi-4-multimodal-instruct"
-    ["qwen3-embedding"]="Qwen/Qwen3-Embedding-8B"
-    ["qwen3-30b-instruct"]="Qwen/Qwen3-30B-A3B-Instruct-2507"
-    ["qwen3-vl-8b"]="Qwen/Qwen3-VL-8B-Instruct"
-    ["colpali-v1.3"]="vidore/colpali-v1.3"
-)
+registry_file = Path("${MODEL_REGISTRY}")
+model_key = "${model_key}"
+gpu_list = "${gpu_list}"
+port = ${port}
 
-# Model size database (for backward compatibility - uses MODEL_CONFIG)
-declare -A MODEL_SIZES=(
-    ["microsoft/Phi-4-multimodal-instruct"]="12"
-    ["Qwen/Qwen3-Embedding-8B"]="16"
-    ["Qwen/Qwen3-30B-A3B-Instruct-2507"]="60"
-    ["Qwen/Qwen3-VL-8B-Instruct"]="16"
-    ["vidore/colpali-v1.3"]="15"
+try:
+    # Read existing YAML
+    with open(registry_file, 'r') as f:
+        content = f.read()
+        data = yaml.safe_load(content)
+    
+    # Initialize available_models if it doesn't exist
+    if 'available_models' not in data:
+        data['available_models'] = {}
+    
+    # Update or add model config
+    if model_key not in data['available_models']:
+        data['available_models'][model_key] = {}
+    
+    # Update GPU and port
+    data['available_models'][model_key]['gpu'] = gpu_list
+    data['available_models'][model_key]['port'] = port
+    
+    # Ensure provider is set if not already
+    if 'provider' not in data['available_models'][model_key]:
+        data['available_models'][model_key]['provider'] = 'vllm'
+    
+    # Write back (preserve structure)
+    # Use ruamel.yaml if available for better comment preservation, otherwise use standard yaml
+    try:
+        from ruamel.yaml import YAML
+        yaml_writer = YAML()
+        yaml_writer.preserve_quotes = True
+        yaml_writer.width = 4096
+        with open(registry_file, 'w') as f:
+            yaml_writer.dump(data, f)
+    except ImportError:
+        # Fallback to standard yaml (may lose some formatting)
+        with open(registry_file, 'w') as f:
+            yaml.dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    
+    print(f"✓ Updated GPU and port for {model_key} in model registry")
+except Exception as e:
+    print(f"ERROR: Failed to update registry: {e}", file=sys.stderr)
+    sys.exit(1)
+PYTHON_EOF
+    
+    if [ $? -eq 0 ]; then
+        success "Updated GPU and port for $model_key in model registry"
+        return 0
+    else
+        error "Failed to update GPU and port for $model_key"
+        return 1
+    fi
+}
+
+# Load model configuration from model_registry.yml
+# This replaces hardcoded MODEL_CONFIG, MODEL_NAMES, and MODEL_SIZES arrays
+load_model_registry() {
+    if [ ! -f "$MODEL_REGISTRY" ]; then
+        error "Model registry not found: $MODEL_REGISTRY"
+        error "Run this script from the busibox repository root"
+        exit 1
+    fi
+    
+    # Check if Python venv exists (for YAML parsing)
+    if [ ! -d "$VENV_DIR" ] || ! "${VENV_DIR}/bin/python3" -c "import yaml" 2>/dev/null; then
+        error "Python venv with PyYAML not found: $VENV_DIR"
+        error "Run setup-llm-models.sh first to set up the environment"
+        exit 1
+    fi
+    
+    # Use Python to parse YAML and populate bash arrays
+    local python_output
+    python_output=$("${VENV_DIR}/bin/python3" << PYTHON_EOF
+import yaml
+import sys
+import os
+import json
+
+registry_file = "${MODEL_REGISTRY}"
+if not os.path.exists(registry_file):
+    print("ERROR: Registry file not found", file=sys.stderr)
+    sys.exit(1)
+
+try:
+    with open(registry_file, 'r') as f:
+        data = yaml.safe_load(f)
+    
+    # Initialize arrays
+    output_lines = []
+    output_lines.append("declare -A MODEL_CONFIG")
+    output_lines.append("declare -A MODEL_NAMES")
+    output_lines.append("declare -A MODEL_SIZES")
+    
+    # Load available_models and model_purposes
+    # New structure: available_models contains full config, model_purposes maps purpose -> model key
+    available_models = data.get('available_models', {})
+    purposes = data.get('model_purposes', {})
+    api_providers = {'bedrock', 'openai', 'anthropic'}
+    
+    # Build MODEL_NAMES from available_models (only vLLM models)
+    for model_key, model_config in available_models.items():
+        provider = model_config.get('provider', '').lower()
+        model_name = model_config.get('model_name', '')
+        
+        # Only include models that use vLLM (not API-based providers)
+        if provider == 'vllm' and model_name:
+            # Escape quotes in values
+            model_key_escaped = model_key.replace('"', '\\"')
+            model_name_escaped = model_name.replace('"', '\\"')
+            output_lines.append(f'MODEL_NAMES["{model_key_escaped}"]="{model_name_escaped}"')
+    
+    # Load model_configs (technical details)
+    configs = data.get('model_configs', {})
+    configs_empty = len(configs) == 0
+    
+    for model_name, config in configs.items():
+        params = config.get('params_billions', 0)
+        precision = config.get('precision', 'fp16')
+        quantization = config.get('quantization', 'none')
+        gpu_size = config.get('gpu_size_gb', 0)
+        notes = config.get('notes', '')
+        
+        # Escape quotes in values
+        model_name_escaped = model_name.replace('"', '\\"')
+        precision_escaped = precision.replace('"', '\\"')
+        quantization_escaped = quantization.replace('"', '\\"')
+        notes_escaped = notes.replace('"', '\\"')
+        
+        # Format: params|precision|quantization|gpu_size|notes
+        config_line = f"{params}|{precision_escaped}|{quantization_escaped}|{gpu_size}|{notes_escaped}"
+        output_lines.append(f'MODEL_CONFIG["{model_name_escaped}"]="{config_line}"')
+        output_lines.append(f'MODEL_SIZES["{model_name_escaped}"]="{gpu_size}"')
+    
+    # Output all lines
+    for line in output_lines:
+        print(line)
+    
+    # Return status via exit code and stderr message
+    if configs_empty:
+        print("WARNING: model_configs section is empty. Run update-model-config.sh to populate it.", file=sys.stderr)
+    
+except Exception as e:
+    print(f"ERROR: Failed to parse registry: {e}", file=sys.stderr)
+    sys.exit(1)
+PYTHON_EOF
 )
+    
+    if [ $? -ne 0 ]; then
+        error "Failed to load model registry"
+        exit 1
+    fi
+    
+    # Evaluate the Python output to populate arrays
+    eval "$python_output"
+    
+    # Check if model_configs was empty (warning already printed by Python)
+    if [ ${#MODEL_CONFIG[@]} -eq 0 ]; then
+        warn "model_configs section is empty. Run update-model-config.sh to populate it."
+        warn "Script will use fallback estimates for model configurations."
+    fi
+}
+
+# Load model registry at script startup
+load_model_registry
 
 # GPU memory sizes
 declare -A GPU_MEMORY=()
@@ -173,27 +319,30 @@ get_model_config() {
     if [ -n "${MODEL_CONFIG[$model_full]:-}" ]; then
         echo "${MODEL_CONFIG[$model_full]}"
     else
-        # Fallback: try to extract from model name
+        # Fallback: try to extract from model name (for models not yet analyzed)
+        warn "Model $model_full not found in model_configs. Using fallback estimates."
+        warn "Run update-model-config.sh to analyze and populate model_configs."
+        
         case "$model_full" in
             *Phi-4*|*phi-4*)
-                echo "6|fp16|none|12|6B params, FP16"
+                echo "6|fp16|none|12|6B params, FP16 (fallback - run update-model-config.sh)"
                 ;;
             *Qwen3-Embedding*|*qwen3-embedding*)
-                echo "8|fp16|none|16|8B params, verify quantization"
+                echo "8|fp16|none|16|8B params, verify quantization (fallback)"
                 ;;
             *Qwen3-30B*|*qwen3-30b*)
-                echo "30|fp16|none|60|30B params, verify quantization"
+                echo "30|fp16|none|60|30B params, verify quantization (fallback)"
                 ;;
             *Qwen3-VL-8B*|*qwen3-vl-8b*)
-                echo "8|fp16|none|16|8B params, FP16"
+                echo "8|fp16|none|16|8B params, FP16 (fallback)"
                 ;;
             *colpali*)
-                echo "3|bf16|none|15|PaliGemma-3B + LoRA, BF16"
+                echo "3|bf16|none|15|PaliGemma-3B + LoRA, BF16 (fallback)"
                 ;;
             *)
                 # Generic fallback
                 warn "Unknown model: $model_full, using default estimates"
-                echo "7|fp16|none|14|Default estimate - verify model config"
+                echo "7|fp16|none|14|Default estimate - run update-model-config.sh to analyze"
                 ;;
         esac
     fi
@@ -642,8 +791,14 @@ generate_routing_config() {
     local tensor_parallel="${3:-1}"
     local vllm_port="${4:-8000}"  # Default vLLM port, can be overridden for separate instances
     local auto_update="${5:-false}"  # Whether to automatically update LiteLLM config
+    local update_registry="${6:-false}"  # Whether to update model registry with GPU/port
     
     local model_full="${MODEL_NAMES[$model_short]:-$model_short}"
+    
+    # Update model registry with GPU and port if requested
+    if [ "$update_registry" = "true" ]; then
+        update_model_registry_gpu_port "$model_short" "$gpu_list" "$vllm_port"
+    fi
     
     echo ""
     info "Configuration for $model_short:"
@@ -732,10 +887,18 @@ interactive_routing() {
             fi
         fi
         
+        echo ""
+        read -p "Update model registry with GPU and port configuration? (Y/n): " -n 1 -r
+        echo
+        local update_registry="false"
+        if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+            update_registry="true"
+        fi
+        
         # Small models on GPU 1
         if [ -n "${GPU_MEMORY[1]:-}" ]; then
-            check_model_fits "${MODEL_NAMES[phi-4]}" "1" "1" "8192" "256" "$cpu_offload" && generate_routing_config "phi-4" "1" "1" "8000" "$should_update"
-            check_model_fits "${MODEL_NAMES[qwen3-embedding]}" "1" "1" "8192" "256" "$cpu_offload" && generate_routing_config "qwen3-embedding" "1" "1" "8001" "$should_update"
+            check_model_fits "${MODEL_NAMES[phi-4]}" "1" "1" "8192" "256" "$cpu_offload" && generate_routing_config "phi-4" "1" "1" "8002" "$should_update" "$update_registry"
+            check_model_fits "${MODEL_NAMES[qwen3-embedding]}" "1" "1" "8192" "256" "$cpu_offload" && generate_routing_config "qwen3-embedding" "1" "1" "8001" "$should_update" "$update_registry"
         fi
         
         # Large models on multiple GPUs
@@ -744,7 +907,7 @@ interactive_routing() {
             if [ ${#GPU_MEMORY[@]} -ge 3 ]; then
                 gpu_list="2,3"
             fi
-            check_model_fits "${MODEL_NAMES[qwen3-30b-instruct]}" "$gpu_list" "2" "8192" "256" "$cpu_offload" && generate_routing_config "qwen3-30b-instruct" "$gpu_list" "2" "8000" "$should_update"
+            check_model_fits "${MODEL_NAMES[qwen3-30b-instruct]}" "$gpu_list" "2" "8192" "256" "$cpu_offload" && generate_routing_config "qwen3-30b-instruct" "$gpu_list" "2" "8003" "$should_update" "$update_registry"
         fi
     else
         # Configure single model
@@ -780,7 +943,15 @@ interactive_routing() {
             fi
         fi
         
-        check_model_fits "$model_full" "$gpu_list" "$tensor_parallel" "8192" "256" "$cpu_offload" && generate_routing_config "$selected_model" "$gpu_list" "$tensor_parallel" "$vllm_port" "$should_update"
+        echo ""
+        read -p "Update model registry with GPU and port configuration? (Y/n): " -n 1 -r
+        echo
+        local update_registry="false"
+        if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+            update_registry="true"
+        fi
+        
+        check_model_fits "$model_full" "$gpu_list" "$tensor_parallel" "8192" "256" "$cpu_offload" && generate_routing_config "$selected_model" "$gpu_list" "$tensor_parallel" "$vllm_port" "$should_update" "$update_registry"
     fi
 }
 

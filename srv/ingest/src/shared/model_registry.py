@@ -56,9 +56,21 @@ class ModelRegistry:
             try:
                 with open(config_path, 'r') as f:
                     registry_data = json.load(f)
-                    # The JSON has "purposes" key containing all model purposes
-                    deployed_purposes = registry_data.get("purposes", {})
-                    self.models.update(deployed_purposes)
+                    # New structure: JSON has "available_models" and "purposes"
+                    # purposes maps purpose -> model key, available_models has full config
+                    available_models = registry_data.get("available_models", {})
+                    purposes = registry_data.get("purposes", {})
+                    
+                    # Build models dict: purpose -> full model config
+                    for purpose, model_key in purposes.items():
+                        if model_key in available_models:
+                            self.models[purpose] = available_models[model_key].copy()
+                        else:
+                            logger.warning(
+                                "Model key not found in available_models",
+                                purpose=purpose,
+                                model_key=model_key
+                            )
                     logger.info(
                         "Loaded model registry from deployed JSON",
                         config_path=config_path,

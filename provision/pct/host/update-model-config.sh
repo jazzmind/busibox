@@ -45,7 +45,8 @@ error() {
 # Paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PCT_DIR="$(dirname "$SCRIPT_DIR")"
-ROUTING_SCRIPT="${SCRIPT_DIR}/configure-vllm-model-routing.sh"
+REPO_ROOT="$(cd "${PCT_DIR}/../.." && pwd)"
+MODEL_REGISTRY="${REPO_ROOT}/provision/ansible/group_vars/all/model_registry.yml"
 HUGGINGFACE_CACHE="/var/lib/llm-models/huggingface"
 MODELS_DIR="${HUGGINGFACE_CACHE}/hub"
 VENV_DIR="/opt/model-downloader"
@@ -305,35 +306,81 @@ PYTHON_EOF
     echo "${params_billions}|${precision}|${quantization}|${gpu_size_gb}|${notes}"
 }
 
-# Update MODEL_CONFIG in routing script
-update_routing_script() {
+# Update model_configs in model_registry.yml
+update_model_registry() {
     local model_name="$1"
-    local config_line="$2"
+    local params_billions="$2"
+    local precision="$3"
+    local quantization="$4"
+    local gpu_size_gb="$5"
+    local notes="$6"
     
-    if [ ! -f "$ROUTING_SCRIPT" ]; then
-        warn "Routing script not found: $ROUTING_SCRIPT"
+    if [ ! -f "$MODEL_REGISTRY" ]; then
+        warn "Model registry not found: $MODEL_REGISTRY"
         return 1
     fi
     
-    # Escape model name for sed
-    local escaped_name=$(echo "$model_name" | sed 's/[[\.*^$()+?{|]/\\&/g')
+    # Use Python to update YAML (preserves structure and comments)
+    "${VENV_DIR}/bin/python3" << PYTHON_EOF
+import yaml
+import sys
+import os
+from pathlib import Path
+
+registry_file = Path("${MODEL_REGISTRY}")
+model_name = "${model_name}"
+params_billions = ${params_billions}
+precision = "${precision}"
+quantization = "${quantization}"
+gpu_size_gb = ${gpu_size_gb}
+notes = "${notes}"
+
+try:
+    # Read existing YAML
+    with open(registry_file, 'r') as f:
+        content = f.read()
+        data = yaml.safe_load(content)
     
-    # Check if model already exists in MODEL_CONFIG
-    if grep -q "\[\"${escaped_name}\"\]=" "$ROUTING_SCRIPT"; then
-        info "Updating existing entry for $model_name"
-        # Update existing entry
-        sed -i "s|\[\"${escaped_name}\"\]=\".*\"|[\"${escaped_name}\"]=\"${config_line}\"|" "$ROUTING_SCRIPT"
+    # Initialize model_configs if it doesn't exist
+    if 'model_configs' not in data:
+        data['model_configs'] = {}
+    
+    # Update or add model config
+    data['model_configs'][model_name] = {
+        'params_billions': params_billions,
+        'precision': precision,
+        'quantization': quantization,
+        'gpu_size_gb': gpu_size_gb,
+        'notes': notes
+    }
+    
+    # Write back (preserve structure)
+    # Use ruamel.yaml if available for better comment preservation, otherwise use standard yaml
+    try:
+        from ruamel.yaml import YAML
+        yaml_writer = YAML()
+        yaml_writer.preserve_quotes = True
+        yaml_writer.width = 4096
+        with open(registry_file, 'w') as f:
+            yaml_writer.dump(data, f)
+    except ImportError:
+        # Fallback to standard yaml (may lose some formatting)
+        with open(registry_file, 'w') as f:
+            yaml.dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    
+    print(f"✓ Updated model_configs for {model_name}")
+except Exception as e:
+    print(f"ERROR: Failed to update registry: {e}", file=sys.stderr)
+    sys.exit(1)
+PYTHON_EOF
+    
+    if [ $? -eq 0 ]; then
+        success "Updated model_configs for $model_name"
+        return 0
     else
-        info "Adding new entry for $model_name"
-        # Find MODEL_CONFIG array and add entry before closing
-        # Insert before the closing parenthesis
-        sed -i "/^declare -A MODEL_CONFIG=(/,/^)$/{
-            /^)$/i\\
-    [\"${model_name}\"]=\"${config_line}\"
-        }" "$ROUTING_SCRIPT"
+        error "Failed to update model_configs for $model_name"
+        return 1
     fi
-    
-    success "Updated MODEL_CONFIG for $model_name"
 }
 
 # Main execution
@@ -375,18 +422,26 @@ main() {
         local config_line=$(analyze_model "$model_name" "$model_path")
         
         if [ -n "$config_line" ]; then
+            # Parse config line: params|precision|quantization|gpu_size|notes
+            IFS='|' read -r params precision quantization gpu_size notes <<< "$config_line"
+            
             if [ "$interactive" = true ]; then
                 echo ""
                 info "Configuration: $config_line"
+                echo "  Parameters: ${params}B"
+                echo "  Precision: $precision"
+                echo "  Quantization: $quantization"
+                echo "  GPU Size: ${gpu_size}GB"
+                echo "  Notes: $notes"
                 echo ""
-                read -p "Update MODEL_CONFIG in routing script? (Y/n): " -n 1 -r
+                read -p "Update model_configs in model_registry.yml? (Y/n): " -n 1 -r
                 echo ""
                 if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-                    update_routing_script "$model_name" "$config_line"
+                    update_model_registry "$model_name" "$params" "$precision" "$quantization" "$gpu_size" "$notes"
                 fi
             else
                 # Non-interactive: auto-update
-                update_routing_script "$model_name" "$config_line" 2>/dev/null || true
+                update_model_registry "$model_name" "$params" "$precision" "$quantization" "$gpu_size" "$notes" 2>/dev/null || true
             fi
         fi
     else
@@ -404,8 +459,10 @@ main() {
             local config_line=$(analyze_model "$model_name" "$model_dir")
             
             if [ -n "$config_line" ]; then
+                # Parse config line: params|precision|quantization|gpu_size|notes
+                IFS='|' read -r params precision quantization gpu_size notes <<< "$config_line"
                 echo "  $model_name: $config_line"
-                update_routing_script "$model_name" "$config_line"
+                update_model_registry "$model_name" "$params" "$precision" "$quantization" "$gpu_size" "$notes"
                 updated=$((updated + 1))
             fi
         done
@@ -416,9 +473,9 @@ main() {
     
     echo ""
     info "Next steps:"
-    echo "  1. Review updated MODEL_CONFIG in: $ROUTING_SCRIPT"
+    echo "  1. Review updated model_configs in: $MODEL_REGISTRY"
     echo "  2. Test memory estimation:"
-    echo "     bash $ROUTING_SCRIPT --interactive"
+    echo "     bash ${SCRIPT_DIR}/configure-vllm-model-routing.sh --interactive"
     echo ""
 }
 
