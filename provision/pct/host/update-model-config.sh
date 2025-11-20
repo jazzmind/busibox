@@ -63,6 +63,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PCT_DIR="$(dirname "$SCRIPT_DIR")"
 REPO_ROOT="$(cd "${PCT_DIR}/../.." && pwd)"
 MODEL_REGISTRY="${REPO_ROOT}/provision/ansible/group_vars/all/model_registry.yml"
+MODEL_CONFIG="${REPO_ROOT}/provision/ansible/group_vars/all/model_config.yml"
 HUGGINGFACE_CACHE="/var/lib/llm-models/huggingface"
 MODELS_DIR="${HUGGINGFACE_CACHE}/hub"
 VENV_DIR="/opt/model-downloader"
@@ -716,21 +717,23 @@ PYTHON_EOF
     echo "${params_billions}|${precision}|${quantization}|${gpu_size_gb}|${notes}"
 }
 
-# Update model_configs in model_registry.yml
-update_model_registry() {
+# Update model_config.yml with technical analysis results
+# Preserves existing GPU/port assignments from configure-vllm-model-routing.sh
+update_model_config() {
     local model_name="$1"
     local params_billions="$2"
     local precision="$3"
     local quantization="$4"
     local gpu_size_gb="$5"
-    local notes="$6"
+    local disk_size_gb="${6:-0}"
+    local notes="$7"
     
     if [ ! -f "$MODEL_REGISTRY" ]; then
         warn "Model registry not found: $MODEL_REGISTRY"
         return 1
     fi
     
-    # Use Python to update YAML (preserves structure and comments)
+    # Use Python to update model_config.yml
     "${VENV_DIR}/bin/python3" << PYTHON_EOF
 import yaml
 import sys
@@ -738,65 +741,215 @@ import os
 from pathlib import Path
 
 registry_file = Path("${MODEL_REGISTRY}")
+config_file = Path("${MODEL_CONFIG}")
 model_name = "${model_name}"
 params_billions = ${params_billions}
 precision = "${precision}"
 quantization = "${quantization}"
 gpu_size_gb = ${gpu_size_gb}
+disk_size_gb = ${disk_size_gb}
 notes = "${notes}"
 
 try:
-    # Read existing YAML
+    # Read model_registry.yml to get provider and model_key
     with open(registry_file, 'r') as f:
-        content = f.read()
-        data = yaml.safe_load(content)
+        registry_data = yaml.safe_load(f) or {}
     
-    # Ensure data is a dict (handle None or empty file)
-    if data is None:
-        data = {}
+    available_models = registry_data.get('available_models') or {}
     
-    # Initialize model_configs if it doesn't exist or is None
-    if 'model_configs' not in data or data.get('model_configs') is None:
-        data['model_configs'] = {}
+    # Find model_key and provider for this model_name
+    model_key = None
+    provider = None
+    for key, config in available_models.items():
+        if config.get('model_name') == model_name:
+            model_key = key
+            provider = config.get('provider', 'vllm')
+            break
     
-    # Ensure model_configs is a dict
-    if not isinstance(data['model_configs'], dict):
-        data['model_configs'] = {}
+    # Read existing model_config.yml if it exists
+    if config_file.exists():
+        with open(config_file, 'r') as f:
+            config_data = yaml.safe_load(f) or {}
+    else:
+        config_data = {}
     
-    # Update or add model config
-    data['model_configs'][model_name] = {
+    # Initialize models dict
+    if 'models' not in config_data:
+        config_data['models'] = {}
+    
+    if not isinstance(config_data['models'], dict):
+        config_data['models'] = {}
+    
+    # Get existing entry to preserve GPU/port assignments
+    existing = config_data['models'].get(model_name, {})
+    
+    # Update or create model entry
+    config_data['models'][model_name] = {
+        # Technical details (from analysis)
         'params_billions': params_billions,
         'precision': precision,
         'quantization': quantization,
         'gpu_size_gb': gpu_size_gb,
-        'notes': notes
+        'disk_size_gb': disk_size_gb,
+        'notes': notes,
+        'analyzed': True,
+        
+        # Preserve existing GPU/port assignments (if any)
+        'gpu': existing.get('gpu'),
+        'port': existing.get('port'),
+        'tensor_parallel': existing.get('tensor_parallel'),
+        'assigned': existing.get('assigned', False),
+        
+        # Reference info from model_registry.yml
+        'provider': provider or 'vllm',
+        'model_key': model_key or model_name
     }
     
-    # Write back (preserve structure)
-    # Use ruamel.yaml if available for better comment preservation, otherwise use standard yaml
+    # Write back
     try:
         from ruamel.yaml import YAML
         yaml_writer = YAML()
         yaml_writer.preserve_quotes = True
         yaml_writer.width = 4096
-        with open(registry_file, 'w') as f:
-            yaml_writer.dump(data, f)
+        yaml_writer.default_flow_style = False
+        with open(config_file, 'w') as f:
+            yaml_writer.dump(config_data, f)
     except ImportError:
-        # Fallback to standard yaml (may lose some formatting)
-        with open(registry_file, 'w') as f:
-            yaml.dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+        # Fallback to standard yaml
+        with open(config_file, 'w') as f:
+            yaml.dump(config_data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
     
-    print(f"✓ Updated model_configs for {model_name}")
+    print(f"✓ Updated model_config.yml for {model_name}")
 except Exception as e:
-    print(f"ERROR: Failed to update registry: {e}", file=sys.stderr)
+    print(f"ERROR: Failed to update model_config.yml: {e}", file=sys.stderr)
+    import traceback
+    traceback.print_exc()
     sys.exit(1)
 PYTHON_EOF
     
     if [ $? -eq 0 ]; then
-        success "Updated model_configs for $model_name"
+        success "Updated model_config.yml for $model_name"
         return 0
     else
-        error "Failed to update model_configs for $model_name"
+        error "Failed to update model_config.yml for $model_name"
+        return 1
+    fi
+}
+
+# Initialize model_config.yml with all models from model_registry.yml
+# Creates entries for unanalyzed models and API models
+initialize_model_config() {
+    if [ ! -f "$MODEL_REGISTRY" ]; then
+        warn "Model registry not found: $MODEL_REGISTRY"
+        return 1
+    fi
+    
+    "${VENV_DIR}/bin/python3" << PYTHON_EOF
+import yaml
+import sys
+import os
+from pathlib import Path
+
+registry_file = Path("${MODEL_REGISTRY}")
+config_file = Path("${MODEL_CONFIG}")
+
+try:
+    # Read model_registry.yml
+    with open(registry_file, 'r') as f:
+        registry_data = yaml.safe_load(f) or {}
+    
+    available_models = registry_data.get('available_models') or {}
+    api_providers = {'bedrock', 'openai', 'anthropic'}
+    
+    # Read existing model_config.yml if it exists
+    if config_file.exists():
+        with open(config_file, 'r') as f:
+            config_data = yaml.safe_load(f) or {}
+    else:
+        config_data = {}
+    
+    if 'models' not in config_data:
+        config_data['models'] = {}
+    
+    if not isinstance(config_data['models'], dict):
+        config_data['models'] = {}
+    
+    # Ensure all models from registry are in config
+    for model_key, model_config in available_models.items():
+        model_name = model_config.get('model_name')
+        provider = model_config.get('provider', 'vllm').lower()
+        
+        if not model_name:
+            continue
+        
+        # Get existing entry or create new
+        existing = config_data['models'].get(model_name, {})
+        
+        # Only create/update if not already analyzed
+        if not existing.get('analyzed', False):
+            if provider in api_providers:
+                # API-based model
+                config_data['models'][model_name] = {
+                    'provider': provider,
+                    'model_key': model_key,
+                    'gpu': None,
+                    'port': None,
+                    'tensor_parallel': None,
+                    'assigned': False,
+                    'analyzed': False,
+                    'params_billions': 0,
+                    'precision': 'unknown',
+                    'quantization': 'none',
+                    'gpu_size_gb': 0,
+                    'disk_size_gb': 0,
+                    'notes': f'API-based model ({provider})'
+                }
+            else:
+                # vLLM model (not yet analyzed)
+                config_data['models'][model_name] = {
+                    'provider': provider,
+                    'model_key': model_key,
+                    'gpu': None,
+                    'port': None,
+                    'tensor_parallel': None,
+                    'assigned': False,
+                    'analyzed': False,
+                    'params_billions': 0,
+                    'precision': 'fp16',
+                    'quantization': 'none',
+                    'gpu_size_gb': 0,
+                    'disk_size_gb': 0,
+                    'notes': 'Not yet analyzed - run update-model-config.sh'
+                }
+        else:
+            # Preserve existing analyzed data, but update provider/model_key if changed
+            config_data['models'][model_name]['provider'] = provider
+            config_data['models'][model_name]['model_key'] = model_key
+    
+    # Write back
+    try:
+        from ruamel.yaml import YAML
+        yaml_writer = YAML()
+        yaml_writer.preserve_quotes = True
+        yaml_writer.width = 4096
+        yaml_writer.default_flow_style = False
+        with open(config_file, 'w') as f:
+            yaml_writer.dump(config_data, f)
+    except ImportError:
+        with open(config_file, 'w') as f:
+            yaml.dump(config_data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    
+    print(f"✓ Initialized model_config.yml")
+except Exception as e:
+    print(f"ERROR: Failed to initialize model_config.yml: {e}", file=sys.stderr)
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
+PYTHON_EOF
+    
+    if [ $? -eq 0 ]; then
+        return 0
+    else
         return 1
     fi
 }
@@ -918,6 +1071,10 @@ main() {
             fi
         fi
     else
+        # Initialize model_config.yml with all models from registry
+        info "Initializing model_config.yml with models from registry..."
+        initialize_model_config
+        
         # Analyze all models
         info "Analyzing all models in cache..."
         echo ""
@@ -930,7 +1087,6 @@ main() {
             
             local model_name=$(basename "$model_dir" | sed 's/models--//g' | sed 's/--/\//g')
             # Capture stdout only (config line), stderr (info messages) goes to terminal
-            # Command substitution only captures stdout by default, stderr goes to terminal
             local config_line=$(analyze_model "$model_name" "$model_dir")
             
             # Filter out any non-config lines (safety check - should not be needed)
@@ -939,8 +1095,19 @@ main() {
             if [ -n "$config_line" ]; then
                 # Parse config line: params|precision|quantization|gpu_size|notes
                 IFS='|' read -r params precision quantization gpu_size notes <<< "$config_line"
+                
+                # Calculate disk size
+                local disk_size_gb=0
+                local snapshot_dir=$(find "$model_dir/snapshots" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
+                if [ -n "$snapshot_dir" ]; then
+                    local size_bytes=$(du -sbL "$snapshot_dir" 2>/dev/null | awk '{print $1}')
+                    if [ -n "$size_bytes" ] && [[ "$size_bytes" =~ ^[0-9]+$ ]] && [ "$size_bytes" -gt 0 ]; then
+                        disk_size_gb=$(echo "scale=2; $size_bytes / 1024 / 1024 / 1024" | bc -l)
+                    fi
+                fi
+                
                 echo "  $model_name: $config_line"
-                update_model_registry "$model_name" "$params" "$precision" "$quantization" "$gpu_size" "$notes"
+                update_model_config "$model_name" "$params" "$precision" "$quantization" "$gpu_size" "$disk_size_gb" "$notes"
                 updated=$((updated + 1))
             fi
         done
@@ -951,8 +1118,8 @@ main() {
     
     echo ""
     info "Next steps:"
-    echo "  1. Review updated model_configs in: $MODEL_REGISTRY"
-    echo "  2. Test memory estimation:"
+    echo "  1. Review updated model_config.yml: $MODEL_CONFIG"
+    echo "  2. Configure GPU/port assignments:"
     echo "     bash ${SCRIPT_DIR}/configure-vllm-model-routing.sh --interactive"
     echo ""
 }
