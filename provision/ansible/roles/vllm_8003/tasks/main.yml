@@ -79,6 +79,15 @@
     vllm_max_model_len: 8192
   when: vllm_assigned_model != ""
 
+- name: Debug - Show resolved vLLM configuration
+  debug:
+    msg: |
+      Model: {{ vllm_default_model }}
+      GPU: {{ vllm_cuda_visible_devices }}
+      Tensor Parallel: {{ vllm_tensor_parallel_size }}
+      Port: {{ vllm_port }}
+  when: vllm_assigned_model != ""
+
 - name: Include installation tasks
   include_tasks: install.yml
   when: vllm_assigned_model != ""
