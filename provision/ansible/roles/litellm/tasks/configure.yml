@@ -1,6 +1,64 @@
 ---
 # LiteLLM Configuration Tasks
 
+- name: Check if model_config.yml exists
+  stat:
+    path: "{{ playbook_dir }}/group_vars/all/model_config.yml"
+  register: model_config_file
+  delegate_to: localhost
+  tags: [litellm_configure]
+
+- name: Load model_config.yml if it exists
+  include_vars:
+    file: "{{ playbook_dir }}/group_vars/all/model_config.yml"
+    name: model_config_data
+  when: model_config_file.stat.exists
+  delegate_to: localhost
+  tags: [litellm_configure]
+
+- name: Build litellm_models list from model_config.yml
+  set_fact:
+    litellm_models: |
+      {% set models = [] %}
+      {% if model_config_file.stat.exists and model_config_data is defined and model_config_data.models is defined %}
+        {% for purpose, model_key in model_purposes.items() %}
+          {% set model_entry = available_models.get(model_key, {}) %}
+          {% if model_entry %}
+            {% set model_name = model_entry.get('model_name', '') %}
+            {% set provider = model_entry.get('provider', '').lower() %}
+            {% set config = model_config_data.models.get(model_name, {}) %}
+            
+            {% if provider == 'bedrock' %}
+              {% set _ = models.append({
+                   'model_name': purpose,
+                   'litellm_params': {
+                     'model': 'bedrock/' + model_name,
+                     'aws_access_key_id': (secrets.bedrock_api_key.split(':')[0] if secrets.bedrock_api_key and ':' in secrets.bedrock_api_key else '') | default(''),
+                     'aws_secret_access_key': (secrets.bedrock_api_key.split(':')[1] if secrets.bedrock_api_key and ':' in secrets.bedrock_api_key else secrets.bedrock_api_key) | default(''),
+                     'aws_region_name': secrets.bedrock_region | default('us-east-1')
+                   }
+                 }) %}
+            {% elif config.assigned | default(false) and config.port %}
+              {% set _ = models.append({
+                   'model_name': purpose,
+                   'litellm_params': {
+                     'model': 'openai/' + model_entry.get('model', model_key),
+                     'api_base': 'http://' + vllm_ip + ':' + config.port|string + '/v1',
+                     'api_key': 'EMPTY'
+                   }
+                 }) %}
+            {% endif %}
+          {% endif %}
+        {% endfor %}
+      {% endif %}
+      {{ models | to_json }}
+  tags: [litellm_configure]
+
+- name: Parse litellm_models JSON
+  set_fact:
+    litellm_models: "{{ litellm_models | from_json }}"
+  tags: [litellm_configure]
+
 - name: Deploy LiteLLM configuration file
   template:
     src: config.yaml.j2
