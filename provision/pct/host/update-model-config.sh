@@ -766,6 +766,18 @@ try:
             provider = config.get('provider', 'vllm')
             break
     
+    # If not found in registry, auto-detect provider from model name
+    if not provider:
+        model_name_lower = model_name.lower()
+        if 'colpali' in model_name_lower or 'vidore/colpali' in model_name_lower:
+            provider = 'colpali'
+            model_key = 'colpali-v1.3'
+        elif 'vikp/surya' in model_name_lower or 'surya_det' in model_name_lower:
+            provider = 'marker'
+            model_key = 'surya-det2'
+        else:
+            provider = 'vllm'
+    
     # Read existing model_config.yml if it exists
     if config_file.exists():
         with open(config_file, 'r') as f:
@@ -905,7 +917,17 @@ try:
                     'notes': f'API-based model ({provider})'
                 }
             else:
-                # vLLM model (not yet analyzed)
+                # Local model (not yet analyzed)
+                # Auto-detect provider from model name if not in registry
+                if provider is None or provider == 'vllm':
+                    model_name_lower = model_name.lower()
+                    if 'colpali' in model_name_lower or 'vidore/colpali' in model_name_lower:
+                        provider = 'colpali'
+                    elif 'vikp/surya' in model_name_lower or 'surya_det' in model_name_lower:
+                        provider = 'marker'
+                    else:
+                        provider = 'vllm'
+                
                 config_data['models'][model_name] = {
                     'provider': provider,
                     'model_key': model_key,
