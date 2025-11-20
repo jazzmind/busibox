@@ -329,3 +329,96 @@
   when: litellm_models_test is defined
   tags: [litellm_configure, litellm_test]
 
+- name: Test embedding model
+  uri:
+    url: "http://{{ litellm_host if litellm_host != '0.0.0.0' else 'localhost' }}:{{ litellm_port }}/v1/embeddings"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ litellm_master_key }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      model: "embedding"
+      input: "This is a small test document for embedding generation."
+    status_code: 200
+  register: embedding_test
+  retries: 3
+  delay: 2
+  when: litellm_start_service and (model_purposes.embedding is defined)
+  failed_when: false
+  tags: [litellm_configure, litellm_test]
+
+- name: Display embedding test result
+  debug:
+    msg: "{{ 'Embedding test passed - generated ' + (embedding_test.json.data | length | string) + ' embeddings' if embedding_test.json is defined and embedding_test.json.data is defined else 'Embedding test skipped or failed: ' + (embedding_test.json.error.message | default('No embedding model configured')) }}"
+  when: embedding_test is defined
+  tags: [litellm_configure, litellm_test]
+
+- name: Test fast chat model
+  uri:
+    url: "http://{{ litellm_host if litellm_host != '0.0.0.0' else 'localhost' }}:{{ litellm_port }}/v1/chat/completions"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ litellm_master_key }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      model: "fast"
+      messages:
+        - role: "user"
+          content: "Say 'hello' in one word."
+      max_tokens: 10
+    status_code: 200
+  register: fast_test
+  retries: 3
+  delay: 2
+  when: litellm_start_service and (model_purposes.fast is defined)
+  failed_when: false
+  tags: [litellm_configure, litellm_test]
+
+- name: Display fast model test result
+  debug:
+    msg: "{{ 'Fast model test passed - response: ' + fast_test.json.choices[0].message.content if fast_test.json is defined and fast_test.json.choices is defined else 'Fast model test skipped or failed: ' + (fast_test.json.error.message | default('No fast model configured')) }}"
+  when: fast_test is defined
+  tags: [litellm_configure, litellm_test]
+
+- name: Test analysis chat model
+  uri:
+    url: "http://{{ litellm_host if litellm_host != '0.0.0.0' else 'localhost' }}:{{ litellm_port }}/v1/chat/completions"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ litellm_master_key }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      model: "analysis"
+      messages:
+        - role: "user"
+          content: "What is 2+2? Answer with just the number."
+      max_tokens: 10
+    status_code: 200
+  register: analysis_test
+  retries: 3
+  delay: 2
+  when: litellm_start_service and (model_purposes.analysis is defined)
+  failed_when: false
+  tags: [litellm_configure, litellm_test]
+
+- name: Display analysis model test result
+  debug:
+    msg: "{{ 'Analysis model test passed - response: ' + analysis_test.json.choices[0].message.content if analysis_test.json is defined and analysis_test.json.choices is defined else 'Analysis model test skipped or failed: ' + (analysis_test.json.error.message | default('No analysis model configured')) }}"
+  when: analysis_test is defined
+  tags: [litellm_configure, litellm_test]
+
+- name: Summary of model tests
+  debug:
+    msg:
+      - "=========================================="
+      - "LiteLLM Model Test Summary"
+      - "=========================================="
+      - "Embedding model: {{ 'PASSED' if embedding_test is defined and embedding_test.status == 200 else 'SKIPPED/FAILED' }}"
+      - "Fast model: {{ 'PASSED' if fast_test is defined and fast_test.status == 200 else 'SKIPPED/FAILED' }}"
+      - "Analysis model: {{ 'PASSED' if analysis_test is defined and analysis_test.status == 200 else 'SKIPPED/FAILED' }}"
+      - "=========================================="
+  tags: [litellm_configure, litellm_test]
+
