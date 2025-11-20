@@ -3,7 +3,7 @@
 # Port-based vLLM role that checks model_config.yml for assigned models
 
 # Port configuration
-vllm_port: 8000
+vllm_port: 8004
 vllm_service_name: "vllm-{{ vllm_port }}"
 
 # Check if model is assigned to this port

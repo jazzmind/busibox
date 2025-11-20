@@ -26,95 +26,50 @@ litellm_port: 4000
 litellm_master_key: "{{ secrets.litellm.master_key | default('sk-litellm-master-key-change-me') }}"
 
 # Backend Configuration
-litellm_backends:
-  # ollama:  # Temporarily disabled
-  #   host: "{{ ollama_ip }}"
-  #   port: "{{ ollama_port }}"
-  vllm:
-    host: "{{ vllm_ip }}"
-    port: "{{ vllm_port }}"
-  vllm_embedding:
-    host: "{{ vllm_ip }}"
-    port: "{{ vllm_embedding_port }}"
-  vllm_analysis:
-    host: "{{ vllm_ip }}"
-    port: "{{ vllm_analysis_port }}"
+# Note: Backends are now dynamically configured via litellm_models
+# which reads port assignments from model_config.yml
+litellm_backends: {}
 
 # Model Configuration
+# Dynamically generated from model_config.yml and model_registry.yml
 # Model names use purpose names (fast, frontier, embedding, etc.) so applications
 # can call LiteLLM using purpose names directly.
-# References model_registry.yml for model names and configurations
-litellm_models:
-  # Model configurations use new structure:
-  # - model_purposes maps purpose -> model key (e.g., "fast" -> "phi-4")
-  # - available_models[model_key] contains full config including GPU and port
-  # - Lookup: available_models[model_purposes.purpose]
-  
-  # Fast model - purpose name: "fast"
-  # Applications call LiteLLM with model="fast"
-  - model_name: "fast"
-    litellm_params:
-      model: "openai/{{ available_models[model_purposes.fast].model_name }}"
-      api_base: "http://{{ vllm_ip }}:{{ available_models[model_purposes.fast].port | default(8000) }}/v1"
-      api_key: "EMPTY"
-
-  # Default model - purpose name: "default"
-  # Applications call LiteLLM with model="default"
-  - model_name: "default"
-    litellm_params:
-      model: "openai/{{ available_models[model_purposes.default].model }}"
-      api_base: "http://{{ vllm_ip }}:{{ available_models[model_purposes.default].port | default(8000) }}/v1"
-      api_key: "EMPTY"
-
-  # Chat model - purpose name: "chat"
-  # Applications call LiteLLM with model="chat"
-  - model_name: "chat"
-    litellm_params:
-      model: "openai/{{ available_models[model_purposes.chat].model_name }}"
-      api_base: "http://{{ vllm_ip }}:{{ available_models[model_purposes.chat].port | default(8000) }}/v1"
-      api_key: "EMPTY"
-
-  # Cleanup model - purpose name: "cleanup"
-  # Applications call LiteLLM with model="cleanup"
-  - model_name: "cleanup"
-    litellm_params:
-      model: "openai/{{ available_models[model_purposes.cleanup].model_name }}"
-      api_base: "http://{{ vllm_ip }}:{{ available_models[model_purposes.cleanup].port | default(8000) }}/v1"
-      api_key: "EMPTY"
-
-  # Research model - purpose name: "research"
-  # Applications call LiteLLM with model="research"
-  - model_name: "research"
-    litellm_params:
-      model: "openai/{{ available_models[model_purposes.research].model }}"
-      api_base: "http://{{ vllm_ip }}:{{ available_models[model_purposes.research].port | default(8000) }}/v1"
-      api_key: "EMPTY"
-
-  # Analysis model - purpose name: "analysis"
-  # Applications call LiteLLM with model="analysis"
-  - model_name: "analysis"
-    litellm_params:
-      model: "openai/{{ available_models[model_purposes.analysis].model }}"
-      api_base: "http://{{ vllm_ip }}:{{ available_models[model_purposes.analysis].port | default(8000) }}/v1"
-      api_key: "EMPTY"
-
-  # Embedding model - purpose name: "embedding"
-  # Applications call LiteLLM with model="embedding"
-  - model_name: "embedding"
-    litellm_params:
-      model: "openai/{{ available_models[model_purposes.embedding].model }}"
-      api_base: "http://{{ vllm_ip }}:{{ available_models[model_purposes.embedding].port | default(8001) }}/v1"
-      api_key: "EMPTY"
-
-  # Frontier model - purpose name: "frontier" (AWS Bedrock)
-  # Applications call LiteLLM with model="frontier"
-  # Uses AWS Bedrock API - requires AWS credentials configured
-  - model_name: "frontier"
-    litellm_params:
-      model: "bedrock/{{ available_models[model_purposes.frontier].model_name }}"
-      aws_access_key_id: "{{ secrets.bedrock_api_key.split(':')[0] if secrets.bedrock_api_key and ':' in secrets.bedrock_api_key else '' }}"
-      aws_secret_access_key: "{{ secrets.bedrock_api_key.split(':')[1] if secrets.bedrock_api_key and ':' in secrets.bedrock_api_key else secrets.bedrock_api_key }}"
-      aws_region_name: "{{ secrets.bedrock_region | default('us-east-1') }}"
+litellm_models: >-
+  {% set models = [] %}
+  {% if model_purposes is defined and model_config is defined and model_config.models is defined %}
+    {% for purpose, model_key in model_purposes.items() %}
+      {% set model_entry = available_models.get(model_key, {}) %}
+      {% if model_entry %}
+        {% set model_name = model_entry.get('model_name', '') %}
+        {% set provider = model_entry.get('provider', '').lower() %}
+        {% set config = model_config.models.get(model_name, {}) %}
+        
+        {% if provider == 'bedrock' %}
+          {# Bedrock API model #}
+          {% set _ = models.append({
+               'model_name': purpose,
+               'litellm_params': {
+                 'model': 'bedrock/' + model_name,
+                 'aws_access_key_id': (secrets.bedrock_api_key.split(':')[0] if secrets.bedrock_api_key and ':' in secrets.bedrock_api_key else '') | default(''),
+                 'aws_secret_access_key': (secrets.bedrock_api_key.split(':')[1] if secrets.bedrock_api_key and ':' in secrets.bedrock_api_key else secrets.bedrock_api_key) | default(''),
+                 'aws_region_name': secrets.bedrock_region | default('us-east-1')
+               }
+             }) %}
+        {% elif config.assigned | default(false) and config.port %}
+          {# vLLM model assigned to a port #}
+          {% set _ = models.append({
+               'model_name': purpose,
+               'litellm_params': {
+                 'model': 'openai/' + model_entry.get('model', model_key),
+                 'api_base': 'http://' + vllm_ip + ':' + config.port|string + '/v1',
+                 'api_key': 'EMPTY'
+               }
+             }) %}
+        {% endif %}
+      {% endif %}
+    {% endfor %}
+  {% endif %}
+  {{ models }}
 
 
 # Router Settings
