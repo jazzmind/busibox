@@ -16,47 +16,75 @@
   delegate_to: localhost
   tags: [litellm_configure]
 
-- name: Build litellm_models list from model_config.yml
-  set_fact:
-    litellm_models: |
-      {% set models = [] %}
-      {% if model_config_file.stat.exists and model_config_data is defined and model_config_data.models is defined %}
-        {% for purpose, model_key in model_purposes.items() %}
-          {% set model_entry = available_models.get(model_key, {}) %}
-          {% if model_entry %}
-            {% set model_name = model_entry.get('model_name', '') %}
-            {% set provider = model_entry.get('provider', '').lower() %}
-            {% set config = model_config_data.models.get(model_name, {}) %}
+- name: Build litellm_models list from model_config.yml using Python
+  shell: |
+    python3 << 'PYTHON_EOF'
+    import json
+    import yaml
+    from pathlib import Path
+    
+    # Load files
+    config_file = Path("{{ playbook_dir }}/group_vars/all/model_config.yml")
+    registry_file = Path("{{ playbook_dir }}/group_vars/all/model_registry.yml")
+    
+    models = []
+    
+    if config_file.exists():
+        with open(config_file, 'r') as f:
+            model_config_data = yaml.safe_load(f) or {}
+        
+        with open(registry_file, 'r') as f:
+            registry_data = yaml.safe_load(f) or {}
+        
+        model_purposes = registry_data.get('model_purposes', {})
+        available_models = registry_data.get('available_models', {})
+        model_configs = model_config_data.get('models', {})
+        
+        for purpose, model_key in model_purposes.items():
+            model_entry = available_models.get(model_key, {})
+            if not model_entry:
+                continue
             
-            {% if provider == 'bedrock' %}
-              {% set _ = models.append({
-                   'model_name': purpose,
-                   'litellm_params': {
-                     'model': 'bedrock/' + model_name,
-                     'aws_access_key_id': (secrets.bedrock_api_key.split(':')[0] if secrets.bedrock_api_key and ':' in secrets.bedrock_api_key else '') | default(''),
-                     'aws_secret_access_key': (secrets.bedrock_api_key.split(':')[1] if secrets.bedrock_api_key and ':' in secrets.bedrock_api_key else secrets.bedrock_api_key) | default(''),
-                     'aws_region_name': secrets.bedrock_region | default('us-east-1')
-                   }
-                 }) %}
-            {% elif config.assigned | default(false) and config.port %}
-              {% set _ = models.append({
-                   'model_name': purpose,
-                   'litellm_params': {
-                     'model': 'openai/' + model_entry.get('model', model_key),
-                     'api_base': 'http://' + vllm_ip + ':' + config.port|string + '/v1',
-                     'api_key': 'EMPTY'
-                   }
-                 }) %}
-            {% endif %}
-          {% endif %}
-        {% endfor %}
-      {% endif %}
-      {{ models | to_json }}
+            model_name = model_entry.get('model_name', '')
+            provider = model_entry.get('provider', '').lower()
+            config = model_configs.get(model_name, {})
+            
+            if provider == 'bedrock':
+                # Bedrock API model
+                bedrock_key = "{{ secrets.bedrock_api_key | default('') }}"
+                aws_access_key = bedrock_key.split(':')[0] if ':' in bedrock_key else ''
+                aws_secret_key = bedrock_key.split(':')[1] if ':' in bedrock_key else bedrock_key
+                
+                models.append({
+                    'model_name': purpose,
+                    'litellm_params': {
+                        'model': f'bedrock/{model_name}',
+                        'aws_access_key_id': aws_access_key,
+                        'aws_secret_access_key': aws_secret_key,
+                        'aws_region_name': "{{ secrets.bedrock_region | default('us-east-1') }}"
+                    }
+                })
+            elif config.get('assigned', False) and config.get('port'):
+                # vLLM model assigned to a port
+                models.append({
+                    'model_name': purpose,
+                    'litellm_params': {
+                        'model': f"openai/{model_entry.get('model', model_key)}",
+                        'api_base': f"http://{{ vllm_ip }}:{config['port']}/v1",
+                        'api_key': 'EMPTY'
+                    }
+                })
+    
+    print(json.dumps(models))
+    PYTHON_EOF
+  register: models_json_output
+  delegate_to: localhost
+  changed_when: false
   tags: [litellm_configure]
 
-- name: Parse litellm_models JSON
+- name: Set litellm_models fact from Python output
   set_fact:
-    litellm_models: "{{ litellm_models | from_json }}"
+    litellm_models: "{{ models_json_output.stdout | from_json }}"
   tags: [litellm_configure]
 
 - name: Deploy LiteLLM configuration file
