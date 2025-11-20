@@ -345,7 +345,11 @@ PYTHON_EOF
     # Evaluate the Python output to populate arrays
     # Note: Python outputs array definitions to stdout (captured in python_output)
     #       Debug messages go to stderr and should appear on terminal automatically
+    echo "[DEBUG] Evaluating Python output to declare arrays..." >&2
     eval "$python_output"
+    
+    echo "[DEBUG] After eval, checking MODEL_NAMES..." >&2
+    echo "[DEBUG] MODEL_NAMES is declared: $(declare -p MODEL_NAMES 2>/dev/null || echo 'NOT DECLARED')" >&2
     
     # Check if any models were loaded
     if [ ${#MODEL_NAMES[@]} -eq 0 ]; then
@@ -365,6 +369,11 @@ PYTHON_EOF
         warn "Script will use fallback estimates for model configurations."
     fi
 }
+
+# Pre-declare arrays as global associative arrays BEFORE calling load_model_registry
+declare -gA MODEL_CONFIG
+declare -gA MODEL_NAMES  
+declare -gA MODEL_SIZES
 
 # Load model registry at script startup
 echo "[DEBUG] About to call load_model_registry..." >&2
