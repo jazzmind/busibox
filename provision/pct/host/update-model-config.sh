@@ -341,8 +341,16 @@ try:
         content = f.read()
         data = yaml.safe_load(content)
     
-    # Initialize model_configs if it doesn't exist
-    if 'model_configs' not in data:
+    # Ensure data is a dict (handle None or empty file)
+    if data is None:
+        data = {}
+    
+    # Initialize model_configs if it doesn't exist or is None
+    if 'model_configs' not in data or data.get('model_configs') is None:
+        data['model_configs'] = {}
+    
+    # Ensure model_configs is a dict
+    if not isinstance(data['model_configs'], dict):
         data['model_configs'] = {}
     
     # Update or add model config

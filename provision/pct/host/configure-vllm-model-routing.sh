@@ -80,12 +80,24 @@ try:
         content = f.read()
         data = yaml.safe_load(content)
     
-    # Initialize available_models if it doesn't exist
-    if 'available_models' not in data:
+    # Ensure data is a dict (handle None or empty file)
+    if data is None:
+        data = {}
+    
+    # Initialize available_models if it doesn't exist or is None
+    if 'available_models' not in data or data['available_models'] is None:
+        data['available_models'] = {}
+    
+    # Ensure available_models is a dict
+    if not isinstance(data['available_models'], dict):
         data['available_models'] = {}
     
     # Update or add model config
     if model_key not in data['available_models']:
+        data['available_models'][model_key] = {}
+    
+    # Ensure model config entry is a dict
+    if not isinstance(data['available_models'][model_key], dict):
         data['available_models'][model_key] = {}
     
     # Update GPU and port
@@ -158,6 +170,10 @@ try:
     with open(registry_file, 'r') as f:
         data = yaml.safe_load(f)
     
+    # Ensure data is a dict (handle None or empty file)
+    if data is None:
+        data = {}
+    
     # Initialize arrays
     output_lines = []
     output_lines.append("declare -A MODEL_CONFIG")
@@ -166,12 +182,20 @@ try:
     
     # Load available_models and model_purposes
     # New structure: available_models contains full config, model_purposes maps purpose -> model key
-    available_models = data.get('available_models', {})
-    purposes = data.get('model_purposes', {})
+    # Ensure we always have dicts, not None
+    available_models = data.get('available_models') or {}
+    purposes = data.get('model_purposes') or {}
     api_providers = {'bedrock', 'openai', 'anthropic'}
+    
+    # Ensure available_models is a dict
+    if not isinstance(available_models, dict):
+        available_models = {}
     
     # Build MODEL_NAMES from available_models (only vLLM models)
     for model_key, model_config in available_models.items():
+        # Ensure model_config is a dict
+        if not isinstance(model_config, dict):
+            continue
         provider = model_config.get('provider', '').lower()
         model_name = model_config.get('model_name', '')
         
@@ -183,10 +207,16 @@ try:
             output_lines.append(f'MODEL_NAMES["{model_key_escaped}"]="{model_name_escaped}"')
     
     # Load model_configs (technical details)
-    configs = data.get('model_configs', {})
+    # Ensure we always have a dict, not None
+    configs = data.get('model_configs') or {}
+    if not isinstance(configs, dict):
+        configs = {}
     configs_empty = len(configs) == 0
     
     for model_name, config in configs.items():
+        # Ensure config is a dict
+        if not isinstance(config, dict):
+            continue
         params = config.get('params_billions', 0)
         precision = config.get('precision', 'fp16')
         quantization = config.get('quantization', 'none')
@@ -213,7 +243,9 @@ try:
         print("WARNING: model_configs section is empty. Run update-model-config.sh to populate it.", file=sys.stderr)
     
 except Exception as e:
+    import traceback
     print(f"ERROR: Failed to parse registry: {e}", file=sys.stderr)
+    print(f"Traceback: {traceback.format_exc()}", file=sys.stderr)
     sys.exit(1)
 PYTHON_EOF
 )
