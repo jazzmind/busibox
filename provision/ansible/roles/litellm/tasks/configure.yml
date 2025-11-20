@@ -87,6 +87,14 @@
     litellm_models: "{{ models_json_output.stdout | from_json }}"
   tags: [litellm_configure]
 
+- name: Debug - Display Python script output
+  debug:
+    msg:
+      - "Python script stdout: {{ models_json_output.stdout }}"
+      - "Parsed litellm_models: {{ litellm_models }}"
+      - "Number of models: {{ litellm_models | length }}"
+  tags: [litellm_configure, litellm_debug]
+
 - name: Deploy LiteLLM configuration file
   template:
     src: config.yaml.j2
@@ -96,6 +104,17 @@
     mode: '0640'
   notify: restart litellm
   tags: [litellm_configure]
+
+- name: Debug - Display generated LiteLLM config (model_list section)
+  shell: "grep -A 50 '^model_list:' {{ litellm_config_dir }}/config.yaml | head -100"
+  register: config_preview
+  changed_when: false
+  tags: [litellm_configure, litellm_debug]
+
+- name: Debug - Show config preview
+  debug:
+    msg: "{{ config_preview.stdout_lines }}"
+  tags: [litellm_configure, litellm_debug]
 
 - name: Deploy LiteLLM systemd service file
   template:
