@@ -142,9 +142,13 @@ PYTHON_EOF
 load_model_registry() {
     if [ ! -f "$MODEL_REGISTRY" ]; then
         error "Model registry not found: $MODEL_REGISTRY"
+        error "Current directory: $(pwd)"
+        error "REPO_ROOT: $REPO_ROOT"
         error "Run this script from the busibox repository root"
         exit 1
     fi
+    
+    info "Loading model registry from: $MODEL_REGISTRY" >&2
     
     # Check if Python venv exists (for YAML parsing)
     if [ ! -d "$VENV_DIR" ] || ! "${VENV_DIR}/bin/python3" -c "import yaml" 2>/dev/null; then
@@ -242,6 +246,15 @@ try:
     if configs_empty:
         print("WARNING: model_configs section is empty. Run update-model-config.sh to populate it.", file=sys.stderr)
     
+    # Debug: Count models found
+    model_count = sum(1 for line in output_lines if line.startswith('MODEL_NAMES['))
+    if model_count == 0:
+        print("WARNING: No vLLM models found in available_models. Check provider field.", file=sys.stderr)
+        print(f"DEBUG: Found {len(available_models)} models in available_models", file=sys.stderr)
+        for key, config in available_models.items():
+            provider = config.get('provider', '') if isinstance(config, dict) else ''
+            print(f"DEBUG: {key}: provider={provider}", file=sys.stderr)
+    
 except Exception as e:
     import traceback
     print(f"ERROR: Failed to parse registry: {e}", file=sys.stderr)
@@ -257,6 +270,14 @@ PYTHON_EOF
     
     # Evaluate the Python output to populate arrays
     eval "$python_output"
+    
+    # Check if any models were loaded
+    if [ ${#MODEL_NAMES[@]} -eq 0 ]; then
+        error "No vLLM models found in model registry!"
+        error "Check that available_models entries have provider: 'vllm'"
+        error "Registry file: $MODEL_REGISTRY"
+        exit 1
+    fi
     
     # Check if model_configs was empty (warning already printed by Python)
     if [ ${#MODEL_CONFIG[@]} -eq 0 ]; then
