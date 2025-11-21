@@ -139,14 +139,21 @@ else
 fi
 echo ""
 
-# Step 3.5: Read models from model_registry.yml
-log_info "Step 3.5: Reading models from model_registry.yml..."
+# Function to read models from model_registry.yml
 read_models_from_registry() {
-    local registry_file="${SCRIPT_DIR}/../../ansible/group_vars/all/model_registry.yml"
+    # Try to find registry file in multiple locations
+    local registry_file=""
     
-    if [ ! -f "$registry_file" ]; then
-        log_error "Model registry not found: $registry_file"
-        log_error "Run this script from the busibox repository root"
+    # Check common locations
+    if [ -f "${SCRIPT_DIR}/../../ansible/group_vars/all/model_registry.yml" ]; then
+        registry_file="${SCRIPT_DIR}/../../ansible/group_vars/all/model_registry.yml"
+    elif [ -f "provision/ansible/group_vars/all/model_registry.yml" ]; then
+        registry_file="provision/ansible/group_vars/all/model_registry.yml"
+    else
+        log_error "Model registry not found!"
+        log_error "Tried: ${SCRIPT_DIR}/../../ansible/group_vars/all/model_registry.yml"
+        log_error "Tried: provision/ansible/group_vars/all/model_registry.yml"
+        log_error "Run this script from the busibox repository root or provision/pct/host/"
         exit 1
     fi
     
@@ -158,7 +165,7 @@ import os
 
 registry_file = "${registry_file}"
 if not os.path.exists(registry_file):
-    print("ERROR: Registry file not found", file=sys.stderr)
+    print("ERROR: Registry file not found: ${registry_file}", file=sys.stderr)
     sys.exit(1)
 
 try:
@@ -195,10 +202,136 @@ try:
         print(model)
 except Exception as e:
     print(f"ERROR: Failed to parse registry: {e}", file=sys.stderr)
+    import traceback
+    traceback.print_exc()
     sys.exit(1)
 PYTHON_EOF
 }
 
+# If cleanup mode, run cleanup and exit early (before model download setup)
+if [ "$CLEANUP_MODE" = true ]; then
+    echo "=========================================="
+    echo "LLM Model Cleanup"
+    echo "=========================================="
+    log_info "Cache directory: ${HUGGINGFACE_CACHE}"
+    log_info "Registry: provision/ansible/group_vars/all/model_registry.yml"
+    echo ""
+    
+    # Read models from registry
+    log_info "Reading models from registry..."
+    MODELS=($(read_models_from_registry))
+    
+    if [ ${#MODELS[@]} -eq 0 ]; then
+        log_error "No models found in model_registry.yml"
+        exit 1
+    fi
+    
+    log_success "Found ${#MODELS[@]} model(s) in registry"
+    echo ""
+    
+    # Run cleanup and exit
+    cleanup_orphaned_models() {
+        log_info "Checking for orphaned models..."
+        echo ""
+        
+        # Get list of models in registry (already in MODELS array)
+        declare -A registry_models
+        for model in "${MODELS[@]}"; do
+            registry_models["$model"]=1
+        done
+        
+        # Get list of cached models on disk
+        if ! ls -1d "${MODELS_DIR}"/models--* 2>/dev/null | grep -q .; then
+            log_info "No cached models found. Nothing to clean up."
+            echo ""
+            return
+        fi
+        
+        # Track orphaned models
+        ORPHANED_COUNT=0
+        DELETED_COUNT=0
+        TOTAL_FREED=0
+        
+        # Check each cached model
+        while read -r dir; do
+            # Convert directory name back to model name (models--org--model -> org/model)
+            MODEL_NAME=$(basename "$dir" | sed 's/^models--//g' | sed 's/--/\//g')
+            
+            # Check if model is in registry
+            if [[ -z "${registry_models[$MODEL_NAME]}" ]]; then
+                ((ORPHANED_COUNT++))
+                
+                # Get model size
+                SIZE=$(du -sh "$dir" 2>/dev/null | awk '{print $1}')
+                SIZE_BYTES=$(du -sb "$dir" 2>/dev/null | awk '{print $1}')
+                
+                log_warning "Orphaned model: ${MODEL_NAME} (${SIZE})"
+                echo ""
+                echo "  This model is not in the registry and is no longer needed."
+                echo "  Location: ${dir}"
+                echo ""
+                
+                # Prompt for confirmation
+                read -p "  Delete this model? [y/N]: " -n 1 -r
+                echo ""
+                
+                if [[ $REPLY =~ ^[Yy]$ ]]; then
+                    log_info "  Deleting ${MODEL_NAME}..."
+                    if rm -rf "$dir"; then
+                        log_success "  ✓ Deleted ${MODEL_NAME} (freed ${SIZE})"
+                        ((DELETED_COUNT++))
+                        TOTAL_FREED=$((TOTAL_FREED + SIZE_BYTES))
+                    else
+                        log_error "  ✗ Failed to delete ${MODEL_NAME}"
+                    fi
+                else
+                    log_info "  Skipped ${MODEL_NAME}"
+                fi
+                echo ""
+            fi
+        done < <(ls -1d "${MODELS_DIR}"/models--* 2>/dev/null)
+        
+        # Summary
+        echo "=========================================="
+        log_info "Cleanup Summary"
+        echo "=========================================="
+        echo ""
+        echo "  Orphaned models found: ${ORPHANED_COUNT}"
+        echo "  Models deleted: ${DELETED_COUNT}"
+        
+        if [ $TOTAL_FREED -gt 0 ]; then
+            # Convert bytes to human readable using awk (no bc dependency)
+            if [ $TOTAL_FREED -gt 1073741824 ]; then
+                FREED_GB=$(awk "BEGIN {printf \"%.2f\", $TOTAL_FREED / 1073741824}")
+                echo "  Space freed: ${FREED_GB} GB"
+            elif [ $TOTAL_FREED -gt 1048576 ]; then
+                FREED_MB=$(awk "BEGIN {printf \"%.2f\", $TOTAL_FREED / 1048576}")
+                echo "  Space freed: ${FREED_MB} MB"
+            else
+                FREED_KB=$(awk "BEGIN {printf \"%.2f\", $TOTAL_FREED / 1024}")
+                echo "  Space freed: ${FREED_KB} KB"
+            fi
+        else
+            echo "  Space freed: 0 bytes"
+        fi
+        echo ""
+        
+        if [ $ORPHANED_COUNT -eq 0 ]; then
+            log_success "No orphaned models found. All cached models are in the registry."
+        elif [ $DELETED_COUNT -gt 0 ]; then
+            log_success "Cleanup complete!"
+        else
+            log_info "No models were deleted."
+        fi
+        echo ""
+    }
+    
+    cleanup_orphaned_models
+    exit 0
+fi
+
+# Download mode - read models from registry
+log_info "Step 3.5: Reading models from model_registry.yml..."
 MODELS=($(read_models_from_registry))
 
 if [ ${#MODELS[@]} -eq 0 ]; then
@@ -208,116 +341,6 @@ fi
 
 log_success "Found ${#MODELS[@]} model(s) in registry"
 echo ""
-
-# Cleanup function - remove models not in registry
-cleanup_orphaned_models() {
-    log_info "Cleanup Mode: Checking for orphaned models..."
-    echo ""
-    
-    # Get list of models in registry (already in MODELS array)
-    declare -A registry_models
-    for model in "${MODELS[@]}"; do
-        registry_models["$model"]=1
-    done
-    
-    # Get list of cached models on disk
-    if ! ls -1d "${MODELS_DIR}"/models--* 2>/dev/null | grep -q .; then
-        log_info "No cached models found. Nothing to clean up."
-        echo ""
-        return
-    fi
-    
-    # Track orphaned models
-    ORPHANED_COUNT=0
-    DELETED_COUNT=0
-    TOTAL_FREED=0
-    
-    # Check each cached model
-    while read -r dir; do
-        # Convert directory name back to model name (models--org--model -> org/model)
-        MODEL_NAME=$(basename "$dir" | sed 's/^models--//g' | sed 's/--/\//g')
-        
-        # Check if model is in registry
-        if [[ -z "${registry_models[$MODEL_NAME]}" ]]; then
-            ((ORPHANED_COUNT++))
-            
-            # Get model size
-            SIZE=$(du -sh "$dir" 2>/dev/null | awk '{print $1}')
-            SIZE_BYTES=$(du -sb "$dir" 2>/dev/null | awk '{print $1}')
-            
-            log_warning "Orphaned model: ${MODEL_NAME} (${SIZE})"
-            echo ""
-            echo "  This model is not in the registry and is no longer needed."
-            echo "  Location: ${dir}"
-            echo ""
-            
-            # Prompt for confirmation
-            read -p "  Delete this model? [y/N]: " -n 1 -r
-            echo ""
-            
-            if [[ $REPLY =~ ^[Yy]$ ]]; then
-                log_info "  Deleting ${MODEL_NAME}..."
-                if rm -rf "$dir"; then
-                    log_success "  ✓ Deleted ${MODEL_NAME} (freed ${SIZE})"
-                    ((DELETED_COUNT++))
-                    TOTAL_FREED=$((TOTAL_FREED + SIZE_BYTES))
-                else
-                    log_error "  ✗ Failed to delete ${MODEL_NAME}"
-                fi
-            else
-                log_info "  Skipped ${MODEL_NAME}"
-            fi
-            echo ""
-        fi
-    done < <(ls -1d "${MODELS_DIR}"/models--* 2>/dev/null)
-    
-    # Summary
-    echo "=========================================="
-    log_info "Cleanup Summary"
-    echo "=========================================="
-    echo ""
-    echo "  Orphaned models found: ${ORPHANED_COUNT}"
-    echo "  Models deleted: ${DELETED_COUNT}"
-    
-    if [ $TOTAL_FREED -gt 0 ]; then
-        # Convert bytes to human readable using awk (no bc dependency)
-        if [ $TOTAL_FREED -gt 1073741824 ]; then
-            FREED_GB=$(awk "BEGIN {printf \"%.2f\", $TOTAL_FREED / 1073741824}")
-            echo "  Space freed: ${FREED_GB} GB"
-        elif [ $TOTAL_FREED -gt 1048576 ]; then
-            FREED_MB=$(awk "BEGIN {printf \"%.2f\", $TOTAL_FREED / 1048576}")
-            echo "  Space freed: ${FREED_MB} MB"
-        else
-            FREED_KB=$(awk "BEGIN {printf \"%.2f\", $TOTAL_FREED / 1024}")
-            echo "  Space freed: ${FREED_KB} KB"
-        fi
-    else
-        echo "  Space freed: 0 bytes"
-    fi
-    echo ""
-    
-    if [ $ORPHANED_COUNT -eq 0 ]; then
-        log_success "No orphaned models found. All cached models are in the registry."
-    elif [ $DELETED_COUNT -gt 0 ]; then
-        log_success "Cleanup complete!"
-    else
-        log_info "No models were deleted."
-    fi
-    echo ""
-}
-
-# If cleanup mode, run cleanup and exit
-if [ "$CLEANUP_MODE" = true ]; then
-    echo "=========================================="
-    echo "LLM Model Cleanup"
-    echo "=========================================="
-    log_info "Cache directory: ${HUGGINGFACE_CACHE}"
-    log_info "Registry: provision/ansible/group_vars/all/model_registry.yml"
-    echo ""
-    
-    cleanup_orphaned_models
-    exit 0
-fi
 
 # Step 4: Download models
 log_info "Step 4: Downloading models..."
