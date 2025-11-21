@@ -113,19 +113,17 @@ deployment_menu() {
         menu "Deploy Services - $env Environment" \
             "Deploy All Services" \
             "Deploy Core Services (files, pg, milvus)" \
+            "Deploy vLLM (includes embedding & ColPali)" \
+            "Deploy LiteLLM" \
+            "Deploy Ingest Service" \
             "Deploy Search API" \
             "Deploy Agent API" \
-            "Deploy Ingest Service" \
             "Deploy Apps (AI Portal)" \
-            "Deploy LiteLLM" \
-            "Deploy vLLM (Main)" \
-            "Deploy vLLM Embedding Service" \
-            "Deploy ColPali Service" \
             "Deploy OpenWebUI" \
             "Verify Deployment (Health Checks)" \
             "Back to Main Menu"
         
-        read -p "$(echo -e "${BOLD}Select option [1-13]:${NC} ")" choice
+        read -p "$(echo -e "${BOLD}Select option [1-11]:${NC} ")" choice
         
         case $choice in
             1)
@@ -145,14 +143,14 @@ deployment_menu() {
                 pause
                 ;;
             3)
-                if confirm "Deploy Search API to $env?"; then
-                    deploy_service "search-api" "$env"
+                if confirm "Deploy vLLM (includes embedding & ColPali) to $env?"; then
+                    deploy_service "vllm" "$env"
                 fi
                 pause
                 ;;
             4)
-                if confirm "Deploy Agent API to $env?"; then
-                    deploy_service "agent" "$env"
+                if confirm "Deploy LiteLLM to $env?"; then
+                    deploy_service "litellm" "$env"
                 fi
                 pause
                 ;;
@@ -163,50 +161,38 @@ deployment_menu() {
                 pause
                 ;;
             6)
+                if confirm "Deploy Search API to $env?"; then
+                    deploy_service "search-api" "$env"
+                fi
+                pause
+                ;;
+            7)
+                if confirm "Deploy Agent API to $env?"; then
+                    deploy_service "agent" "$env"
+                fi
+                pause
+                ;;
+            8)
                 if confirm "Deploy Apps to $env?"; then
                     deploy_service "apps" "$env"
                 fi
                 pause
                 ;;
-            7)
-                if confirm "Deploy LiteLLM to $env?"; then
-                    deploy_service "litellm" "$env"
-                fi
-                pause
-                ;;
-            8)
-                if confirm "Deploy vLLM (Main) to $env?"; then
-                    deploy_service "vllm" "$env"
-                fi
-                pause
-                ;;
             9)
-                if confirm "Deploy vLLM Embedding to $env?"; then
-                    deploy_service "vllm-embedding" "$env"
-                fi
-                pause
-                ;;
-            10)
-                if confirm "Deploy ColPali to $env?"; then
-                    deploy_service "colpali" "$env"
-                fi
-                pause
-                ;;
-            11)
                 if confirm "Deploy OpenWebUI to $env?"; then
                     deploy_service "openwebui" "$env"
                 fi
                 pause
                 ;;
-            12)
+            10)
                 verify_deployment "$env"
                 pause
                 ;;
-            13)
+            11)
                 return 0
                 ;;
             *)
-                error "Invalid selection. Please enter 1-13."
+                error "Invalid selection. Please enter 1-11."
                 ;;
         esac
     done
