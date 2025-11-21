@@ -300,6 +300,59 @@ container_configuration() {
     done
 }
 
+# Secrets Configuration Menu
+secrets_configuration() {
+    while true; do
+        echo ""
+        menu "Secrets & Configuration" \
+            "Edit Ansible Vault (secrets)" \
+            "View Vault Variables (masked)" \
+            "Back to Main Menu"
+        
+        read -p "$(echo -e "${BOLD}Select option [1-3]:${NC} ")" choice
+        
+        case $choice in
+            1)
+                header "Edit Ansible Vault" 70
+                echo ""
+                info "Opening encrypted vault for editing"
+                info "You will need the vault password"
+                echo ""
+                
+                cd "${REPO_ROOT}/provision/ansible"
+                ansible-vault edit roles/secrets/vars/vault.yml || {
+                    error "Failed to edit vault"
+                }
+                cd "${REPO_ROOT}"
+                
+                pause
+                ;;
+            2)
+                header "View Vault Variables" 70
+                echo ""
+                info "Showing vault structure (sensitive values masked)"
+                echo ""
+                
+                cd "${REPO_ROOT}/provision/ansible"
+                if ansible-vault view roles/secrets/vars/vault.yml | grep -E "^[a-z_]+:" | sed 's/:.*$/: <masked>/'; then
+                    :
+                else
+                    error "Failed to view vault"
+                fi
+                cd "${REPO_ROOT}"
+                
+                pause
+                ;;
+            3)
+                return 0
+                ;;
+            *)
+                error "Invalid selection. Please enter 1-3."
+                ;;
+        esac
+    done
+}
+
 # Main menu
 main_menu() {
     while true; do
@@ -307,9 +360,10 @@ main_menu() {
         menu "Busibox Configuration" \
             "Model Configuration" \
             "Container Configuration" \
+            "Secrets & Configuration" \
             "Exit"
         
-        read -p "$(echo -e "${BOLD}Select option [1-3]:${NC} ")" choice
+        read -p "$(echo -e "${BOLD}Select option [1-4]:${NC} ")" choice
         
         case $choice in
             1)
@@ -319,12 +373,15 @@ main_menu() {
                 container_configuration
                 ;;
             3)
+                secrets_configuration
+                ;;
+            4)
                 echo ""
                 info "Exiting..."
                 exit 0
                 ;;
             *)
-                error "Invalid selection. Please enter 1-3."
+                error "Invalid selection. Please enter 1-4."
                 ;;
         esac
     done

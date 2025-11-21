@@ -20,16 +20,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Determine mode
 MODE="${1:-production}"
 
-# Load variables
+# Load variables from parent directory (provision/pct/)
+PCT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 if [[ "$MODE" == "test" ]]; then
-    source "${SCRIPT_DIR}/test-vars.env"
+    source "${PCT_DIR}/test-vars.env"
     CT_PG="$CT_PG_TEST"
     CT_FILES="$CT_FILES_TEST"
     CT_MILVUS="$CT_MILVUS_TEST"
     CT_VLLM="$CT_VLLM_TEST"
     CT_OLLAMA="$CT_OLLAMA_TEST"
 else
-    source "${SCRIPT_DIR}/vars.env"
+    source "${PCT_DIR}/vars.env"
 fi
 
 echo "=========================================="
