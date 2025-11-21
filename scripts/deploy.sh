@@ -234,10 +234,12 @@ deploy_apps_menu() {
         
         echo -e "  ${CYAN}1)${NC} Deploy All Apps"
         echo -e "  ${CYAN}2)${NC} Deploy AI Portal"
-        echo -e "  ${CYAN}3)${NC} Back to Main Menu"
+        echo -e "  ${CYAN}3)${NC} Deploy Agent Manager (agent-client)"
+        echo -e "  ${CYAN}4)${NC} Deploy Doc Intelligence (doc-intel)"
+        echo -e "  ${CYAN}5)${NC} Back to Main Menu"
         echo ""
         
-        read -p "Select option [1-3]: " choice
+        read -p "Select option [1-5]: " choice
         echo ""
         
         case "$choice" in
@@ -253,7 +255,7 @@ deploy_apps_menu() {
                     local vault_flags="$(get_vault_flags)"
                     info "Deploying AI Portal to $env environment..."
                     echo ""
-                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags ai_portal $vault_flags || {
+                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags apps --extra-vars "deploy_app=ai-portal" $vault_flags || {
                         error "Deployment failed"
                     }
                     cd "$REPO_ROOT"
@@ -263,6 +265,36 @@ deploy_apps_menu() {
                 pause
                 ;;
             3)
+                if confirm "Deploy Agent Manager to $env?"; then
+                    cd "$ANSIBLE_DIR"
+                    local vault_flags="$(get_vault_flags)"
+                    info "Deploying Agent Manager to $env environment..."
+                    echo ""
+                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags apps --extra-vars "deploy_app=agent-client" $vault_flags || {
+                        error "Deployment failed"
+                    }
+                    cd "$REPO_ROOT"
+                    echo ""
+                    success "Deployment completed successfully!"
+                fi
+                pause
+                ;;
+            4)
+                if confirm "Deploy Doc Intelligence to $env?"; then
+                    cd "$ANSIBLE_DIR"
+                    local vault_flags="$(get_vault_flags)"
+                    info "Deploying Doc Intelligence to $env environment..."
+                    echo ""
+                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags apps --extra-vars "deploy_app=doc-intel" $vault_flags || {
+                        error "Deployment failed"
+                    }
+                    cd "$REPO_ROOT"
+                    echo ""
+                    success "Deployment completed successfully!"
+                fi
+                pause
+                ;;
+            5)
                 return 0
                 ;;
             *)
