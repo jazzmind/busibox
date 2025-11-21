@@ -133,7 +133,7 @@ select_environment() {
         echo ""
         box "Environment Selection"
         echo ""
-        echo -e "  ${CYAN}1)${NC} Test Environment       (10.96.200.x network)"
+        echo -e "  ${CYAN}1)${NC} Test Environment       (10.96.201.x network)"
         echo -e "  ${CYAN}2)${NC} Production Environment (10.96.200.x network)"
         echo ""
     } >&2
