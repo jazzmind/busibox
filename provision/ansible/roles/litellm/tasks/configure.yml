@@ -82,7 +82,7 @@
                         'aws_region_name': "{{ secrets.bedrock_region | default('us-east-1') }}"
                     }
                 })
-            elif config.get('assigned', False) and config.get('port'):
+            elif provider == 'vllm' and config.get('assigned', False) and config.get('port'):
                 # vLLM model assigned to a port
                 models.append({
                     'model_name': purpose,
@@ -92,6 +92,7 @@
                         'api_key': 'EMPTY'
                     }
                 })
+            # Skip fastembed, colpali, marker, and other non-LiteLLM providers
     
     print(json.dumps(models))
     PYTHON_EOF
