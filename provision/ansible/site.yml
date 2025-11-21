@@ -75,22 +75,7 @@
     
     - name: Determine which vLLM services to stop
       set_fact:
-        vllm_services_to_stop: >-
-          {%- if 'vllm_8000' in ansible_run_tags -%}
-            ['8000']
-          {%- elif 'vllm_8001' in ansible_run_tags -%}
-            ['8001']
-          {%- elif 'vllm_8002' in ansible_run_tags -%}
-            ['8002']
-          {%- elif 'vllm_8003' in ansible_run_tags -%}
-            ['8003']
-          {%- elif 'vllm_8004' in ansible_run_tags -%}
-            ['8004']
-          {%- elif 'vllm_8005' in ansible_run_tags -%}
-            ['8005']
-          {%- else -%}
-            ['8000', '8001', '8002', '8003', '8004', '8005']
-          {%- endif -%}
+        vllm_services_to_stop: "{{ ['8000'] if 'vllm_8000' in ansible_run_tags else ['8001'] if 'vllm_8001' in ansible_run_tags else ['8002'] if 'vllm_8002' in ansible_run_tags else ['8003'] if 'vllm_8003' in ansible_run_tags else ['8004'] if 'vllm_8004' in ansible_run_tags else ['8005'] if 'vllm_8005' in ansible_run_tags else ['8000', '8001', '8002', '8003', '8004', '8005'] }}"
       tags: [vllm, vllm_8000, vllm_8001, vllm_8002, vllm_8003, vllm_8004, vllm_8005]
     
     - name: Display which vLLM services will be redeployed
