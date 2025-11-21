@@ -5,11 +5,10 @@ Provides embedding generation endpoints for external services.
 """
 
 from typing import List, Optional
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 import structlog
 
-from api.middleware.auth import verify_bearer_token
 from processors.embedder import Embedder
 from shared.config import Config
 
@@ -59,8 +58,8 @@ embedder = Embedder(config)
 
 @router.post("", response_model=EmbeddingResponse)
 async def create_embeddings(
-    request: EmbeddingRequest,
-    user_id: str = Depends(verify_bearer_token)
+    embedding_request: EmbeddingRequest,
+    request: Request,
 ):
     """
     Generate embeddings for text input.
@@ -69,8 +68,8 @@ async def create_embeddings(
     Uses FastEmbed with bge-large-en-v1.5 (1024-d).
     
     Args:
-        request: Embedding request with text input
-        user_id: User ID from bearer token authentication
+        embedding_request: Embedding request with text input
+        request: FastAPI request (for user_id from middleware)
     
     Returns:
         Embeddings in OpenAI-compatible format
@@ -85,27 +84,32 @@ async def create_embeddings(
         ```
     """
     try:
+        # Get user_id from middleware (set by AuthMiddleware)
+        user_id = request.state.user_id
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User not authenticated")
+        
         # Normalize input to list
-        if isinstance(request.input, str):
-            texts = [request.input]
+        if isinstance(embedding_request.input, str):
+            texts = [embedding_request.input]
         else:
-            texts = request.input
+            texts = embedding_request.input
         
         if not texts:
             raise HTTPException(status_code=400, detail="Input cannot be empty")
         
         # Validate model
-        if request.model and request.model != "bge-large-en-v1.5":
+        if embedding_request.model and embedding_request.model != "bge-large-en-v1.5":
             raise HTTPException(
                 status_code=400,
-                detail=f"Model '{request.model}' not supported. Only 'bge-large-en-v1.5' is available."
+                detail=f"Model '{embedding_request.model}' not supported. Only 'bge-large-en-v1.5' is available."
             )
         
         logger.info(
             "Generating embeddings",
             user_id=user_id,
             text_count=len(texts),
-            model=request.model,
+            model=embedding_request.model,
         )
         
         # Generate embeddings
@@ -158,13 +162,21 @@ async def create_embeddings(
 
 
 @router.get("/models")
-async def list_models(user_id: str = Depends(verify_bearer_token)):
+async def list_models(request: Request):
     """
     List available embedding models.
+    
+    Args:
+        request: FastAPI request (for user_id from middleware)
     
     Returns:
         List of available models with metadata
     """
+    # Get user_id from middleware (set by AuthMiddleware)
+    user_id = request.state.user_id
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User not authenticated")
+    
     return {
         "object": "list",
         "data": [
