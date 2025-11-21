@@ -38,6 +38,7 @@
   shell: |
     python3 << 'PYTHON_EOF'
     import json
+    import sys
     import yaml
     from pathlib import Path
     
@@ -58,9 +59,13 @@
         available_models = registry_data.get('available_models', {})
         model_configs = model_config_data.get('models', {})
         
+        # Debug: Show what's in model_configs
+        print(f"DEBUG: model_configs keys: {list(model_configs.keys())}", file=sys.stderr)
+        
         for purpose, model_key in model_purposes.items():
             model_entry = available_models.get(model_key, {})
             if not model_entry:
+                print(f"WARNING: No model entry for purpose '{purpose}' with key '{model_key}'", file=sys.stderr)
                 continue
             
             model_name = model_entry.get('model_name', '')
@@ -68,9 +73,16 @@
             config = model_configs.get(model_name, {})
             config_provider = config.get('provider', '').lower()
             
+            # Debug logging
+            if purpose == 'reranking':
+                print(f"DEBUG reranking: model_key={model_key}, model_name={model_name}, provider={provider}", file=sys.stderr)
+                print(f"DEBUG reranking: config={config}", file=sys.stderr)
+                print(f"DEBUG reranking: assigned={config.get('assigned')}, port={config.get('port')}", file=sys.stderr)
+            
             # Use provider from registry as source of truth
             # But skip if config has a conflicting provider (stale data)
             if config_provider and config_provider != provider:
+                print(f"WARNING: Provider mismatch for {model_name}: registry={provider}, config={config_provider}", file=sys.stderr)
                 continue
             
             if provider == 'bedrock':
