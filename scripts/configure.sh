@@ -46,10 +46,11 @@ model_configuration() {
                     echo ""
                     menu "Download/Manage LLM Models" \
                         "Download Models from Registry" \
-                        "Cleanup Orphaned Models" \
+                        "Cleanup Orphaned Models (not in registry)" \
+                        "Remove Duplicate Models (save disk space)" \
                         "Back to Model Configuration"
                     
-                    read -p "$(echo -e "${BOLD}Select option [1-3]:${NC} ")" subchoice
+                    read -p "$(echo -e "${BOLD}Select option [1-4]:${NC} ")" subchoice
                     
                     case $subchoice in
                         1)
@@ -74,7 +75,7 @@ model_configuration() {
                         2)
                             header "Cleanup Orphaned Models" 70
                             echo ""
-                            info "This will remove models not in registry (with confirmation)"
+                            info "This will remove models NOT in registry (with confirmation)"
                             echo ""
                             
                             if ! check_proxmox; then
@@ -91,10 +92,32 @@ model_configuration() {
                             pause
                             ;;
                         3)
+                            header "Remove Duplicate Models" 70
+                            echo ""
+                            info "This will find and remove duplicate models stored in multiple locations"
+                            info "Keeps the standard hub/ version and removes old root copies"
+                            echo ""
+                            warn "This can free up significant disk space!"
+                            echo ""
+                            
+                            if ! check_proxmox; then
+                                error "This operation requires Proxmox host"
+                                pause
+                                continue
+                            fi
+                            
+                            if confirm "Run deduplication to remove duplicate models?"; then
+                                bash "${REPO_ROOT}/provision/pct/host/setup-llm-models.sh" --deduplicate || {
+                                    error "Model deduplication failed"
+                                }
+                            fi
+                            pause
+                            ;;
+                        4)
                             break
                             ;;
                         *)
-                            error "Invalid selection. Please enter 1-3."
+                            error "Invalid selection. Please enter 1-4."
                             ;;
                     esac
                 done

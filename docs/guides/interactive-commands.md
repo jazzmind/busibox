@@ -61,7 +61,8 @@ make help       # Show available commands
 1. **Model Configuration**
    - Download/Manage LLM Models
      - Download Models from Registry
-     - Cleanup Orphaned Models
+     - Cleanup Orphaned Models (not in registry)
+     - Remove Duplicate Models (save disk space)
    - Update Model Config (analyze downloaded models)
    - Configure vLLM Model Routing (GPU assignments)
 
@@ -352,10 +353,16 @@ make configure
 make configure
 # Model Configuration > Configure vLLM Model Routing
 
-# 4. (Optional) Clean up orphaned models
+# 4. (Optional) Remove duplicate models to save disk space
+make configure
+# Model Configuration > Download/Manage LLM Models > Remove Duplicate Models
+
+# 5. (Optional) Clean up orphaned models
 make configure
 # Model Configuration > Download/Manage LLM Models > Cleanup Orphaned Models
 ```
+
+**Note about duplicates:** If you've downloaded models using different tools (Ollama, older scripts, manual downloads), you may have duplicate copies in both `/var/lib/llm-models/huggingface/` and `/var/lib/llm-models/huggingface/hub/`. The deduplication tool will detect these and offer to remove the older copies, keeping only the standard `hub/` versions. This can free up significant disk space (models are typically 5-30GB each).
 
 ### GPU Configuration Workflow
 
