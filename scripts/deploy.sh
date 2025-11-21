@@ -221,6 +221,90 @@ vllm_submenu() {
     done
 }
 
+# Deploy a single app with branch/release selection
+deploy_single_app() {
+    local app_name="$1"
+    local app_display="$2"
+    local env="$3"
+    
+    clear
+    box "Deploy $app_display - $env" 70
+    echo ""
+    info "Select deployment method"
+    echo ""
+    
+    echo -e "  ${CYAN}1)${NC} Deploy from Branch (default: main)"
+    echo -e "  ${CYAN}2)${NC} Deploy from Release (default: latest)"
+    echo -e "  ${CYAN}3)${NC} Cancel"
+    echo ""
+    
+    read -p "Select option [1-3]: " method_choice
+    echo ""
+    
+    case "$method_choice" in
+        1)
+            read -p "Enter branch name [main]: " branch_name
+            branch_name="${branch_name:-main}"
+            
+            if confirm "Deploy $app_display from branch '$branch_name' to $env?"; then
+                cd "$ANSIBLE_DIR"
+                local vault_flags="$(get_vault_flags)"
+                info "Deploying $app_display from branch '$branch_name' to $env environment..."
+                echo ""
+                ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags apps \
+                    --extra-vars "deploy_app=${app_name}" \
+                    --extra-vars "deploy_branch=${branch_name}" \
+                    --extra-vars "deploy_from_branch=true" \
+                    $vault_flags || {
+                    error "Deployment failed"
+                }
+                cd "$REPO_ROOT"
+                echo ""
+                success "Deployment completed successfully!"
+            fi
+            ;;
+        2)
+            read -p "Enter release tag [latest]: " release_tag
+            release_tag="${release_tag:-latest}"
+            
+            if confirm "Deploy $app_display from release '$release_tag' to $env?"; then
+                cd "$ANSIBLE_DIR"
+                local vault_flags="$(get_vault_flags)"
+                info "Deploying $app_display from release '$release_tag' to $env environment..."
+                echo ""
+                
+                if [ "$release_tag" = "latest" ]; then
+                    # Use standard release deployment (deploywatch gets latest)
+                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags apps \
+                        --extra-vars "deploy_app=${app_name}" \
+                        $vault_flags || {
+                        error "Deployment failed"
+                    }
+                else
+                    # Deploy specific release tag (use branch deployment method with tag)
+                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags apps \
+                        --extra-vars "deploy_app=${app_name}" \
+                        --extra-vars "deploy_branch=${release_tag}" \
+                        --extra-vars "deploy_from_branch=true" \
+                        $vault_flags || {
+                        error "Deployment failed"
+                    }
+                fi
+                cd "$REPO_ROOT"
+                echo ""
+                success "Deployment completed successfully!"
+            fi
+            ;;
+        3)
+            return 0
+            ;;
+        *)
+            error "Invalid choice"
+            return 1
+            ;;
+    esac
+}
+
 # Apps deployment submenu
 deploy_apps_menu() {
     local env="$1"
@@ -232,7 +316,7 @@ deploy_apps_menu() {
         info "Select application to deploy"
         echo ""
         
-        echo -e "  ${CYAN}1)${NC} Deploy All Apps"
+        echo -e "  ${CYAN}1)${NC} Deploy All Apps (latest release)"
         echo -e "  ${CYAN}2)${NC} Deploy AI Portal"
         echo -e "  ${CYAN}3)${NC} Deploy Agent Manager (agent-client)"
         echo -e "  ${CYAN}4)${NC} Deploy Doc Intelligence (doc-intel)"
@@ -244,54 +328,21 @@ deploy_apps_menu() {
         
         case "$choice" in
             1)
-                if confirm "Deploy ALL apps to $env?"; then
+                if confirm "Deploy ALL apps (latest release) to $env?"; then
                     deploy_service "apps" "$env"
                 fi
                 pause
                 ;;
             2)
-                if confirm "Deploy AI Portal to $env?"; then
-                    cd "$ANSIBLE_DIR"
-                    local vault_flags="$(get_vault_flags)"
-                    info "Deploying AI Portal to $env environment..."
-                    echo ""
-                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags apps --extra-vars "deploy_app=ai-portal" $vault_flags || {
-                        error "Deployment failed"
-                    }
-                    cd "$REPO_ROOT"
-                    echo ""
-                    success "Deployment completed successfully!"
-                fi
+                deploy_single_app "ai-portal" "AI Portal" "$env"
                 pause
                 ;;
             3)
-                if confirm "Deploy Agent Manager to $env?"; then
-                    cd "$ANSIBLE_DIR"
-                    local vault_flags="$(get_vault_flags)"
-                    info "Deploying Agent Manager to $env environment..."
-                    echo ""
-                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags apps --extra-vars "deploy_app=agent-client" $vault_flags || {
-                        error "Deployment failed"
-                    }
-                    cd "$REPO_ROOT"
-                    echo ""
-                    success "Deployment completed successfully!"
-                fi
+                deploy_single_app "agent-client" "Agent Manager" "$env"
                 pause
                 ;;
             4)
-                if confirm "Deploy Doc Intelligence to $env?"; then
-                    cd "$ANSIBLE_DIR"
-                    local vault_flags="$(get_vault_flags)"
-                    info "Deploying Doc Intelligence to $env environment..."
-                    echo ""
-                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags apps --extra-vars "deploy_app=doc-intel" $vault_flags || {
-                        error "Deployment failed"
-                    }
-                    cd "$REPO_ROOT"
-                    echo ""
-                    success "Deployment completed successfully!"
-                fi
+                deploy_single_app "doc-intel" "Doc Intelligence" "$env"
                 pause
                 ;;
             5)
