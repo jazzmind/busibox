@@ -91,25 +91,25 @@
                 aws_access_key = bedrock_key.split(':')[0] if ':' in bedrock_key else ''
                 aws_secret_key = bedrock_key.split(':')[1] if ':' in bedrock_key else bedrock_key
                 
-            models.append({
-                'model_name': purpose,
-                'litellm_params': {
-                    'model': 'bedrock/{}'.format(model_name),
+                models.append({
+                    'model_name': purpose,
+                    'litellm_params': {
+                        'model': 'bedrock/{}'.format(model_name),
                         'aws_access_key_id': aws_access_key,
                         'aws_secret_access_key': aws_secret_key,
                         'aws_region_name': "{{ secrets.bedrock_region | default('us-east-1') }}"
                     }
                 })
-        elif provider == 'vllm' and config.get('assigned', False) and config.get('port'):
-            # vLLM model assigned to a port
-            models.append({
-                'model_name': purpose,
-                'litellm_params': {
-                    'model': "openai/{}".format(model_name),
-                    'api_base': "http://{{ vllm_ip }}:{}/v1".format(config['port']),
-                    'api_key': 'EMPTY'
-                }
-            })
+            elif provider == 'vllm' and config.get('assigned', False) and config.get('port'):
+                # vLLM model assigned to a port
+                models.append({
+                    'model_name': purpose,
+                    'litellm_params': {
+                        'model': "openai/{}".format(model_name),
+                        'api_base': "http://{{ vllm_ip }}:{}/v1".format(config['port']),
+                        'api_key': 'EMPTY'
+                    }
+                })
             # Skip fastembed, colpali, marker, and other non-LiteLLM providers
     
     print(json.dumps(models))
