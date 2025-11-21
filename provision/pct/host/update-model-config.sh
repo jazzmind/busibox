@@ -757,13 +757,25 @@ try:
     
     available_models = registry_data.get('available_models') or {}
     
-    # Find model_key and provider for this model_name
+    # Find model_key, provider, and tuning parameters for this model_name
     model_key = None
     provider = None
+    # vLLM tuning parameters from registry
+    gpu_memory_utilization = None
+    max_model_len = None
+    max_num_seqs = None
+    cpu_offload_gb = None
+    
     for key, config in available_models.items():
         if config.get('model_name') == model_name:
             model_key = key
             provider = config.get('provider', 'vllm')
+            # Extract tuning parameters (only for vLLM models)
+            if provider == 'vllm':
+                gpu_memory_utilization = config.get('gpu_memory_utilization')
+                max_model_len = config.get('max_model_len')
+                max_num_seqs = config.get('max_num_seqs')
+                cpu_offload_gb = config.get('cpu_offload_gb')
             break
     
     # If not found in registry, auto-detect provider from model name
@@ -816,6 +828,17 @@ try:
         'provider': provider or 'vllm',
         'model_key': model_key or model_name
     }
+    
+    # Add vLLM tuning parameters if available (only for vLLM models)
+    if provider == 'vllm':
+        if gpu_memory_utilization is not None:
+            config_data['models'][model_name]['gpu_memory_utilization'] = gpu_memory_utilization
+        if max_model_len is not None:
+            config_data['models'][model_name]['max_model_len'] = max_model_len
+        if max_num_seqs is not None:
+            config_data['models'][model_name]['max_num_seqs'] = max_num_seqs
+        if cpu_offload_gb is not None:
+            config_data['models'][model_name]['cpu_offload_gb'] = cpu_offload_gb
     
     # Write back
     try:
@@ -971,6 +994,17 @@ try:
                     'disk_size_gb': 0,
                     'notes': 'Not yet analyzed - run update-model-config.sh'
                 }
+                
+                # Add vLLM tuning parameters from registry (if available)
+                if provider == 'vllm':
+                    if 'gpu_memory_utilization' in model_config:
+                        config_data['models'][model_name]['gpu_memory_utilization'] = model_config['gpu_memory_utilization']
+                    if 'max_model_len' in model_config:
+                        config_data['models'][model_name]['max_model_len'] = model_config['max_model_len']
+                    if 'max_num_seqs' in model_config:
+                        config_data['models'][model_name]['max_num_seqs'] = model_config['max_num_seqs']
+                    if 'cpu_offload_gb' in model_config:
+                        config_data['models'][model_name]['cpu_offload_gb'] = model_config['cpu_offload_gb']
         else:
             # Preserve existing analyzed data, but update provider/model_key if changed
             config_data['models'][model_name]['provider'] = provider
