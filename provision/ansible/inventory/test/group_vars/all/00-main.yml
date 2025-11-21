@@ -92,6 +92,10 @@ vllm_host: "{{ vllm_ip }}"
 # ============================================================================
 # LLM Model Configuration
 # ============================================================================
+# HuggingFace Authentication (for gated models like PaliGemma)
+# Token stored in vault, get from: https://huggingface.co/settings/tokens
+huggingface_token: "{{ huggingface_token_test }}"
+
 # Ollama Models (TEST - lightweight models)
 ollama_initial_models:
   - name: "gemma:2b"

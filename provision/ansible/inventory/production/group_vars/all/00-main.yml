@@ -104,6 +104,10 @@ vllm_host: "{{ vllm_ip }}"
 # ============================================================================
 # LLM Model Configuration
 # ============================================================================
+# HuggingFace Authentication (for gated models like PaliGemma)
+# Token stored in vault, get from: https://huggingface.co/settings/tokens
+huggingface_token: "{{ huggingface_token_production }}"
+
 # vLLM Model Configuration
 # Note: vLLM configuration is now managed via model_config.yml
 # Port-based roles (vllm_8000, vllm_8001, etc.) read model assignments from model_config.yml

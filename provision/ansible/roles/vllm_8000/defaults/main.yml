@@ -42,7 +42,7 @@ vllm_gpu_memory_utilization: 0.9
 vllm_max_model_len: 8192
 vllm_max_num_seqs: 256
 vllm_trust_remote_code: true
-vllm_hf_token: ""
+vllm_hf_token: "{{ huggingface_token | default('') }}"
 vllm_max_num_batched_tokens: null
 vllm_enable_prefix_caching: true
 vllm_disable_log_stats: false
