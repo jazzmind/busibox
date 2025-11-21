@@ -23,7 +23,7 @@
     - vllm_service_file.stat.exists
     - current_vllm_model.stdout != vllm_default_model
   notify:
-    - reload systemd
+    - reload systemd for vllm-8000
   tags: [vllm_configure]
 
 - name: Deploy vLLM systemd service file
@@ -34,8 +34,8 @@
     group: root
     mode: '0644'
   notify:
-    - reload systemd
-    - restart vllm
+    - reload systemd for vllm-8000
+    - restart vllm-8000
   tags: [vllm_configure]
 
 - name: Create vLLM environment file
@@ -45,7 +45,7 @@
     owner: root
     group: root
     mode: '0640'
-  notify: restart vllm
+  notify: restart vllm-8000
   tags: [vllm_configure]
 
 - name: Ensure systemd is reloaded
