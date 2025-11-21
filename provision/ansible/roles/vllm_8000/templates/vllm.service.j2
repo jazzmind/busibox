@@ -14,7 +14,15 @@ EnvironmentFile=/etc/default/{{ vllm_service_name }}
 
 # Service execution
 ExecStart={{ vllm_venv_dir }}/bin/python -m vllm.entrypoints.openai.api_server \
+{% if vllm_enable_lora and vllm_lora_base_model %}
+  --model {{ vllm_lora_base_model }} \
+  --enable-lora \
+  --lora-modules colpali={{ vllm_default_model }} \
+  --max-loras {{ vllm_max_loras }} \
+  --max-lora-rank {{ vllm_max_lora_rank }} \
+{% else %}
   --model {{ vllm_default_model }} \
+{% endif %}
   --host {{ vllm_host }} \
   --port {{ vllm_port }} \
   --tensor-parallel-size {{ vllm_tensor_parallel_size }} \

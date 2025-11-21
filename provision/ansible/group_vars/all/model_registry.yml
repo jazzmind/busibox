@@ -46,7 +46,10 @@ available_models:
     provider: "vllm"
     model: "colpali-v1.3"
     model_name: "vidore/colpali-v1.3"
-    description: "Visual document embedding"
+    description: "Visual document embedding (LoRA adapter on PaliGemma-3B base)"
+    gpu: "0"  # Reserved for visual embeddings
+    port: 8000  # vLLM port for ColPali
+    lora_base_model: "google/paligemma-3b-pt-448"
 
 model_purposes:
   default: "qwen3-30b"   # General purpose agent model (default for most tasks)
@@ -60,7 +63,7 @@ model_purposes:
   classify: "phi-4"   # Document classification
   parsing: "phi-4"   # Document parsing and structure extraction
   embedding: "bge-large"   # Text embedding generation
-  visual-embedding: "colpali"   # Visual document embedding
+  visual-embedding: "colpali"   # Visual document embedding (vLLM with LoRA adapters)
   reranking: "qwen3-reranker"   # Search result reranking
-  # Note: visual-embedding (colpali) is managed by separate colpali service, not vLLM
+  # Note: ColPali is now served via vLLM (port 8000, GPU 0) with LoRA adapters on PaliGemma-3B base
 

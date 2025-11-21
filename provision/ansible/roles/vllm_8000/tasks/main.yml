@@ -79,6 +79,60 @@
     vllm_max_model_len: 8192
   when: vllm_assigned_model != ""
 
+- name: Check if model has LoRA base model defined in registry
+  shell: |
+    python3 << 'PYTHON_EOF'
+    import yaml
+    from pathlib import Path
+    
+    registry_file = Path("{{ playbook_dir }}/group_vars/all/model_registry.yml")
+    
+    if not registry_file.exists():
+        print("")
+        exit(0)
+    
+    with open(registry_file, 'r') as f:
+        registry_data = yaml.safe_load(f) or {}
+    
+    available_models = registry_data.get('available_models', {})
+    
+    # Find model entry by model_name
+    lora_base = ""
+    for model_key, model_config in available_models.items():
+        if model_config.get('model_name') == "{{ vllm_assigned_model }}":
+            lora_base = model_config.get('lora_base_model', '')
+            break
+    
+    print(lora_base)
+    PYTHON_EOF
+  register: lora_base_lookup
+  delegate_to: localhost
+  changed_when: false
+  when: vllm_assigned_model != ""
+
+- name: Enable LoRA support if base model is defined
+  set_fact:
+    vllm_enable_lora: true
+    vllm_lora_base_model: "{{ lora_base_lookup.stdout | trim }}"
+    vllm_max_loras: 1
+    vllm_max_lora_rank: 128
+  when: 
+    - vllm_assigned_model != ""
+    - lora_base_lookup.stdout is defined
+    - lora_base_lookup.stdout | trim | length > 0
+
+- name: Display LoRA configuration if enabled
+  debug:
+    msg: |
+      LoRA Support: ENABLED
+      Base Model: {{ vllm_lora_base_model }}
+      LoRA Adapter: {{ vllm_default_model }}
+      Max LoRAs: {{ vllm_max_loras }}
+      Max Rank: {{ vllm_max_lora_rank }}
+  when: 
+    - vllm_assigned_model != ""
+    - vllm_enable_lora
+
 - name: Debug - Show resolved vLLM configuration
   debug:
     msg: |

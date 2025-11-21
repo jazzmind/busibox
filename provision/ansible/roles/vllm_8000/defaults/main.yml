@@ -31,6 +31,12 @@ vllm_default_model: ""  # Set from model_config.yml if assigned
 vllm_tensor_parallel_size: 1  # Set from model_config.yml if assigned
 vllm_cuda_visible_devices: ""  # Set from model_config.yml if assigned
 
+# LoRA Adapter Support (for ColPali and other LoRA models)
+vllm_enable_lora: false  # Auto-detected for ColPali
+vllm_lora_base_model: ""  # For ColPali: google/paligemma-3b-pt-448
+vllm_max_loras: 1  # Number of LoRA adapters to support
+vllm_max_lora_rank: 128  # Maximum LoRA rank
+
 # Performance Configuration
 vllm_gpu_memory_utilization: 0.9
 vllm_max_model_len: 8192

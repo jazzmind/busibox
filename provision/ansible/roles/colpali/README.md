@@ -1,26 +1,47 @@
 # ColPali Visual Embedding Service
 
-Deploys ColPali v1.3 for visual document embeddings using the native `colpali-engine` package.
+Deploys ColPali v1.3 for visual document embeddings.
 
 ## Overview
 
-ColPali generates multi-vector embeddings (128 patches × 128 dimensions) for PDF page images, enabling visual search without OCR. This role deploys a standalone FastAPI service that provides an OpenAI-compatible embeddings API.
+ColPali generates multi-vector embeddings (128 patches × 128 dimensions) for PDF page images, enabling visual search without OCR.
 
-## Architecture
+## Deployment Options
 
-- **Model**: vidore/colpali-v1.3 (LoRA adapters on PaliGemma-3B)
+### Option 1: vLLM with LoRA Adapters (Recommended)
+
+**Status**: Now supported! ColPali is served via vLLM on GPU 0, port 8000.
+
+- **Model**: vidore/colpali-v1.3 (LoRA adapters)
 - **Base Model**: google/paligemma-3b-pt-448 (~11GB)
-- **Implementation**: Native colpali-engine package (not vLLM)
+- **Implementation**: vLLM with LoRA adapter support
+- **GPU**: GPU 0 (reserved for visual embeddings)
+- **Port**: 8000
+- **Deployment**: Use `vllm_8000` role (auto-configured via model_registry.yml)
+
+To deploy via vLLM:
+```bash
+cd provision/ansible
+# Configure model routing (auto-assigns ColPali to GPU 0)
+bash ../../provision/pct/host/configure-vllm-model-routing.sh --interactive
+# Deploy
+make test
+```
+
+### Option 2: Standalone Service (Legacy)
+
+**Status**: Available as alternative, but vLLM is now preferred.
+
+- **Implementation**: Native colpali-engine package
 - **API**: OpenAI-compatible `/v1/embeddings` endpoint
-- **GPU**: Dedicated GPU (default: GPU 2)
+- **GPU**: Configurable (default: GPU 2)
+- **Deployment**: Use this role (`colpali`)
 
-## Why Not vLLM?
-
-vLLM's V1 engine doesn't support LoRA adapters for vision-language models like PaliGemma. While V0 engine has better LoRA support, the native `colpali-engine` package provides:
+The standalone service provides:
 - Direct ColPali implementation
-- Better performance for vision embeddings
-- Simpler deployment
-- Official ColPali support
+- Simpler debugging
+- Independent from vLLM
+- Official colpali-engine support
 
 ## Requirements
 
@@ -42,8 +63,25 @@ colpali_hf_token: "{{ secrets.huggingface.token }}"
 
 ## Deployment
 
+### vLLM Deployment (Recommended)
+
 ```bash
-# Deploy to test environment
+# 1. Pre-cache models on Proxmox host
+cd /root/busibox/provision/pct/host
+bash setup-llm-models.sh
+
+# 2. Configure model routing (auto-assigns ColPali to GPU 0, port 8000)
+bash configure-vllm-model-routing.sh --interactive
+
+# 3. Deploy vLLM
+cd ../../provision/ansible
+make test  # or: ansible-playbook -i inventory/test/hosts.yml site.yml --tags vllm_8000
+```
+
+### Standalone Deployment (Legacy)
+
+```bash
+# Deploy standalone ColPali service
 cd provision/ansible
 ansible-playbook -i inventory/test/hosts.yml site.yml --tags colpali
 
@@ -67,6 +105,8 @@ This downloads:
 
 ## API Usage
 
+### vLLM Endpoint (Port 8000)
+
 ```python
 import requests
 import base64
@@ -75,12 +115,12 @@ import base64
 with open("page.png", "rb") as f:
     image_b64 = base64.b64encode(f.read()).decode()
 
-# Generate embedding
+# Generate embedding via vLLM
 response = requests.post(
-    "http://vllm-lxc:8002/v1/embeddings",
+    "http://vllm-lxc:8000/v1/embeddings",
     json={
         "input": [f"data:image/png;base64,{image_b64}"],
-        "model": "colpali"
+        "model": "vidore/colpali-v1.3"  # Or use LoRA adapter name
     }
 )
 
@@ -88,7 +128,38 @@ embedding = response.json()["data"][0]["embedding"]
 print(f"Embedding dimensions: {len(embedding)}")  # 16384 (128*128)
 ```
 
+### Standalone Endpoint (Port 8002, Legacy)
+
+```python
+# Generate embedding via standalone service
+response = requests.post(
+    "http://vllm-lxc:8002/v1/embeddings",
+    json={
+        "input": [f"data:image/png;base64,{image_b64}"],
+        "model": "colpali"
+    }
+)
+```
+
 ## Monitoring
+
+### vLLM Deployment
+
+```bash
+# Check vLLM service status
+systemctl status vllm-8000
+
+# View logs
+journalctl -u vllm-8000 -f
+
+# Test health
+curl http://localhost:8000/health
+
+# List models
+curl http://localhost:8000/v1/models
+```
+
+### Standalone Deployment
 
 ```bash
 # Check service status
