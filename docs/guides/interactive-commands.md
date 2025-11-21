@@ -59,6 +59,9 @@ make help       # Show available commands
 
 **Main Menu:**
 1. **Model Configuration**
+   - Download/Manage LLM Models
+     - Download Models from Registry
+     - Cleanup Orphaned Models
    - Update Model Config (analyze downloaded models)
    - Configure vLLM Model Routing (GPU assignments)
 
@@ -75,12 +78,20 @@ make help       # Show available commands
 
 **Common workflows:**
 
+**Download Models:**
+```bash
+make configure
+# Select: 1 (Model Configuration)
+# Select: 1 (Download/Manage LLM Models)
+# Select: 1 (Download Models from Registry)
+```
+
 **Model Configuration:**
 ```bash
 make configure
 # Select: 1 (Model Configuration)
-# Select: 1 (Update Model Config)
-# Then: 2 (Configure vLLM Model Routing)
+# Select: 2 (Update Model Config)
+# Then: 3 (Configure vLLM Model Routing)
 ```
 
 **GPU Configuration:**
@@ -324,6 +335,26 @@ make test
 # 5. Redeploy and retest
 make deploy  # Redeploy
 make test    # Retest
+```
+
+### Model Setup Workflow
+
+```bash
+# 1. Download models from registry
+make configure
+# Model Configuration > Download/Manage LLM Models > Download Models from Registry
+
+# 2. Analyze downloaded models
+make configure
+# Model Configuration > Update Model Config
+
+# 3. Configure model routing
+make configure
+# Model Configuration > Configure vLLM Model Routing
+
+# 4. (Optional) Clean up orphaned models
+make configure
+# Model Configuration > Download/Manage LLM Models > Cleanup Orphaned Models
 ```
 
 ### GPU Configuration Workflow

@@ -32,14 +32,74 @@ model_configuration() {
     while true; do
         echo ""
         menu "Model Configuration" \
+            "Download/Manage LLM Models" \
             "Update Model Config (analyze downloaded models)" \
             "Configure vLLM Model Routing (GPU assignments)" \
             "Back to Main Menu"
         
-        read -p "$(echo -e "${BOLD}Select option [1-3]:${NC} ")" choice
+        read -p "$(echo -e "${BOLD}Select option [1-4]:${NC} ")" choice
         
         case $choice in
             1)
+                # Download/Manage Models submenu
+                while true; do
+                    echo ""
+                    menu "Download/Manage LLM Models" \
+                        "Download Models from Registry" \
+                        "Cleanup Orphaned Models" \
+                        "Back to Model Configuration"
+                    
+                    read -p "$(echo -e "${BOLD}Select option [1-3]:${NC} ")" subchoice
+                    
+                    case $subchoice in
+                        1)
+                            header "Download LLM Models" 70
+                            echo ""
+                            info "This will download models from model_registry.yml to Proxmox host"
+                            echo ""
+                            
+                            if ! check_proxmox; then
+                                error "This operation requires Proxmox host"
+                                pause
+                                continue
+                            fi
+                            
+                            if confirm "Download models from registry?"; then
+                                bash "${REPO_ROOT}/provision/pct/host/setup-llm-models.sh" || {
+                                    error "Model download failed"
+                                }
+                            fi
+                            pause
+                            ;;
+                        2)
+                            header "Cleanup Orphaned Models" 70
+                            echo ""
+                            info "This will remove models not in registry (with confirmation)"
+                            echo ""
+                            
+                            if ! check_proxmox; then
+                                error "This operation requires Proxmox host"
+                                pause
+                                continue
+                            fi
+                            
+                            if confirm "Run cleanup to remove orphaned models?"; then
+                                bash "${REPO_ROOT}/provision/pct/host/setup-llm-models.sh" --cleanup || {
+                                    error "Model cleanup failed"
+                                }
+                            fi
+                            pause
+                            ;;
+                        3)
+                            break
+                            ;;
+                        *)
+                            error "Invalid selection. Please enter 1-3."
+                            ;;
+                    esac
+                done
+                ;;
+            2)
                 header "Update Model Configuration" 70
                 echo ""
                 info "This will analyze downloaded models and update model_config.yml"
@@ -52,7 +112,7 @@ model_configuration() {
                 fi
                 pause
                 ;;
-            2)
+            3)
                 header "Configure vLLM Model Routing" 70
                 echo ""
                 info "This will configure which models run on which GPUs"
@@ -71,11 +131,11 @@ model_configuration() {
                 fi
                 pause
                 ;;
-            3)
+            4)
                 return 0
                 ;;
             *)
-                error "Invalid selection. Please enter 1-3."
+                error "Invalid selection. Please enter 1-4."
                 ;;
         esac
     done
