@@ -60,12 +60,12 @@
         model_configs = model_config_data.get('models', {})
         
         # Debug: Show what's in model_configs
-        print(f"DEBUG: model_configs keys: {list(model_configs.keys())}", file=sys.stderr)
+        print("DEBUG: model_configs keys: {}".format(list(model_configs.keys())), file=sys.stderr)
         
         for purpose, model_key in model_purposes.items():
             model_entry = available_models.get(model_key, {})
             if not model_entry:
-                print(f"WARNING: No model entry for purpose '{purpose}' with key '{model_key}'", file=sys.stderr)
+                print("WARNING: No model entry for purpose '{}' with key '{}'".format(purpose, model_key), file=sys.stderr)
                 continue
             
             model_name = model_entry.get('model_name', '')
@@ -75,14 +75,14 @@
             
             # Debug logging
             if purpose == 'reranking':
-                print(f"DEBUG reranking: model_key={model_key}, model_name={model_name}, provider={provider}", file=sys.stderr)
-                print(f"DEBUG reranking: config={config}", file=sys.stderr)
-                print(f"DEBUG reranking: assigned={config.get('assigned')}, port={config.get('port')}", file=sys.stderr)
+                print("DEBUG reranking: model_key={}, model_name={}, provider={}".format(model_key, model_name, provider), file=sys.stderr)
+                print("DEBUG reranking: config={}".format(config), file=sys.stderr)
+                print("DEBUG reranking: assigned={}, port={}".format(config.get('assigned'), config.get('port')), file=sys.stderr)
             
             # Use provider from registry as source of truth
             # But skip if config has a conflicting provider (stale data)
             if config_provider and config_provider != provider:
-                print(f"WARNING: Provider mismatch for {model_name}: registry={provider}, config={config_provider}", file=sys.stderr)
+                print("WARNING: Provider mismatch for {}: registry={}, config={}".format(model_name, provider, config_provider), file=sys.stderr)
                 continue
             
             if provider == 'bedrock':
@@ -91,25 +91,25 @@
                 aws_access_key = bedrock_key.split(':')[0] if ':' in bedrock_key else ''
                 aws_secret_key = bedrock_key.split(':')[1] if ':' in bedrock_key else bedrock_key
                 
-                models.append({
-                    'model_name': purpose,
-                    'litellm_params': {
-                        'model': f'bedrock/{model_name}',
+            models.append({
+                'model_name': purpose,
+                'litellm_params': {
+                    'model': 'bedrock/{}'.format(model_name),
                         'aws_access_key_id': aws_access_key,
                         'aws_secret_access_key': aws_secret_key,
                         'aws_region_name': "{{ secrets.bedrock_region | default('us-east-1') }}"
                     }
                 })
-            elif provider == 'vllm' and config.get('assigned', False) and config.get('port'):
-                # vLLM model assigned to a port
-                models.append({
-                    'model_name': purpose,
-                    'litellm_params': {
-                        'model': f"openai/{model_name}",
-                        'api_base': f"http://{{ vllm_ip }}:{config['port']}/v1",
-                        'api_key': 'EMPTY'
-                    }
-                })
+        elif provider == 'vllm' and config.get('assigned', False) and config.get('port'):
+            # vLLM model assigned to a port
+            models.append({
+                'model_name': purpose,
+                'litellm_params': {
+                    'model': "openai/{}".format(model_name),
+                    'api_base': "http://{{ vllm_ip }}:{}/v1".format(config['port']),
+                    'api_key': 'EMPTY'
+                }
+            })
             # Skip fastembed, colpali, marker, and other non-LiteLLM providers
     
     print(json.dumps(models))
