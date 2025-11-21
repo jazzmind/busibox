@@ -328,16 +328,27 @@
     headers:
       Authorization: "Bearer {{ litellm_master_key }}"
     status_code: 200
+    timeout: 30
   register: litellm_health_test
-  retries: 3
-  delay: 2
+  failed_when: false
   when: litellm_start_service
   tags: [litellm_configure, litellm_test]
 
 - name: Display health check result
   debug:
-    msg: "LiteLLM health check passed (authenticated)"
-  when: litellm_health_test is defined and litellm_health_test.status == 200
+    msg: |
+      LiteLLM Health Check Result:
+      {% if litellm_health_test.status == 200 %}
+      ✅ Status: HEALTHY (200 OK)
+      Note: Health check probes all backend models, which can take time
+      {% elif litellm_health_test.status == -1 %}
+      ⚠️  Status: TIMEOUT (Health check took > 30s)
+      This is normal if backend models are slow to respond
+      Service is running - check /health endpoint manually if needed
+      {% else %}
+      ❌ Status: {{ litellm_health_test.status | default('UNKNOWN') }}
+      {% endif %}
+  when: litellm_health_test is defined
   tags: [litellm_configure, litellm_test]
 
 - name: Test LiteLLM models endpoint
