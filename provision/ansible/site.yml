@@ -71,7 +71,7 @@
         state: present
         update_cache: false
       failed_when: false
-      tags: [always]
+      tags: [vllm]  # Only run for vLLM deployments
     
     - name: Stop vLLM services one by one to ensure proper GPU memory release
       systemd:
@@ -79,12 +79,12 @@
         state: stopped
       loop: [8000, 8001, 8002, 8003, 8004, 8005]
       failed_when: false
-      tags: [always]
+      tags: [vllm]  # Only run for vLLM deployments
     
     - name: Wait for systemd to process stop requests
       pause:
         seconds: 5
-      tags: [always]
+      tags: [vllm]  # Only run for vLLM deployments
     
     - name: Force kill any remaining vLLM processes
       shell: |
@@ -101,29 +101,42 @@
       register: kill_result
       changed_when: false
       failed_when: false
-      tags: [always]
+      tags: [vllm]  # Only run for vLLM deployments
     
-    - name: Force release GPU memory
+    - name: Force release GPU memory (vLLM processes only - preserves ColPali)
       shell: |
-        # Kill anything using NVIDIA GPUs
-        if command -v fuser &> /dev/null; then
-          for device in /dev/nvidia*; do
-            if [ -e "$device" ]; then
-              fuser -k "$device" 2>/dev/null || true
-            fi
-          done
-        fi
+        # IMPORTANT: Only kill vLLM processes, NOT all GPU users
+        # This preserves ColPali and other services running on GPU 0
         
-        # Alternative: use lsof to find GPU users
+        # Kill vLLM-specific processes using GPUs
+        # Method 1: Kill by process name pattern
         if command -v lsof &> /dev/null; then
-          lsof /dev/nvidia* 2>/dev/null | awk 'NR>1 {print $2}' | xargs -r kill -9 2>/dev/null || true
+          # Find processes using NVIDIA devices that match vLLM patterns
+          lsof /dev/nvidia* 2>/dev/null | \
+            awk 'NR>1 {print $2, $1}' | \
+            grep -E "python.*vllm|vllm.*api_server|ray::" | \
+            awk '{print $1}' | \
+            sort -u | \
+            xargs -r kill -9 2>/dev/null || true
         fi
         
-        echo "Forced GPU memory release"
+        # Method 2: Check environment variables for CUDA_VISIBLE_DEVICES
+        # vLLM processes should have CUDA_VISIBLE_DEVICES=1,2,3... (not 0)
+        # ColPali has CUDA_VISIBLE_DEVICES=0
+        for pid in $(pgrep -f "python.*vllm" 2>/dev/null); do
+          if [ -f "/proc/$pid/environ" ]; then
+            # Check if this is a vLLM process (not ColPali)
+            if grep -q "vllm" "/proc/$pid/cmdline" 2>/dev/null; then
+              kill -9 "$pid" 2>/dev/null || true
+            fi
+          fi
+        done
+        
+        echo "Released GPU memory for vLLM processes only (preserved ColPali)"
       register: gpu_cleanup
       changed_when: false
       failed_when: false
-      tags: [always]
+      tags: [vllm]  # Only run for vLLM deployments
     
     - name: Clean shared memory and temp files
       shell: |
@@ -138,25 +151,25 @@
       register: shm_cleanup
       changed_when: false
       failed_when: false
-      tags: [always]
+      tags: [vllm]  # Only run for vLLM deployments
     
     - name: Wait for GPU memory to be fully released
       pause:
         seconds: 10
-      tags: [always]
+      tags: [vllm]  # Only run for vLLM deployments
     
     - name: Verify GPU memory is free
       shell: nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits
       register: gpu_memory_check
       changed_when: false
       failed_when: false
-      tags: [always]
+      tags: [vllm]  # Only run for vLLM deployments
     
     - name: Display GPU memory status
       debug:
         msg: "GPU memory usage (MB): {{ gpu_memory_check.stdout_lines }}"
       when: gpu_memory_check.stdout_lines is defined
-      tags: [always]
+      tags: [vllm]  # Only run for vLLM deployments
   roles:
     # - role: ollama  # Temporarily disabled - using vLLM only
     #   when: "'ollama' in group_names"
