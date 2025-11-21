@@ -42,6 +42,17 @@ check_ansible() {
     return 0
 }
 
+# Detect vault password method
+get_vault_flags() {
+    local vault_pass_file="$HOME/.vault_pass"
+    
+    if [ -f "$vault_pass_file" ]; then
+        echo "--vault-password-file $vault_pass_file"
+    else
+        echo "--ask-vault-pass"
+    fi
+}
+
 # Deploy service
 deploy_service() {
     local service="$1"
@@ -112,9 +123,10 @@ vllm_submenu() {
             2)
                 if confirm "Deploy vLLM 8000 (single instance) to $env?"; then
                     cd "$ANSIBLE_DIR"
+                    local vault_flags="$(get_vault_flags)"
                     info "Deploying vLLM 8000 to $env environment..."
                     echo ""
-                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags vllm_8000 || {
+                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags vllm_8000 $vault_flags || {
                         error "Deployment failed"
                     }
                     cd "$REPO_ROOT"
@@ -126,9 +138,10 @@ vllm_submenu() {
             3)
                 if confirm "Deploy vLLM 8001 (single instance) to $env?"; then
                     cd "$ANSIBLE_DIR"
+                    local vault_flags="$(get_vault_flags)"
                     info "Deploying vLLM 8001 to $env environment..."
                     echo ""
-                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags vllm_8001 || {
+                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags vllm_8001 $vault_flags || {
                         error "Deployment failed"
                     }
                     cd "$REPO_ROOT"
@@ -140,9 +153,10 @@ vllm_submenu() {
             4)
                 if confirm "Deploy vLLM 8002 (single instance) to $env?"; then
                     cd "$ANSIBLE_DIR"
+                    local vault_flags="$(get_vault_flags)"
                     info "Deploying vLLM 8002 to $env environment..."
                     echo ""
-                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags vllm_8002 || {
+                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags vllm_8002 $vault_flags || {
                         error "Deployment failed"
                     }
                     cd "$REPO_ROOT"
@@ -154,9 +168,10 @@ vllm_submenu() {
             5)
                 if confirm "Deploy vLLM 8003 (single instance) to $env?"; then
                     cd "$ANSIBLE_DIR"
+                    local vault_flags="$(get_vault_flags)"
                     info "Deploying vLLM 8003 to $env environment..."
                     echo ""
-                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags vllm_8003 || {
+                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags vllm_8003 $vault_flags || {
                         error "Deployment failed"
                     }
                     cd "$REPO_ROOT"
@@ -168,9 +183,10 @@ vllm_submenu() {
             6)
                 if confirm "Deploy vLLM 8004 (single instance) to $env?"; then
                     cd "$ANSIBLE_DIR"
+                    local vault_flags="$(get_vault_flags)"
                     info "Deploying vLLM 8004 to $env environment..."
                     echo ""
-                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags vllm_8004 || {
+                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags vllm_8004 $vault_flags || {
                         error "Deployment failed"
                     }
                     cd "$REPO_ROOT"
@@ -182,9 +198,10 @@ vllm_submenu() {
             7)
                 if confirm "Deploy vLLM 8005 (single instance) to $env?"; then
                     cd "$ANSIBLE_DIR"
+                    local vault_flags="$(get_vault_flags)"
                     info "Deploying vLLM 8005 to $env environment..."
                     echo ""
-                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags vllm_8005 || {
+                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags vllm_8005 $vault_flags || {
                         error "Deployment failed"
                     }
                     cd "$REPO_ROOT"
