@@ -83,6 +83,74 @@
     vllm_cpu_offload_gb: "{{ model_config_data.models[vllm_assigned_model].cpu_offload_gb | default(150) }}"
   when: vllm_assigned_model != ""
 
+- name: Check if model has tool calling config in registry
+  shell: |
+    python3 << 'PYTHON_EOF'
+    import yaml
+    import json
+    from pathlib import Path
+    
+    registry_file = Path("{{ playbook_dir }}/group_vars/all/model_registry.yml")
+    
+    if not registry_file.exists():
+        print(json.dumps({"tool_calling": False, "tool_call_parser": "", "tool_chat_template": ""}))
+        exit(0)
+    
+    with open(registry_file, 'r') as f:
+        registry_data = yaml.safe_load(f) or {}
+    
+    available_models = registry_data.get('available_models', {})
+    
+    # Find model entry by model_name
+    tool_calling = False
+    tool_call_parser = ""
+    tool_chat_template = ""
+    
+    for model_key, model_config in available_models.items():
+        if model_config.get('model_name') == "{{ vllm_assigned_model }}":
+            tool_calling = model_config.get('tool_calling', False)
+            tool_call_parser = model_config.get('tool_call_parser', '')
+            tool_chat_template = model_config.get('tool_chat_template', '')
+            break
+    
+    print(json.dumps({
+        "tool_calling": tool_calling,
+        "tool_call_parser": tool_call_parser,
+        "tool_chat_template": tool_chat_template
+    }))
+    PYTHON_EOF
+  register: model_features_lookup
+  delegate_to: localhost
+  changed_when: false
+  when: vllm_assigned_model != ""
+
+- name: Parse model features from JSON
+  set_fact:
+    model_features: "{{ model_features_lookup.stdout | from_json }}"
+  when: 
+    - vllm_assigned_model != ""
+    - model_features_lookup.stdout is defined
+
+- name: Enable tool calling if configured
+  set_fact:
+    vllm_enable_tool_calling: "{{ model_features.tool_calling }}"
+    vllm_tool_call_parser: "{{ model_features.tool_call_parser }}"
+    vllm_tool_chat_template: "{{ model_features.tool_chat_template }}"
+  when: 
+    - vllm_assigned_model != ""
+    - model_features.tool_calling is defined
+
+- name: Display tool calling configuration if enabled
+  debug:
+    msg: |
+      Tool Calling: ENABLED
+      Parser: {{ vllm_tool_call_parser }}
+      Chat Template: {{ vllm_tool_chat_template if vllm_tool_chat_template | length > 0 else 'Default' }}
+  when: 
+    - vllm_assigned_model != ""
+    - vllm_enable_tool_calling is defined
+    - vllm_enable_tool_calling
+
 - name: Debug - Show resolved vLLM configuration
   debug:
     msg: |

@@ -47,6 +47,15 @@ ExecStart={{ vllm_venv_dir }}/bin/python -m vllm.entrypoints.openai.api_server \
 {% if vllm_enable_api_key and vllm_api_key %}
   --api-key {{ vllm_api_key }} \
 {% endif %}
+{% if vllm_enable_tool_calling is defined and vllm_enable_tool_calling %}
+  --enable-auto-tool-choice \
+{% if vllm_tool_call_parser is defined and vllm_tool_call_parser | length > 0 %}
+  --tool-call-parser {{ vllm_tool_call_parser }} \
+{% endif %}
+{% if vllm_tool_chat_template is defined and vllm_tool_chat_template | length > 0 %}
+  --chat-template {{ vllm_tool_chat_template }} \
+{% endif %}
+{% endif %}
 {% if vllm_disable_log_stats %}
   --disable-log-stats
 {% endif %}

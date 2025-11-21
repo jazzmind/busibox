@@ -765,6 +765,10 @@ try:
     max_model_len = None
     max_num_seqs = None
     cpu_offload_gb = None
+    # Tool calling parameters from registry
+    tool_calling = None
+    tool_call_parser = None
+    tool_chat_template = None
     
     for key, config in available_models.items():
         if config.get('model_name') == model_name:
@@ -776,6 +780,10 @@ try:
                 max_model_len = config.get('max_model_len')
                 max_num_seqs = config.get('max_num_seqs')
                 cpu_offload_gb = config.get('cpu_offload_gb')
+                # Extract tool calling parameters
+                tool_calling = config.get('tool_calling', False)
+                tool_call_parser = config.get('tool_call_parser')
+                tool_chat_template = config.get('tool_chat_template')
             break
     
     # If not found in registry, auto-detect provider from model name
@@ -839,6 +847,13 @@ try:
             config_data['models'][model_name]['max_num_seqs'] = max_num_seqs
         if cpu_offload_gb is not None:
             config_data['models'][model_name]['cpu_offload_gb'] = cpu_offload_gb
+        # Add tool calling parameters if configured
+        if tool_calling is not None:
+            config_data['models'][model_name]['tool_calling'] = tool_calling
+        if tool_call_parser is not None:
+            config_data['models'][model_name]['tool_call_parser'] = tool_call_parser
+        if tool_chat_template is not None:
+            config_data['models'][model_name]['tool_chat_template'] = tool_chat_template
     
     # Write back
     try:
