@@ -226,7 +226,8 @@ try:
         models = {}
     
     vllm_models_found = []
-    api_providers = {'bedrock', 'openai', 'anthropic'}
+    api_providers = {'bedrock', 'openai', 'anthropic', 'fastembed', 'marker', 'colpali'}
+    model_keys_seen = set()
     
     for model_name, model_config in models.items():
         # Ensure model_config is a dict
@@ -235,10 +236,20 @@ try:
         
         provider = model_config.get('provider', '').lower()
         
-        # Only include vLLM models (not API-based)
-        if provider not in api_providers:
+        # Only include vLLM models (not API-based or service-specific)
+        # vLLM provider means the model runs on vLLM inference engine
+        if provider == 'vllm':
             # Get model_key from registry
             model_key = model_name_to_key.get(model_name, model_name)
+            
+            # Check for duplicate model_keys (would overwrite in associative array)
+            if model_key in model_keys_seen:
+                print(f"WARNING: Duplicate model_key '{model_key}' for model '{model_name}'. Skipping.", file=sys.stderr)
+                print(f"  This usually means model_config.yml has obsolete models not in model_registry.yml", file=sys.stderr)
+                print(f"  Run: provision/pct/host/update-model-config.sh to sync", file=sys.stderr)
+                continue
+            
+            model_keys_seen.add(model_key)
             
             # Get technical details
             params = model_config.get('params_billions', 0)
@@ -264,6 +275,9 @@ try:
             output_lines.append(f'MODEL_SIZES["{model_name_escaped}"]="{gpu_size}"')
             
             vllm_models_found.append(model_key)
+            
+            # Debug: print which model was loaded
+            print(f"  Loaded vLLM model: {model_key} -> {model_name} ({params}B, {precision}, {quantization})", file=sys.stderr)
     
     # Output warnings if needed
     if len(vllm_models_found) == 0:
@@ -1458,95 +1472,6 @@ PYTHON_EOF
     fi
     
     success "Configuration saved"
-}
-
-# Legacy "configure all" or single model mode - keeping for backwards compatibility
-interactive_routing_legacy() {
-    read -p "Select model to configure (or 'all' for all models): " selected_model
-    
-    if [ "$selected_model" = "all" ]; then
-        # Configure all models
-        info "Configuring all models..."
-        
-        # Determine auto-update behavior
-        local should_update="$AUTO_UPDATE"
-        if [ -z "$should_update" ]; then
-            echo ""
-            read -p "Automatically update LiteLLM config file for all models? (Y/n): " -n 1 -r
-            echo
-            if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-                should_update="true"
-            else
-                should_update="false"
-            fi
-        fi
-        
-        echo ""
-        read -p "Update model registry with GPU and port configuration? (Y/n): " -n 1 -r
-        echo
-        local update_registry="false"
-        if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-            update_registry="true"
-        fi
-        
-        # Small models on GPU 1
-        if [ -n "${GPU_MEMORY[1]:-}" ]; then
-            check_model_fits "${MODEL_NAMES[phi-4]}" "1" "1" "8192" "256" "$cpu_offload" && generate_routing_config "phi-4" "1" "1" "8002" "$should_update" "$update_registry"
-            check_model_fits "${MODEL_NAMES[qwen3-embedding]}" "1" "1" "8192" "256" "$cpu_offload" && generate_routing_config "qwen3-embedding" "1" "1" "8001" "$should_update" "$update_registry"
-        fi
-        
-        # Large models on multiple GPUs
-        if [ ${#GPU_MEMORY[@]} -ge 2 ]; then
-            local gpu_list="2"
-            if [ ${#GPU_MEMORY[@]} -ge 3 ]; then
-                gpu_list="2,3"
-            fi
-            check_model_fits "${MODEL_NAMES[qwen3-30b-instruct]}" "$gpu_list" "2" "8192" "256" "$cpu_offload" && generate_routing_config "qwen3-30b-instruct" "$gpu_list" "2" "8003" "$should_update" "$update_registry"
-        fi
-    else
-        # Configure single model
-        if [ -z "${MODEL_NAMES[$selected_model]:-}" ]; then
-            error "Unknown model: $selected_model"
-            exit 1
-        fi
-        
-        local model_full="${MODEL_NAMES[$selected_model]}"
-        local model_size=$(calculate_model_size "$model_full")
-        
-        echo ""
-        info "Model: $selected_model ($model_full)"
-        info "Size: ~${model_size}GB"
-        echo ""
-        
-        read -p "GPU(s) for this model (e.g., 1 or 2,3): " gpu_list
-        read -p "Tensor parallelism (number of GPUs, default: 1): " tensor_parallel
-        tensor_parallel="${tensor_parallel:-1}"
-        read -p "vLLM port (default: 8000): " vllm_port
-        vllm_port="${vllm_port:-8000}"
-        
-        # Determine auto-update behavior
-        local should_update="$AUTO_UPDATE"
-        if [ -z "$should_update" ]; then
-            echo ""
-            read -p "Automatically update LiteLLM config file? (Y/n): " -n 1 -r
-            echo
-            if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-                should_update="true"
-            else
-                should_update="false"
-            fi
-        fi
-        
-        echo ""
-        read -p "Update model registry with GPU and port configuration? (Y/n): " -n 1 -r
-        echo
-        local update_registry="false"
-        if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-            update_registry="true"
-        fi
-        
-        check_model_fits "$model_full" "$gpu_list" "$tensor_parallel" "8192" "256" "$cpu_offload" && generate_routing_config "$selected_model" "$gpu_list" "$tensor_parallel" "$vllm_port" "$should_update" "$update_registry"
-    fi
 }
 
 # Main execution
