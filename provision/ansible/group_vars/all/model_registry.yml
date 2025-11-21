@@ -36,12 +36,6 @@ available_models:
     model_name: "Qwen/Qwen3-30B-A3B-Instruct-2507"
     description: "General purpose agent model"
 
-  "qwen3-vl-8b":
-    provider: "vllm"
-    model: "qwen3-vl-8b"
-    model_name: "Qwen/Qwen3-VL-8B"
-    description: "Vision-language model"
-
 model_purposes:
   default: "qwen3-30b-a3b-instruct"   # General purpose agent model (default for most tasks)
   frontier: "claude-sonnet-4-5"   # Frontier model
