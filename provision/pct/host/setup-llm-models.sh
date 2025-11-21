@@ -252,60 +252,74 @@ if [ "$CLEANUP_MODE" = true ]; then
         done
         
         log_info "Registry contains ${#MODELS[@]} model(s)"
-        log_info "Scanning ${MODELS_DIR} for cached models..."
         echo ""
-        
-        # Get list of cached models on disk
-        if ! ls -1d "${MODELS_DIR}"/models--* 2>/dev/null | grep -q .; then
-            log_info "No cached models found. Nothing to clean up."
-            echo ""
-            set -e
-            return 0
-        fi
         
         # Track orphaned models
         ORPHANED_COUNT=0
         DELETED_COUNT=0
         TOTAL_FREED=0
         
-        # Check each cached model
-        while read -r dir; do
-            # Convert directory name back to model name (models--org--model -> org/model)
-            MODEL_NAME=$(basename "$dir" | sed 's/^models--//g' | sed 's/--/\//g')
-            
-            # Check if model is in registry
-            if [[ -z "${registry_models[$MODEL_NAME]}" ]]; then
-                ((ORPHANED_COUNT++))
-                
-                # Get model size
-                SIZE=$(du -sh "$dir" 2>/dev/null | awk '{print $1}')
-                SIZE_BYTES=$(du -sb "$dir" 2>/dev/null | awk '{print $1}')
-                
-                log_warning "Orphaned model: ${MODEL_NAME} (${SIZE})"
-                echo ""
-                echo "  This model is not in the registry and is no longer needed."
-                echo "  Location: ${dir}"
-                echo ""
-                
-                # Prompt for confirmation
-                read -p "  Delete this model? [y/N]: " -n 1 -r
-                echo ""
-                
-                if [[ $REPLY =~ ^[Yy]$ ]]; then
-                    log_info "  Deleting ${MODEL_NAME}..."
-                    if rm -rf "$dir"; then
-                        log_success "  ✓ Deleted ${MODEL_NAME} (freed ${SIZE})"
-                        ((DELETED_COUNT++))
-                        TOTAL_FREED=$((TOTAL_FREED + SIZE_BYTES))
-                    else
-                        log_error "  ✗ Failed to delete ${MODEL_NAME}"
-                    fi
-                else
-                    log_info "  Skipped ${MODEL_NAME}"
-                fi
-                echo ""
+        # Check both possible model locations:
+        # 1. Hub subdirectory (standard HuggingFace cache structure)
+        # 2. Direct in cache directory (older or alternate download methods)
+        SEARCH_DIRS=(
+            "${MODELS_DIR}"                    # /var/lib/llm-models/huggingface/hub
+            "${HUGGINGFACE_CACHE}"             # /var/lib/llm-models/huggingface
+        )
+        
+        for SEARCH_DIR in "${SEARCH_DIRS[@]}"; do
+            if [ ! -d "${SEARCH_DIR}" ]; then
+                continue
             fi
-        done < <(ls -1d "${MODELS_DIR}"/models--* 2>/dev/null)
+            
+            log_info "Scanning ${SEARCH_DIR}/ for cached models..."
+            
+            # Get list of cached models on disk
+            if ! ls -1d "${SEARCH_DIR}"/models--* 2>/dev/null | grep -q .; then
+                log_info "  No models found in ${SEARCH_DIR}/"
+                continue
+            fi
+            
+            # Check each cached model
+            while read -r dir; do
+                # Convert directory name back to model name (models--org--model -> org/model)
+                MODEL_NAME=$(basename "$dir" | sed 's/^models--//g' | sed 's/--/\//g')
+                
+                # Check if model is in registry
+                if [[ -z "${registry_models[$MODEL_NAME]}" ]]; then
+                    ((ORPHANED_COUNT++))
+                    
+                    # Get model size
+                    SIZE=$(du -sh "$dir" 2>/dev/null | awk '{print $1}')
+                    SIZE_BYTES=$(du -sb "$dir" 2>/dev/null | awk '{print $1}')
+                    
+                    echo ""
+                    log_warning "Orphaned model: ${MODEL_NAME} (${SIZE})"
+                    echo "  This model is not in the registry and is no longer needed."
+                    echo "  Location: ${dir}"
+                    echo ""
+                    
+                    # Prompt for confirmation
+                    read -p "  Delete this model? [y/N]: " -n 1 -r
+                    echo ""
+                    
+                    if [[ $REPLY =~ ^[Yy]$ ]]; then
+                        log_info "  Deleting ${MODEL_NAME}..."
+                        if rm -rf "$dir"; then
+                            log_success "  ✓ Deleted ${MODEL_NAME} (freed ${SIZE})"
+                            ((DELETED_COUNT++))
+                            TOTAL_FREED=$((TOTAL_FREED + SIZE_BYTES))
+                        else
+                            log_error "  ✗ Failed to delete ${MODEL_NAME}"
+                        fi
+                    else
+                        log_info "  Skipped ${MODEL_NAME}"
+                    fi
+                fi
+            done < <(ls -1d "${SEARCH_DIR}"/models--* 2>/dev/null)
+        done
+        
+        echo ""
         
         # Summary
         echo "=========================================="
