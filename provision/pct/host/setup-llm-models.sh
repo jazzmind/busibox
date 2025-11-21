@@ -38,14 +38,21 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # Parse command line arguments
 CLEANUP_MODE=false
+DEDUPLICATE_MODE=false
 for arg in "$@"; do
     case "$arg" in
         --cleanup)
             CLEANUP_MODE=true
             ;;
+        --deduplicate)
+            DEDUPLICATE_MODE=true
+            ;;
+        --interactive)
+            # Allow --interactive flag for compatibility
+            ;;
         *)
             log_error "Unknown argument: $arg"
-            echo "Usage: $0 [--cleanup]"
+            echo "Usage: $0 [--cleanup|--deduplicate]"
             exit 1
             ;;
     esac
@@ -207,6 +214,160 @@ except Exception as e:
     sys.exit(1)
 PYTHON_EOF
 }
+
+# If deduplicate mode, remove duplicate models and exit
+if [ "$DEDUPLICATE_MODE" = true ]; then
+    echo "=========================================="
+    echo "LLM Model Deduplication"
+    echo "=========================================="
+    log_info "Cache directory: ${HUGGINGFACE_CACHE}"
+    echo ""
+    
+    deduplicate_models() {
+        # Disable errexit temporarily for this function
+        set +e
+        
+        log_info "Checking for duplicate models between cache locations..."
+        echo ""
+        
+        # Verify directories exist
+        if [ ! -d "${HUGGINGFACE_CACHE}" ]; then
+            log_error "Cache directory does not exist: ${HUGGINGFACE_CACHE}"
+            set -e
+            return 1
+        fi
+        
+        if [ ! -d "${MODELS_DIR}" ]; then
+            log_info "Hub directory does not exist yet: ${MODELS_DIR}"
+            log_info "No duplicates to remove."
+            set -e
+            return 0
+        fi
+        
+        # Track duplicates
+        DUPLICATE_COUNT=0
+        DELETED_COUNT=0
+        TOTAL_FREED=0
+        
+        # Get list of models in hub/ directory (this is the standard location we keep)
+        if ! ls -1d "${MODELS_DIR}"/models--* 2>/dev/null | grep -q .; then
+            log_info "No models found in hub/ directory."
+            log_info "No duplicates to remove."
+            set -e
+            return 0
+        fi
+        
+        log_info "Models in standard location (${MODELS_DIR}/):"
+        declare -A hub_models
+        while read -r hub_dir; do
+            MODEL_NAME=$(basename "$hub_dir")
+            hub_models["$MODEL_NAME"]=1
+            echo "  - ${MODEL_NAME}"
+        done < <(ls -1d "${MODELS_DIR}"/models--* 2>/dev/null)
+        
+        echo ""
+        log_info "Checking for duplicates in root cache (${HUGGINGFACE_CACHE}/)..."
+        echo ""
+        
+        # Check for duplicates in root cache directory
+        if ! ls -1d "${HUGGINGFACE_CACHE}"/models--* 2>/dev/null | grep -q .; then
+            log_info "No models found in root cache directory."
+            log_info "No duplicates to remove."
+            set -e
+            return 0
+        fi
+        
+        # Check each model in root cache
+        while read -r root_dir; do
+            MODEL_NAME=$(basename "$root_dir")
+            
+            # Check if this model also exists in hub/
+            if [[ -n "${hub_models[$MODEL_NAME]}" ]]; then
+                ((DUPLICATE_COUNT++))
+                
+                # Get model size
+                SIZE=$(du -sh "$root_dir" 2>/dev/null | awk '{print $1}')
+                SIZE_BYTES=$(du -sb "$root_dir" 2>/dev/null | awk '{print $1}')
+                
+                # Convert to human-readable model name
+                DISPLAY_NAME=$(echo "$MODEL_NAME" | sed 's/^models--//g' | sed 's/--/\//g')
+                
+                log_warning "DUPLICATE: ${DISPLAY_NAME} (${SIZE})"
+                echo "  Root location: ${root_dir}"
+                echo "  Hub location:  ${MODELS_DIR}/${MODEL_NAME}"
+                echo ""
+                echo "  This model exists in both locations. The hub/ version is the"
+                echo "  standard location used by modern HuggingFace tools."
+                echo ""
+                
+                # Prompt for confirmation
+                read -p "  Delete root copy and keep hub/ version? [y/N]: " -n 1 -r
+                echo ""
+                
+                if [[ $REPLY =~ ^[Yy]$ ]]; then
+                    log_info "  Deleting root copy: ${root_dir}..."
+                    if rm -rf "$root_dir"; then
+                        log_success "  ✓ Deleted root copy (freed ${SIZE})"
+                        ((DELETED_COUNT++))
+                        TOTAL_FREED=$((TOTAL_FREED + SIZE_BYTES))
+                    else
+                        log_error "  ✗ Failed to delete root copy"
+                    fi
+                else
+                    log_info "  Skipped ${DISPLAY_NAME}"
+                fi
+                echo ""
+            fi
+        done < <(ls -1d "${HUGGINGFACE_CACHE}"/models--* 2>/dev/null)
+        
+        # Summary
+        echo "=========================================="
+        log_info "Deduplication Summary"
+        echo "=========================================="
+        echo ""
+        echo "  Duplicate models found: ${DUPLICATE_COUNT}"
+        echo "  Duplicates deleted: ${DELETED_COUNT}"
+        
+        if [ $TOTAL_FREED -gt 0 ]; then
+            # Convert bytes to human readable using awk
+            if [ $TOTAL_FREED -gt 1073741824 ]; then
+                FREED_GB=$(awk "BEGIN {printf \"%.2f\", $TOTAL_FREED / 1073741824}")
+                echo "  Space freed: ${FREED_GB} GB"
+            elif [ $TOTAL_FREED -gt 1048576 ]; then
+                FREED_MB=$(awk "BEGIN {printf \"%.2f\", $TOTAL_FREED / 1048576}")
+                echo "  Space freed: ${FREED_MB} MB"
+            else
+                FREED_KB=$(awk "BEGIN {printf \"%.2f\", $TOTAL_FREED / 1024}")
+                echo "  Space freed: ${FREED_KB} KB"
+            fi
+        else
+            echo "  Space freed: 0 bytes"
+        fi
+        echo ""
+        
+        if [ $DUPLICATE_COUNT -eq 0 ]; then
+            log_success "No duplicate models found!"
+        elif [ $DELETED_COUNT -gt 0 ]; then
+            log_success "Deduplication complete!"
+            log_info "All models are now in the standard hub/ location."
+        else
+            log_info "No duplicates were deleted."
+        fi
+        echo ""
+        
+        # Re-enable errexit
+        set -e
+        return 0
+    }
+    
+    # Call deduplication with error handling
+    if deduplicate_models; then
+        exit 0
+    else
+        log_error "Deduplication failed. Check the error messages above."
+        exit 1
+    fi
+fi
 
 # If cleanup mode, run cleanup and exit early (before model download setup)
 if [ "$CLEANUP_MODE" = true ]; then
