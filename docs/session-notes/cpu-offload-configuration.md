@@ -246,3 +246,4 @@ vllm_memory_limit: "32G"
 - PCIe 4.0 x16 provides ~20-25 GB/s transfer speed ✓
 - Recommended for high-concurrency workloads ✓
 
+

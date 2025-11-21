@@ -27,7 +27,7 @@ available_models:
     gpu_memory_utilization: 0.9  # Small model - only needs 60% GPU
     max_model_len: 16384  # Supports longer context
     max_num_seqs: 10  # Can handle more concurrent requests
-    cpu_offload_gb: 100  # Moderate CPU offload
+    cpu_offload_gb: 0  # Moderate CPU offload
     # Tool calling support
     tool_calling: true
     tool_call_parser: "phi4_mini_json"  # Phi-4 uses Hermes-style tool calling
@@ -41,7 +41,7 @@ available_models:
     gpu_memory_utilization: 0.9  # Large model - needs 80% GPU
     max_model_len: 28000  # Supports very long context (AWQ quantized)
     max_num_seqs: 3  # Standard concurrent requests
-    cpu_offload_gb: 150  # Heavy CPU offload for KV cache
+    cpu_offload_gb: 0  # Heavy CPU offload for KV cache
     # Tool calling support
     tool_calling: true
     tool_call_parser: "hermes"  # Qwen3 models use Hermes-style tool calling (Qwen2.5 compatible)
@@ -55,7 +55,7 @@ available_models:
     gpu_memory_utilization: 0.2  # Tiny model - only 20% GPU (leave room for overhead)
     max_model_len: 4096  # Reranker uses short sequences
     max_num_seqs: 32  # Fewer concurrent requests needed
-    cpu_offload_gb: 50  # Minimal CPU offload
+    cpu_offload_gb: 0  # Minimal CPU offload
 
   "bge-large":
     provider: "fastembed"
