@@ -43,13 +43,14 @@ available_models:
     description: "Text embedding generation"
 
   "colpali":
-    provider: "vllm"
+    provider: "colpali"  # Dedicated ColPali service (not vLLM - LoRA not supported)
     model: "colpali-v1.3"
     model_name: "vidore/colpali-v1.3"
-    description: "Visual document embedding (LoRA adapter on PaliGemma-3B base)"
+    description: "Visual document embedding (dedicated service)"
     gpu: "0"  # Reserved for visual embeddings
-    port: 8000  # vLLM port for ColPali
-    lora_base_model: "google/paligemma-3b-pt-448"
+    port: 9006  # Dedicated ColPali service port
+    # Note: vLLM 0.11.0 does not support LoRA for PaliGemmaForConditionalGeneration
+    # ColPali uses its own service with custom inference code
 
 model_purposes:
   default: "qwen3-30b"   # General purpose agent model (default for most tasks)
@@ -63,7 +64,7 @@ model_purposes:
   classify: "phi-4"   # Document classification
   parsing: "phi-4"   # Document parsing and structure extraction
   embedding: "bge-large"   # Text embedding generation
-  visual-embedding: "colpali"   # Visual document embedding (vLLM with LoRA adapters)
+  visual-embedding: "colpali"   # Visual document embedding (dedicated service)
   reranking: "qwen3-reranker"   # Search result reranking
-  # Note: ColPali is now served via vLLM (port 8000, GPU 0) with LoRA adapters on PaliGemma-3B base
+  # Note: ColPali uses dedicated service (port 9006, GPU 0) - vLLM doesn't support LoRA for PaliGemma
 
