@@ -24,9 +24,9 @@ available_models:
     model_name: "microsoft/Phi-4-multimodal-instruct"
     description: "Fast model for quick operations"
     # vLLM tuning parameters
-    gpu_memory_utilization: 0.6  # Small model - only needs 60% GPU
+    gpu_memory_utilization: 0.65  # Small model - only needs 60% GPU
     max_model_len: 16384  # Supports longer context
-    max_num_seqs: 512  # Can handle more concurrent requests
+    max_num_seqs: 5  # Can handle more concurrent requests
     cpu_offload_gb: 100  # Moderate CPU offload
     
   "qwen3-30b":
@@ -35,9 +35,9 @@ available_models:
     model_name: "cpatonn/Qwen3-30B-A3B-Instruct-2507-AWQ-4bit"
     description: "General purpose agent model"
     # vLLM tuning parameters
-    gpu_memory_utilization: 0.8  # Large model - needs 80% GPU
+    gpu_memory_utilization: 0.85  # Large model - needs 80% GPU
     max_model_len: 32768  # Supports very long context (AWQ quantized)
-    max_num_seqs: 256  # Standard concurrent requests
+    max_num_seqs: 3  # Standard concurrent requests
     cpu_offload_gb: 150  # Heavy CPU offload for KV cache
 
   "qwen3-reranker":
@@ -48,7 +48,7 @@ available_models:
     # vLLM tuning parameters
     gpu_memory_utilization: 0.2  # Tiny model - only 20% GPU (leave room for overhead)
     max_model_len: 4096  # Reranker uses short sequences
-    max_num_seqs: 128  # Fewer concurrent requests needed
+    max_num_seqs: 32  # Fewer concurrent requests needed
     cpu_offload_gb: 50  # Minimal CPU offload
 
   "bge-large":
