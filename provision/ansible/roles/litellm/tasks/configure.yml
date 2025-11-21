@@ -66,6 +66,12 @@
             model_name = model_entry.get('model_name', '')
             provider = model_entry.get('provider', '').lower()
             config = model_configs.get(model_name, {})
+            config_provider = config.get('provider', '').lower()
+            
+            # Use provider from registry as source of truth
+            # But skip if config has a conflicting provider (stale data)
+            if config_provider and config_provider != provider:
+                continue
             
             if provider == 'bedrock':
                 # Bedrock API model
