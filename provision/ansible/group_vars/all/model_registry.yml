@@ -18,10 +18,10 @@ available_models:
     model_name: "anthropic.claude-sonnet-4-5"
     description: "Frontier model"
 
-  "qwen3-embedding":
+  "qwen3-embedding-0.6b":
     provider: "vllm"
-    model: "qwen3-embedding"
-    model_name: "Qwen/Qwen3-Embedding-8B"
+    model: "qwen3-embedding-0.6b"
+    model_name: "Qwen/Qwen3-Embedding-0.6B"
     description: "Text embedding generation"
 
   "phi-4":
@@ -30,23 +30,29 @@ available_models:
     model_name: "microsoft/Phi-4-multimodal-instruct"
     description: "Fast model for quick operations"
     
-  "qwen3-30b-instruct":
+  "qwen3-30b-a3b-instruct":
     provider: "vllm"
-    model: "qwen3-30b-instruct"
+    model: "qwen3-30b-a3b-instruct"
     model_name: "Qwen/Qwen3-30B-A3B-Instruct-2507"
     description: "General purpose agent model"
 
+  "qwen3-vl-8b":
+    provider: "vllm"
+    model: "qwen3-vl-8b"
+    model_name: "Qwen/Qwen3-VL-8B"
+    description: "Vision-language model"
+
 model_purposes:
-  default: "qwen3-30b-instruct"   # General purpose agent model (default for most tasks)
+  default: "qwen3-30b-a3b-instruct"   # General purpose agent model (default for most tasks)
   frontier: "claude-sonnet-4-5"   # Frontier model
-  vision: "qwen3-30b-instruct"   # Vision-language model for image understanding
-  research: "qwen3-30b-instruct"   # Research and analysis
-  analysis: "qwen3-30b-instruct"   # Data analysis
+  vision: "phi-4"   # Vision-language model for image understanding
+  research: "qwen3-30b-a3b-instruct"   # Research and analysis
+  analysis: "qwen3-30b-a3b-instruct"   # Data analysis
   fast: "phi-4"   # Fast model for quick operations
   cleanup: "phi-4"   # Text cleanup and formatting  
   chat: "phi-4"   # General chat and Q&A
   classify: "phi-4"   # Document classification
   parsing: "phi-4"   # Document parsing and structure extraction
-  embedding: "qwen3-embedding"   # Text embedding generation
+  embedding: "qwen3-embedding-0.6b"   # Text embedding generation
   # Note: visual-embedding (colpali) is managed by separate colpali service, not vLLM
 
