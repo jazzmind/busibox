@@ -823,144 +823,17 @@ check_model_fits() {
     fi
 }
 
-# Update LiteLLM config file automatically
+# DEPRECATED: LiteLLM config is now automatically generated from model_config.yml
+# This function is kept for backwards compatibility but does nothing
 update_litellm_config() {
     local model_short="$1"
     local model_full="$2"
     local vllm_port="${3:-8000}"
     local auto_update="${4:-false}"
     
-    if [ "$auto_update" != "true" ]; then
-        return 0  # Skip if auto-update not requested
-    fi
-    
-    if [ ! -f "$LITELLM_CONFIG" ]; then
-        warn "LiteLLM config file not found: $LITELLM_CONFIG"
-        warn "Skipping automatic update"
-        return 1
-    fi
-    
-    # Check if Python and PyYAML are available
-    if ! python3 -c "import yaml" 2>/dev/null; then
-        warn "PyYAML not available. Install with: pip3 install pyyaml"
-        warn "Skipping automatic LiteLLM config update"
-        return 1
-    fi
-    
-    info "Updating LiteLLM config file automatically..."
-    
-    # Use Python to edit YAML (preserves Jinja2 templates)
-    python3 << PYTHON_EOF
-import yaml
-import re
-from pathlib import Path
-
-config_file = Path("${LITELLM_CONFIG}")
-model_short = "${model_short}"
-model_full = "${model_full}"
-vllm_port = "${vllm_port}"
-
-# Read existing config as text to preserve structure
-with open(config_file, 'r') as f:
-    lines = f.readlines()
-
-# Find litellm_models section
-litellm_start = -1
-litellm_end = -1
-base_indent = 0
-
-for i, line in enumerate(lines):
-    if re.match(r'^litellm_models:', line):
-        litellm_start = i
-        base_indent = len(line) - len(line.lstrip())
-        # Find end of litellm_models section (next top-level key or end of file)
-        for j in range(i + 1, len(lines)):
-            stripped = lines[j].lstrip()
-            # Check if this is a new top-level key (starts at column 0, not a list item or comment)
-            if stripped and not lines[j].startswith(' ') and not lines[j].startswith('#'):
-                if not stripped.startswith('-'):
-                    litellm_end = j
-                    break
-        if litellm_end == -1:
-            litellm_end = len(lines)
-        break
-
-if litellm_start == -1:
-    # litellm_models section doesn't exist, append it
-    lines.append('\n')
-    lines.append('litellm_models:\n')
-    litellm_start = len(lines) - 1
-    litellm_end = len(lines)
-    base_indent = 0
-
-# Check if model already exists in the section
-model_exists = False
-model_line_start = -1
-model_line_end = -1
-in_model_entry = False
-entry_indent = base_indent + 2
-
-for i in range(litellm_start + 1, litellm_end):
-    line = lines[i]
-    stripped = line.lstrip()
-    
-    # Check if this line starts a model entry
-    if stripped.startswith('- model_name:'):
-        # Check if this is our model
-        if f'"{model_short}"' in line or f"'{model_short}'" in line or model_short in line:
-            model_exists = True
-            model_line_start = i
-            in_model_entry = True
-            entry_indent = len(line) - len(line.lstrip())
-            continue
-    
-    if in_model_entry:
-        # Check if we've reached the end of this model entry
-        if stripped and not line.startswith(' ' * (entry_indent + 1)):
-            if not stripped.startswith('#') and not stripped.startswith('-'):
-                model_line_end = i
-                break
-        # If we hit the next model entry, this one ends
-        if stripped.startswith('- model_name:'):
-            model_line_end = i
-            break
-
-if model_line_end == -1 and in_model_entry:
-    model_line_end = litellm_end
-
-# Build new model entry
-new_entry_lines = [
-    ' ' * entry_indent + f'- model_name: "{model_short}"\n',
-    ' ' * (entry_indent + 2) + 'litellm_params:\n',
-    ' ' * (entry_indent + 4) + f'model: "openai/{model_full}"\n',
-    ' ' * (entry_indent + 4) + f'api_base: "http://{{{{ vllm_ip }}}}:{vllm_port}/v1"\n',
-    ' ' * (entry_indent + 4) + "api_key: \"EMPTY\"  # vLLM doesn't require authentication\n"
-]
-
-# Insert or replace
-if model_exists and model_line_start >= 0 and model_line_end >= 0:
-    # Replace existing entry
-    lines[model_line_start:model_line_end] = new_entry_lines
-    action = "updated"
-else:
-    # Insert before end of litellm_models section
-    lines[litellm_end:litellm_end] = new_entry_lines
-    action = "added"
-
-# Write back
-with open(config_file, 'w') as f:
-    f.writelines(lines)
-
-print(f"✓ {action.capitalize()} model '{model_short}' in LiteLLM config")
-PYTHON_EOF
-    
-    if [ $? -eq 0 ]; then
-        success "LiteLLM config updated: $model_short"
-        return 0
-    else
-        error "Failed to update LiteLLM config"
-        return 1
-    fi
+    # LiteLLM role now reads model_config.yml directly - no manual editing needed
+    info "LiteLLM will automatically configure '$model_short' from model_config.yml during deployment"
+    return 0
 }
 
 # Generate vLLM and LiteLLM routing configuration
@@ -988,23 +861,8 @@ generate_routing_config() {
     echo "  Status: Configuration saved to model_config.yml"
     echo ""
     
-    # Update LiteLLM config automatically if requested
-    if [ "$auto_update" = "true" ]; then
-        update_litellm_config "$model_short" "$model_full" "$vllm_port" "true"
-    else
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "2. LiteLLM Configuration (Manual - use --auto-update to edit automatically)"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "# In provision/ansible/roles/litellm/defaults/main.yml"
-        echo "# Add to litellm_models list:"
-        echo ""
-        echo "  - model_name: \"$model_short\""
-        echo "    litellm_params:"
-        echo "      model: \"openai/$model_full\""
-        echo "      api_base: \"http://{{ vllm_ip }}:${vllm_port}/v1\""
-        echo "      api_key: \"EMPTY\"  # vLLM doesn't require authentication"
-        echo ""
-    fi
+    # LiteLLM will automatically read from model_config.yml during deployment
+    success "LiteLLM will automatically configure this model from model_config.yml"
 }
 
 # Interactive routing configuration
@@ -1219,6 +1077,101 @@ assign_model_to_gpu() {
     success "Assigned $selected_model to GPU(s) $gpu_list (port $port, TP=$tp)"
 }
 
+# Update model_config.yml to mark a model as unassigned
+unassign_model_in_config() {
+    local model_key="$1"  # Model key in available_models (e.g., "phi-4")
+    
+    if [ ! -f "$MODEL_CONFIG" ]; then
+        warn "Model config not found: $MODEL_CONFIG"
+        return 1
+    fi
+    
+    if [ ! -f "$MODEL_REGISTRY" ]; then
+        warn "Model registry not found: $MODEL_REGISTRY"
+        return 1
+    fi
+    
+    # Use Python to update model_config.yml
+    "${VENV_DIR}/bin/python3" << PYTHON_EOF
+import yaml
+import sys
+import os
+from pathlib import Path
+
+registry_file = Path("${MODEL_REGISTRY}")
+config_file = Path("${MODEL_CONFIG}")
+model_key = "${model_key}"
+
+try:
+    # Read model_registry.yml to find model_name for this model_key
+    with open(registry_file, 'r') as f:
+        registry_data = yaml.safe_load(f) or {}
+    
+    available_models = registry_data.get('available_models') or {}
+    model_config_entry = available_models.get(model_key)
+    
+    if not model_config_entry:
+        print(f"ERROR: Model key '{model_key}' not found in model_registry.yml", file=sys.stderr)
+        sys.exit(1)
+    
+    model_name = model_config_entry.get('model_name')
+    if not model_name:
+        print(f"ERROR: model_name not found for model_key '{model_key}'", file=sys.stderr)
+        sys.exit(1)
+    
+    # Read existing model_config.yml
+    if config_file.exists():
+        with open(config_file, 'r') as f:
+            config_data = yaml.safe_load(f) or {}
+    else:
+        config_data = {}
+    
+    if 'models' not in config_data:
+        config_data['models'] = {}
+    
+    if not isinstance(config_data['models'], dict):
+        config_data['models'] = {}
+    
+    # Find entry for this model_name
+    if model_name in config_data['models']:
+        # Set gpu and port to null, assigned to false
+        config_data['models'][model_name]['gpu'] = None
+        config_data['models'][model_name]['port'] = None
+        config_data['models'][model_name]['tensor_parallel'] = None
+        config_data['models'][model_name]['assigned'] = False
+    else:
+        print(f"WARNING: Model '{model_name}' not found in model_config.yml", file=sys.stderr)
+    
+    # Write back
+    try:
+        from ruamel.yaml import YAML
+        yaml_writer = YAML()
+        yaml_writer.preserve_quotes = True
+        yaml_writer.width = 4096
+        yaml_writer.default_flow_style = False
+        with open(config_file, 'w') as f:
+            yaml_writer.dump(config_data, f)
+    except ImportError:
+        with open(config_file, 'w') as f:
+            yaml.dump(config_data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    
+    print(f"✓ Unassigned {model_key} ({model_name}) in model_config.yml")
+except Exception as e:
+    print(f"ERROR: Failed to update model_config.yml: {e}", file=sys.stderr)
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
+PYTHON_EOF
+    
+    if [ $? -eq 0 ]; then
+        success "Unassigned $model_key in model_config.yml"
+        return 0
+    else
+        error "Failed to unassign $model_key"
+        return 1
+    fi
+}
+
 # Remove a model from GPU assignment
 remove_model_from_gpu() {
     echo ""
@@ -1247,6 +1200,11 @@ remove_model_from_gpu() {
     fi
     
     local selected_model="${assigned_models[$((model_num - 1))]}"
+    
+    # Update model_config.yml to mark as unassigned
+    unassign_model_in_config "$selected_model"
+    
+    # Remove from in-memory assignments
     unset MODEL_GPU_ASSIGNMENTS["$selected_model"]
     unset MODEL_PORT_ASSIGNMENTS["$selected_model"]
     unset MODEL_TP_ASSIGNMENTS["$selected_model"]
@@ -1341,22 +1299,69 @@ save_routing_configuration() {
     fi
     
     echo ""
-    read -p "Update model registry with GPU and port assignments? (Y/n): " -n 1 -r
+    read -p "Update model_config.yml with GPU and port assignments? (Y/n): " -n 1 -r
     echo
     local update_registry="false"
     if [[ ! $REPLY =~ ^[Nn]$ ]]; then
         update_registry="true"
     fi
     
-    # Save each assignment
-    for model in "${!MODEL_GPU_ASSIGNMENTS[@]}"; do
-        local gpus="${MODEL_GPU_ASSIGNMENTS[$model]}"
-        local port="${MODEL_PORT_ASSIGNMENTS[$model]}"
-        local tp="${MODEL_TP_ASSIGNMENTS[$model]}"
+    if [ "$update_registry" = "true" ]; then
+        # Save assigned models
+        for model in "${!MODEL_GPU_ASSIGNMENTS[@]}"; do
+            local gpus="${MODEL_GPU_ASSIGNMENTS[$model]}"
+            local port="${MODEL_PORT_ASSIGNMENTS[$model]}"
+            local tp="${MODEL_TP_ASSIGNMENTS[$model]}"
+            
+            info "Saving assignment for $model..."
+            generate_routing_config "$model" "$gpus" "$tp" "$port" "$should_update" "$update_registry"
+        done
         
-        info "Generating routing config for $model..."
-        generate_routing_config "$model" "$gpus" "$tp" "$port" "$should_update" "$update_registry"
-    done
+        # Unassign models that were previously assigned but are no longer
+        info "Checking for models to unassign..."
+        for model in "${!MODEL_NAMES[@]}"; do
+            # If model is not in current assignments but exists in MODEL_NAMES, unassign it
+            if [ -z "${MODEL_GPU_ASSIGNMENTS[$model]:-}" ]; then
+                # Check if it was previously assigned by looking at model_config.yml
+                local was_assigned=$("${VENV_DIR}/bin/python3" << PYTHON_EOF
+import yaml
+from pathlib import Path
+
+config_file = Path("${MODEL_CONFIG}")
+registry_file = Path("${MODEL_REGISTRY}")
+
+if not config_file.exists():
+    print("false")
+    exit(0)
+
+with open(config_file, 'r') as f:
+    config_data = yaml.safe_load(f) or {}
+
+with open(registry_file, 'r') as f:
+    registry_data = yaml.safe_load(f) or {}
+
+available_models = registry_data.get('available_models', {})
+model_entry = available_models.get("${model}", {})
+model_name = model_entry.get('model_name', '')
+
+if model_name and model_name in config_data.get('models', {}):
+    model_config = config_data['models'][model_name]
+    if model_config.get('assigned', False):
+        print("true")
+    else:
+        print("false")
+else:
+    print("false")
+PYTHON_EOF
+                )
+                
+                if [ "$was_assigned" = "true" ]; then
+                    info "Unassigning $model (no longer in GPU assignments)..."
+                    unassign_model_in_config "$model"
+                fi
+            fi
+        done
+    fi
     
     success "Configuration saved"
 }
