@@ -221,6 +221,58 @@ vllm_submenu() {
     done
 }
 
+# Apps deployment submenu
+deploy_apps_menu() {
+    local env="$1"
+    
+    while true; do
+        clear
+        box "Apps Deployment - $env" 70
+        echo ""
+        info "Select application to deploy"
+        echo ""
+        
+        echo -e "  ${CYAN}1)${NC} Deploy All Apps"
+        echo -e "  ${CYAN}2)${NC} Deploy AI Portal"
+        echo -e "  ${CYAN}3)${NC} Back to Main Menu"
+        echo ""
+        
+        read -p "Select option [1-3]: " choice
+        echo ""
+        
+        case "$choice" in
+            1)
+                if confirm "Deploy ALL apps to $env?"; then
+                    deploy_service "apps" "$env"
+                fi
+                pause
+                ;;
+            2)
+                if confirm "Deploy AI Portal to $env?"; then
+                    cd "$ANSIBLE_DIR"
+                    local vault_flags="$(get_vault_flags)"
+                    info "Deploying AI Portal to $env environment..."
+                    echo ""
+                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags ai_portal $vault_flags || {
+                        error "Deployment failed"
+                    }
+                    cd "$REPO_ROOT"
+                    echo ""
+                    success "Deployment completed successfully!"
+                fi
+                pause
+                ;;
+            3)
+                return 0
+                ;;
+            *)
+                error "Invalid choice"
+                pause
+                ;;
+        esac
+    done
+}
+
 # Verify deployment
 verify_deployment() {
     local env="$1"
@@ -320,10 +372,7 @@ deployment_menu() {
                 pause
                 ;;
             9)
-                if confirm "Deploy Apps to $env?"; then
-                    deploy_service "apps" "$env"
-                fi
-                pause
+                deploy_apps_menu "$env"
                 ;;
             10)
                 if confirm "Deploy OpenWebUI to $env?"; then
