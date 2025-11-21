@@ -19,9 +19,11 @@ colpali_model: "{{ available_models[model_purposes['visual-embedding']].model_na
 colpali_device: "cuda:0"  # Device index within CUDA_VISIBLE_DEVICES
 colpali_dtype: "bfloat16"
 
-# GPU and Port Configuration - Read from model registry
-colpali_cuda_visible_devices: "{{ available_models[model_purposes['visual-embedding']].gpu | default('0') }}"
-colpali_port: "{{ available_models[model_purposes['visual-embedding']].port | default(8002) }}"
+# GPU and Port Configuration
+# IMPORTANT: ColPali is ALWAYS on GPU 0 - this is hardcoded and cannot be changed
+# GPU 0 is reserved for visual document processing (ColPali + Marker)
+colpali_cuda_visible_devices: "0"  # HARDCODED: Always GPU 0
+colpali_port: "{{ available_models[model_purposes['visual-embedding']].port | default(9006) }}"
 
 # HuggingFace Configuration
 colpali_hf_token: "{{ secrets.huggingface.token | default('') }}"

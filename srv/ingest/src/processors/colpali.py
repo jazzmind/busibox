@@ -32,7 +32,7 @@ class ColPaliEmbedder:
             config: Configuration dictionary with colpali_base_url
         """
         self.config = config
-        self.colpali_base_url = config.get("colpali_base_url", "http://vllm-lxc:8000/v1")
+        self.colpali_base_url = config.get("colpali_base_url", "http://vllm-lxc:9006/v1")
         self.api_key = config.get("colpali_api_key", "EMPTY")
         self.enabled = config.get("colpali_enabled", True)
         
