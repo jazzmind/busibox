@@ -63,6 +63,19 @@
 - name: Deploy LLM Inference Backends (can run in parallel)
   hosts: vllm  # Ollama temporarily disabled
   pre_tasks:
+    - name: Install psmisc (for fuser) if not present
+      apt:
+        name: psmisc
+        state: present
+        update_cache: false
+      failed_when: false
+    
+    - name: Stop ColPali service to free GPU 0
+      systemd:
+        name: colpali
+        state: stopped
+      failed_when: false
+    
     - name: Stop all existing vLLM services to free GPU memory
       systemd:
         name: "vllm-{{ item }}"
@@ -70,7 +83,7 @@
       loop: [8000, 8001, 8002, 8003, 8004, 8005]
       failed_when: false
     
-    - name: Wait for vLLM processes to fully terminate
+    - name: Wait for services to fully terminate
       wait_for:
         timeout: 10
       delegate_to: localhost
@@ -81,11 +94,13 @@
         pkill -9 -f "vllm.entrypoints.openai.api_server" || true
         pkill -9 -f "multiprocessing" || true
         
-        # Kill anything using NVIDIA GPUs
-        fuser -k /dev/nvidia* || true
+        # Kill anything using NVIDIA GPUs (requires psmisc/fuser)
+        if command -v fuser &> /dev/null; then
+          fuser -k /dev/nvidia* 2>/dev/null || true
+        fi
         
         # Clean shared memory (removes stale PyTorch/Ray segments)
-        rm -rf /dev/shm/*
+        rm -rf /dev/shm/* 2>/dev/null || true
         
         # Wait for cleanup
         sleep 5
