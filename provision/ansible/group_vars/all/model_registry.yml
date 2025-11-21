@@ -28,6 +28,9 @@ available_models:
     max_model_len: 16384  # Supports longer context
     max_num_seqs: 5  # Can handle more concurrent requests
     cpu_offload_gb: 100  # Moderate CPU offload
+    # Tool calling support
+    tool_calling: true
+    tool_call_parser: "hermes"  # Phi-4 uses Hermes-style tool calling
     
   "qwen3-30b":
     provider: "vllm"
@@ -39,6 +42,9 @@ available_models:
     max_model_len: 28000  # Supports very long context (AWQ quantized)
     max_num_seqs: 3  # Standard concurrent requests
     cpu_offload_gb: 150  # Heavy CPU offload for KV cache
+    # Tool calling support
+    tool_calling: true
+    tool_call_parser: "hermes"  # Qwen3 models use Hermes-style tool calling (Qwen2.5 compatible)
 
   "qwen3-reranker":
     provider: "vllm"
