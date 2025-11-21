@@ -36,7 +36,7 @@ available_models:
     description: "General purpose agent model"
     # vLLM tuning parameters
     gpu_memory_utilization: 0.85  # Large model - needs 80% GPU
-    max_model_len: 32768  # Supports very long context (AWQ quantized)
+    max_model_len: 28000  # Supports very long context (AWQ quantized)
     max_num_seqs: 3  # Standard concurrent requests
     cpu_offload_gb: 150  # Heavy CPU offload for KV cache
 

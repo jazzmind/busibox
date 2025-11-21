@@ -78,6 +78,132 @@ deploy_service() {
     return 0
 }
 
+# vLLM deployment submenu
+vllm_submenu() {
+    local env="$1"
+    
+    while true; do
+        clear
+        box "vLLM Deployment - $env" 70
+        echo ""
+        info "Select vLLM instance to deploy"
+        echo ""
+        
+        echo -e "  ${CYAN}1)${NC} Deploy All vLLM Instances    (ports 8000-8005)"
+        echo -e "  ${CYAN}2)${NC} Deploy vLLM 8000              (individual)"
+        echo -e "  ${CYAN}3)${NC} Deploy vLLM 8001              (individual)"
+        echo -e "  ${CYAN}4)${NC} Deploy vLLM 8002              (individual)"
+        echo -e "  ${CYAN}5)${NC} Deploy vLLM 8003              (individual)"
+        echo -e "  ${CYAN}6)${NC} Deploy vLLM 8004              (individual)"
+        echo -e "  ${CYAN}7)${NC} Deploy vLLM 8005              (individual)"
+        echo -e "  ${CYAN}8)${NC} Back to Main Menu"
+        echo ""
+        
+        read -p "Select option [1-8]: " choice
+        echo ""
+        
+        case "$choice" in
+            1)
+                if confirm "Deploy ALL vLLM instances (8000-8005) to $env?"; then
+                    deploy_service "vllm" "$env"
+                fi
+                pause
+                ;;
+            2)
+                if confirm "Deploy vLLM 8000 (single instance) to $env?"; then
+                    cd "$ANSIBLE_DIR"
+                    info "Deploying vLLM 8000 to $env environment..."
+                    echo ""
+                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags vllm_8000 || {
+                        error "Deployment failed"
+                    }
+                    cd "$REPO_ROOT"
+                    echo ""
+                    success "Deployment completed successfully!"
+                fi
+                pause
+                ;;
+            3)
+                if confirm "Deploy vLLM 8001 (single instance) to $env?"; then
+                    cd "$ANSIBLE_DIR"
+                    info "Deploying vLLM 8001 to $env environment..."
+                    echo ""
+                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags vllm_8001 || {
+                        error "Deployment failed"
+                    }
+                    cd "$REPO_ROOT"
+                    echo ""
+                    success "Deployment completed successfully!"
+                fi
+                pause
+                ;;
+            4)
+                if confirm "Deploy vLLM 8002 (single instance) to $env?"; then
+                    cd "$ANSIBLE_DIR"
+                    info "Deploying vLLM 8002 to $env environment..."
+                    echo ""
+                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags vllm_8002 || {
+                        error "Deployment failed"
+                    }
+                    cd "$REPO_ROOT"
+                    echo ""
+                    success "Deployment completed successfully!"
+                fi
+                pause
+                ;;
+            5)
+                if confirm "Deploy vLLM 8003 (single instance) to $env?"; then
+                    cd "$ANSIBLE_DIR"
+                    info "Deploying vLLM 8003 to $env environment..."
+                    echo ""
+                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags vllm_8003 || {
+                        error "Deployment failed"
+                    }
+                    cd "$REPO_ROOT"
+                    echo ""
+                    success "Deployment completed successfully!"
+                fi
+                pause
+                ;;
+            6)
+                if confirm "Deploy vLLM 8004 (single instance) to $env?"; then
+                    cd "$ANSIBLE_DIR"
+                    info "Deploying vLLM 8004 to $env environment..."
+                    echo ""
+                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags vllm_8004 || {
+                        error "Deployment failed"
+                    }
+                    cd "$REPO_ROOT"
+                    echo ""
+                    success "Deployment completed successfully!"
+                fi
+                pause
+                ;;
+            7)
+                if confirm "Deploy vLLM 8005 (single instance) to $env?"; then
+                    cd "$ANSIBLE_DIR"
+                    info "Deploying vLLM 8005 to $env environment..."
+                    echo ""
+                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags vllm_8005 || {
+                        error "Deployment failed"
+                    }
+                    cd "$REPO_ROOT"
+                    echo ""
+                    success "Deployment completed successfully!"
+                fi
+                pause
+                ;;
+            8)
+                return 0
+                ;;
+            *)
+                error "Invalid choice"
+                pause
+                ;;
+        esac
+    done
+}
+
 # Verify deployment
 verify_deployment() {
     local env="$1"
@@ -150,10 +276,7 @@ deployment_menu() {
                 pause
                 ;;
             4)
-                if confirm "Deploy vLLM (LLM inference) to $env?"; then
-                    deploy_service "vllm" "$env"
-                fi
-                pause
+                vllm_submenu "$env"
                 ;;
             5)
                 if confirm "Deploy LiteLLM to $env?"; then
