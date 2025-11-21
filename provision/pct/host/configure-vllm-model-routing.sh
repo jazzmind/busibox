@@ -971,6 +971,11 @@ show_gpu_allocation_table() {
     
     # Check if any vLLM models are assigned to GPU 0
     for model in "${!MODEL_GPU_ASSIGNMENTS[@]}"; do
+        # Skip if model not in MODEL_NAMES (shouldn't happen, but be safe)
+        if [ -z "${MODEL_NAMES[$model]:-}" ]; then
+            continue
+        fi
+        
         local assigned_gpus="${MODEL_GPU_ASSIGNMENTS[$model]}"
         if [[ ",$assigned_gpus," == *",0,"* ]] || [[ "$assigned_gpus" == "0" ]]; then
             local model_full="${MODEL_NAMES[$model]}"
@@ -1013,6 +1018,11 @@ show_gpu_allocation_table() {
         
         # Find models assigned to this GPU
         for model in "${!MODEL_GPU_ASSIGNMENTS[@]}"; do
+            # Skip if model not in MODEL_NAMES (shouldn't happen, but be safe)
+            if [ -z "${MODEL_NAMES[$model]:-}" ]; then
+                continue
+            fi
+            
             local assigned_gpus="${MODEL_GPU_ASSIGNMENTS[$model]}"
             if [[ ",$assigned_gpus," == *",$gpu_id,"* ]]; then
                 local model_full="${MODEL_NAMES[$model]}"
