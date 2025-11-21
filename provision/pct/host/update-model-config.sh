@@ -886,7 +886,30 @@ try:
     if not isinstance(config_data['models'], dict):
         config_data['models'] = {}
     
-    # Ensure all models from registry are in config
+    # Step 1: Build list of valid model names from registry
+    valid_model_names = set()
+    for model_key, model_config in available_models.items():
+        model_name = model_config.get('model_name')
+        if model_name:
+            valid_model_names.add(model_name)
+    
+    # Step 2: Remove models from config that are no longer in registry
+    models_to_remove = []
+    for model_name in config_data['models'].keys():
+        if model_name not in valid_model_names:
+            models_to_remove.append(model_name)
+    
+    removed_count = 0
+    for model_name in models_to_remove:
+        print(f"  Removing obsolete model: {model_name}")
+        del config_data['models'][model_name]
+        removed_count += 1
+    
+    if removed_count > 0:
+        print(f"  Removed {removed_count} obsolete model(s) from config")
+    
+    # Step 3: Ensure all models from registry are in config
+    added_count = 0
     for model_key, model_config in available_models.items():
         model_name = model_config.get('model_name')
         provider = model_config.get('provider', 'vllm').lower()
@@ -896,9 +919,14 @@ try:
         
         # Get existing entry or create new
         existing = config_data['models'].get(model_name, {})
+        is_new = len(existing) == 0
         
         # Only create/update if not already analyzed
         if not existing.get('analyzed', False):
+            if is_new:
+                added_count += 1
+                print(f"  Adding new model: {model_name}")
+            
             if provider in api_providers:
                 # API-based model
                 config_data['models'][model_name] = {
@@ -961,7 +989,11 @@ try:
         with open(config_file, 'w') as f:
             yaml.dump(config_data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
     
-    print(f"✓ Initialized model_config.yml")
+    # Summary
+    total_models = len(config_data.get('models', {}))
+    if added_count > 0:
+        print(f"  Added {added_count} new model(s) to config")
+    print(f"✓ Initialized model_config.yml with {total_models} model(s)")
 except Exception as e:
     print(f"ERROR: Failed to initialize model_config.yml: {e}", file=sys.stderr)
     import traceback
@@ -1078,14 +1110,14 @@ main() {
                 echo "  Full Notes: $notes"
                 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 echo ""
-                read -p "Update model_configs in model_registry.yml? (Y/n): " -n 1 -r
+                read -p "Update model_config.yml? (Y/n): " -n 1 -r
                 echo ""
                 if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-                    update_model_registry "$model_name" "$params" "$precision" "$quantization" "$gpu_size" "$notes"
+                    update_model_config "$model_name" "$params" "$precision" "$quantization" "$gpu_size" "0" "$notes"
                 fi
             else
                 # Non-interactive: auto-update
-                update_model_registry "$model_name" "$params" "$precision" "$quantization" "$gpu_size" "$notes" 2>/dev/null || true
+                update_model_config "$model_name" "$params" "$precision" "$quantization" "$gpu_size" "0" "$notes" 2>/dev/null || true
             fi
         else
             if [ "$interactive" = true ]; then
