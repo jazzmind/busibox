@@ -879,47 +879,12 @@ generate_routing_config() {
     success "LiteLLM will automatically configure this model from model_config.yml"
 }
 
-# Auto-assign ColPali to GPU 0 and port 8000 if in registry
+# DEPRECATED: ColPali is no longer a vLLM service - it has its own dedicated service
+# This function is kept for backwards compatibility but does nothing
 auto_assign_colpali() {
-    # Check if colpali is in the model registry
-    local has_colpali=false
-    for model in "${!MODEL_NAMES[@]}"; do
-        if [[ "$model" == "colpali" ]]; then
-            has_colpali=true
-            break
-        fi
-    done
-    
-    if [ "$has_colpali" = false ]; then
-        return 0
-    fi
-    
-    info "ColPali detected in model registry - auto-assigning to GPU 0, port 8000"
-    
-    # Check if already assigned correctly
-    if [ -n "${MODEL_GPU_ASSIGNMENTS[colpali]:-}" ]; then
-        local current_gpu="${MODEL_GPU_ASSIGNMENTS[colpali]}"
-        local current_port="${MODEL_PORT_ASSIGNMENTS[colpali]}"
-        
-        if [ "$current_gpu" = "0" ] && [ "$current_port" = "8000" ]; then
-            success "ColPali already assigned to GPU 0, port 8000"
-            return 0
-        else
-            warn "ColPali currently assigned to GPU $current_gpu, port $current_port"
-            warn "Updating to GPU 0, port 8000 (required for visual embeddings)"
-        fi
-    fi
-    
-    # Assign ColPali to GPU 0, port 8000
-    MODEL_GPU_ASSIGNMENTS["colpali"]="0"
-    MODEL_PORT_ASSIGNMENTS["colpali"]="8000"
-    MODEL_TP_ASSIGNMENTS["colpali"]="1"
-    
-    # Update model_config.yml
-    update_model_config_gpu_port "colpali" "0" "8000" "1"
-    
-    success "✓ Assigned ColPali to GPU 0, port 8000 (vLLM with LoRA adapters)"
-    echo ""
+    # ColPali now runs as a separate service (port 9006) - not managed by vLLM
+    # It is no longer assigned to vLLM ports or included in vLLM model routing
+    return 0
 }
 
 # Interactive routing configuration
@@ -999,19 +964,13 @@ show_gpu_allocation_table() {
     printf "%-8s %-10s %-25s %-10s %-8s %-8s\n" "GPU" "Memory" "Model" "Size(GB)" "Port" "TP"
     echo "────────────────────────────────────────────────────────────────────────────────────"
     
-    # Show GPU 0 (ColPali or reserved)
-    local gpu0_model="RESERVED"
-    local gpu0_size="-"
-    local gpu0_port="-"
+    # Show GPU 0 (reserved for ColPali - separate service, not vLLM)
+    local gpu0_model="RESERVED (ColPali)"
+    local gpu0_size="~15GB"
+    local gpu0_port="9006"
     local gpu0_tp="-"
     
-    # Check if ColPali is assigned to GPU 0
-    if [ -n "${MODEL_GPU_ASSIGNMENTS[colpali]:-}" ] && [ "${MODEL_GPU_ASSIGNMENTS[colpali]}" = "0" ]; then
-        gpu0_model="colpali"
-        gpu0_size="15GB"
-        gpu0_port="${MODEL_PORT_ASSIGNMENTS[colpali]:-8000}"
-        gpu0_tp="${MODEL_TP_ASSIGNMENTS[colpali]:-1}"
-    fi
+    # Note: ColPali runs as dedicated service on port 9006, not managed by vLLM
     
     printf "%-8s %-10s %-25s %-10s %-8s %-8s\n" \
         "GPU 0" "${GPU_MEMORY[0]:-0}GB" "$gpu0_model" "$gpu0_size" "$gpu0_port" "$gpu0_tp"
@@ -1105,33 +1064,18 @@ assign_model_to_gpu() {
     info "Model: $selected_model (~${model_size}GB)"
     echo ""
     echo "Available GPUs:"
-    echo "  GPU 0: ${GPU_MEMORY[0]:-0}GB (reserved for ColPali)"
+    echo "  GPU 0: ${GPU_MEMORY[0]:-0}GB (reserved for ColPali service)"
     for gpu_id in $(seq 1 $((${#GPU_MEMORY[@]} - 1))); do
         echo "  GPU $gpu_id: ${GPU_MEMORY[$gpu_id]:-0}GB"
     done
     
     echo ""
     
-    # Special handling for ColPali
-    if [ "$selected_model" = "colpali" ]; then
-        info "ColPali must run on GPU 0, port 8000 (visual embeddings with LoRA adapters)"
-        gpu_list="0"
-        local port=8000
-        local tp=1
-        
-        MODEL_GPU_ASSIGNMENTS["$selected_model"]="$gpu_list"
-        MODEL_PORT_ASSIGNMENTS["$selected_model"]="$port"
-        MODEL_TP_ASSIGNMENTS["$selected_model"]="$tp"
-        
-        success "Assigned $selected_model to GPU 0, port 8000"
-        return 0
-    fi
+    read -p "GPU(s) for this model (e.g., '1' or '2,3' for tensor parallelism, GPU 0 reserved): " gpu_list
     
-    read -p "GPU(s) for this model (e.g., '1' or '2,3' for tensor parallelism, GPU 0 reserved for ColPali): " gpu_list
-    
-    # Validate GPU 0 is not selected (except for ColPali)
+    # Validate GPU 0 is not selected
     if [[ "$gpu_list" == *"0"* ]]; then
-        error "GPU 0 is reserved for ColPali. Please select GPU 1 or higher."
+        error "GPU 0 is reserved for ColPali service (separate, not vLLM). Please select GPU 1 or higher."
         return 1
     fi
     
@@ -1312,33 +1256,16 @@ auto_assign_all_models() {
     MODEL_PORT_ASSIGNMENTS=()
     MODEL_TP_ASSIGNMENTS=()
     
-    # Assign ColPali first (GPU 0, port 8000)
-    local port_counter=8001  # Start from 8001 since ColPali takes 8000
-    
-    # Check if ColPali is in registry
-    local has_colpali=false
-    for model in "${!MODEL_NAMES[@]}"; do
-        if [[ "$model" == "colpali" ]]; then
-            has_colpali=true
-            MODEL_GPU_ASSIGNMENTS["colpali"]="0"
-            MODEL_PORT_ASSIGNMENTS["colpali"]="8000"
-            MODEL_TP_ASSIGNMENTS["colpali"]="1"
-            success "Assigned colpali to GPU 0 (port 8000)"
-            break
-        fi
-    done
+    # Note: GPU 0 is reserved for ColPali service (separate, not managed here)
+    # Start port counter at 8000 for vLLM models
+    local port_counter=8000
     
     # Strategy: Put small models on GPU 1, large models on remaining GPUs with TP
-    # Sort models by size (excluding ColPali)
+    # Sort models by size (GPU 0 is reserved for ColPali service)
     local small_models=()
     local large_models=()
     
     for model in "${!MODEL_NAMES[@]}"; do
-        # Skip ColPali - already assigned
-        if [[ "$model" == "colpali" ]]; then
-            continue
-        fi
-        
         local model_full="${MODEL_NAMES[$model]}"
         local params=$(get_model_params "$model_full")
         
