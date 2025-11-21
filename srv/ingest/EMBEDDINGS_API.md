@@ -5,7 +5,7 @@ FastEmbed embedding generation endpoint for external services.
 ## Endpoint
 
 ```
-POST http://ingest-lxc:8000/api/embeddings
+POST http://ingest-lxc:8002/api/embeddings
 ```
 
 ## Authentication
@@ -83,7 +83,7 @@ export async function generateEmbeddings(
   input: string | string[],
   userId: string
 ): Promise<number[][]> {
-  const response = await fetch('http://ingest-lxc:8000/api/embeddings', {
+  const response = await fetch('http://ingest-lxc:8002/api/embeddings', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -125,7 +125,7 @@ import OpenAI from 'openai';
 
 const ingestClient = new OpenAI({
   apiKey: 'not-needed', // Auth via X-User-Id header
-  baseURL: 'http://ingest-lxc:8000/api',
+  baseURL: 'http://ingest-lxc:8002/api',
 });
 
 export async function generateEmbeddings(
@@ -167,7 +167,7 @@ export async function embedTexts(
   texts: string[],
   options: EmbeddingOptions
 ): Promise<number[][]> {
-  const response = await fetch('http://ingest-lxc:8000/api/embeddings', {
+  const response = await fetch('http://ingest-lxc:8002/api/embeddings', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -265,7 +265,7 @@ export async function embedTextCached(
 ## List Available Models
 
 ```bash
-curl -X GET http://ingest-lxc:8000/api/embeddings/models \
+curl -X GET http://ingest-lxc:8002/api/embeddings/models \
   -H "X-User-Id: user-123"
 ```
 
@@ -291,10 +291,10 @@ The embeddings endpoint is automatically available when the ingest service is ru
 
 ```bash
 # Check if API is running
-curl http://ingest-lxc:8000/health
+curl http://ingest-lxc:8002/health
 
 # Test embeddings endpoint
-curl -X POST http://ingest-lxc:8000/api/embeddings \
+curl -X POST http://ingest-lxc:8002/api/embeddings \
   -H "Content-Type: application/json" \
   -H "X-User-Id: test-user" \
   -d '{"input": "Hello world"}'
@@ -313,7 +313,7 @@ EMBEDDING_BATCH_SIZE=32                  # Default
 
 If you're currently using OpenAI or another embedding service:
 
-1. Replace base URL: `https://api.openai.com/v1` → `http://ingest-lxc:8000/api`
+1. Replace base URL: `https://api.openai.com/v1` → `http://ingest-lxc:8002/api`
 2. Change model: `text-embedding-3-small` → `bge-large-en-v1.5`
 3. Update auth: `Authorization: Bearer sk-xxx` → `X-User-Id: user-123`
 4. Note dimension change: 1536-d → 1024-d (may need to update vector DB schemas)
@@ -337,7 +337,7 @@ If you're currently using OpenAI or another embedding service:
 ## Support
 
 For issues or questions:
-- API docs: http://ingest-lxc:8000/docs
-- Health check: http://ingest-lxc:8000/health
+- API docs: http://ingest-lxc:8002/docs
+- Health check: http://ingest-lxc:8002/health
 - Logs: `journalctl -u ingest-api -f`
 
