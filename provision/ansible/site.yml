@@ -114,10 +114,10 @@
     - name: Force kill any remaining vLLM processes for specific ports
       shell: |
         # Build port filter based on services being deployed
-        echo "Targeting vLLM processes on ports: $VLLM_PORTS"
+        echo "Targeting vLLM processes on ports: {{ vllm_ports_string }}"
         
         killed_any=0
-        for port in $VLLM_PORTS; do
+        for port in {{ vllm_ports_string }}; do
           # Kill vLLM API server processes for this specific port
           for pid in $(pgrep -f "vllm.entrypoints.openai.api_server.*--port $port" 2>/dev/null); do
             echo "Killing vLLM process on port $port (PID $pid)"
@@ -133,17 +133,20 @@
         done
         
         if [ "$killed_any" -eq 0 ]; then
-          echo "No vLLM processes found for ports: $VLLM_PORTS"
+          echo "No vLLM processes found for ports: {{ vllm_ports_string }}"
         else
-          echo "Killed vLLM processes for ports: $VLLM_PORTS"
+          echo "Killed vLLM processes for ports: {{ vllm_ports_string }}"
         fi
-      environment:
-        VLLM_PORTS: "{{ vllm_services_to_stop | join(' ') }}"
       args:
         executable: /bin/bash
       register: kill_result
       changed_when: false
       failed_when: false
+      tags: [vllm, vllm_8000, vllm_8001, vllm_8002, vllm_8003, vllm_8004, vllm_8005]
+    
+    - name: Build ports list for GPU cleanup
+      set_fact:
+        vllm_ports_string: "{{ vllm_services_to_stop | join(' ') }}"
       tags: [vllm, vllm_8000, vllm_8001, vllm_8002, vllm_8003, vllm_8004, vllm_8005]
     
     - name: Force release GPU memory (vLLM on GPU 1+ only - preserves GPU 0)
@@ -152,44 +155,40 @@
         # This cleanup ONLY targets vLLM processes on GPU 1+
         # DO NOT touch GPU 0 under any circumstances
         
-        echo "Cleaning GPU memory for vLLM on ports: $VLLM_PORTS"
+        echo "Cleaning GPU memory for vLLM on ports: {{ vllm_ports_string }}"
         
         killed_pids=""
         
         # Kill vLLM-specific processes for the ports being deployed
         # Check both port number AND GPU 0 protection
-        for port in $VLLM_PORTS; do
+        for port in {{ vllm_ports_string }}; do
           for pid in $(pgrep -f "vllm.entrypoints.openai.api_server.*--port $port" 2>/dev/null); do
             if [ -f "/proc/$pid/environ" ]; then
               # Check CUDA_VISIBLE_DEVICES - skip if it contains GPU 0
               cuda_devices=$(tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep "^CUDA_VISIBLE_DEVICES=" | cut -d= -f2)
-              if [[ "$cuda_devices" != *"0"* ]] || [[ -z "$cuda_devices" ]]; then
-                # Safe to kill - not using GPU 0
-                kill -9 "$pid" 2>/dev/null && killed_pids="$killed_pids $pid" || true
-              else
-                echo "Preserved PID $pid on port $port (uses GPU 0)"
-              fi
+              case "$cuda_devices" in
+                *0*) echo "Preserved PID $pid on port $port (uses GPU 0)" ;;
+                *) kill -9 "$pid" 2>/dev/null && killed_pids="$killed_pids $pid" || true ;;
+              esac
             fi
           done
           
           # Kill Ray processes associated with this port's vLLM instance
-          # Ray processes may be child processes, check parent
           for pid in $(pgrep -f "ray::.*$port" 2>/dev/null); do
             cuda_devices=$(tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep "^CUDA_VISIBLE_DEVICES=" | cut -d= -f2)
-            if [[ "$cuda_devices" != *"0"* ]] || [[ -z "$cuda_devices" ]]; then
-              kill -9 "$pid" 2>/dev/null && killed_pids="$killed_pids $pid" || true
-            fi
+            case "$cuda_devices" in
+              *0*) : ;;  # Skip GPU 0
+              *) kill -9 "$pid" 2>/dev/null && killed_pids="$killed_pids $pid" || true ;;
+            esac
           done
         done
         
         if [ -n "$killed_pids" ]; then
-          echo "Killed vLLM processes on ports $VLLM_PORTS (GPU 1+ only):$killed_pids"
+          echo "Killed vLLM processes on ports {{ vllm_ports_string }} (GPU 1+ only):$killed_pids"
         else
-          echo "No vLLM processes found for ports: $VLLM_PORTS"
+          echo "No vLLM processes found for ports: {{ vllm_ports_string }}"
         fi
         echo "GPU 0 preserved (ColPali + Marker continue running)"
-      environment:
-        VLLM_PORTS: "{{ vllm_services_to_stop | join(' ') }}"
       args:
         executable: /bin/bash
       register: gpu_cleanup
