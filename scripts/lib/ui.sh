@@ -128,17 +128,23 @@ confirm() {
 # Usage: ENV=$(select_environment)
 # Returns: "test" or "production"
 select_environment() {
-    echo ""
-    box "Environment Selection"
-    echo ""
-    echo -e "  ${CYAN}1)${NC} Test Environment       (10.96.200.x network)"
-    echo -e "  ${CYAN}2)${NC} Production Environment (10.96.200.x network)"
-    echo ""
+    # Send display output to stderr so it shows on terminal (not captured by command substitution)
+    {
+        echo ""
+        box "Environment Selection"
+        echo ""
+        echo -e "  ${CYAN}1)${NC} Test Environment       (10.96.200.x network)"
+        echo -e "  ${CYAN}2)${NC} Production Environment (10.96.200.x network)"
+        echo ""
+    } >&2
     
     while true; do
-        read -p "$(echo -e "${BOLD}Select environment [1-2]:${NC} ")" choice
+        # Read from terminal and show prompt on stderr
+        echo -ne "${BOLD}Select environment [1-2]:${NC} " >&2
+        read choice < /dev/tty
         case $choice in
             1)
+                # Only output result to stdout (will be captured)
                 echo "test"
                 return 0
                 ;;
