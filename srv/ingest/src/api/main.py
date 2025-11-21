@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.middleware.auth import AuthMiddleware
 from api.middleware.logging import LoggingMiddleware
-from api.routes import files, health, search, status, upload
+from api.routes import embeddings, files, health, search, status, upload
 
 # Configure structured logging
 structlog.configure(
@@ -61,7 +61,7 @@ the Busibox ingestion pipeline.
 2. **Parsing** → Text extraction (Marker, TATR, OCR)
 3. **Classification** → Document type and language detection
 4. **Chunking** → Semantic text chunking (400-800 tokens)
-5. **Embedding** → Dense (text-embedding-3-small) + BM25 + ColPali
+5. **Embedding** → Dense (FastEmbed bge-large 1024-d) + BM25 + ColPali pooled
 6. **Indexing** → Store in Milvus vector database
 
 ### Authentication
@@ -89,6 +89,10 @@ For issues or questions, contact the Busibox infrastructure team.
         {
             "name": "Search",
             "description": "Semantic document search with hybrid retrieval",
+        },
+        {
+            "name": "Embeddings",
+            "description": "Text embedding generation with FastEmbed",
         },
         {
             "name": "Status",
@@ -128,6 +132,7 @@ app.add_middleware(AuthMiddleware)
 # Include routers
 app.include_router(upload.router, prefix="/upload", tags=["Upload"])
 app.include_router(search.router, prefix="/search", tags=["Search"])
+app.include_router(embeddings.router, prefix="/api", tags=["Embeddings"])
 app.include_router(status.router, prefix="/status", tags=["Status"])
 app.include_router(files.router, prefix="/files", tags=["Files"])
 app.include_router(health.router, prefix="/health", tags=["Health"])
@@ -164,6 +169,7 @@ async def root():
         "endpoints": {
             "upload": "/upload",
             "search": "/search",
+            "embeddings": "/api/embeddings",
             "status": "/status/{file_id}",
             "files": "/files/{file_id}",
             "health": "/health",
