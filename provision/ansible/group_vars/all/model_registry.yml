@@ -18,35 +18,49 @@ available_models:
     model_name: "anthropic.claude-sonnet-4-5"
     description: "Frontier model"
 
-  "qwen3-embedding-0.6b":
-    provider: "vllm"
-    model: "qwen3-embedding-0.6b"
-    model_name: "Qwen/Qwen3-Embedding-0.6B"
-    description: "Text embedding generation"
-
   "phi-4":
     provider: "vllm"
     model: "phi-4"
     model_name: "microsoft/Phi-4-multimodal-instruct"
     description: "Fast model for quick operations"
     
-  "qwen3-30b-a3b-instruct-fp8":
+  "qwen3-30b":
     provider: "vllm"
-    model: "qwen3-30b-a3b-instruct-fp8"
-    model_name: "Qwen/Qwen3-30B-A3B-Instruct-2507-FP8"
+    model: "qwen3-30b-a3b-instruct-awq-4bit"
+    model_name: "Qwen/Qwen3-30B-A3B-Instruct-2507-AWQ-4bit"
     description: "General purpose agent model"
 
+  "qwen3-reranker":
+    provider: "vllm"
+    model: "qwen3-reranker-0.6b"
+    model_name: "Qwen/Qwen3-Reranker-0.6B"
+    description: "Search result reranking"
+
+  "bge-large":
+    provider: "fastembed"
+    model: "bge-large-en-v1.5"
+    model_name: "BAAI/bge-large-en-v1.5)"
+    description: "Text embedding generation"
+
+  "colpali":
+    provider: "vllm"
+    model: "colpali-v1.3"
+    model_name: "vidore/colpali-v1.3"
+    description: "Visual document embedding"
+
 model_purposes:
-  default: "qwen3-30b-a3b-instruct"   # General purpose agent model (default for most tasks)
+  default: "qwen3-30b"   # General purpose agent model (default for most tasks)
   frontier: "claude-sonnet-4-5"   # Frontier model
   vision: "phi-4"   # Vision-language model for image understanding
-  research: "qwen3-30b-a3b-instruct"   # Research and analysis
-  analysis: "qwen3-30b-a3b-instruct"   # Data analysis
+  research: "qwen3-30b"   # Research and analysis
+  analysis: "qwen3-30b"   # Data analysis
   fast: "phi-4"   # Fast model for quick operations
   cleanup: "phi-4"   # Text cleanup and formatting  
   chat: "phi-4"   # General chat and Q&A
   classify: "phi-4"   # Document classification
   parsing: "phi-4"   # Document parsing and structure extraction
-  embedding: "qwen3-embedding-0.6b"   # Text embedding generation
+  embedding: "bge-large"   # Text embedding generation
+  visual-embedding: "colpali"   # Visual document embedding
+  reranking: "qwen3-reranker"   # Search result reranking
   # Note: visual-embedding (colpali) is managed by separate colpali service, not vLLM
 

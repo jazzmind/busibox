@@ -6,18 +6,21 @@
 # PURPOSE: Pre-download and cache LLM models to shared storage before container deployment
 #
 # USAGE:
-#   bash setup-llm-models.sh
+#   bash setup-llm-models.sh              # Download models from registry
+#   bash setup-llm-models.sh --cleanup    # Remove models not in registry
 #
 # WHAT IT DOES:
 #   1. Creates shared model directories on Proxmox host
 #   2. Downloads models from HuggingFace
 #   3. Models are mounted into LXC containers via bind mounts
+#   4. (cleanup mode) Removes orphaned models with confirmation
 #
 # WHY:
 #   - Avoids downloading large models during container deployment
 #   - Saves bandwidth and time
 #   - Models shared across multiple containers
 #   - Mirrors pattern used for NVIDIA drivers
+#   - Cleanup saves disk space by removing unused models
 #
 set -eo pipefail
 
@@ -32,6 +35,21 @@ log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
+# Parse command line arguments
+CLEANUP_MODE=false
+for arg in "$@"; do
+    case "$arg" in
+        --cleanup)
+            CLEANUP_MODE=true
+            ;;
+        *)
+            log_error "Unknown argument: $arg"
+            echo "Usage: $0 [--cleanup]"
+            exit 1
+            ;;
+    esac
+done
 
 # Get script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -51,12 +69,15 @@ if [[ -z "$HF_TOKEN" ]] && [[ -f "$HOME/.huggingface/token" ]]; then
     HF_TOKEN=$(cat "$HOME/.huggingface/token")
 fi
 
-echo "=========================================="
-echo "LLM Model Pre-Download for vLLM"
-echo "=========================================="
-log_info "This will download models to: ${HUGGINGFACE_CACHE}"
-log_info "Note: Marker/Surya models are downloaded automatically by Marker when needed"
-echo ""
+# Only show download header if not in cleanup mode
+if [ "$CLEANUP_MODE" = false ]; then
+    echo "=========================================="
+    echo "LLM Model Pre-Download for vLLM"
+    echo "=========================================="
+    log_info "This will download models to: ${HUGGINGFACE_CACHE}"
+    log_info "Note: Marker/Surya models are downloaded automatically by Marker when needed"
+    echo ""
+fi
 
 # Check for HuggingFace authentication
 if [[ -z "$HF_TOKEN" ]]; then
@@ -77,6 +98,7 @@ else
     echo ""
 fi
 
+# Download mode - proceed with downloading models
 # Step 1: Create host directory
 log_info "Step 1: Creating model cache directory on host..."
 mkdir -p "${HUGGINGFACE_CACHE}"
@@ -149,7 +171,7 @@ try:
     available_models = data.get('available_models', {})
     
     # Providers that don't require local model downloads
-    api_providers = {'bedrock', 'openai', 'anthropic'}
+    api_providers = {'bedrock', 'openai', 'anthropic', 'fastembed'}
     
     for model_key, model_config in available_models.items():
         provider = model_config.get('provider', '').lower()
@@ -184,8 +206,118 @@ if [ ${#MODELS[@]} -eq 0 ]; then
     exit 1
 fi
 
-log_success "Found ${#MODELS[@]} model(s) to download"
+log_success "Found ${#MODELS[@]} model(s) in registry"
 echo ""
+
+# Cleanup function - remove models not in registry
+cleanup_orphaned_models() {
+    log_info "Cleanup Mode: Checking for orphaned models..."
+    echo ""
+    
+    # Get list of models in registry (already in MODELS array)
+    declare -A registry_models
+    for model in "${MODELS[@]}"; do
+        registry_models["$model"]=1
+    done
+    
+    # Get list of cached models on disk
+    if ! ls -1d "${MODELS_DIR}"/models--* 2>/dev/null | grep -q .; then
+        log_info "No cached models found. Nothing to clean up."
+        echo ""
+        return
+    fi
+    
+    # Track orphaned models
+    ORPHANED_COUNT=0
+    DELETED_COUNT=0
+    TOTAL_FREED=0
+    
+    # Check each cached model
+    while read -r dir; do
+        # Convert directory name back to model name (models--org--model -> org/model)
+        MODEL_NAME=$(basename "$dir" | sed 's/^models--//g' | sed 's/--/\//g')
+        
+        # Check if model is in registry
+        if [[ -z "${registry_models[$MODEL_NAME]}" ]]; then
+            ((ORPHANED_COUNT++))
+            
+            # Get model size
+            SIZE=$(du -sh "$dir" 2>/dev/null | awk '{print $1}')
+            SIZE_BYTES=$(du -sb "$dir" 2>/dev/null | awk '{print $1}')
+            
+            log_warning "Orphaned model: ${MODEL_NAME} (${SIZE})"
+            echo ""
+            echo "  This model is not in the registry and is no longer needed."
+            echo "  Location: ${dir}"
+            echo ""
+            
+            # Prompt for confirmation
+            read -p "  Delete this model? [y/N]: " -n 1 -r
+            echo ""
+            
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                log_info "  Deleting ${MODEL_NAME}..."
+                if rm -rf "$dir"; then
+                    log_success "  ✓ Deleted ${MODEL_NAME} (freed ${SIZE})"
+                    ((DELETED_COUNT++))
+                    TOTAL_FREED=$((TOTAL_FREED + SIZE_BYTES))
+                else
+                    log_error "  ✗ Failed to delete ${MODEL_NAME}"
+                fi
+            else
+                log_info "  Skipped ${MODEL_NAME}"
+            fi
+            echo ""
+        fi
+    done < <(ls -1d "${MODELS_DIR}"/models--* 2>/dev/null)
+    
+    # Summary
+    echo "=========================================="
+    log_info "Cleanup Summary"
+    echo "=========================================="
+    echo ""
+    echo "  Orphaned models found: ${ORPHANED_COUNT}"
+    echo "  Models deleted: ${DELETED_COUNT}"
+    
+    if [ $TOTAL_FREED -gt 0 ]; then
+        # Convert bytes to human readable using awk (no bc dependency)
+        if [ $TOTAL_FREED -gt 1073741824 ]; then
+            FREED_GB=$(awk "BEGIN {printf \"%.2f\", $TOTAL_FREED / 1073741824}")
+            echo "  Space freed: ${FREED_GB} GB"
+        elif [ $TOTAL_FREED -gt 1048576 ]; then
+            FREED_MB=$(awk "BEGIN {printf \"%.2f\", $TOTAL_FREED / 1048576}")
+            echo "  Space freed: ${FREED_MB} MB"
+        else
+            FREED_KB=$(awk "BEGIN {printf \"%.2f\", $TOTAL_FREED / 1024}")
+            echo "  Space freed: ${FREED_KB} KB"
+        fi
+    else
+        echo "  Space freed: 0 bytes"
+    fi
+    echo ""
+    
+    if [ $ORPHANED_COUNT -eq 0 ]; then
+        log_success "No orphaned models found. All cached models are in the registry."
+    elif [ $DELETED_COUNT -gt 0 ]; then
+        log_success "Cleanup complete!"
+    else
+        log_info "No models were deleted."
+    fi
+    echo ""
+}
+
+# If cleanup mode, run cleanup and exit
+if [ "$CLEANUP_MODE" = true ]; then
+    echo "=========================================="
+    echo "LLM Model Cleanup"
+    echo "=========================================="
+    log_info "Cache directory: ${HUGGINGFACE_CACHE}"
+    log_info "Registry: provision/ansible/group_vars/all/model_registry.yml"
+    echo ""
+    
+    cleanup_orphaned_models
+    exit 0
+fi
 
 # Step 4: Download models
 log_info "Step 4: Downloading models..."
@@ -326,5 +458,9 @@ log_info "   bash ${SCRIPT_DIR}/update-model-config.sh"
 log_info "   This analyzes downloaded models and updates memory estimation config"
 echo ""
 log_info "5. vLLM will use these pre-downloaded models (no re-download needed)"
+echo ""
+log_info "To clean up models no longer in registry:"
+log_info "   bash ${SCRIPT_DIR}/$(basename "$0") --cleanup"
+log_info "   (confirms each deletion to save disk space)"
 echo ""
 

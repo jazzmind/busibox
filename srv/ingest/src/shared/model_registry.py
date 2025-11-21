@@ -33,10 +33,10 @@ class ModelRegistry:
     # which is deployed as JSON to /etc/ingest/model_registry.json via Ansible
     # These defaults should never be used in production - they're just for development/testing
     DEFAULT_MODELS = {
-        "embedding": {"model": "qwen-3-embedding", "provider": "litellm"},
-        "cleanup": {"model": "phi-4", "provider": "litellm", "temperature": 0.1, "max_tokens": 32768},
-        "parsing": {"model": "phi-4", "provider": "litellm", "temperature": 0.1, "max_tokens": 8192},
-        "analysis": {"model": "qwen-2.5-72b", "provider": "litellm", "temperature": 0.7},
+        "embedding": {"model": "embedding", "provider": "litellm"},
+        "cleanup": {"model": "cleanup", "provider": "litellm", "temperature": 0.1, "max_tokens": 32768},
+        "parsing": {"model": "parsing", "provider": "litellm", "temperature": 0.1, "max_tokens": 8192},
+        "analysis": {"model": "analysis", "provider": "litellm", "temperature": 0.7},
     }
     
     def __init__(self, config_path: Optional[str] = None):
