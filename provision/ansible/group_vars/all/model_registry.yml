@@ -24,13 +24,13 @@ available_models:
     model_name: "microsoft/Phi-4-multimodal-instruct"
     description: "Fast model for quick operations"
     # vLLM tuning parameters
-    gpu_memory_utilization: 0.85  # Small model - only needs 60% GPU
+    gpu_memory_utilization: 0.9  # Small model - only needs 60% GPU
     max_model_len: 16384  # Supports longer context
     max_num_seqs: 10  # Can handle more concurrent requests
     cpu_offload_gb: 100  # Moderate CPU offload
     # Tool calling support
     tool_calling: true
-    tool_call_parser: "hermes"  # Phi-4 uses Hermes-style tool calling
+    tool_call_parser: "phi4_mini_json"  # Phi-4 uses Hermes-style tool calling
     
   "qwen3-30b":
     provider: "vllm"
@@ -38,7 +38,7 @@ available_models:
     model_name: "cpatonn/Qwen3-30B-A3B-Instruct-2507-AWQ-4bit"
     description: "General purpose agent model"
     # vLLM tuning parameters
-    gpu_memory_utilization: 0.85  # Large model - needs 80% GPU
+    gpu_memory_utilization: 0.9  # Large model - needs 80% GPU
     max_model_len: 28000  # Supports very long context (AWQ quantized)
     max_num_seqs: 3  # Standard concurrent requests
     cpu_offload_gb: 150  # Heavy CPU offload for KV cache
