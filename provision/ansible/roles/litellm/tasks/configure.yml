@@ -38,13 +38,14 @@
   shell: |
     python3 << 'PYTHON_EOF'
     import json
+    import os
     import sys
     import yaml
     from pathlib import Path
     
-    # Load files
-    config_file = Path("{{ playbook_dir }}/group_vars/all/model_config.yml")
-    registry_file = Path("{{ playbook_dir }}/group_vars/all/model_registry.yml")
+    # Load files from environment variables
+    config_file = Path(os.environ.get('MODEL_CONFIG_FILE', ''))
+    registry_file = Path(os.environ.get('MODEL_REGISTRY_FILE', ''))
     
     models = []
     
@@ -86,8 +87,9 @@
                 continue
             
             if provider == 'bedrock':
-                # Bedrock API model
-                bedrock_key = "{{ secrets.bedrock_api_key | default('') }}"
+                # Bedrock API model - get credentials from environment
+                bedrock_key = os.environ.get('BEDROCK_API_KEY', '')
+                aws_region = os.environ.get('BEDROCK_REGION', 'us-east-1')
                 aws_access_key = bedrock_key.split(':')[0] if ':' in bedrock_key else ''
                 aws_secret_key = bedrock_key.split(':')[1] if ':' in bedrock_key else bedrock_key
                 
@@ -97,16 +99,17 @@
                         'model': 'bedrock/{}'.format(model_name),
                         'aws_access_key_id': aws_access_key,
                         'aws_secret_access_key': aws_secret_key,
-                        'aws_region_name': "{{ secrets.bedrock_region | default('us-east-1') }}"
+                        'aws_region_name': aws_region
                     }
                 })
             elif provider == 'vllm' and config.get('assigned', False) and config.get('port'):
                 # vLLM model assigned to a port
+                vllm_ip = os.environ.get('VLLM_IP', '10.96.200.208')
                 models.append({
                     'model_name': purpose,
                     'litellm_params': {
                         'model': "openai/{}".format(model_name),
-                        'api_base': "http://{{ vllm_ip }}:{}/v1".format(config['port']),
+                        'api_base': "http://{}:{}/v1".format(vllm_ip, config['port']),
                         'api_key': 'EMPTY'
                     }
                 })
@@ -114,6 +117,12 @@
     
     print(json.dumps(models))
     PYTHON_EOF
+  environment:
+    MODEL_CONFIG_FILE: "{{ playbook_dir }}/group_vars/all/model_config.yml"
+    MODEL_REGISTRY_FILE: "{{ playbook_dir }}/group_vars/all/model_registry.yml"
+    BEDROCK_API_KEY: "{{ secrets.bedrock_api_key | default('') }}"
+    BEDROCK_REGION: "{{ secrets.bedrock_region | default('us-east-1') }}"
+    VLLM_IP: "{{ vllm_ip }}"
   register: models_json_output
   delegate_to: localhost
   changed_when: false
