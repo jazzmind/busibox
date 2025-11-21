@@ -126,7 +126,7 @@ vllm_submenu() {
                     local vault_flags="$(get_vault_flags)"
                     info "Deploying vLLM 8000 to $env environment..."
                     echo ""
-                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags vllm_8000 $vault_flags || {
+                    ansible-playbook -i "inventory/${env}/hosts.yml" -l vllm site.yml --tags vllm_8000 $vault_flags || {
                         error "Deployment failed"
                     }
                     cd "$REPO_ROOT"
@@ -141,7 +141,7 @@ vllm_submenu() {
                     local vault_flags="$(get_vault_flags)"
                     info "Deploying vLLM 8001 to $env environment..."
                     echo ""
-                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags vllm_8001 $vault_flags || {
+                    ansible-playbook -i "inventory/${env}/hosts.yml" -l vllm site.yml --tags vllm_8001 $vault_flags || {
                         error "Deployment failed"
                     }
                     cd "$REPO_ROOT"
@@ -156,7 +156,7 @@ vllm_submenu() {
                     local vault_flags="$(get_vault_flags)"
                     info "Deploying vLLM 8002 to $env environment..."
                     echo ""
-                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags vllm_8002 $vault_flags || {
+                    ansible-playbook -i "inventory/${env}/hosts.yml" -l vllm site.yml --tags vllm_8002 $vault_flags || {
                         error "Deployment failed"
                     }
                     cd "$REPO_ROOT"
@@ -171,7 +171,7 @@ vllm_submenu() {
                     local vault_flags="$(get_vault_flags)"
                     info "Deploying vLLM 8003 to $env environment..."
                     echo ""
-                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags vllm_8003 $vault_flags || {
+                    ansible-playbook -i "inventory/${env}/hosts.yml" -l vllm site.yml --tags vllm_8003 $vault_flags || {
                         error "Deployment failed"
                     }
                     cd "$REPO_ROOT"
@@ -186,7 +186,7 @@ vllm_submenu() {
                     local vault_flags="$(get_vault_flags)"
                     info "Deploying vLLM 8004 to $env environment..."
                     echo ""
-                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags vllm_8004 $vault_flags || {
+                    ansible-playbook -i "inventory/${env}/hosts.yml" -l vllm site.yml --tags vllm_8004 $vault_flags || {
                         error "Deployment failed"
                     }
                     cd "$REPO_ROOT"
@@ -201,7 +201,7 @@ vllm_submenu() {
                     local vault_flags="$(get_vault_flags)"
                     info "Deploying vLLM 8005 to $env environment..."
                     echo ""
-                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags vllm_8005 $vault_flags || {
+                    ansible-playbook -i "inventory/${env}/hosts.yml" -l vllm site.yml --tags vllm_8005 $vault_flags || {
                         error "Deployment failed"
                     }
                     cd "$REPO_ROOT"
