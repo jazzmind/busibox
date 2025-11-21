@@ -42,15 +42,15 @@ class Config:
         self.minio_secure = os.getenv("MINIO_SECURE", "false").lower() == "true"
         self.minio_bucket = os.getenv("MINIO_BUCKET", "documents")
         
-        # liteLLM configuration
-        self.litellm_base_url = os.getenv("LITELLM_BASE_URL", "http://10.96.200.30:4000")
-        self.litellm_api_key = os.getenv("LITELLM_API_KEY", "")
-        self.embedding_model = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+        # FastEmbed configuration (local text embeddings)
+        self.fastembed_model = os.getenv("FASTEMBED_MODEL", "BAAI/bge-large-en-v1.5")
+        self.embedding_batch_size = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
         
-        # ColPali configuration (optional visual embeddings)
+        # ColPali configuration (visual embeddings)
         self.colpali_base_url = os.getenv("COLPALI_BASE_URL", "http://10.96.200.208:8002/v1")
         self.colpali_api_key = os.getenv("COLPALI_API_KEY", "EMPTY")
         self.colpali_enabled = os.getenv("COLPALI_ENABLED", "true").lower() == "true"
+        self.colpali_pooling_method = os.getenv("COLPALI_POOLING_METHOD", "mean")  # mean or max
         
         # Marker configuration (optional - can disable to save memory)
         self.marker_enabled = os.getenv("MARKER_ENABLED", "false").lower() == "true"
@@ -94,12 +94,12 @@ class Config:
             "minio_secret_key": self.minio_secret_key,
             "minio_secure": self.minio_secure,
             "minio_bucket": self.minio_bucket,
-            "litellm_base_url": self.litellm_base_url,
-            "litellm_api_key": self.litellm_api_key,
-            "embedding_model": self.embedding_model,
+            "fastembed_model": self.fastembed_model,
+            "embedding_batch_size": self.embedding_batch_size,
             "colpali_base_url": self.colpali_base_url,
             "colpali_api_key": self.colpali_api_key,
             "colpali_enabled": self.colpali_enabled,
+            "colpali_pooling_method": self.colpali_pooling_method,
             "marker_enabled": self.marker_enabled,
             "marker_use_gpu": self.marker_use_gpu,
             "marker_gpu_device": self.marker_gpu_device,

@@ -474,7 +474,7 @@ class MultiFlowProcessor:
                 "primary_language": primary_language,
                 "detected_languages": detected_languages,
                 "visual_embedding_count": len(visual_embeddings),
-                "patches_per_page": [len(page_emb) for page_emb in visual_embeddings],
+                "embedding_dimension": len(visual_embeddings[0]) if visual_embeddings else 0,
             },
             visual_embeddings=visual_embeddings,
             processing_time_seconds=processing_time,

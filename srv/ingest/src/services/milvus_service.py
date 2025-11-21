@@ -123,49 +123,16 @@ class MilvusService:
             # Convert to scipy sparse matrix (required by pymilvus)
             sparse_vector = csr_matrix(bm25_scores)
             
-            # Pad or truncate text_dense embedding to match Milvus schema dimension (4096)
-            # Milvus expects 4096 dims (Qwen3-Embedding-8B), but embeddings may be:
-            # - 1536 dims (OpenAI text-embedding-3-small)
-            # - 768 dims (FastEmbed fallback)
-            # - 4096 dims (Qwen3-Embedding-8B primary)
-            target_dim = 4096
-            original_length = len(embedding)
-            
-            if original_length < target_dim:
-                # Pad with zeros
-                padded_embedding = list(embedding) + ([0.0] * (target_dim - original_length))
-                logger.debug(
-                    "Padded text_dense embedding",
-                    chunk_index=chunk.get("chunk_index", i),
-                    original_length=original_length,
-                    padded_length=len(padded_embedding),
-                )
-            elif original_length > target_dim:
-                # Truncate
-                padded_embedding = list(embedding[:target_dim])
-                logger.warning(
-                    "Truncated text_dense embedding",
-                    chunk_index=chunk.get("chunk_index", i),
-                    original_length=original_length,
-                    truncated_length=len(padded_embedding),
-                )
-            else:
-                # Exact match - ensure it's a list
-                padded_embedding = list(embedding)
-            
-            # Verify final dimension
-            if len(padded_embedding) != target_dim:
+            # Embeddings are exactly 1024-d from FastEmbed (bge-large-en-v1.5)
+            # No padding/truncation needed
+            if len(embedding) != 1024:
                 logger.error(
-                    "Text dense embedding dimension mismatch after padding/truncation",
+                    "Unexpected embedding dimension from FastEmbed",
                     chunk_index=chunk.get("chunk_index", i),
-                    expected=target_dim,
-                    actual=len(padded_embedding),
+                    expected=1024,
+                    actual=len(embedding),
                 )
-                # Force correct length
-                if len(padded_embedding) < target_dim:
-                    padded_embedding.extend([0.0] * (target_dim - len(padded_embedding)))
-                else:
-                    padded_embedding = padded_embedding[:target_dim]
+                raise ValueError(f"Expected 1024-d embeddings, got {len(embedding)}-d")
             
             entity = {
                 "id": vector_id,
@@ -174,7 +141,7 @@ class MilvusService:
                 "page_number": chunk.get("page_number") or 0,  # 0 for non-PDF chunks (None -> 0)
                 "modality": "text",
                 "text": chunk["text"],
-                "text_dense": padded_embedding,  # Padded/truncated to 4096 dims
+                "text_dense": list(embedding),  # 1024-d from FastEmbed
                 "text_sparse": sparse_vector,  # BM25 sparse vector
                 "page_vectors": [0.0] * 128,  # Empty ColPali vector (128 dims)
                 "user_id": user_id,
@@ -221,17 +188,17 @@ class MilvusService:
         file_id: str,
         user_id: str,
         page_images: List[Dict],
-        page_embeddings: List[List[List[float]]],
+        page_embeddings: List[List[float]],
         content_hash: str,
     ) -> int:
         """
-        Insert PDF page images with ColPali multi-vector embeddings.
+        Insert PDF page images with ColPali pooled embeddings.
         
         Args:
             file_id: File identifier
             user_id: User identifier
             page_images: List of page image metadata (page_number, image_path)
-            page_embeddings: List of page embeddings (each page has 128 patch embeddings)
+            page_embeddings: List of page embeddings (each page is a single 128-d pooled vector)
             content_hash: Content hash for vector reuse
         
         Returns:
@@ -254,75 +221,24 @@ class MilvusService:
             page_number = page_info.get("page_number", 1)
             vector_id = f"{file_id}-page-{page_number}"
             
-            # Milvus schema expects page_vectors to be 128 dimensions (single patch)
-            # ColPali returns multiple patches (typically 128+ patches × 128 dims each)
-            # For now, we use the first patch as a representative embedding
-            # TODO: Consider schema redesign to store all patches (16384 dims) or use multi-vector storage
+            # ColPali returns single pooled 128-d vector per page (mean-pooled from patches)
+            # No need for multi-patch handling anymore
             target_dim = 128  # Match Milvus schema dimension
-            num_patches = len(page_embedding)
             
-            if num_patches == 0:
-                logger.warning(
-                    "No patches in page embedding",
+            if len(page_embedding) != target_dim:
+                logger.error(
+                    "Unexpected ColPali embedding dimension",
                     page_number=page_number,
+                    expected=target_dim,
+                    actual=len(page_embedding),
                 )
-                # Use zero vector if no patches
-                page_vector = [0.0] * target_dim
-            else:
-                # Use first patch (128 dims)
-                first_patch = page_embedding[0]
-                if len(first_patch) != target_dim:
-                    logger.error(
-                        "Patch dimension mismatch",
-                        page_number=page_number,
-                        expected=target_dim,
-                        actual=len(first_patch),
-                    )
-                    # Pad or truncate first patch to match schema
-                    if len(first_patch) < target_dim:
-                        page_vector = list(first_patch) + ([0.0] * (target_dim - len(first_patch)))
-                    else:
-                        page_vector = list(first_patch[:target_dim])
-                else:
-                    page_vector = list(first_patch)
-                
-                if num_patches > 1:
-                    logger.debug(
-                        "Using first patch as representative (storing only 1 of N patches)",
-                        page_number=page_number,
-                        total_patches=num_patches,
-                        stored_patch_dims=len(page_vector),
-                    )
+                raise ValueError(f"Expected 128-d ColPali embeddings, got {len(page_embedding)}-d")
             
             # Generate zero/empty embeddings for text fields (required by Milvus schema)
             # Page images don't have text embeddings, so use zeros/empty
-            # Note: text_dense is now 4096 dims (padded), but we use zeros for page images
-            zero_dense_embedding = [0.0] * 4096  # Match text_dense dimension (4096)
+            zero_dense_embedding = [0.0] * 1024  # Match text_dense dimension (1024-d FastEmbed)
             # Create empty sparse matrix (BM25) - must match format used for text chunks
-            # Text chunks use: csr_matrix(bm25_scores) where bm25_scores is a 1D array
-            # So we create an empty 1D array and convert to sparse
             empty_sparse_embedding = csr_matrix([0.0])  # Minimal sparse vector
-            
-            # Verify final dimensions before creating entity
-            if len(page_vector) != target_dim:
-                logger.error(
-                    "Page vector dimension mismatch",
-                    page_number=page_number,
-                    expected=target_dim,
-                    actual=len(page_vector),
-                )
-                # Force correct length
-                if len(page_vector) < target_dim:
-                    page_vector.extend([0.0] * (target_dim - len(page_vector)))
-                else:
-                    page_vector = page_vector[:target_dim]
-            
-            logger.debug(
-                "Creating entity for page",
-                page_number=page_number,
-                page_vector_length=len(page_vector),
-                text_dense_length=len(zero_dense_embedding),
-            )
             
             entity = {
                 "id": vector_id,
@@ -331,9 +247,9 @@ class MilvusService:
                 "page_number": page_number,
                 "modality": "page_image",
                 "text": f"Page {page_number}",  # Placeholder text
-                "text_dense": zero_dense_embedding,  # Zero vector (4096 dims) - page images don't have text embeddings
+                "text_dense": zero_dense_embedding,  # Zero vector (1024 dims) - page images don't have text embeddings
                 "text_sparse": empty_sparse_embedding,  # Empty sparse vector (no BM25 for images)
-                "page_vectors": page_vector,  # Single patch (128 dims) matching schema
+                "page_vectors": list(page_embedding),  # Pooled ColPali vector (128 dims)
                 "user_id": user_id,
                 "metadata": {
                     "content_hash": content_hash,

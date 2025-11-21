@@ -1,10 +1,11 @@
 """
-Milvus search service with hybrid search support.
+Milvus search service with hybrid search support and reranking.
 """
 
 import structlog
 from typing import List, Dict, Optional
 from pymilvus import Collection, connections
+import httpx
 
 logger = structlog.get_logger()
 
@@ -20,6 +21,12 @@ class MilvusSearchService:
         self.collection_name = config.get("milvus_collection", "document_embeddings")
         self.connected = False
         self.collection = None
+        
+        # Reranker configuration
+        self.reranker_enabled = config.get("reranker_enabled", True)
+        self.reranker_base_url = config.get("litellm_base_url", "http://10.96.200.30:4000")
+        self.reranker_api_key = config.get("litellm_api_key", "")
+        self.reranker_model = config.get("reranker_model", "reranking")  # Model purpose from registry
     
     def connect(self):
         """Connect to Milvus."""
@@ -211,7 +218,7 @@ class MilvusSearchService:
             )
             raise
     
-    def hybrid_search(
+    async def hybrid_search(
         self,
         query_embedding: List[float],
         query_text: str,
@@ -221,22 +228,24 @@ class MilvusSearchService:
         dense_weight: float = 0.7,
         sparse_weight: float = 0.3,
         filters: Optional[Dict] = None,
+        use_reranker: bool = True,
     ) -> List[Dict]:
         """
-        Hybrid search combining dense and sparse (BM25) search with RRF fusion.
+        Hybrid search combining dense and sparse (BM25) search with RRF fusion and optional reranking.
         
         Args:
             query_embedding: Dense embedding vector
             query_text: Text query for BM25
             user_id: User ID for permission filtering
             top_k: Final number of results to return
-            rerank_k: Number of candidates to retrieve (will be fused)
+            rerank_k: Number of candidates to retrieve (will be fused and optionally reranked)
             dense_weight: Weight for dense search
             sparse_weight: Weight for sparse search
             filters: Additional filters
+            use_reranker: Whether to apply reranking after RRF fusion
         
         Returns:
-            List of search results with fused scores
+            List of search results with fused (and optionally reranked) scores
         """
         if not self.connected:
             self.connect()
@@ -276,13 +285,24 @@ class MilvusSearchService:
                 k=60,  # RRF constant
             )
             
-            # Take top-k after fusion
-            fused_results = fused_results[:top_k]
+            # Apply reranking if enabled
+            if use_reranker and self.reranker_enabled:
+                # Rerank with more candidates than final top_k for better quality
+                rerank_candidates = min(len(fused_results), rerank_k // 2)  # Use half of rerank_k candidates
+                fused_results = await self.rerank_results(
+                    query=query_text,
+                    results=fused_results[:rerank_candidates],
+                    top_k=top_k,
+                )
+            else:
+                # Take top-k after fusion
+                fused_results = fused_results[:top_k]
             
             logger.info(
                 "Hybrid search completed",
                 user_id=user_id,
                 result_count=len(fused_results),
+                reranked=use_reranker and self.reranker_enabled,
             )
             
             return fused_results
@@ -295,6 +315,106 @@ class MilvusSearchService:
                 exc_info=True,
             )
             raise
+    
+    async def rerank_results(
+        self,
+        query: str,
+        results: List[Dict],
+        top_k: Optional[int] = None,
+    ) -> List[Dict]:
+        """
+        Rerank search results using vLLM reranker model.
+        
+        Args:
+            query: Original search query
+            results: Search results to rerank
+            top_k: Number of top results to return (None = return all)
+        
+        Returns:
+            Reranked results with reranker scores
+        """
+        if not self.reranker_enabled or not results:
+            logger.debug("Reranker disabled or no results, skipping reranking")
+            return results[:top_k] if top_k else results
+        
+        try:
+            logger.info(
+                "Reranking results",
+                result_count=len(results),
+                reranker_model=self.reranker_model,
+            )
+            
+            # Prepare query-document pairs for reranking
+            # Format: [{"query": "...", "document": "..."}]
+            pairs = [
+                {
+                    "query": query,
+                    "document": result["text"][:2000],  # Limit to 2000 chars for performance
+                }
+                for result in results
+            ]
+            
+            # Call reranker via liteLLM (compatible with OpenAI embeddings API)
+            # Most reranker models use the embeddings endpoint but return relevance scores
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    f"{self.reranker_base_url}/rerank",
+                    json={
+                        "model": self.reranker_model,
+                        "query": query,
+                        "documents": [result["text"][:2000] for result in results],
+                        "top_n": top_k or len(results),
+                    },
+                    headers={
+                        "Authorization": f"Bearer {self.reranker_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                
+                if response.status_code != 200:
+                    logger.warning(
+                        "Reranker API request failed, returning original results",
+                        status_code=response.status_code,
+                        response=response.text[:500],
+                    )
+                    return results[:top_k] if top_k else results
+                
+                rerank_data = response.json()
+                
+                # Parse reranker response
+                # Expected format: {"results": [{"index": 0, "relevance_score": 0.95}, ...]}
+                if "results" not in rerank_data:
+                    logger.warning("Unexpected reranker response format, returning original results")
+                    return results[:top_k] if top_k else results
+                
+                # Map reranker scores back to results
+                reranked_results = []
+                for rerank_item in rerank_data["results"]:
+                    idx = rerank_item["index"]
+                    relevance_score = rerank_item["relevance_score"]
+                    
+                    if idx < len(results):
+                        result = results[idx].copy()
+                        result["rerank_score"] = relevance_score
+                        result["original_score"] = result["score"]
+                        result["score"] = relevance_score  # Replace score with rerank score
+                        reranked_results.append(result)
+                
+                logger.info(
+                    "Reranking completed",
+                    original_count=len(results),
+                    reranked_count=len(reranked_results),
+                )
+                
+                return reranked_results
+        
+        except Exception as e:
+            logger.warning(
+                "Reranking failed, returning original results",
+                error=str(e),
+                exc_info=True,
+            )
+            return results[:top_k] if top_k else results
     
     def _process_results(
         self,

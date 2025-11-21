@@ -1,9 +1,10 @@
 """
 ColPali PDF page embedder for visual search.
 
-Generates multi-vector embeddings for PDF page images using ColPali v1.3.
+Generates pooled embeddings for PDF page images using ColPali v1.3.
 ColPali is based on PaliGemma-3B with ColBERT-style multi-vector representations.
-Each page produces 128 patch embeddings of 128 dimensions each.
+Each page produces multiple patch embeddings (128 dims each) which are mean-pooled
+into a single 128-d vector for efficient storage and retrieval.
 
 Reference: https://huggingface.co/vidore/colpali-v1.3
 """
@@ -13,6 +14,7 @@ import os
 from typing import List, Optional
 
 import httpx
+import numpy as np
 import structlog
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -44,7 +46,7 @@ class ColPaliEmbedder:
     async def embed_pages(
         self,
         page_image_paths: List[str],
-    ) -> Optional[List[List[List[float]]]]:
+    ) -> Optional[List[List[float]]]:
         """
         Generate ColPali embeddings for PDF page images.
         
@@ -52,7 +54,7 @@ class ColPaliEmbedder:
             page_image_paths: List of paths to page image files
         
         Returns:
-            List of page embeddings, each page has 128 patch embeddings (128 dims each)
+            List of page embeddings, each page is a single 128-d pooled vector
             Returns None if ColPali not available or disabled
         """
         if not self.enabled or not page_image_paths:
@@ -140,22 +142,31 @@ class ColPaliEmbedder:
                     num_patches = len(embedding) // patch_dim
                     
                     # Reshape to [num_patches, patch_dim]
-                    reshaped = [
-                        embedding[i * patch_dim : (i + 1) * patch_dim]
-                        for i in range(num_patches)
-                    ]
-                    embeddings.append(reshaped)
+                    reshaped = np.array(embedding).reshape(num_patches, patch_dim)
+                    
+                    # Pool patches into single vector using mean pooling
+                    # This preserves overall page "gist" while reducing storage
+                    pooling_method = self.config.get("colpali_pooling_method", "mean")
+                    if pooling_method == "max":
+                        pooled_vector = np.max(reshaped, axis=0)
+                    else:  # mean (default)
+                        pooled_vector = np.mean(reshaped, axis=0)
+                    
+                    # Convert to list for JSON serialization
+                    embeddings.append(pooled_vector.tolist())
                     
                     logger.debug(
-                        "Reshaped ColPali embedding",
+                        "Pooled ColPali embedding",
                         num_patches=num_patches,
-                        patch_dim=patch_dim,
-                        total_values=len(embedding),
+                        pooling_method=pooling_method,
+                        input_dims=f"{num_patches}x{patch_dim}",
+                        output_dims=len(pooled_vector),
                     )
                 
                 logger.info(
-                    "ColPali embeddings generated successfully",
+                    "ColPali embeddings generated and pooled successfully",
                     page_count=len(embeddings),
+                    pooling_method=pooling_method,
                 )
                 
                 return embeddings
