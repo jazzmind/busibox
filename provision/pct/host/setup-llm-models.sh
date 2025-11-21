@@ -316,8 +316,8 @@ if [ "$DEDUPLICATE_MODE" = true ]; then
                 echo "  standard location used by modern HuggingFace tools."
                 echo ""
                 
-                # Prompt for confirmation
-                read -p "  Delete root copy and keep hub/ version? [y/N]: " -n 1 -r
+                # Prompt for confirmation (use /dev/tty to ensure interactive input works)
+                read -p "  Delete root copy and keep hub/ version? [y/N]: " -n 1 -r REPLY < /dev/tty
                 echo ""
                 
                 if [[ $REPLY =~ ^[Yy]$ ]]; then
@@ -476,8 +476,8 @@ if [ "$CLEANUP_MODE" = true ]; then
                     echo "  Location: ${dir}"
                     echo ""
                     
-                    # Prompt for confirmation
-                    read -p "  Delete this model? [y/N]: " -n 1 -r
+                    # Prompt for confirmation (use /dev/tty to ensure interactive input works)
+                    read -p "  Delete this model? [y/N]: " -n 1 -r REPLY < /dev/tty
                     echo ""
                     
                     if [[ $REPLY =~ ^[Yy]$ ]]; then
