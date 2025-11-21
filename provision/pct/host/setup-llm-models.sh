@@ -201,8 +201,24 @@ try:
     # Check if ColPali is configured in available_models
     for model_key, model_config in available_models.items():
         if model_config.get('model_name') == 'vidore/colpali-v1.3':
+            # Add base model
             models.add('google/paligemma-3b-pt-448')
+            # Also preserve alternate base model names
+            models.add('vidore/colpaligemma-3b-pt-448-base')
             break
+    
+    # Add service dependencies (models used by services but not in registry)
+    # These are hard dependencies that cannot be removed
+    service_dependencies = [
+        'vikp/surya_det2',  # Marker PDF extraction (layout detection) - used by ingest service
+    ]
+    
+    for dep_model in service_dependencies:
+        models.add(dep_model)
+    
+    print("# Service dependencies added:", file=sys.stderr)
+    for dep in service_dependencies:
+        print(f"#   - {dep}", file=sys.stderr)
     
     # Output models, one per line
     for model in sorted(models):
