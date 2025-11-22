@@ -66,15 +66,16 @@ def main():
         
         if provider == 'bedrock':
             # Bedrock API model - get credentials from environment
-            bedrock_key = os.environ.get('BEDROCK_API_KEY', '')
-            aws_region = os.environ.get('BEDROCK_REGION', 'us-east-1')
+            bedrock_key = os.environ.get('AWS_BEARER_TOKEN_BEDROCK', '')
+            aws_region = os.environ.get('AWS_REGION_BEDROCK', 'us-east-1')
             aws_access_key = bedrock_key.split(':')[0] if ':' in bedrock_key else ''
-            aws_secret_key = bedrock_key.split(':')[1] if ':' in bedrock_key else bedrock_key
+            aws_secret_key = bedrock_key.split(':')[1] if ':' in bedrock_key else ''
             
             models.append({
                 'model_name': purpose,
                 'litellm_params': {
                     'model': 'bedrock/{}'.format(model_name),
+                    'aws_bearer_token_bedrock': bedrock_key,
                     'aws_access_key_id': aws_access_key,
                     'aws_secret_access_key': aws_secret_key,
                     'aws_region_name': aws_region

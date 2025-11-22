@@ -101,11 +101,11 @@ model_purposes:
   research: "qwen3-30b"   # Research and analysis (using best Claude)
   agent: "qwen3-30b"   # agent model for agentic tasks
   chat: "phi-4"   # General chat (Claude 4.5 Haiku)
-  fast: "phi-4"   # Fast model for quick operations
-  cleanup: "phi-4"   # Text cleanup and formatting  
+  vision: "phi-4"   # Vision-language model for image understanding
   classify: "phi-4"   # Document classification
   parsing: "phi-4"   # Document parsing and structure extraction
-  vision: "phi-4"   # Vision-language model for image understanding
+  cleanup: "phi-4"   # Text cleanup and formatting  
+  fast: "phi-4"   # Fast model for quick operations
   
   # Embeddings (dedicated services)
   embedding: "bge-large"   # Text embedding generation

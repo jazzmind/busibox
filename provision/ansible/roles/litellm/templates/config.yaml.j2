@@ -21,6 +21,10 @@ model_list:
 {% if model.litellm_params.aws_region_name is defined %}
       aws_region_name: {{ model.litellm_params.aws_region_name }}
 {% endif %}
+{% if model.description is defined %}
+    model_info: 
+      metadata: {{ model.description }}
+{% endif %}
 {% endfor %}
 
 router_settings:

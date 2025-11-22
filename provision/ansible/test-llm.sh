@@ -338,9 +338,9 @@ test_fast() {
 }
 
 # Test analysis (challenging math/physics problem)
-test_analysis() {
+test_purpose_research() {
     local problem="Solve this step by step: A particle moves in a 2D plane with position vector r(t) = (3t^2, 4t^3) where t is time. Find the velocity vector, acceleration vector, and the magnitude of acceleration at t=2."
-    test_purpose_chat "analysis" "$problem"
+    test_purpose_chat "research" "$problem"
 }
 
 # Test other purposes
@@ -353,10 +353,10 @@ test_purpose() {
         "embedding")
             test_purpose_embedding
             ;;
-        "analysis")
-            test_analysis
+        "research")
+            test_purpose_research
             ;;
-        "default"|"chat"|"research"|"cleanup"|"parsing"|"classify"|"vision")
+        "default"|"chat"|"agent"|"cleanup"|"parsing"|"classify"|"vision")
             test_purpose_chat "$purpose" "Provide a brief response demonstrating this model's capabilities."
             ;;
         *)
