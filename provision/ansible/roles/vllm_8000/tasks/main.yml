@@ -106,6 +106,8 @@
     tool_calling = False
     tool_call_parser = ""
     tool_chat_template = ""
+    multimodal = False
+    limit_mm_per_prompt = ""
     
     for model_key, model_config in available_models.items():
         if model_config.get('model_name') == "{{ vllm_assigned_model }}":
@@ -113,13 +115,20 @@
             tool_calling = model_config.get('tool_calling', False)
             tool_call_parser = model_config.get('tool_call_parser', '')
             tool_chat_template = model_config.get('tool_chat_template', '')
+            multimodal = model_config.get('multimodal', False)
+            # Convert limit_mm_per_prompt dict to vLLM format: image=4
+            limit_mm_dict = model_config.get('limit_mm_per_prompt', {})
+            if limit_mm_dict:
+                limit_mm_per_prompt = ','.join([f"{k}={v}" for k, v in limit_mm_dict.items()])
             break
     
     print(json.dumps({
         "lora_base": lora_base,
         "tool_calling": tool_calling,
         "tool_call_parser": tool_call_parser,
-        "tool_chat_template": tool_chat_template
+        "tool_chat_template": tool_chat_template,
+        "multimodal": multimodal,
+        "limit_mm_per_prompt": limit_mm_per_prompt
     }))
     PYTHON_EOF
   register: model_features_lookup
@@ -154,6 +163,15 @@
     - vllm_assigned_model != ""
     - model_features.tool_calling is defined
 
+- name: Enable multimodal support if configured
+  set_fact:
+    vllm_multimodal: "{{ model_features.multimodal }}"
+    vllm_limit_mm_per_prompt: "{{ model_features.limit_mm_per_prompt }}"
+  when: 
+    - vllm_assigned_model != ""
+    - model_features.multimodal is defined
+    - model_features.multimodal
+
 - name: Display LoRA configuration if enabled
   debug:
     msg: |
@@ -177,6 +195,16 @@
     - vllm_assigned_model != ""
     - vllm_enable_tool_calling is defined
     - vllm_enable_tool_calling
+
+- name: Display multimodal configuration if enabled
+  debug:
+    msg: |
+      Multimodal: ENABLED
+      Limits: {{ vllm_limit_mm_per_prompt }}
+  when: 
+    - vllm_assigned_model != ""
+    - vllm_multimodal is defined
+    - vllm_multimodal
 
 - name: Debug - Show resolved vLLM configuration
   debug:

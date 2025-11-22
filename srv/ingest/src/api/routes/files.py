@@ -263,6 +263,112 @@ async def download_file(fileId: str, request: Request):
         await postgres_service.disconnect()
 
 
+@router.get("/{fileId}/presigned-url")
+async def get_presigned_url(fileId: str, request: Request, expiry: int = 3600):
+    """
+    Generate a presigned URL for direct file access from MinIO.
+    
+    Args:
+        fileId: File identifier
+        expiry: URL expiration time in seconds (default: 3600 = 1 hour)
+    
+    Returns:
+        JSON with presigned URL
+    """
+    user_id = request.state.user_id
+    
+    config = Config().to_dict()
+    postgres_service = PostgresService(config)
+    minio_service = MinIOService(config)
+    
+    await postgres_service.connect()
+    
+    try:
+        async with postgres_service.pool.acquire() as conn:
+            # Get file record
+            file_row = await conn.fetchrow("""
+                SELECT user_id, storage_path, original_filename, mime_type
+                FROM ingestion_files
+                WHERE file_id = $1
+            """, uuid.UUID(fileId))
+            
+            if not file_row:
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content={"error": "File not found"}
+                )
+            
+            # Verify ownership
+            if str(file_row["user_id"]) != user_id:
+                return JSONResponse(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    content={"error": "Unauthorized access"}
+                )
+            
+            storage_path = file_row["storage_path"]
+            
+            # Generate presigned URL
+            try:
+                import asyncio
+                from datetime import timedelta
+                
+                loop = asyncio.get_event_loop()
+                
+                # Generate presigned GET URL
+                presigned_url = await loop.run_in_executor(
+                    None,
+                    lambda: minio_service.client.presigned_get_object(
+                        minio_service.bucket,
+                        storage_path,
+                        expires=timedelta(seconds=expiry)
+                    )
+                )
+                
+                logger.info(
+                    "Presigned URL generated",
+                    file_id=fileId,
+                    user_id=user_id,
+                    expiry_seconds=expiry,
+                )
+                
+                return JSONResponse(
+                    status_code=status.HTTP_200_OK,
+                    content={
+                        "url": presigned_url,
+                        "expiresIn": expiry,
+                    }
+                )
+                
+            except Exception as e:
+                logger.error(
+                    "Failed to generate presigned URL",
+                    file_id=fileId,
+                    storage_path=storage_path,
+                    error=str(e),
+                    exc_info=True,
+                )
+                return JSONResponse(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    content={"error": "Failed to generate presigned URL", "details": str(e)}
+                )
+    
+    except Exception as e:
+        logger.error(
+            "Failed to process presigned URL request",
+            file_id=fileId,
+            user_id=user_id,
+            error=str(e),
+            exc_info=True,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": "Failed to process request", "details": str(e)}
+        )
+    
+    finally:
+        await postgres_service.disconnect()
+
+
 @router.get("/{fileId}/chunks")
 async def get_file_chunks(
     fileId: str,

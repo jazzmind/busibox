@@ -31,6 +31,10 @@ available_models:
     # Tool calling support
     tool_calling: true
     tool_call_parser: "phi4_mini_json"  # Phi-4 uses Hermes-style tool calling
+    # Multimodal support
+    multimodal: true
+    limit_mm_per_prompt: 
+      image: 4  # Allow up to 4 images per prompt
     
   "qwen3-30b":
     provider: "vllm"

@@ -48,6 +48,11 @@ ExecStart={{ vllm_venv_dir }}/bin/python -m vllm.entrypoints.openai.api_server \
   --chat-template {{ vllm_tool_chat_template }} \
 {% endif %}
 {% endif %}
+{% if vllm_multimodal is defined and vllm_multimodal %}
+{% if vllm_limit_mm_per_prompt is defined and vllm_limit_mm_per_prompt | length > 0 %}
+  --limit-mm-per-prompt {{ vllm_limit_mm_per_prompt }} \
+{% endif %}
+{% endif %}
 {% if vllm_disable_log_stats %}
   --disable-log-stats
 {% endif %}
