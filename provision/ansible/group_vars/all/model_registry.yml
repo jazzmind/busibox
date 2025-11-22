@@ -12,12 +12,26 @@
 # Note: GPU/port assignments and technical details are in model_config.yml
 # (machine-generated, not version-controlled)
 available_models:
+  # AWS Bedrock Models (Verified Working)
+  # Models with 'us.' prefix are cross-region inference profiles
+  # These provide better availability and are required for Claude 3.5
+  
   "claude-sonnet-4-5":
     provider: "bedrock"
-    model: "anthropic.claude-sonnet-4-5"
-    model_name: "anthropic.claude-sonnet-4-5"
-    description: "Frontier model"
+    model: "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    model_name: "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    description: "Claude 4.5 Sonnet - Most capable, frontier model (Sept 2025)"
+    multimodal: true
+    tool_calling: true
 
+  "claude-haiku-4-5":
+    provider: "bedrock"
+    model: "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    model_name: "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    description: "Claude 4.5 Haiku - Fast, efficient, excellent for most tasks"
+    multimodal: true
+    tool_calling: true
+  
   "phi-4":
     provider: "vllm"
     model: "phi-4"
@@ -29,8 +43,7 @@ available_models:
     max_num_seqs: 10  # Can handle more concurrent requests
     cpu_offload_gb: 0  # Moderate CPU offload
     # Tool calling support
-    tool_calling: true
-    tool_call_parser: "phi4_mini_json"  # Phi-4 uses Hermes-style tool calling
+    tool_calling: false
     # Multimodal support
     multimodal: true
     limit_mm_per_prompt: 
@@ -49,6 +62,7 @@ available_models:
     # Tool calling support
     tool_calling: true
     tool_call_parser: "hermes"  # Qwen3 models use Hermes-style tool calling (Qwen2.5 compatible)
+    multimodal: false
 
   "qwen3-reranker":
     provider: "vllm"
@@ -78,16 +92,22 @@ available_models:
     # ColPali uses its own service with custom inference code
 
 model_purposes:
-  default: "qwen3-30b"   # General purpose agent model (default for most tasks)
-  frontier: "claude-sonnet-4-5"   # Frontier model
-  vision: "phi-4"   # Vision-language model for image understanding
-  research: "qwen3-30b"   # Research and analysis
-  analysis: "qwen3-30b"   # Data analysis
+  # Primary models
+  default: "phi-4"   # General purpose agent model (default for most tasks)
+  frontier: "claude-sonnet-4-5"   # Most capable model (Claude 4.5 Sonnet)
+  frontier-fast: "claude-haiku-4-5"   # Fast frontier model (Claude 4.5 Haiku)
+  
+  # Task-specific
+  research: "qwen3-30b"   # Research and analysis (using best Claude)
+  agent: "qwen3-30b"   # agent model for agentic tasks
+  chat: "phi-4"   # General chat (Claude 4.5 Haiku)
   fast: "phi-4"   # Fast model for quick operations
   cleanup: "phi-4"   # Text cleanup and formatting  
-  chat: "phi-4"   # General chat and Q&A
   classify: "phi-4"   # Document classification
   parsing: "phi-4"   # Document parsing and structure extraction
+  vision: "phi-4"   # Vision-language model for image understanding
+  
+  # Embeddings (dedicated services)
   embedding: "bge-large"   # Text embedding generation
   visual-embedding: "colpali"   # Visual document embedding (dedicated service)
   reranking: "qwen3-reranker"   # Search result reranking
