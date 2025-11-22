@@ -306,6 +306,8 @@ async def get_presigned_url(fileId: str, request: Request, expiry: int = 3600):
                 )
             
             storage_path = file_row["storage_path"]
+            mime_type = file_row["mime_type"]
+            filename = file_row["original_filename"]
             
             # Generate presigned URL
             try:
@@ -325,10 +327,15 @@ async def get_presigned_url(fileId: str, request: Request, expiry: int = 3600):
                 )
                 
                 logger.info(
-                    "Presigned URL generated",
+                    "Presigned URL generated successfully",
                     file_id=fileId,
                     user_id=user_id,
+                    storage_path=storage_path,
+                    filename=filename,
+                    mime_type=mime_type,
                     expiry_seconds=expiry,
+                    presigned_url=presigned_url,
+                    url_length=len(presigned_url),
                 )
                 
                 return JSONResponse(
