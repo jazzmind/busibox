@@ -17,7 +17,7 @@ Reorganized application deployment configuration to eliminate duplication betwee
 
 ### 1. Centralized Application Definitions
 
-**Created:** `provision/ansible/group_vars/apps.yml`
+**Created:** `provision/ansible/group_vars/all/apps.yml`
 
 **Purpose:** Single source of truth for all application configurations
 
