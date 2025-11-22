@@ -47,8 +47,8 @@
   environment:
     MODEL_CONFIG_FILE: "{{ playbook_dir }}/group_vars/all/model_config.yml"
     MODEL_REGISTRY_FILE: "{{ playbook_dir }}/group_vars/all/model_registry.yml"
-    BEDROCK_API_KEY: "{{ secrets.bedrock_api_key | default('') }}"
-    BEDROCK_REGION: "{{ secrets.bedrock_region | default('us-east-1') }}"
+    AWS_BEARER_TOKEN_BEDROCK: "{{ secrets.bedrock_api_key | default('') }}"
+    AWS_REGION_NAME: "{{ secrets.bedrock_region | default('us-east-1') }}"
     VLLM_IP: "{{ vllm_ip }}"
   register: models_json_output
   delegate_to: localhost
