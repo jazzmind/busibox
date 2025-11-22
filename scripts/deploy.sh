@@ -320,10 +320,13 @@ deploy_apps_menu() {
         echo -e "  ${CYAN}2)${NC} Deploy AI Portal"
         echo -e "  ${CYAN}3)${NC} Deploy Agent Manager (agent-client)"
         echo -e "  ${CYAN}4)${NC} Deploy Doc Intelligence (doc-intel)"
-        echo -e "  ${CYAN}5)${NC} Back to Main Menu"
+        echo -e "  ${CYAN}5)${NC} Deploy Foundation Manager"
+        echo -e "  ${CYAN}6)${NC} Deploy Project Analysis"
+        echo -e "  ${CYAN}7)${NC} Deploy Innovation Manager"
+        echo -e "  ${CYAN}8)${NC} Back to Main Menu"
         echo ""
         
-        read -p "Select option [1-5]: " choice
+        read -p "Select option [1-8]: " choice
         echo ""
         
         case "$choice" in
@@ -346,6 +349,18 @@ deploy_apps_menu() {
                 pause
                 ;;
             5)
+                deploy_single_app "foundation" "Foundation Manager" "$env"
+                pause
+                ;;
+            6)
+                deploy_single_app "project-analysis" "Project Analysis" "$env"
+                pause
+                ;;
+            7)
+                deploy_single_app "innovation" "Innovation Manager" "$env"
+                pause
+                ;;
+            8)
                 return 0
                 ;;
             *)
