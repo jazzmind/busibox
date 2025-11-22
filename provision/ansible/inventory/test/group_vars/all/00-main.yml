@@ -12,6 +12,7 @@
 # ============================================================================
 busibox_env: test
 busibox_test_mode: true
+node_env: development  # For Node.js applications
 
 # ============================================================================
 # Network Configuration - Test
@@ -43,6 +44,8 @@ ollama_ip: "{{ network_base_octets }}.210"
 env_suffix: test
 domain: "ai.{{ base_domain }}"
 full_domain: "{{ env_suffix }}.{{ domain }}"
+www_domain: "www.{{ full_domain }}"
+env_subdomain_suffix: "-test"  # Suffix for test subdomains (e.g., "agents-test")
 
 # SSL Certificate Mode
 # Options: "letsencrypt", "provisioned", "selfsigned"
@@ -141,136 +144,8 @@ hsts_max_age: 31536000  # 1 year (shorter for test)
 # ============================================================================
 # Application Definitions
 # ============================================================================
-# All applications deployed in the Busibox TEST environment
-# Schema reference: specs/002-deploy-app-servers/data-model.md
+# Applications are now defined in group_vars/apps.yml (centralized)
+# This allows sharing app definitions between test and production environments
+# while keeping environment-specific values (IPs, domains, NODE_ENV) here.
 #
-# Port allocation strategy:
-# - 3000-3099: Public web applications
-# - 4000-4099: Internal API services
-# - 8000-8099: LLM/AI services
-applications:
-  # Internal API Services
-  - name: agent-server
-    github_repo: jazzmind/agent-server
-    container: agent-lxc
-    container_ip: "{{ agent_ip }}"
-    port: 4111
-    deploy_path: /srv/agent
-    health_endpoint: /auth/health
-    routes: []  # Internal only - no NGINX routing
-    secrets:
-      - database_url
-      - minio_access_key
-      - minio_secret_key
-      - redis_url
-      - jwt_secret
-    env:
-      LOG_LEVEL: "{{ log_level }}"
-      MILVUS_HOST: "{{ milvus_ip }}"
-      MILVUS_PORT: "{{ milvus_port }}"
-      MINIO_ENDPOINT: "{{ minio_ip }}:{{ minio_port }}"
-      POSTGRES_HOST: "{{ postgres_ip }}"
-      REDIS_HOST: "{{ ingest_ip }}"
-      TOKEN_SERVICE_URL: "http://{{ agent_ip }}:4111"
-      MASTRA_API_URL: "http://{{ agent_ip }}:4111"
-  
-  # Public Web Applications
-  - name: ai-portal
-    github_repo: jazzmind/ai-portal
-    container: apps-lxc
-    container_ip: "{{ apps_ip }}"
-    port: 3000
-    deploy_path: /srv/apps/ai-portal
-    health_endpoint: /api/health
-    build_command: "npm run build"
-    routes:
-      - type: domain
-        domains:
-          - "{{ full_domain }}"
-    secrets:
-      - database_url
-      - better_auth_secret
-      - better_auth_url
-      - email_from
-      - sso_jwt_secret
-      - litellm_api_key
-      - admin_email
-      - allowed_email_domains
-      - smtp_host
-      - smtp_port
-      - smtp_user
-      - smtp_password
-      - smtp_secure
-      - github_client_id
-      - github_client_secret
-      - github_redirect_uri
-      - encryption_key
-      - current_container_ip
-      - apps_container_ip
-      - agent_container_ip
-      - postgres_container_ip
-    optional_secrets:
-      - resend_api_key
-      - microsoft_client_id
-      - microsoft_client_secret
-      - microsoft_tenant_id
-      - container_ssh_private_key
-    env:
-      NODE_ENV: development
-      LITELLM_BASE_URL: "http://{{ litellm_ip }}:{{ litellm_port }}/v1"
-      BETTER_AUTH_URL: "https://{{ full_domain }}"
-      SSO_TOKEN_EXPIRY: "900"
-      PORT: "3000"
-      INGEST_API_HOST: "{{ ingest_ip }}"
-  
-  - name: agent-client
-    github_repo: jazzmind/agent-client
-    container: apps-lxc
-    container_ip: "{{ apps_ip }}"
-    port: 3001
-    deploy_path: /srv/apps/agent-client
-    health_endpoint: /api/health
-    build_command: "npm run build"
-    routes:
-      - type: subdomain
-        subdomain: agents-test
-        websocket: true
-      - type: path
-        domain: "{{ full_domain }}"
-        path: /agents
-        strip_path: false
-    secrets:
-      - database_url
-      - agent_api_key
-      - jwt_secret
-      - session_secret
-    env:
-      NODE_ENV: development
-      AGENT_API_URL: "http://{{ agent_api_host }}:{{ agent_api_port }}"
-      PORT: "3001"
-  
-  - name: doc-intel
-    github_repo: jazzmind/docintel
-    container: apps-lxc
-    container_ip: "{{ apps_ip }}"
-    port: 3002
-    deploy_path: /srv/apps/doc-intel
-    health_endpoint: /api/health
-    build_command: "npm run build"
-    routes:
-      - type: subdomain
-        subdomain: docs-test
-      - type: path
-        domain: "{{ full_domain }}"
-        path: /docs
-        strip_path: false
-    secrets:
-      - database_url
-      - better_auth_secret
-      - jwt_secret
-      - litellm_api_key
-    env:
-      NODE_ENV: development
-      MILVUS_HOST: "{{ milvus_ip }}"
-      MILVUS_PORT: "{{ milvus_port }}"
-      PORT: "3002"
+# See: provision/ansible/group_vars/apps.yml

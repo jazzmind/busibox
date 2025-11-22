@@ -11,6 +11,7 @@
 # Environment Configuration
 # ============================================================================
 busibox_env: production
+node_env: production  # For Node.js applications
 
 # ============================================================================
 # Network Configuration - Production
@@ -43,6 +44,7 @@ ollama_ip: "{{ network_base_octets }}.210"
 domain: "ai.{{ base_domain }}"
 full_domain: "{{ domain }}"  # For compatibility with templates that use full_domain
 www_domain: "www.{{ domain }}"
+env_subdomain_suffix: ""  # No suffix for production (e.g., "agents" not "agents-prod")
 
 # SSL Certificate Mode
 # Options: "letsencrypt", "provisioned", "selfsigned"
@@ -145,157 +147,9 @@ hsts_max_age: 63072000  # 2 years in seconds
 # ============================================================================
 # Application Definitions
 # ============================================================================
-# All applications deployed in the Busibox environment
-# Schema reference: specs/002-deploy-app-servers/data-model.md
+# Applications are now defined in group_vars/apps.yml (centralized)
+# This allows sharing app definitions between test and production environments
+# while keeping environment-specific values (IPs, domains, NODE_ENV) here.
 #
-# Port allocation strategy:
-# - 3000-3099: Public web applications
-# - 4000-4099: Internal API services
-# - 8000-8099: LLM/AI services
-applications:
-  # Internal API Services
-  - name: agent-server
-    github_repo: jazzmind/agent-server
-    container: agent-lxc
-    container_ip: "{{ agent_ip }}"
-    port: 4111
-    deploy_path: /srv/agent
-    health_endpoint: /auth/health
-    routes: []  # Internal only - no NGINX routing
-    secrets:
-      - database_url
-      - minio_access_key
-      - minio_secret_key
-      - redis_url
-      - jwt_secret
-      - litellm_api_key
-    env:
-      LOG_LEVEL: "{{ log_level }}"
-      MILVUS_HOST: "{{ milvus_ip }}"
-      MILVUS_PORT: "{{ milvus_port }}"
-      MINIO_ENDPOINT: "{{ minio_ip }}:{{ minio_port }}"
-      POSTGRES_HOST: "{{ postgres_ip }}"
-      REDIS_HOST: "{{ ingest_ip }}"
-      TOKEN_SERVICE_URL: "http://{{ agent_ip }}:4111"
-      MASTRA_API_URL: "http://{{ agent_ip }}:4111"
-      LITELLM_BASE_URL: "http://{{ litellm_ip }}:{{ litellm_port }}/v1"
-  
-  # Public Web Applications
-  - name: ai-portal
-    github_repo: jazzmind/ai-portal
-    container: apps-lxc
-    container_ip: "{{ apps_ip }}"
-    port: 3000
-    deploy_path: /srv/apps/ai-portal
-    health_endpoint: /api/health
-    build_command: "npm run build"
-    routes:
-      - type: domain
-        domains:
-          - "{{ domain }}"
-          - "{{ www_domain }}"
-      - type: path
-        domain: "{{ domain }}"
-        path: /home
-        strip_path: false  # Keep /home path for Next.js routing
-      - type: path
-        domain: "{{ domain }}"
-        path: /portal
-        strip_path: true  # Strip /portal prefix so Next.js receives requests at root
-
-    secrets:
-      - database_url
-      - better_auth_secret
-      - sso_jwt_secret
-      - litellm_api_key
-      - admin_email
-      - allowed_email_domains
-      - email_from
-      - smtp_host
-      - smtp_port
-      - smtp_user
-      - smtp_password
-      - smtp_secure
-      - github_client_id
-      - github_client_secret
-      - github_redirect_uri
-      - encryption_key
-      - current_container_ip
-      - apps_container_ip
-      - agent_container_ip
-      - postgres_container_ip
-    optional_secrets:
-      - resend_api_key
-      - microsoft_client_id
-      - microsoft_client_secret
-      - microsoft_tenant_id
-      - container_ssh_private_key
-    env:
-      NODE_ENV: production
-      LITELLM_BASE_URL: "http://{{ litellm_ip }}:{{ litellm_port }}/v1"
-      BETTER_AUTH_URL: "https://{{ domain }}"
-      SSO_TOKEN_EXPIRY: "900"
-      PORT: "3000"
-      INGEST_API_HOST: "{{ ingest_ip }}"
-  
-  - name: agent-client
-    github_repo: jazzmind/agent-client
-    container: apps-lxc
-    container_ip: "{{ apps_ip }}"
-    port: 3001
-    deploy_path: /srv/apps/agent-client
-    health_endpoint: /api/health
-    build_command: "npm run build"
-    routes:
-      - type: subdomain
-        subdomain: agents
-        websocket: true
-      - type: path
-        domain: "{{ domain }}"
-        path: /agents
-        strip_path: true  # Strip /agents prefix so Next.js receives requests at root
-    secrets:
-      - database_url
-      - agent_api_key
-      - jwt_secret
-      - session_secret
-      - sso_jwt_secret
-      - oauth_client_secret
-    env:
-      NODE_ENV: production
-      MASTRA_API_URL: "http://{{ agent_api_host }}:{{ agent_api_port }}"
-      TOKEN_SERVICE_URL: "http://{{ agent_api_host }}:{{ agent_api_port }}"
-      AGENT_API_URL: "http://{{ agent_api_host }}:{{ agent_api_port }}"
-      AI_PORTAL_URL: "https://{{ domain }}"
-      PORT: "3001"
-  
-  - name: doc-intel
-    github_repo: jazzmind/docintel
-    container: apps-lxc
-    container_ip: "{{ apps_ip }}"
-    port: 3002
-    deploy_path: /srv/apps/doc-intel
-    health_endpoint: /api/health
-    build_command: "npm run build"
-    routes:
-      - type: subdomain
-        subdomain: docs
-      - type: path
-        domain: "{{ domain }}"
-        path: /docs
-        strip_path: true  # Strip /docs prefix so Next.js receives requests at root
-    secrets:
-      - database_url
-      - litellm_api_key
-      - better_auth_secret
-      - jwt_secret
-      - sso_jwt_secret
-      - oauth_client_secret
-    env:
-      NODE_ENV: production
-      MILVUS_HOST: "{{ milvus_ip }}"
-      MILVUS_PORT: "{{ milvus_port }}"
-      AI_PORTAL_URL: "https://{{ domain }}"
-      PORT: "3002"
-      LITELLM_BASE_URL: "http://{{ litellm_ip }}:{{ litellm_port }}/v1"
+# See: provision/ansible/group_vars/apps.yml
 
