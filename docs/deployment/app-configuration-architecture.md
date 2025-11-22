@@ -31,7 +31,7 @@ This document describes the centralized application configuration architecture f
 
 ### 1. Centralized Application Definitions
 
-**Location:** `provision/ansible/group_vars/apps.yml`
+**Location:** `provision/ansible/group_vars/all/apps.yml`
 
 **Purpose:** Define all applications deployed in Busibox with their:
 - GitHub repository
@@ -145,7 +145,7 @@ env:
 
 ### Step 1: Add to apps.yml
 
-Edit `provision/ansible/group_vars/apps.yml`:
+Edit `provision/ansible/group_vars/all/apps.yml`:
 
 ```yaml
 applications:
