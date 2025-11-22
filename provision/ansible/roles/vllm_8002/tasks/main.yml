@@ -114,10 +114,11 @@
             tool_call_parser = model_config.get('tool_call_parser', '')
             tool_chat_template = model_config.get('tool_chat_template', '')
             multimodal = model_config.get('multimodal', False)
-            # Convert limit_mm_per_prompt dict to vLLM format: image=4
+            # Convert limit_mm_per_prompt dict to JSON string for vLLM
             limit_mm_dict = model_config.get('limit_mm_per_prompt', {})
             if limit_mm_dict:
-                limit_mm_per_prompt = ','.join([f"{k}={v}" for k, v in limit_mm_dict.items()])
+                import json as json_module
+                limit_mm_per_prompt = json_module.dumps(limit_mm_dict)
             break
     
     print(json.dumps({
