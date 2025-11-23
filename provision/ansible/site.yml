@@ -42,6 +42,8 @@
 
 - hosts: proxy
   roles:
+    - role: secrets
+      tags: [proxy, nginx, secrets]
     - role: nginx
       tags: [proxy, nginx]
 
