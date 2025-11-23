@@ -72,6 +72,11 @@ server {
 {% endfor %}
 {% endfor %}
 
+    # Redirect root to portal
+    location = / {
+        return 302 /portal;
+    }
+
     # Default location for domain-type routes (root path)
 {% for app in apps_with_routes %}
 {% for route in app.routes %}

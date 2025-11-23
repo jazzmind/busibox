@@ -58,10 +58,6 @@ applications:
     health_endpoint: /api/health
     build_command: "npm run build"
     routes:
-      - type: domain
-        domains:
-          - "{{ full_domain }}"
-          - "{{ www_domain | default('www.' + full_domain) }}"
       - type: path
         domain: "{{ full_domain }}"
         path: /home
