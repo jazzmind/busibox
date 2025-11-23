@@ -146,135 +146,53 @@
   register: prisma_result
   failed_when: false  # Don't fail if Prisma isn't used
 
-- name: Create database if it doesn't exist (Prisma apps) using Node.js
+- name: Create database and run migrations (Prisma apps)
   shell: |
     cd {{ app_to_deploy.deploy_path }}
     
     if [ ! -f "prisma/schema.prisma" ]; then
-      echo "No Prisma schema found, skipping database creation"
+      echo "No Prisma schema found, skipping"
       exit 0
     fi
     
     echo "========================================"
-    echo "DATABASE CREATION (using Node.js pg)"
+    echo "DATABASE SETUP"
     echo "========================================"
     
-    # Load DATABASE_URL from .env
-    if [ -f .env ]; then
-      export $(grep -v '^#' .env | grep DATABASE_URL | xargs)
+    # Try to run migrations first (works if DB exists)
+    echo "Attempting to run migrations..."
+    if npx prisma migrate deploy 2>&1; then
+      echo "✓ Migrations completed successfully"
+    else
+      echo "Migrations failed (database may not exist), trying db push..."
+      # db push will create the database and schema
+      if npx prisma db push --accept-data-loss 2>&1; then
+        echo "✓ Database created and schema pushed successfully"
+      else
+        echo "✗ Failed to create database and push schema"
+        echo "This may require manual database creation"
+        exit 1
+      fi
     fi
     
-    if [ -z "$DATABASE_URL" ]; then
-      echo "ERROR: DATABASE_URL not set in .env"
-      exit 1
-    fi
-    
-    # Parse DATABASE_URL to create postgres connection URL
-    DB_NAME=$(echo "$DATABASE_URL" | sed -n 's|.*/\([^?]*\).*|\1|p')
-    POSTGRES_URL=$(echo "$DATABASE_URL" | sed "s|/$DB_NAME|/postgres|")
-    
-    echo "Target database: $DB_NAME"
-    echo "Connecting via: ${POSTGRES_URL:0:30}...${POSTGRES_URL: -20}"
-    
-    # Use Node.js with pg library to create database
-    # Note: Running from app directory so node_modules/pg is accessible
-    cat > create-db-temp.js << 'ENDOFSCRIPT'
-    const { Client } = require('pg');
-    
-    async function createDatabase() {
-      const dbName = process.env.DB_NAME;
-      const postgresUrl = process.env.POSTGRES_URL;
-      
-      console.log('Connecting to PostgreSQL...');
-      const client = new Client({ connectionString: postgresUrl });
-      
-      try {
-        await client.connect();
-        console.log('Connected to PostgreSQL');
-        
-        // Check if database exists
-        const result = await client.query(
-          'SELECT 1 FROM pg_database WHERE datname = $1',
-          [dbName]
-        );
-        
-        if (result.rows.length > 0) {
-          console.log('Database already exists: ' + dbName);
-        } else {
-          console.log('Creating database: ' + dbName);
-          // CREATE DATABASE cannot use parameterized queries
-          await client.query('CREATE DATABASE "' + dbName + '"');
-          console.log('Database created successfully: ' + dbName);
-        }
-      } catch (error) {
-        if (error.message.includes('already exists')) {
-          console.log('Database already exists (concurrent creation): ' + dbName);
-        } else {
-          console.error('Error:', error.message);
-          process.exit(1);
-        }
-      } finally {
-        await client.end();
-      }
-    }
-    
-    createDatabase().catch(error => {
-      console.error('Fatal error:', error);
-      process.exit(1);
-    });
-    ENDOFSCRIPT
-    
-    # Run the Node.js script from app directory (so it can find node_modules/pg)
-    DB_NAME="$DB_NAME" POSTGRES_URL="$POSTGRES_URL" node create-db-temp.js
-    CREATE_STATUS=$?
-    
-    rm -f create-db-temp.js
-    
     echo "========================================"
-    echo "DATABASE CREATION COMPLETE"
+    echo "DATABASE SETUP COMPLETE"
     echo "========================================"
-    
-    exit $CREATE_STATUS
   args:
     executable: /bin/bash
   delegate_to: "{{ app_to_deploy.container_ip }}"
-  register: db_create_result
-  failed_when: db_create_result.rc != 0
+  register: db_setup_result
+  failed_when: db_setup_result.rc != 0
 
-- name: Display database creation output
+- name: Display database setup output
   debug:
-    var: db_create_result.stdout_lines
-  when: db_create_result is defined
+    var: db_setup_result.stdout_lines
+  when: db_setup_result is defined
 
-- name: Display database creation errors (if any)
+- name: Display database setup errors (if any)
   debug:
-    var: db_create_result.stderr_lines
-  when: db_create_result is defined and db_create_result.stderr_lines is defined and db_create_result.stderr_lines | length > 0
-
-- name: Run Prisma migrations (push schema to database)
-  shell: |
-    cd {{ app_to_deploy.deploy_path }}
-    if [ -f "prisma/schema.prisma" ]; then
-      # Load DATABASE_URL from .env
-      if [ -f .env ]; then
-        export $(grep -v '^#' .env | grep DATABASE_URL | xargs)
-      fi
-      
-      echo "Running Prisma DB push..."
-      npx prisma db push --accept-data-loss 2>&1 || {
-        echo "Prisma db push failed, trying migrate deploy..."
-        npx prisma migrate deploy 2>&1 || {
-          echo "Migration failed with exit code $?"
-          exit 1
-        }
-      }
-      echo "Database schema updated successfully"
-    else
-      echo "No Prisma schema found, skipping"
-    fi
-  delegate_to: "{{ app_to_deploy.container_ip }}"
-  register: prisma_migrate_result
-  failed_when: false
+    var: db_setup_result.stderr_lines
+  when: db_setup_result is defined and db_setup_result.stderr_lines is defined and db_setup_result.stderr_lines | length > 0
 
 - name: Run database migrations (if migrate:up script exists)
   shell: |
