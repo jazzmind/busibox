@@ -227,82 +227,87 @@ deploy_single_app() {
     local app_display="$2"
     local env="$3"
     
-    clear
-    box "Deploy $app_display - $env" 70
-    echo ""
-    info "Select deployment method"
-    echo ""
-    
-    echo -e "  ${CYAN}1)${NC} Deploy from Branch (default: main)"
-    echo -e "  ${CYAN}2)${NC} Deploy from Release (default: latest)"
-    echo -e "  ${CYAN}3)${NC} Cancel"
-    echo ""
-    
-    read -p "Select option [1-3]: " method_choice
-    echo ""
-    
-    case "$method_choice" in
-        1)
-            read -p "Enter branch name [main]: " branch_name
-            branch_name="${branch_name:-main}"
-            
-            if confirm "Deploy $app_display from branch '$branch_name' to $env?"; then
-                cd "$ANSIBLE_DIR"
-                local vault_flags="$(get_vault_flags)"
-                info "Deploying $app_display from branch '$branch_name' to $env environment..."
-                echo ""
-                ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags apps \
-                    --extra-vars "deploy_app=${app_name}" \
-                    --extra-vars "deploy_branch=${branch_name}" \
-                    --extra-vars "deploy_from_branch=true" \
-                    $vault_flags || {
-                    error "Deployment failed"
-                }
-                cd "$REPO_ROOT"
-                echo ""
-                success "Deployment completed successfully!"
-            fi
-            ;;
-        2)
-            read -p "Enter release tag [latest]: " release_tag
-            release_tag="${release_tag:-latest}"
-            
-            if confirm "Deploy $app_display from release '$release_tag' to $env?"; then
-                cd "$ANSIBLE_DIR"
-                local vault_flags="$(get_vault_flags)"
-                info "Deploying $app_display from release '$release_tag' to $env environment..."
-                echo ""
+    while true; do
+        clear
+        box "Deploy $app_display - $env" 70
+        echo ""
+        info "Select deployment method"
+        echo ""
+        
+        echo -e "  ${CYAN}1)${NC} Deploy from Branch (default: main)"
+        echo -e "  ${CYAN}2)${NC} Deploy from Release (default: latest)"
+        echo -e "  ${CYAN}3)${NC} Cancel"
+        echo ""
+        
+        read -p "Select option [1-3]: " method_choice
+        echo ""
+        
+        case "$method_choice" in
+            1)
+                read -p "Enter branch name [main]: " branch_name
+                branch_name="${branch_name:-main}"
                 
-                if [ "$release_tag" = "latest" ]; then
-                    # Use standard release deployment (deploywatch gets latest)
+                if confirm "Deploy $app_display from branch '$branch_name' to $env?"; then
+                    cd "$ANSIBLE_DIR"
+                    local vault_flags="$(get_vault_flags)"
+                    info "Deploying $app_display from branch '$branch_name' to $env environment..."
+                    echo ""
                     ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags apps \
                         --extra-vars "deploy_app=${app_name}" \
-                        $vault_flags || {
-                        error "Deployment failed"
-                    }
-                else
-                    # Deploy specific release tag (use branch deployment method with tag)
-                    ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags apps \
-                        --extra-vars "deploy_app=${app_name}" \
-                        --extra-vars "deploy_branch=${release_tag}" \
+                        --extra-vars "deploy_branch=${branch_name}" \
                         --extra-vars "deploy_from_branch=true" \
                         $vault_flags || {
                         error "Deployment failed"
                     }
+                    cd "$REPO_ROOT"
+                    echo ""
+                    success "Deployment completed successfully!"
                 fi
-                cd "$REPO_ROOT"
-                echo ""
-                success "Deployment completed successfully!"
-            fi
-            ;;
-        3)
-            return 0
-            ;;
-        *)
-            error "Invalid choice"
-            return 1
-            ;;
-    esac
+                return 0
+                ;;
+            2)
+                read -p "Enter release tag [latest]: " release_tag
+                release_tag="${release_tag:-latest}"
+                
+                if confirm "Deploy $app_display from release '$release_tag' to $env?"; then
+                    cd "$ANSIBLE_DIR"
+                    local vault_flags="$(get_vault_flags)"
+                    info "Deploying $app_display from release '$release_tag' to $env environment..."
+                    echo ""
+                    
+                    if [ "$release_tag" = "latest" ]; then
+                        # Use standard release deployment (deploywatch gets latest)
+                        ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags apps \
+                            --extra-vars "deploy_app=${app_name}" \
+                            $vault_flags || {
+                            error "Deployment failed"
+                        }
+                    else
+                        # Deploy specific release tag (use branch deployment method with tag)
+                        ansible-playbook -i "inventory/${env}/hosts.yml" site.yml --tags apps \
+                            --extra-vars "deploy_app=${app_name}" \
+                            --extra-vars "deploy_branch=${release_tag}" \
+                            --extra-vars "deploy_from_branch=true" \
+                            $vault_flags || {
+                            error "Deployment failed"
+                        }
+                    fi
+                    cd "$REPO_ROOT"
+                    echo ""
+                    success "Deployment completed successfully!"
+                fi
+                return 0
+                ;;
+            3)
+                return 0
+                ;;
+            *)
+                error "Invalid choice. Please select 1-3."
+                pause
+                # Loop continues
+                ;;
+        esac
+    done
 }
 
 # Apps deployment submenu
