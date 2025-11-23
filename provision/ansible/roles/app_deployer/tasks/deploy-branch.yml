@@ -368,15 +368,7 @@
       
       Health check:
         curl http://{{ app_to_deploy.container_ip }}:{{ app_to_deploy.port }}{{ health_check_path }}
-
-- name: Trigger NGINX reconfiguration (if routes defined)
-  shell: |
-    # Reconfigure NGINX to pick up new routes
-    cd {{ playbook_dir }}
-    ansible-playbook -i {{ inventory_file }} site.yml --tags nginx --limit proxy-lxc
-  delegate_to: localhost
-  when: 
-    - app_to_deploy.routes is defined
-    - app_to_deploy.routes | length > 0
-  run_once: true
+      
+      ⚠️  IMPORTANT: Nginx routing may need to be updated manually
+      Run: cd provision/ansible && make production (or make test)
 
