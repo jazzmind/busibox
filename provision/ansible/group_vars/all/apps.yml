@@ -183,7 +183,7 @@ applications:
       - type: path
         domain: "{{ full_domain }}"
         path: /foundation
-        strip_path: true
+        strip_path: false  # Keep path so Next.js basePath works
     secrets:
       - database_url
       - litellm_api_key
@@ -205,6 +205,9 @@ applications:
       AI_PORTAL_URL: "https://{{ full_domain }}"
       PORT: "3003"
       DEPLOYMENT_MODE: "busibox"
+      # Set basePath only for path-based routing (not for subdomain)
+      # This is used in next.config.ts: basePath: process.env.NEXT_PUBLIC_BASE_PATH || ''
+      NEXT_PUBLIC_BASE_PATH: "/foundation"
   
   - name: project-analysis
     github_repo: jazzmind/tabular-bells
@@ -220,7 +223,7 @@ applications:
       - type: path
         domain: "{{ full_domain }}"
         path: /projects
-        strip_path: true
+        strip_path: false  # Keep path so Next.js basePath works
     secrets:
       - database_url
       - litellm_api_key
@@ -242,4 +245,7 @@ applications:
       AI_PORTAL_URL: "https://{{ full_domain }}"
       PORT: "3004"
       DEPLOYMENT_MODE: "busibox"
+      # Set basePath only for path-based routing (not for subdomain)
+      # This is used in next.config.js: basePath: process.env.NEXT_PUBLIC_BASE_PATH || ''
+      NEXT_PUBLIC_BASE_PATH: "/projects"
 
