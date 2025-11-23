@@ -48,11 +48,18 @@
 - name: Deploy SSL certificate
   copy:
     content: "{{ secrets.ssl_certificates.certificate }}"
-    dest: "/etc/ssl/busibox/{{ cert_domain }}.crt"
+    dest: "/etc/ssl/busibox/{{ cert_domain }}.crt.tmp"
     mode: "0644"
     owner: root
     group: root
   no_log: true
+
+- name: Format SSL certificate to proper PEM format
+  shell: |
+    # Reformat certificate to ensure proper line breaks (64 chars per line)
+    openssl x509 -in "/etc/ssl/busibox/{{ cert_domain }}.crt.tmp" -out "/etc/ssl/busibox/{{ cert_domain }}.crt"
+    rm -f "/etc/ssl/busibox/{{ cert_domain }}.crt.tmp"
+  no_log: false
 
 - name: Deploy SSL private key
   copy:
@@ -66,7 +73,7 @@
 - name: Deploy SSL certificate chain
   copy:
     content: "{{ secrets.ssl_certificates.chain }}"
-    dest: "/etc/ssl/busibox/{{ cert_domain }}-chain.crt"
+    dest: "/etc/ssl/busibox/{{ cert_domain }}-chain.crt.tmp"
     mode: "0644"
     owner: root
     group: root
@@ -75,6 +82,22 @@
     - secrets.ssl_certificates.chain | length > 0
   no_log: true
 
+- name: Format SSL certificate chain to proper PEM format
+  shell: |
+    # Split and reformat each certificate in the chain
+    csplit -s -z -f "/tmp/chain-" "/etc/ssl/busibox/{{ cert_domain }}-chain.crt.tmp" '/-----BEGIN CERTIFICATE-----/' '{*}'
+    rm -f "/etc/ssl/busibox/{{ cert_domain }}-chain.crt"
+    for cert in /tmp/chain-*; do
+      if [ -s "$cert" ] && grep -q "BEGIN CERTIFICATE" "$cert"; then
+        openssl x509 -in "$cert" >> "/etc/ssl/busibox/{{ cert_domain }}-chain.crt"
+      fi
+    done
+    rm -f /tmp/chain-* "/etc/ssl/busibox/{{ cert_domain }}-chain.crt.tmp"
+  when: 
+    - secrets.ssl_certificates.chain is defined
+    - secrets.ssl_certificates.chain | length > 0
+  no_log: false
+
 - name: Check if chain file exists and has content
   stat:
     path: "/etc/ssl/busibox/{{ cert_domain }}-chain.crt"
@@ -82,10 +105,7 @@
 
 - name: Create fullchain certificate (certificate + chain)
   shell: |
-    # Ensure proper line breaks between certificates
-    cat /etc/ssl/busibox/{{ cert_domain }}.crt > /etc/ssl/busibox/{{ cert_domain }}-fullchain.crt
-    echo "" >> /etc/ssl/busibox/{{ cert_domain }}-fullchain.crt
-    cat /etc/ssl/busibox/{{ cert_domain }}-chain.crt >> /etc/ssl/busibox/{{ cert_domain }}-fullchain.crt
+    cat /etc/ssl/busibox/{{ cert_domain }}.crt /etc/ssl/busibox/{{ cert_domain }}-chain.crt > /etc/ssl/busibox/{{ cert_domain }}-fullchain.crt
   when: 
     - chain_file_stat.stat.exists
     - chain_file_stat.stat.size > 0
