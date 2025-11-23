@@ -146,6 +146,62 @@
   register: prisma_result
   failed_when: false  # Don't fail if Prisma isn't used
 
+- name: Create database if it doesn't exist (Prisma apps)
+  shell: |
+    cd {{ app_to_deploy.deploy_path }}
+    if [ -f "prisma/schema.prisma" ]; then
+      # Load DATABASE_URL from .env
+      if [ -f .env ]; then
+        export $(grep -v '^#' .env | grep DATABASE_URL | xargs)
+      fi
+      
+      # Extract database name from DATABASE_URL
+      DB_NAME=$(echo "$DATABASE_URL" | sed -n 's|.*\/\([^?]*\).*|\1|p')
+      DB_HOST=$(echo "$DATABASE_URL" | sed -n 's|.*@\([^:\/]*\).*|\1|p')
+      DB_USER=$(echo "$DATABASE_URL" | sed -n 's|.*:\/\/\([^:]*\):.*|\1|p')
+      
+      echo "Database: $DB_NAME on $DB_HOST"
+      
+      # Check if database exists
+      if PGPASSWORD="$DATABASE_URL" psql -h "$DB_HOST" -U "$DB_USER" -lqt | cut -d \| -f 1 | grep -qw "$DB_NAME"; then
+        echo "Database $DB_NAME already exists"
+      else
+        echo "Creating database $DB_NAME..."
+        # Extract password from DATABASE_URL for createdb
+        DB_PASS=$(echo "$DATABASE_URL" | sed -n 's|.*:\([^@]*\)@.*|\1|p')
+        PGPASSWORD="$DB_PASS" createdb -h "$DB_HOST" -U "$DB_USER" "$DB_NAME" || true
+        echo "Database created"
+      fi
+    fi
+  delegate_to: "{{ app_to_deploy.container_ip }}"
+  register: db_create_result
+  failed_when: false
+
+- name: Run Prisma migrations (push schema to database)
+  shell: |
+    cd {{ app_to_deploy.deploy_path }}
+    if [ -f "prisma/schema.prisma" ]; then
+      # Load DATABASE_URL from .env
+      if [ -f .env ]; then
+        export $(grep -v '^#' .env | grep DATABASE_URL | xargs)
+      fi
+      
+      echo "Running Prisma DB push..."
+      npx prisma db push --accept-data-loss 2>&1 || {
+        echo "Prisma db push failed, trying migrate deploy..."
+        npx prisma migrate deploy 2>&1 || {
+          echo "Migration failed with exit code $?"
+          exit 1
+        }
+      }
+      echo "Database schema updated successfully"
+    else
+      echo "No Prisma schema found, skipping"
+    fi
+  delegate_to: "{{ app_to_deploy.container_ip }}"
+  register: prisma_migrate_result
+  failed_when: false
+
 - name: Run database migrations (if migrate:up script exists)
   shell: |
     set -e
