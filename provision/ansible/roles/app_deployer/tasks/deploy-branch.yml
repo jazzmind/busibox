@@ -234,6 +234,21 @@
   delegate_to: "{{ app_to_deploy.container_ip }}"
   register: version_info
 
+- name: Stop any process using the target port
+  shell: |
+    # Find and kill any process using port {{ app_to_deploy.port }}
+    PORT_PID=$(lsof -ti:{{ app_to_deploy.port }} 2>/dev/null || true)
+    if [ -n "$PORT_PID" ]; then
+      echo "Found process $PORT_PID using port {{ app_to_deploy.port }}, killing it..."
+      kill -9 $PORT_PID || true
+      sleep 2
+    else
+      echo "No process found using port {{ app_to_deploy.port }}"
+    fi
+  delegate_to: "{{ app_to_deploy.container_ip }}"
+  register: port_cleanup
+  failed_when: false
+
 - name: Check if PM2 is managing the application
   shell: pm2 list | grep -q "{{ app_to_deploy.name }}"
   delegate_to: "{{ app_to_deploy.container_ip }}"
@@ -241,21 +256,28 @@
   failed_when: false
   changed_when: false
 
-- name: Restart application with PM2 (if already running)
+- name: Stop application with PM2 (if already running)
   shell: |
     cd {{ app_to_deploy.deploy_path }}
-    pm2 restart {{ app_to_deploy.name }}
+    pm2 stop {{ app_to_deploy.name }} || true
+    pm2 delete {{ app_to_deploy.name }} || true
   delegate_to: "{{ app_to_deploy.container_ip }}"
   when: pm2_check.rc == 0
-  register: restart_result
+  register: stop_result
 
-- name: Start application with PM2 (if not running)
+- name: Start application with PM2 and environment variables
   shell: |
     cd {{ app_to_deploy.deploy_path }}
-    pm2 start npm --name "{{ app_to_deploy.name }}" -- start
+    # Load environment from .env file and start with PM2
+    pm2 start npm \
+      --name "{{ app_to_deploy.name }}" \
+      --env production \
+      {% for key, value in app_to_deploy.env.items() %}
+      --update-env {{ key }}="{{ value }}" \
+      {% endfor %}
+      -- start
     pm2 save
   delegate_to: "{{ app_to_deploy.container_ip }}"
-  when: pm2_check.rc != 0
   register: start_result
 
 - name: Wait for application to start
