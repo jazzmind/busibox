@@ -317,16 +317,17 @@ deploy_apps_menu() {
         echo ""
         
         echo -e "  ${CYAN}1)${NC} Deploy All Apps (latest release)"
-        echo -e "  ${CYAN}2)${NC} Deploy AI Portal"
-        echo -e "  ${CYAN}3)${NC} Deploy Agent Manager (agent-client)"
-        echo -e "  ${CYAN}4)${NC} Deploy Doc Intelligence (doc-intel)"
-        echo -e "  ${CYAN}5)${NC} Deploy Foundation Manager"
-        echo -e "  ${CYAN}6)${NC} Deploy Project Analysis"
-        echo -e "  ${CYAN}7)${NC} Deploy Innovation Manager"
-        echo -e "  ${CYAN}8)${NC} Back to Main Menu"
+        echo -e "  ${CYAN}2)${NC} Update Nginx Routing (after new app deployment)"
+        echo -e "  ${CYAN}3)${NC} Deploy AI Portal"
+        echo -e "  ${CYAN}4)${NC} Deploy Agent Manager (agent-client)"
+        echo -e "  ${CYAN}5)${NC} Deploy Doc Intelligence (doc-intel)"
+        echo -e "  ${CYAN}6)${NC} Deploy Foundation Manager"
+        echo -e "  ${CYAN}7)${NC} Deploy Project Analysis"
+        echo -e "  ${CYAN}8)${NC} Deploy Innovation Manager"
+        echo -e "  ${CYAN}9)${NC} Back to Main Menu"
         echo ""
         
-        read -p "Select option [1-8]: " choice
+        read -p "Select option [1-9]: " choice
         echo ""
         
         case "$choice" in
@@ -337,30 +338,36 @@ deploy_apps_menu() {
                 pause
                 ;;
             2)
-                deploy_single_app "ai-portal" "AI Portal" "$env"
+                if confirm "Update Nginx routing configuration for $env?"; then
+                    deploy_service "nginx" "$env"
+                fi
                 pause
                 ;;
             3)
-                deploy_single_app "agent-client" "Agent Manager" "$env"
+                deploy_single_app "ai-portal" "AI Portal" "$env"
                 pause
                 ;;
             4)
-                deploy_single_app "doc-intel" "Doc Intelligence" "$env"
+                deploy_single_app "agent-client" "Agent Manager" "$env"
                 pause
                 ;;
             5)
-                deploy_single_app "foundation" "Foundation Manager" "$env"
+                deploy_single_app "doc-intel" "Doc Intelligence" "$env"
                 pause
                 ;;
             6)
-                deploy_single_app "project-analysis" "Project Analysis" "$env"
+                deploy_single_app "foundation" "Foundation Manager" "$env"
                 pause
                 ;;
             7)
-                deploy_single_app "innovation" "Innovation Manager" "$env"
+                deploy_single_app "project-analysis" "Project Analysis" "$env"
                 pause
                 ;;
             8)
+                deploy_single_app "innovation" "Innovation Manager" "$env"
+                pause
+                ;;
+            9)
                 return 0
                 ;;
             *)
@@ -405,7 +412,6 @@ deployment_menu() {
         echo ""
         menu "Deploy Services - $env Environment" \
             "Deploy All Services" \
-            "Deploy Nginx (update routing)" \
             "Deploy Core Services (files, pg, milvus)" \
             "Deploy ColPali (visual embeddings)" \
             "Deploy vLLM (LLM inference)" \
@@ -418,7 +424,7 @@ deployment_menu() {
             "Verify Deployment (Health Checks)" \
             "Back to Main Menu"
         
-        read -p "$(echo -e "${BOLD}Select option [1-13]:${NC} ")" choice
+        read -p "$(echo -e "${BOLD}Select option [1-12]:${NC} ")" choice
         
         case $choice in
             1)
@@ -428,12 +434,6 @@ deployment_menu() {
                 pause
                 ;;
             2)
-                if confirm "Update Nginx routing configuration for $env?"; then
-                    deploy_service "nginx" "$env"
-                fi
-                pause
-                ;;
-            3)
                 header "Deploying Core Services" 70
                 echo ""
                 if confirm "Deploy files, pg, and milvus to $env?"; then
@@ -443,57 +443,57 @@ deployment_menu() {
                 fi
                 pause
                 ;;
-            4)
+            3)
                 if confirm "Deploy ColPali (visual embeddings) to $env?"; then
                     deploy_service "colpali" "$env"
                 fi
                 pause
                 ;;
-            5)
+            4)
                 vllm_submenu "$env"
                 ;;
-            6)
+            5)
                 if confirm "Deploy LiteLLM to $env?"; then
                     deploy_service "litellm" "$env"
                 fi
                 pause
                 ;;
-            7)
+            6)
                 if confirm "Deploy Ingest Service to $env?"; then
                     deploy_service "ingest" "$env"
                 fi
                 pause
                 ;;
-            8)
+            7)
                 if confirm "Deploy Search API to $env?"; then
                     deploy_service "search-api" "$env"
                 fi
                 pause
                 ;;
-            9)
+            8)
                 if confirm "Deploy Agent API to $env?"; then
                     deploy_service "agent" "$env"
                 fi
                 pause
                 ;;
-            10)
+            9)
                 deploy_apps_menu "$env"
                 ;;
-            11)
+            10)
                 if confirm "Deploy OpenWebUI to $env?"; then
                     deploy_service "openwebui" "$env"
                 fi
                 pause
                 ;;
-            12)
+            11)
                 verify_deployment "$env"
                 pause
                 ;;
-            13)
+            12)
                 return 0
                 ;;
             *)
-                error "Invalid selection. Please enter 1-13."
+                error "Invalid selection. Please enter 1-12."
                 ;;
         esac
     done
