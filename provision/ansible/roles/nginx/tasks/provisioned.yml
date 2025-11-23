@@ -75,13 +75,50 @@
     CERTEOF
   no_log: true
 
-- name: Deploy SSL private key
-  copy:
-    content: "{{ secrets.ssl_certificates.private_key }}"
-    dest: "/etc/ssl/busibox/{{ cert_domain }}.key"
-    mode: "0600"
-    owner: root
-    group: root
+- name: Deploy and format SSL private key
+  shell: |
+    # Single-pass solution for private key
+    cat << 'KEYEOF' | awk '
+    BEGIN { RS=""; ORS="" }
+    {
+      # Remove ALL whitespace
+      gsub(/[[:space:]]/, "")
+      
+      # Detect key type and find markers
+      if (index($0, "-----BEGINPRIVATEKEY-----") > 0) {
+        begin_marker = "-----BEGINPRIVATEKEY-----"
+        end_marker = "-----ENDPRIVATEKEY-----"
+        begin_len = 25
+      } else if (index($0, "-----BEGINRSAPRIVATEKEY-----") > 0) {
+        begin_marker = "-----BEGINRSAPRIVATEKEY-----"
+        end_marker = "-----ENDRSAPRIVATEKEY-----"
+        begin_len = 28
+      } else {
+        print "ERROR: Unknown private key format" > "/dev/stderr"
+        exit 1
+      }
+      
+      begin_pos = index($0, begin_marker)
+      end_pos = index($0, end_marker)
+      
+      if (begin_pos > 0 && end_pos > 0) {
+        # Extract base64 between markers
+        base64 = substr($0, begin_pos + begin_len, end_pos - begin_pos - begin_len)
+        
+        # Output properly formatted
+        gsub(/-----/,"-----", begin_marker)
+        gsub(/-----/,"-----", end_marker)
+        print begin_marker "\n"
+        for (i=1; i<=length(base64); i+=64) {
+          print substr(base64, i, 64) "\n"
+        }
+        print end_marker "\n"
+      }
+    }
+    ' > "/etc/ssl/busibox/{{ cert_domain }}.key"
+    {{ secrets.ssl_certificates.private_key }}
+    KEYEOF
+    chmod 600 "/etc/ssl/busibox/{{ cert_domain }}.key"
   no_log: true
 
 - name: Deploy and format SSL certificate chain
