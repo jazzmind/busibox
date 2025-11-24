@@ -93,7 +93,7 @@ class MilvusService:
             file_id: File identifier
             user_id: User identifier
             chunks: List of chunk dictionaries with text, chunk_index, page_number, etc.
-            embeddings: List of dense embedding vectors (variable dims, will be padded/truncated to 4096)
+            embeddings: List of dense embedding vectors (1024-d from FastEmbed bge-large-en-v1.5)
             content_hash: Content hash for vector reuse
         
         Returns:
@@ -300,7 +300,7 @@ class MilvusService:
         Perform hybrid search combining dense semantic and sparse BM25.
         
         Args:
-            query_embedding: Dense embedding vector for the query (1536 dims)
+            query_embedding: Dense embedding vector for the query (1024 dims from FastEmbed)
             user_id: User ID for permission filtering
             top_k: Number of final results to return
             rerank_k: Number of candidates to retrieve before reranking
