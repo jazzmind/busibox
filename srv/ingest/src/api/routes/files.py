@@ -140,6 +140,19 @@ async def get_file_metadata(fileId: str, request: Request):
                 }
             )
     
+    except ValueError as e:
+        # Handle UUID parsing errors (invalid file ID format)
+        logger.warning(
+            "Invalid file ID format",
+            file_id=fileId,
+            user_id=user_id,
+            error=str(e),
+        )
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"error": "Invalid file ID format"}
+        )
+    
     except Exception as e:
         logger.error(
             "Failed to get file metadata",
