@@ -16,7 +16,7 @@ class TestImageExtractor:
     def setup_method(self):
         """Setup test fixtures"""
         self.extractor = ImageExtractor()
-        self.test_data_dir = Path(__file__).parent.parent.parent / "samples"
+        self.test_data_dir = Path(__file__).parent.parent / "samples"
 
     def test_extract_images_from_pdf(self):
         """Test extracting images from a PDF file"""
