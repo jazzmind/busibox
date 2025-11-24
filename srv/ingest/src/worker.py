@@ -780,6 +780,65 @@ class IngestWorker:
                         },
                     )
                     
+                    # Record strategy results in database
+                    try:
+                        conn = self.postgres_service._get_connection()
+                        try:
+                            with conn.cursor() as cur:
+                                for strategy, result in results.items():
+                                    # Calculate metrics
+                                    text_length = len(result.text) if result.text else 0
+                                    chunk_count = len(result.chunks) if result.chunks else 0
+                                    embedding_count = len(result.embeddings) if result.embeddings else 0
+                                    visual_embedding_count = len(result.visual_embeddings) if result.visual_embeddings else 0
+                                    
+                                    # Insert or update strategy result
+                                    cur.execute("""
+                                        INSERT INTO processing_strategy_results (
+                                            file_id, processing_strategy, success,
+                                            text_length, chunk_count, embedding_count, visual_embedding_count,
+                                            processing_time_seconds, error_message, metadata
+                                        ) VALUES (
+                                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                                        )
+                                        ON CONFLICT (file_id, processing_strategy)
+                                        DO UPDATE SET
+                                            success = EXCLUDED.success,
+                                            text_length = EXCLUDED.text_length,
+                                            chunk_count = EXCLUDED.chunk_count,
+                                            embedding_count = EXCLUDED.embedding_count,
+                                            visual_embedding_count = EXCLUDED.visual_embedding_count,
+                                            processing_time_seconds = EXCLUDED.processing_time_seconds,
+                                            error_message = EXCLUDED.error_message,
+                                            metadata = EXCLUDED.metadata,
+                                            created_at = NOW()
+                                    """, (
+                                        file_id,
+                                        strategy.value,
+                                        result.success,
+                                        text_length,
+                                        chunk_count,
+                                        embedding_count,
+                                        visual_embedding_count,
+                                        result.processing_time_seconds,
+                                        result.error if not result.success else None,
+                                        json.dumps(result.metadata) if result.metadata else '{}',
+                                    ))
+                                conn.commit()
+                                logger.info(
+                                    "Recorded processing strategy results",
+                                    file_id=file_id,
+                                    strategies_recorded=len(results),
+                                )
+                        finally:
+                            self.postgres_service._return_connection(conn)
+                    except Exception as db_error:
+                        logger.warning(
+                            "Failed to record strategy results (non-fatal)",
+                            file_id=file_id,
+                            error=str(db_error),
+                        )
+                    
                 except ImportError as e:
                     logger.warning(
                         "Multi-flow requested but MultiFlowProcessor not available",
