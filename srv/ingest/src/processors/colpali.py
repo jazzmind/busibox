@@ -122,6 +122,8 @@ class ColPaliEmbedder:
                 # Extract embeddings from response
                 # Response format: {"data": [{"embedding": [...], "index": 0}, ...]}
                 embeddings = []
+                pooling_method = self.config.get("colpali_pooling_method", "mean")
+                
                 for item in sorted(result.get("data", []), key=lambda x: x["index"]):
                     embedding = item["embedding"]
                     # ColPali returns flattened multi-vector embeddings
@@ -146,7 +148,6 @@ class ColPaliEmbedder:
                     
                     # Pool patches into single vector using mean pooling
                     # This preserves overall page "gist" while reducing storage
-                    pooling_method = self.config.get("colpali_pooling_method", "mean")
                     if pooling_method == "max":
                         pooled_vector = np.max(reshaped, axis=0)
                     else:  # mean (default)

@@ -43,7 +43,7 @@ def test_config():
         "temp_dir": "/tmp/ingest_test",
         "marker_enabled": True,
         "colpali_enabled": True,
-        "colpali_base_url": os.getenv("COLPALI_BASE_URL", "http://10.96.200.31:8002/v1"),
+        "colpali_base_url": os.getenv("COLPALI_BASE_URL", "http://10.96.200.208:9006/v1"),
         "colpali_api_key": "EMPTY",
         "litellm_base_url": os.getenv("LITELLM_BASE_URL", "http://10.96.200.30:4000"),
         "embedding_model": "text-embedding-3-small",

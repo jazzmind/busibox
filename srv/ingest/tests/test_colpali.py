@@ -37,7 +37,7 @@ from shared.config import Config
 # ============================================================================
 
 # Test environment variables (override defaults for testing)
-TEST_COLPALI_BASE_URL = os.getenv("COLPALI_BASE_URL", "http://10.96.200.31:8002/v1")
+TEST_COLPALI_BASE_URL = os.getenv("COLPALI_BASE_URL", "http://10.96.200.208:9006/v1")
 TEST_COLPALI_HEALTH_URL = TEST_COLPALI_BASE_URL.replace("/v1", "/health")
 TEST_COLPALI_API_KEY = os.getenv("COLPALI_API_KEY", "EMPTY")
 
@@ -760,8 +760,8 @@ async def test_diagnostic_report():
         print("   • ColPali service is not accessible")
         print("   • Verify the service is running on vllm-lxc container")
         print("   • Check network connectivity:")
-        print("     ping 10.96.200.31")
-        print("     curl http://10.96.200.31:8002/health")
+        print("     ping 10.96.200.208")
+        print("     curl http://10.96.200.208:9006/health")
     
     print("\n" + "="*70)
 

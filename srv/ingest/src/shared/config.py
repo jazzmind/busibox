@@ -47,7 +47,7 @@ class Config:
         self.embedding_batch_size = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
         
         # ColPali configuration (visual embeddings)
-        self.colpali_base_url = os.getenv("COLPALI_BASE_URL", "http://10.96.200.208:8002/v1")
+        self.colpali_base_url = os.getenv("COLPALI_BASE_URL", "http://10.96.200.208:9006/v1")
         self.colpali_api_key = os.getenv("COLPALI_API_KEY", "EMPTY")
         self.colpali_enabled = os.getenv("COLPALI_ENABLED", "true").lower() == "true"
         self.colpali_pooling_method = os.getenv("COLPALI_POOLING_METHOD", "mean")  # mean or max
