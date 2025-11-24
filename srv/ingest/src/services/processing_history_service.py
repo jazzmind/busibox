@@ -18,24 +18,44 @@ class ProcessingHistoryService:
     def __init__(self, config: dict):
         """Initialize with database configuration."""
         self.config = config
-        # Use the same connection pool as PostgresService
-        import psycopg2.pool
-        self.pool = psycopg2.pool.SimpleConnectionPool(
-            1, 10,
-            host=config.get("postgres_host"),
-            port=config.get("postgres_port", 5432),
-            database=config.get("files_db"),
-            user=config.get("postgres_user"),
-            password=config.get("postgres_password"),
-        )
+        self.pool = None
+    
+    def connect(self):
+        """Establish connection pool to database."""
+        if self.pool is None:
+            import psycopg2.pool
+            try:
+                self.pool = psycopg2.pool.SimpleConnectionPool(
+                    1, 10,
+                    host=self.config.get("postgres_host"),
+                    port=self.config.get("postgres_port", 5432),
+                    database=self.config.get("files_db"),
+                    user=self.config.get("postgres_user"),
+                    password=self.config.get("postgres_password"),
+                )
+                logger.info("ProcessingHistoryService connected to PostgreSQL")
+            except Exception as e:
+                logger.error("Failed to connect ProcessingHistoryService", error=str(e))
+                raise
+    
+    def disconnect(self):
+        """Close the connection pool."""
+        if self.pool:
+            self.pool.closeall()
+            self.pool = None
+            logger.info("ProcessingHistoryService disconnected")
     
     def _get_connection(self):
         """Get a connection from the pool."""
+        if not self.pool:
+            logger.error("ProcessingHistoryService not connected")
+            return None
         return self.pool.getconn()
     
     def _return_connection(self, conn):
         """Return a connection to the pool."""
-        self.pool.putconn(conn)
+        if self.pool and conn:
+            self.pool.putconn(conn)
     
     def log_step(
         self,
@@ -63,8 +83,14 @@ class ProcessingHistoryService:
             duration_ms: Duration in milliseconds
             started_at: Start timestamp (for calculating duration)
         """
+        if not self.pool:
+            logger.warning("ProcessingHistoryService not connected, skipping log")
+            return
+            
         try:
             conn = self._get_connection()
+            if not conn:
+                return
             try:
                 with conn.cursor() as cur:
                     # Calculate duration if started_at provided and not already set
@@ -116,7 +142,13 @@ class ProcessingHistoryService:
     
     def get_history(self, file_id: str):
         """Get processing history for a file."""
+        if not self.pool:
+            logger.warning("ProcessingHistoryService not connected")
+            return []
+            
         conn = self._get_connection()
+        if not conn:
+            return []
         try:
             with conn.cursor() as cur:
                 cur.execute("""
@@ -147,9 +179,4 @@ class ProcessingHistoryService:
                 ]
         finally:
             self._return_connection(conn)
-    
-    def close(self):
-        """Close the connection pool."""
-        if self.pool:
-            self.pool.closeall()
 

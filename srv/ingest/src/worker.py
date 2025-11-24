@@ -149,6 +149,7 @@ class IngestWorker:
         self.milvus_service = MilvusService(self.config)
         self.milvus_service.connect()
         self.history_service = ProcessingHistoryService(self.config)
+        self.history_service.connect()
         self.error_handler = ErrorHandler(self.config, self.postgres_service, self.redis_client)
         self.history = HistoryLogger(self.history_service)
         
