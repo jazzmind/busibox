@@ -58,6 +58,12 @@
     dest: /srv/ingest/src/
     mode: "0644"
 
+- name: Copy sample files for testing
+  copy:
+    src: "{{ playbook_dir }}/../../samples/"
+    dest: /srv/ingest/samples/
+    mode: "0644"
+
 - name: Copy requirements.txt
   copy:
     src: "{{ playbook_dir }}/../../srv/ingest/requirements.txt"
