@@ -509,9 +509,9 @@ async def test_full_pipeline_with_search(
         milvus_service = MilvusService(config.to_dict())
         milvus_service.connect()
         
-        # Generate query embedding (in real system, this would use liteLLM)
+        # Generate query embedding (in real system, this would use local FastEmbed)
         # For test, we'll use a simple query vector
-        query_embedding = [0.1] * 1536  # Dummy embedding
+        query_embedding = [0.1] * 1024  # Dummy embedding (bge-large-en-v1.5 dimension)
         
         # Search for documents (semantic search)
         search_results = milvus_service.collection.search(

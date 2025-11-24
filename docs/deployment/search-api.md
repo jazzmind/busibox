@@ -192,9 +192,9 @@ POSTGRES_DB=busibox
 POSTGRES_USER=app_user
 POSTGRES_PASSWORD=<from_vault>
 
-# Embedding Service
-EMBEDDING_SERVICE_URL=http://10.96.200.30:8000
-EMBEDDING_MODEL=text-embedding-3-small
+# Embedding Service (local FastEmbed on ingest-lxc)
+EMBEDDING_SERVICE_URL=http://10.96.200.30:8002
+EMBEDDING_MODEL=bge-large-en-v1.5
 
 # Reranking
 RERANKER_MODEL=BAAI/bge-reranker-v2-m3

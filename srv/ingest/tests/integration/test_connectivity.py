@@ -163,7 +163,7 @@ def test_litellm_connectivity():
                     f"{base_url}/v1/embeddings",
                     headers=headers,
                     json={
-                        "model": "text-embedding-3-small",
+                        "model": "bge-large-en-v1.5",
                         "input": "test"
                     },
                     timeout=10.0,

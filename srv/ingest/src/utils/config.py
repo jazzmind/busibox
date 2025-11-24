@@ -47,6 +47,6 @@ def load_config() -> Dict[str, any]:
         # Processing configuration
         "chunk_size": int(os.getenv("CHUNK_SIZE", "512")),
         "chunk_overlap": int(os.getenv("CHUNK_OVERLAP", "50")),
-        "embedding_model": os.getenv("EMBEDDING_MODEL", "text-embedding-ada-002"),
+        "embedding_model": os.getenv("EMBEDDING_MODEL", "bge-large-en-v1.5"),
     }
 

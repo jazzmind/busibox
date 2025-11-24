@@ -171,7 +171,7 @@ class TestSearchAPI:
             "file_id": "file-123",
             "chunk_index": 0,
             "text": "test document",
-            "text_dense": [0.1] * 1536,
+            "text_dense": [0.1] * 1024,
         })
         mock_reranker.explain_score = Mock(return_value={
             "score": 0.9,

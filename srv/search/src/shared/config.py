@@ -18,7 +18,7 @@ class Config(BaseSettings):
     # Milvus
     milvus_host: str = "localhost"
     milvus_port: int = 19530
-    milvus_collection: str = "document_embeddings"
+    milvus_collection: str = "documents"
     
     # PostgreSQL
     postgres_host: str = os.getenv("POSTGRES_HOST", "10.96.200.26")
@@ -34,10 +34,10 @@ class Config(BaseSettings):
     enable_caching: bool = os.getenv("ENABLE_CACHING", "false").lower() == "true"
     cache_ttl: int = 300  # 5 minutes
     
-    # Embedding service
-    embedding_service_url: str = os.getenv("EMBEDDING_SERVICE_URL", "http://10.96.200.30:8000")
-    embedding_model: str = "text-embedding-3-small"
-    embedding_dim: int = 1536
+    # Embedding service (local FastEmbed on ingest-lxc)
+    embedding_service_url: str = os.getenv("EMBEDDING_SERVICE_URL", "http://10.96.200.30:8002")
+    embedding_model: str = "bge-large-en-v1.5"
+    embedding_dim: int = 1024
     
     # Reranking
     reranker_model: str = "BAAI/bge-reranker-v2-m3"

@@ -67,7 +67,7 @@ MILVUS_FIELDS = {
 
 # Embedding dimensions
 EMBEDDING_DIMS = {
-    "text_dense": 1536,  # text-embedding-3-small
+    "text_dense": 1024,  # bge-large-en-v1.5 (local FastEmbed)
     "page_vectors": 128,  # ColPali patch dimension
 }
 

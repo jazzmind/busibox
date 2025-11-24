@@ -46,7 +46,7 @@ def test_config():
         "colpali_base_url": os.getenv("COLPALI_BASE_URL", "http://10.96.200.208:9006/v1"),
         "colpali_api_key": "EMPTY",
         "litellm_base_url": os.getenv("LITELLM_BASE_URL", "http://10.96.200.30:4000"),
-        "embedding_model": "text-embedding-3-small",
+        "embedding_model": "bge-large-en-v1.5",
         "chunk_size_min": 400,
         "chunk_size_max": 800,
         "chunk_overlap_pct": 0.12,

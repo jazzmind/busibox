@@ -126,7 +126,7 @@ Available fixtures (defined in `conftest.py`):
 - `sample_query`: Sample search query
 - `sample_user_id`: Sample user ID
 - `sample_document_text`: Sample document
-- `sample_embedding`: Sample 1536-dim embedding
+- `sample_embedding`: Sample 1024-dim embedding (bge-large-en-v1.5)
 - `sample_search_results`: Mock Milvus results
 - `mock_milvus_service`: Mock Milvus service
 - `mock_embedder`: Mock embedding service

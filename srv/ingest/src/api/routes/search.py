@@ -61,11 +61,11 @@ class SearchResponse(BaseModel):
     "",
     response_model=SearchResponse,
     summary="Search documents",
-    description="""
+    description=    """
     Perform semantic search across user's documents using hybrid search.
     
     **Features:**
-    - Dense semantic search using text-embedding-3-small
+    - Dense semantic search using bge-large-en-v1.5 (local FastEmbed)
     - Sparse BM25 keyword search
     - Weighted combination of both approaches
     - User permission filtering (only searches user's documents)

@@ -89,7 +89,7 @@ class Vector(BaseModel):
     page_number: Optional[int] = Field(None, description="PDF page number")
     modality: str = Field(..., description="'text' or 'page_image'")
     text: Optional[str] = Field(None, description="Text content (for BM25)")
-    text_dense: Optional[List[float]] = Field(None, description="Dense embedding (1536 dims)")
+    text_dense: Optional[List[float]] = Field(None, description="Dense embedding (1024 dims, bge-large-en-v1.5)")
     text_sparse: Optional[Dict] = Field(None, description="Sparse BM25 embedding")
     page_vectors: Optional[List[float]] = Field(None, description="ColPali multi-vector (128 dims)")
     user_id: str = Field(..., description="User identifier")

@@ -169,7 +169,7 @@ class TestMilvusSearchService:
             "file_id": "file-123",
             "chunk_index": 5,
             "text": "document text",
-            "text_dense": [0.1] * 1536,
+            "text_dense": [0.1] * 1024,
         }])
         service.collection = mock_collection
         
