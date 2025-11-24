@@ -30,7 +30,7 @@ Content here."""
             await minio_service.upload_text(test_markdown, object_path)
             
             # Retrieve markdown
-            retrieved_content = await minio_service.get_file_content(object_path)
+            retrieved_content = minio_service.get_file_content(object_path)
             
             assert retrieved_content == test_markdown
         finally:
@@ -54,7 +54,7 @@ Content here."""
             await minio_service.upload_bytes(test_image_data, object_path, content_type='image/png')
             
             # Retrieve image
-            retrieved_data = await minio_service.get_file_stream(object_path)
+            retrieved_data = minio_service.get_file_bytes(object_path)
             
             assert retrieved_data is not None
             assert len(retrieved_data) > 0
@@ -118,7 +118,7 @@ Content here."""
         nonexistent_path = f"nonexistent/{uuid.uuid4()}/file.md"
         
         with pytest.raises(Exception):  # Should raise S3Error or similar
-            await minio_service.get_file_content(nonexistent_path)
+            minio_service.get_file_content(nonexistent_path)
 
     @pytest.mark.asyncio
     async def test_overwrite_existing_markdown(self, minio_service):
@@ -132,7 +132,7 @@ Content here."""
             await minio_service.upload_text(original, object_path)
             
             # Verify original
-            retrieved = await minio_service.get_file_content(object_path)
+            retrieved = minio_service.get_file_content(object_path)
             assert retrieved == original
             
             # Overwrite with new content
@@ -140,7 +140,7 @@ Content here."""
             await minio_service.upload_text(updated, object_path)
             
             # Verify updated
-            retrieved_updated = await minio_service.get_file_content(object_path)
+            retrieved_updated = minio_service.get_file_content(object_path)
             assert retrieved_updated == updated
             assert retrieved_updated != original
         finally:
@@ -203,7 +203,7 @@ Content here."""
             await minio_service.upload_text(test_markdown, object_path)
             
             # Retrieve
-            retrieved = await minio_service.get_file_content(object_path)
+            retrieved = minio_service.get_file_content(object_path)
             
             assert retrieved == test_markdown
             assert "🎉" in retrieved
@@ -230,7 +230,7 @@ Content here."""
             await minio_service.upload_text(large_content, object_path)
             
             # Retrieve
-            retrieved = await minio_service.get_file_content(object_path)
+            retrieved = minio_service.get_file_content(object_path)
             
             assert len(retrieved) == len(large_content)
             assert retrieved[:50] == large_content[:50]  # Check beginning
