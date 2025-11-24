@@ -56,3 +56,23 @@
     msg: "{{ 'Cleanup stage migration applied successfully' if cleanup_migration_result.changed else 'Cleanup stage migration already applied' }}"
   tags: [ingest, ingest_migrations]
 
+- name: Check if processing history table exists
+  shell: |
+    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -tAc \
+    "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='processing_history');"
+  register: history_table_check
+  changed_when: false
+  tags: [ingest, ingest_migrations]
+
+- name: Apply processing history migration
+  shell: |
+    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -f /srv/ingest/migrations/add_processing_history.sql
+  when: history_table_check.stdout == 'f'
+  register: history_migration_result
+  tags: [ingest, ingest_migrations]
+
+- name: Display processing history migration status
+  debug:
+    msg: "{{ 'Processing history migration applied successfully' if history_migration_result.changed else 'Processing history table already exists' }}"
+  tags: [ingest, ingest_migrations]
+

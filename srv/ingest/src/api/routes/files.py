@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 from api.services.minio_service import MinIOService
 from api.services.postgres import PostgresService
 from services.milvus_service import MilvusService
+from services.processing_history_service import ProcessingHistoryService
 from shared.config import Config
 
 logger = structlog.get_logger()
@@ -203,6 +204,52 @@ async def get_file_metadata(fileId: str, request: Request):
     
     finally:
         await postgres_service.disconnect()
+
+
+@router.get("/{fileId}/history")
+async def get_processing_history(fileId: str, request: Request):
+    """
+    Get detailed processing history for a file.
+    
+    Returns:
+        Processing history with steps, timing, and any errors
+    """
+    user_id = request.state.user_id
+    
+    try:
+        # Validate UUID format
+        try:
+            uuid.UUID(fileId)
+        except ValueError:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={"error": "Invalid file ID format"}
+            )
+        
+        config = Config().to_dict()
+        history_service = ProcessingHistoryService(config)
+        
+        try:
+            history = history_service.get_history(fileId)
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={"history": history}
+            )
+        finally:
+            history_service.close()
+            
+    except Exception as e:
+        logger.error(
+            "Failed to get processing history",
+            file_id=fileId,
+            user_id=user_id,
+            error=str(e),
+            exc_info=True,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": "Failed to retrieve processing history"}
+        )
 
 
 @router.get("/{fileId}/download")
