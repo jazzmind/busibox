@@ -555,13 +555,7 @@ class IngestWorker:
                     file_id=file_id,
                     chunk_count=total_chunks,
                 )
-                self.postgres_service.update_status(
-                    file_id=file_id,
-                    stage="cleanup",
-                    progress=47,
-                    chunks_processed=0,
-                    total_chunks=total_chunks,
-                )
+                # No status update - cleanup is part of chunking stage
                 
                 # Run async cleanup in sync context
                 loop = asyncio.new_event_loop()
@@ -577,14 +571,6 @@ class IngestWorker:
                     )
                 finally:
                     loop.close()
-                
-                self.postgres_service.update_status(
-                    file_id=file_id,
-                    stage="cleanup",
-                    progress=50,
-                    chunks_processed=total_chunks,
-                    total_chunks=total_chunks,
-                )
             else:
                 logger.debug("LLM cleanup disabled, skipping", file_id=file_id)
                 self.postgres_service.update_status(
