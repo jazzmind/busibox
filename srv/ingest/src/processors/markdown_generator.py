@@ -153,8 +153,8 @@ class MarkdownGenerator:
         """
         Infer heading level based on line characteristics.
         """
-        # Very short, all caps -> H1
-        if line.isupper() and len(line.split()) <= 5:
+        # Very short (1-2 words), all caps -> H1
+        if line.isupper() and len(line.split()) <= 2:
             return 1
         # All caps -> H2
         elif line.isupper():
