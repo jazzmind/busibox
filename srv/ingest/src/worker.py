@@ -697,7 +697,6 @@ class IngestWorker:
                             "Uploading markdown to MinIO"
                         )
                         markdown_path = f"{user_id}/{file_id}/content.md"
-                        import asyncio
                         asyncio.run(self.file_service.minio_service.upload_text(
                             markdown_content,
                             markdown_path
@@ -727,7 +726,6 @@ class IngestWorker:
                         
                         for i, (img_data, img_meta) in enumerate(zip(images_data, images_metadata)):
                             image_path = f"{images_path}/image_{i}.png"
-                            import asyncio
                             asyncio.run(self.file_service.minio_service.upload_bytes(
                                 img_data,
                                 image_path,
