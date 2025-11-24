@@ -16,7 +16,7 @@ import json
 import uuid
 from typing import Optional, List
 
-import redis.asyncio as redis
+import redis.asyncio as redis_async
 import structlog
 from fastapi import APIRouter, Request, Query, status
 from fastapi.responses import JSONResponse, StreamingResponse, Response
@@ -826,7 +826,7 @@ async def reprocess_file(fileId: str, request: Request):
             logger.info("Reset ingestion status", file_id=fileId)
             
             # Add job back to Redis queue
-            redis_client = redis.Redis(
+            redis_client = redis_async.Redis(
                 host=config.get("redis_host", "localhost"),
                 port=config.get("redis_port", 6379),
                 decode_responses=True,
