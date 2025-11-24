@@ -15,6 +15,7 @@
       - build-essential
       - nginx
       - redis-server
+      - postgresql-client  # For running migrations
       - poppler-utils  # For pdf2image
       - tesseract-ocr  # For pytesseract OCR
     state: present
