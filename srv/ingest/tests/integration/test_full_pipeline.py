@@ -21,8 +21,8 @@ import structlog
 from fastapi.testclient import TestClient
 
 from src.api.main import app
-from src.services.minio_service import MinIOService
-from src.services.postgres_service import PostgresService
+from src.api.services.minio_service import MinIOService
+from src.api.services.postgres import PostgresService
 from src.services.milvus_service import MilvusService
 from src.shared.config import Config
 

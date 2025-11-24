@@ -304,7 +304,15 @@
       elif [ "$1" == "api" ]; then
         python -m pytest tests/api/ -v
       elif [ "$1" == "all" ]; then
-        python -m pytest tests/ -v
+        # Run tests by category to avoid pytest collection order issues
+        echo "=== Running Unit Tests ==="
+        python -m pytest tests/test_*.py -v --tb=short
+        echo ""
+        echo "=== Running API Tests ==="
+        python -m pytest tests/api/ -v --tb=short
+        echo ""
+        echo "=== Running Integration Tests ==="
+        python -m pytest tests/integration/ -v --tb=short
       elif [ "$1" == "quick" ]; then
         python -m pytest tests/test_chunker.py -v --tb=short
       else
