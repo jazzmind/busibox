@@ -1052,14 +1052,7 @@ class IngestWorker:
                 try:
                     from processors.multi_flow_processor import MultiFlowProcessor
                     
-                    multi_flow = MultiFlowProcessor(
-                        config=self.config,
-                        text_extractor=self.text_extractor,
-                        chunker=self.chunker,
-                        embedder=self.embedder,
-                        classifier=self.classifier,
-                        colpali_embedder=self.colpali,
-                    )
+                    multi_flow = MultiFlowProcessor(config=self.config)
                     
                     # Process with multiple strategies for comparison
                     max_strategies = processing_config.get("max_parallel_strategies", 3)

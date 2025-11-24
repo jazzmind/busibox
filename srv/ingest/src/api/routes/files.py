@@ -236,7 +236,7 @@ async def get_processing_history(fileId: str, request: Request):
                 content={"history": history}
             )
         finally:
-            history_service.close()
+            history_service.disconnect()
             
     except Exception as e:
         logger.error(
