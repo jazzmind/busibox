@@ -148,31 +148,78 @@
 
 - name: Create database and run migrations (Prisma apps)
   shell: |
+    set -e  # Exit on any error
     cd {{ app_to_deploy.deploy_path }}
     
     if [ ! -f "prisma/schema.prisma" ]; then
-      echo "No Prisma schema found, skipping"
+      echo "No Prisma schema found, skipping database setup"
       exit 0
     fi
     
     echo "========================================"
-    echo "DATABASE SETUP"
+    echo "DATABASE SETUP FOR {{ app_to_deploy.name }}"
     echo "========================================"
     
-    # Try to run migrations first (works if DB exists)
-    echo "Attempting to run migrations..."
-    if npx prisma migrate deploy 2>&1; then
-      echo "✓ Migrations completed successfully"
+    # Load environment variables (DATABASE_URL, etc.)
+    if [ -f .env ]; then
+      echo "Loading environment variables from .env"
+      export $(grep -v '^#' .env | xargs)
     else
-      echo "Migrations failed (database may not exist), trying db push..."
-      # db push will create the database and schema
-      if npx prisma db push --accept-data-loss 2>&1; then
-        echo "✓ Database created and schema pushed successfully"
+      echo "WARNING: No .env file found"
+    fi
+    
+    # Check if DATABASE_URL is set
+    if [ -z "$DATABASE_URL" ]; then
+      echo "ERROR: DATABASE_URL not set"
+      exit 1
+    fi
+    
+    echo "Database URL configured: ${DATABASE_URL%%@*}@***"
+    
+    # Check if migrations directory exists
+    if [ -d "prisma/migrations" ] && [ "$(ls -A prisma/migrations)" ]; then
+      echo "Found migrations directory, attempting to deploy migrations..."
+      
+      # Try to run migrations
+      if npx prisma migrate deploy 2>&1; then
+        echo "✓ Migrations deployed successfully"
       else
-        echo "✗ Failed to create database and push schema"
-        echo "This may require manual database creation"
+        echo "✗ Migration deployment failed"
+        echo "This could mean:"
+        echo "  1. Database doesn't exist yet"
+        echo "  2. Schema is out of sync with migrations"
+        echo "  3. Connection issue"
+        echo ""
+        echo "Attempting db push as fallback (will sync schema without migrations)..."
+        
+        # Use db push without --accept-data-loss for initial setup
+        # This will create the database and schema if they don't exist
+        if npx prisma db push --skip-generate 2>&1; then
+          echo "✓ Database schema pushed successfully"
+        else
+          echo "✗ Failed to push database schema"
+          exit 1
+        fi
+      fi
+    else
+      echo "No migrations found, using db push to create schema..."
+      
+      # No migrations exist, use db push to create schema
+      # This is safe for initial setup as there's no existing data
+      if npx prisma db push --skip-generate 2>&1; then
+        echo "✓ Database schema created successfully"
+      else
+        echo "✗ Failed to create database schema"
         exit 1
       fi
+    fi
+    
+    echo ""
+    echo "Verifying database connection..."
+    if npx prisma db execute --stdin <<< "SELECT 1;" 2>&1; then
+      echo "✓ Database connection verified"
+    else
+      echo "WARNING: Could not verify database connection"
     fi
     
     echo "========================================"
