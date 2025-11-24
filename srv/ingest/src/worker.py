@@ -45,6 +45,7 @@ from shared.config import Config
 from services.file_service import FileService
 from services.postgres_service import PostgresService
 from services.milvus_service import MilvusService
+from services.processing_history_service import ProcessingHistoryService
 from processors.text_extractor import TextExtractor, ExtractionResult
 from processors.chunker import Chunker, Chunk
 from processors.embedder import Embedder
@@ -93,6 +94,7 @@ class IngestWorker:
         self.file_service: Optional[FileService] = None
         self.postgres_service: Optional[PostgresService] = None
         self.milvus_service: Optional[MilvusService] = None
+        self.history_service: Optional[ProcessingHistoryService] = None
         
         # Processors (initialized in connect())
         self.text_extractor: Optional[TextExtractor] = None
@@ -143,6 +145,7 @@ class IngestWorker:
         self.postgres_service.connect()
         self.milvus_service = MilvusService(self.config)
         self.milvus_service.connect()
+        self.history_service = ProcessingHistoryService(self.config)
         
         # Initialize processors
         self.text_extractor = TextExtractor(self.config)
@@ -169,6 +172,39 @@ class IngestWorker:
             self.redis_client.close()
         
         logger.info("All services disconnected")
+    
+    def _log_step(
+        self,
+        file_id: str,
+        stage: str,
+        step_name: str,
+        status: str,
+        message: str = None,
+        error_message: str = None,
+        metadata: dict = None,
+        started_at: float = None,
+    ):
+        """Helper to log processing step to history."""
+        try:
+            self.history_service.log_step(
+                file_id=file_id,
+                stage=stage,
+                step_name=step_name,
+                status=status,
+                message=message,
+                error_message=error_message,
+                metadata=metadata,
+                started_at=started_at,
+            )
+        except Exception as e:
+            # Don't fail processing if history logging fails
+            logger.warning(
+                "Failed to log processing step",
+                file_id=file_id,
+                stage=stage,
+                step_name=step_name,
+                error=str(e),
+            )
     
     def _get_timeout_seconds(self, page_count: int) -> int:
         """Calculate timeout based on document size."""
