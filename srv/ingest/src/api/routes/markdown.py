@@ -32,7 +32,7 @@ async def get_markdown(fileId: str, request: Request):
     config = Config().to_dict()
     postgres_service = PostgresService(config)
     minio_service = MinIOService(config)
-    await postgres_service.connect()
+    postgres_service.connect()
 
     try:
         # Validate fileId is a valid UUID
@@ -99,7 +99,7 @@ async def get_markdown(fileId: str, request: Request):
             content={"error": "Failed to retrieve markdown", "details": str(e)}
         )
     finally:
-        await postgres_service.disconnect()
+        postgres_service.close()
 
 
 @router.get("/{fileId}/html")
@@ -115,7 +115,7 @@ async def get_html(fileId: str, request: Request):
     config = Config().to_dict()
     postgres_service = PostgresService(config)
     minio_service = MinIOService(config)
-    await postgres_service.connect()
+    postgres_service.connect()
 
     try:
         # Validate fileId is a valid UUID
@@ -187,7 +187,7 @@ async def get_html(fileId: str, request: Request):
             content={"error": "Failed to retrieve HTML", "details": str(e)}
         )
     finally:
-        await postgres_service.disconnect()
+        postgres_service.close()
 
 
 @router.get("/{fileId}/images/{imageIndex}")
@@ -207,7 +207,7 @@ async def get_image(fileId: str, imageIndex: int, request: Request):
     config = Config().to_dict()
     postgres_service = PostgresService(config)
     minio_service = MinIOService(config)
-    await postgres_service.connect()
+    postgres_service.connect()
 
     try:
         # Validate fileId is a valid UUID
@@ -303,6 +303,6 @@ async def get_image(fileId: str, imageIndex: int, request: Request):
             content={"error": "Failed to retrieve image", "details": str(e)}
         )
     finally:
-        await postgres_service.disconnect()
+        postgres_service.close()
 
 
