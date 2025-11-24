@@ -446,6 +446,11 @@ class IngestWorker:
             )
             
             # Stage 4: Chunking
+            chunking_start = self.history.log_stage_start(
+                file_id, "chunking",
+                f"Starting chunking with detected languages: {detected_languages}",
+                metadata={"text_length": len(extraction_result.text), "detected_languages": detected_languages}
+            )
             logger.info(
                 "Stage 4: Starting text chunking",
                 file_id=file_id,
@@ -501,6 +506,13 @@ class IngestWorker:
                 chunk_count=total_chunks,
             )
             
+            self.history.log_stage_complete(
+                file_id, "chunking",
+                f"Created {total_chunks} chunks from {len(extraction_result.text)} characters",
+                metadata={"chunk_count": total_chunks, "text_length": len(extraction_result.text)},
+                started_at=chunking_start
+            )
+            
             self.postgres_service.update_status(
                 file_id=file_id,
                 stage="chunking",
@@ -515,6 +527,11 @@ class IngestWorker:
             llm_cleanup_enabled = llm_cleanup_enabled or (self.llm_cleanup and self.llm_cleanup.enabled)
             
             if llm_cleanup_enabled and self.llm_cleanup:
+                cleanup_start = self.history.log_stage_start(
+                    file_id, "cleanup",
+                    f"Starting LLM cleanup on {total_chunks} chunks",
+                    metadata={"original_chunk_count": total_chunks}
+                )
                 logger.info(
                     "Stage 4.5: Starting LLM cleanup",
                     file_id=file_id,
@@ -532,6 +549,7 @@ class IngestWorker:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 try:
+                    original_chunk_count = len(chunks)
                     chunks = loop.run_until_complete(
                         self.llm_cleanup.cleanup_chunks(chunks)
                     )
@@ -539,6 +557,13 @@ class IngestWorker:
                         "LLM cleanup complete",
                         file_id=file_id,
                         chunk_count=len(chunks),
+                    )
+                    
+                    self.history.log_stage_complete(
+                        file_id, "cleanup",
+                        f"LLM cleanup: {original_chunk_count} → {len(chunks)} chunks",
+                        metadata={"original_count": original_chunk_count, "final_count": len(chunks)},
+                        started_at=cleanup_start
                     )
                 finally:
                     loop.close()
@@ -552,6 +577,11 @@ class IngestWorker:
                 )
             else:
                 logger.debug("LLM cleanup disabled, skipping", file_id=file_id)
+                self.history.log_skip(
+                    file_id, "cleanup", "llm_cleanup",
+                    "LLM cleanup was disabled",
+                    metadata={"chunk_count": total_chunks}
+                )
                 self.postgres_service.update_status(
                     file_id=file_id,
                     stage="chunking",
@@ -565,6 +595,11 @@ class IngestWorker:
             self.postgres_service.insert_chunks(file_id, chunk_dicts)
             
             # Stage 5: Embedding
+            embedding_start = self.history.log_stage_start(
+                file_id, "embedding",
+                f"Starting embedding generation for {len(chunks)} chunks",
+                metadata={"chunk_count": len(chunks)}
+            )
             logger.info(
                 "Stage 5: Starting embedding generation",
                 file_id=file_id,
@@ -581,6 +616,7 @@ class IngestWorker:
             # Generate dense embeddings
             chunk_texts = [c.text for c in chunks]
             
+            text_embed_start = time.time()
             logger.debug("Generating dense embeddings", file_id=file_id, chunk_count=len(chunk_texts))
             # Run async embedding in sync context
             loop = asyncio.new_event_loop()
@@ -593,6 +629,12 @@ class IngestWorker:
                     "Dense embeddings generated",
                     file_id=file_id,
                     embedding_count=len(embeddings),
+                )
+                self.history.log_substep(
+                    file_id, "embedding", "text_embeddings",
+                    f"Generated {len(embeddings)} text embeddings (FastEmbed bge-large-en-v1.5 1024-d)",
+                    metadata={"embedding_count": len(embeddings), "model": "bge-large-en-v1.5", "dimension": 1024},
+                    started_at=text_embed_start
                 )
             finally:
                 loop.close()
@@ -608,6 +650,7 @@ class IngestWorker:
             # Generate ColPali embeddings for PDF pages (if available)
             page_embeddings = None
             if extraction_result.page_images and mime_type == "application/pdf":
+                colpali_start = time.time()
                 logger.info(
                     "Generating ColPali visual embeddings",
                     file_id=file_id,
@@ -634,14 +677,41 @@ class IngestWorker:
                             file_id=file_id,
                             page_count=len(page_embeddings),
                         )
+                        self.history.log_substep(
+                            file_id, "embedding", "colpali_embeddings",
+                            f"Generated {len(page_embeddings)} ColPali page embeddings (128-d pooled)",
+                            metadata={"page_count": len(page_embeddings), "model": "vidore/colpali", "dimension": 128},
+                            started_at=colpali_start
+                        )
                 except Exception as e:
                     logger.warning(
                         "ColPali embedding generation failed",
                         file_id=file_id,
                         error=str(e),
                     )
+                    self.history.log_error(
+                        file_id, "embedding", "colpali_embeddings", e,
+                        metadata={"page_count": len(extraction_result.page_images)},
+                        started_at=colpali_start
+                    )
+            
+            # Complete embedding stage
+            self.history.log_stage_complete(
+                file_id, "embedding",
+                f"Completed embedding generation: {len(embeddings)} text, {len(page_embeddings) if page_embeddings else 0} visual",
+                metadata={
+                    "text_embedding_count": len(embeddings),
+                    "visual_embedding_count": len(page_embeddings) if page_embeddings else 0
+                },
+                started_at=embedding_start
+            )
             
             # Stage 6: Indexing
+            indexing_start = self.history.log_stage_start(
+                file_id, "indexing",
+                f"Starting Milvus indexing for {len(chunks)} chunks",
+                metadata={"chunk_count": len(chunks), "has_visual": bool(page_embeddings)}
+            )
             self.postgres_service.update_status(
                 file_id=file_id,
                 stage="indexing",
@@ -663,6 +733,7 @@ class IngestWorker:
                 for c in chunks
             ]
             
+            milvus_text_start = time.time()
             vector_count = self.milvus_service.insert_text_chunks(
                 file_id=file_id,
                 user_id=user_id,
@@ -670,9 +741,16 @@ class IngestWorker:
                 embeddings=embeddings,
                 content_hash=content_hash,
             )
+            self.history.log_substep(
+                file_id, "indexing", "milvus_text_insert",
+                f"Inserted {vector_count} text vectors into Milvus",
+                metadata={"vector_count": vector_count},
+                started_at=milvus_text_start
+            )
             
             # Insert page images if available
             if page_embeddings and extraction_result.page_images:
+                milvus_visual_start = time.time()
                 page_image_dicts = [
                     {"page_number": i + 1, "image_path": path}
                     for i, path in enumerate(extraction_result.page_images)
@@ -687,6 +765,20 @@ class IngestWorker:
                 )
                 
                 vector_count += page_vector_count
+                self.history.log_substep(
+                    file_id, "indexing", "milvus_visual_insert",
+                    f"Inserted {page_vector_count} visual vectors into Milvus",
+                    metadata={"page_vector_count": page_vector_count},
+                    started_at=milvus_visual_start
+                )
+            
+            # Complete indexing stage
+            self.history.log_stage_complete(
+                file_id, "indexing",
+                f"Completed Milvus indexing: {vector_count} total vectors",
+                metadata={"total_vectors": vector_count, "text_chunks": len(chunks), "page_vectors": len(page_embeddings) if page_embeddings else 0},
+                started_at=indexing_start
+            )
             
             # Update final metadata
             processing_duration = int(time.time() - start_time)
@@ -696,6 +788,19 @@ class IngestWorker:
                 chunk_count=total_chunks,
                 vector_count=vector_count,
                 processing_duration_seconds=processing_duration,
+            )
+            
+            # Log final completion
+            self.history.log_stage_complete(
+                file_id, "completed",
+                f"Processing complete: {total_chunks} chunks, {vector_count} vectors in {processing_duration}s",
+                metadata={
+                    "total_chunks": total_chunks,
+                    "total_vectors": vector_count,
+                    "processing_duration_seconds": processing_duration,
+                    "stages": ["parsing", "chunking", "cleanup" if llm_cleanup_enabled else None, "embedding", "indexing"],
+                },
+                started_at=start_time
             )
             
             # Stage 7: Multi-Flow Processing (optional, non-blocking)
