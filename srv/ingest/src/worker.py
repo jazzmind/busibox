@@ -610,8 +610,7 @@ class IngestWorker:
                 )
                 logger.info(
                     "Stage 4.6: Starting markdown and image generation",
-                    file_id=file_id,
-                    extraction_method=extraction_result.method
+                    file_id=file_id
                 )
                 
                 # Extract images from the original file
@@ -661,7 +660,7 @@ class IngestWorker:
                     
                     markdown_content, md_metadata = self.markdown_generator.generate(
                         extraction_result.text,
-                        extraction_method=extraction_result.method,
+                        extraction_method="text",  # Default to text extraction
                         images=image_refs if image_refs else None
                     )
                     
@@ -810,12 +809,15 @@ class IngestWorker:
                     error=str(e),
                     exc_info=True
                 )
-                self.history.log_failure(
-                    file_id, "markdown_generation", "markdown_generation_error",
-                    error_message=str(e),
-                    stack_trace=traceback.format_exc(),
-                    message="Markdown/image generation failed",
-                    started_at=markdown_start
+                self.history.log_step(
+                    file_id=file_id,
+                    stage="markdown_generation",
+                    step_name="markdown_generation_error",
+                    status="failed",
+                    message=f"Markdown/image generation failed: {str(e)}",
+                    metadata={"error": str(e), "stack_trace": traceback.format_exc()},
+                    started_at=markdown_start,
+                    completed_at=datetime.utcnow()
                 )
             
             # Stage 5: Embedding
