@@ -74,7 +74,7 @@ class ModelRegistry:
                     logger.info(
                         "Loaded model registry from deployed JSON",
                         config_path=config_path,
-                        purposes=list(deployed_purposes.keys()),
+                        purposes=list(purposes.keys()),
                         source="ansible_deployment"
                     )
             except Exception as e:
