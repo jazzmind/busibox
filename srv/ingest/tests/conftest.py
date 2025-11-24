@@ -89,14 +89,17 @@ def postgres_service(config):
 async def async_client():
     """
     Async HTTP client for API testing.
-    Requires the API to be running.
+    Uses TestClient with FastAPI app directly.
     """
     from api.main import app
+    import uuid
+    
+    test_user_id = str(uuid.uuid4())
     
     async with AsyncClient(app=app, base_url="http://test") as client:
-        # Add test user headers
+        # Add test user headers (note: X-User-Id not X-User-ID)
         client.headers.update({
-            "X-User-ID": "test-user-123"
+            "X-User-Id": test_user_id
         })
         yield client
 
@@ -107,11 +110,14 @@ async def async_client_different_user():
     Async HTTP client for testing unauthorized access.
     """
     from api.main import app
+    import uuid
+    
+    different_user_id = str(uuid.uuid4())
     
     async with AsyncClient(app=app, base_url="http://test") as client:
-        # Different user
+        # Different user (note: X-User-Id not X-User-ID)
         client.headers.update({
-            "X-User-ID": "different-user-456"
+            "X-User-Id": different_user_id
         })
         yield client
 
