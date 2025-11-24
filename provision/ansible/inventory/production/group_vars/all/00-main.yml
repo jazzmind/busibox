@@ -31,7 +31,7 @@ milvus_ip: "{{ network_base_octets }}.204"
 minio_ip: "{{ network_base_octets }}.205"
 ingest_ip: "{{ network_base_octets }}.206"
 
-# LLM Service IPs: .30-.39 (to allow room for more infrastructure)
+# LLM Service IPs: .207-.210 (to allow room for more infrastructure)
 litellm_ip: "{{ network_base_octets }}.207"
 vllm_ip: "{{ network_base_octets }}.208"
 ollama_ip: "{{ network_base_octets }}.210"

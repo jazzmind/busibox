@@ -15,7 +15,7 @@ class EmbeddingService:
     def __init__(self, config: Dict):
         """Initialize embedding service."""
         self.config = config
-        self.service_url = config.get("embedding_service_url", "http://10.96.200.30:8002")
+        self.service_url = config.get("embedding_service_url", "http://10.96.200.206:8002")
         self.model = config.get("embedding_model", "bge-large-en-v1.5")
         self.embedding_dim = config.get("embedding_dim", 1024)
         self.timeout = 30.0

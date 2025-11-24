@@ -249,3 +249,4 @@ class ImageExtractor:
         fmt = (format or self.target_format).lower()
         return f"image_{index}.{fmt}"
 
+

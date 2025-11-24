@@ -210,3 +210,4 @@ All tests should run in CI/CD:
 4. Frontend tests with mock API responses
 5. End-to-end smoke tests on test environment
 
+

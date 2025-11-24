@@ -215,7 +215,7 @@ test_health_checks() {
   
   # MinIO
   log_info "Checking MinIO..."
-  if curl -f -s http://10.96.201.28:9000/minio/health/live > /dev/null 2>&1; then
+  if curl -f -s http://10.96.201.205:9000/minio/health/live > /dev/null 2>&1; then
     record_test "MinIO health" "PASS"
   else
     record_test "MinIO health" "FAIL" "Health endpoint failed"
@@ -420,7 +420,7 @@ Commands:
 
 Test Environment:
   Container IDs: 301-307 (Production + 100)
-  IP Range: 10.96.201.24-30
+  IP Range: 10.96.201.202-209
   Prefix: TEST-
 
 Examples:

@@ -27,3 +27,4 @@ COMMENT ON COLUMN ingestion_files.has_markdown IS 'Flag indicating if markdown v
 COMMENT ON COLUMN ingestion_files.images_path IS 'Path to directory containing extracted images in MinIO';
 COMMENT ON COLUMN ingestion_files.image_count IS 'Number of images extracted from the document';
 
+

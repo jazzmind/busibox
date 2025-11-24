@@ -15,7 +15,7 @@ Options:
     --drop    Drop existing collection before creating (data loss!)
 
 Environment Variables:
-    MILVUS_HOST: Milvus server host (default: 10.96.200.27)
+    MILVUS_HOST: Milvus server host (default: 10.96.200.204)
     MILVUS_PORT: Milvus server port (default: 19530)
 """
 
@@ -34,7 +34,7 @@ from pymilvus import (
 def get_config():
     """Get configuration from environment variables with defaults."""
     return {
-        "host": os.getenv("MILVUS_HOST", "10.96.200.27"),
+        "host": os.getenv("MILVUS_HOST", "10.96.200.204"),
         "port": int(os.getenv("MILVUS_PORT", "19530")),
         "collection_name": os.getenv("MILVUS_COLLECTION", "documents"),
         "text_dim": 1024,  # FastEmbed bge-large-en-v1.5

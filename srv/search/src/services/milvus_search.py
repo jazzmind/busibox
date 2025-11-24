@@ -24,7 +24,7 @@ class MilvusSearchService:
         
         # Reranker configuration
         self.reranker_enabled = config.get("reranker_enabled", True)
-        self.reranker_base_url = config.get("litellm_base_url", "http://10.96.200.30:4000")
+        self.reranker_base_url = config.get("litellm_base_url", "http://10.96.200.207:4000")
         self.reranker_api_key = config.get("litellm_api_key", "")
         self.reranker_model = config.get("reranker_model", "reranking")  # Model purpose from registry
     

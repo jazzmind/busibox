@@ -21,7 +21,7 @@ class MilvusService:
     def __init__(self, config: dict):
         """Initialize Milvus service with configuration."""
         self.config = config
-        self.host = config.get("milvus_host", "10.96.200.27")
+        self.host = config.get("milvus_host", "10.96.200.204")
         self.port = config.get("milvus_port", "19530")
         self.collection_name = config.get("milvus_collection", "documents")
         

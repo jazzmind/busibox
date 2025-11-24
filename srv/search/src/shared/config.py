@@ -21,7 +21,7 @@ class Config(BaseSettings):
     milvus_collection: str = "documents"
     
     # PostgreSQL
-    postgres_host: str = os.getenv("POSTGRES_HOST", "10.96.200.26")
+    postgres_host: str = os.getenv("POSTGRES_HOST", "10.96.200.203")
     postgres_port: int = int(os.getenv("POSTGRES_PORT", "5432"))
     postgres_db: str = os.getenv("POSTGRES_DB", "busibox")
     postgres_user: str = os.getenv("POSTGRES_USER", "app_user")
@@ -35,7 +35,7 @@ class Config(BaseSettings):
     cache_ttl: int = 300  # 5 minutes
     
     # Embedding service (local FastEmbed on ingest-lxc)
-    embedding_service_url: str = os.getenv("EMBEDDING_SERVICE_URL", "http://10.96.200.30:8002")
+    embedding_service_url: str = os.getenv("EMBEDDING_SERVICE_URL", "http://10.96.200.206:8002")
     embedding_model: str = "bge-large-en-v1.5"
     embedding_dim: int = 1024
     

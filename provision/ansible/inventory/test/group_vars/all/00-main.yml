@@ -32,7 +32,7 @@ milvus_ip: "{{ network_base_octets }}.204"
 minio_ip: "{{ network_base_octets }}.205"
 ingest_ip: "{{ network_base_octets }}.206"
 
-# LLM Service IPs: .30-.39 (to allow room for more infrastructure)
+# LLM Service IPs: .207-.210 (to allow room for more infrastructure)
 litellm_ip: "{{ network_base_octets }}.207"
 # vLLM IP Configuration - Test environment can use production vLLM by default
 # Set use_production_vllm: true to use production vLLM (default, saves GPU memory)

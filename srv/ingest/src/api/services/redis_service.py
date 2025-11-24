@@ -21,7 +21,7 @@ class RedisService:
     def __init__(self, config: dict):
         """Initialize Redis client."""
         self.config = config
-        self.host = config.get("redis_host", "10.96.200.29")
+        self.host = config.get("redis_host", "10.96.200.206")
         self.port = config.get("redis_port", 6379)
         self.stream_name = config.get("redis_stream", "jobs:ingestion")
         self.consumer_group = config.get("redis_consumer_group", "workers")

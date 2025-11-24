@@ -14,7 +14,7 @@
 #
 # Environment:
 #   TEST: 10.96.201.208:8002
-#   PRODUCTION: 10.96.200.31:8002
+#   PRODUCTION: 10.96.200.208:8002
 
 set -euo pipefail
 

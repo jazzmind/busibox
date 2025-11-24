@@ -22,7 +22,7 @@ def check_postgres() -> bool:
     """
     try:
         conn = psycopg2.connect(
-            host=os.getenv("POSTGRES_HOST", "10.96.200.26"),
+            host=os.getenv("POSTGRES_HOST", "10.96.200.203"),
             port=int(os.getenv("POSTGRES_PORT", "5432")),
             database=os.getenv("POSTGRES_DB", "busibox"),
             user=os.getenv("POSTGRES_USER", "postgres"),
@@ -55,7 +55,7 @@ def check_milvus() -> bool:
         # Connect to Milvus
         connections.connect(
             alias="health_check",
-            host=os.getenv("MILVUS_HOST", "10.96.200.27"),
+            host=os.getenv("MILVUS_HOST", "10.96.200.204"),
             port=int(os.getenv("MILVUS_PORT", "19530")),
             timeout=5,
         )
@@ -82,7 +82,7 @@ def check_minio() -> bool:
     try:
         # Create MinIO client
         client = Minio(
-            endpoint=os.getenv("MINIO_ENDPOINT", "10.96.200.28:9000"),
+            endpoint=os.getenv("MINIO_ENDPOINT", "10.96.200.205:9000"),
             access_key=os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
             secret_key=os.getenv("MINIO_SECRET_KEY", "minioadmin"),
             secure=os.getenv("MINIO_SECURE", "false").lower() == "true",
@@ -108,7 +108,7 @@ def check_redis() -> bool:
     try:
         # Create Redis client
         client = redis.Redis(
-            host=os.getenv("REDIS_HOST", "10.96.200.29"),
+            host=os.getenv("REDIS_HOST", "10.96.200.206"),
             port=int(os.getenv("REDIS_PORT", "6379")),
             socket_connect_timeout=5,
             socket_timeout=5,

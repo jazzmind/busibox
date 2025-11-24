@@ -10,10 +10,10 @@ info:
     All endpoints require JWT authentication via Bearer token or session cookie.
     
     ## Base URL
-    Internal: http://10.96.200.30:8000 (not publicly exposed)
+    Internal: http://10.96.200.202:8000 (not publicly exposed)
 
 servers:
-  - url: http://10.96.200.30:8000
+  - url: http://10.96.200.202:8000
     description: Internal agent-server (agent-lxc container)
 
 security:

@@ -19,23 +19,23 @@ class Config:
         self.consumer_group = os.getenv("REDIS_CONSUMER_GROUP", "workers")
         
         # Redis configuration
-        self.redis_host = os.getenv("REDIS_HOST", "10.96.200.29")
+        self.redis_host = os.getenv("REDIS_HOST", "10.96.200.206")
         self.redis_port = int(os.getenv("REDIS_PORT", "6379"))
         
         # PostgreSQL configuration (files database)
-        self.postgres_host = os.getenv("POSTGRES_HOST", "10.96.200.26")
+        self.postgres_host = os.getenv("POSTGRES_HOST", "10.96.200.203")
         self.postgres_port = int(os.getenv("POSTGRES_PORT", "5432"))
         self.postgres_db = os.getenv("POSTGRES_DB", "files")
         self.postgres_user = os.getenv("POSTGRES_USER", "busibox_user")
         self.postgres_password = os.getenv("POSTGRES_PASSWORD", "")
         
         # Milvus configuration
-        self.milvus_host = os.getenv("MILVUS_HOST", "10.96.200.27")
+        self.milvus_host = os.getenv("MILVUS_HOST", "10.96.200.204")
         self.milvus_port = int(os.getenv("MILVUS_PORT", "19530"))
         self.milvus_collection = os.getenv("MILVUS_COLLECTION", "documents")
         
         # MinIO configuration
-        self.minio_endpoint = os.getenv("MINIO_ENDPOINT", "10.96.200.28:9000")
+        self.minio_endpoint = os.getenv("MINIO_ENDPOINT", "10.96.200.205:9000")
         # Support both MINIO_ACCESS_KEY and MINIO_USER for compatibility
         self.minio_access_key = os.getenv("MINIO_ACCESS_KEY") or os.getenv("MINIO_USER", "minioadmin")
         self.minio_secret_key = os.getenv("MINIO_SECRET_KEY") or os.getenv("MINIO_PASS", "minioadmin")

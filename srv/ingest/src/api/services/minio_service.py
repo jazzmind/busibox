@@ -20,7 +20,7 @@ class MinIOService:
     def __init__(self, config: dict):
         """Initialize MinIO client."""
         self.config = config
-        self.endpoint = config.get("minio_endpoint", "10.96.200.28:9000")
+        self.endpoint = config.get("minio_endpoint", "10.96.200.205:9000")
         self.access_key = config.get("minio_access_key", "minioadmin")
         self.secret_key = config.get("minio_secret_key", "minioadmin")
         self.secure = config.get("minio_secure", False)
