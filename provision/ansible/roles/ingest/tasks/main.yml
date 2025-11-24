@@ -163,6 +163,13 @@
   tags: [ingest, ingest_deploy]
 
 # ============================================================================
+# Database Migrations
+# ============================================================================
+- name: Apply database migrations
+  include_tasks: migrations.yml
+  tags: [ingest, ingest_migrations, ingest_configure]
+
+# ============================================================================
 # Configuration
 # ============================================================================
 - name: Deploy model registry configuration
