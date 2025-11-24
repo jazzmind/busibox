@@ -80,13 +80,10 @@ class TestImageExtractor:
 
     def test_no_images_in_document(self):
         """Test handling of documents without images"""
-        # This would require a text-only PDF
-        # For now, test with non-existent file returns empty
-        metadata, images = self.extractor.extract("/tmp/nonexistent.pdf") if os.path.exists("/tmp") else ([], [])
-        
-        # Should handle gracefully
-        assert isinstance(metadata, list)
-        assert isinstance(images, list)
+        # Test that attempting to extract from nonexistent file raises an exception
+        # The extractor logs errors and re-raises them
+        with pytest.raises(Exception):
+            self.extractor.extract("/tmp/nonexistent.pdf")
 
     def test_image_quality_preservation(self):
         """Test that image quality is preserved during extraction"""

@@ -151,9 +151,13 @@ def hello():
         """Test rendering of bullet and numbered lists"""
         markdown = """# Lists
 
+Bullet list:
+
 - Item 1
 - Item 2
 - Item 3
+
+Numbered list:
 
 1. First
 2. Second
