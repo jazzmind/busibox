@@ -98,6 +98,7 @@ applications:
       SSO_TOKEN_EXPIRY: "900"
       PORT: "3000"
       INGEST_API_HOST: "{{ ingest_ip }}"
+      NEXT_PUBLIC_INGEST_API_URL: "http://{{ ingest_ip }}:8002"
       DEPLOYMENT_MODE: "busibox"
       NEXT_PUBLIC_BASE_PATH: "/portal"
   
