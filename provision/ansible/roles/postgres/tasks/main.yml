@@ -99,55 +99,8 @@
     msg: "Vault loaded. Top-level keys: {{ hostvars[inventory_hostname].keys() | select('match', '^(secrets|network_base|base_domain)') | list }}"
   tags: [postgres]
 
-- name: Debug - Show secrets keys
-  debug:
-    msg: "Secrets keys available: {{ secrets.keys() | list }}"
-  when: secrets is defined
-  tags: [postgres]
-
-- name: Build list of application databases from secrets
-  set_fact:
-    app_databases: []
-  tags: [postgres]
-
-- name: Debug - Check each secret entry
-  debug:
-    msg: "Checking {{ item.key }}: is_mapping={{ item.value is mapping }}, has_database_url={{ (item.value is mapping) and (item.value.database_url is defined) }}"
-  loop: "{{ secrets | dict2items }}"
-  loop_control:
-    label: "{{ item.key }}"
-  when: secrets is defined
-  tags: [postgres]
-
-- name: Find apps with database_url in secrets
-  set_fact:
-    app_databases: "{{ app_databases + [item.key | replace('-', '_')] }}"
-  loop: "{{ secrets | dict2items }}"
-  loop_control:
-    label: "{{ item.key }}"
-  when: 
-    - secrets is defined
-    - item.value is mapping
-    - item.value.database_url is defined
-  tags: [postgres]
-
-- name: Display databases to be created
-  debug:
-    msg: "Will create databases: {{ app_databases | default([]) }}"
-  tags: [postgres]
-
-- name: Create application-specific databases
-  become_user: postgres
-  postgresql_db:
-    name: "{{ item }}"
-    owner: "{{ postgres_user }}"
-    encoding: UTF8
-    lc_collate: en_US.UTF-8
-    lc_ctype: en_US.UTF-8
-    template: template0
-  loop: "{{ app_databases | default([]) }}"
-  when: app_databases is defined and app_databases | length > 0
-  tags: [postgres]
+# Application-specific databases are created by their respective app deployment roles
+# This ensures proper separation of concerns and avoids encoding issues
 
 - name: Create migrations directory
   file:
