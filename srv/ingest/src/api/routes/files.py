@@ -101,6 +101,40 @@ async def get_file_metadata(fileId: str, request: Request):
                 WHERE file_id = $1
             """, uuid.UUID(fileId))
             
+            # Get processing strategies attempted
+            strategy_rows = await conn.fetch("""
+                SELECT 
+                    processing_strategy,
+                    success,
+                    text_length,
+                    chunk_count,
+                    embedding_count,
+                    visual_embedding_count,
+                    processing_time_seconds,
+                    error_message,
+                    metadata,
+                    created_at
+                FROM processing_strategy_results
+                WHERE file_id = $1
+                ORDER BY created_at ASC
+            """, uuid.UUID(fileId))
+            
+            strategies = [
+                {
+                    "strategy": row["processing_strategy"],
+                    "success": row["success"],
+                    "textLength": row["text_length"],
+                    "chunkCount": row["chunk_count"],
+                    "embeddingCount": row["embedding_count"],
+                    "visualEmbeddingCount": row["visual_embedding_count"],
+                    "processingTimeSeconds": float(row["processing_time_seconds"]) if row["processing_time_seconds"] else None,
+                    "errorMessage": row["error_message"],
+                    "metadata": row["metadata"],
+                    "attemptedAt": row["created_at"].isoformat() if row["created_at"] else None,
+                }
+                for row in strategy_rows
+            ]
+            
             return JSONResponse(
                 status_code=status.HTTP_200_OK,
                 content={
@@ -123,6 +157,7 @@ async def get_file_metadata(fileId: str, request: Request):
                     "extractedKeywords": file_row["extracted_keywords"],
                     "metadata": file_row["metadata"],
                     "permissions": file_row["permissions"],
+                    "processingStrategies": strategies,
                     "status": {
                         "stage": status_row["stage"] if status_row else None,
                         "progress": status_row["progress"] if status_row else None,
