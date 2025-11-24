@@ -30,6 +30,7 @@ import json
 import os
 import sys
 import time
+import traceback
 import signal
 import socket
 import uuid
@@ -53,6 +54,8 @@ from processors.classifier import DocumentClassifier
 from processors.metadata_extractor import MetadataExtractor
 from processors.colpali import ColPaliEmbedder
 from processors.llm_cleanup import LLMCleanup
+from processors.markdown_generator import MarkdownGenerator
+from processors.image_extractor import ImageExtractor
 from worker import ErrorHandler, HistoryLogger
 
 # Configure structured logging
@@ -161,6 +164,8 @@ class IngestWorker:
         self.metadata_extractor = MetadataExtractor(self.config)
         self.colpali = ColPaliEmbedder(self.config)
         self.llm_cleanup = LLMCleanup(self.config)
+        self.markdown_generator = MarkdownGenerator()
+        self.image_extractor = ImageExtractor()
         
         logger.info("All services connected")
     
@@ -594,6 +599,211 @@ class IngestWorker:
             # Store chunks in PostgreSQL (after cleanup)
             chunk_dicts = [c.to_dict() for c in chunks]
             self.postgres_service.insert_chunks(file_id, chunk_dicts)
+            
+            # Stage 4.6: Markdown and Image Generation
+            markdown_start = time.time()
+            try:
+                self.history.log_stage_start(
+                    file_id, "markdown_generation",
+                    "Starting markdown and image generation",
+                    metadata={"text_length": len(extraction_result.text)}
+                )
+                logger.info(
+                    "Stage 4.6: Starting markdown and image generation",
+                    file_id=file_id,
+                    extraction_method=extraction_result.method
+                )
+                
+                # Extract images from the original file
+                images_metadata = []
+                images_data = []
+                try:
+                    self.history.log_substep(
+                        file_id, "markdown_generation", "image_extraction",
+                        "Extracting images from document"
+                    )
+                    images_metadata, images_data = self.image_extractor.extract(
+                        local_path, 
+                        mime_type=mime_type
+                    )
+                    logger.info(
+                        "Image extraction complete",
+                        file_id=file_id,
+                        image_count=len(images_data)
+                    )
+                except Exception as img_err:
+                    logger.warning(
+                        "Image extraction failed (non-fatal)",
+                        file_id=file_id,
+                        error=str(img_err),
+                        exc_info=True
+                    )
+                    self.history.log_substep(
+                        file_id, "markdown_generation", "image_extraction_failed",
+                        f"Image extraction failed: {str(img_err)}",
+                        metadata={"error": str(img_err)}
+                    )
+                
+                # Generate markdown
+                try:
+                    self.history.log_substep(
+                        file_id, "markdown_generation", "markdown_generation",
+                        "Generating markdown from extracted text"
+                    )
+                    
+                    # Prepare image metadata for markdown generator
+                    image_refs = []
+                    for i, img_meta in enumerate(images_metadata):
+                        image_refs.append({
+                            'path': f'images/image_{i}.png',
+                            'caption': f'Image {i+1}'
+                        })
+                    
+                    markdown_content, md_metadata = self.markdown_generator.generate(
+                        extraction_result.text,
+                        extraction_method=extraction_result.method,
+                        images=image_refs if image_refs else None
+                    )
+                    
+                    logger.info(
+                        "Markdown generation complete",
+                        file_id=file_id,
+                        markdown_length=len(markdown_content),
+                        heading_count=md_metadata.get('heading_count', 0)
+                    )
+                except Exception as md_err:
+                    logger.warning(
+                        "Markdown generation failed (non-fatal)",
+                        file_id=file_id,
+                        error=str(md_err),
+                        exc_info=True
+                    )
+                    self.history.log_substep(
+                        file_id, "markdown_generation", "markdown_generation_failed",
+                        f"Markdown generation failed: {str(md_err)}",
+                        metadata={"error": str(md_err)}
+                    )
+                    markdown_content = None
+                
+                # Upload markdown and images to MinIO
+                markdown_path = None
+                images_path = None
+                image_count = 0
+                
+                if markdown_content:
+                    try:
+                        self.history.log_substep(
+                            file_id, "markdown_generation", "upload_markdown",
+                            "Uploading markdown to MinIO"
+                        )
+                        markdown_path = f"{user_id}/{file_id}/content.md"
+                        await self.file_service.minio_service.upload_text(
+                            markdown_content,
+                            markdown_path
+                        )
+                        logger.info(
+                            "Markdown uploaded to MinIO",
+                            file_id=file_id,
+                            path=markdown_path
+                        )
+                    except Exception as upload_err:
+                        logger.warning(
+                            "Markdown upload failed (non-fatal)",
+                            file_id=file_id,
+                            error=str(upload_err),
+                            exc_info=True
+                        )
+                        markdown_path = None
+                
+                # Upload images
+                if images_data:
+                    try:
+                        self.history.log_substep(
+                            file_id, "markdown_generation", "upload_images",
+                            f"Uploading {len(images_data)} images to MinIO"
+                        )
+                        images_path = f"{user_id}/{file_id}/images"
+                        
+                        for i, (img_data, img_meta) in enumerate(zip(images_data, images_metadata)):
+                            image_path = f"{images_path}/image_{i}.png"
+                            await self.file_service.minio_service.upload_bytes(
+                                img_data,
+                                image_path,
+                                content_type='image/png'
+                            )
+                        
+                        image_count = len(images_data)
+                        logger.info(
+                            "Images uploaded to MinIO",
+                            file_id=file_id,
+                            image_count=image_count,
+                            path=images_path
+                        )
+                    except Exception as upload_err:
+                        logger.warning(
+                            "Image upload failed (non-fatal)",
+                            file_id=file_id,
+                            error=str(upload_err),
+                            exc_info=True
+                        )
+                        images_path = None
+                        image_count = 0
+                
+                # Update database with markdown/image paths
+                try:
+                    async with self.postgres_service.pool.acquire() as conn:
+                        await conn.execute(
+                            """UPDATE ingestion_files 
+                               SET markdown_path = $1, 
+                                   has_markdown = $2, 
+                                   images_path = $3, 
+                                   image_count = $4
+                               WHERE file_id = $5""",
+                            markdown_path,
+                            markdown_path is not None,
+                            images_path,
+                            image_count,
+                            uuid.UUID(file_id)
+                        )
+                    logger.info(
+                        "Database updated with markdown/image paths",
+                        file_id=file_id,
+                        has_markdown=markdown_path is not None,
+                        image_count=image_count
+                    )
+                except Exception as db_err:
+                    logger.error(
+                        "Failed to update database with markdown paths",
+                        file_id=file_id,
+                        error=str(db_err),
+                        exc_info=True
+                    )
+                
+                self.history.log_success(
+                    file_id, "markdown_generation", "markdown_generation_complete",
+                    f"Markdown and image generation complete",
+                    metadata={
+                        "has_markdown": markdown_path is not None,
+                        "image_count": image_count,
+                        "markdown_length": len(markdown_content) if markdown_content else 0
+                    },
+                    started_at=markdown_start
+                )
+                
+            except Exception as e:
+                logger.warning(
+                    "Markdown/image generation stage failed (non-fatal)",
+                    file_id=file_id,
+                    error=str(e),
+                    exc_info=True
+                )
+                self.history.log_failure(
+                    file_id, "markdown_generation", "markdown_generation_error",
+                    error_message=str(e),
+                    stack_trace=traceback.format_exc(),
+                    message="Markdown/image generation failed",
+                    started_at=markdown_start
+                )
             
             # Stage 5: Embedding
             embedding_start = self.history.log_stage_start(

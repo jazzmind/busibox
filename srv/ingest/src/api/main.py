@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.middleware.auth import AuthMiddleware
 from api.middleware.logging import LoggingMiddleware
-from api.routes import embeddings, files, health, search, status, upload
+from api.routes import embeddings, files, health, markdown, search, status, upload
 
 # Configure structured logging
 structlog.configure(
@@ -135,6 +135,7 @@ app.include_router(search.router, prefix="/search", tags=["Search"])
 app.include_router(embeddings.router, prefix="/api", tags=["Embeddings"])
 app.include_router(status.router, prefix="/status", tags=["Status"])
 app.include_router(files.router, prefix="/files", tags=["Files"])
+app.include_router(markdown.router, prefix="/files", tags=["Markdown"])
 app.include_router(health.router, prefix="/health", tags=["Health"])
 
 
