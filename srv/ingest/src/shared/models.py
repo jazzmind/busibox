@@ -18,6 +18,7 @@ class ProcessingStage(str, Enum):
     CLASSIFYING = "classifying"
     EXTRACTING_METADATA = "extracting_metadata"
     CHUNKING = "chunking"
+    CLEANUP = "cleanup"
     EMBEDDING = "embedding"
     INDEXING = "indexing"
     COMPLETED = "completed"

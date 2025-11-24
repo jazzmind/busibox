@@ -30,8 +30,29 @@
   register: migration_result
   tags: [ingest, ingest_migrations]
 
-- name: Display migration status
+- name: Display multi-flow migration status
   debug:
-    msg: "{{ 'Migration applied successfully' if migration_result.changed else 'Migration already applied' }}"
+    msg: "{{ 'Multi-flow migration applied successfully' if migration_result.changed else 'Multi-flow migration already applied' }}"
+  tags: [ingest, ingest_migrations]
+
+- name: Check if cleanup stage migration has been applied
+  shell: |
+    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -tAc \
+    "SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ingestion_status_stage_check' AND consrc LIKE '%cleanup%');"
+  register: cleanup_migration_check
+  changed_when: false
+  failed_when: false
+  tags: [ingest, ingest_migrations]
+
+- name: Apply cleanup stage migration
+  shell: |
+    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -f /srv/ingest/migrations/add_cleanup_stage.sql
+  when: cleanup_migration_check.stdout != 't'
+  register: cleanup_migration_result
+  tags: [ingest, ingest_migrations]
+
+- name: Display cleanup migration status
+  debug:
+    msg: "{{ 'Cleanup stage migration applied successfully' if cleanup_migration_result.changed else 'Cleanup stage migration already applied' }}"
   tags: [ingest, ingest_migrations]
 

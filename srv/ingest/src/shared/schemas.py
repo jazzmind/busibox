@@ -21,6 +21,7 @@ PROCESSING_STAGES = [
     "classifying",
     "extracting_metadata",
     "chunking",
+    "cleanup",
     "embedding",
     "indexing",
     "completed",
