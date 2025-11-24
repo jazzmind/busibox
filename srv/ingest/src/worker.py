@@ -418,6 +418,13 @@ class IngestWorker:
                 return
             
             # Stage 1: Parsing
+            parsing_start = time.time()
+            self._log_step(
+                file_id, "parsing", "stage_start", "started",
+                f"Starting text extraction for {mime_type}",
+                metadata={"mime_type": mime_type, "filename": original_filename}
+            )
+            
             logger.info(
                 "Stage 1: Starting text extraction",
                 file_id=file_id,
@@ -431,7 +438,13 @@ class IngestWorker:
             )
             
             logger.debug("Downloading file from storage", file_id=file_id, storage_path=storage_path)
+            download_start = time.time()
             temp_file_path = self.file_service.download(storage_path)
+            self._log_step(
+                file_id, "parsing", "download_from_minio", "completed",
+                f"Downloaded file from {storage_path}",
+                started_at=download_start
+            )
             logger.debug("File downloaded", file_id=file_id, temp_path=temp_file_path)
             
             logger.info("Extracting text and images", file_id=file_id, mime_type=mime_type)
@@ -446,6 +459,7 @@ class IngestWorker:
                     marker_enabled=self.text_extractor.marker_enabled,
                 )
             
+            extract_start = time.time()
             extraction_result: ExtractionResult = self.text_extractor.extract(
                 temp_file_path,
                 mime_type,
@@ -454,6 +468,19 @@ class IngestWorker:
             # Restore original marker_enabled setting
             if processing_config and "marker_enabled" in processing_config:
                 self.text_extractor.marker_enabled = original_marker_enabled
+            
+            self._log_step(
+                file_id, "parsing", "text_extraction", "completed",
+                f"Extracted {len(extraction_result.text)} chars, {extraction_result.page_count} pages",
+                metadata={
+                    "text_length": len(extraction_result.text),
+                    "page_count": extraction_result.page_count,
+                    "table_count": len(extraction_result.tables) if extraction_result.tables else 0,
+                    "method": extraction_result.metadata.get("extraction_method", "unknown"),
+                },
+                started_at=extract_start
+            )
+            
             logger.info(
                 "Text extraction complete",
                 file_id=file_id,
@@ -913,6 +940,17 @@ class IngestWorker:
             processing_duration = int(time.time() - start_time)
             error_msg = f"Processing exceeded {timeout_seconds}s timeout for {page_count}-page document"
             
+            self._log_step(
+                file_id, "failed", "timeout_error", "failed",
+                error_message=error_msg,
+                metadata={
+                    "timeout_seconds": timeout_seconds,
+                    "processing_duration": processing_duration,
+                    "page_count": page_count,
+                },
+                started_at=start_time
+            )
+            
             # Timeout is considered permanent (document too large)
             self.postgres_service.update_status(
                 file_id=file_id,
@@ -930,8 +968,22 @@ class IngestWorker:
             raise
         
         except Exception as e:
+            import traceback
             error_msg = str(e)
+            error_traceback = traceback.format_exc()
             is_transient = self._is_transient_error(e)
+            
+            self._log_step(
+                file_id, "failed", "processing_error", "failed",
+                error_message=f"{e.__class__.__name__}: {error_msg}",
+                metadata={
+                    "error_type": e.__class__.__name__,
+                    "error_message": error_msg,
+                    "traceback": error_traceback,
+                    "is_transient": is_transient,
+                },
+                started_at=start_time
+            )
             
             # Get current retry count
             conn = self.postgres_service._get_connection()
