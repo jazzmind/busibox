@@ -29,7 +29,7 @@ class ProcessingHistoryService:
                     1, 10,
                     host=self.config.get("postgres_host"),
                     port=self.config.get("postgres_port", 5432),
-                    database=self.config.get("files_db"),
+                    database=self.config.get("postgres_db"),
                     user=self.config.get("postgres_user"),
                     password=self.config.get("postgres_password"),
                 )
