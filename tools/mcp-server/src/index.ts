@@ -1102,6 +1102,38 @@ server.setRequestHandler(ListPromptsRequestSchema, async () => {
           },
         ],
       },
+      {
+        name: 'run_tests',
+        description: 'Guide for running tests on Busibox services',
+        arguments: [
+          {
+            name: 'service',
+            description: 'Service to test (ingest, search, agent, apps, or all)',
+            required: false,
+          },
+          {
+            name: 'test_type',
+            description: 'Type of test (unit, integration, coverage, extraction)',
+            required: false,
+          },
+        ],
+      },
+      {
+        name: 'deploy_app',
+        description: 'Guide for deploying a specific application (ai-portal, agent-client, etc.)',
+        arguments: [
+          {
+            name: 'app_name',
+            description: 'Application name (ai-portal, agent-client, doc-intel, foundation, project-analysis, innovation)',
+            required: true,
+          },
+          {
+            name: 'environment',
+            description: 'Target environment (test or production)',
+            required: true,
+          },
+        ],
+      },
     ],
   };
 });
@@ -1499,6 +1531,177 @@ git commit -m "docs: add ${topic} documentation to <category>"
 - See \`.cursor/rules/001-documentation-organization.md\` for complete rules
 - See \`docs/ORGANIZATION_RULES_SUMMARY.md\` for quick reference
 - Examples: Look at existing docs in the target category`,
+            },
+          },
+        ],
+      };
+    }
+
+    case 'run_tests': {
+      const { service = 'all', test_type = 'unit' } = args as { service?: string; test_type?: string };
+      
+      return {
+        messages: [
+          {
+            role: 'user',
+            content: {
+              type: 'text',
+              text: `How do I run ${test_type} tests for ${service}?`,
+            },
+          },
+          {
+            role: 'assistant',
+            content: {
+              type: 'text',
+              text: `Here's how to run ${test_type} tests for ${service}:
+
+1. **Navigate to Ansible directory**:
+   \`\`\`bash
+   cd provision/ansible
+   \`\`\`
+
+2. **Interactive Test Menu** (Recommended):
+   \`\`\`bash
+   make test-menu
+   \`\`\`
+   
+   This shows an interactive menu with all test options.
+
+3. **Direct Test Commands**:
+
+   ${service === 'ingest' || service === 'all' ? `
+   **Ingest Service**:
+   \`\`\`bash
+   make test-ingest              # Unit tests
+   make test-ingest-all          # All tests including integration
+   make test-ingest-coverage     # With coverage report
+   
+   # Extraction strategy tests:
+   make test-extraction-simple   # Basic PDF extraction
+   make test-extraction-llm      # LLM-enhanced extraction
+   make test-extraction-marker   # Marker extraction (GPU)
+   make test-extraction-colpali  # ColPali visual extraction
+   \`\`\`
+   ` : ''}
+
+   ${service === 'search' || service === 'all' ? `
+   **Search Service**:
+   \`\`\`bash
+   make test-search              # All tests
+   make test-search-unit         # Unit tests only
+   make test-search-integration  # Integration tests only
+   make test-search-coverage     # With coverage report
+   \`\`\`
+   ` : ''}
+
+   ${service === 'agent' || service === 'all' ? `
+   **Agent Service**:
+   \`\`\`bash
+   make test-agent
+   \`\`\`
+   ` : ''}
+
+   ${service === 'apps' || service === 'all' ? `
+   **Applications**:
+   \`\`\`bash
+   make test-apps
+   \`\`\`
+   ` : ''}
+
+   ${service === 'all' ? `
+   **All Services**:
+   \`\`\`bash
+   make test-all
+   \`\`\`
+   ` : ''}
+
+4. **Verification**:
+   \`\`\`bash
+   make verify              # All health checks
+   make verify-health       # Service health checks
+   make verify-smoke        # Database smoke tests
+   \`\`\`
+
+For more details, see: docs/guides/testing-guide.md`,
+            },
+          },
+        ],
+      };
+    }
+
+    case 'deploy_app': {
+      const { app_name, environment } = args as { app_name: string; environment: string };
+      const inv = environment === 'test' ? 'INV=inventory/test' : '';
+      
+      return {
+        messages: [
+          {
+            role: 'user',
+            content: {
+              type: 'text',
+              text: `How do I deploy ${app_name} to ${environment}?`,
+            },
+          },
+          {
+            role: 'assistant',
+            content: {
+              type: 'text',
+              text: `Here's how to deploy ${app_name} to ${environment}:
+
+1. **Check Prerequisites**:
+   - Ensure you're on the admin workstation
+   - Verify network connectivity to ${environment} environment
+   - Have Ansible vault password ready (if using secrets)
+
+2. **Navigate to Ansible directory**:
+   \`\`\`bash
+   cd provision/ansible
+   \`\`\`
+
+3. **Deploy the application**:
+   \`\`\`bash
+   # Using new make target (recommended):
+   make deploy-${app_name} ${inv}
+   
+   # Or using ansible directly:
+   ansible-playbook -i inventory/${environment}/hosts.yml site.yml \\
+       --tags app_deployer,secrets \\
+       --extra-vars "deploy_app=${app_name}" \\
+       --ask-vault-pass
+   \`\`\`
+
+4. **Verify deployment**:
+   \`\`\`bash
+   # Check PM2 status
+   ssh root@<apps-ip>
+   pm2 list
+   pm2 logs ${app_name}
+   
+   # Or use AI Portal log viewer (if deployed)
+   \`\`\`
+
+5. **Test the application**:
+   - Visit the application URL
+   - Check health endpoint
+   - Verify functionality
+
+**Available Applications**:
+- \`ai-portal\` - AI Portal dashboard
+- \`agent-client\` - Agent management UI
+- \`doc-intel\` - Document intelligence
+- \`foundation\` - Foundation app
+- \`project-analysis\` - Project analysis
+- \`innovation\` - Innovation app
+
+**Deploy All Apps**:
+\`\`\`bash
+make deploy-apps ${inv}
+\`\`\`
+
+For more details, see:
+- docs/deployment/ai-portal.md
+- docs/guides/testing-guide.md
+- ai-portal/docs/DEPLOYMENT_SYSTEM.md`,
             },
           },
         ],

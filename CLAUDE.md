@@ -30,22 +30,54 @@ bash create_lxc_base.sh test
 cd provision/ansible
 
 # Deploy all services to test environment:
-make test
+make all INV=inventory/test
 
 # Deploy all services to production:
-make production
+make all
 
 # Deploy specific service:
-ansible-playbook -i inventory/test/hosts.yml site.yml --tags nginx
+make milvus              # Deploy Milvus vector database
+make search-api          # Deploy search API
+make agent               # Deploy agent service
+make ingest              # Deploy ingest service
+make apps                # Deploy all apps
+
+# Deploy individual applications:
+make deploy-ai-portal    # Deploy AI Portal
+make deploy-agent-client # Deploy Agent Client
+make deploy-doc-intel    # Deploy Doc Intel
+make deploy-foundation   # Deploy Foundation
+make deploy-project-analysis
+make deploy-innovation
 ```
 
 **Testing**:
 ```bash
-# Run infrastructure tests:
-bash scripts/test-infrastructure.sh
+cd provision/ansible
 
-# Run LLM container tests:
-bash scripts/test-llm-containers.sh
+# Interactive test menu (recommended):
+make test-menu
+
+# Run specific tests:
+make test-ingest         # Test ingest service
+make test-search         # Test search service
+make test-agent          # Test agent service
+make test-apps           # Test applications
+
+# Run extraction strategy tests:
+make test-extraction-simple   # Basic PDF extraction
+make test-extraction-llm      # LLM-enhanced extraction
+make test-extraction-marker   # Marker extraction (GPU)
+make test-extraction-colpali  # ColPali visual extraction
+
+# Run with coverage:
+make test-ingest-coverage
+make test-search-coverage
+
+# Verification:
+make verify              # Run all health checks
+make verify-health       # Service health checks
+make verify-smoke        # Database smoke tests
 ```
 
 ### MCP Server for Cursor

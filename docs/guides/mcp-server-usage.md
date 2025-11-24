@@ -199,6 +199,86 @@ Prompt: create_documentation
 - "Where should deployment documentation go?"
 - "What's the format for architecture docs?"
 
+## New Make Targets (2025-01)
+
+The Busibox Makefile has been significantly enhanced with new targets for deployment, testing, and verification.
+
+### Deployment Targets
+
+```bash
+# Deploy specific services
+make search-api          # Deploy search API
+make agent               # Deploy agent service
+make ingest              # Deploy ingest service
+make ingest-api          # Deploy ingest API only
+make ingest-worker       # Deploy ingest worker only
+make apps                # Deploy all apps
+
+# Deploy individual applications
+make deploy-ai-portal    # Deploy AI Portal
+make deploy-agent-client # Deploy Agent Client
+make deploy-doc-intel    # Deploy Doc Intel
+make deploy-foundation   # Deploy Foundation
+make deploy-project-analysis
+make deploy-innovation
+
+# Deploy to test environment
+make deploy-ai-portal INV=inventory/test
+```
+
+### Testing Targets
+
+```bash
+# Interactive test menu (recommended)
+make test-menu           # Shows interactive menu
+
+# Service tests
+make test-ingest         # Test ingest service
+make test-search         # Test search service
+make test-agent          # Test agent service
+make test-apps           # Test applications
+
+# Extraction strategy tests
+make test-extraction-simple   # Basic PDF extraction
+make test-extraction-llm      # LLM-enhanced extraction
+make test-extraction-marker   # Marker extraction (GPU)
+make test-extraction-colpali  # ColPali visual extraction
+
+# Coverage reports
+make test-ingest-coverage
+make test-search-coverage
+
+# Specific test types
+make test-search-unit         # Unit tests only
+make test-search-integration  # Integration tests only
+make test-ingest-all          # All ingest tests including integration
+```
+
+### Verification Targets
+
+```bash
+make verify              # Run all verification checks
+make verify-health       # Service health checks
+make verify-smoke        # Database smoke tests
+```
+
+### Using MCP with Make Targets
+
+**Natural Language**:
+- "Run the test menu"
+- "Deploy ai-portal to test"
+- "Run ingest tests with coverage"
+- "Execute the simple extraction test"
+- "Verify all services are healthy"
+
+**Using execute_proxmox_command**:
+```
+AI: Call execute_proxmox_command
+Parameters:
+  command: "cd /root/busibox/provision/ansible && make test-menu"
+  working_directory: "/root/busibox"
+```
+
 ## Workflow Examples
 
 ### Example 1: Deploying to Test Environment

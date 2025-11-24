@@ -240,6 +240,78 @@ Interactive guide for creating documentation following organization rules.
 - Document structure template
 - Organization rules reference
 
+## Make Targets Reference (2025-01)
+
+The Busibox Makefile has been significantly enhanced. This section documents the new targets available for use with the `execute_proxmox_command` tool.
+
+### Deployment Targets
+
+| Target | Description | Example |
+|--------|-------------|---------|
+| `deploy-ai-portal` | Deploy AI Portal | `make deploy-ai-portal` |
+| `deploy-agent-client` | Deploy Agent Client | `make deploy-agent-client` |
+| `deploy-doc-intel` | Deploy Doc Intel | `make deploy-doc-intel` |
+| `deploy-foundation` | Deploy Foundation | `make deploy-foundation` |
+| `deploy-project-analysis` | Deploy Project Analysis | `make deploy-project-analysis` |
+| `deploy-innovation` | Deploy Innovation | `make deploy-innovation` |
+| `search-api` | Deploy search API | `make search-api` |
+| `agent` | Deploy agent service | `make agent` |
+| `ingest` | Deploy ingest service | `make ingest` |
+| `ingest-api` | Deploy ingest API only | `make ingest-api` |
+| `ingest-worker` | Deploy ingest worker only | `make ingest-worker` |
+| `apps` | Deploy all apps | `make apps` |
+
+**Environment Selection**:
+Add `INV=inventory/test` to deploy to test environment:
+```bash
+make deploy-ai-portal INV=inventory/test
+```
+
+### Testing Targets
+
+| Target | Description | Example |
+|--------|-------------|---------|
+| `test-menu` | Interactive test menu | `make test-menu` |
+| `test-ingest` | Test ingest service | `make test-ingest` |
+| `test-search` | Test search service | `make test-search` |
+| `test-agent` | Test agent service | `make test-agent` |
+| `test-apps` | Test applications | `make test-apps` |
+| `test-extraction-simple` | Test simple PDF extraction | `make test-extraction-simple` |
+| `test-extraction-llm` | Test LLM-enhanced extraction | `make test-extraction-llm` |
+| `test-extraction-marker` | Test Marker extraction (GPU) | `make test-extraction-marker` |
+| `test-extraction-colpali` | Test ColPali visual extraction | `make test-extraction-colpali` |
+| `test-ingest-all` | All ingest tests (including integration) | `make test-ingest-all` |
+| `test-ingest-coverage` | Ingest tests with coverage | `make test-ingest-coverage` |
+| `test-search-unit` | Search unit tests only | `make test-search-unit` |
+| `test-search-integration` | Search integration tests | `make test-search-integration` |
+| `test-search-coverage` | Search tests with coverage | `make test-search-coverage` |
+
+### Verification Targets
+
+| Target | Description | Example |
+|--------|-------------|---------|
+| `verify` | Run all verification checks | `make verify` |
+| `verify-health` | Service health checks | `make verify-health` |
+| `verify-smoke` | Database smoke tests | `make verify-smoke` |
+
+### Usage with MCP
+
+**Using execute_proxmox_command**:
+```json
+{
+  "command": "cd /root/busibox/provision/ansible && make test-menu",
+  "working_directory": "/root/busibox"
+}
+```
+
+**Natural Language Examples**:
+- "Run the test menu"
+- "Deploy ai-portal to test environment"
+- "Run ingest tests with coverage"
+- "Execute simple extraction tests"
+- "Verify all services are healthy"
+- "Deploy search-api to production"
+
 ## Usage Patterns
 
 ### For AI Coding Agents
