@@ -409,6 +409,29 @@
     var: hybrid_schema_init
   when: hybrid_schema_init is defined
 
+- name: Copy Milvus partition initialization script
+  copy:
+    src: "{{ playbook_dir }}/../../tools/milvus_init_partitions.py"
+    dest: /root/milvus_init_partitions.py
+    mode: "0755"
+
+- name: Initialize Milvus partitions for RBAC
+  shell: |
+    /opt/milvus-tools/bin/python /root/milvus_init_partitions.py
+  environment:
+    MILVUS_HOST: localhost
+    MILVUS_PORT: "19530"
+  register: milvus_partitions_init
+  retries: 3
+  delay: 5
+  until: milvus_partitions_init.rc == 0
+  when: milvus_health.status is defined and milvus_health.status == 200
+
+- name: Display Milvus partition initialization result
+  debug:
+    var: milvus_partitions_init.stdout_lines
+  when: milvus_partitions_init.stdout_lines is defined
+
 - name: Create Milvus health check script
   copy:
     dest: /usr/local/bin/milvus-health-check

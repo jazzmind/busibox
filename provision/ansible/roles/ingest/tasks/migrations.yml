@@ -96,3 +96,43 @@
     msg: "{{ 'Markdown storage migration applied successfully' if markdown_storage_result.changed else 'Markdown storage migration already applied' }}"
   tags: [ingest, ingest_migrations]
 
+- name: Check if RBAC schema exists
+  shell: |
+    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -tAc \
+    "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='groups');"
+  register: rbac_schema_check
+  changed_when: false
+  tags: [ingest, ingest_migrations]
+
+- name: Apply RBAC schema migration
+  shell: |
+    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -f /srv/ingest/migrations/add_rbac_schema.sql
+  when: rbac_schema_check.stdout == 'f'
+  register: rbac_schema_result
+  tags: [ingest, ingest_migrations]
+
+- name: Display RBAC schema migration status
+  debug:
+    msg: "{{ 'RBAC schema migration applied successfully' if rbac_schema_result.changed else 'RBAC schema already exists' }}"
+  tags: [ingest, ingest_migrations]
+
+- name: Check if RLS policies are enabled
+  shell: |
+    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -tAc \
+    "SELECT relrowsecurity FROM pg_class WHERE relname='ingestion_files';"
+  register: rls_check
+  changed_when: false
+  tags: [ingest, ingest_migrations]
+
+- name: Apply RLS policies migration
+  shell: |
+    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -f /srv/ingest/migrations/add_rls_policies.sql
+  when: rls_check.stdout != 't'
+  register: rls_result
+  tags: [ingest, ingest_migrations]
+
+- name: Display RLS policies migration status
+  debug:
+    msg: "{{ 'RLS policies applied successfully' if rls_result.changed else 'RLS policies already enabled' }}"
+  tags: [ingest, ingest_migrations]
+
