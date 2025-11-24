@@ -500,18 +500,18 @@ class IngestWorker:
                 
                 # Temporarily override chunker config
                 if chunk_size_min is not None:
-                    original_min = self.chunker.min_chars
-                    self.chunker.min_chars = chunk_size_min
+                    original_min = self.chunker.min_tokens
+                    self.chunker.min_tokens = chunk_size_min
                     logger.info(f"Using custom chunk_size_min: {chunk_size_min}")
                 
                 if chunk_size_max is not None:
-                    original_max = self.chunker.max_chars
-                    self.chunker.max_chars = chunk_size_max
+                    original_max = self.chunker.max_tokens
+                    self.chunker.max_tokens = chunk_size_max
                     logger.info(f"Using custom chunk_size_max: {chunk_size_max}")
                 
                 if chunk_overlap_pct is not None:
-                    original_overlap = self.chunker.overlap
-                    self.chunker.overlap = chunk_overlap_pct
+                    original_overlap = self.chunker.overlap_pct
+                    self.chunker.overlap_pct = chunk_overlap_pct
                     logger.info(f"Using custom chunk_overlap_pct: {chunk_overlap_pct}")
             
             chunks: List[Chunk] = self.chunker.chunk(
@@ -523,11 +523,11 @@ class IngestWorker:
             # Restore original chunker config
             if processing_config:
                 if chunk_size_min is not None:
-                    self.chunker.min_chars = original_min
+                    self.chunker.min_tokens = original_min
                 if chunk_size_max is not None:
-                    self.chunker.max_chars = original_max
+                    self.chunker.max_tokens = original_max
                 if chunk_overlap_pct is not None:
-                    self.chunker.overlap = original_overlap
+                    self.chunker.overlap_pct = original_overlap
             
             total_chunks = len(chunks)
             logger.info(
