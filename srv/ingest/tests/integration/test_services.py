@@ -184,7 +184,7 @@ async def test_milvus_service(config: Config, test_file_id: str, test_user_id: s
                 "token_count": 10,
             }
         ]
-        embeddings = [[0.1] * 1536]  # text-embedding-3-small dimension
+        embeddings = [[0.1] * 1024]  # bge-large-en-v1.5 dimension (local FastEmbed)
         content_hash = "test-hash-123"
         
         # Insert chunks
