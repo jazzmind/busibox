@@ -310,6 +310,180 @@ deploy_single_app() {
     done
 }
 
+# Core Services submenu (files, database, vectorstore)
+core_services_menu() {
+    local env="$1"
+    
+    while true; do
+        clear
+        box "Core Services - $env" 70
+        echo ""
+        info "Select core service to deploy"
+        echo ""
+        
+        echo -e "  ${CYAN}1)${NC} Deploy All Core Services"
+        echo -e "  ${CYAN}2)${NC} Deploy Files (MinIO)"
+        echo -e "  ${CYAN}3)${NC} Deploy Database (PostgreSQL)"
+        echo -e "  ${CYAN}4)${NC} Deploy Vectorstore (Milvus)"
+        echo -e "  ${CYAN}5)${NC} Back"
+        echo ""
+        
+        read -p "Select option [1-5]: " choice
+        echo ""
+        
+        case "$choice" in
+            1)
+                if confirm "Deploy ALL core services (files, pg, milvus) to $env?"; then
+                    deploy_service "files" "$env" && \
+                    deploy_service "pg" "$env" && \
+                    deploy_service "milvus" "$env"
+                fi
+                pause
+                ;;
+            2)
+                if confirm "Deploy Files (MinIO) to $env?"; then
+                    deploy_service "files" "$env"
+                fi
+                pause
+                ;;
+            3)
+                if confirm "Deploy Database (PostgreSQL) to $env?"; then
+                    deploy_service "pg" "$env"
+                fi
+                pause
+                ;;
+            4)
+                if confirm "Deploy Vectorstore (Milvus) to $env?"; then
+                    deploy_service "milvus" "$env"
+                fi
+                pause
+                ;;
+            5)
+                return 0
+                ;;
+            *)
+                error "Invalid choice"
+                pause
+                ;;
+        esac
+    done
+}
+
+# LLM Services submenu (vllm, litellm, colpali)
+llm_services_menu() {
+    local env="$1"
+    
+    while true; do
+        clear
+        box "LLM Services - $env" 70
+        echo ""
+        info "Select LLM service to deploy"
+        echo ""
+        
+        echo -e "  ${CYAN}1)${NC} Deploy All LLM Services"
+        echo -e "  ${CYAN}2)${NC} Deploy vLLM & Models"
+        echo -e "  ${CYAN}3)${NC} Deploy ColPali (visual embeddings)"
+        echo -e "  ${CYAN}4)${NC} Deploy LiteLLM (gateway)"
+        echo -e "  ${CYAN}5)${NC} Back"
+        echo ""
+        
+        read -p "Select option [1-5]: " choice
+        echo ""
+        
+        case "$choice" in
+            1)
+                if confirm "Deploy ALL LLM services (vLLM, ColPali, LiteLLM) to $env?"; then
+                    deploy_service "vllm" "$env" && \
+                    deploy_service "colpali" "$env" && \
+                    deploy_service "litellm" "$env"
+                fi
+                pause
+                ;;
+            2)
+                vllm_submenu "$env"
+                ;;
+            3)
+                if confirm "Deploy ColPali (visual embeddings) to $env?"; then
+                    deploy_service "colpali" "$env"
+                fi
+                pause
+                ;;
+            4)
+                if confirm "Deploy LiteLLM (gateway) to $env?"; then
+                    deploy_service "litellm" "$env"
+                fi
+                pause
+                ;;
+            5)
+                return 0
+                ;;
+            *)
+                error "Invalid choice"
+                pause
+                ;;
+        esac
+    done
+}
+
+# APIs submenu (ingest, search, agent)
+apis_menu() {
+    local env="$1"
+    
+    while true; do
+        clear
+        box "API Services - $env" 70
+        echo ""
+        info "Select API service to deploy"
+        echo ""
+        
+        echo -e "  ${CYAN}1)${NC} Deploy All APIs"
+        echo -e "  ${CYAN}2)${NC} Deploy Ingest API"
+        echo -e "  ${CYAN}3)${NC} Deploy Search API"
+        echo -e "  ${CYAN}4)${NC} Deploy Agent API"
+        echo -e "  ${CYAN}5)${NC} Back"
+        echo ""
+        
+        read -p "Select option [1-5]: " choice
+        echo ""
+        
+        case "$choice" in
+            1)
+                if confirm "Deploy ALL APIs (ingest, search, agent) to $env?"; then
+                    deploy_service "ingest" "$env" && \
+                    deploy_service "search-api" "$env" && \
+                    deploy_service "agent" "$env"
+                fi
+                pause
+                ;;
+            2)
+                if confirm "Deploy Ingest API to $env?"; then
+                    deploy_service "ingest" "$env"
+                fi
+                pause
+                ;;
+            3)
+                if confirm "Deploy Search API to $env?"; then
+                    deploy_service "search-api" "$env"
+                fi
+                pause
+                ;;
+            4)
+                if confirm "Deploy Agent API to $env?"; then
+                    deploy_service "agent" "$env"
+                fi
+                pause
+                ;;
+            5)
+                return 0
+                ;;
+            *)
+                error "Invalid choice"
+                pause
+                ;;
+        esac
+    done
+}
+
 # Apps deployment submenu
 deploy_apps_menu() {
     local env="$1"
@@ -322,17 +496,18 @@ deploy_apps_menu() {
         echo ""
         
         echo -e "  ${CYAN}1)${NC} Deploy All Apps (latest release)"
-        echo -e "  ${CYAN}2)${NC} Update Nginx Routing (after new app deployment)"
+        echo -e "  ${CYAN}2)${NC} Update Nginx Routing"
         echo -e "  ${CYAN}3)${NC} Deploy AI Portal"
         echo -e "  ${CYAN}4)${NC} Deploy Agent Manager (agent-client)"
         echo -e "  ${CYAN}5)${NC} Deploy Doc Intelligence (doc-intel)"
         echo -e "  ${CYAN}6)${NC} Deploy Foundation Manager"
         echo -e "  ${CYAN}7)${NC} Deploy Project Analysis"
         echo -e "  ${CYAN}8)${NC} Deploy Innovation Manager"
-        echo -e "  ${CYAN}9)${NC} Back to Main Menu"
+        echo -e "  ${CYAN}9)${NC} Deploy OpenWebUI"
+        echo -e "  ${CYAN}10)${NC} Back"
         echo ""
         
-        read -p "Select option [1-9]: " choice
+        read -p "Select option [1-10]: " choice
         echo ""
         
         case "$choice" in
@@ -373,6 +548,12 @@ deploy_apps_menu() {
                 pause
                 ;;
             9)
+                if confirm "Deploy OpenWebUI to $env?"; then
+                    deploy_service "openwebui" "$env"
+                fi
+                pause
+                ;;
+            10)
                 return 0
                 ;;
             *)
@@ -417,19 +598,14 @@ deployment_menu() {
         echo ""
         menu "Deploy Services - $env Environment" \
             "Deploy All Services" \
-            "Deploy Core Services (files, pg, milvus)" \
-            "Deploy ColPali (visual embeddings)" \
-            "Deploy vLLM (LLM inference)" \
-            "Deploy LiteLLM" \
-            "Deploy Ingest Service" \
-            "Deploy Search API" \
-            "Deploy Agent API" \
-            "Deploy Apps (AI Portal)" \
-            "Deploy OpenWebUI" \
+            "Deploy Core Services (files, database, vectorstore)" \
+            "Deploy LLM Services (vllm, litellm, colpali)" \
+            "Deploy APIs (ingest, search, agent)" \
+            "Deploy Apps" \
             "Verify Deployment (Health Checks)" \
             "Back to Main Menu"
         
-        read -p "$(echo -e "${BOLD}Select option [1-12]:${NC} ")" choice
+        read -p "$(echo -e "${BOLD}Select option [1-7]:${NC} ")" choice
         
         case $choice in
             1)
@@ -439,66 +615,26 @@ deployment_menu() {
                 pause
                 ;;
             2)
-                header "Deploying Core Services" 70
-                echo ""
-                if confirm "Deploy files, pg, and milvus to $env?"; then
-                    deploy_service "files" "$env" && \
-                    deploy_service "pg" "$env" && \
-                    deploy_service "milvus" "$env"
-                fi
-                pause
+                core_services_menu "$env"
                 ;;
             3)
-                if confirm "Deploy ColPali (visual embeddings) to $env?"; then
-                    deploy_service "colpali" "$env"
-                fi
-                pause
+                llm_services_menu "$env"
                 ;;
             4)
-                vllm_submenu "$env"
+                apis_menu "$env"
                 ;;
             5)
-                if confirm "Deploy LiteLLM to $env?"; then
-                    deploy_service "litellm" "$env"
-                fi
-                pause
-                ;;
-            6)
-                if confirm "Deploy Ingest Service to $env?"; then
-                    deploy_service "ingest" "$env"
-                fi
-                pause
-                ;;
-            7)
-                if confirm "Deploy Search API to $env?"; then
-                    deploy_service "search-api" "$env"
-                fi
-                pause
-                ;;
-            8)
-                if confirm "Deploy Agent API to $env?"; then
-                    deploy_service "agent" "$env"
-                fi
-                pause
-                ;;
-            9)
                 deploy_apps_menu "$env"
                 ;;
-            10)
-                if confirm "Deploy OpenWebUI to $env?"; then
-                    deploy_service "openwebui" "$env"
-                fi
-                pause
-                ;;
-            11)
+            6)
                 verify_deployment "$env"
                 pause
                 ;;
-            12)
+            7)
                 return 0
                 ;;
             *)
-                error "Invalid selection. Please enter 1-12."
+                error "Invalid selection. Please enter 1-7."
                 ;;
         esac
     done
