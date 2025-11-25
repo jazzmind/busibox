@@ -40,7 +40,7 @@ def _get_file_metadata(postgres_service, file_uuid, user_uuid, fields):
                 f"""SELECT {field_list}
                    FROM ingestion_files 
                    WHERE file_id = %s AND user_id = %s""",
-                (file_uuid, user_uuid)
+                (str(file_uuid), str(user_uuid))  # Convert UUID to string for psycopg2
             )
             row = cur.fetchone()
             
@@ -131,7 +131,7 @@ async def get_markdown(fileId: str, request: Request):
             content={"error": "Failed to retrieve markdown", "details": str(e)}
         )
     finally:
-        postgres_service.disconnect()
+        postgres_service.close()
 
 
 @router.get("/{fileId}/html")
@@ -217,7 +217,7 @@ async def get_html(fileId: str, request: Request):
             content={"error": "Failed to retrieve HTML", "details": str(e)}
         )
     finally:
-        postgres_service.disconnect()
+        postgres_service.close()
 
 
 @router.get("/{fileId}/images/{imageIndex}")
@@ -332,4 +332,4 @@ async def get_image(fileId: str, imageIndex: int, request: Request):
             content={"error": "Failed to retrieve image", "details": str(e)}
         )
     finally:
-        postgres_service.disconnect()
+        postgres_service.close()
