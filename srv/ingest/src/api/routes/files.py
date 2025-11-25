@@ -228,6 +228,7 @@ async def get_processing_history(fileId: str, request: Request):
         
         config = Config().to_dict()
         history_service = ProcessingHistoryService(config)
+        history_service.connect()  # Must connect before use
         
         try:
             history = history_service.get_history(fileId)
