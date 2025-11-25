@@ -178,7 +178,7 @@
       exit 1
     fi
     
-    echo "Database URL configured: ${DATABASE_URL%%@*}@***"
+    echo "Database URL configured: {% raw %}${DATABASE_URL%%@*}{% endraw %}@***"
     
     # Check if migrations directory exists and has migrations
     if [ -d "prisma/migrations" ] && [ "$(ls -A prisma/migrations 2>/dev/null)" ]; then
