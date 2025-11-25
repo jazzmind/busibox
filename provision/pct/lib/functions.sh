@@ -12,8 +12,9 @@
 # Functions:
 #   create_ct()          - Create and start an LXC container
 #   add_data_mount()     - Add persistent storage bind mount to container
-#   add_gpu_passthrough() - Configure NVIDIA GPU passthrough for container
+#   add_gpu_passthrough() - Configure single NVIDIA GPU passthrough for container
 #   add_all_gpus()       - Pass through all available NVIDIA GPUs to container
+#   add_gpus()           - Pass through multiple specific NVIDIA GPUs to container
 #
 # Usage:
 #   source "$(dirname "$0")/lib/functions.sh"
@@ -215,6 +216,82 @@ EOF
   done
   
   echo "    Successfully configured ${GPU_COUNT} GPUs for passthrough"
+  
+  return 0
+}
+
+# Pass through multiple specific NVIDIA GPUs to container
+# Args: CTID GPU_NUMBERS (comma-separated, e.g., "1,2,3" or "1-3")
+# Example: add_gpus 208 "1,2,3"  # Add GPUs 1, 2, and 3 to container 208
+add_gpus() {
+  local CTID=$1
+  local GPU_SPEC="$2"
+  
+  local CONFIG_FILE="/etc/pve/lxc/${CTID}.conf"
+  
+  # Check if GPU passthrough already configured
+  if grep -q "# GPU Passthrough" "$CONFIG_FILE"; then
+    echo "    GPU passthrough already configured"
+    return 0
+  fi
+  
+  # Check if nvidia-smi is available on host
+  if ! command -v nvidia-smi &>/dev/null; then
+    echo "    WARNING: nvidia-smi not found on host"
+    echo "    Run: bash provision/pct/setup-proxmox-host.sh to install NVIDIA drivers"
+    return 1
+  fi
+  
+  # Parse GPU specification (supports: 1, 1,2,3, or 1-3)
+  local GPU_NUMBERS=()
+  
+  if [[ "$GPU_SPEC" =~ ^[0-9]+-[0-9]+$ ]]; then
+    # Range format: 1-3
+    IFS='-' read -r START END <<< "$GPU_SPEC"
+    for ((i=START; i<=END; i++)); do
+      GPU_NUMBERS+=("$i")
+    done
+  elif [[ "$GPU_SPEC" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+    # Comma-separated format: 1,2,3
+    IFS=',' read -ra GPU_NUMBERS <<< "$GPU_SPEC"
+  else
+    echo "    ERROR: Invalid GPU specification: $GPU_SPEC"
+    echo "    Valid formats: 1 (single), 1,2,3 (multiple), 1-3 (range)"
+    return 1
+  fi
+  
+  # Validate all GPUs exist
+  for gpu_num in "${GPU_NUMBERS[@]}"; do
+    if ! nvidia-smi -L | grep -q "GPU ${gpu_num}:"; then
+      echo "    WARNING: GPU ${gpu_num} not found on host"
+      echo "    Available GPUs:"
+      nvidia-smi -L 2>/dev/null || echo "      None detected"
+      return 1
+    fi
+  done
+  
+  echo "    Configuring GPUs ${GPU_NUMBERS[*]} for passthrough..."
+  
+  # Add common GPU device permissions
+  cat >> "$CONFIG_FILE" << EOF
+# GPU Passthrough: NVIDIA GPUs ${GPU_NUMBERS[*]}
+lxc.cgroup2.devices.allow: c 195:* rwm
+lxc.cgroup2.devices.allow: c 234:* rwm
+lxc.cgroup2.devices.allow: c 508:* rwm
+lxc.mount.entry: /dev/nvidiactl dev/nvidiactl none bind,optional,create=file
+lxc.mount.entry: /dev/nvidia-modeset dev/nvidia-modeset none bind,optional,create=file
+lxc.mount.entry: /dev/nvidia-uvm dev/nvidia-uvm none bind,optional,create=file
+lxc.mount.entry: /dev/nvidia-uvm-tools dev/nvidia-uvm-tools none bind,optional,create=file
+lxc.mount.entry: /dev/nvidia-caps dev/nvidia-caps none bind,optional,create=dir
+EOF
+  
+  # Add each specified GPU device
+  for gpu_num in "${GPU_NUMBERS[@]}"; do
+    echo "lxc.mount.entry: /dev/nvidia${gpu_num} dev/nvidia${gpu_num} none bind,optional,create=file" >> "$CONFIG_FILE"
+    echo "    Added GPU ${gpu_num}"
+  done
+  
+  echo "    Successfully configured ${#GPU_NUMBERS[@]} GPUs for passthrough"
   
   return 0
 }

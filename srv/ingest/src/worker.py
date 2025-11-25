@@ -30,6 +30,7 @@ import json
 import os
 import sys
 import time
+import traceback
 import signal
 import socket
 import uuid
@@ -37,7 +38,7 @@ from datetime import datetime
 from typing import List, Optional
 
 import structlog
-import redis
+import redis as redis_sync
 from redis.exceptions import RedisError
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
@@ -45,6 +46,7 @@ from shared.config import Config
 from services.file_service import FileService
 from services.postgres_service import PostgresService
 from services.milvus_service import MilvusService
+from services.processing_history_service import ProcessingHistoryService
 from processors.text_extractor import TextExtractor, ExtractionResult
 from processors.chunker import Chunker, Chunk
 from processors.embedder import Embedder
@@ -52,6 +54,9 @@ from processors.classifier import DocumentClassifier
 from processors.metadata_extractor import MetadataExtractor
 from processors.colpali import ColPaliEmbedder
 from processors.llm_cleanup import LLMCleanup
+from processors.markdown_generator import MarkdownGenerator
+from processors.image_extractor import ImageExtractor
+from worker import ErrorHandler, HistoryLogger
 
 # Configure structured logging
 structlog.configure(
@@ -89,10 +94,13 @@ class IngestWorker:
         self.running = False
         
         # Services (initialized in connect())
-        self.redis_client: Optional[redis.Redis] = None
+        self.redis_client: Optional[redis_sync.Redis] = None
         self.file_service: Optional[FileService] = None
         self.postgres_service: Optional[PostgresService] = None
         self.milvus_service: Optional[MilvusService] = None
+        self.history_service: Optional[ProcessingHistoryService] = None
+        self.error_handler: Optional[ErrorHandler] = None
+        self.history: Optional[HistoryLogger] = None
         
         # Processors (initialized in connect())
         self.text_extractor: Optional[TextExtractor] = None
@@ -115,7 +123,7 @@ class IngestWorker:
         logger.info("Connecting to services")
         
         # Redis
-        self.redis_client = redis.Redis(
+        self.redis_client = redis_sync.Redis(
             host=self.config["redis_host"],
             port=self.config["redis_port"],
             decode_responses=True,
@@ -131,7 +139,7 @@ class IngestWorker:
                 mkstream=True
             )
             logger.info("Consumer group created", group=self.consumer_group)
-        except redis.ResponseError as e:
+        except redis_sync.ResponseError as e:
             if "BUSYGROUP" in str(e):
                 logger.info("Consumer group already exists", group=self.consumer_group)
             else:
@@ -143,6 +151,10 @@ class IngestWorker:
         self.postgres_service.connect()
         self.milvus_service = MilvusService(self.config)
         self.milvus_service.connect()
+        self.history_service = ProcessingHistoryService(self.config)
+        self.history_service.connect()
+        self.error_handler = ErrorHandler(self.config, self.postgres_service, self.redis_client)
+        self.history = HistoryLogger(self.history_service)
         
         # Initialize processors
         self.text_extractor = TextExtractor(self.config)
@@ -152,6 +164,8 @@ class IngestWorker:
         self.metadata_extractor = MetadataExtractor(self.config)
         self.colpali = ColPaliEmbedder(self.config)
         self.llm_cleanup = LLMCleanup(self.config)
+        self.markdown_generator = MarkdownGenerator()
+        self.image_extractor = ImageExtractor()
         
         logger.info("All services connected")
     
@@ -170,6 +184,9 @@ class IngestWorker:
         
         logger.info("All services disconnected")
     
+    # Removed _log_step - now using self.history.log_step() directly
+    # Removed _is_transient_error - now using self.error_handler.is_transient_error()
+    
     def _get_timeout_seconds(self, page_count: int) -> int:
         """Calculate timeout based on document size."""
         if page_count < 10:
@@ -179,79 +196,7 @@ class IngestWorker:
         else:
             return self.config.get("timeout_large", 1200)  # 20 minutes
     
-    def _is_transient_error(self, error: Exception) -> bool:
-        """
-        Determine if error is transient (should retry) or permanent.
-        
-        Transient errors:
-        - Network timeouts
-        - Service unavailable (503, 502)
-        - Connection errors
-        - Rate limiting (429)
-        - Temporary service failures
-        
-        Permanent errors:
-        - Corrupted files
-        - Unsupported formats
-        - Invalid data
-        - Authentication failures (401)
-        - Permission errors (403)
-        """
-        error_str = str(error).lower()
-        error_type = type(error).__name__
-        
-        # Transient errors
-        transient_indicators = [
-            "timeout",
-            "connection",
-            "unavailable",
-            "temporary",
-            "retry",
-            "rate limit",
-            "429",
-            "502",
-            "503",
-            "504",
-            "network",
-            "socket",
-            "refused",
-        ]
-        
-        if any(indicator in error_str for indicator in transient_indicators):
-            return True
-        
-        # Permanent errors
-        permanent_indicators = [
-            "corrupted",
-            "invalid",
-            "unsupported",
-            "format",
-            "malformed",
-            "parse error",
-            "401",
-            "403",
-            "404",  # File not found is permanent
-            "valueerror",
-            "typeerror",
-        ]
-        
-        if any(indicator in error_str for indicator in permanent_indicators):
-            return False
-        
-        # Check error type
-        transient_types = (
-            ConnectionError,
-            TimeoutError,
-            asyncio.TimeoutError,
-            redis.ConnectionError,
-            redis.TimeoutError,
-        )
-        
-        if isinstance(error, transient_types):
-            return True
-        
-        # Default: assume transient for unknown errors (safer to retry)
-        return True
+    # Removed _is_transient_error - moved to ErrorHandler class
     
     def _check_duplicate(self, file_id: str, content_hash: str) -> bool:
         """Check if file with same content_hash already processed."""
@@ -324,6 +269,20 @@ class IngestWorker:
         mime_type = job_data.get("mime_type")
         original_filename = job_data.get("original_filename", "unknown")
         
+        # Extract visibility and role_ids for partition routing
+        visibility = job_data.get("visibility", "personal")
+        role_ids_str = job_data.get("role_ids")
+        role_ids: Optional[List[str]] = None
+        if role_ids_str:
+            try:
+                role_ids = json.loads(role_ids_str)
+            except json.JSONDecodeError:
+                logger.warning(
+                    "Failed to parse role_ids, using None",
+                    file_id=file_id,
+                    role_ids_str=role_ids_str,
+                )
+        
         # Parse processing configuration if provided
         processing_config = {}
         processing_config_str = job_data.get("processing_config")
@@ -355,6 +314,8 @@ class IngestWorker:
                 file_id=file_id,
                 user_id=user_id,
                 trace_id=trace_id,
+                visibility=visibility,
+                role_count=len(role_ids) if role_ids else 0,
             )
             
             # Get content_hash from database
@@ -382,6 +343,12 @@ class IngestWorker:
                 return
             
             # Stage 1: Parsing
+            parsing_start = self.history.log_stage_start(
+                file_id, "parsing",
+                f"Starting text extraction for {mime_type}",
+                metadata={"mime_type": mime_type, "filename": original_filename}
+            )
+            
             logger.info(
                 "Stage 1: Starting text extraction",
                 file_id=file_id,
@@ -395,14 +362,49 @@ class IngestWorker:
             )
             
             logger.debug("Downloading file from storage", file_id=file_id, storage_path=storage_path)
+            download_start = time.time()
             temp_file_path = self.file_service.download(storage_path)
+            self.history.log_substep(
+                file_id, "parsing", "download_from_minio",
+                f"Downloaded file from {storage_path}",
+                started_at=download_start
+            )
             logger.debug("File downloaded", file_id=file_id, temp_path=temp_file_path)
             
             logger.info("Extracting text and images", file_id=file_id, mime_type=mime_type)
+            
+            # Override marker_enabled from processing_config if provided
+            original_marker_enabled = self.text_extractor.marker_enabled
+            if processing_config and "marker_enabled" in processing_config:
+                self.text_extractor.marker_enabled = processing_config["marker_enabled"]
+                logger.info(
+                    "Overriding marker_enabled from processing_config",
+                    file_id=file_id,
+                    marker_enabled=self.text_extractor.marker_enabled,
+                )
+            
+            extract_start = time.time()
             extraction_result: ExtractionResult = self.text_extractor.extract(
                 temp_file_path,
                 mime_type,
             )
+            
+            # Restore original marker_enabled setting
+            if processing_config and "marker_enabled" in processing_config:
+                self.text_extractor.marker_enabled = original_marker_enabled
+            
+            self.history.log_substep(
+                file_id, "parsing", "text_extraction",
+                f"Extracted {len(extraction_result.text)} chars, {extraction_result.page_count} pages",
+                metadata={
+                    "text_length": len(extraction_result.text),
+                    "page_count": extraction_result.page_count,
+                    "table_count": len(extraction_result.tables) if extraction_result.tables else 0,
+                    "method": extraction_result.metadata.get("extraction_method", "unknown"),
+                },
+                started_at=extract_start
+            )
+            
             logger.info(
                 "Text extraction complete",
                 file_id=file_id,
@@ -465,7 +467,43 @@ class IngestWorker:
                 extracted_keywords=metadata.get("keywords", []),
             )
             
+            # Update metadata JSON with page_count and word_count
+            try:
+                conn = self.postgres_service._get_connection()
+                with conn.cursor() as cur:
+                    # Calculate word count from extracted text
+                    word_count = len(extraction_result.text.split())
+                    
+                    # Update metadata JSON field
+                    cur.execute("""
+                        UPDATE ingestion_files
+                        SET metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb
+                        WHERE file_id = %s
+                    """, (
+                        json.dumps({"page_count": extraction_result.page_count, "word_count": word_count}),
+                        file_id
+                    ))
+                    conn.commit()
+                    logger.debug(
+                        "Updated metadata with page_count and word_count",
+                        file_id=file_id,
+                        page_count=extraction_result.page_count,
+                        word_count=word_count
+                    )
+                self.postgres_service._return_connection(conn)
+            except Exception as e:
+                logger.warning(
+                    "Failed to update metadata JSON",
+                    file_id=file_id,
+                    error=str(e)
+                )
+            
             # Stage 4: Chunking
+            chunking_start = self.history.log_stage_start(
+                file_id, "chunking",
+                f"Starting chunking with detected languages: {detected_languages}",
+                metadata={"text_length": len(extraction_result.text), "detected_languages": detected_languages}
+            )
             logger.info(
                 "Stage 4: Starting text chunking",
                 file_id=file_id,
@@ -485,18 +523,18 @@ class IngestWorker:
                 
                 # Temporarily override chunker config
                 if chunk_size_min is not None:
-                    original_min = self.chunker.min_chars
-                    self.chunker.min_chars = chunk_size_min
+                    original_min = self.chunker.min_tokens
+                    self.chunker.min_tokens = chunk_size_min
                     logger.info(f"Using custom chunk_size_min: {chunk_size_min}")
                 
                 if chunk_size_max is not None:
-                    original_max = self.chunker.max_chars
-                    self.chunker.max_chars = chunk_size_max
+                    original_max = self.chunker.max_tokens
+                    self.chunker.max_tokens = chunk_size_max
                     logger.info(f"Using custom chunk_size_max: {chunk_size_max}")
                 
                 if chunk_overlap_pct is not None:
-                    original_overlap = self.chunker.overlap
-                    self.chunker.overlap = chunk_overlap_pct
+                    original_overlap = self.chunker.overlap_pct
+                    self.chunker.overlap_pct = chunk_overlap_pct
                     logger.info(f"Using custom chunk_overlap_pct: {chunk_overlap_pct}")
             
             chunks: List[Chunk] = self.chunker.chunk(
@@ -508,17 +546,24 @@ class IngestWorker:
             # Restore original chunker config
             if processing_config:
                 if chunk_size_min is not None:
-                    self.chunker.min_chars = original_min
+                    self.chunker.min_tokens = original_min
                 if chunk_size_max is not None:
-                    self.chunker.max_chars = original_max
+                    self.chunker.max_tokens = original_max
                 if chunk_overlap_pct is not None:
-                    self.chunker.overlap = original_overlap
+                    self.chunker.overlap_pct = original_overlap
             
             total_chunks = len(chunks)
             logger.info(
                 "Chunking complete",
                 file_id=file_id,
                 chunk_count=total_chunks,
+            )
+            
+            self.history.log_stage_complete(
+                file_id, "chunking",
+                f"Created {total_chunks} chunks from {len(extraction_result.text)} characters",
+                metadata={"chunk_count": total_chunks, "text_length": len(extraction_result.text)},
+                started_at=chunking_start
             )
             
             self.postgres_service.update_status(
@@ -535,6 +580,11 @@ class IngestWorker:
             llm_cleanup_enabled = llm_cleanup_enabled or (self.llm_cleanup and self.llm_cleanup.enabled)
             
             if llm_cleanup_enabled and self.llm_cleanup:
+                cleanup_start = self.history.log_stage_start(
+                    file_id, "cleanup",
+                    f"Starting LLM cleanup on {total_chunks} chunks",
+                    metadata={"original_chunk_count": total_chunks}
+                )
                 logger.info(
                     "Stage 4.5: Starting LLM cleanup",
                     file_id=file_id,
@@ -552,6 +602,7 @@ class IngestWorker:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 try:
+                    original_chunk_count = len(chunks)
                     chunks = loop.run_until_complete(
                         self.llm_cleanup.cleanup_chunks(chunks)
                     )
@@ -559,6 +610,13 @@ class IngestWorker:
                         "LLM cleanup complete",
                         file_id=file_id,
                         chunk_count=len(chunks),
+                    )
+                    
+                    self.history.log_stage_complete(
+                        file_id, "cleanup",
+                        f"LLM cleanup: {original_chunk_count} → {len(chunks)} chunks",
+                        metadata={"original_count": original_chunk_count, "final_count": len(chunks)},
+                        started_at=cleanup_start
                     )
                 finally:
                     loop.close()
@@ -572,6 +630,11 @@ class IngestWorker:
                 )
             else:
                 logger.debug("LLM cleanup disabled, skipping", file_id=file_id)
+                self.history.log_skip(
+                    file_id, "cleanup", "llm_cleanup",
+                    "LLM cleanup was disabled",
+                    metadata={"chunk_count": total_chunks}
+                )
                 self.postgres_service.update_status(
                     file_id=file_id,
                     stage="chunking",
@@ -584,7 +647,274 @@ class IngestWorker:
             chunk_dicts = [c.to_dict() for c in chunks]
             self.postgres_service.insert_chunks(file_id, chunk_dicts)
             
+            # Stage 4.6: Markdown and Image Generation
+            markdown_start = time.time()
+            try:
+                self.history.log_stage_start(
+                    file_id, "markdown_generation",
+                    "Starting markdown and image generation",
+                    metadata={"text_length": len(extraction_result.text)}
+                )
+                logger.info(
+                    "Stage 4.6: Starting markdown and image generation",
+                    file_id=file_id
+                )
+                
+                # Extract images from the original file
+                images_metadata = []
+                images_data = []
+                try:
+                    self.history.log_substep(
+                        file_id, "markdown_generation", "image_extraction",
+                        "Extracting images from document"
+                    )
+                    images_metadata, images_data = self.image_extractor.extract(
+                        temp_file_path, 
+                        mime_type=mime_type
+                    )
+                    logger.info(
+                        "Image extraction complete",
+                        file_id=file_id,
+                        image_count=len(images_data)
+                    )
+                except Exception as img_err:
+                    logger.warning(
+                        "Image extraction failed (non-fatal)",
+                        file_id=file_id,
+                        error=str(img_err),
+                        exc_info=True
+                    )
+                    self.history.log_substep(
+                        file_id, "markdown_generation", "image_extraction_failed",
+                        f"Image extraction failed: {str(img_err)}",
+                        metadata={"error": str(img_err)}
+                    )
+                
+                # Generate markdown
+                try:
+                    self.history.log_substep(
+                        file_id, "markdown_generation", "markdown_generation",
+                        "Generating markdown from extracted text"
+                    )
+                    
+                    # Get extraction method from metadata
+                    extraction_method = extraction_result.metadata.get("extraction_method", "simple")
+                    
+                    # Prepare image references (HTMLRenderer will convert to API URLs)
+                    image_refs = []
+                    for i, img_meta in enumerate(images_metadata):
+                        # Use relative path - HTMLRenderer converts to API URLs
+                        image_refs.append({
+                            'path': f'images/image_{i}.png',
+                            'caption': f'Image {i+1}'
+                        })
+                    
+                    # Use existing markdown from Marker if available, otherwise generate
+                    if extraction_result.markdown:
+                        logger.info(
+                            "Using markdown from extraction",
+                            file_id=file_id,
+                            extraction_method=extraction_method,
+                            markdown_length=len(extraction_result.markdown)
+                        )
+                        markdown_content = extraction_result.markdown
+                        
+                        # Insert image references if we have images
+                        if image_refs:
+                            markdown_content = self.markdown_generator._insert_image_references(
+                                markdown_content, 
+                                image_refs
+                            )
+                        
+                        # Extract metadata
+                        md_metadata = self.markdown_generator._extract_metadata(markdown_content)
+                    else:
+                        # Generate markdown from text (for simple extraction or when Marker didn't produce markdown)
+                        logger.info(
+                            "Generating markdown from text",
+                            file_id=file_id,
+                            extraction_method=extraction_method
+                        )
+                        markdown_content, md_metadata = self.markdown_generator.generate(
+                            extraction_result.text,
+                            extraction_method=extraction_method,
+                            images=image_refs if image_refs else None
+                        )
+                    
+                    logger.info(
+                        "Markdown generation complete",
+                        file_id=file_id,
+                        markdown_length=len(markdown_content),
+                        heading_count=md_metadata.get('heading_count', 0),
+                        extraction_method=extraction_method
+                    )
+                except Exception as md_err:
+                    logger.warning(
+                        "Markdown generation failed (non-fatal)",
+                        file_id=file_id,
+                        error=str(md_err),
+                        exc_info=True
+                    )
+                    self.history.log_substep(
+                        file_id, "markdown_generation", "markdown_generation_failed",
+                        f"Markdown generation failed: {str(md_err)}",
+                        metadata={"error": str(md_err)}
+                    )
+                    markdown_content = None
+                
+                # Upload markdown and images to MinIO
+                markdown_path = None
+                images_path = None
+                image_count = 0
+                
+                if markdown_content:
+                    try:
+                        self.history.log_substep(
+                            file_id, "markdown_generation", "upload_markdown",
+                            "Uploading markdown to MinIO"
+                        )
+                        markdown_path = f"{user_id}/{file_id}/content.md"
+                        
+                        # Upload markdown to MinIO
+                        import io
+                        markdown_bytes = markdown_content.encode('utf-8')
+                        self.file_service.client.put_object(
+                            bucket_name=self.file_service.bucket,
+                            object_name=markdown_path,
+                            data=io.BytesIO(markdown_bytes),
+                            length=len(markdown_bytes),
+                            content_type='text/markdown'
+                        )
+                        
+                        logger.info(
+                            "Markdown uploaded to MinIO",
+                            file_id=file_id,
+                            path=markdown_path
+                        )
+                    except Exception as upload_err:
+                        logger.warning(
+                            "Markdown upload failed (non-fatal)",
+                            file_id=file_id,
+                            error=str(upload_err),
+                            exc_info=True
+                        )
+                        markdown_path = None
+                
+                # Upload images
+                if images_data:
+                    try:
+                        self.history.log_substep(
+                            file_id, "markdown_generation", "upload_images",
+                            f"Uploading {len(images_data)} images to MinIO"
+                        )
+                        images_path = f"{user_id}/{file_id}/images"
+                        
+                        import io
+                        for i, (img_data, img_meta) in enumerate(zip(images_data, images_metadata)):
+                            image_path = f"{images_path}/image_{i}.png"
+                            self.file_service.client.put_object(
+                                bucket_name=self.file_service.bucket,
+                                object_name=image_path,
+                                data=io.BytesIO(img_data),
+                                length=len(img_data),
+                                content_type='image/png'
+                            )
+                        
+                        image_count = len(images_data)
+                        logger.info(
+                            "Images uploaded to MinIO",
+                            file_id=file_id,
+                            image_count=image_count,
+                            path=images_path
+                        )
+                    except Exception as upload_err:
+                        logger.warning(
+                            "Image upload failed (non-fatal)",
+                            file_id=file_id,
+                            error=str(upload_err),
+                            exc_info=True
+                        )
+                        images_path = None
+                        image_count = 0
+                
+                # Update database with markdown/image paths
+                try:
+                    import psycopg2
+                    conn = psycopg2.connect(
+                        host=self.config["postgres_host"],
+                        port=self.config["postgres_port"],
+                        database=self.config["postgres_db"],
+                        user=self.config["postgres_user"],
+                        password=self.config["postgres_password"]
+                    )
+                    try:
+                        cur = conn.cursor()
+                        cur.execute(
+                            """UPDATE ingestion_files 
+                               SET markdown_path = %s, 
+                                   has_markdown = %s, 
+                                   images_path = %s, 
+                                   image_count = %s
+                               WHERE file_id = %s""",
+                            (markdown_path,
+                             markdown_path is not None,
+                             images_path,
+                             image_count,
+                             file_id)
+                        )
+                        conn.commit()
+                        cur.close()
+                    finally:
+                        conn.close()
+                    logger.info(
+                        "Database updated with markdown/image paths",
+                        file_id=file_id,
+                        has_markdown=markdown_path is not None,
+                        image_count=image_count
+                    )
+                except Exception as db_err:
+                    logger.error(
+                        "Failed to update database with markdown paths",
+                        file_id=file_id,
+                        error=str(db_err),
+                        exc_info=True
+                    )
+                
+                self.history.log_stage_complete(
+                    file_id=file_id,
+                    stage="markdown_generation",
+                    message="Markdown and image generation complete",
+                    metadata={
+                        "has_markdown": markdown_path is not None,
+                        "image_count": image_count,
+                        "markdown_length": len(markdown_content) if markdown_content else 0
+                    },
+                    started_at=markdown_start
+                )
+                
+            except Exception as e:
+                logger.warning(
+                    "Markdown/image generation stage failed (non-fatal)",
+                    file_id=file_id,
+                    error=str(e),
+                    exc_info=True
+                )
+                self.history.log_step(
+                    file_id=file_id,
+                    stage="markdown_generation",
+                    step_name="markdown_generation_error",
+                    status="failed",
+                    error_message=f"Markdown/image generation failed: {str(e)}",
+                    metadata={"error": str(e), "stack_trace": traceback.format_exc()},
+                    started_at=markdown_start
+                )
+            
             # Stage 5: Embedding
+            embedding_start = self.history.log_stage_start(
+                file_id, "embedding",
+                f"Starting embedding generation for {len(chunks)} chunks",
+                metadata={"chunk_count": len(chunks)}
+            )
             logger.info(
                 "Stage 5: Starting embedding generation",
                 file_id=file_id,
@@ -601,6 +931,7 @@ class IngestWorker:
             # Generate dense embeddings
             chunk_texts = [c.text for c in chunks]
             
+            text_embed_start = time.time()
             logger.debug("Generating dense embeddings", file_id=file_id, chunk_count=len(chunk_texts))
             # Run async embedding in sync context
             loop = asyncio.new_event_loop()
@@ -613,6 +944,12 @@ class IngestWorker:
                     "Dense embeddings generated",
                     file_id=file_id,
                     embedding_count=len(embeddings),
+                )
+                self.history.log_substep(
+                    file_id, "embedding", "text_embeddings",
+                    f"Generated {len(embeddings)} text embeddings (FastEmbed bge-large-en-v1.5 1024-d)",
+                    metadata={"embedding_count": len(embeddings), "model": "bge-large-en-v1.5", "dimension": 1024},
+                    started_at=text_embed_start
                 )
             finally:
                 loop.close()
@@ -628,6 +965,7 @@ class IngestWorker:
             # Generate ColPali embeddings for PDF pages (if available)
             page_embeddings = None
             if extraction_result.page_images and mime_type == "application/pdf":
+                colpali_start = time.time()
                 logger.info(
                     "Generating ColPali visual embeddings",
                     file_id=file_id,
@@ -654,14 +992,41 @@ class IngestWorker:
                             file_id=file_id,
                             page_count=len(page_embeddings),
                         )
+                        self.history.log_substep(
+                            file_id, "embedding", "colpali_embeddings",
+                            f"Generated {len(page_embeddings)} ColPali page embeddings (128-d pooled)",
+                            metadata={"page_count": len(page_embeddings), "model": "vidore/colpali", "dimension": 128},
+                            started_at=colpali_start
+                        )
                 except Exception as e:
                     logger.warning(
                         "ColPali embedding generation failed",
                         file_id=file_id,
                         error=str(e),
                     )
+                    self.history.log_error(
+                        file_id, "embedding", "colpali_embeddings", e,
+                        metadata={"page_count": len(extraction_result.page_images)},
+                        started_at=colpali_start
+                    )
+            
+            # Complete embedding stage
+            self.history.log_stage_complete(
+                file_id, "embedding",
+                f"Completed embedding generation: {len(embeddings)} text, {len(page_embeddings) if page_embeddings else 0} visual",
+                metadata={
+                    "text_embedding_count": len(embeddings),
+                    "visual_embedding_count": len(page_embeddings) if page_embeddings else 0
+                },
+                started_at=embedding_start
+            )
             
             # Stage 6: Indexing
+            indexing_start = self.history.log_stage_start(
+                file_id, "indexing",
+                f"Starting Milvus indexing for {len(chunks)} chunks",
+                metadata={"chunk_count": len(chunks), "has_visual": bool(page_embeddings)}
+            )
             self.postgres_service.update_status(
                 file_id=file_id,
                 stage="indexing",
@@ -683,16 +1048,26 @@ class IngestWorker:
                 for c in chunks
             ]
             
+            milvus_text_start = time.time()
             vector_count = self.milvus_service.insert_text_chunks(
                 file_id=file_id,
                 user_id=user_id,
                 chunks=chunk_dicts_for_milvus,
                 embeddings=embeddings,
                 content_hash=content_hash,
+                visibility=visibility,
+                role_ids=role_ids,
+            )
+            self.history.log_substep(
+                file_id, "indexing", "milvus_text_insert",
+                f"Inserted {vector_count} text vectors into Milvus",
+                metadata={"vector_count": vector_count},
+                started_at=milvus_text_start
             )
             
             # Insert page images if available
             if page_embeddings and extraction_result.page_images:
+                milvus_visual_start = time.time()
                 page_image_dicts = [
                     {"page_number": i + 1, "image_path": path}
                     for i, path in enumerate(extraction_result.page_images)
@@ -704,9 +1079,25 @@ class IngestWorker:
                     page_images=page_image_dicts,
                     page_embeddings=page_embeddings,
                     content_hash=content_hash,
+                    visibility=visibility,
+                    role_ids=role_ids,
                 )
                 
                 vector_count += page_vector_count
+                self.history.log_substep(
+                    file_id, "indexing", "milvus_visual_insert",
+                    f"Inserted {page_vector_count} visual vectors into Milvus",
+                    metadata={"page_vector_count": page_vector_count},
+                    started_at=milvus_visual_start
+                )
+            
+            # Complete indexing stage
+            self.history.log_stage_complete(
+                file_id, "indexing",
+                f"Completed Milvus indexing: {vector_count} total vectors",
+                metadata={"total_vectors": vector_count, "text_chunks": len(chunks), "page_vectors": len(page_embeddings) if page_embeddings else 0},
+                started_at=indexing_start
+            )
             
             # Update final metadata
             processing_duration = int(time.time() - start_time)
@@ -716,6 +1107,19 @@ class IngestWorker:
                 chunk_count=total_chunks,
                 vector_count=vector_count,
                 processing_duration_seconds=processing_duration,
+            )
+            
+            # Log final completion
+            self.history.log_stage_complete(
+                file_id, "completed",
+                f"Processing complete: {total_chunks} chunks, {vector_count} vectors in {processing_duration}s",
+                metadata={
+                    "total_chunks": total_chunks,
+                    "total_vectors": vector_count,
+                    "processing_duration_seconds": processing_duration,
+                    "stages": ["parsing", "chunking", "cleanup" if llm_cleanup_enabled else None, "embedding", "indexing"],
+                },
+                started_at=start_time
             )
             
             # Stage 7: Multi-Flow Processing (optional, non-blocking)
@@ -730,14 +1134,7 @@ class IngestWorker:
                 try:
                     from processors.multi_flow_processor import MultiFlowProcessor
                     
-                    multi_flow = MultiFlowProcessor(
-                        config=self.config,
-                        text_extractor=self.text_extractor,
-                        chunker=self.chunker,
-                        embedder=self.embedder,
-                        classifier=self.classifier,
-                        colpali_embedder=self.colpali,
-                    )
+                    multi_flow = MultiFlowProcessor(config=self.config)
                     
                     # Process with multiple strategies for comparison
                     max_strategies = processing_config.get("max_parallel_strategies", 3)
@@ -764,6 +1161,65 @@ class IngestWorker:
                             for strategy, result in results.items()
                         },
                     )
+                    
+                    # Record strategy results in database
+                    try:
+                        conn = self.postgres_service._get_connection()
+                        try:
+                            with conn.cursor() as cur:
+                                for strategy, result in results.items():
+                                    # Calculate metrics
+                                    text_length = len(result.text) if result.text else 0
+                                    chunk_count = len(result.chunks) if result.chunks else 0
+                                    embedding_count = len(result.embeddings) if result.embeddings else 0
+                                    visual_embedding_count = len(result.visual_embeddings) if result.visual_embeddings else 0
+                                    
+                                    # Insert or update strategy result
+                                    cur.execute("""
+                                        INSERT INTO processing_strategy_results (
+                                            file_id, processing_strategy, success,
+                                            text_length, chunk_count, embedding_count, visual_embedding_count,
+                                            processing_time_seconds, error_message, metadata
+                                        ) VALUES (
+                                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                                        )
+                                        ON CONFLICT (file_id, processing_strategy)
+                                        DO UPDATE SET
+                                            success = EXCLUDED.success,
+                                            text_length = EXCLUDED.text_length,
+                                            chunk_count = EXCLUDED.chunk_count,
+                                            embedding_count = EXCLUDED.embedding_count,
+                                            visual_embedding_count = EXCLUDED.visual_embedding_count,
+                                            processing_time_seconds = EXCLUDED.processing_time_seconds,
+                                            error_message = EXCLUDED.error_message,
+                                            metadata = EXCLUDED.metadata,
+                                            created_at = NOW()
+                                    """, (
+                                        file_id,
+                                        strategy.value,
+                                        result.success,
+                                        text_length,
+                                        chunk_count,
+                                        embedding_count,
+                                        visual_embedding_count,
+                                        result.processing_time_seconds,
+                                        result.error if not result.success else None,
+                                        json.dumps(result.metadata) if result.metadata else '{}',
+                                    ))
+                                conn.commit()
+                                logger.info(
+                                    "Recorded processing strategy results",
+                                    file_id=file_id,
+                                    strategies_recorded=len(results),
+                                )
+                        finally:
+                            self.postgres_service._return_connection(conn)
+                    except Exception as db_error:
+                        logger.warning(
+                            "Failed to record strategy results (non-fatal)",
+                            file_id=file_id,
+                            error=str(db_error),
+                        )
                     
                 except ImportError as e:
                     logger.warning(
@@ -799,17 +1255,22 @@ class IngestWorker:
                 multi_flow_enabled=processing_config.get("multi_flow_enabled", False) if processing_config else False,
             )
         
-        except asyncio.TimeoutError:
+        except asyncio.TimeoutError as e:
             processing_duration = int(time.time() - start_time)
             error_msg = f"Processing exceeded {timeout_seconds}s timeout for {page_count}-page document"
             
-            # Timeout is considered permanent (document too large)
-            self.postgres_service.update_status(
-                file_id=file_id,
-                stage="failed",
-                progress=0,
-                error_message=error_msg,
+            self.history.log_error(
+                file_id, "failed", "timeout_error", e,
+                metadata={
+                    "timeout_seconds": timeout_seconds,
+                    "processing_duration": processing_duration,
+                    "page_count": page_count,
+                },
+                started_at=start_time
             )
+            
+            # Timeout is considered permanent (document too large)
+            self.error_handler.mark_failed(file_id, e)
             
             logger.error(
                 "Job processing timeout",
@@ -821,82 +1282,44 @@ class IngestWorker:
         
         except Exception as e:
             error_msg = str(e)
-            is_transient = self._is_transient_error(e)
             
-            # Get current retry count
-            conn = self.postgres_service._get_connection()
-            try:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "SELECT retry_count FROM ingestion_status WHERE file_id = %s",
-                        (file_id,),  # Pass string directly, not UUID object
-                    )
-                    result = cur.fetchone()
-                    retry_count = result[0] if result else 0
-            finally:
-                self.postgres_service._return_connection(conn)
+            # Log error to history
+            self.history.log_error(
+                file_id, "failed", "processing_error", e,
+                metadata={"is_transient": self.error_handler.is_transient_error(e)},
+                started_at=start_time
+            )
             
-            max_retries = 3
+            # Build job_data dict for error handler
+            job_data = {
+                "job_id": job_id,
+                "file_id": file_id,
+                "user_id": user_id,
+                "storage_path": storage_path,
+                "mime_type": mime_type,
+                "original_filename": original_filename,
+                "trace_id": trace_id,
+            }
             
-            if is_transient and retry_count < max_retries:
-                # Transient error - will retry
-                new_retry_count = retry_count + 1
-                self.postgres_service.update_status(
-                    file_id=file_id,
-                    stage="queued",  # Back to queued for retry
-                    progress=0,
-                    error_message=f"Transient error (retry {new_retry_count}/{max_retries}): {error_msg}",
-                    retry_count=new_retry_count,
-                )
-                
+            # Use ErrorHandler to manage retry logic
+            if self.error_handler.should_retry(file_id, e):
+                # Transient error - requeue for retry
+                self.error_handler.requeue_job(job_id, file_id, job_data, e)
                 logger.warning(
                     "Job processing failed (transient, will retry)",
                     job_id=job_id,
                     file_id=file_id,
-                    retry_count=new_retry_count,
-                    max_retries=max_retries,
                     error=error_msg,
-                    exc_info=True,
                 )
-                
-                # Re-queue job in Redis for retry
-                try:
-                    self.redis_client.xadd(
-                        self.stream_name,
-                        {
-                            "job_id": job_id,
-                            "file_id": file_id,
-                            "user_id": user_id,
-                            "storage_path": storage_path,
-                            "mime_type": mime_type,
-                            "original_filename": original_filename,
-                            "trace_id": trace_id,
-                            "retry_count": str(new_retry_count),
-                        },
-                    )
-                    logger.info("Job re-queued for retry", file_id=file_id, retry_count=new_retry_count)
-                except Exception as requeue_error:
-                    logger.error("Failed to re-queue job", file_id=file_id, error=str(requeue_error))
-                
                 # Don't raise - allow Redis to handle retry
                 return
-            
             else:
                 # Permanent error or max retries exceeded
-                self.postgres_service.update_status(
-                    file_id=file_id,
-                    stage="failed",
-                    progress=0,
-                    error_message=error_msg if not is_transient else f"Max retries ({max_retries}) exceeded: {error_msg}",
-                    retry_count=retry_count,
-                )
-                
+                self.error_handler.mark_failed(file_id, e)
                 logger.error(
-                    "Job processing failed (permanent or max retries)",
+                    "Job processing failed",
                     job_id=job_id,
                     file_id=file_id,
-                    retry_count=retry_count,
-                    is_transient=is_transient,
                     error=error_msg,
                     exc_info=True,
                 )
@@ -941,6 +1364,21 @@ class IngestWorker:
                                 self.consumer_group,
                                 message_id
                             )
+                            
+                            # Trim stream to keep only last 10000 messages (prevent memory bloat)
+                            # MAXLEN ~ 10000 uses approximate trimming for better performance
+                            try:
+                                self.redis_client.xtrim(
+                                    self.stream_name,
+                                    maxlen=10000,
+                                    approximate=True
+                                )
+                            except Exception as trim_err:
+                                logger.warning(
+                                    "Failed to trim Redis stream",
+                                    stream=self.stream_name,
+                                    error=str(trim_err)
+                                )
                             
                         except Exception as e:
                             logger.error(

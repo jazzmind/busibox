@@ -8,114 +8,108 @@
 #   - Services reference purposes, not model names
 #   - Change models here without touching code
 #   - Environment-specific overrides in inventory/*/group_vars/
+#
+# Note: GPU/port assignments and technical details are in model_config.yml
+# (machine-generated, not version-controlled)
+available_models:
+  # AWS Bedrock Models (Verified Working)
+  # Models with 'us.' prefix are cross-region inference profiles
+  # These provide better availability and are required for Claude 3.5
+  
+  "claude-sonnet-4-5":
+    provider: "bedrock"
+    model: "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    model_name: "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    description: "Claude 4.5 Sonnet - Most capable, frontier model (Sept 2025)"
+    multimodal: true
+    tool_calling: true
+
+  "claude-haiku-4-5":
+    provider: "bedrock"
+    model: "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    model_name: "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    description: "Claude 4.5 Haiku - Fast, efficient, excellent for most tasks"
+    multimodal: true
+    tool_calling: true
+  
+  "phi-4":
+    provider: "vllm"
+    model: "phi-4"
+    model_name: "microsoft/Phi-4-multimodal-instruct"
+    description: "Fast model for quick operations"
+    # vLLM tuning parameters
+    gpu_memory_utilization: 0.9  # Small model - only needs 60% GPU
+    max_model_len: 16384  # Supports longer context
+    max_num_seqs: 10  # Can handle more concurrent requests
+    cpu_offload_gb: 0  # Moderate CPU offload
+    # Tool calling support
+    tool_calling: false
+    # Multimodal support
+    multimodal: true
+    limit_mm_per_prompt: 
+      image: 4  # Allow up to 4 images per prompt
+    
+  "qwen3-30b":
+    provider: "vllm"
+    model: "qwen3-30b-a3b-instruct-awq-4bit"
+    model_name: "cpatonn/Qwen3-30B-A3B-Instruct-2507-AWQ-4bit"
+    description: "General purpose agent model"
+    # vLLM tuning parameters
+    gpu_memory_utilization: 0.9  # Large model - needs 80% GPU
+    max_model_len: 28000  # Supports very long context (AWQ quantized)
+    max_num_seqs: 3  # Standard concurrent requests
+    cpu_offload_gb: 0  # Heavy CPU offload for KV cache
+    # Tool calling support
+    tool_calling: true
+    tool_call_parser: "hermes"  # Qwen3 models use Hermes-style tool calling (Qwen2.5 compatible)
+    multimodal: false
+
+  "qwen3-reranker":
+    provider: "vllm"
+    model: "qwen3-reranker-0.6b"
+    model_name: "Qwen/Qwen3-Reranker-0.6B"
+    description: "Search result reranking"
+    # vLLM tuning parameters
+    gpu_memory_utilization: 0.2  # Tiny model - only 20% GPU (leave room for overhead)
+    max_model_len: 4096  # Reranker uses short sequences
+    max_num_seqs: 32  # Fewer concurrent requests needed
+    cpu_offload_gb: 0  # Minimal CPU offload
+
+  "bge-large":
+    provider: "fastembed"
+    model: "bge-large-en-v1.5"
+    model_name: "BAAI/bge-large-en-v1.5)"
+    description: "Text embedding generation"
+
+  "colpali":
+    provider: "colpali"  # Dedicated ColPali service (not vLLM - LoRA not supported)
+    model: "colpali-v1.3"
+    model_name: "vidore/colpali-v1.3"
+    description: "Visual document embedding (dedicated service)"
+    gpu: "0"  # Reserved for visual embeddings
+    port: 9006  # Dedicated ColPali service port
+    # Note: vLLM 0.11.0 does not support LoRA for PaliGemmaForConditionalGeneration
+    # ColPali uses its own service with custom inference code
 
 model_purposes:
-  # Text embedding generation
-  # Actual model: Qwen/Qwen3-Embedding-8B (8B parameters, 4096 dims, GPU 1)
-  embedding:
-    model: "qwen3-embedding"
-    description: "Text embedding generation"
-    max_tokens: 8192
-    provider: "litellm"
-    endpoint: "/embeddings"
-    
-  # Visual document embedding
-  # Actual model: vidore/colpali-v1.3 (LoRA adapters on PaliGemma-3B, GPU 2)
-  visual:
-    model: "colpali-v1.3"
-    description: "Visual document embedding"
-    max_tokens: 4096
-    provider: "colpali"
-    endpoint: "/v1/embeddings"
-    
-  # Vision-language model for image understanding
-  # Actual model: Qwen/Qwen3-VL-8B-Instruct (8B parameters, GPU 1)
-  vision:
-    model: "qwen3-vl-8b"
-    description: "Vision-language model for image understanding"
-    max_tokens: 4096
-    temperature: 0.7
-    provider: "litellm"
-    endpoint: "/chat/completions"
-    
-  # Fast model for quick operations
-  # Actual model: microsoft/Phi-4-multimodal-instruct (6B parameters, GPU 0)
-  fast:
-    model: "phi-4"
-    description: "Fast model for quick operations"
-    max_tokens: 4096
-    temperature: 0.7
-    provider: "litellm"
-    endpoint: "/chat/completions"
-    
-  # General purpose agent model (default for most tasks)
-  # Actual model: Qwen/Qwen3-30B-A3B-Instruct-2507 (30B parameters, GPU 1)
-  default:
-    model: "qwen3-30b-instruct"
-    description: "General purpose agent model"
-    max_tokens: 32768
-    temperature: 0.7
-    provider: "litellm"
-    endpoint: "/chat/completions"
-    
-  # Text cleanup and formatting
-  cleanup:
-    model: "phi-4"
-    description: "Text cleanup and formatting"
-    max_tokens: 32768
-    temperature: 0.1
-    provider: "litellm"
-    endpoint: "/chat/completions"
-    
-  # General chat and Q&A
-  chat:
-    model: "qwen3-30b-instruct"
-    description: "General chat and Q&A"
-    max_tokens: 32768
-    temperature: 0.7
-    provider: "litellm"
-    endpoint: "/chat/completions"
-    
-  # Document classification
-  classify:
-    model: "phi-4"
-    description: "Document classification"
-    max_tokens: 4096
-    temperature: 0.1
-    provider: "litellm"
-    endpoint: "/chat/completions"
-    
-  # Research and analysis
-  research:
-    model: "qwen3-30b-instruct"
-    description: "Research and analysis"
-    max_tokens: 32768
-    temperature: 0.7
-    provider: "litellm"
-    endpoint: "/chat/completions"
-    
-  # Data analysis
-  analysis:
-    model: "qwen3-30b-instruct"
-    description: "Data analysis"
-    max_tokens: 32768
-    temperature: 0.5
-    provider: "litellm"
-    endpoint: "/chat/completions"
-    
-  # Document parsing and structure extraction
-  parsing:
-    model: "phi-4"
-    description: "Document parsing and structure extraction"
-    max_tokens: 8192
-    temperature: 0.1
-    provider: "litellm"
-    endpoint: "/chat/completions"
-
-# Model registry file path (deployed to containers)
-model_registry_path: "/etc/ingest/model_registry.json"
-
-# LLM cleanup configuration
-# Enabled by default to fix text quality issues (smashed words, spacing, etc.)
-llm_cleanup_enabled: true
+  # Primary models
+  default: "phi-4"   # General purpose agent model (default for most tasks)
+  frontier: "claude-sonnet-4-5"   # Most capable model (Claude 4.5 Sonnet)
+  frontier-fast: "claude-haiku-4-5"   # Fast frontier model (Claude 4.5 Haiku)
+  
+  # Task-specific
+  research: "qwen3-30b"   # Research and analysis (using best Claude)
+  agent: "qwen3-30b"   # agent model for agentic tasks
+  chat: "phi-4"   # General chat (Claude 4.5 Haiku)
+  vision: "phi-4"   # Vision-language model for image understanding
+  classify: "phi-4"   # Document classification
+  parsing: "phi-4"   # Document parsing and structure extraction
+  cleanup: "phi-4"   # Text cleanup and formatting  
+  fast: "phi-4"   # Fast model for quick operations
+  
+  # Embeddings (dedicated services)
+  embedding: "bge-large"   # Text embedding generation
+  visual-embedding: "colpali"   # Visual document embedding (dedicated service)
+  reranking: "qwen3-reranker"   # Search result reranking
+  # Note: ColPali uses dedicated service (port 9006, GPU 0) - vLLM doesn't support LoRA for PaliGemma
 

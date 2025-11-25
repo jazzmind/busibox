@@ -14,9 +14,9 @@ import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.middleware.auth import AuthMiddleware
+from api.middleware.jwt_auth import JWTAuthMiddleware
 from api.middleware.logging import LoggingMiddleware
-from api.routes import files, health, search, status, upload
+from api.routes import embeddings, files, health, markdown, roles, search, status, upload
 
 # Configure structured logging
 structlog.configure(
@@ -61,12 +61,17 @@ the Busibox ingestion pipeline.
 2. **Parsing** → Text extraction (Marker, TATR, OCR)
 3. **Classification** → Document type and language detection
 4. **Chunking** → Semantic text chunking (400-800 tokens)
-5. **Embedding** → Dense (text-embedding-3-small) + BM25 + ColPali
+5. **Embedding** → Dense (FastEmbed bge-large 1024-d) + BM25 + ColPali pooled
 6. **Indexing** → Store in Milvus vector database
 
 ### Authentication
 
-All endpoints require `X-User-Id` header for user identification and access control.
+All endpoints require authentication via one of:
+- `Authorization: Bearer <JWT>` header (preferred) - JWT with user identity and role permissions
+- `X-User-Id` header (legacy) - User UUID for backward compatibility
+
+JWT tokens contain user identity and document role memberships with CRUD permissions,
+enabling Row-Level Security (RLS) enforcement in the database.
 
 ### Rate Limits
 
@@ -84,11 +89,15 @@ For issues or questions, contact the Busibox infrastructure team.
     openapi_tags=[
         {
             "name": "Upload",
-            "description": "File upload with chunked streaming and metadata",
+            "description": "File upload with chunked streaming, metadata, and role assignment",
         },
         {
             "name": "Search",
             "description": "Semantic document search with hybrid retrieval",
+        },
+        {
+            "name": "Embeddings",
+            "description": "Text embedding generation with FastEmbed",
         },
         {
             "name": "Status",
@@ -97,6 +106,10 @@ For issues or questions, contact the Busibox infrastructure team.
         {
             "name": "Files",
             "description": "File metadata retrieval and deletion",
+        },
+        {
+            "name": "Roles",
+            "description": "Document role management (add/remove roles, share documents)",
         },
         {
             "name": "Health",
@@ -123,13 +136,16 @@ app.add_middleware(
 
 # Add custom middleware
 app.add_middleware(LoggingMiddleware)
-app.add_middleware(AuthMiddleware)
+app.add_middleware(JWTAuthMiddleware)
 
 # Include routers
 app.include_router(upload.router, prefix="/upload", tags=["Upload"])
 app.include_router(search.router, prefix="/search", tags=["Search"])
+app.include_router(embeddings.router, prefix="/api", tags=["Embeddings"])
 app.include_router(status.router, prefix="/status", tags=["Status"])
 app.include_router(files.router, prefix="/files", tags=["Files"])
+app.include_router(markdown.router, prefix="/files", tags=["Markdown"])
+app.include_router(roles.router, prefix="/files", tags=["Roles"])
 app.include_router(health.router, prefix="/health", tags=["Health"])
 
 
@@ -164,6 +180,7 @@ async def root():
         "endpoints": {
             "upload": "/upload",
             "search": "/search",
+            "embeddings": "/api/embeddings",
             "status": "/status/{file_id}",
             "files": "/files/{file_id}",
             "health": "/health",

@@ -1,0 +1,151 @@
+---
+# Apply database migrations for ingestion service
+
+- name: Ensure files database exists
+  become_user: postgres
+  delegate_to: "{{ postgres_host }}"
+  postgresql_db:
+    name: "{{ files_db | default('files') }}"
+    owner: "{{ postgres_user }}"
+    encoding: UTF8
+    lc_collate: en_US.UTF-8
+    lc_ctype: en_US.UTF-8
+    template: template0
+    state: present
+  tags: [ingest, ingest_migrations, ingest_db]
+
+- name: Create migrations directory
+  file:
+    path: /srv/ingest/migrations
+    state: directory
+    mode: '0755'
+  tags: [ingest, ingest_migrations]
+
+- name: Copy migration files
+  copy:
+    src: "{{ playbook_dir }}/../../srv/ingest/migrations/"
+    dest: /srv/ingest/migrations/
+    mode: '0644'
+  tags: [ingest, ingest_migrations]
+
+- name: Check if multi-flow migration has been applied
+  shell: |
+    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -tAc \
+    "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='ingestion_chunks' AND column_name='processing_strategy');"
+  register: migration_check
+  changed_when: false
+  tags: [ingest, ingest_migrations]
+
+- name: Apply multi-flow support migration
+  shell: |
+    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -f /srv/ingest/migrations/add_multi_flow_support.sql
+  when: migration_check.stdout == 'f'
+  register: migration_result
+  tags: [ingest, ingest_migrations]
+
+- name: Display multi-flow migration status
+  debug:
+    msg: "{{ 'Multi-flow migration applied successfully' if migration_result.changed else 'Multi-flow migration already applied' }}"
+  tags: [ingest, ingest_migrations]
+
+- name: Check if cleanup stage migration has been applied
+  shell: |
+    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -tAc \
+    "SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ingestion_status_stage_check' AND consrc LIKE '%cleanup%');"
+  register: cleanup_migration_check
+  changed_when: false
+  failed_when: false
+  tags: [ingest, ingest_migrations]
+
+- name: Apply cleanup stage migration
+  shell: |
+    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -f /srv/ingest/migrations/add_cleanup_stage.sql
+  when: cleanup_migration_check.stdout != 't'
+  register: cleanup_migration_result
+  tags: [ingest, ingest_migrations]
+
+- name: Display cleanup migration status
+  debug:
+    msg: "{{ 'Cleanup stage migration applied successfully' if cleanup_migration_result.changed else 'Cleanup stage migration already applied' }}"
+  tags: [ingest, ingest_migrations]
+
+- name: Check if processing history table exists
+  shell: |
+    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -tAc \
+    "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='processing_history');"
+  register: history_table_check
+  changed_when: false
+  tags: [ingest, ingest_migrations]
+
+- name: Apply processing history migration
+  shell: |
+    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -f /srv/ingest/migrations/add_processing_history.sql
+  when: history_table_check.stdout == 'f'
+  register: history_migration_result
+  tags: [ingest, ingest_migrations]
+
+- name: Display processing history migration status
+  debug:
+    msg: "{{ 'Processing history migration applied successfully' if history_migration_result.changed else 'Processing history table already exists' }}"
+  tags: [ingest, ingest_migrations]
+
+- name: Check if markdown storage columns exist
+  shell: |
+    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -tAc \
+    "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='ingestion_files' AND column_name='markdown_path');"
+  register: markdown_storage_check
+  changed_when: false
+  tags: [ingest, ingest_migrations]
+
+- name: Apply markdown storage migration
+  shell: |
+    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -f /srv/ingest/migrations/add_markdown_storage.sql
+  when: markdown_storage_check.stdout == 'f'
+  register: markdown_storage_result
+  tags: [ingest, ingest_migrations]
+
+- name: Display markdown storage migration status
+  debug:
+    msg: "{{ 'Markdown storage migration applied successfully' if markdown_storage_result.changed else 'Markdown storage migration already applied' }}"
+  tags: [ingest, ingest_migrations]
+
+- name: Check if RBAC schema exists
+  shell: |
+    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -tAc \
+    "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='groups');"
+  register: rbac_schema_check
+  changed_when: false
+  tags: [ingest, ingest_migrations]
+
+- name: Apply RBAC schema migration
+  shell: |
+    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -f /srv/ingest/migrations/add_rbac_schema.sql
+  when: rbac_schema_check.stdout == 'f'
+  register: rbac_schema_result
+  tags: [ingest, ingest_migrations]
+
+- name: Display RBAC schema migration status
+  debug:
+    msg: "{{ 'RBAC schema migration applied successfully' if rbac_schema_result.changed else 'RBAC schema already exists' }}"
+  tags: [ingest, ingest_migrations]
+
+- name: Check if RLS policies are enabled
+  shell: |
+    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -tAc \
+    "SELECT relrowsecurity FROM pg_class WHERE relname='ingestion_files';"
+  register: rls_check
+  changed_when: false
+  tags: [ingest, ingest_migrations]
+
+- name: Apply RLS policies migration
+  shell: |
+    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -f /srv/ingest/migrations/add_rls_policies.sql
+  when: rls_check.stdout != 't'
+  register: rls_result
+  tags: [ingest, ingest_migrations]
+
+- name: Display RLS policies migration status
+  debug:
+    msg: "{{ 'RLS policies applied successfully' if rls_result.changed else 'RLS policies already enabled' }}"
+  tags: [ingest, ingest_migrations]
+

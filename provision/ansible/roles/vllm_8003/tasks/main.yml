@@ -1,0 +1,207 @@
+---
+# vLLM Port 8000 Role - Main Tasks
+# Checks model_config.yml for model assigned to port 8000
+
+- name: Check if model_config.yml exists
+  stat:
+    path: "{{ playbook_dir }}/group_vars/all/model_config.yml"
+  register: model_config_file
+  delegate_to: localhost
+
+- name: Load model_config.yml if it exists
+  include_vars:
+    file: "{{ playbook_dir }}/group_vars/all/model_config.yml"
+    name: model_config_data
+  when: model_config_file.stat.exists
+  delegate_to: localhost
+
+- name: Find model assigned to port {{ vllm_port }} using Python
+  shell: |
+    python3 << 'PYTHON_EOF'
+    import yaml
+    from pathlib import Path
+    
+    config_file = Path("{{ playbook_dir }}/group_vars/all/model_config.yml")
+    
+    if not config_file.exists():
+        print("")
+        exit(0)
+    
+    with open(config_file, 'r') as f:
+        model_config = yaml.safe_load(f) or {}
+    
+    models = model_config.get('models', {})
+    target_port = {{ vllm_port }}
+    
+    for model_name, config in models.items():
+        port = config.get('port')
+        assigned = config.get('assigned', False)
+        provider = config.get('provider', 'vllm')
+        
+        # Only process vLLM models - skip colpali, marker, bedrock, etc.
+        if provider != 'vllm':
+            continue
+        
+        if port == target_port and assigned:
+            print(model_name)
+            exit(0)
+    
+    print("")
+    PYTHON_EOF
+  register: model_lookup
+  delegate_to: localhost
+  changed_when: false
+  when: model_config_file.stat.exists
+
+- name: Set vllm_assigned_model from Python output
+  set_fact:
+    vllm_assigned_model: "{{ model_lookup.stdout | trim }}"
+  when: model_config_file.stat.exists
+
+- name: Set vllm_assigned_model to empty if no model_config
+  set_fact:
+    vllm_assigned_model: ""
+  when: not model_config_file.stat.exists
+
+- name: Debug - Show model assignment for port {{ vllm_port }}
+  debug:
+    msg: "Port {{ vllm_port }}: {{ 'Assigned to ' + vllm_assigned_model if vllm_assigned_model|length > 0 else 'No model assigned - skipping deployment' }}"
+
+- name: End play for this host if no model assigned
+  meta: end_host
+  when: vllm_assigned_model is not defined or vllm_assigned_model|length == 0
+
+- name: Set model configuration from model_config.yml
+  set_fact:
+    vllm_default_model: "{{ vllm_assigned_model }}"
+    vllm_tensor_parallel_size: "{{ model_config_data.models[vllm_assigned_model].tensor_parallel | default(1) }}"
+    vllm_cuda_visible_devices: "{{ model_config_data.models[vllm_assigned_model].gpu | default('') }}"
+    # Performance tuning parameters from model registry
+    vllm_gpu_memory_utilization: "{{ model_config_data.models[vllm_assigned_model].gpu_memory_utilization | default(0.9) }}"
+    vllm_max_model_len: "{{ model_config_data.models[vllm_assigned_model].max_model_len | default(8192) }}"
+    vllm_max_num_seqs: "{{ model_config_data.models[vllm_assigned_model].max_num_seqs | default(256) }}"
+    vllm_cpu_offload_gb: "{{ model_config_data.models[vllm_assigned_model].cpu_offload_gb | default(150) }}"
+  when: vllm_assigned_model != ""
+
+- name: Check if model has tool calling config in registry
+  shell: |
+    python3 << 'PYTHON_EOF'
+    import yaml
+    import json
+    from pathlib import Path
+    
+    registry_file = Path("{{ playbook_dir }}/group_vars/all/model_registry.yml")
+    
+    if not registry_file.exists():
+        print(json.dumps({"tool_calling": False, "tool_call_parser": "", "tool_chat_template": ""}))
+        exit(0)
+    
+    with open(registry_file, 'r') as f:
+        registry_data = yaml.safe_load(f) or {}
+    
+    available_models = registry_data.get('available_models', {})
+    
+    # Find model entry by model_name
+    tool_calling = False
+    tool_call_parser = ""
+    tool_chat_template = ""
+    multimodal = False
+    limit_mm_per_prompt = ""
+    
+    for model_key, model_config in available_models.items():
+        if model_config.get('model_name') == "{{ vllm_assigned_model }}":
+            tool_calling = model_config.get('tool_calling', False)
+            tool_call_parser = model_config.get('tool_call_parser', '')
+            tool_chat_template = model_config.get('tool_chat_template', '')
+            multimodal = model_config.get('multimodal', False)
+            # Convert limit_mm_per_prompt dict to JSON string for vLLM
+            limit_mm_dict = model_config.get('limit_mm_per_prompt', {})
+            if limit_mm_dict:
+                import json as json_module
+                limit_mm_per_prompt = json_module.dumps(limit_mm_dict)
+            break
+    
+    print(json.dumps({
+        "tool_calling": tool_calling,
+        "tool_call_parser": tool_call_parser,
+        "tool_chat_template": tool_chat_template,
+        "multimodal": multimodal,
+        "limit_mm_per_prompt": limit_mm_per_prompt
+    }))
+    PYTHON_EOF
+  register: model_features_lookup
+  delegate_to: localhost
+  changed_when: false
+  when: vllm_assigned_model != ""
+
+- name: Parse model features from JSON
+  set_fact:
+    model_features: "{{ model_features_lookup.stdout | from_json }}"
+  when: 
+    - vllm_assigned_model != ""
+    - model_features_lookup.stdout is defined
+
+- name: Enable tool calling if configured
+  set_fact:
+    vllm_enable_tool_calling: "{{ model_features.tool_calling }}"
+    vllm_tool_call_parser: "{{ model_features.tool_call_parser }}"
+    vllm_tool_chat_template: "{{ model_features.tool_chat_template }}"
+  when: 
+    - vllm_assigned_model != ""
+    - model_features.tool_calling is defined
+
+- name: Enable multimodal support if configured
+  set_fact:
+    vllm_multimodal: "{{ model_features.multimodal }}"
+    vllm_limit_mm_per_prompt: "{{ model_features.limit_mm_per_prompt }}"
+  when: 
+    - vllm_assigned_model != ""
+    - model_features.multimodal is defined
+    - model_features.multimodal
+
+- name: Display tool calling configuration if enabled
+  debug:
+    msg: |
+      Tool Calling: ENABLED
+      Parser: {{ vllm_tool_call_parser }}
+      Chat Template: {{ vllm_tool_chat_template if vllm_tool_chat_template | length > 0 else 'Default' }}
+  when: 
+    - vllm_assigned_model != ""
+    - vllm_enable_tool_calling is defined
+    - vllm_enable_tool_calling
+
+- name: Display multimodal configuration if enabled
+  debug:
+    msg: |
+      Multimodal: ENABLED
+      Limits: {{ vllm_limit_mm_per_prompt }}
+  when: 
+    - vllm_assigned_model != ""
+    - vllm_multimodal is defined
+    - vllm_multimodal
+
+- name: Debug - Show resolved vLLM configuration
+  debug:
+    msg: |
+      Model: {{ vllm_default_model }}
+      GPU: {{ vllm_cuda_visible_devices }}
+      Tensor Parallel: {{ vllm_tensor_parallel_size }}
+      Port: {{ vllm_port }}
+  when: vllm_assigned_model != ""
+
+- name: Include installation tasks
+  include_tasks: install.yml
+  when: vllm_assigned_model != ""
+  tags:
+    - vllm
+    - vllm_install
+    - "vllm_{{ vllm_port }}"
+
+- name: Include configuration tasks
+  include_tasks: configure.yml
+  when: vllm_assigned_model != ""
+  tags:
+    - vllm
+    - vllm_configure
+    - "vllm_{{ vllm_port }}"
+

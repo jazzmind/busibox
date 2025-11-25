@@ -18,8 +18,8 @@ import structlog
 from fastapi import APIRouter, status
 from fastapi.responses import JSONResponse
 
-from api.services.minio import MinIOService
-from api.services.redis import RedisService
+from api.services.minio_service import MinIOService
+from api.services.redis_service import RedisService
 from shared.config import Config
 
 logger = structlog.get_logger()
@@ -35,7 +35,7 @@ async def check_postgres() -> Dict[str, any]:
         
         start = time.time()
         conn = await asyncpg.connect(
-            host=config.get("postgres_host", "10.96.200.26"),
+            host=config.get("postgres_host", "10.96.200.203"),
             port=config.get("postgres_port", 5432),
             database=config.get("postgres_db", "busibox"),
             user=config.get("postgres_user", "postgres"),
@@ -108,7 +108,7 @@ async def check_milvus() -> Dict[str, any]:
         start = time.time()
         connections.connect(
             "default",
-            host=config.get("milvus_host", "10.96.200.27"),
+            host=config.get("milvus_host", "10.96.200.204"),
             port=config.get("milvus_port", "19530"),
             timeout=2,
         )
@@ -137,7 +137,7 @@ async def check_litellm() -> Dict[str, any]:
         import httpx
         
         config = Config().to_dict()
-        litellm_url = config.get("litellm_base_url", "http://10.96.200.30:4000")
+        litellm_url = config.get("litellm_base_url", "http://10.96.200.207:4000")
         
         start = time.time()
         async with httpx.AsyncClient(timeout=2.0) as client:

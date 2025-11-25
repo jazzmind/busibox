@@ -184,7 +184,7 @@ RUN_PYTHON_TESTS=1 bash scripts/test-colpali.sh test
 **Diagnosis:**
 ```bash
 # Check service status
-ssh root@10.96.200.31  # or test: 10.96.201.208
+ssh root@10.96.200.208  # or test: 10.96.201.208
 systemctl status colpali
 
 # View logs

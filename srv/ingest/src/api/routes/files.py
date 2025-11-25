@@ -16,15 +16,16 @@ import json
 import uuid
 from typing import Optional, List
 
-import redis.asyncio as redis
+import redis.asyncio as redis_async
 import structlog
 from fastapi import APIRouter, Request, Query, status
 from fastapi.responses import JSONResponse, StreamingResponse, Response
 from pydantic import BaseModel, Field
 
-from api.services.minio import MinIOService
+from api.services.minio_service import MinIOService
 from api.services.postgres import PostgresService
 from services.milvus_service import MilvusService
+from services.processing_history_service import ProcessingHistoryService
 from shared.config import Config
 
 logger = structlog.get_logger()
@@ -101,6 +102,45 @@ async def get_file_metadata(fileId: str, request: Request):
                 WHERE file_id = $1
             """, uuid.UUID(fileId))
             
+            # Get processing strategies attempted
+            strategy_rows = await conn.fetch("""
+                SELECT 
+                    processing_strategy,
+                    success,
+                    text_length,
+                    chunk_count,
+                    embedding_count,
+                    visual_embedding_count,
+                    processing_time_seconds,
+                    error_message,
+                    metadata,
+                    created_at
+                FROM processing_strategy_results
+                WHERE file_id = $1
+                ORDER BY created_at ASC
+            """, uuid.UUID(fileId))
+            
+            strategies = [
+                {
+                    "strategy": row["processing_strategy"],
+                    "success": row["success"],
+                    "textLength": row["text_length"],
+                    "chunkCount": row["chunk_count"],
+                    "embeddingCount": row["embedding_count"],
+                    "visualEmbeddingCount": row["visual_embedding_count"],
+                    "processingTimeSeconds": float(row["processing_time_seconds"]) if row["processing_time_seconds"] else None,
+                    "errorMessage": row["error_message"],
+                    "metadata": row["metadata"],
+                    "attemptedAt": row["created_at"].isoformat() if row["created_at"] else None,
+                }
+                for row in strategy_rows
+            ]
+            
+            # Merge metadata with fallbacks for page_count and word_count
+            metadata = file_row["metadata"] or {}
+            if "page_count" not in metadata and status_row and status_row["total_pages"]:
+                metadata["page_count"] = status_row["total_pages"]
+            
             return JSONResponse(
                 status_code=status.HTTP_200_OK,
                 content={
@@ -121,8 +161,9 @@ async def get_file_metadata(fileId: str, request: Request):
                     "extractedAuthor": file_row["extracted_author"],
                     "extractedDate": file_row["extracted_date"].isoformat() if file_row["extracted_date"] else None,
                     "extractedKeywords": file_row["extracted_keywords"],
-                    "metadata": file_row["metadata"],
+                    "metadata": metadata,
                     "permissions": file_row["permissions"],
+                    "processingStrategies": strategies,
                     "status": {
                         "stage": status_row["stage"] if status_row else None,
                         "progress": status_row["progress"] if status_row else None,
@@ -140,6 +181,19 @@ async def get_file_metadata(fileId: str, request: Request):
                 }
             )
     
+    except ValueError as e:
+        # Handle UUID parsing errors (invalid file ID format)
+        logger.warning(
+            "Invalid file ID format",
+            file_id=fileId,
+            user_id=user_id,
+            error=str(e),
+        )
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"error": "Invalid file ID format"}
+        )
+    
     except Exception as e:
         logger.error(
             "Failed to get file metadata",
@@ -155,6 +209,53 @@ async def get_file_metadata(fileId: str, request: Request):
     
     finally:
         await postgres_service.disconnect()
+
+
+@router.get("/{fileId}/history")
+async def get_processing_history(fileId: str, request: Request):
+    """
+    Get detailed processing history for a file.
+    
+    Returns:
+        Processing history with steps, timing, and any errors
+    """
+    user_id = request.state.user_id
+    
+    try:
+        # Validate UUID format
+        try:
+            uuid.UUID(fileId)
+        except ValueError:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={"error": "Invalid file ID format"}
+            )
+        
+        config = Config().to_dict()
+        history_service = ProcessingHistoryService(config)
+        history_service.connect()  # Must connect before use
+        
+        try:
+            history = history_service.get_history(fileId)
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={"history": history}
+            )
+        finally:
+            history_service.disconnect()
+            
+    except Exception as e:
+        logger.error(
+            "Failed to get processing history",
+            file_id=fileId,
+            user_id=user_id,
+            error=str(e),
+            exc_info=True,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": "Failed to retrieve processing history"}
+        )
 
 
 @router.get("/{fileId}/download")
@@ -257,6 +358,119 @@ async def download_file(fileId: str, request: Request):
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"error": "Failed to process download request", "details": str(e)}
+        )
+    
+    finally:
+        await postgres_service.disconnect()
+
+
+@router.get("/{fileId}/presigned-url")
+async def get_presigned_url(fileId: str, request: Request, expiry: int = 3600):
+    """
+    Generate a presigned URL for direct file access from MinIO.
+    
+    Args:
+        fileId: File identifier
+        expiry: URL expiration time in seconds (default: 3600 = 1 hour)
+    
+    Returns:
+        JSON with presigned URL
+    """
+    user_id = request.state.user_id
+    
+    config = Config().to_dict()
+    postgres_service = PostgresService(config)
+    minio_service = MinIOService(config)
+    
+    await postgres_service.connect()
+    
+    try:
+        async with postgres_service.pool.acquire() as conn:
+            # Get file record
+            file_row = await conn.fetchrow("""
+                SELECT user_id, storage_path, original_filename, mime_type
+                FROM ingestion_files
+                WHERE file_id = $1
+            """, uuid.UUID(fileId))
+            
+            if not file_row:
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content={"error": "File not found"}
+                )
+            
+            # Verify ownership
+            if str(file_row["user_id"]) != user_id:
+                return JSONResponse(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    content={"error": "Unauthorized access"}
+                )
+            
+            storage_path = file_row["storage_path"]
+            mime_type = file_row["mime_type"]
+            filename = file_row["original_filename"]
+            
+            # Generate presigned URL
+            try:
+                import asyncio
+                from datetime import timedelta
+                
+                loop = asyncio.get_event_loop()
+                
+                # Generate presigned GET URL
+                presigned_url = await loop.run_in_executor(
+                    None,
+                    lambda: minio_service.client.presigned_get_object(
+                        minio_service.bucket,
+                        storage_path,
+                        expires=timedelta(seconds=expiry)
+                    )
+                )
+                
+                logger.info(
+                    "Presigned URL generated successfully",
+                    file_id=fileId,
+                    user_id=user_id,
+                    storage_path=storage_path,
+                    filename=filename,
+                    mime_type=mime_type,
+                    expiry_seconds=expiry,
+                    presigned_url=presigned_url,
+                    url_length=len(presigned_url),
+                )
+                
+                return JSONResponse(
+                    status_code=status.HTTP_200_OK,
+                    content={
+                        "url": presigned_url,
+                        "expiresIn": expiry,
+                    }
+                )
+                
+            except Exception as e:
+                logger.error(
+                    "Failed to generate presigned URL",
+                    file_id=fileId,
+                    storage_path=storage_path,
+                    error=str(e),
+                    exc_info=True,
+                )
+                return JSONResponse(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    content={"error": "Failed to generate presigned URL", "details": str(e)}
+                )
+    
+    except Exception as e:
+        logger.error(
+            "Failed to process presigned URL request",
+            file_id=fileId,
+            user_id=user_id,
+            error=str(e),
+            exc_info=True,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": "Failed to process request", "details": str(e)}
         )
     
     finally:
@@ -713,7 +927,7 @@ async def reprocess_file(fileId: str, request: Request):
             logger.info("Reset ingestion status", file_id=fileId)
             
             # Add job back to Redis queue
-            redis_client = redis.Redis(
+            redis_client = redis_async.Redis(
                 host=config.get("redis_host", "localhost"),
                 port=config.get("redis_port", 6379),
                 decode_responses=True,

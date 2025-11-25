@@ -24,12 +24,22 @@ import { readFileSync, readdirSync, statSync, existsSync } from 'fs';
 import { join, dirname, relative } from 'path';
 import { fileURLToPath } from 'url';
 import { glob } from 'glob';
+import { Client as SSHClient } from 'ssh2';
+import { homedir } from 'os';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // Project root is 3 levels up from dist/index.js: dist -> mcp-server -> tools -> busibox
 const PROJECT_ROOT = join(__dirname, '..', '..', '..');
+
+/**
+ * Configuration
+ */
+const PROXMOX_HOST_IP = process.env.PROXMOX_HOST_IP || '10.96.200.1';
+const PROXMOX_HOST_USER = process.env.PROXMOX_HOST_USER || 'root';
+const PROXMOX_SSH_KEY_PATH = process.env.PROXMOX_SSH_KEY_PATH || join(homedir(), '.ssh', 'id_rsa');
+const CONTAINER_SSH_KEY_PATH = process.env.CONTAINER_SSH_KEY_PATH || join(homedir(), '.ssh', 'id_rsa');
 
 /**
  * Documentation categories as defined in .cursor/rules/001-documentation-organization.md
@@ -162,6 +172,121 @@ function extractScriptInfo(scriptPath: string): {
   }
 
   return info;
+}
+
+/**
+ * SSH Helper Functions
+ */
+
+/**
+ * Read SSH private key from file
+ */
+function readSSHKey(keyPath: string): string | null {
+  try {
+    return readFileSync(keyPath, 'utf-8');
+  } catch (error) {
+    console.error(`Error reading SSH key from ${keyPath}:`, error);
+    return null;
+  }
+}
+
+/**
+ * Execute SSH command on remote host
+ */
+async function executeSSHCommand(
+  host: string,
+  user: string,
+  command: string,
+  keyPath: string,
+  timeout: number = 30000
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  return new Promise((resolve, reject) => {
+    const conn = new SSHClient();
+    let stdout = '';
+    let stderr = '';
+    let exitCode = 0;
+
+    const timeoutHandle = setTimeout(() => {
+      conn.end();
+      reject(new Error(`SSH command timed out after ${timeout}ms`));
+    }, timeout);
+
+    conn.on('ready', () => {
+      conn.exec(command, (err: Error | null | undefined, stream?: any) => {
+        if (err) {
+          clearTimeout(timeoutHandle);
+          conn.end();
+          reject(err);
+          return;
+        }
+
+        if (!stream) {
+          clearTimeout(timeoutHandle);
+          conn.end();
+          reject(new Error('Failed to create command stream'));
+          return;
+        }
+
+        stream.on('close', (code: number) => {
+          clearTimeout(timeoutHandle);
+          conn.end();
+          exitCode = code || 0;
+          resolve({ stdout, stderr, exitCode });
+        });
+
+        stream.on('data', (data: Buffer) => {
+          stdout += data.toString();
+        });
+
+        stream.stderr.on('data', (data: Buffer) => {
+          stderr += data.toString();
+        });
+      });
+    });
+
+    conn.on('error', (err: Error) => {
+      clearTimeout(timeoutHandle);
+      reject(err);
+    });
+
+    const privateKey = readSSHKey(keyPath);
+    if (!privateKey) {
+      clearTimeout(timeoutHandle);
+      reject(new Error(`Failed to read SSH key from ${keyPath}`));
+      return;
+    }
+
+    conn.connect({
+      host,
+      port: 22,
+      username: user,
+      privateKey,
+      readyTimeout: 10000,
+    });
+  });
+}
+
+/**
+ * Get container IP address by name
+ */
+function getContainerIP(containerName: string): string | null {
+  // Hardcoded container IPs from architecture
+  const containerIPs: Record<string, string> = {
+    'proxy-lxc': '10.96.200.200',
+    'apps-lxc': '10.96.200.201',
+    'agent-lxc': '10.96.200.202',
+    'pg-lxc': '10.96.200.203',
+    'milvus-lxc': '10.96.200.204',
+    'files-lxc': '10.96.200.205',
+    'ingest-lxc': '10.96.200.206',
+    'litellm-lxc': '10.96.200.207',
+    'vllm-lxc': '10.96.200.208',
+    'ollama-lxc': '10.96.200.210',
+  };
+
+  // Handle variations like "milvus" -> "milvus-lxc"
+  const normalizedName = containerName.endsWith('-lxc') ? containerName : `${containerName}-lxc`;
+  return containerIPs[normalizedName] || containerIPs[containerName] || null;
 }
 
 /**
@@ -481,6 +606,68 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ['environment'],
         },
       },
+      {
+        name: 'execute_proxmox_command',
+        description: 'Execute a command on the Proxmox host (make, ansible-playbook, pct, ssh, etc.)',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            command: {
+              type: 'string',
+              description: 'Command to execute on Proxmox host (e.g., "make test", "pct status 200", "cd /root/busibox/provision/ansible && ansible-playbook -i inventory/test/hosts.yml site.yml --tags milvus")',
+            },
+            working_directory: {
+              type: 'string',
+              description: 'Working directory for command execution (default: /root/busibox)',
+            },
+            timeout: {
+              type: 'number',
+              description: 'Command timeout in milliseconds (default: 300000 = 5 minutes)',
+            },
+          },
+          required: ['command'],
+        },
+      },
+      {
+        name: 'get_container_logs',
+        description: 'Get logs from a container via SSH (journalctl)',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            container: {
+              type: 'string',
+              description: 'Container name (e.g., "milvus-lxc", "agent-lxc") or IP address',
+            },
+            service: {
+              type: 'string',
+              description: 'Service name for journalctl -u (optional, if not provided returns general logs)',
+            },
+            lines: {
+              type: 'number',
+              description: 'Number of log lines to retrieve (default: 50)',
+            },
+          },
+          required: ['container'],
+        },
+      },
+      {
+        name: 'get_container_service_status',
+        description: 'Get systemctl status for a service on a container via SSH',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            container: {
+              type: 'string',
+              description: 'Container name (e.g., "milvus-lxc", "agent-lxc") or IP address',
+            },
+            service: {
+              type: 'string',
+              description: 'Service name (e.g., "search-api", "milvus", "nginx")',
+            },
+          },
+          required: ['container', 'service'],
+        },
+      },
     ],
   };
 });
@@ -632,16 +819,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const archPath = join(PROJECT_ROOT, 'docs', 'architecture', 'architecture.md');
       const content = safeReadFile(archPath);
       
-      // Extract container information from architecture doc
+      // Container information matching vars.env
       const containers = [
-        { id: 200, name: 'proxy-lxc', ip: '10.96.200.23', purpose: 'Main reverse proxy' },
-        { id: 202, name: 'apps-lxc', ip: '10.96.200.25', purpose: 'nginx and Next.js apps' },
-        { id: 203, name: 'pg-lxc', ip: '10.96.200.26', purpose: 'PostgreSQL database' },
-        { id: 204, name: 'milvus-lxc', ip: '10.96.200.27', purpose: 'Milvus vector database' },
-        { id: 205, name: 'files-lxc', ip: '10.96.200.28', purpose: 'MinIO for S3 storage' },
-        { id: 206, name: 'ingest-lxc', ip: '10.96.200.29', purpose: 'Worker and Redis' },
-        { id: 207, name: 'agent-lxc', ip: '10.96.200.30', purpose: 'Agent API and liteLLM' },
-        { id: 210, name: 'llm-lxc-01', ip: '10.96.200.33', purpose: 'LLM container (Ollama, vLLM, etc.)' },
+        { id: 200, name: 'proxy-lxc', ip: '10.96.200.200', purpose: 'Main reverse proxy' },
+        { id: 201, name: 'apps-lxc', ip: '10.96.200.201', purpose: 'nginx and Next.js apps' },
+        { id: 202, name: 'agent-lxc', ip: '10.96.200.202', purpose: 'Agent API and liteLLM' },
+        { id: 203, name: 'pg-lxc', ip: '10.96.200.203', purpose: 'PostgreSQL database' },
+        { id: 204, name: 'milvus-lxc', ip: '10.96.200.204', purpose: 'Milvus vector database' },
+        { id: 205, name: 'files-lxc', ip: '10.96.200.205', purpose: 'MinIO for S3 storage' },
+        { id: 206, name: 'ingest-lxc', ip: '10.96.200.206', purpose: 'Worker and Redis' },
+        { id: 207, name: 'litellm-lxc', ip: '10.96.200.207', purpose: 'LiteLLM gateway' },
+        { id: 208, name: 'vllm-lxc', ip: '10.96.200.208', purpose: 'vLLM inference server' },
+        { id: 210, name: 'ollama-lxc', ip: '10.96.200.210', purpose: 'Ollama LLM server' },
       ];
 
       return {
@@ -677,6 +866,180 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           },
         ],
       };
+    }
+
+    case 'execute_proxmox_command': {
+      const { command, working_directory = '/root/busibox', timeout = 300000 } = args as {
+        command: string;
+        working_directory?: string;
+        timeout?: number;
+      };
+
+      try {
+        const fullCommand = `cd ${working_directory} && ${command}`;
+        const result = await executeSSHCommand(
+          PROXMOX_HOST_IP,
+          PROXMOX_HOST_USER,
+          fullCommand,
+          PROXMOX_SSH_KEY_PATH,
+          timeout
+        );
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  command: fullCommand,
+                  exitCode: result.exitCode,
+                  stdout: result.stdout,
+                  stderr: result.stderr,
+                  success: result.exitCode === 0,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (error: any) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  error: error.message || 'Unknown error',
+                  command,
+                  working_directory,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case 'get_container_logs': {
+      const { container, service, lines = 50 } = args as {
+        container: string;
+        service?: string;
+        lines?: number;
+      };
+
+      try {
+        const containerIP = getContainerIP(container) || container;
+        const logCommand = service
+          ? `journalctl -u ${service} -n ${lines} --no-pager`
+          : `journalctl -n ${lines} --no-pager`;
+
+        const result = await executeSSHCommand(
+          containerIP,
+          'root',
+          logCommand,
+          CONTAINER_SSH_KEY_PATH,
+          30000
+        );
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  container,
+                  containerIP,
+                  service: service || 'all',
+                  lines,
+                  exitCode: result.exitCode,
+                  logs: result.stdout,
+                  error: result.stderr || undefined,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (error: any) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  error: error.message || 'Unknown error',
+                  container,
+                  service,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case 'get_container_service_status': {
+      const { container, service } = args as { container: string; service: string };
+
+      try {
+        const containerIP = getContainerIP(container) || container;
+        const statusCommand = `systemctl status ${service} --no-pager -l`;
+
+        const result = await executeSSHCommand(
+          containerIP,
+          'root',
+          statusCommand,
+          CONTAINER_SSH_KEY_PATH,
+          30000
+        );
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  container,
+                  containerIP,
+                  service,
+                  exitCode: result.exitCode,
+                  status: result.stdout,
+                  error: result.stderr || undefined,
+                  isActive: result.exitCode === 0,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (error: any) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  error: error.message || 'Unknown error',
+                  container,
+                  service,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+          isError: true,
+        };
+      }
     }
 
     default:
@@ -735,6 +1098,38 @@ server.setRequestHandler(ListPromptsRequestSchema, async () => {
           {
             name: 'topic',
             description: 'Topic to document',
+            required: true,
+          },
+        ],
+      },
+      {
+        name: 'run_tests',
+        description: 'Guide for running tests on Busibox services',
+        arguments: [
+          {
+            name: 'service',
+            description: 'Service to test (ingest, search, agent, apps, or all)',
+            required: false,
+          },
+          {
+            name: 'test_type',
+            description: 'Type of test (unit, integration, coverage, extraction)',
+            required: false,
+          },
+        ],
+      },
+      {
+        name: 'deploy_app',
+        description: 'Guide for deploying a specific application (ai-portal, agent-client, etc.)',
+        arguments: [
+          {
+            name: 'app_name',
+            description: 'Application name (ai-portal, agent-client, doc-intel, foundation, project-analysis, innovation)',
+            required: true,
+          },
+          {
+            name: 'environment',
+            description: 'Target environment (test or production)',
             required: true,
           },
         ],
@@ -1142,6 +1537,177 @@ git commit -m "docs: add ${topic} documentation to <category>"
       };
     }
 
+    case 'run_tests': {
+      const { service = 'all', test_type = 'unit' } = args as { service?: string; test_type?: string };
+      
+      return {
+        messages: [
+          {
+            role: 'user',
+            content: {
+              type: 'text',
+              text: `How do I run ${test_type} tests for ${service}?`,
+            },
+          },
+          {
+            role: 'assistant',
+            content: {
+              type: 'text',
+              text: `Here's how to run ${test_type} tests for ${service}:
+
+1. **Navigate to Ansible directory**:
+   \`\`\`bash
+   cd provision/ansible
+   \`\`\`
+
+2. **Interactive Test Menu** (Recommended):
+   \`\`\`bash
+   make test-menu
+   \`\`\`
+   
+   This shows an interactive menu with all test options.
+
+3. **Direct Test Commands**:
+
+   ${service === 'ingest' || service === 'all' ? `
+   **Ingest Service**:
+   \`\`\`bash
+   make test-ingest              # Unit tests
+   make test-ingest-all          # All tests including integration
+   make test-ingest-coverage     # With coverage report
+   
+   # Extraction strategy tests:
+   make test-extraction-simple   # Basic PDF extraction
+   make test-extraction-llm      # LLM-enhanced extraction
+   make test-extraction-marker   # Marker extraction (GPU)
+   make test-extraction-colpali  # ColPali visual extraction
+   \`\`\`
+   ` : ''}
+
+   ${service === 'search' || service === 'all' ? `
+   **Search Service**:
+   \`\`\`bash
+   make test-search              # All tests
+   make test-search-unit         # Unit tests only
+   make test-search-integration  # Integration tests only
+   make test-search-coverage     # With coverage report
+   \`\`\`
+   ` : ''}
+
+   ${service === 'agent' || service === 'all' ? `
+   **Agent Service**:
+   \`\`\`bash
+   make test-agent
+   \`\`\`
+   ` : ''}
+
+   ${service === 'apps' || service === 'all' ? `
+   **Applications**:
+   \`\`\`bash
+   make test-apps
+   \`\`\`
+   ` : ''}
+
+   ${service === 'all' ? `
+   **All Services**:
+   \`\`\`bash
+   make test-all
+   \`\`\`
+   ` : ''}
+
+4. **Verification**:
+   \`\`\`bash
+   make verify              # All health checks
+   make verify-health       # Service health checks
+   make verify-smoke        # Database smoke tests
+   \`\`\`
+
+For more details, see: docs/guides/testing-guide.md`,
+            },
+          },
+        ],
+      };
+    }
+
+    case 'deploy_app': {
+      const { app_name, environment } = args as { app_name: string; environment: string };
+      const inv = environment === 'test' ? 'INV=inventory/test' : '';
+      
+      return {
+        messages: [
+          {
+            role: 'user',
+            content: {
+              type: 'text',
+              text: `How do I deploy ${app_name} to ${environment}?`,
+            },
+          },
+          {
+            role: 'assistant',
+            content: {
+              type: 'text',
+              text: `Here's how to deploy ${app_name} to ${environment}:
+
+1. **Check Prerequisites**:
+   - Ensure you're on the admin workstation
+   - Verify network connectivity to ${environment} environment
+   - Have Ansible vault password ready (if using secrets)
+
+2. **Navigate to Ansible directory**:
+   \`\`\`bash
+   cd provision/ansible
+   \`\`\`
+
+3. **Deploy the application**:
+   \`\`\`bash
+   # Using new make target (recommended):
+   make deploy-${app_name} ${inv}
+   
+   # Or using ansible directly:
+   ansible-playbook -i inventory/${environment}/hosts.yml site.yml \\
+       --tags app_deployer,secrets \\
+       --extra-vars "deploy_app=${app_name}" \\
+       --ask-vault-pass
+   \`\`\`
+
+4. **Verify deployment**:
+   \`\`\`bash
+   # Check PM2 status
+   ssh root@<apps-ip>
+   pm2 list
+   pm2 logs ${app_name}
+   
+   # Or use AI Portal log viewer (if deployed)
+   \`\`\`
+
+5. **Test the application**:
+   - Visit the application URL
+   - Check health endpoint
+   - Verify functionality
+
+**Available Applications**:
+- \`ai-portal\` - AI Portal dashboard
+- \`agent-client\` - Agent management UI
+- \`doc-intel\` - Document intelligence
+- \`foundation\` - Foundation app
+- \`project-analysis\` - Project analysis
+- \`innovation\` - Innovation app
+
+**Deploy All Apps**:
+\`\`\`bash
+make deploy-apps ${inv}
+\`\`\`
+
+For more details, see:
+- docs/deployment/ai-portal.md
+- docs/guides/testing-guide.md
+- ai-portal/docs/DEPLOYMENT_SYSTEM.md`,
+            },
+          },
+        ],
+      };
+    }
+
     default:
       throw new Error(`Unknown prompt: ${name}`);
   }
@@ -1160,6 +1726,7 @@ main().catch((error) => {
   console.error('Fatal error in main():', error);
   process.exit(1);
 });
+
 
 
 

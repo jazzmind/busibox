@@ -1,7 +1,7 @@
 """
 Model Purpose Registry
 
-Central registry for model purposes. Maps abstract purposes (embedding, cleanup, chat)
+Central registry for model purposes. Maps abstract purposes (embedding, cleanup, analysis)
 to actual model names. Allows easy model swapping without code changes.
 
 Usage:
@@ -24,15 +24,19 @@ class ModelRegistry:
     """
     Central registry for model purposes.
     
-    Maps abstract purposes (embedding, cleanup, chat) to actual model names.
+    Maps abstract purposes (embedding, cleanup, analysis) to actual model names.
     Allows easy model swapping without code changes.
     """
     
-    # Minimal fallback models (should be configured via Ansible)
+    # Minimal fallback models (ONLY used if model_registry.json is not found)
+    # The real model registry comes from provision/ansible/group_vars/all/model_registry.yml
+    # which is deployed as JSON to /etc/ingest/model_registry.json via Ansible
+    # These defaults should never be used in production - they're just for development/testing
     DEFAULT_MODELS = {
-        "embedding": {"model": "qwen-3-embedding", "provider": "litellm"},
-        "cleanup": {"model": "qwen-2.5-32b", "provider": "litellm", "temperature": 0.1},
-        "chat": {"model": "qwen-2.5-72b", "provider": "litellm", "temperature": 0.7},
+        "embedding": {"model": "embedding", "provider": "litellm"},
+        "cleanup": {"model": "cleanup", "provider": "litellm", "temperature": 0.1, "max_tokens": 32768},
+        "parsing": {"model": "parsing", "provider": "litellm", "temperature": 0.1, "max_tokens": 8192},
+        "analysis": {"model": "analysis", "provider": "litellm", "temperature": 0.7},
     }
     
     def __init__(self, config_path: Optional[str] = None):
@@ -42,31 +46,69 @@ class ModelRegistry:
         Args:
             config_path: Optional path to JSON config file with custom model mappings
         """
-        self.models = self.DEFAULT_MODELS.copy()
+        # Start with empty dict - will be populated from deployed JSON or fallback to defaults
+        self.models = {}
         
-        # Load custom config if provided
+        # Load deployed model registry JSON (from Ansible deployment)
+        # This is the single source of truth: provision/ansible/group_vars/all/model_registry.yml
+        # which gets deployed as JSON to /etc/ingest/model_registry.json
         if config_path and os.path.exists(config_path):
             try:
                 with open(config_path, 'r') as f:
-                    custom = json.load(f)
-                    custom_purposes = custom.get("purposes", {})
-                    self.models.update(custom_purposes)
+                    registry_data = json.load(f)
+                    # New structure: JSON has "available_models" and "purposes"
+                    # purposes maps purpose -> model key, available_models has full config
+                    available_models = registry_data.get("available_models", {})
+                    purposes = registry_data.get("purposes", {})
+                    
+                    # Build models dict: purpose -> full model config
+                    for purpose, model_key in purposes.items():
+                        if model_key in available_models:
+                            self.models[purpose] = available_models[model_key].copy()
+                        else:
+                            logger.warning(
+                                "Model key not found in available_models",
+                                purpose=purpose,
+                                model_key=model_key
+                            )
                     logger.info(
-                        "Loaded custom model registry",
+                        "Loaded model registry from deployed JSON",
                         config_path=config_path,
-                        custom_purposes=list(custom_purposes.keys())
+                        purposes=list(purposes.keys()),
+                        source="ansible_deployment"
                     )
             except Exception as e:
                 logger.error(
-                    "Failed to load custom model registry",
+                    "Failed to load deployed model registry",
                     config_path=config_path,
                     error=str(e)
+                )
+                # Fall back to defaults if JSON load fails
+                self.models = self.DEFAULT_MODELS.copy()
+                logger.warning(
+                    "Using fallback model registry (deployed JSON not available)",
+                    fallback_purposes=list(self.models.keys())
+                )
+        else:
+            # No config path provided or file doesn't exist - use defaults
+            # This should only happen in development/testing
+            self.models = self.DEFAULT_MODELS.copy()
+            if config_path:
+                logger.warning(
+                    "Model registry file not found, using defaults",
+                    expected_path=config_path,
+                    fallback_purposes=list(self.models.keys())
+                )
+            else:
+                logger.info(
+                    "Model registry initialized with defaults (no config path provided)",
+                    purposes=list(self.models.keys())
                 )
         
         logger.info(
             "Model registry initialized",
             purposes=list(self.models.keys()),
-            custom_config=config_path is not None
+            source="deployed_json" if (config_path and os.path.exists(config_path)) else "defaults"
         )
     
     def get_model(self, purpose: str) -> str:
@@ -74,7 +116,7 @@ class ModelRegistry:
         Get model name for a purpose.
         
         Args:
-            purpose: Model purpose (e.g., "embedding", "cleanup", "chat")
+            purpose: Model purpose (e.g., "embedding", "cleanup", "analysis")
             
         Returns:
             Model name (e.g., "qwen-3-embedding")

@@ -11,6 +11,7 @@
 # Environment Configuration
 # ============================================================================
 busibox_env: production
+node_env: production  # For Node.js applications
 
 # ============================================================================
 # Network Configuration - Production
@@ -27,10 +28,11 @@ apps_ip: "{{ network_base_octets }}.201"
 agent_ip: "{{ network_base_octets }}.202"
 postgres_ip: "{{ network_base_octets }}.203"
 milvus_ip: "{{ network_base_octets }}.204"
+search_api_ip: "{{ milvus_ip }}"  # Search API runs on milvus container
 minio_ip: "{{ network_base_octets }}.205"
 ingest_ip: "{{ network_base_octets }}.206"
 
-# LLM Service IPs: .30-.39 (to allow room for more infrastructure)
+# LLM Service IPs: .207-.210 (to allow room for more infrastructure)
 litellm_ip: "{{ network_base_octets }}.207"
 vllm_ip: "{{ network_base_octets }}.208"
 ollama_ip: "{{ network_base_octets }}.210"
@@ -43,6 +45,7 @@ ollama_ip: "{{ network_base_octets }}.210"
 domain: "ai.{{ base_domain }}"
 full_domain: "{{ domain }}"  # For compatibility with templates that use full_domain
 www_domain: "www.{{ domain }}"
+env_subdomain_suffix: ""  # No suffix for production (e.g., "agents" not "agents-prod")
 
 # SSL Certificate Mode
 # Options: "letsencrypt", "provisioned", "selfsigned"
@@ -88,27 +91,36 @@ agent_api_port: 4111
 litellm_host: "{{ litellm_ip }}"
 litellm_port: 4000
 
+# LiteLLM Settings - Enable tool/function calling support
+litellm_drop_params: false  # CRITICAL: Must be false to pass tools to vLLM
+litellm_add_function_to_prompt: true  # Add function definitions to prompt for models that need it
+
 # Embedding Configuration (for ingest service)
-embedding_model: "qwen3-embedding"
-embedding_dimension: 4096
+# Reference model registry for embedding model configuration
+# New structure: model_purposes.embedding -> model key, lookup in available_models
+embedding_model: "{{ available_models[model_purposes.embedding].model }}"
+embedding_dimension: 4096  # Qwen3-Embedding-8B output dimension
 
 ollama_host: "{{ ollama_ip }}"
 ollama_port: 11434
 
-vllm_host: "{{ vllm_ip }}"
-vllm_port: 8000
+vllm_host: "0.0.0.0"  # Listen on all interfaces for IP aliasing support
+# Note: vLLM ports are now configured via model_config.yml
+# Port-based roles (vllm_8000, vllm_8001, etc.) read assignments from model_config.yml
+# Production environment always uses its own vLLM service (no override)
+# Test environment may optionally use production vLLM via use_production_vllm flag
 
 # ============================================================================
 # LLM Model Configuration
 # ============================================================================
-# Ollama Models (PRODUCTION - full models)
-ollama_initial_models:
-  - name: "phi4:multimodal-instruct"
-    description: "Phi4 is a general-purpose model"
+# HuggingFace Authentication (for gated models like PaliGemma)
+# Token stored in vault at secrets.huggingface.token
+huggingface_token: "{{ secrets.huggingface.token }}"
 
 # vLLM Model Configuration
-# Use model pre-cached by setup-llm-models.sh
-vllm_default_model: "microsoft/Phi-4-multimodal-instruct"
+# Note: vLLM configuration is now managed via model_config.yml
+# Port-based roles (vllm_8000, vllm_8001, etc.) read model assignments from model_config.yml
+# GPU assignments, ports, and tensor parallelism are configured via configure-vllm-model-routing.sh
 
 # ============================================================================
 # Deployment Configuration
@@ -138,157 +150,9 @@ hsts_max_age: 63072000  # 2 years in seconds
 # ============================================================================
 # Application Definitions
 # ============================================================================
-# All applications deployed in the Busibox environment
-# Schema reference: specs/002-deploy-app-servers/data-model.md
+# Applications are now defined in group_vars/apps.yml (centralized)
+# This allows sharing app definitions between test and production environments
+# while keeping environment-specific values (IPs, domains, NODE_ENV) here.
 #
-# Port allocation strategy:
-# - 3000-3099: Public web applications
-# - 4000-4099: Internal API services
-# - 8000-8099: LLM/AI services
-applications:
-  # Internal API Services
-  - name: agent-server
-    github_repo: jazzmind/agent-server
-    container: agent-lxc
-    container_ip: "{{ agent_ip }}"
-    port: 4111
-    deploy_path: /srv/agent
-    health_endpoint: /auth/health
-    routes: []  # Internal only - no NGINX routing
-    secrets:
-      - database_url
-      - minio_access_key
-      - minio_secret_key
-      - redis_url
-      - jwt_secret
-      - litellm_api_key
-    env:
-      LOG_LEVEL: "{{ log_level }}"
-      MILVUS_HOST: "{{ milvus_ip }}"
-      MILVUS_PORT: "{{ milvus_port }}"
-      MINIO_ENDPOINT: "{{ minio_ip }}:{{ minio_port }}"
-      POSTGRES_HOST: "{{ postgres_ip }}"
-      REDIS_HOST: "{{ ingest_ip }}"
-      TOKEN_SERVICE_URL: "http://{{ agent_ip }}:4111"
-      MASTRA_API_URL: "http://{{ agent_ip }}:4111"
-      OPENAI_BASE_URL: "http://{{ litellm_ip }}:{{ litellm_port }}/v1"
-  
-  # Public Web Applications
-  - name: ai-portal
-    github_repo: jazzmind/ai-portal
-    container: apps-lxc
-    container_ip: "{{ apps_ip }}"
-    port: 3000
-    deploy_path: /srv/apps/ai-portal
-    health_endpoint: /api/health
-    build_command: "npm run build"
-    routes:
-      - type: domain
-        domains:
-          - "{{ domain }}"
-          - "{{ www_domain }}"
-      - type: path
-        domain: "{{ domain }}"
-        path: /home
-        strip_path: false  # Keep /home path for Next.js routing
-      - type: path
-        domain: "{{ domain }}"
-        path: /portal
-        strip_path: true  # Strip /portal prefix so Next.js receives requests at root
-
-    secrets:
-      - database_url
-      - better_auth_secret
-      - sso_jwt_secret
-      - litellm_api_key
-      - openai_api_key
-      - admin_email
-      - allowed_email_domains
-      - email_from
-      - smtp_host
-      - smtp_port
-      - smtp_user
-      - smtp_password
-      - smtp_secure
-      - github_client_id
-      - github_client_secret
-      - github_redirect_uri
-      - encryption_key
-      - current_container_ip
-      - apps_container_ip
-      - agent_container_ip
-      - postgres_container_ip
-    optional_secrets:
-      - resend_api_key
-      - microsoft_client_id
-      - microsoft_client_secret
-      - microsoft_tenant_id
-      - container_ssh_private_key
-    env:
-      NODE_ENV: production
-      LITELLM_BASE_URL: "http://{{ litellm_ip }}:{{ litellm_port }}/v1"
-      BETTER_AUTH_URL: "https://{{ domain }}"
-      SSO_TOKEN_EXPIRY: "900"
-      PORT: "3000"
-      INGEST_API_HOST: "{{ ingest_ip }}"
-  
-  - name: agent-client
-    github_repo: jazzmind/agent-client
-    container: apps-lxc
-    container_ip: "{{ apps_ip }}"
-    port: 3001
-    deploy_path: /srv/apps/agent-client
-    health_endpoint: /api/health
-    build_command: "npm run build"
-    routes:
-      - type: subdomain
-        subdomain: agents
-        websocket: true
-      - type: path
-        domain: "{{ domain }}"
-        path: /agents
-        strip_path: true  # Strip /agents prefix so Next.js receives requests at root
-    secrets:
-      - database_url
-      - agent_api_key
-      - jwt_secret
-      - session_secret
-      - sso_jwt_secret
-      - oauth_client_secret
-    env:
-      NODE_ENV: production
-      MASTRA_API_URL: "http://{{ agent_api_host }}:{{ agent_api_port }}"
-      TOKEN_SERVICE_URL: "http://{{ agent_api_host }}:{{ agent_api_port }}"
-      AGENT_API_URL: "http://{{ agent_api_host }}:{{ agent_api_port }}"
-      AI_PORTAL_URL: "https://{{ domain }}"
-      PORT: "3001"
-  
-  - name: doc-intel
-    github_repo: jazzmind/docintel
-    container: apps-lxc
-    container_ip: "{{ apps_ip }}"
-    port: 3002
-    deploy_path: /srv/apps/doc-intel
-    health_endpoint: /api/health
-    build_command: "npm run build"
-    routes:
-      - type: subdomain
-        subdomain: docs
-      - type: path
-        domain: "{{ domain }}"
-        path: /docs
-        strip_path: true  # Strip /docs prefix so Next.js receives requests at root
-    secrets:
-      - database_url
-      - openai_api_key
-      - better_auth_secret
-      - jwt_secret
-      - sso_jwt_secret
-      - oauth_client_secret
-    env:
-      NODE_ENV: production
-      MILVUS_HOST: "{{ milvus_ip }}"
-      MILVUS_PORT: "{{ milvus_port }}"
-      AI_PORTAL_URL: "https://{{ domain }}"
-      PORT: "3002"
+# See: provision/ansible/group_vars/apps.yml
 

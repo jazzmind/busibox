@@ -29,51 +29,37 @@
     msg: "{{ gpu_devices_check.stdout_lines }}"
   tags: [ollama_install, ollama_gpu]
 
-- name: Install NVIDIA userspace drivers for LXC
-  block:
-    - name: Add NVIDIA CUDA repository
-      block:
-        - name: Download CUDA keyring
-          get_url:
-            url: https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-keyring_1.1-1_all.deb
-            dest: /tmp/cuda-keyring.deb
-            mode: '0644'
+- name: Check if NVIDIA drivers are installed (must match host version)
+  shell: "nvidia-smi 2>&1 || echo 'NOT_INSTALLED'"
+  register: nvidia_drivers_check
+  changed_when: false
+  failed_when: false
+  tags: [ollama_install, ollama_gpu]
 
-        - name: Install CUDA keyring
-          apt:
-            deb: /tmp/cuda-keyring.deb
-            state: present
+- name: Install NVIDIA drivers using install-nvidia-drivers.sh (on Proxmox host)
+  shell: "bash /root/busibox/provision/pct/host/install-nvidia-drivers.sh {{ container_id }}"
+  delegate_to: localhost
+  become: false
+  when: 
+    - "'No NVIDIA devices' not in gpu_devices_check.stdout"
+    - (nvidia_drivers_check.stdout is defined and 'NOT_INSTALLED' in nvidia_drivers_check.stdout) or (nvidia_drivers_check.stderr is defined and 'Driver/library version mismatch' in nvidia_drivers_check.stderr)
+  register: driver_install_result
+  changed_when: driver_install_result.rc == 0
+  failed_when: driver_install_result.rc != 0
+  tags: [ollama_install, ollama_gpu]
 
-        - name: Remove keyring deb file
-          file:
-            path: /tmp/cuda-keyring.deb
-            state: absent
+- name: Verify drivers after installation
+  shell: "nvidia-smi 2>&1"
+  register: nvidia_drivers_verify
+  changed_when: false
+  failed_when: "'Driver/library version mismatch' in nvidia_drivers_verify.stderr"
+  tags: [ollama_install, ollama_gpu]
 
-        - name: Update apt cache
-          apt:
-            update_cache: yes
-
-    - name: Install NVIDIA drivers and CUDA toolkit (userspace only in LXC)
-      apt:
-        name:
-          - cuda-drivers
-          - cuda-toolkit
-        state: present
-        install_recommends: no
-      environment:
-        DEBIAN_FRONTEND: noninteractive
-      register: nvidia_drivers_install
-
-    - name: Verify nvidia-smi is available
-      command: nvidia-smi
-      register: nvidia_smi_check
-      changed_when: false
-      failed_when: false
-
-    - name: Display nvidia-smi output
-      debug:
-        msg: "{{ nvidia_smi_check.stdout_lines }}"
-      when: nvidia_smi_check.rc == 0
+- name: Display nvidia-smi output
+  debug:
+    msg: "{{ nvidia_drivers_verify.stdout_lines }}"
+  when: "'Driver/library version mismatch' not in nvidia_drivers_verify.stderr"
+  tags: [ollama_install, ollama_gpu]
 
   when: "'No NVIDIA devices' not in gpu_devices_check.stdout"
   tags: [ollama_install, ollama_gpu]

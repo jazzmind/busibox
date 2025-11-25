@@ -85,13 +85,25 @@ secrets:
 ```
 
 ### 4. Deploy
+
+**Using interactive menu (recommended):**
+```bash
+make deploy
+# Select environment: production or test
+# Select service to deploy
+```
+
+**Or using Ansible directly:**
 ```bash
 # Deploy to production
+cd provision/ansible
 ansible-playbook -i inventory/production site.yml --ask-vault-pass
 
 # Deploy to test
 ansible-playbook -i inventory/test site.yml --ask-vault-pass
 ```
+
+See [Interactive Commands Guide](../guides/interactive-commands.md) for more details.
 
 ## Multiple Deployments Example
 

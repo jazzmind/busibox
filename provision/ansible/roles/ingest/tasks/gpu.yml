@@ -1,0 +1,100 @@
+---
+# GPU and CUDA Support for Ingest Container
+# Installs NVIDIA CUDA toolkit for GPU-accelerated Marker PDF extraction
+
+- name: Check if GPU devices are present in container
+  shell: "ls -la /dev/nvidia* 2>/dev/null || echo 'No NVIDIA devices'"
+  register: gpu_devices_check
+  changed_when: false
+  failed_when: false
+  tags: [ingest, ingest_gpu, ingest_install]
+
+- name: Display GPU device status
+  debug:
+    msg: "{{ gpu_devices_check.stdout_lines }}"
+  tags: [ingest, ingest_gpu, ingest_install]
+
+- name: Check if NVIDIA drivers are installed (must match host version)
+  shell: "nvidia-smi 2>&1 || echo 'NOT_INSTALLED'"
+  register: nvidia_drivers_check
+  changed_when: false
+  failed_when: false
+  tags: [ingest, ingest_gpu, ingest_install]
+
+- name: Install NVIDIA drivers using install-nvidia-drivers.sh (on Proxmox host)
+  shell: "bash /root/busibox/provision/pct/host/install-nvidia-drivers.sh {{ container_id }}"
+  delegate_to: localhost
+  become: false
+  when: 
+    - "'No NVIDIA devices' not in gpu_devices_check.stdout"
+    - (nvidia_drivers_check.stdout is defined and 'NOT_INSTALLED' in nvidia_drivers_check.stdout) or (nvidia_drivers_check.stderr is defined and 'Driver/library version mismatch' in nvidia_drivers_check.stderr)
+  register: driver_install_result
+  changed_when: driver_install_result.rc == 0
+  failed_when: driver_install_result.rc != 0
+  tags: [ingest, ingest_gpu, ingest_install]
+
+- name: Verify drivers after installation
+  shell: "nvidia-smi 2>&1"
+  register: nvidia_drivers_verify
+  changed_when: false
+  failed_when: "'Driver/library version mismatch' in nvidia_drivers_verify.stderr"
+  tags: [ingest, ingest_gpu, ingest_install]
+
+- name: Display nvidia-smi output
+  debug:
+    msg: "{{ nvidia_drivers_verify.stdout_lines }}"
+  when: "'Driver/library version mismatch' not in nvidia_drivers_verify.stderr"
+  tags: [ingest, ingest_gpu, ingest_install]
+
+- name: Set LD_LIBRARY_PATH for CUDA libraries
+  lineinfile:
+    path: /srv/ingest/.env
+    regexp: '^LD_LIBRARY_PATH='
+    line: 'LD_LIBRARY_PATH=/usr/local/cuda/targets/x86_64-linux/lib:/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH}'
+    state: present
+  when: "'No NVIDIA devices' not in gpu_devices_check.stdout"
+  tags: [ingest, ingest_gpu, ingest_configure]
+
+- name: Set CUDA_VISIBLE_DEVICES for ingest services
+  lineinfile:
+    path: /srv/ingest/.env
+    regexp: '^CUDA_VISIBLE_DEVICES='
+    line: 'CUDA_VISIBLE_DEVICES={{ ingest_cuda_visible_devices | default("0") }}'
+    state: present
+  when: "'No NVIDIA devices' not in gpu_devices_check.stdout"
+  tags: [ingest, ingest_gpu, ingest_configure]
+
+- name: Test PyTorch CUDA availability (all GPUs visible)
+  shell: |
+    {{ ingest_venv_dir | default('/srv/ingest/venv') }}/bin/python -c "
+    import os
+    print('LD_LIBRARY_PATH:', os.environ.get('LD_LIBRARY_PATH', 'NOT SET'))
+    print('CUDA_VISIBLE_DEVICES (for test):', os.environ.get('CUDA_VISIBLE_DEVICES', 'ALL GPUS'))
+    try:
+        import torch
+        print('PyTorch version:', torch.__version__)
+        print('CUDA available:', torch.cuda.is_available())
+        if torch.cuda.is_available():
+            print('CUDA version:', torch.version.cuda)
+            print('GPU count (all visible):', torch.cuda.device_count())
+            for i in range(torch.cuda.device_count()):
+                print(f'GPU {i}: {torch.cuda.get_device_name(i)}')
+    except ImportError:
+        print('PyTorch not installed yet')
+    "
+  args:
+    executable: /bin/bash
+  environment:
+    LD_LIBRARY_PATH: "/usr/local/cuda/targets/x86_64-linux/lib:/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu"
+    # Don't set CUDA_VISIBLE_DEVICES here - we want to see all GPUs in the test
+    # Services will use CUDA_VISIBLE_DEVICES from .env file (defaults to GPU 0)
+  register: pytorch_cuda_test
+  changed_when: false
+  failed_when: false
+  tags: [ingest, ingest_gpu, ingest_install]
+
+- name: Display PyTorch CUDA test results
+  debug:
+    msg: "{{ pytorch_cuda_test.stdout_lines }}"
+  tags: [ingest, ingest_gpu, ingest_install]
+

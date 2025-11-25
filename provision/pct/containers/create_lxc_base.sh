@@ -151,11 +151,11 @@ if [[ "$MODE" == "test" ]]; then
   echo "    - TEST-files-lxc  ($CT_FILES_TEST @ $IP_FILES_TEST)"
   echo ""
   echo "  Worker Services:"
-  echo "    - TEST-ingest-lxc ($CT_INGEST_TEST @ $IP_INGEST_TEST)"
+  echo "    - TEST-ingest-lxc ($CT_INGEST_TEST @ $IP_INGEST_TEST) [All GPUs, defaults to GPU 0]"
   echo "    - TEST-litellm-lxc ($CT_LITELLM_TEST @ $IP_LITELLM_TEST)"
   echo ""
   echo "  LLM Services:"
-  echo "    - TEST-vllm-lxc   ($CT_VLLM_TEST @ $IP_VLLM_TEST) [ALL GPUs]"
+  echo "    - TEST-vllm-lxc   ($CT_VLLM_TEST @ $IP_VLLM_TEST) [GPUs 1+]"
   if $CREATE_OLLAMA; then
     echo "    - TEST-ollama-lxc ($CT_OLLAMA_TEST @ $IP_OLLAMA_TEST) [GPU 0]"
   fi
@@ -172,11 +172,11 @@ else
   echo "    - files-lxc  ($CT_FILES @ $IP_FILES)"
   echo ""
   echo "  Worker Services:"
-  echo "    - ingest-lxc ($CT_INGEST @ $IP_INGEST)"
+  echo "    - ingest-lxc ($CT_INGEST @ $IP_INGEST) [All GPUs, defaults to GPU 0]"
   echo "    - litellm-lxc ($CT_LITELLM @ $IP_LITELLM)"
   echo ""
   echo "  LLM Services:"
-  echo "    - vllm-lxc   ($CT_VLLM @ $IP_VLLM) [ALL GPUs]"
+  echo "    - vllm-lxc   ($CT_VLLM @ $IP_VLLM) [GPUs 1+]"
   if $CREATE_OLLAMA; then
     echo "    - ollama-lxc ($CT_OLLAMA @ $IP_OLLAMA) [GPU 0]"
   fi

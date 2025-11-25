@@ -1,5 +1,5 @@
 """
-File upload endpoint with chunked upload support.
+File upload endpoint with chunked upload support and role-based access control.
 
 Handles:
 - Streaming file upload with SHA-256 hash calculation
@@ -7,19 +7,21 @@ Handles:
 - File storage in MinIO
 - Database record creation
 - Job queuing in Redis Streams
+- Role-based visibility (personal or shared with roles)
 """
 
 import json
 import uuid
-from typing import Optional
+from typing import List, Optional
 
 import structlog
 from fastapi import APIRouter, File, Form, Request, UploadFile, status
 from fastapi.responses import JSONResponse
 
-from api.services.minio import MinIOService
+from api.middleware.jwt_auth import has_create_permission
+from api.services.minio_service import MinIOService
 from api.services.postgres import PostgresService
-from api.services.redis import RedisService
+from api.services.redis_service import RedisService
 from shared.config import Config
 
 logger = structlog.get_logger()
@@ -53,27 +55,72 @@ async def upload_file(
     file: UploadFile = File(...),
     metadata: Optional[str] = Form(None),
     processing_config: Optional[str] = Form(None),
+    visibility: str = Form("personal"),
+    role_ids: Optional[str] = Form(None),
 ):
     """
-    Upload a document for processing.
+    Upload a document for processing with role-based access control.
     
     Supports chunked upload with streaming. Calculates SHA-256 hash during upload.
     Detects duplicates and reuses vectors if content already processed.
     
     Headers:
-        X-User-Id: User UUID (required)
+        Authorization: Bearer <JWT> (preferred) - JWT with user identity and role permissions
+        X-User-Id: User UUID (legacy fallback)
     
     Body:
         file: Document file (multipart/form-data)
         metadata: Optional JSON metadata string
         processing_config: Optional JSON processing configuration string
+        visibility: 'personal' (default) or 'shared'
+        role_ids: Comma-separated role UUIDs (required if visibility='shared')
     
     Returns:
         fileId: UUID for tracking status
         status: Initial status
         duplicate: Whether this is a duplicate (vectors reused)
+        visibility: Document visibility setting
+        roles: List of role IDs (if shared)
     """
     user_id = request.state.user_id
+    
+    # Parse role_ids from comma-separated string
+    parsed_role_ids: List[str] = []
+    if role_ids:
+        parsed_role_ids = [r.strip() for r in role_ids.split(",") if r.strip()]
+    
+    # Validate visibility
+    if visibility not in ("personal", "shared"):
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"error": f"Invalid visibility: {visibility}. Must be 'personal' or 'shared'."}
+        )
+    
+    # Validate role_ids for shared documents
+    if visibility == "shared":
+        if not parsed_role_ids:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={"error": "role_ids required for shared visibility"}
+            )
+        
+        # Verify user has create permission on all specified roles
+        user_create_roles = getattr(request.state, "role_ids_create", [])
+        for role_id in parsed_role_ids:
+            if role_id not in user_create_roles:
+                logger.warning(
+                    "User lacks create permission on role",
+                    user_id=user_id,
+                    role_id=role_id,
+                    user_create_roles=user_create_roles,
+                )
+                return JSONResponse(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    content={
+                        "error": f"You don't have 'create' permission on role: {role_id}",
+                        "hint": "You can only upload documents to roles you have create permission on",
+                    }
+                )
     
     # Validate file
     if not file.filename:
@@ -193,7 +240,7 @@ async def upload_file(
                 )
                 parsed_processing_config = {}
         
-        # New file - create record
+        # New file - create record with visibility and roles
         await postgres_service.create_file_record(
             file_id=file_id,
             user_id=user_id,
@@ -204,6 +251,8 @@ async def upload_file(
             storage_path=storage_path,
             content_hash=content_hash,
             metadata=parsed_metadata,
+            visibility=visibility,
+            role_ids=parsed_role_ids if visibility == "shared" else None,
         )
         
         # Skip processing queue for video and image files (they're stored but not processed)
@@ -211,7 +260,7 @@ async def upload_file(
         is_image = file.content_type and file.content_type.startswith("image/")
         
         if not is_video and not is_image:
-            # Queue job in Redis with processing config for non-video files
+            # Queue job in Redis with processing config and role information for non-video files
             await redis_service.ensure_consumer_group()
             await redis_service.add_job(
                 file_id=file_id,
@@ -220,12 +269,16 @@ async def upload_file(
                 mime_type=file.content_type,
                 original_filename=file.filename,
                 processing_config=parsed_processing_config,
+                visibility=visibility,
+                role_ids=parsed_role_ids if visibility == "shared" else None,
             )
             
             logger.info(
                 "File uploaded and queued",
                 file_id=file_id,
                 user_id=user_id,
+                visibility=visibility,
+                role_count=len(parsed_role_ids) if parsed_role_ids else 0,
                 content_hash=content_hash,
             )
             
@@ -236,6 +289,8 @@ async def upload_file(
                     "status": "queued",
                     "duplicate": False,
                     "message": "File uploaded and queued for processing",
+                    "visibility": visibility,
+                    "roles": parsed_role_ids if visibility == "shared" else None,
                 }
             )
         else:
@@ -245,6 +300,8 @@ async def upload_file(
                 f"{file_type} file uploaded and stored",
                 file_id=file_id,
                 user_id=user_id,
+                visibility=visibility,
+                role_count=len(parsed_role_ids) if parsed_role_ids else 0,
                 content_hash=content_hash,
             )
             
@@ -255,6 +312,8 @@ async def upload_file(
                     "status": "completed",
                     "duplicate": False,
                     "message": f"{file_type} file uploaded and stored",
+                    "visibility": visibility,
+                    "roles": parsed_role_ids if visibility == "shared" else None,
                 }
             )
     

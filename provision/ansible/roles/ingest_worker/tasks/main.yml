@@ -58,6 +58,12 @@
     dest: /srv/ingest/src/
     mode: "0644"
 
+- name: Copy sample files for testing
+  copy:
+    src: "{{ playbook_dir }}/../../samples/"
+    dest: /srv/ingest/samples/
+    mode: "0644"
+
 - name: Copy requirements.txt
   copy:
     src: "{{ playbook_dir }}/../../srv/ingest/requirements.txt"
@@ -104,14 +110,14 @@
       REDIS_CONSUMER_GROUP=workers
       
       # PostgreSQL configuration (files database)
-      POSTGRES_HOST={{ postgres_host | default('10.96.200.26') }}
+      POSTGRES_HOST={{ postgres_host | default('10.96.200.203') }}
       POSTGRES_PORT={{ postgres_port | default('5432') }}
       POSTGRES_DB={{ files_db | default('files') }}
       POSTGRES_USER={{ postgres_user }}
       POSTGRES_PASSWORD={{ secrets.postgresql.password }}
       
       # Milvus configuration
-      MILVUS_HOST={{ milvus_host | default('10.96.200.27') }}
+      MILVUS_HOST={{ milvus_host | default('10.96.200.204') }}
       MILVUS_PORT={{ milvus_port | default('19530') }}
       MILVUS_COLLECTION={{ milvus_collection | default('documents') }}
       
@@ -122,7 +128,7 @@
       MINIO_SECURE=false
       
       # liteLLM configuration
-      LITELLM_BASE_URL={{ litellm_base_url | default('http://10.96.200.30:8000') }}
+      LITELLM_BASE_URL={{ litellm_base_url | default('http://10.96.200.207:8000') }}
       LITELLM_API_KEY={{ secrets.litellm.master_key | default('') }}
       
       # Processing configuration

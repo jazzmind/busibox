@@ -45,31 +45,117 @@
   set_fact:
     cert_domain: "{{ full_domain | default(domain) }}"
 
-- name: Deploy SSL certificate
-  copy:
-    content: "{{ secrets.ssl_certificates.certificate }}"
-    dest: "/etc/ssl/busibox/{{ cert_domain }}.crt"
-    mode: "0644"
-    owner: root
-    group: root
+- name: Deploy and format SSL certificate
+  shell: |
+    # Single-pass solution: write vault content, then reformat
+    cat << 'CERTEOF' | awk '
+    BEGIN { RS=""; ORS="" }
+    {
+      # Remove ALL whitespace first
+      gsub(/[[:space:]]/, "")
+      
+      # Find the certificate markers
+      begin_pos = index($0, "-----BEGINCERTIFICATE-----")
+      end_pos = index($0, "-----ENDCERTIFICATE-----")
+      
+      if (begin_pos > 0 && end_pos > 0) {
+        # Extract base64 between markers
+        base64 = substr($0, begin_pos + 26, end_pos - begin_pos - 26)
+        
+        # Output properly formatted
+        print "-----BEGIN CERTIFICATE-----\n"
+        for (i=1; i<=length(base64); i+=64) {
+          print substr(base64, i, 64) "\n"
+        }
+        print "-----END CERTIFICATE-----\n"
+      }
+    }
+    ' > "/etc/ssl/busibox/{{ cert_domain }}.crt"
+    {{ secrets.ssl_certificates.certificate }}
+    CERTEOF
   no_log: true
 
-- name: Deploy SSL private key
-  copy:
-    content: "{{ secrets.ssl_certificates.private_key }}"
-    dest: "/etc/ssl/busibox/{{ cert_domain }}.key"
-    mode: "0600"
-    owner: root
-    group: root
+- name: Deploy and format SSL private key
+  shell: |
+    # Single-pass solution for private key
+    cat << 'KEYEOF' | awk '
+    BEGIN { RS=""; ORS="" }
+    {
+      # Remove ALL whitespace to get continuous string
+      gsub(/[[:space:]]/, "")
+      
+      # Detect key type and set proper markers (with spaces restored)
+      if (index($0, "BEGINPRIVATEKEY") > 0) {
+        begin_out = "-----BEGIN PRIVATE KEY-----"
+        end_out = "-----END PRIVATE KEY-----"
+        begin_search = "-----BEGINPRIVATEKEY-----"
+        end_search = "-----ENDPRIVATEKEY-----"
+        begin_len = 25
+      } else if (index($0, "BEGINRSAPRIVATEKEY") > 0) {
+        begin_out = "-----BEGIN RSA PRIVATE KEY-----"
+        end_out = "-----END RSA PRIVATE KEY-----"
+        begin_search = "-----BEGINRSAPRIVATEKEY-----"
+        end_search = "-----ENDRSAPRIVATEKEY-----"
+        begin_len = 28
+      } else {
+        print "ERROR: Unknown private key format" > "/dev/stderr"
+        exit 1
+      }
+      
+      begin_pos = index($0, begin_search)
+      end_pos = index($0, end_search)
+      
+      if (begin_pos > 0 && end_pos > 0) {
+        # Extract base64 between markers
+        end_len = length(end_search)
+        base64 = substr($0, begin_pos + begin_len, end_pos - begin_pos - begin_len)
+        
+        # Output properly formatted with correct markers
+        print begin_out "\n"
+        for (i=1; i<=length(base64); i+=64) {
+          print substr(base64, i, 64) "\n"
+        }
+        print end_out "\n"
+      }
+    }
+    ' > "/etc/ssl/busibox/{{ cert_domain }}.key"
+    {{ secrets.ssl_certificates.private_key }}
+    KEYEOF
+    chmod 600 "/etc/ssl/busibox/{{ cert_domain }}.key"
   no_log: true
 
-- name: Deploy SSL certificate chain
-  copy:
-    content: "{{ secrets.ssl_certificates.chain }}"
-    dest: "/etc/ssl/busibox/{{ cert_domain }}-chain.crt"
-    mode: "0644"
-    owner: root
-    group: root
+- name: Deploy and format SSL certificate chain
+  shell: |
+    # Single-pass solution for chain (may have multiple certificates)
+    cat << 'CHAINEOF' | awk '
+    BEGIN { RS=""; ORS="" }
+    {
+      # Remove ALL whitespace
+      gsub(/[[:space:]]/, "")
+      
+      # Process each certificate in the chain
+      remaining = $0
+      while (match(remaining, /-----BEGINCERTIFICATE-----.*?-----ENDCERTIFICATE-----/)) {
+        cert = substr(remaining, RSTART, RLENGTH)
+        
+        # Extract base64 (remove BEGIN/END markers)
+        gsub(/-----BEGINCERTIFICATE-----/, "", cert)
+        gsub(/-----ENDCERTIFICATE-----/, "", cert)
+        
+        # Output formatted certificate
+        print "-----BEGIN CERTIFICATE-----\n"
+        for (i=1; i<=length(cert); i+=64) {
+          print substr(cert, i, 64) "\n"
+        }
+        print "-----END CERTIFICATE-----\n"
+        
+        # Move to next certificate
+        remaining = substr(remaining, RSTART + RLENGTH)
+      }
+    }
+    ' > "/etc/ssl/busibox/{{ cert_domain }}-chain.crt"
+    {{ secrets.ssl_certificates.chain }}
+    CHAINEOF
   when: 
     - secrets.ssl_certificates.chain is defined
     - secrets.ssl_certificates.chain | length > 0

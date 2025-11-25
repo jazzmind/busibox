@@ -28,9 +28,9 @@ def mock_config():
         "postgres_db": "test_db",
         "postgres_user": "test_user",
         "postgres_password": "test_pass",
-        "embedding_service_url": "http://localhost:8000",
-        "embedding_model": "text-embedding-3-small",
-        "embedding_dim": 1536,
+        "embedding_service_url": "http://localhost:8002",
+        "embedding_model": "bge-large-en-v1.5",
+        "embedding_dim": 1024,
         "reranker_model": "BAAI/bge-reranker-v2-m3",
         "reranker_device": "cpu",
         "enable_reranking": True,
@@ -71,10 +71,10 @@ def sample_document_text():
 
 @pytest.fixture
 def sample_embedding():
-    """Sample embedding vector."""
+    """Sample embedding vector (bge-large-en-v1.5 dimension)."""
     import random
     random.seed(42)
-    return [random.random() for _ in range(1536)]
+    return [random.random() for _ in range(1024)]
 
 
 @pytest.fixture
@@ -121,7 +121,7 @@ def mock_milvus_service(sample_search_results):
         "file_id": "file-123",
         "chunk_index": 0,
         "text": "Sample document text",
-        "text_dense": [0.1] * 1536,
+        "text_dense": [0.1] * 1024,
     })
     service.health_check = Mock(return_value=True)
     return service

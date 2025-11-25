@@ -37,7 +37,7 @@ from shared.config import Config
 # ============================================================================
 
 # Test environment variables (override defaults for testing)
-TEST_COLPALI_BASE_URL = os.getenv("COLPALI_BASE_URL", "http://10.96.200.31:8002/v1")
+TEST_COLPALI_BASE_URL = os.getenv("COLPALI_BASE_URL", "http://10.96.200.208:9006/v1")
 TEST_COLPALI_HEALTH_URL = TEST_COLPALI_BASE_URL.replace("/v1", "/health")
 TEST_COLPALI_API_KEY = os.getenv("COLPALI_API_KEY", "EMPTY")
 
@@ -45,10 +45,9 @@ TEST_COLPALI_API_KEY = os.getenv("COLPALI_API_KEY", "EMPTY")
 HEALTH_TIMEOUT = 5.0
 EMBEDDING_TIMEOUT = 60.0
 
-# Expected embedding dimensions
-EXPECTED_PATCH_DIM = 128
-MIN_PATCHES = 32  # Minimum patches for small images
-MAX_PATCHES = 2048  # Maximum patches for large images
+# Expected embedding dimensions (pooled vectors)
+EXPECTED_POOLED_DIM = 128  # ColPali returns pooled 128-d vectors per page
+# Note: ColPali now returns mean-pooled vectors instead of multi-patch format
 
 
 # ============================================================================
@@ -269,22 +268,15 @@ class TestEmbeddingGeneration:
         assert embeddings is not None, "Embedding generation returned None"
         assert len(embeddings) == 1, f"Expected 1 embedding, got {len(embeddings)}"
         
-        # Check embedding structure
+        # Check embedding structure (pooled vector)
         page_embedding = embeddings[0]
-        assert isinstance(page_embedding, list), "Embedding should be a list of patches"
-        assert len(page_embedding) >= MIN_PATCHES, f"Too few patches: {len(page_embedding)}"
-        assert len(page_embedding) <= MAX_PATCHES, f"Too many patches: {len(page_embedding)}"
+        assert isinstance(page_embedding, list), "Embedding should be a list"
+        assert len(page_embedding) == EXPECTED_POOLED_DIM, f"Expected {EXPECTED_POOLED_DIM} dims, got {len(page_embedding)}"
+        assert all(isinstance(v, (int, float)) for v in page_embedding), "Embedding values should be numeric"
         
-        # Check patch dimensions
-        for patch in page_embedding:
-            assert isinstance(patch, list), "Each patch should be a list"
-            assert len(patch) == EXPECTED_PATCH_DIM, f"Expected {EXPECTED_PATCH_DIM} dims, got {len(patch)}"
-            assert all(isinstance(v, (int, float)) for v in patch), "Patch values should be numeric"
-        
-        print(f"\n✓ Generated embedding for single image")
-        print(f"  Patches: {len(page_embedding)}")
-        print(f"  Dimensions per patch: {len(page_embedding[0])}")
-        print(f"  Total values: {len(page_embedding) * len(page_embedding[0])}")
+        print(f"\n✓ Generated pooled embedding for single image")
+        print(f"  Dimensions: {len(page_embedding)}")
+        print(f"  Sample values: {page_embedding[:5]}")
     
     @pytest.mark.asyncio
     async def test_multiple_image_embeddings(self, colpali_embedder, multiple_images):
@@ -301,13 +293,11 @@ class TestEmbeddingGeneration:
         assert embeddings is not None
         assert len(embeddings) == len(multiple_images)
         
-        # Check each embedding
+        # Check each embedding (pooled vectors)
         for i, page_embedding in enumerate(embeddings):
             assert isinstance(page_embedding, list)
-            assert len(page_embedding) >= MIN_PATCHES
-            
-            for patch in page_embedding:
-                assert len(patch) == EXPECTED_PATCH_DIM
+            assert len(page_embedding) == EXPECTED_POOLED_DIM, f"Image {i}: Expected {EXPECTED_POOLED_DIM} dims, got {len(page_embedding)}"
+            assert all(isinstance(v, (int, float)) for v in page_embedding)
         
         print(f"\n✓ Generated embeddings for {len(multiple_images)} images")
         print(f"  Time: {elapsed:.2f}s ({elapsed/len(multiple_images):.2f}s per image)")
@@ -760,8 +750,8 @@ async def test_diagnostic_report():
         print("   • ColPali service is not accessible")
         print("   • Verify the service is running on vllm-lxc container")
         print("   • Check network connectivity:")
-        print("     ping 10.96.200.31")
-        print("     curl http://10.96.200.31:8002/health")
+        print("     ping 10.96.200.208")
+        print("     curl http://10.96.200.208:9006/health")
     
     print("\n" + "="*70)
 

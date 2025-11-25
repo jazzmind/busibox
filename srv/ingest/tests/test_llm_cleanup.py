@@ -9,7 +9,13 @@ Tests the LLM-based text cleanup functionality that fixes:
 """
 
 import pytest
+import sys
+from pathlib import Path
 from unittest.mock import Mock, AsyncMock, patch
+
+# Add src to path
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
 from processors.llm_cleanup import LLMCleanup
 
 
@@ -34,13 +40,35 @@ def mock_config_disabled():
 
 @pytest.fixture
 def mock_registry():
-    """Mock model registry."""
+    """Mock model registry - returns cleanup model (phi-4) from registry."""
     registry = Mock()
-    registry.get_model.return_value = "qwen3-30b-instruct"
-    registry.get_config.return_value = {
-        "temperature": 0.1,
-        "max_tokens": 32768,
-    }
+    # Model registry returns "phi-4" for cleanup purpose (from model_registry.yml)
+    # get_model("cleanup") should return "phi-4"
+    registry.get_model = Mock(side_effect=lambda purpose: {
+        "cleanup": "phi-4",
+        "parsing": "phi-4",
+    }.get(purpose, ValueError(f"Unknown purpose: {purpose}")))
+    
+    # get_config("cleanup") should return full config
+    registry.get_config = Mock(side_effect=lambda purpose: {
+        "cleanup": {
+            "model": "phi-4",
+            "model_name": "microsoft/Phi-4-multimodal-instruct",
+            "temperature": 0.1,
+            "max_tokens": 32768,
+            "provider": "litellm",
+            "endpoint": "/chat/completions",
+        },
+        "parsing": {
+            "model": "phi-4",
+            "model_name": "microsoft/Phi-4-multimodal-instruct",
+            "temperature": 0.1,
+            "max_tokens": 8192,
+            "provider": "litellm",
+            "endpoint": "/chat/completions",
+        },
+    }.get(purpose, ValueError(f"Unknown purpose: {purpose}")))
+    
     return registry
 
 
@@ -66,7 +94,7 @@ class TestLLMCleanupInit:
     def test_init_enabled(self, cleanup_processor):
         """Test initialization with cleanup enabled."""
         assert cleanup_processor.enabled is True
-        assert cleanup_processor.model == "qwen3-30b-instruct"
+        assert cleanup_processor.model == "phi-4"  # From model registry (cleanup purpose)
         assert cleanup_processor.litellm_base_url == "http://localhost:4000"
     
     def test_init_disabled(self, cleanup_processor_disabled):
@@ -74,10 +102,29 @@ class TestLLMCleanupInit:
         assert cleanup_processor_disabled.enabled is False
     
     def test_init_with_fallback_model(self, mock_config):
-        """Test initialization falls back to default model if registry fails."""
+        """Test initialization falls back to parsing model, then phi-4 if registry fails."""
+        # Mock registry to fail on "cleanup" but succeed on "parsing"
+        registry = Mock()
+        registry.get_model.side_effect = lambda purpose: {
+            "cleanup": ValueError("cleanup not found"),
+            "parsing": "phi-4"
+        }.get(purpose, ValueError(f"Unknown purpose: {purpose}"))
+        registry.get_config.return_value = {
+            "model": "phi-4",
+            "temperature": 0.1,
+            "max_tokens": 8192,
+        }
+        
+        with patch('processors.llm_cleanup.get_registry', return_value=registry):
+            processor = LLMCleanup(mock_config)
+            # Should fallback to parsing model (phi-4)
+            assert processor.model == "phi-4"
+        
+        # Test complete registry failure - should use hardcoded phi-4 fallback
         with patch('processors.llm_cleanup.get_registry', side_effect=Exception("Registry error")):
             processor = LLMCleanup(mock_config)
-            assert processor.model == "qwen3-30b-instruct"
+            # Final fallback is hardcoded phi-4
+            assert processor.model == "phi-4"
 
 
 class TestNeedsCleanup:
@@ -243,8 +290,8 @@ class TestCleanupChunks:
         from processors.chunker import Chunk
         
         chunks = [
-            Chunk(text="Chunk 1 with actuallyunderstoodsmashed", chunk_index=0, token_count=10),
-            Chunk(text="Chunk 2 with moresmashedwords", chunk_index=1, token_count=10),
+            Chunk(text="Chunk 1 with actuallyunderstoodsmashed", chunk_index=0, token_count=10, char_offset=0),
+            Chunk(text="Chunk 2 with moresmashedwords", chunk_index=1, token_count=10, char_offset=50),
         ]
         
         result = await cleanup_processor_disabled.cleanup_chunks(chunks)
@@ -258,8 +305,8 @@ class TestCleanupChunks:
         from processors.chunker import Chunk
         
         chunks = [
-            Chunk(text="Chunk 1 with actuallyunderstoodsmashed words", chunk_index=0, token_count=10),
-            Chunk(text="Chunk 2 is clean", chunk_index=1, token_count=10),
+            Chunk(text="Chunk 1 with actuallyunderstoodsmashed words", chunk_index=0, token_count=10, char_offset=0),
+            Chunk(text="Chunk 2 is clean", chunk_index=1, token_count=10, char_offset=50),
         ]
         
         # Mock cleanup_chunk to return cleaned text for first chunk

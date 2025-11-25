@@ -266,25 +266,17 @@ verify_health() {
   
   # LiteLLM
   log_info "Checking LiteLLM..."
-  if curl -f -s http://10.96.200.30:4000/health > /dev/null 2>&1; then
+  if curl -f -s http://10.96.200.207:4000/health > /dev/null 2>&1; then
     record_step "LiteLLM health" "PASS"
   else
     log_warning "LiteLLM not responding (may still be starting)"
     record_step "LiteLLM health" "PASS" "Not ready yet (expected during initial deploy)"
   fi
   
-  # Ollama
-  log_info "Checking Ollama..."
-  if curl -f -s http://10.96.200.31:11434/api/tags > /dev/null 2>&1; then
-    record_step "Ollama health" "PASS"
-  else
-    log_warning "Ollama not responding (may be downloading models)"
-    record_step "Ollama health" "PASS" "Not ready yet (expected during initial deploy)"
-  fi
   
   # vLLM
   log_info "Checking vLLM..."
-  if curl -f -s http://10.96.200.32:8000/health > /dev/null 2>&1; then
+  if curl -f -s http://10.96.200.208:8000/health > /dev/null 2>&1; then
     record_step "vLLM health" "PASS"
   else
     log_warning "vLLM not responding (may be loading model)"
@@ -314,9 +306,9 @@ print_deployment_summary() {
     log_success "PRODUCTION DEPLOYMENT SUCCESSFUL!"
     echo ""
     echo "Production Endpoints:"
-    echo "  LiteLLM API:    http://10.96.200.30:4000"
-    echo "  Ollama API:     http://10.96.200.31:11434"
-    echo "  vLLM API:       http://10.96.200.32:8000"
+    echo "  LiteLLM API:    http://10.96.200.207:4000"
+    echo "  Ollama API:     http://10.96.200.208:11434"
+    echo "  vLLM API:       http://10.96.200.209:8000"
     echo "  PostgreSQL:     10.96.200.203:5432"
     echo "  MinIO Console:  http://10.96.200.205:9001"
     echo "  Milvus:         10.96.200.204:19530"
@@ -402,12 +394,12 @@ Commands:
 
 Production Environment:
   Container IDs: 200-209
-  IP Range: 10.96.200.30-32 (LLM), 10.96.200.200-206 (services)
+  IP Range: 10.96.200.207-210 (LLM), 10.96.200.200-206 (services)
   
 LLM Services:
-  - LiteLLM:  10.96.200.30:4000 (unified API)
-  - Ollama:   10.96.200.31:11434 (GPU 0)
-  - vLLM:     10.96.200.32:8000 (GPU 1)
+  - LiteLLM:  10.96.200.207:4000 (unified API)
+  - Ollama:   10.96.200.208:11434 (GPU 0)
+  - vLLM:     10.96.200.209:8000 (GPU 1)
 
 Examples:
   bash deploy-production.sh full        # Complete deployment

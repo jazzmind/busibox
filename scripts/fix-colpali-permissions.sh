@@ -43,9 +43,10 @@ chmod -R g+rwX /var/lib/llm-models/huggingface 2>/dev/null || true
 
 echo ""
 echo "4. Fixing specific model directories..."
+# Models are stored in the standard hub/ subdirectory
 for model_dir in \
-    "/var/lib/llm-models/huggingface/models--vidore--colpali-v1.3" \
-    "/var/lib/llm-models/huggingface/models--google--paligemma-3b-pt-448" \
+    "/var/lib/llm-models/huggingface/hub/models--vidore--colpali-v1.3" \
+    "/var/lib/llm-models/huggingface/hub/models--google--paligemma-3b-pt-448" \
     "/var/lib/llm-models/huggingface/hub"
 do
     if [ -d "$model_dir" ]; then
@@ -59,8 +60,8 @@ done
 
 echo ""
 echo "5. Verifying permissions..."
-ls -ld /var/lib/llm-models/huggingface/models--vidore--colpali-v1.3 || echo "   (ColPali model not cached)"
-ls -ld /var/lib/llm-models/huggingface/models--google--paligemma-3b-pt-448 || echo "   (PaliGemma model not cached)"
+ls -ld /var/lib/llm-models/huggingface/hub/models--vidore--colpali-v1.3 || echo "   (ColPali model not cached in hub/)"
+ls -ld /var/lib/llm-models/huggingface/hub/models--google--paligemma-3b-pt-448 || echo "   (PaliGemma model not cached in hub/)"
 
 echo ""
 echo "6. Restarting colpali service..."

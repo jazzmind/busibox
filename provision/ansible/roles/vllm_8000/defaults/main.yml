@@ -1,0 +1,67 @@
+---
+# vLLM Port 8000 Role - Default Variables
+# Port-based vLLM role that checks model_config.yml for assigned models
+
+# Port configuration
+vllm_port: 8000
+vllm_service_name: "vllm-{{ vllm_port }}"
+
+# Check if model is assigned to this port
+# This will be set dynamically based on model_config.yml
+vllm_assigned_model: ""
+
+# vLLM Installation (shared with other vLLM roles)
+vllm_version: "0.6.3"
+vllm_install_method: "pip"
+vllm_install_dir: /opt/vllm
+vllm_venv_dir: "{{ vllm_install_dir }}/venv"
+vllm_python_version: "3.10"
+vllm_pip_extra_index_url: "https://download.pytorch.org/whl/cu121"
+
+# Service Configuration
+vllm_user: vllm
+vllm_group: vllm
+vllm_home: /var/lib/vllm
+vllm_cache_dir: /var/lib/llm-models/huggingface
+vllm_host: "0.0.0.0"
+vllm_download_dir: "{{ vllm_cache_dir }}/hub"
+
+# Model Configuration (from model_config.yml)
+vllm_default_model: ""  # Set from model_config.yml if assigned
+vllm_tensor_parallel_size: 1  # Set from model_config.yml if assigned
+vllm_cuda_visible_devices: ""  # Set from model_config.yml if assigned
+
+# LoRA Adapter Support (for ColPali and other LoRA models)
+vllm_enable_lora: false  # Auto-detected for ColPali
+vllm_lora_base_model: ""  # For ColPali: google/paligemma-3b-pt-448
+vllm_max_loras: 1  # Number of LoRA adapters to support
+vllm_max_lora_rank: 128  # Maximum LoRA rank
+
+# Performance Configuration
+vllm_gpu_memory_utilization: 0.9
+vllm_max_model_len: 8192
+vllm_max_num_seqs: 256
+vllm_trust_remote_code: true
+vllm_hf_token: "{{ huggingface_token | default('') }}"
+vllm_max_num_batched_tokens: null
+vllm_enable_prefix_caching: true
+vllm_disable_log_stats: false
+vllm_cpu_offload_gb: 150
+
+# API Configuration
+vllm_served_model_name: null
+vllm_api_key: null
+vllm_enable_api_key: false
+
+# Service Configuration
+vllm_enable_service: true
+vllm_start_service: true
+vllm_restart_on_failure: true
+vllm_restart_sec: 15
+vllm_log_level: info
+vllm_memory_limit: "180G"
+vllm_cpu_limit: "8"
+vllm_health_check_enabled: true
+vllm_health_check_interval: 60
+vllm_startup_timeout: 900  # 15 minutes - large models take time to load
+

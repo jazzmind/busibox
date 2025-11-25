@@ -65,6 +65,21 @@ The server provides the following tools:
    - Parameters: `environment` (required: test|production)
    - Returns: Environment-specific configuration
 
+7. **execute_proxmox_command** - Execute commands on Proxmox host
+   - Parameters: `command` (required), `working_directory` (optional), `timeout` (optional)
+   - Returns: Command output, exit code, stdout, stderr
+   - Examples: `make test`, `pct status 200`, `ansible-playbook -i inventory/test/hosts.yml site.yml --tags milvus`
+
+8. **get_container_logs** - Get logs from containers via SSH
+   - Parameters: `container` (required), `service` (optional), `lines` (optional, default: 50)
+   - Returns: Journalctl logs from the container
+   - Examples: Get logs for `search-api` service on `milvus-lxc` container
+
+9. **get_container_service_status** - Get systemctl status for services
+   - Parameters: `container` (required), `service` (required)
+   - Returns: Systemctl status output
+   - Examples: Check status of `search-api` on `milvus-lxc`
+
 ### Prompts
 
 Guided assistance for common tasks:
@@ -92,6 +107,24 @@ npm run build
 
 ### Configuration
 
+#### Environment Variables
+
+The MCP server supports the following environment variables for SSH configuration:
+
+- `PROXMOX_HOST_IP` - IP address of the Proxmox host (default: `10.96.200.1`)
+- `PROXMOX_HOST_USER` - SSH user for Proxmox host (default: `root`)
+- `PROXMOX_SSH_KEY_PATH` - Path to SSH private key for Proxmox host (default: `~/.ssh/id_rsa`)
+- `CONTAINER_SSH_KEY_PATH` - Path to SSH private key for containers (default: `~/.ssh/id_rsa`)
+
+Example configuration:
+
+```bash
+export PROXMOX_HOST_IP="10.96.200.1"
+export PROXMOX_HOST_USER="root"
+export PROXMOX_SSH_KEY_PATH="/path/to/proxmox/key"
+export CONTAINER_SSH_KEY_PATH="/path/to/container/key"
+```
+
 #### For Claude Desktop
 
 Add to your Claude Desktop configuration (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
@@ -103,7 +136,12 @@ Add to your Claude Desktop configuration (`~/Library/Application Support/Claude/
       "command": "node",
       "args": [
         "/absolute/path/to/busibox/tools/mcp-server/dist/index.js"
-      ]
+      ],
+      "env": {
+        "PROXMOX_HOST_IP": "10.96.200.1",
+        "PROXMOX_HOST_USER": "root",
+        "PROXMOX_SSH_KEY_PATH": "/path/to/.ssh/id_rsa"
+      }
     }
   }
 }
@@ -119,7 +157,12 @@ Add to your Cursor MCP settings (Settings > MCP Servers):
     "command": "node",
     "args": [
       "/absolute/path/to/busibox/tools/mcp-server/dist/index.js"
-    ]
+    ],
+    "env": {
+      "PROXMOX_HOST_IP": "10.96.200.1",
+      "PROXMOX_HOST_USER": "root",
+      "PROXMOX_SSH_KEY_PATH": "/path/to/.ssh/id_rsa"
+    }
   }
 }
 ```
@@ -166,6 +209,21 @@ How do I deploy the agent-lxc service to test?
 **Troubleshoot issues:**
 ```
 Help me troubleshoot a container issue
+```
+
+**Execute commands on Proxmox host:**
+```
+Run "make test" on the Proxmox host
+```
+
+**Get container logs:**
+```
+Get the last 100 lines of logs for search-api service on milvus-lxc
+```
+
+**Check service status:**
+```
+Check the status of search-api service on milvus-lxc container
 ```
 
 ### Direct MCP Usage
@@ -321,6 +379,7 @@ When making changes to the MCP server:
 ## License
 
 Part of the Busibox project. See project root for license information.
+
 
 
 

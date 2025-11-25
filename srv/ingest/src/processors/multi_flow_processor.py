@@ -324,13 +324,31 @@ class MultiFlowProcessor:
         original_filename: str,
         start_time: float,
     ) -> ProcessingResult:
-        """Process with MARKER strategy (enhanced PDF processing)."""
+        """Process with MARKER strategy (enhanced document processing).
         
-        if mime_type != "application/pdf":
+        Marker supports: PDF, PPTX, DOCX, XLSX, HTML, EPUB, and images.
+        """
+        
+        # Marker supported formats (as per https://pypi.org/project/marker-pdf/)
+        supported_mimes = {
+            "application/pdf",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",  # DOCX
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",  # PPTX
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",  # XLSX
+            "text/html",
+            "application/epub+zip",
+            "image/png",
+            "image/jpeg",
+            "image/jpg",
+            "image/webp",
+            "image/tiff",
+        }
+        
+        if mime_type not in supported_mimes:
             return ProcessingResult(
                 strategy=ProcessingStrategy.MARKER,
                 success=False,
-                error="Marker only supports PDF files",
+                error=f"Marker does not support {mime_type}. Supported: PDF, DOCX, PPTX, XLSX, HTML, EPUB, images",
                 processing_time_seconds=time.time() - start_time,
             )
         
@@ -474,7 +492,7 @@ class MultiFlowProcessor:
                 "primary_language": primary_language,
                 "detected_languages": detected_languages,
                 "visual_embedding_count": len(visual_embeddings),
-                "patches_per_page": [len(page_emb) for page_emb in visual_embeddings],
+                "embedding_dimension": len(visual_embeddings[0]) if visual_embeddings else 0,
             },
             visual_embeddings=visual_embeddings,
             processing_time_seconds=processing_time,

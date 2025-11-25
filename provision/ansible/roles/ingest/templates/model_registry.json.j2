@@ -1,10 +1,11 @@
 {
+  "available_models": {{ available_models | to_nice_json(indent=2) | indent(2) }},
   "purposes": {{ model_purposes | to_nice_json(indent=2) | indent(2) }},
   "metadata": {
     "deployed_at": "{{ ansible_date_time.iso8601 }}",
     "deployed_by": "ansible",
     "environment": "{{ inventory_environment | default('unknown') }}",
-    "version": "1.0"
+    "version": "2.0"
   }
 }
 

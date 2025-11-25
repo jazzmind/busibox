@@ -16,10 +16,11 @@ postgres_host: "{{ hostvars[groups['pg'][0]]['ansible_host'] }}"
 postgres_port: 5432
 postgres_db: busibox
 postgres_user: app_user
+# postgres_password is defined in inventory group_vars
 
-# Embedding service (litellm)
-embedding_service_url: "http://{{ hostvars[groups['litellm'][0]]['ansible_host'] }}:8000"
-embedding_model: text-embedding-3-small
+# Embedding service (local FastEmbed on ingest-lxc)
+embedding_service_url: "http://{{ hostvars[groups['ingest'][0]]['ansible_host'] }}:8002"
+embedding_model: bge-large-en-v1.5
 
 # Reranking settings
 reranker_model: "BAAI/bge-reranker-v2-m3"

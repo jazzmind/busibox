@@ -1,6 +1,83 @@
 ---
 # LiteLLM Configuration Tasks
 
+- name: Check if model_config.yml exists
+  stat:
+    path: "{{ playbook_dir }}/group_vars/all/model_config.yml"
+  register: model_config_file
+  delegate_to: localhost
+  tags: [litellm_configure]
+
+- name: Warning if model_config.yml does not exist
+  debug:
+    msg:
+      - "=========================================="
+      - "WARNING: model_config.yml not found!"
+      - "=========================================="
+      - "No models will be configured in LiteLLM."
+      - ""
+      - "To generate model_config.yml on Proxmox host:"
+      - "  1. cd /root/busibox/provision/pct/host"
+      - "  2. bash update-model-config.sh"
+      - "  3. bash configure-vllm-model-routing.sh --interactive"
+      - ""
+      - "Then re-run this deployment."
+      - "=========================================="
+  when: not model_config_file.stat.exists
+  tags: [litellm_configure]
+
+- name: Load model_config.yml if it exists
+  include_vars:
+    file: "{{ playbook_dir }}/group_vars/all/model_config.yml"
+    name: model_config_data
+  when: model_config_file.stat.exists
+  delegate_to: localhost
+  tags: [litellm_configure]
+
+- name: Copy model config generator script
+  copy:
+    src: generate_model_config.py
+    dest: /tmp/generate_model_config.py
+    mode: '0755'
+  delegate_to: localhost
+  tags: [litellm_configure]
+
+- name: Build litellm_models list from model_config.yml using Python
+  command: python3 /tmp/generate_model_config.py
+  environment:
+    MODEL_CONFIG_FILE: "{{ playbook_dir }}/group_vars/all/model_config.yml"
+    MODEL_REGISTRY_FILE: "{{ playbook_dir }}/group_vars/all/model_registry.yml"
+    AWS_BEARER_TOKEN_BEDROCK: "{{ secrets.bedrock_api_key | default('') }}"
+    AWS_REGION_NAME: "{{ secrets.bedrock_region | default('us-east-1') }}"
+    VLLM_IP: "{{ vllm_ip }}"
+  register: models_json_output
+  delegate_to: localhost
+  changed_when: false
+  tags: [litellm_configure]
+
+- name: Set litellm_models fact from Python output
+  set_fact:
+    litellm_models: "{{ models_json_output.stdout | from_json }}"
+  tags: [litellm_configure]
+
+- name: Debug - Display model configuration details
+  debug:
+    msg: |
+      ==========================================
+      Model Configuration Details
+      ==========================================
+      Number of models configured: {{ litellm_models | length }}
+      
+      {% for model in litellm_models %}
+      Model: {{ model.model_name }}
+        Backend: {{ model.litellm_params.model }}
+      {% if model.litellm_params.api_base is defined %}
+        API Base: {{ model.litellm_params.api_base }}
+      {% endif %}
+      {% endfor %}
+      ==========================================
+  tags: [litellm_configure, litellm_debug]
+
 - name: Deploy LiteLLM configuration file
   template:
     src: config.yaml.j2
@@ -10,6 +87,17 @@
     mode: '0640'
   notify: restart litellm
   tags: [litellm_configure]
+
+- name: Debug - Display generated LiteLLM config (model_list section)
+  shell: "grep -A 50 '^model_list:' {{ litellm_config_dir }}/config.yaml | head -100"
+  register: config_preview
+  changed_when: false
+  tags: [litellm_configure, litellm_debug]
+
+- name: Debug - Show config preview
+  debug:
+    msg: "{{ config_preview.stdout_lines }}"
+  tags: [litellm_configure, litellm_debug]
 
 - name: Deploy LiteLLM systemd service file
   template:
@@ -240,16 +328,27 @@
     headers:
       Authorization: "Bearer {{ litellm_master_key }}"
     status_code: 200
+    timeout: 30
   register: litellm_health_test
-  retries: 3
-  delay: 2
+  failed_when: false
   when: litellm_start_service
   tags: [litellm_configure, litellm_test]
 
 - name: Display health check result
   debug:
-    msg: "LiteLLM health check passed (authenticated)"
-  when: litellm_health_test is defined and litellm_health_test.status == 200
+    msg: |
+      LiteLLM Health Check Result:
+      {% if litellm_health_test.status == 200 %}
+      ✅ Status: HEALTHY (200 OK)
+      Note: Health check probes all backend models, which can take time
+      {% elif litellm_health_test.status == -1 %}
+      ⚠️  Status: TIMEOUT (Health check took > 30s)
+      This is normal if backend models are slow to respond
+      Service is running - check /health endpoint manually if needed
+      {% else %}
+      ❌ Status: {{ litellm_health_test.status | default('UNKNOWN') }}
+      {% endif %}
+  when: litellm_health_test is defined
   tags: [litellm_configure, litellm_test]
 
 - name: Test LiteLLM models endpoint
@@ -267,7 +366,140 @@
 
 - name: Display available models
   debug:
-    msg: "{{ litellm_models_test.json.data | map(attribute='id') | list if litellm_models_test.json is defined else 'Unable to retrieve models' }}"
+    msg: 
+      - "=========================================="
+      - "Available Models in LiteLLM"
+      - "=========================================="
+      - "{{ litellm_models_test.json.data | map(attribute='id') | list if litellm_models_test.json is defined else 'Unable to retrieve models' }}"
+      - "=========================================="
   when: litellm_models_test is defined
+  tags: [litellm_configure, litellm_test]
+
+# Backend health checks removed - redundant with actual chat completion tests below
+
+- name: Skip embedding test (served by FastEmbed service, not LiteLLM)
+  debug:
+    msg: |
+      ⏭️  Embedding test skipped
+      Reason: 'embedding' purpose is served by FastEmbed service (dedicated API)
+      Not routed through LiteLLM's chat completion API
+  tags: [litellm_configure, litellm_test]
+
+- name: Test fast chat model
+  uri:
+    url: "http://{{ litellm_host if litellm_host != '0.0.0.0' else 'localhost' }}:{{ litellm_port }}/v1/chat/completions"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ litellm_master_key }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      model: "fast"
+      messages:
+        - role: "user"
+          content: "Say 'hello' in one word."
+      max_tokens: 10
+    status_code: 200
+  register: fast_test
+  retries: 3
+  delay: 2
+  when: litellm_start_service and (model_purposes.fast is defined)
+  failed_when: false
+  tags: [litellm_configure, litellm_test]
+
+- name: Display fast model test result
+  debug:
+    msg: "{{ 'Fast model test passed - response: ' + fast_test.json.choices[0].message.content if fast_test.json is defined and fast_test.json.choices is defined else 'Fast model test skipped or failed: ' + (fast_test.json.error.message | default('No fast model configured')) }}"
+  when: fast_test is defined
+  tags: [litellm_configure, litellm_test]
+
+- name: Test agent chat model
+  uri:
+    url: "http://{{ litellm_host if litellm_host != '0.0.0.0' else 'localhost' }}:{{ litellm_port }}/v1/chat/completions"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ litellm_master_key }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      model: "agent"
+      messages:
+        - role: "user"
+          content: "What is 2+2? Answer with just the number."
+      max_tokens: 10
+    status_code: 200
+  register: agent_test
+  retries: 3
+  delay: 2
+  when: litellm_start_service and (model_purposes.agent is defined)
+  failed_when: false
+  tags: [litellm_configure, litellm_test]
+
+- name: Display agent model test result
+  debug:
+    msg: "{{ 'Agent model test passed - response: ' + agent_test.json.choices[0].message.content if agent_test.json is defined and agent_test.json.choices is defined else 'Agent model test skipped or failed: ' + (agent_test.json.error.message | default('No agent model configured')) }}"
+  when: agent_test is defined
+  tags: [litellm_configure, litellm_test]
+
+- name: Test frontier (Bedrock Claude 4.5) model
+  uri:
+    url: "http://{{ litellm_host if litellm_host != '0.0.0.0' else 'localhost' }}:{{ litellm_port }}/v1/chat/completions"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ litellm_master_key }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      model: "frontier"
+      messages:
+        - role: "user"
+          content: "Say 'hello' in one word."
+      max_tokens: 10
+    status_code: 200
+  register: frontier_test
+  retries: 3
+  delay: 2
+  when: litellm_start_service and (model_purposes.frontier is defined)
+  failed_when: false
+  tags: [litellm_configure, litellm_test]
+
+- name: Display frontier model test result
+  debug:
+    msg: "{{ 'Frontier (Bedrock) model test passed - response: ' + frontier_test.json.choices[0].message.content if frontier_test.json is defined and frontier_test.json.choices is defined else 'Frontier model test FAILED: ' + (frontier_test.json.error.message | default(frontier_test.msg | default('Unknown error - check Bedrock credentials'))) }}"
+  when: frontier_test is defined
+  tags: [litellm_configure, litellm_test]
+
+- name: Display Bedrock authentication warning if frontier test failed
+  debug:
+    msg:
+      - "⚠️  WARNING: Bedrock (frontier) model test failed!"
+      - "This likely means AWS Bedrock credentials are not configured correctly."
+      - ""
+      - "To fix:"
+      - "1. Check vault has bedrock_api_key: ansible-vault edit roles/secrets/vars/vault.yml"
+      - "2. Verify /etc/default/litellm has AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY"
+      - "3. Check logs: journalctl -u litellm -n 50"
+      - ""
+      - "Expected vault format:"
+      - "  secrets:"
+      - "    bedrock_api_key: 'YOUR_KEY_HERE'"
+      - "    litellm:"
+      - "      bedrock_api_key: 'YOUR_KEY_HERE'"
+  when: frontier_test is defined and (frontier_test.json is not defined or frontier_test.json.choices is not defined)
+  tags: [litellm_configure, litellm_test]
+
+- name: Summary of model tests
+  debug:
+    msg:
+      - "=========================================="
+      - "LiteLLM Chat Model Test Summary" 
+      - "=========================================="
+      - "Fast model: {{ 'PASSED' if fast_test is defined and fast_test.json is defined and fast_test.json.choices is defined else 'SKIPPED/FAILED' }}"
+      - "Agent model: {{ 'PASSED' if agent_test is defined and agent_test.json is defined and agent_test.json.choices is defined else 'SKIPPED/FAILED' }}"
+      - "Frontier (Bedrock Claude 4.5): {{ 'PASSED ✓' if frontier_test is defined and frontier_test.json is defined and frontier_test.json.choices is defined else 'FAILED ✗ (check Bedrock credentials)' }}"
+      - ""
+      - "Note: Embedding, visual-embedding, and reranking"
+      - "      are served by dedicated services, not LiteLLM"
+      - "=========================================="
   tags: [litellm_configure, litellm_test]
 

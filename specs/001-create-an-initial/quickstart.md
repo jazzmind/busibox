@@ -34,11 +34,11 @@ Choose an IP range for your containers. Default suggested IPs (adjust in `vars.e
 
 | Container | Service | IP | Port |
 |-----------|---------|-----|------|
-| files-lxc | MinIO | 10.96.200.21 | 9000 (API), 9001 (Console) |
-| pg-lxc | PostgreSQL | 10.96.200.22 | 5432 |
-| milvus-lxc | Milvus | 10.96.200.23 | 19530 |
-| agent-lxc | Agent API | 10.96.200.24 | 3001 |
-| ingest-lxc | Ingest Worker + Redis | 10.96.200.25 | 6379 (Redis), 3002 (Health) |
+| files-lxc | MinIO | 10.96.200.205 | 9000 (API), 9001 (Console) |
+| pg-lxc | PostgreSQL | 10.96.200.203 | 5432 |
+| milvus-lxc | Milvus | 10.96.200.204 | 19530 |
+| agent-lxc | Agent API | 10.96.200.202 | 8000 |
+| ingest-lxc | Ingest Worker + Redis | 10.96.200.206 | 6379 (Redis), 8002 (Health) |
 
 ---
 
@@ -167,33 +167,33 @@ all:
   children:
     files:
       hosts:
-        10.96.200.21:
+        10.96.200.205:
           service_name: minio
           health_port: 9000
     
     pg:
       hosts:
-        10.96.200.22:
+        10.96.200.203:
           service_name: postgresql
           health_port: 5432
     
     milvus:
       hosts:
-        10.96.200.23:
+        10.96.200.204:
           service_name: milvus
           health_port: 19530
     
     agent:
       hosts:
-        10.96.200.24:
+        10.96.200.202:
           service_name: agent-api
-          health_port: 3001
+          health_port: 8000
     
     ingest:
       hosts:
-        10.96.200.25:
+        10.96.200.206:
           service_name: ingest-worker
-          health_port: 3002
+          health_port: 8002
 
   vars:
     ansible_user: root
@@ -209,8 +209,8 @@ ansible all -i inventory/hosts.yml -m ping
 
 Expected output:
 ```
-10.96.200.21 | SUCCESS => {"changed": false, "ping": "pong"}
-10.96.200.22 | SUCCESS => {"changed": false, "ping": "pong"}
+10.96.200.205 | SUCCESS => {"changed": false, "ping": "pong"}
+10.96.200.203 | SUCCESS => {"changed": false, "ping": "pong"}
 ...
 ```
 
@@ -244,11 +244,11 @@ Ansible will output detailed logs. Look for `PLAY RECAP` at the end:
 
 ```
 PLAY RECAP ***********************************************************
-10.96.200.21               : ok=12   changed=8    unreachable=0    failed=0
-10.96.200.22               : ok=15   changed=10   unreachable=0    failed=0
-10.96.200.23               : ok=18   changed=12   unreachable=0    failed=0
-10.96.200.24               : ok=14   changed=9    unreachable=0    failed=0
-10.96.200.25               : ok=16   changed=11   unreachable=0    failed=0
+10.96.200.205              : ok=12   changed=8    unreachable=0    failed=0
+10.96.200.203              : ok=15   changed=10   unreachable=0    failed=0
+10.96.200.204              : ok=18   changed=12   unreachable=0    failed=0
+10.96.200.202              : ok=14   changed=9    unreachable=0    failed=0
+10.96.200.206              : ok=16   changed=11   unreachable=0    failed=0
 ```
 
 **If errors occur**:
@@ -276,7 +276,7 @@ python tools/milvus_init.py
 
 **Expected output**:
 ```
-Connecting to Milvus at 10.96.200.23:19530...
+Connecting to Milvus at 10.96.200.204:19530...
 Connected successfully
 Creating collection 'document_embeddings'...
 Collection created
@@ -303,11 +303,11 @@ make verify-quick
 **Expected output**:
 ```
 Checking service health...
-✓ minio (10.96.200.21:9000) is healthy
-✓ postgres (10.96.200.22:5432) is healthy
-✓ milvus (10.96.200.23:19530) is healthy
-✓ agent-api (10.96.200.24:3001) is healthy
-✓ ingest-worker (10.96.200.25:3002) is healthy
+✓ minio (10.96.200.205:9000) is healthy
+✓ postgres (10.96.200.203:5432) is healthy
+✓ milvus (10.96.200.204:19530) is healthy
+✓ agent-api (10.96.200.202:8000) is healthy
+✓ ingest-worker (10.96.200.206:8002) is healthy
 All services are healthy!
 ```
 
@@ -316,7 +316,7 @@ All services are healthy!
 **MinIO Console**:
 ```bash
 # Open in browser
-http://10.96.200.21:9001
+http://10.96.200.205:9001
 
 # Default credentials (change after first login)
 Username: minioadmin
@@ -326,21 +326,21 @@ Password: minioadmin
 **PostgreSQL Connection**:
 ```bash
 # From admin workstation
-psql -h 10.96.200.22 -U appuser -d busibox -c "SELECT version();"
+psql -h 10.96.200.203 -U appuser -d busibox -c "SELECT version();"
 ```
 
 **Milvus Status**:
 ```bash
 python -c "
 from pymilvus import connections, utility
-connections.connect('default', host='10.96.200.23', port='19530')
+connections.connect('default', host='10.96.200.204', port='19530')
 print('Collections:', utility.list_collections())
 "
 ```
 
 **Agent API**:
 ```bash
-curl http://10.96.200.24:3001/health | jq
+curl http://10.96.200.202:8000/health | jq
 ```
 
 Expected response:
@@ -364,7 +364,7 @@ Expected response:
 
 ```bash
 # SSH into pg-lxc container
-ssh root@10.96.200.22
+ssh root@10.96.200.203
 
 # Create test user in PostgreSQL
 psql -U postgres -d busibox <<EOF
@@ -391,7 +391,7 @@ EOF
 **Login and get token**:
 
 ```bash
-curl -X POST http://10.96.200.24:3001/auth/login \
+curl -X POST http://10.96.200.202:8000/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username": "testuser", "password": "test123"}' | jq
 ```
@@ -403,7 +403,7 @@ Save the `token` value from the response.
 ```bash
 TOKEN="<your-token-here>"
 
-curl -X POST http://10.96.200.24:3001/files/upload \
+curl -X POST http://10.96.200.202:8000/files/upload \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -432,7 +432,7 @@ curl -X PUT "$UPLOAD_URL" \
 ```bash
 FILE_ID="<file-id-from-initiate-step>"
 
-curl http://10.96.200.24:3001/files/$FILE_ID \
+curl http://10.96.200.202:8000/files/$FILE_ID \
   -H "Authorization: Bearer $TOKEN" | jq
 ```
 
@@ -440,7 +440,7 @@ curl http://10.96.200.24:3001/files/$FILE_ID \
 
 ```bash
 # Check ingestion worker logs
-ssh root@10.96.200.25
+ssh root@10.96.200.206
 journalctl -u ingest-worker -f
 ```
 
@@ -456,7 +456,7 @@ You should see logs showing:
 ```bash
 python -c "
 from pymilvus import connections, Collection
-connections.connect('default', host='10.96.200.23', port='19530')
+connections.connect('default', host='10.96.200.204', port='19530')
 collection = Collection('document_embeddings')
 print('Total embeddings:', collection.num_entities)
 "
@@ -465,7 +465,7 @@ print('Total embeddings:', collection.num_entities)
 **Test semantic search**:
 
 ```bash
-curl -X POST http://10.96.200.24:3001/search \
+curl -X POST http://10.96.200.202:8000/search \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -486,7 +486,7 @@ Expected: Results containing chunks from your uploaded test document.
 
 ```bash
 # SSH into files-lxc
-ssh root@10.96.200.21
+ssh root@10.96.200.205
 
 # Edit MinIO environment file
 vim /srv/minio/.env
@@ -500,7 +500,7 @@ systemctl restart minio
 
 ```bash
 # SSH into pg-lxc
-ssh root@10.96.200.22
+ssh root@10.96.200.203
 
 # Change postgres user password
 psql -U postgres -c "ALTER USER postgres PASSWORD 'new-secure-password';"
@@ -524,10 +524,10 @@ ollama pull llama2
 ollama pull codellama
 ```
 
-**Configure liteLLM gateway** (on agent-lxc):
+**Configure liteLLM gateway** (on litellm-lxc):
 
 ```bash
-ssh root@10.96.200.24
+ssh root@10.96.200.207
 
 # Create liteLLM config
 vim /etc/litellm/config.yaml
@@ -603,7 +603,7 @@ pct config <CTID> | grep features
 Check MinIO webhook configuration:
 
 ```bash
-ssh root@10.96.200.21
+ssh root@10.96.200.205
 mc admin config get myminio notify_webhook:1
 ```
 

@@ -11,10 +11,10 @@ sse-starlette>=1.6.5,<2.0.0
 psycopg2-binary>=2.9.9,<3.0.0
 asyncpg>=0.29.0,<0.30.0
 
-# Vector Database
-pymilvus>=2.3.5,<2.5.0
-rank-bm25>=0.2.2,<0.3.0  # BM25 sparse vectors
-scipy>=1.11.0,<2.0.0  # Sparse matrix support for BM25
+# Vector Database - compatible with Milvus v2.6.x
+# Milvus 2.6+ handles BM25 sparse vectors internally via Function API
+pymilvus>=2.6.0,<2.7.0
+scipy>=1.11.0,<2.0.0  # Scientific computing utilities
 
 # Object Storage
 minio>=7.2.3,<8.0.0
@@ -29,11 +29,11 @@ httpx>=0.25.0,<1.0.0
 pdfplumber>=0.10.3,<0.12.0
 PyPDF2>=3.0.1,<4.0.0
 python-docx>=1.1.0,<2.0.0
-python-pptx>=0.6.21,<1.0.0  # PowerPoint extraction
+python-pptx>=1.0.2,<2.0.0  # PowerPoint extraction (updated for marker-pdf[full] compatibility)
 openpyxl>=3.1.2,<4.0.0  # Excel extraction
 odfpy>=1.4.1,<2.0.0  # OpenDocument (ODT) extraction
 lxml>=4.9.3,<6.0.0  # XML parsing
-marker-pdf>=1.10.1,<2.0.0  # High-quality PDF to markdown
+marker-pdf[full]==1.10.1  # High-quality document to markdown (PDF, DOCX, PPTX, XLSX, HTML, EPUB, images)
 # tatr - Table extraction (optional, not available on PyPI - would need manual install)
 pdf2image>=1.16.3,<2.0.0  # PDF page images for ColPali
 pytesseract>=0.3.10,<0.4.0  # OCR for scanned PDFs
@@ -41,7 +41,10 @@ beautifulsoup4>=4.12.2,<5.0.0  # HTML parsing
 
 # Document Export
 markdown>=3.5.0,<4.0.0  # Markdown to HTML conversion
+bleach>=6.0.0,<7.0.0  # HTML sanitization
 reportlab>=4.0.0,<5.0.0  # PDF generation
+Pillow>=10.0.0,<11.0.0  # Image processing
+PyMuPDF>=1.23.0,<2.0.0  # PDF image extraction (fitz)
 
 # Text Processing & Chunking
 spacy>=3.7.2,<4.0.0
@@ -70,4 +73,7 @@ testcontainers>=3.7.1,<4.0.0  # For integration tests with containers
 
 # Utilities
 python-dotenv>=1.0.0,<2.0.0
+
+# JWT Authentication
+PyJWT>=2.8.0,<3.0.0
 

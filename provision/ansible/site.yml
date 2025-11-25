@@ -42,6 +42,8 @@
 
 - hosts: proxy
   roles:
+    - role: secrets
+      tags: [proxy, nginx, secrets]
     - role: nginx
       tags: [proxy, nginx]
 
@@ -62,16 +64,161 @@
 # LLM Services - Deploy backends first, then proxy
 - name: Deploy LLM Inference Backends (can run in parallel)
   hosts: vllm  # Ollama temporarily disabled
+  pre_tasks:
+    - name: Install required cleanup tools
+      apt:
+        name:
+          - psmisc  # Provides fuser
+          - lsof    # For debugging
+        state: present
+        update_cache: false
+      failed_when: false
+      tags: [vllm]  # Only run for vLLM deployments
+    
+    - name: Determine which vLLM services to stop
+      set_fact:
+        vllm_services_to_stop: "{{ ['8000'] if 'vllm_8000' in ansible_run_tags else ['8001'] if 'vllm_8001' in ansible_run_tags else ['8002'] if 'vllm_8002' in ansible_run_tags else ['8003'] if 'vllm_8003' in ansible_run_tags else ['8004'] if 'vllm_8004' in ansible_run_tags else ['8005'] if 'vllm_8005' in ansible_run_tags else ['8000', '8001', '8002', '8003', '8004', '8005'] }}"
+      tags: [vllm, vllm_8000, vllm_8001, vllm_8002, vllm_8003, vllm_8004, vllm_8005]
+    
+    - name: Display which vLLM services will be redeployed
+      debug:
+        msg: "Redeploying vLLM services: {{ vllm_services_to_stop }}"
+      tags: [vllm, vllm_8000, vllm_8001, vllm_8002, vllm_8003, vllm_8004, vllm_8005]
+    
+    - name: Stop selected vLLM services to ensure proper GPU memory release
+      systemd:
+        name: "vllm-{{ item }}"
+        state: stopped
+      loop: "{{ vllm_services_to_stop }}"
+      failed_when: false
+      tags: [vllm, vllm_8000, vllm_8001, vllm_8002, vllm_8003, vllm_8004, vllm_8005]
+    
+    - name: Wait for systemd to process stop requests
+      pause:
+        seconds: 5
+      tags: [vllm, vllm_8000, vllm_8001, vllm_8002, vllm_8003, vllm_8004, vllm_8005]
+    
+    - name: Force kill any remaining vLLM processes for specific ports
+      vars:
+        ports_to_kill: "{{ vllm_services_to_stop | join(' ') }}"
+      shell: >
+        echo "Targeting vLLM processes on ports: {{ ports_to_kill }}" &&
+        killed_any=0 &&
+        for port in {{ ports_to_kill }}; do
+          for pid in $(pgrep -f "vllm.entrypoints.openai.api_server.*--port $port" 2>/dev/null); do
+            echo "Killing vLLM process on port $port (PID $pid)";
+            kill -9 "$pid" 2>/dev/null && killed_any=1 || true;
+          done;
+          for pid in $(pgrep -f "vllm.*$port" 2>/dev/null); do
+            echo "Killing vLLM-related process for port $port (PID $pid)";
+            kill -9 "$pid" 2>/dev/null && killed_any=1 || true;
+          done;
+        done &&
+        if [ "$killed_any" -eq 0 ]; then
+          echo "No vLLM processes found for ports: {{ ports_to_kill }}";
+        else
+          echo "Killed vLLM processes for ports: {{ ports_to_kill }}";
+        fi
+      args:
+        executable: /bin/bash
+      register: kill_result
+      changed_when: false
+      failed_when: false
+      tags: [vllm, vllm_8000, vllm_8001, vllm_8002, vllm_8003, vllm_8004, vllm_8005]
+    
+    - name: Force release GPU memory (vLLM on GPU 1+ only - preserves GPU 0)
+      vars:
+        ports_to_clean: "{{ vllm_services_to_stop | join(' ') }}"
+      shell: >
+        echo "Cleaning GPU memory for vLLM on ports: {{ ports_to_clean }}" &&
+        killed_pids="" &&
+        for port in {{ ports_to_clean }}; do
+          for pid in $(pgrep -f "vllm.entrypoints.openai.api_server.*--port $port" 2>/dev/null); do
+            if [ -f "/proc/$pid/environ" ]; then
+              cuda_devices=$(tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep "^CUDA_VISIBLE_DEVICES=" | cut -d= -f2);
+              case "$cuda_devices" in
+                *0*) echo "Preserved PID $pid on port $port (uses GPU 0)" ;;
+                *) kill -9 "$pid" 2>/dev/null && killed_pids="$killed_pids $pid" || true ;;
+              esac;
+            fi;
+          done;
+          for pid in $(pgrep -f "ray::.*$port" 2>/dev/null); do
+            cuda_devices=$(tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep "^CUDA_VISIBLE_DEVICES=" | cut -d= -f2);
+            case "$cuda_devices" in
+              *0*) : ;;
+              *) kill -9 "$pid" 2>/dev/null && killed_pids="$killed_pids $pid" || true ;;
+            esac;
+          done;
+        done &&
+        if [ -n "$killed_pids" ]; then
+          echo "Killed vLLM processes on ports {{ ports_to_clean }} (GPU 1+ only):$killed_pids";
+        else
+          echo "No vLLM processes found for ports: {{ ports_to_clean }}";
+        fi &&
+        echo "GPU 0 preserved (ColPali + Marker continue running)"
+      args:
+        executable: /bin/bash
+      register: gpu_cleanup
+      changed_when: false
+      failed_when: false
+      tags: [vllm, vllm_8000, vllm_8001, vllm_8002, vllm_8003, vllm_8004, vllm_8005]
+    
+    - name: Clean shared memory and temp files
+      shell: |
+        # Clean shared memory (PyTorch/Ray use this heavily)
+        find /dev/shm -type f -name "*torch*" -delete 2>/dev/null || true
+        find /dev/shm -type f -name "*ray*" -delete 2>/dev/null || true
+        
+        # Clean /tmp for vLLM temp files
+        find /tmp -type f -name "*vllm*" -mmin +5 -delete 2>/dev/null || true
+        
+        echo "Cleaned shared memory and temp files"
+      register: shm_cleanup
+      changed_when: false
+      failed_when: false
+      tags: [vllm, vllm_8000, vllm_8001, vllm_8002, vllm_8003, vllm_8004, vllm_8005]
+    
+    - name: Wait for GPU memory to be fully released
+      pause:
+        seconds: 10
+      tags: [vllm]  # Only run for vLLM deployments
+    
+    - name: Verify GPU memory is free
+      shell: nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits
+      register: gpu_memory_check
+      changed_when: false
+      failed_when: false
+      tags: [vllm]  # Only run for vLLM deployments
+    
+    - name: Display GPU memory status
+      debug:
+        msg: "GPU memory usage (MB): {{ gpu_memory_check.stdout_lines }}"
+      when: gpu_memory_check.stdout_lines is defined
+      tags: [vllm]  # Only run for vLLM deployments
   roles:
     # - role: ollama  # Temporarily disabled - using vLLM only
     #   when: "'ollama' in group_names"
     #   tags: [llm, ollama]
-    - role: vllm
+    # Port-based vLLM roles - each checks model_config.yml for assigned models
+    - role: vllm_8000
       when: "'vllm' in group_names"
-      tags: [llm, vllm]
-    - role: vllm_embedding
+      tags: [llm, vllm, vllm_8000]
+    - role: vllm_8001
       when: "'vllm' in group_names"
-      tags: [llm, vllm, vllm_embedding]
+      tags: [llm, vllm, vllm_8001]
+    - role: vllm_8002
+      when: "'vllm' in group_names"
+      tags: [llm, vllm, vllm_8002]
+    - role: vllm_8003
+      when: "'vllm' in group_names"
+      tags: [llm, vllm, vllm_8003]
+    - role: vllm_8004
+      when: "'vllm' in group_names"
+      tags: [llm, vllm, vllm_8004]
+    - role: vllm_8005
+      when: "'vllm' in group_names"
+      tags: [llm, vllm, vllm_8005]
+    # ColPali has its own service (not vLLM-based)
     - role: colpali
       when: "'vllm' in group_names"
       tags: [llm, colpali]

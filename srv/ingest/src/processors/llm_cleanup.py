@@ -9,6 +9,7 @@ Fixes text quality issues using LLM:
 """
 
 import re
+import os
 from typing import List
 import httpx
 import structlog
@@ -62,11 +63,20 @@ Output clean, well-formatted markdown."""
         """
         self.config = config
         self.enabled = config.get("llm_cleanup_enabled", False)
-        self.litellm_base_url = config.get("litellm_base_url", "http://litellm-lxc:4000")
         
-        # Get model from registry
+        # Get LiteLLM URL from config or environment variable
+        # Priority: config dict > LITELLM_BASE_URL env var > default IP
+        # Ansible sets LITELLM_BASE_URL in .env file, which Config class reads
+        self.litellm_base_url = (
+            config.get("litellm_base_url") 
+            or os.getenv("LITELLM_BASE_URL") 
+            or "http://10.96.200.207:4000"  # Fallback to litellm-lxc IP
+        )
+        
+        # Get model from registry - try "cleanup" first, then "parsing" as fallback
+        # Both map to phi-4 currently but can change via model registry
+        registry = get_registry()
         try:
-            registry = get_registry()
             self.model = registry.get_model("cleanup")
             self.model_config = registry.get_config("cleanup")
             logger.info(
@@ -75,11 +85,24 @@ Output clean, well-formatted markdown."""
                 model=self.model,
                 base_url=self.litellm_base_url
             )
-        except Exception as e:
-            logger.error("Failed to get cleanup model from registry", error=str(e))
-            self.model = "qwen3-30b-instruct"  # Fallback to our actual deployed model
-            self.model_config = {"temperature": 0.1, "max_tokens": 32768}
-            logger.warning("Using fallback cleanup model", model=self.model)
+        except (ValueError, KeyError) as e:
+            # Fallback to "parsing" model if "cleanup" not found
+            try:
+                logger.warning("Cleanup model not found, trying parsing model", error=str(e))
+                self.model = registry.get_model("parsing")
+                self.model_config = registry.get_config("parsing")
+                logger.info(
+                    "LLM cleanup initialized with parsing model",
+                    enabled=self.enabled,
+                    model=self.model,
+                    base_url=self.litellm_base_url
+                )
+            except Exception as e2:
+                # Final fallback - should not happen if model registry is configured
+                logger.error("Failed to get cleanup or parsing model from registry", error=str(e2))
+                self.model = "phi-4"  # Default model name (should match LiteLLM config)
+                self.model_config = {"temperature": 0.1, "max_tokens": 32768}
+                logger.warning("Using hardcoded fallback model", model=self.model)
     
     async def cleanup_chunk(self, text: str) -> str:
         """
@@ -168,7 +191,7 @@ Output clean, well-formatted markdown."""
     
     def _needs_cleanup(self, text: str) -> bool:
         """
-        Check if text needs cleanup (has long words indicating smashed text).
+        Check if text needs cleanup (has long words or missing spaces).
         
         Args:
             text: Text to check
@@ -176,14 +199,19 @@ Output clean, well-formatted markdown."""
         Returns:
             True if text needs cleanup, False otherwise
         """
-        # Find words longer than 40 characters (likely smashed)
-        long_words = re.findall(r'\b\w{40,}\b', text)
+        # Check 1: Find words longer than 20 characters (likely smashed words)
+        # Common smashed words are 20-40 chars: "actuallyunderstood" (20), "actuallyunderstoodsmashed" (28)
+        long_words = re.findall(r'\b\w{20,}\b', text)
         
-        if long_words:
+        # Check 2: Missing spaces after punctuation (e.g., "word.Another" or "sentence.Yetanother")
+        missing_spaces = re.findall(r'[.!?][A-Za-z]', text)
+        
+        if long_words or missing_spaces:
             logger.debug(
                 "Text needs cleanup",
                 long_word_count=len(long_words),
-                examples=long_words[:3]
+                missing_space_count=len(missing_spaces),
+                examples=long_words[:3] if long_words else None
             )
             return True
         

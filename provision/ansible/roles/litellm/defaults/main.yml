@@ -26,55 +26,17 @@ litellm_port: 4000
 litellm_master_key: "{{ secrets.litellm.master_key | default('sk-litellm-master-key-change-me') }}"
 
 # Backend Configuration
-litellm_backends:
-  # ollama:  # Temporarily disabled
-  #   host: "{{ ollama_ip }}"
-  #   port: "{{ ollama_port }}"
-  vllm:
-    host: "{{ vllm_ip }}"
-    port: "{{ vllm_port }}"
+# Note: Backends are now dynamically configured via litellm_models
+# which reads port assignments from model_config.yml
+litellm_backends: {}
 
-# Model Configuration (vLLM only - Ollama disabled)
-litellm_models:
-  # Ollama models (temporarily disabled)
-  # - model_name: "llama3-8b"
-  #   litellm_params:
-  #     model: "ollama/llama3:8b"
-  #     api_base: "http://{{ ollama_ip }}:{{ ollama_port }}"
-  # - model_name: "phi3"
-  #   litellm_params:
-  #     model: "ollama/phi3:3.8b"
-  #     api_base: "http://{{ ollama_ip }}:{{ ollama_port }}"
-  # - model_name: "gemma-2b"
-  #   litellm_params:
-  #     model: "ollama/gemma:2b"
-  #     api_base: "http://{{ ollama_ip }}:{{ ollama_port }}"
-  
-  # vLLM models (active) - Only Phi-4 for now
-  - model_name: "phi-4-multimodal"
-    litellm_params:
-      model: "openai/microsoft/Phi-4-multimodal-instruct"
-      api_base: "http://{{ vllm_ip }}:{{ vllm_port }}/v1"
-      api_key: "EMPTY"  # vLLM doesn't require authentication
-  
-  # Qwen3-VL (disabled - not loaded in vLLM)
-  # To enable: Deploy a second vLLM instance with Qwen3-VL-8B-Instruct
-  # - model_name: "qwen3-vl-8b"
-  #   litellm_params:
-  #     model: "openai/Qwen/Qwen3-VL-8B-Instruct"
-  #     api_base: "http://{{ vllm_ip }}:{{ vllm_port }}/v1"
-  
-  # Embedding models (for ingestion service)
-  # Using vLLM with Qwen3 embedding model
-  - model_name: "qwen3-embedding"
-    litellm_params:
-      model: "openai/qwen3-embedding"  # Use vLLM's served-model-name, not HF model path
-      api_base: "http://{{ vllm_ip }}:8001/v1"
-      api_key: "EMPTY"  # vLLM doesn't require auth, but OpenAI provider needs a key
-    # Embedding dimension: 4096
-    # Max sequence length: 32K
-    # Used by ingestion service for dense semantic embeddings
-    # Requires separate vLLM instance on port 8001
+# Model Configuration
+# Dynamically generated from model_config.yml and model_registry.yml
+# Model names use purpose names (fast, frontier, embedding, etc.) so applications
+# can call LiteLLM using purpose names directly.
+# Note: This will be empty if model_config.yml doesn't exist yet
+litellm_models: []
+
 
 # Router Settings
 litellm_routing_strategy: "simple-shuffle"

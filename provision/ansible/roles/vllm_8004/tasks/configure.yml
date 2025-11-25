@@ -1,0 +1,166 @@
+---
+# vLLM Port 8000 Configuration Tasks
+# Configure systemd service and environment for port 8000
+
+- name: Check if vLLM service file exists
+  stat:
+    path: /etc/systemd/system/{{ vllm_service_name }}.service
+  register: vllm_service_file
+  tags: [vllm_configure]
+
+- name: Check current model in service file
+  shell: grep -oP '(?<=--model )[^ ]+' /etc/systemd/system/{{ vllm_service_name }}.service || echo "none"
+  register: current_vllm_model
+  changed_when: false
+  when: vllm_service_file.stat.exists
+  tags: [vllm_configure]
+
+- name: Remove old service file if model changed
+  file:
+    path: /etc/systemd/system/{{ vllm_service_name }}.service
+    state: absent
+  when: 
+    - vllm_service_file.stat.exists
+    - current_vllm_model.stdout != vllm_default_model
+  notify:
+    - reload systemd for vllm-8004
+  tags: [vllm_configure]
+
+- name: Deploy vLLM systemd service file
+  template:
+    src: vllm.service.j2
+    dest: /etc/systemd/system/{{ vllm_service_name }}.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - reload systemd for vllm-8004
+    - restart vllm-8004
+  tags: [vllm_configure]
+
+- name: Create vLLM environment file
+  template:
+    src: vllm.env.j2
+    dest: /etc/default/{{ vllm_service_name }}
+    owner: root
+    group: root
+    mode: '0640'
+  notify: restart vllm-8004
+  tags: [vllm_configure]
+
+- name: Ensure systemd is reloaded
+  systemd:
+    daemon_reload: yes
+  tags: [vllm_configure]
+
+- name: Enable vLLM service
+  systemd:
+    name: "{{ vllm_service_name }}"
+    enabled: "{{ vllm_enable_service }}"
+  when: vllm_enable_service
+  tags: [vllm_configure]
+
+- name: Start vLLM service
+  systemd:
+    name: "{{ vllm_service_name }}"
+    state: started
+  when: vllm_start_service
+  tags: [vllm_configure]
+
+- name: Check vLLM service logs (last 2 minutes only)
+  command: journalctl -u {{ vllm_service_name }} --since "2 minutes ago" --no-pager
+  register: vllm_logs_initial
+  changed_when: false
+  tags: [vllm_configure]
+
+- name: Display initial vLLM service logs
+  debug:
+    msg: "{{ vllm_logs_initial.stdout_lines if vllm_logs_initial.stdout_lines | length > 0 else ['No recent logs'] }}"
+  tags: [vllm_configure]
+
+- name: Wait for vLLM service to be ready
+  wait_for:
+    host: "{{ vllm_host if vllm_host != '0.0.0.0' else 'localhost' }}"
+    port: "{{ vllm_port }}"
+    delay: 10
+    timeout: 600  # 10 minutes - large models take time to load
+  when: vllm_start_service
+  failed_when: false
+  register: vllm_port_check
+  tags: [vllm_configure]
+
+- name: Get vLLM service logs if port check failed
+  command: journalctl -u {{ vllm_service_name }} -n 100 --no-pager
+  register: vllm_logs
+  when: 
+    - vllm_start_service
+    - vllm_port_check.failed is defined
+    - vllm_port_check.failed
+  changed_when: false
+  tags: [vllm_configure]
+
+- name: Display vLLM service logs if failed
+  debug:
+    msg: "{{ vllm_logs.stdout_lines }}"
+  when: 
+    - vllm_start_service
+    - vllm_port_check.failed is defined
+    - vllm_port_check.failed
+  tags: [vllm_configure]
+
+- name: Check vLLM service status
+  systemd:
+    name: "{{ vllm_service_name }}"
+  register: vllm_service_status
+  tags: [vllm_configure]
+
+- name: Display service status
+  debug:
+    msg: "vLLM service {{ vllm_service_name }} is {{ vllm_service_status.status.ActiveState }}"
+  tags: [vllm_configure]
+
+- name: Test vLLM health endpoint
+  uri:
+    url: "http://{{ vllm_host if vllm_host != '0.0.0.0' else 'localhost' }}:{{ vllm_port }}/health"
+    method: GET
+    status_code: 200
+  register: vllm_health_test
+  retries: 30  # 30 retries × 10 seconds = 5 minutes for model to load
+  delay: 10
+  when: vllm_start_service
+  tags: [vllm_configure, vllm_test]
+
+- name: Display health check result
+  debug:
+    msg: "vLLM health check passed: {{ vllm_health_test.json if vllm_health_test.json is defined else 'OK' }}"
+  when: vllm_health_test is defined and vllm_health_test.status == 200
+  tags: [vllm_configure, vllm_test]
+
+- name: Verify running model matches assigned model
+  uri:
+    url: "http://{{ vllm_host if vllm_host != '0.0.0.0' else 'localhost' }}:{{ vllm_port }}/v1/models"
+    method: GET
+    status_code: 200
+  register: vllm_model_check
+  when: vllm_start_service and vllm_health_test.status == 200
+  tags: [vllm_configure, vllm_test]
+
+- name: Fail if running model does not match configuration
+  fail:
+    msg: "Model mismatch! Expected {{ vllm_assigned_model }} but running {{ vllm_model_check.json.data[0].id }}"
+  when: 
+    - vllm_start_service 
+    - vllm_model_check is defined 
+    - vllm_model_check.status == 200
+    - vllm_model_check.json.data[0].id != vllm_assigned_model
+  tags: [vllm_configure, vllm_test]
+
+- name: Display running model verification
+  debug:
+    msg: "Verified running model: {{ vllm_model_check.json.data[0].id }} matches assignment: {{ vllm_assigned_model }}"
+  when: 
+    - vllm_start_service 
+    - vllm_model_check is defined 
+    - vllm_model_check.status == 200
+  tags: [vllm_configure, vllm_test]
+

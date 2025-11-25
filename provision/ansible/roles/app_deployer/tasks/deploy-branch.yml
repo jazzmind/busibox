@@ -146,6 +146,118 @@
   register: prisma_result
   failed_when: false  # Don't fail if Prisma isn't used
 
+- name: Create database and run migrations (Prisma apps)
+  shell: |
+    set -e  # Exit on any error
+    cd {{ app_to_deploy.deploy_path }}
+    
+    if [ ! -f "prisma/schema.prisma" ]; then
+      echo "No Prisma schema found, skipping database setup"
+      exit 0
+    fi
+    
+    echo "========================================"
+    echo "DATABASE SETUP FOR {{ app_to_deploy.name }}"
+    echo "========================================"
+    
+    # Load environment variables (DATABASE_URL, etc.)
+    if [ -f .env ]; then
+      echo "Loading environment variables from .env"
+      # Use set -a to automatically export all variables
+      set -a
+      source .env
+      set +a
+    else
+      echo "WARNING: No .env file found"
+    fi
+    
+    # Check if DATABASE_URL is set
+    if [ -z "$DATABASE_URL" ]; then
+      echo "ERROR: DATABASE_URL not set"
+      exit 1
+    fi
+    
+    echo "Database URL configured: ${DATABASE_URL%%@*}@***"
+    
+    # Check if migrations directory exists and has migrations
+    if [ -d "prisma/migrations" ] && [ "$(ls -A prisma/migrations 2>/dev/null)" ]; then
+      echo "Found migrations directory, attempting to deploy migrations..."
+      
+      # Try to run migrations
+      if npx prisma migrate deploy 2>&1; then
+        echo "✓ Migrations deployed successfully"
+      else
+        echo "✗ Migration deployment failed"
+        echo "This could mean:"
+        echo "  1. Database doesn't exist yet"
+        echo "  2. Schema is out of sync with migrations"
+        echo "  3. Connection issue"
+        echo ""
+        echo "Attempting db push as fallback (will sync schema without migrations)..."
+        
+        # Try db push without data loss first
+        if npx prisma db push --skip-generate 2>&1; then
+          echo "✓ Database schema pushed successfully"
+        else
+          echo "⚠ Schema push failed, trying with --accept-data-loss..."
+          echo "WARNING: This may remove unused enum values or columns"
+          
+          # Last resort: accept data loss for schema changes like removed enum values
+          if npx prisma db push --skip-generate --accept-data-loss 2>&1; then
+            echo "✓ Database schema pushed with data loss accepted"
+          else
+            echo "✗ Failed to push database schema"
+            exit 1
+          fi
+        fi
+      fi
+    else
+      echo "No migrations found, using db push to create schema..."
+      
+      # No migrations exist, use db push to create schema
+      # This is safe for initial setup as there's no existing data
+      if npx prisma db push --skip-generate 2>&1; then
+        echo "✓ Database schema created successfully"
+      else
+        echo "⚠ Schema push failed, trying with --accept-data-loss..."
+        
+        # Try with accept-data-loss for existing databases with schema drift
+        if npx prisma db push --skip-generate --accept-data-loss 2>&1; then
+          echo "✓ Database schema pushed with data loss accepted"
+        else
+          echo "✗ Failed to create database schema"
+          exit 1
+        fi
+      fi
+    fi
+    
+    echo ""
+    echo "Verifying database connection..."
+    if npx prisma db execute --stdin <<< "SELECT 1;" 2>&1; then
+      echo "✓ Database connection verified"
+    else
+      echo "WARNING: Could not verify database connection"
+    fi
+    
+    echo "========================================"
+    echo "DATABASE SETUP COMPLETE"
+    echo "========================================"
+  args:
+    executable: /bin/bash
+  delegate_to: "{{ app_to_deploy.container_ip }}"
+  register: db_setup_result
+  failed_when: db_setup_result.rc != 0
+
+- name: Display database setup output
+  debug:
+    var: db_setup_result.stdout_lines
+  when: db_setup_result is defined
+
+- name: Display database setup errors (if any)
+  debug:
+    var: db_setup_result.stderr_lines
+  when: db_setup_result is defined and db_setup_result.stderr_lines is defined and db_setup_result.stderr_lines | length > 0
+
 - name: Run database migrations (if migrate:up script exists)
   shell: |
     set -e
@@ -234,6 +346,21 @@
   delegate_to: "{{ app_to_deploy.container_ip }}"
   register: version_info
 
+- name: Stop any process using the target port
+  shell: |
+    # Find and kill any process using port {{ app_to_deploy.port }}
+    PORT_PID=$(lsof -ti:{{ app_to_deploy.port }} 2>/dev/null || true)
+    if [ -n "$PORT_PID" ]; then
+      echo "Found process $PORT_PID using port {{ app_to_deploy.port }}, killing it..."
+      kill -9 $PORT_PID || true
+      sleep 2
+    else
+      echo "No process found using port {{ app_to_deploy.port }}"
+    fi
+  delegate_to: "{{ app_to_deploy.container_ip }}"
+  register: port_cleanup
+  failed_when: false
+
 - name: Check if PM2 is managing the application
   shell: pm2 list | grep -q "{{ app_to_deploy.name }}"
   delegate_to: "{{ app_to_deploy.container_ip }}"
@@ -241,21 +368,28 @@
   failed_when: false
   changed_when: false
 
-- name: Restart application with PM2 (if already running)
+- name: Stop application with PM2 (if already running)
   shell: |
     cd {{ app_to_deploy.deploy_path }}
-    pm2 restart {{ app_to_deploy.name }}
+    pm2 stop {{ app_to_deploy.name }} || true
+    pm2 delete {{ app_to_deploy.name }} || true
   delegate_to: "{{ app_to_deploy.container_ip }}"
   when: pm2_check.rc == 0
-  register: restart_result
+  register: stop_result
 
-- name: Start application with PM2 (if not running)
+- name: Start application with PM2 and environment variables
   shell: |
     cd {{ app_to_deploy.deploy_path }}
-    pm2 start npm --name "{{ app_to_deploy.name }}" -- start
+    # Load environment from .env file and start with PM2
+    pm2 start npm \
+      --name "{{ app_to_deploy.name }}" \
+      --env production \
+      {% for key, value in app_to_deploy.env.items() %}
+      --update-env {{ key }}="{{ value }}" \
+      {% endfor %}
+      -- start -- -p {{ app_to_deploy.port }}
     pm2 save
   delegate_to: "{{ app_to_deploy.container_ip }}"
-  when: pm2_check.rc != 0
   register: start_result
 
 - name: Wait for application to start
@@ -267,9 +401,13 @@
     timeout: 30
   delegate_to: localhost
 
+- name: Build health check URL with basePath support
+  set_fact:
+    health_check_path: "{{ app_to_deploy.env.NEXT_PUBLIC_BASE_PATH | default('') }}{{ app_to_deploy.health_endpoint | default('/api/health') }}"
+
 - name: Check application health
   uri:
-    url: "http://{{ app_to_deploy.container_ip }}:{{ app_to_deploy.port }}{{ app_to_deploy.health_endpoint | default('/api/health') }}"
+    url: "http://{{ app_to_deploy.container_ip }}:{{ app_to_deploy.port }}{{ health_check_path }}"
     status_code: 200
     timeout: 10
   register: health_check
@@ -293,5 +431,8 @@
         ssh root@{{ app_to_deploy.container_ip }} "pm2 logs {{ app_to_deploy.name }}"
       
       Health check:
-        curl http://{{ app_to_deploy.container_ip }}:{{ app_to_deploy.port }}{{ app_to_deploy.health_endpoint | default('/api/health') }}
+        curl http://{{ app_to_deploy.container_ip }}:{{ app_to_deploy.port }}{{ health_check_path }}
+      
+      ⚠️  IMPORTANT: Nginx routing may need to be updated manually
+      Run: cd provision/ansible && make production (or make test)
 

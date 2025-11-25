@@ -6,7 +6,7 @@ import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.middleware.auth import AuthMiddleware
+from api.middleware.jwt_auth import JWTAuthMiddleware
 from api.middleware.logging import LoggingMiddleware
 from api.routes import search, health
 from shared.config import config
@@ -56,7 +56,7 @@ app.add_middleware(
 
 # Add custom middleware
 app.add_middleware(LoggingMiddleware)
-app.add_middleware(AuthMiddleware)
+app.add_middleware(JWTAuthMiddleware)
 
 # Include routers
 app.include_router(search.router, prefix="/search", tags=["search"])

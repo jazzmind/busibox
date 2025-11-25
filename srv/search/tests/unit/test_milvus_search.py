@@ -42,13 +42,14 @@ class TestMilvusSearchService:
         # Mock collection
         mock_collection = Mock()
         mock_hits = Mock()
-        mock_hits.entity.get = Mock(side_effect=lambda key: {
+        # Fix: get() method takes 2 arguments (key, default)
+        mock_hits.entity.get = Mock(side_effect=lambda key, default=None: {
             "file_id": "file-123",
             "chunk_index": 0,
             "page_number": 1,
             "text": "test text",
             "metadata": {},
-        }.get(key))
+        }.get(key, default))
         mock_hits.score = 0.95
         
         mock_collection.search = Mock(return_value=[[mock_hits]])
@@ -73,13 +74,14 @@ class TestMilvusSearchService:
         # Mock collection
         mock_collection = Mock()
         mock_hits = Mock()
-        mock_hits.entity.get = Mock(side_effect=lambda key: {
+        # Fix: get() method takes 2 arguments (key, default)
+        mock_hits.entity.get = Mock(side_effect=lambda key, default=None: {
             "file_id": "file-456",
             "chunk_index": 2,
             "page_number": 3,
             "text": "semantic test",
             "metadata": {},
-        }.get(key))
+        }.get(key, default))
         mock_hits.score = 0.89
         
         mock_collection.search = Mock(return_value=[[mock_hits]])
@@ -167,7 +169,7 @@ class TestMilvusSearchService:
             "file_id": "file-123",
             "chunk_index": 5,
             "text": "document text",
-            "text_dense": [0.1] * 1536,
+            "text_dense": [0.1] * 1024,
         }])
         service.collection = mock_collection
         

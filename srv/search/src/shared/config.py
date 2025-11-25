@@ -18,10 +18,10 @@ class Config(BaseSettings):
     # Milvus
     milvus_host: str = "localhost"
     milvus_port: int = 19530
-    milvus_collection: str = "document_embeddings"
+    milvus_collection: str = "documents"
     
     # PostgreSQL
-    postgres_host: str = os.getenv("POSTGRES_HOST", "10.96.200.26")
+    postgres_host: str = os.getenv("POSTGRES_HOST", "10.96.200.203")
     postgres_port: int = int(os.getenv("POSTGRES_PORT", "5432"))
     postgres_db: str = os.getenv("POSTGRES_DB", "busibox")
     postgres_user: str = os.getenv("POSTGRES_USER", "app_user")
@@ -34,15 +34,19 @@ class Config(BaseSettings):
     enable_caching: bool = os.getenv("ENABLE_CACHING", "false").lower() == "true"
     cache_ttl: int = 300  # 5 minutes
     
-    # Embedding service
-    embedding_service_url: str = os.getenv("EMBEDDING_SERVICE_URL", "http://10.96.200.30:8000")
-    embedding_model: str = "text-embedding-3-small"
-    embedding_dim: int = 1536
+    # Embedding service (local FastEmbed on ingest-lxc)
+    embedding_service_url: str = os.getenv("EMBEDDING_SERVICE_URL", "http://10.96.200.206:8002")
+    embedding_model: str = "bge-large-en-v1.5"
+    embedding_dim: int = 1024
+    
+    # LiteLLM (for reranker proxy)
+    litellm_base_url: str = os.getenv("LITELLM_BASE_URL", "http://10.96.200.207:4000")
+    litellm_api_key: str = os.getenv("LITELLM_API_KEY", "")
     
     # Reranking
-    reranker_model: str = "BAAI/bge-reranker-v2-m3"
+    reranker_model: str = os.getenv("RERANKER_MODEL", "reranking")  # Model name in litellm registry
     reranker_device: str = "cpu"  # or "cuda"
-    enable_reranking: bool = True
+    enable_reranking: bool = os.getenv("ENABLE_RERANKING", "true").lower() == "true"
     
     # Search defaults
     default_search_limit: int = 10

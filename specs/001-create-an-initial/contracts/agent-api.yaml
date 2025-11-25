@@ -10,7 +10,7 @@ info:
     url: https://github.com/jazzmind/busibox
 
 servers:
-  - url: http://10.96.200.24:3001
+  - url: http://10.96.200.202:8000
     description: Agent API server (agent-lxc container)
 
 tags:

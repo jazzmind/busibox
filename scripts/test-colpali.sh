@@ -14,7 +14,7 @@
 #
 # Environment:
 #   TEST: 10.96.201.208:8002
-#   PRODUCTION: 10.96.200.31:8002
+#   PRODUCTION: 10.96.200.208:8002
 
 set -euo pipefail
 
@@ -32,14 +32,14 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # Determine environment
 ENV="${1:-test}"
 if [[ "$ENV" == "production" ]]; then
-    COLPALI_HOST="10.96.200.31"
+    COLPALI_HOST="10.96.200.208"  # vllm-lxc container
     CONTAINER_NAME="vllm-lxc"
 else
-    COLPALI_HOST="10.96.201.208"
+    COLPALI_HOST="10.96.201.208"  # TEST-vllm-lxc container (adjust if different)
     CONTAINER_NAME="TEST-vllm-lxc"
 fi
 
-COLPALI_PORT="8002"
+COLPALI_PORT="9006"  # Dedicated ColPali service port
 COLPALI_BASE_URL="http://${COLPALI_HOST}:${COLPALI_PORT}"
 COLPALI_HEALTH_URL="${COLPALI_BASE_URL}/health"
 COLPALI_EMBEDDINGS_URL="${COLPALI_BASE_URL}/v1/embeddings"
@@ -346,12 +346,12 @@ show_troubleshooting_tips() {
     echo "  3. GPU Issues:"
     echo "     ssh root@$COLPALI_HOST"
     echo "     nvidia-smi"
-    echo "     • Check GPU 2 is available"
-    echo "     • Check VRAM usage (needs ~8-10GB)"
+    echo "     • Check GPU 0 is available (reserved for ColPali)"
+    echo "     • Check VRAM usage (needs ~15GB for model)"
     echo ""
     echo "  4. Re-deploy Service:"
-    echo "     cd provision/ansible"
-    echo "     make colpali ENV=$ENV"
+    echo "     make deploy"
+    echo "     # Select: vLLM (includes ColPali)"
     echo ""
 }
 

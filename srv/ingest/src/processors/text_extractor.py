@@ -125,8 +125,47 @@ class TextExtractor:
                     # Try marker v1.x API (marker-pdf >= 1.0)
                     from marker.converters.pdf import PdfConverter
                     from marker.models import create_model_dict
+                    import torch
+                    import os
                     
-                    logger.info("Using Marker v1.x for PDF extraction", file_path=file_path)
+                    # Configure GPU settings for Marker
+                    marker_use_gpu = self.config.get("marker_use_gpu", True)
+                    marker_gpu_device = self.config.get("marker_gpu_device", "cuda")
+                    
+                    # Determine device
+                    if marker_use_gpu and torch.cuda.is_available():
+                        device = marker_gpu_device if marker_gpu_device != "auto" else "cuda"
+                        logger.info(
+                            "Marker GPU available and enabled",
+                            file_path=file_path,
+                            device=device,
+                            cuda_device_count=torch.cuda.device_count(),
+                        )
+                    else:
+                        device = "cpu"
+                        if marker_use_gpu and not torch.cuda.is_available():
+                            logger.warning(
+                                "Marker GPU requested but CUDA not available, using CPU",
+                                file_path=file_path,
+                            )
+                        else:
+                            logger.info("Marker using CPU", file_path=file_path)
+                    
+                    # Set environment variables for Marker
+                    os.environ["TORCH_DEVICE"] = device
+                    if device == "cuda":
+                        # Set GPU memory settings
+                        inference_ram = self.config.get("marker_inference_ram", "16")
+                        vram_per_task = self.config.get("marker_vram_per_task", "3.5")
+                        os.environ["INFERENCE_RAM"] = str(inference_ram)
+                        os.environ["VRAM_PER_TASK"] = str(vram_per_task)
+                        logger.debug(
+                            "Marker GPU memory configured",
+                            inference_ram=inference_ram,
+                            vram_per_task=vram_per_task,
+                        )
+                    
+                    logger.info("Using Marker v1.x for PDF extraction", file_path=file_path, device=device)
                     
                     # Create model dict with default models
                     # This downloads models on first use (cached after)

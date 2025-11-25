@@ -1,11 +1,11 @@
 """
 PostgreSQL service for API layer.
 
-Handles database operations for file metadata and status tracking.
+Handles database operations for file metadata, status tracking, and role management.
 """
 
 import uuid
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import asyncpg
 import structlog
@@ -19,7 +19,7 @@ class PostgresService:
     def __init__(self, config: dict):
         """Initialize PostgreSQL connection pool."""
         self.config = config
-        self.host = config.get("postgres_host", "10.96.200.26")
+        self.host = config.get("postgres_host", "10.96.200.203")
         self.port = config.get("postgres_port", 5432)
         self.database = config.get("postgres_db", "busibox")
         self.user = config.get("postgres_user", "postgres")
@@ -92,49 +92,85 @@ class PostgresService:
         storage_path: str,
         content_hash: str,
         metadata: Optional[Dict] = None,
+        visibility: str = "personal",
+        role_ids: Optional[List[str]] = None,
     ) -> str:
         """
-        Create file record in ingestion_files table.
+        Create file record in ingestion_files table with role-based access control.
+        
+        Args:
+            file_id: Unique file identifier
+            user_id: Owner user ID
+            filename: Display filename
+            original_filename: Original uploaded filename
+            mime_type: MIME type
+            size_bytes: File size in bytes
+            storage_path: MinIO storage path
+            content_hash: SHA-256 content hash
+            metadata: Optional metadata dict
+            visibility: 'personal' (owner only) or 'shared' (role-based)
+            role_ids: List of role IDs (required if visibility='shared')
         
         Returns:
             file_id
         """
         import json
         async with self.pool.acquire() as conn:
-            await conn.execute("""
-                INSERT INTO ingestion_files (
-                    file_id, user_id, filename, original_filename,
-                    mime_type, size_bytes, storage_path, content_hash,
-                    metadata, permissions
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            """,
-                uuid.UUID(file_id),
-                uuid.UUID(user_id),
-                filename,
-                original_filename,
-                mime_type,
-                size_bytes,
-                storage_path,
-                content_hash,
-                json.dumps(metadata) if isinstance(metadata, dict) else (metadata or '{}'),
-                json.dumps({"visibility": "private"}),
-            )
-            
-            # Create initial status record
-            await conn.execute("""
-                INSERT INTO ingestion_status (
-                    file_id, stage, progress, started_at
-                ) VALUES ($1, $2, $3, NOW())
-            """,
-                uuid.UUID(file_id),
-                "queued",
-                0,
-            )
+            # Start transaction
+            async with conn.transaction():
+                # Create file record with owner_id and visibility
+                await conn.execute("""
+                    INSERT INTO ingestion_files (
+                        file_id, user_id, owner_id, filename, original_filename,
+                        mime_type, size_bytes, storage_path, content_hash,
+                        metadata, permissions, visibility
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                """,
+                    uuid.UUID(file_id),
+                    uuid.UUID(user_id),
+                    uuid.UUID(user_id),  # owner_id = user_id
+                    filename,
+                    original_filename,
+                    mime_type,
+                    size_bytes,
+                    storage_path,
+                    content_hash,
+                    json.dumps(metadata) if isinstance(metadata, dict) else (metadata or '{}'),
+                    json.dumps({"visibility": visibility}),
+                    visibility,
+                )
+                
+                # Create initial status record
+                await conn.execute("""
+                    INSERT INTO ingestion_status (
+                        file_id, stage, progress, started_at
+                    ) VALUES ($1, $2, $3, NOW())
+                """,
+                    uuid.UUID(file_id),
+                    "queued",
+                    0,
+                )
+                
+                # Add role assignments if shared
+                if visibility == "shared" and role_ids:
+                    for role_id in role_ids:
+                        await conn.execute("""
+                            INSERT INTO document_roles (
+                                file_id, role_id, role_name, added_by
+                            ) VALUES ($1, $2, $3, $4)
+                        """,
+                            uuid.UUID(file_id),
+                            uuid.UUID(role_id),
+                            f"Role-{role_id[:8]}",  # Placeholder name, will be updated by caller
+                            uuid.UUID(user_id),
+                        )
             
             logger.info(
                 "File record created",
                 file_id=file_id,
                 user_id=user_id,
+                visibility=visibility,
+                role_count=len(role_ids) if role_ids else 0,
                 content_hash=content_hash,
             )
             
@@ -311,4 +347,112 @@ class PostgresService:
                 new_file_id=new_file_id,
                 existing_file_id=existing_file_id,
                 user_id=user_id,
+            )
+    
+    # ========================================================================
+    # Role Management Methods
+    # ========================================================================
+    
+    async def get_document_roles(self, file_id: str) -> List[Dict]:
+        """
+        Get all roles assigned to a document.
+        
+        Returns:
+            List of role dictionaries with role_id, role_name, added_at, added_by
+        """
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT 
+                    role_id::text,
+                    role_name,
+                    added_at,
+                    added_by::text
+                FROM document_roles
+                WHERE file_id = $1
+                ORDER BY added_at
+            """, uuid.UUID(file_id))
+            
+            return [dict(row) for row in rows]
+    
+    async def add_document_role(
+        self,
+        file_id: str,
+        role_id: str,
+        role_name: str,
+        added_by: str,
+    ) -> None:
+        """
+        Add a role to a document.
+        
+        Raises:
+            Exception if role already assigned
+        """
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO document_roles (
+                    file_id, role_id, role_name, added_by
+                ) VALUES ($1, $2, $3, $4)
+                ON CONFLICT (file_id, role_id) DO NOTHING
+            """,
+                uuid.UUID(file_id),
+                uuid.UUID(role_id),
+                role_name,
+                uuid.UUID(added_by),
+            )
+            
+            logger.info(
+                "Role added to document",
+                file_id=file_id,
+                role_id=role_id,
+                role_name=role_name,
+            )
+    
+    async def remove_document_role(
+        self,
+        file_id: str,
+        role_id: str,
+    ) -> None:
+        """
+        Remove a role from a document.
+        
+        Note: The trigger will prevent removing the last role from a shared document.
+        """
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                DELETE FROM document_roles
+                WHERE file_id = $1 AND role_id = $2
+            """,
+                uuid.UUID(file_id),
+                uuid.UUID(role_id),
+            )
+            
+            logger.info(
+                "Role removed from document",
+                file_id=file_id,
+                role_id=role_id,
+            )
+    
+    async def update_file_visibility(
+        self,
+        file_id: str,
+        visibility: str,
+    ) -> None:
+        """
+        Update document visibility (personal/shared).
+        """
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE ingestion_files
+                SET visibility = $2,
+                    updated_at = NOW()
+                WHERE file_id = $1
+            """,
+                uuid.UUID(file_id),
+                visibility,
+            )
+            
+            logger.info(
+                "Document visibility updated",
+                file_id=file_id,
+                visibility=visibility,
             )

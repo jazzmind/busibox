@@ -572,14 +572,18 @@ step_container_creation() {
   echo "Containers to create/verify:"
   echo "  - Core services: proxy, apps, agent"
   echo "  - Data services: postgres, milvus, minio"
-  echo "  - Worker services: ingest, litellm"
-  echo "  - LLM services: vLLM (208/308, all GPUs)"
+  echo "  - Worker services: ingest (GPU 0), litellm"
+  echo "  - LLM services: vLLM (GPUs 1+, requires 2+ GPUs)"
+  echo ""
+  echo "GPU Allocation Strategy:"
+  echo "  - GPU 0: Ingest container (Marker PDF extraction + ColPali visual embeddings)"
+  echo "  - GPUs 1+: vLLM container (LLM inference with tensor parallelism)"
   echo ""
   
   # Optional Ollama
   echo "Optional: Ollama LXC Container"
   echo "  - Container ID: 210 (production) / 310 (test)"
-  echo "  - Uses single GPU (GPU 0)"
+  echo "  - Uses single GPU (shares with ingest or vLLM)"
   echo "  - Alternative to vLLM for some use cases"
   echo "  - Not required (vLLM is primary inference engine)"
   echo ""
@@ -618,6 +622,186 @@ step_container_creation() {
     print_error "Container creation failed"
     return 1
   fi
+}
+
+# Step 2.5: GPU Configuration
+step_gpu_configuration() {
+  print_header "Step 2.5: GPU Configuration"
+  
+  # Check if GPUs are available
+  if ! command -v nvidia-smi &>/dev/null; then
+    print_warning "nvidia-smi not found on host"
+    echo "GPUs may not be available. Continue anyway?"
+    read -p "(y/N): " -n 1 -r
+    echo ""
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+      print_info "Skipping GPU configuration"
+      return 0
+    fi
+  fi
+  
+  # Get GPU count
+  local gpu_count=$(nvidia-smi -L 2>/dev/null | wc -l || echo "0")
+  
+  if [[ "$gpu_count" -eq 0 ]]; then
+    print_warning "No GPUs detected on host"
+    print_info "Skipping GPU configuration"
+    return 0
+  fi
+  
+  print_success "Detected $gpu_count GPU(s) on host"
+  echo ""
+  
+  # Detect mode from previous step or ask
+  if [[ -f /tmp/busibox_setup_mode ]]; then
+    MODE=$(cat /tmp/busibox_setup_mode)
+    print_info "Using $MODE environment from previous step"
+  else
+    echo "Select environment:"
+    echo "  1) Production"
+    echo "  2) Test"
+    echo ""
+    read -p "Choose [1-2]: " -n 1 -r env_choice
+    echo ""
+    echo ""
+    
+    case "$env_choice" in
+      1) MODE="production" ;;
+      2) MODE="test" ;;
+      *)
+        print_error "Invalid choice"
+        return 1
+        ;;
+    esac
+  fi
+  
+  # Get container IDs based on mode
+  local CT_INGEST CT_VLLM CT_LITELLM
+  if [[ "$MODE" == "test" ]]; then
+    CT_INGEST="306"
+    CT_VLLM="308"
+    CT_LITELLM="307"
+  else
+    CT_INGEST="206"
+    CT_VLLM="208"
+    CT_LITELLM="207"
+  fi
+  
+  echo ""
+  echo "GPU Configuration Options:"
+  echo "  1) Configure GPUs for all containers (ingest, vLLM, litellm)"
+  echo "  2) Configure GPUs for specific container"
+  echo "  3) Configure vLLM model routing (assign models to GPUs)"
+  echo "  4) Skip GPU configuration"
+  echo ""
+  read -p "Choose [1-4]: " -n 1 -r gpu_choice
+  echo ""
+  echo ""
+  
+  case "$gpu_choice" in
+    1)
+      # Configure all containers
+      print_info "Configuring GPUs for all containers..."
+      
+      # Ingest container
+      if pct status "$CT_INGEST" &>/dev/null; then
+        print_info "Configuring GPUs for ingest container ($CT_INGEST)..."
+        if bash "${PCT_DIR}/host/configure-container-gpus.sh" "$CT_INGEST"; then
+          print_success "Ingest container GPU configuration complete"
+        else
+          print_warning "Ingest container GPU configuration failed"
+        fi
+      else
+        print_warning "Ingest container ($CT_INGEST) not found"
+      fi
+      
+      # vLLM container
+      if pct status "$CT_VLLM" &>/dev/null; then
+        print_info "Configuring GPUs for vLLM container ($CT_VLLM)..."
+        if bash "${PCT_DIR}/host/configure-container-gpus.sh" "$CT_VLLM"; then
+          print_success "vLLM container GPU configuration complete"
+        else
+          print_warning "vLLM container GPU configuration failed"
+        fi
+      else
+        print_warning "vLLM container ($CT_VLLM) not found"
+      fi
+      
+      # LiteLLM container (usually doesn't need GPUs, but check anyway)
+      if pct status "$CT_LITELLM" &>/dev/null; then
+        echo ""
+        read -p "Configure GPUs for LiteLLM container? (y/N): " -n 1 -r
+        echo ""
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+          print_info "Configuring GPUs for LiteLLM container ($CT_LITELLM)..."
+          if bash "${PCT_DIR}/host/configure-container-gpus.sh" "$CT_LITELLM"; then
+            print_success "LiteLLM container GPU configuration complete"
+          else
+            print_warning "LiteLLM container GPU configuration failed"
+          fi
+        fi
+      fi
+      
+      print_success "GPU configuration complete for all containers"
+      ;;
+    2)
+      # Configure specific container
+      echo "Enter container ID to configure:"
+      read -r container_id
+      
+      if [[ -z "$container_id" ]]; then
+        print_error "No container ID provided"
+        return 1
+      fi
+      
+      if ! pct status "$container_id" &>/dev/null; then
+        print_error "Container $container_id does not exist"
+        return 1
+      fi
+      
+      print_info "Configuring GPUs for container $container_id..."
+      if bash "${PCT_DIR}/host/configure-container-gpus.sh" "$container_id"; then
+        print_success "GPU configuration complete"
+      else
+        print_error "GPU configuration failed"
+        return 1
+      fi
+      ;;
+    3)
+      # Configure vLLM model routing
+      print_info "Configuring vLLM model routing..."
+      echo ""
+      echo "This will:"
+      echo "  - Show model memory estimates"
+      echo "  - Allow you to assign models to specific GPUs"
+      echo "  - Configure multiple models on single GPU if memory allows"
+      echo "  - Automatically update LiteLLM configuration"
+      echo ""
+      read -p "Continue? (Y/n): " -n 1 -r
+      echo ""
+      
+      if [[ $REPLY =~ ^[Nn]$ ]]; then
+        print_info "Skipping vLLM model routing"
+        return 0
+      fi
+      
+      if bash "${PCT_DIR}/host/configure-vllm-model-routing.sh" --interactive --auto-update; then
+        print_success "vLLM model routing configured"
+      else
+        print_warning "vLLM model routing configuration failed"
+      fi
+      ;;
+    4)
+      print_info "Skipping GPU configuration"
+      return 0
+      ;;
+    *)
+      print_error "Invalid choice"
+      return 1
+      ;;
+  esac
+  
+  return 0
 }
 
 # Step 3: Ansible Configuration
@@ -673,8 +857,16 @@ step_ansible_configuration() {
     print_warning "Encrypted Ansible vault detected"
     echo "  File: roles/secrets/vars/vault.yml"
     echo ""
-    echo "Vault password will be required for deployment"
-    VAULT_PASS_FLAG="--ask-vault-pass"
+    
+    # Check if vault password file exists
+    if [[ -f ~/.vault_pass ]]; then
+      print_info "Found vault password file: ~/.vault_pass"
+      VAULT_PASS_FLAG="--vault-password-file ~/.vault_pass"
+    else
+      print_warning "Vault password file not found: ~/.vault_pass"
+      echo "  You will be prompted for the vault password"
+      VAULT_PASS_FLAG="--ask-vault-pass"
+    fi
     echo ""
   fi
   
@@ -695,7 +887,7 @@ step_ansible_configuration() {
       1)
         # Full deployment
         print_info "Running full Ansible deployment for $MODE..."
-        if [[ -n "$VAULT_PASS_FLAG" ]]; then
+        if [[ -n "$VAULT_PASS_FLAG" ]] && [[ "$VAULT_PASS_FLAG" == *"--ask-vault-pass"* ]]; then
           print_warning "You will be prompted for the vault password"
         fi
         echo ""
@@ -738,7 +930,7 @@ step_ansible_configuration() {
         fi
         
         print_info "Running Ansible with tags: $tags"
-        if [[ -n "$VAULT_PASS_FLAG" ]]; then
+        if [[ -n "$VAULT_PASS_FLAG" ]] && [[ "$VAULT_PASS_FLAG" == *"--ask-vault-pass"* ]]; then
           print_warning "You will be prompted for the vault password"
         fi
         echo ""
@@ -768,7 +960,7 @@ step_ansible_configuration() {
         fi
         
         print_info "Running custom Ansible command..."
-        if [[ -n "$VAULT_PASS_FLAG" ]]; then
+        if [[ -n "$VAULT_PASS_FLAG" ]] && [[ "$VAULT_PASS_FLAG" == *"--ask-vault-pass"* ]]; then
           print_warning "You will be prompted for the vault password"
         fi
         echo ""
@@ -812,6 +1004,7 @@ main() {
   echo "This script will guide you through setting up Busibox infrastructure:"
   echo "  1. Configure Proxmox host"
   echo "  2. Create LXC containers"
+  echo "  2.5. Configure GPU passthrough and model routing"
   echo "  3. Configure with Ansible"
   echo ""
   
@@ -851,7 +1044,23 @@ main() {
     echo "You can:"
     echo "  - Fix any issues and run this script again"
     echo "  - Create containers manually: bash provision/pct/containers/create_lxc_base.sh"
-    echo "  - Continue to Ansible if containers already exist"
+    echo "  - Continue to GPU configuration if containers already exist"
+    echo ""
+    read -p "Continue to GPU configuration anyway? (y/N): " -n 1 -r
+    echo ""
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+      exit 1
+    fi
+  fi
+  
+  # Step 2.5: GPU Configuration
+  if ! step_gpu_configuration; then
+    print_warning "GPU configuration failed or was skipped"
+    echo ""
+    echo "You can:"
+    echo "  - Fix any issues and run this script again"
+    echo "  - Configure GPUs manually: bash provision/pct/host/configure-container-gpus.sh"
+    echo "  - Continue to Ansible configuration"
     echo ""
     read -p "Continue to Ansible configuration anyway? (y/N): " -n 1 -r
     echo ""

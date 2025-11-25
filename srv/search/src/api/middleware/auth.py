@@ -1,5 +1,11 @@
 """
 Authentication middleware for Search API.
+
+Supports both:
+- JWT passthrough (Authorization: Bearer <token>) - preferred
+- Legacy X-User-Id header - for backwards compatibility
+
+When JWT is present, it's stored in request state for passthrough to downstream services.
 """
 
 import structlog
@@ -19,26 +25,30 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if request.url.path == "/health":
             return await call_next(request)
         
-        # Get user ID from X-User-Id header (set by upstream API gateway)
+        # Check for Authorization header (JWT passthrough)
+        auth_header = request.headers.get("authorization")
         user_id = request.headers.get("x-user-id")
         
-        if not user_id:
+        # Store authorization header for passthrough to downstream services
+        request.state.authorization = auth_header
+        
+        if not user_id and not auth_header:
             logger.warning(
-                "Request missing user ID",
+                "Request missing authentication",
                 path=request.url.path,
-                headers=dict(request.headers),
             )
             raise HTTPException(
                 status_code=401,
-                detail="User not authenticated - missing X-User-Id header"
+                detail="User not authenticated - missing X-User-Id or Authorization header"
             )
         
-        # Attach user_id to request state
+        # Attach user_id to request state (from header or will be extracted by downstream)
         request.state.user_id = user_id
         
         logger.debug(
             "Request authenticated",
             user_id=user_id,
+            has_jwt=bool(auth_header),
             path=request.url.path,
         )
         

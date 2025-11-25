@@ -10,11 +10,38 @@ This repo provisions a role-secured data layer on a Proxmox host using LXC conta
 
 It also ships a **deploywatch** systemd timer to poll GitHub Releases and redeploy services.
 
-> NOTE: You will execute the `provision/pct/*.sh` from the Proxmox host. The rest is applied inside each container via Ansible.
+## Quick Start
+
+From the repository root, use the interactive command system:
+
+```bash
+# Initial setup (on Proxmox host)
+make setup
+
+# Configure models and GPUs
+make configure
+
+# Deploy services
+make deploy
+
+# Run tests
+make test
+
+# Build MCP server (for Cursor AI)
+make mcp
+```
+
+All commands are interactive and will guide you through the process. See the [Interactive Commands Guide](docs/guides/interactive-commands.md) for detailed information about each command.
 
 ## For Cursor Users
 
 **Use the Busibox MCP Server** for structured access to documentation and scripts:
+
+```bash
+make mcp
+```
+
+Or manually:
 
 ```bash
 cd tools/mcp-server && bash setup.sh

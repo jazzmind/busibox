@@ -1,0 +1,22 @@
+---
+# vLLM Port 8004 Handlers
+
+- name: reload systemd for vllm-8004
+  systemd:
+    daemon_reload: yes
+
+- name: restart vllm-8004
+  systemd:
+    name: "{{ vllm_service_name }}"
+    state: restarted
+  when: vllm_start_service | default(true)
+
+- name: stop vllm-8004
+  systemd:
+    name: "{{ vllm_service_name }}"
+    state: stopped
+
+- name: start vllm-8004
+  systemd:
+    name: "{{ vllm_service_name }}"
+    state: started

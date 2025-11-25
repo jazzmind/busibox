@@ -14,6 +14,8 @@ The Busibox MCP Server is a **Model Context Protocol server** that makes the Bus
 - ✅ **Guided assistance** - Step-by-step help for common tasks
 - ✅ **Standards enforcement** - Implements project organization rules
 - ✅ **Always up-to-date** - Reads directly from the filesystem
+- ✅ **SSH command execution** - Execute commands on Proxmox host and containers
+- ✅ **Log gathering** - Get logs and service status from containers via SSH
 
 ## What Can It Do?
 
@@ -204,7 +206,7 @@ Browse project content:
 - Architecture document
 - Quick start guide
 
-### 6 Tools
+### 9 Tools
 
 Interactive operations:
 - search_docs
@@ -213,6 +215,9 @@ Interactive operations:
 - get_doc
 - list_containers
 - get_deployment_info
+- execute_proxmox_command (NEW)
+- get_container_logs (NEW)
+- get_container_service_status (NEW)
 
 ### 4 Prompts
 
@@ -368,6 +373,7 @@ It's production-ready, well-documented, and easy to install. Just run `bash setu
 **Created**: 2025-11-06  
 **Status**: Production Ready  
 **License**: Part of Busibox project
+
 
 
 

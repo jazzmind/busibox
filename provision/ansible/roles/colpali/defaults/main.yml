@@ -11,12 +11,19 @@ colpali_venv_dir: "{{ colpali_home }}/venv"
 
 # Network Configuration
 colpali_host: "0.0.0.0"
-colpali_port: 8002
+# Port is set below from model registry
 
-# Model Configuration
-colpali_model: "vidore/colpali-v1.3"
+# Model Configuration - References model_registry.yml
+# New structure: model_purposes['visual-embedding'] -> model key, lookup in available_models
+colpali_model: "{{ available_models[model_purposes['visual-embedding']].model_name | default('vidore/colpali-v1.3') }}"
 colpali_device: "cuda:0"  # Device index within CUDA_VISIBLE_DEVICES
 colpali_dtype: "bfloat16"
+
+# GPU and Port Configuration
+# IMPORTANT: ColPali is ALWAYS on GPU 0 - this is hardcoded and cannot be changed
+# GPU 0 is reserved for visual document processing (ColPali + Marker)
+colpali_cuda_visible_devices: "0"  # HARDCODED: Always GPU 0
+colpali_port: "{{ available_models[model_purposes['visual-embedding']].port | default(9006) }}"
 
 # HuggingFace Configuration
 colpali_hf_token: "{{ secrets.huggingface.token | default('') }}"
@@ -31,8 +38,14 @@ colpali_memory_limit: "16G"
 colpali_cpu_limit: "4"
 
 # CUDA Configuration
-# Use GPU 2 (third GPU) - GPUs 0 and 1 are used by vLLM and embedding services
-colpali_cuda_visible_devices: "2"
+# GPU allocation strategy:
+# - GPU 0: Ingest container (Marker PDF extraction + ColPali visual embeddings)
+# - GPU 1+: vLLM container (LLM inference)
+# 
+# ColPali shares GPU 0 with Marker by default.
+# Memory is managed automatically - Marker uses ~3.5GB per task, ColPali uses ~15GB.
+# Future: Will support multi-GPU ColPali for larger workloads.
+# GPU is set above from model registry
 
 # Service Management
 colpali_restart_on_failure: true

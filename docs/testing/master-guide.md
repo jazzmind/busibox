@@ -95,17 +95,36 @@ Busibox testing is organized in a hierarchy from infrastructure to application:
 
 | Test Type | Execution Location | Command Interface |
 |-----------|-------------------|-------------------|
-| Infrastructure | Proxmox host | `test-infrastructure.sh` |
-| Provisioning | Proxmox host / workstation | `make` targets |
-| Health checks | Proxmox host / workstation | `make verify-*` |
+| Infrastructure | Proxmox host | `make test` or `test-infrastructure.sh` |
+| Provisioning | Proxmox host / workstation | `make test` or `make` targets in provision/ansible |
+| Health checks | Proxmox host / workstation | `make test` or `make verify-*` in provision/ansible |
 | Service tests | Remote (via SSH) | `make test-*` |
 
 ---
 
 ## Quick Start
 
+### Recommended: Interactive Test Menu
+
+```bash
+# On Proxmox host or admin workstation
+make test
+
+# Select environment (test/production)
+# Select test type from menu
+```
+
+This provides an interactive menu for all test types. See [Interactive Commands Guide](../guides/interactive-commands.md) for details.
+
 ### 1. Infrastructure Testing (First-Time Setup)
 
+**Using interactive menu (recommended):**
+```bash
+make test
+# Select: Infrastructure Tests (Full Suite)
+```
+
+**Or run directly:**
 ```bash
 # On Proxmox host
 cd /root/busibox

@@ -141,11 +141,11 @@ psql -d busibox_test -f provision/ansible/roles/postgres/files/migrations/001_ro
 # Start Milvus with Docker
 docker run -d --name milvus-test \
   -p 19530:19530 -p 9091:9091 \
-  milvusdb/milvus:v2.3.3 \
+  milvusdb/milvus:v2.6.5 \
   milvus run standalone
 
 # Run initialization script
-pip install pymilvus==2.3.5
+pip install 'pymilvus>=2.6.7,<2.7.0'
 python tools/milvus_init.py
 
 # Cleanup

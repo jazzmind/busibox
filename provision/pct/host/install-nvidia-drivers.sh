@@ -159,8 +159,13 @@ DRIVER_URL="${NVIDIA_BASE_URL}/${DRIVER_VERSION}/${DRIVER_FILENAME}"
 info "Driver download URL: $DRIVER_URL"
 echo ""
 
+# Host cache directory for NVIDIA drivers (shared across containers)
+HOST_CACHE_DIR="/var/lib/llm-models/nvidia-drivers"
+mkdir -p "$HOST_CACHE_DIR"
+
 # Check if driver is already installed
 info "Checking if driver is already installed in container..."
+INSTALLED_VERSION=""
 if pct exec "$CONTAINER_ID" -- bash -c "command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null" 2>/dev/null; then
     INSTALLED_VERSION=$(pct exec "$CONTAINER_ID" -- nvidia-smi | grep "Driver Version" | awk '{print $3}' | head -1 || echo "unknown")
     
@@ -171,10 +176,39 @@ if pct exec "$CONTAINER_ID" -- bash -c "command -v nvidia-smi &>/dev/null && nvi
         exit 0
     else
         warn "Different driver version installed: $INSTALLED_VERSION (need $DRIVER_VERSION)"
-        warn "Will reinstall correct version..."
+        warn "Will uninstall existing drivers and install correct version..."
     fi
 else
     info "No NVIDIA driver installed in container"
+fi
+
+# Uninstall existing drivers if version mismatch or if installation exists
+if [ -n "$INSTALLED_VERSION" ] || pct exec "$CONTAINER_ID" -- bash -c "ls /usr/lib/x86_64-linux-gnu/libnvidia* 2>/dev/null || ls /usr/local/nvidia* 2>/dev/null" 2>/dev/null | grep -q .; then
+    warn "Uninstalling existing NVIDIA drivers..."
+    
+    pct exec "$CONTAINER_ID" -- bash -c "
+        # Try to uninstall using NVIDIA installer if it exists
+        if [ -f /usr/bin/nvidia-uninstall ]; then
+            /usr/bin/nvidia-uninstall --silent || true
+        fi
+        
+        # Remove NVIDIA libraries and binaries
+        rm -rf /usr/lib/x86_64-linux-gnu/libnvidia* 2>/dev/null || true
+        rm -rf /usr/local/nvidia* 2>/dev/null || true
+        rm -f /usr/bin/nvidia-smi /usr/bin/nvidia-debugdump /usr/bin/nvidia-ml-py* 2>/dev/null || true
+        rm -rf /usr/lib/x86_64-linux-gnu/libGL* 2>/dev/null || true
+        
+        # Remove CUDA toolkit if installed via apt (but keep if installed via NVIDIA installer)
+        apt-get purge -y 'cuda-drivers' 'cuda-toolkit' 'nvidia-driver*' 2>/dev/null || true
+        apt-get autoremove -y 2>/dev/null || true
+        
+        # Clean up any remaining NVIDIA files
+        find /usr -name '*nvidia*' -type f -delete 2>/dev/null || true
+        find /usr -name '*cuda*' -type f -delete 2>/dev/null || true
+    " || warn "Some cleanup steps failed (may be harmless)"
+    
+    success "Existing drivers uninstalled"
+    echo ""
 fi
 
 echo ""
@@ -195,30 +229,45 @@ pct exec "$CONTAINER_ID" -- bash -c "
 
 success "Prerequisites installed"
 
-# Download driver installer in container
-info "Downloading NVIDIA driver $DRIVER_VERSION to container..."
-info "This may take a few minutes..."
+# Download driver installer to host cache (if not already cached)
+HOST_DRIVER_PATH="${HOST_CACHE_DIR}/${DRIVER_FILENAME}"
 
-pct exec "$CONTAINER_ID" -- bash -c "
-    cd /tmp
-    if [ -f '$DRIVER_FILENAME' ]; then
-        echo 'Driver installer already downloaded, skipping...'
+if [ -f "$HOST_DRIVER_PATH" ]; then
+    info "Driver installer found in host cache: $HOST_DRIVER_PATH"
+    success "Using cached driver installer"
+else
+    info "Downloading NVIDIA driver $DRIVER_VERSION to host cache..."
+    info "This may take a few minutes..."
+    info "Cache location: $HOST_CACHE_DIR"
+    
+    if wget -q --show-progress "$DRIVER_URL" -O "$HOST_DRIVER_PATH"; then
+        chmod +x "$HOST_DRIVER_PATH"
+        success "Driver downloaded and cached on host"
     else
-        wget -q --show-progress '$DRIVER_URL' || exit 1
+        error "Failed to download driver installer"
+        echo ""
+        echo "Check if URL is valid:"
+        echo "  $DRIVER_URL"
+        echo ""
+        echo "You can find available driver versions at:"
+        echo "  https://www.nvidia.com/Download/index.aspx"
+        exit 1
     fi
-    chmod +x '$DRIVER_FILENAME'
-" || {
-    error "Failed to download driver installer"
-    echo ""
-    echo "Check if URL is valid:"
-    echo "  $DRIVER_URL"
-    echo ""
-    echo "You can find available driver versions at:"
-    echo "  https://www.nvidia.com/Download/index.aspx"
+fi
+
+# Copy driver installer from host cache to container
+info "Copying driver installer to container..."
+pct push "$CONTAINER_ID" "$HOST_DRIVER_PATH" "/tmp/$DRIVER_FILENAME" || {
+    error "Failed to copy driver installer to container"
     exit 1
 }
 
-success "Driver downloaded"
+pct exec "$CONTAINER_ID" -- chmod +x "/tmp/$DRIVER_FILENAME" || {
+    error "Failed to make driver installer executable"
+    exit 1
+}
+
+success "Driver installer ready in container"
 echo ""
 
 # Install driver (this takes a few minutes)
@@ -226,6 +275,8 @@ info "Installing NVIDIA driver in container..."
 info "This will take 2-5 minutes, please wait..."
 echo ""
 
+# Install driver (this takes a few minutes)
+# Use --uninstall-first to remove any conflicting installations
 pct exec "$CONTAINER_ID" -- bash -c "
     cd /tmp
     
@@ -234,24 +285,36 @@ pct exec "$CONTAINER_ID" -- bash -c "
     # --silent: Non-interactive installation
     # --no-drm: Skip DRM setup
     # --install-libglvnd: Install GL vendor neutral dispatch library
+    # --uninstall-first: Remove any existing conflicting installations
     
     ./'$DRIVER_FILENAME' \
         --no-kernel-module \
         --silent \
         --no-drm \
         --install-libglvnd \
-        2>&1 | grep -i 'error' || true
+        --uninstall-first \
+        2>&1
     
     # Check exit code
-    if [ \${PIPESTATUS[0]} -ne 0 ]; then
-        echo 'Installation failed'
-        exit 1
+    INSTALL_EXIT=\$?
+    if [ \$INSTALL_EXIT -ne 0 ]; then
+        echo 'Installation failed with exit code: '\$INSTALL_EXIT
+        echo ''
+        echo 'Checking installer log for details...'
+        if [ -f /var/log/nvidia-installer.log ]; then
+            tail -50 /var/log/nvidia-installer.log
+        fi
+        exit \$INSTALL_EXIT
     fi
 " || {
     error "Driver installation failed"
     echo ""
     echo "Check logs in container:"
     echo "  pct exec $CONTAINER_ID -- cat /var/log/nvidia-installer.log"
+    echo ""
+    echo "Common issues:"
+    echo "  - Conflicting driver installations: Try manual cleanup first"
+    echo "  - Container needs reboot: pct reboot $CONTAINER_ID"
     exit 1
 }
 
@@ -325,9 +388,12 @@ else
     success "nvtop already installed"
 fi
 
-# Cleanup
-info "Cleaning up..."
+# Cleanup container temp file (keep host cache)
+info "Cleaning up container temp files..."
 pct exec "$CONTAINER_ID" -- bash -c "rm -f /tmp/$DRIVER_FILENAME" 2>/dev/null || true
+
+# Note: Host cache is kept for reuse across containers
+info "Driver installer cached on host at: $HOST_DRIVER_PATH"
 
 echo ""
 echo "=========================================="

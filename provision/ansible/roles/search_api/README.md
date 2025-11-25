@@ -42,8 +42,8 @@ This role installs and configures the Search API, a sophisticated search service
 
 ### Embedding Service
 
-- `embedding_service_url`: URL of embedding service (litellm)
-- `embedding_model`: Model name (default: text-embedding-3-small)
+- `embedding_service_url`: URL of embedding service (local FastEmbed on ingest-lxc)
+- `embedding_model`: Model name (default: bge-large-en-v1.5)
 
 ### Reranking
 

@@ -1,128 +1,72 @@
-.PHONY: help local-up local-down local-deploy local-logs local-shell local-reset test-deploy prod-deploy
+.PHONY: menu help setup configure deploy test mcp
 
-# Default target
+# Default target - interactive menu
+.DEFAULT_GOAL := menu
+
+# Interactive menu (default when running just 'make')
+menu:
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════════════════╗"
+	@echo "║                         Busibox Main Menu                            ║"
+	@echo "╚══════════════════════════════════════════════════════════════════════╝"
+	@echo ""
+	@echo "  1) Setup      - Initial setup (Proxmox host + LXC containers)"
+	@echo "  2) Configure  - Configure models, GPUs, and containers"
+	@echo "  3) Deploy     - Deploy services with Ansible"
+	@echo "  4) Test       - Run tests (infrastructure and services)"
+	@echo "  5) MCP        - Build MCP server for Cursor AI"
+	@echo "  6) Help       - Show detailed help"
+	@echo "  Q) Quit"
+	@echo ""
+	@read -p "Select option [1-6, Q]: " choice; \
+	case "$$choice" in \
+		1) $(MAKE) setup ;; \
+		2) $(MAKE) configure ;; \
+		3) $(MAKE) deploy ;; \
+		4) $(MAKE) test ;; \
+		5) $(MAKE) mcp ;; \
+		6) $(MAKE) help ;; \
+		[Qq]) echo "Exiting..." ;; \
+		*) echo "Invalid choice" ;; \
+	esac
+
 help:
-	@echo "Cashman Infrastructure Management"
 	@echo ""
-	@echo "Local Development (Docker):"
-	@echo "  make local-up          - Start local Docker containers"
-	@echo "  make local-down        - Stop local Docker containers"
-	@echo "  make local-deploy      - Deploy to local containers with Ansible"
-	@echo "  make local-logs        - Show logs from all containers"
-	@echo "  make local-shell       - Open shell in ai-portal container"
-	@echo "  make local-reset       - Reset local environment (WARNING: deletes data)"
+	@echo "╔══════════════════════════════════════════════════════════════════════╗"
+	@echo "║                    Busibox - Interactive Commands                    ║"
+	@echo "╚══════════════════════════════════════════════════════════════════════╝"
 	@echo ""
-	@echo "Proxmox Deployment:"
-	@echo "  make test-deploy       - Deploy to Proxmox test environment"
-	@echo "  make prod-deploy       - Deploy to Proxmox production (requires confirmation)"
+	@echo "Usage: make <target>"
 	@echo ""
-	@echo "Examples:"
-	@echo "  make local-up && make local-deploy    # Full local setup"
-	@echo "  make local-shell                       # Debug ai-portal container"
+	@echo "Available targets:"
+	@echo "  menu       - Interactive menu (default)"
+	@echo "  setup      - Initial setup (Proxmox host + LXC containers)"
+	@echo "  configure  - Configure models, GPUs, and containers"
+	@echo "  deploy     - Deploy services with Ansible"
+	@echo "  test       - Run tests (infrastructure and services)"
+	@echo "  mcp        - Build MCP server for Cursor AI"
+	@echo "  help       - Show this help message"
+	@echo ""
+	@echo "Quick Start:"
+	@echo "  1. make setup      # On Proxmox host"
+	@echo "  2. make configure  # Configure models/GPUs"
+	@echo "  3. make deploy     # Deploy services"
+	@echo "  4. make test       # Verify deployment"
+	@echo ""
+	@echo "All commands are interactive and will guide you through the process."
+	@echo ""
 
-# ============================================================================
-# Local Development
-# ============================================================================
+setup:
+	@bash scripts/setup.sh
 
-local-up:
-	@echo "🚀 Starting local Docker containers..."
-	docker compose -f docker-compose.local.yml up -d
-	@echo "✅ Containers started. Run 'make local-deploy' to provision with Ansible."
+configure:
+	@bash scripts/configure.sh
 
-local-down:
-	@echo "🛑 Stopping local Docker containers..."
-	docker compose -f docker-compose.local.yml down
-	@echo "✅ Containers stopped."
+deploy:
+	@bash scripts/deploy.sh
 
-local-deploy:
-	@echo "📦 Deploying to local containers with Ansible..."
-	cd provision/ansible && \
-	ansible-playbook -i inventory/local/hosts.yml site.yml \
-		--vault-password-file $HOME/.vault_pass
-	@echo "✅ Deployment complete."
+test:
+	@bash scripts/test.sh
 
-local-deploy-apps:
-	@echo "📦 Deploying only ai-portal to local..."
-	cd provision/ansible && \
-	ansible-playbook -i inventory/local/hosts.yml site.yml \
-		--vault-password-file $HOME/.vault_pass \
-		--limit apps --tags nextjs
-
-local-logs:
-	@echo "📋 Showing logs from all containers..."
-	docker compose -f docker-compose.local.yml logs -f
-
-local-shell:
-	@echo "🐚 Opening shell in ai-portal container..."
-	docker exec -it local-apps bash
-
-local-shell-user:
-	@echo "🐚 Opening shell as appuser in ai-portal container..."
-	docker exec -it -u appuser local-apps bash
-
-local-reset:
-	@echo "⚠️  WARNING: This will delete all local data!"
-	@read -p "Are you sure? [y/N] " -n 1 -r; \
-	echo; \
-	if [[ $$REPLY =~ ^[Yy]$$ ]]; then \
-		docker compose -f docker-compose.local.yml down -v; \
-		echo "✅ Local environment reset."; \
-	else \
-		echo "❌ Aborted."; \
-	fi
-
-# ============================================================================
-# Proxmox Deployment
-# ============================================================================
-
-test-deploy:
-	@echo "🧪 Deploying to Proxmox TEST environment..."
-	cd provision/ansible && \
-	ansible-playbook -i inventory/test/hosts.yml site.yml \
-		--vault-password-file ~/.vault_pass
-	@echo "✅ Test deployment complete."
-
-test-deploy-apps:
-	@echo "🧪 Deploying only ai-portal to Proxmox TEST..."
-	cd provision/ansible && \
-	ansible-playbook -i inventory/test/hosts.yml site.yml \
-		--vault-password-file ~/.vault_pass \
-		--limit apps --tags nextjs
-
-prod-deploy:
-	@echo "🚨 WARNING: Deploying to PRODUCTION!"
-	@read -p "Are you sure? Type 'production' to confirm: " confirm; \
-	if [ "$$confirm" = "production" ]; then \
-		cd provision/ansible && \
-		ansible-playbook -i inventory/production/hosts.yml site.yml \
-			--vault-password-file ~/.vault_pass; \
-		echo "✅ Production deployment complete."; \
-	else \
-		echo "❌ Aborted."; \
-	fi
-
-# ============================================================================
-# Utilities
-# ============================================================================
-
-check-docker:
-	@docker info > /dev/null 2>&1 || (echo "❌ Docker is not running. Start Docker Desktop." && exit 1)
-	@echo "✅ Docker is running."
-
-check-ansible:
-	@which ansible-playbook > /dev/null || (echo "❌ Ansible not found. Run: brew install ansible" && exit 1)
-	@echo "✅ Ansible is installed."
-
-check-deps: check-docker check-ansible
-	@echo "✅ All dependencies are installed."
-
-
-
-
-
-
-
-
-
-
-
+mcp:
+	@bash scripts/mcp.sh

@@ -1,11 +1,16 @@
+# Fix for environs/marshmallow compatibility - MUST BE FIRST
+# pymilvus depends on environs which needs marshmallow>=3.13
+# Using latest 4.x series for best compatibility
+marshmallow>=4.1.0,<5.0.0
+
 # Core API
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 pydantic==2.4.2
 pydantic-settings==2.0.3
 
-# Vector database
-pymilvus==2.4.0
+# Vector database - compatible with Milvus v2.6.x
+pymilvus>=2.6.0,<2.7.0
 
 # Database
 asyncpg==0.29.0
@@ -15,9 +20,9 @@ psycopg2-binary==2.9.9
 redis==5.0.1
 
 # Embeddings & Reranking
-sentence-transformers==2.2.2
-transformers==4.35.2
-torch==2.1.0
+sentence-transformers>=3.0.0,<4.0.0
+transformers>=4.40.0,<5.0.0
+torch>=2.1.0,<3.0.0
 
 # Text processing
 nltk==3.8.1
@@ -34,6 +39,7 @@ python-json-logger==2.0.7
 python-multipart==0.0.6
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
+PyJWT>=2.8.0,<3.0.0
 
 # Development
 pytest==7.4.3
