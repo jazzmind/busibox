@@ -20,12 +20,13 @@ class EmbeddingService:
         self.embedding_dim = config.get("embedding_dim", 1024)
         self.timeout = 30.0
     
-    async def embed_query(self, query: str) -> Optional[List[float]]:
+    async def embed_query(self, query: str, user_id: Optional[str] = None) -> Optional[List[float]]:
         """
         Generate embedding for a search query.
         
         Args:
             query: Search query text
+            user_id: User ID for authentication (optional, required for ingest service)
         
         Returns:
             Embedding vector or None on failure
@@ -37,6 +38,11 @@ class EmbeddingService:
                 model=self.model,
             )
             
+            # Prepare headers with user ID for authentication
+            headers = {}
+            if user_id:
+                headers["X-User-Id"] = user_id
+            
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.post(
                     f"{self.service_url}/api/embeddings",
@@ -44,6 +50,7 @@ class EmbeddingService:
                         "input": query,
                         "model": self.model,
                     },
+                    headers=headers,
                 )
                 
                 if response.status_code != 200:
@@ -72,12 +79,13 @@ class EmbeddingService:
             )
             return None
     
-    async def embed_batch(self, texts: List[str]) -> Optional[List[List[float]]]:
+    async def embed_batch(self, texts: List[str], user_id: Optional[str] = None) -> Optional[List[List[float]]]:
         """
         Generate embeddings for multiple texts.
         
         Args:
             texts: List of texts to embed
+            user_id: User ID for authentication (optional, required for ingest service)
         
         Returns:
             List of embedding vectors or None on failure
@@ -89,6 +97,11 @@ class EmbeddingService:
                 model=self.model,
             )
             
+            # Prepare headers with user ID for authentication
+            headers = {}
+            if user_id:
+                headers["X-User-Id"] = user_id
+            
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.post(
                     f"{self.service_url}/api/embeddings",
@@ -96,6 +109,7 @@ class EmbeddingService:
                         "input": texts,
                         "model": self.model,
                     },
+                    headers=headers,
                 )
                 
                 if response.status_code != 200:

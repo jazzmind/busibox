@@ -84,7 +84,7 @@ async def search(
         
         elif search_request.mode == "semantic":
             # Pure semantic search
-            query_embedding = await embedding_service.embed_query(search_request.query)
+            query_embedding = await embedding_service.embed_query(search_request.query, user_id=user_id)
             
             if not query_embedding:
                 raise HTTPException(
@@ -101,7 +101,7 @@ async def search(
         
         elif search_request.mode == "hybrid":
             # Hybrid search (dense + sparse)
-            query_embedding = await embedding_service.embed_query(search_request.query)
+            query_embedding = await embedding_service.embed_query(search_request.query, user_id=user_id)
             
             if not query_embedding:
                 raise HTTPException(
@@ -342,7 +342,7 @@ async def explain_result(
             )
         
         # Generate query embedding
-        query_embedding = await embedding_service.embed_query(explain_request.query)
+        query_embedding = await embedding_service.embed_query(explain_request.query, user_id=user_id)
         
         if not query_embedding:
             raise HTTPException(
