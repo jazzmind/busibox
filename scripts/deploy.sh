@@ -23,6 +23,9 @@ source "${SCRIPT_DIR}/lib/ui.sh"
 # vLLM mode for test environment: "alias" (use production) or "deploy" (own container)
 VLLM_MODE="alias"
 
+# Track if IP aliasing has been configured
+ALIAS_CONFIGURED=false
+
 # Display welcome
 clear
 box "Busibox Deployment" 70
@@ -56,6 +59,58 @@ get_vault_flags() {
     fi
 }
 
+# Setup vLLM IP aliasing on Proxmox host
+setup_vllm_alias() {
+    local action="$1"  # "enable" or "disable" or "status"
+    
+    info "Configuring vLLM IP aliasing on Proxmox host..."
+    echo ""
+    
+    # Get Proxmox host from inventory
+    local proxmox_host
+    proxmox_host=$(grep -E "^proxmox_host:" "${ANSIBLE_DIR}/inventory/production/group_vars/all/00-main.yml" 2>/dev/null | awk '{print $2}' || echo "proxmox")
+    
+    if [ -z "$proxmox_host" ] || [ "$proxmox_host" = "proxmox" ]; then
+        # Try to get from ~/.ssh/config or use default
+        proxmox_host="proxmox"
+    fi
+    
+    # Check if we can reach the Proxmox host
+    if ! ssh -o BatchMode=yes -o ConnectTimeout=5 "root@${proxmox_host}" "echo 'connected'" &>/dev/null; then
+        error "Cannot connect to Proxmox host ($proxmox_host)"
+        info "Make sure you can SSH to Proxmox: ssh root@${proxmox_host}"
+        return 1
+    fi
+    
+    # Copy and run the aliasing script
+    local script_path="${REPO_ROOT}/provision/pct/host/setup-vllm-alias.sh"
+    
+    if [ ! -f "$script_path" ]; then
+        error "Aliasing script not found: $script_path"
+        return 1
+    fi
+    
+    # Copy script to Proxmox host and execute
+    scp -q "$script_path" "root@${proxmox_host}:/tmp/setup-vllm-alias.sh"
+    ssh "root@${proxmox_host}" "chmod +x /tmp/setup-vllm-alias.sh && /tmp/setup-vllm-alias.sh $action"
+    local result=$?
+    
+    if [ $result -eq 0 ]; then
+        if [ "$action" = "enable" ]; then
+            ALIAS_CONFIGURED=true
+            success "vLLM IP aliasing configured successfully"
+        elif [ "$action" = "disable" ]; then
+            ALIAS_CONFIGURED=false
+            success "vLLM IP aliasing disabled"
+        fi
+    else
+        error "Failed to configure vLLM IP aliasing"
+        return 1
+    fi
+    
+    return 0
+}
+
 # Select vLLM mode for test environment
 select_vllm_mode() {
     echo ""
@@ -65,12 +120,15 @@ select_vllm_mode() {
     echo ""
     echo -e "  ${CYAN}1)${NC} Alias to production vLLM ${GREEN}(default, saves resources)${NC}"
     echo -e "     Test services will use production vLLM endpoints"
+    echo -e "     ${DIM}(Configures IP aliasing on Proxmox host)${NC}"
     echo ""
     echo -e "  ${CYAN}2)${NC} Deploy test vLLM container ${YELLOW}(isolated testing)${NC}"
     echo -e "     Requires GPU resources and significant memory"
     echo ""
+    echo -e "  ${CYAN}3)${NC} Check current aliasing status"
+    echo ""
     
-    read -p "$(echo -e "${BOLD}Select option [1-2, default=1]:${NC} ")" vllm_choice
+    read -p "$(echo -e "${BOLD}Select option [1-3, default=1]:${NC} ")" vllm_choice
     echo ""
     
     case "$vllm_choice" in
@@ -78,10 +136,38 @@ select_vllm_mode() {
             VLLM_MODE="deploy"
             warn "Test environment will deploy its own vLLM container"
             info "This requires GPU resources and significant memory"
+            
+            # Offer to disable aliasing if it was previously enabled
+            if confirm "Disable vLLM aliasing (if enabled)?"; then
+                setup_vllm_alias "disable" || true
+            fi
+            ;;
+        3)
+            setup_vllm_alias "status"
+            echo ""
+            # Re-run selection
+            select_vllm_mode
+            return
             ;;
         *)
             VLLM_MODE="alias"
             success "Test environment will use production vLLM"
+            echo ""
+            
+            # Set up IP aliasing
+            if confirm "Configure IP aliasing on Proxmox host now?"; then
+                if setup_vllm_alias "enable"; then
+                    info "Test LiteLLM can now be deployed"
+                else
+                    warn "IP aliasing failed - LiteLLM deployment may fail"
+                    if ! confirm "Continue anyway?"; then
+                        VLLM_MODE="deploy"
+                        warn "Switched to deploy mode"
+                    fi
+                fi
+            else
+                info "You can configure IP aliasing later from the LLM Services menu"
+            fi
             ;;
     esac
 }
@@ -415,6 +501,11 @@ llm_services_menu() {
         if [ "$env" = "test" ]; then
             if [ "$VLLM_MODE" = "alias" ]; then
                 echo -e "  ${GREEN}vLLM Mode: Aliased to Production${NC}"
+                if [ "$ALIAS_CONFIGURED" = "true" ]; then
+                    echo -e "  ${GREEN}IP Aliasing: Configured ✓${NC}"
+                else
+                    echo -e "  ${YELLOW}IP Aliasing: Not configured (may be needed)${NC}"
+                fi
             else
                 echo -e "  ${YELLOW}vLLM Mode: Deploy Test Container${NC}"
             fi
@@ -429,15 +520,16 @@ llm_services_menu() {
         echo -e "  ${CYAN}3)${NC} Deploy ColPali (visual embeddings)"
         echo -e "  ${CYAN}4)${NC} Deploy LiteLLM (gateway)"
         if [ "$env" = "test" ]; then
-            echo -e "  ${CYAN}5)${NC} Change vLLM Mode"
-            echo -e "  ${CYAN}6)${NC} Back"
+            echo -e "  ${CYAN}5)${NC} Configure IP Aliasing"
+            echo -e "  ${CYAN}6)${NC} Change vLLM Mode"
+            echo -e "  ${CYAN}7)${NC} Back"
         else
             echo -e "  ${CYAN}5)${NC} Back"
         fi
         echo ""
         
         local max_option=5
-        [ "$env" = "test" ] && max_option=6
+        [ "$env" = "test" ] && max_option=7
         
         read -p "Select option [1-$max_option]: " choice
         echo ""
@@ -445,11 +537,26 @@ llm_services_menu() {
         case "$choice" in
             1)
                 if [ "$env" = "test" ] && [ "$VLLM_MODE" = "alias" ]; then
+                    # Ensure IP aliasing is configured before deploying LiteLLM
+                    if [ "$ALIAS_CONFIGURED" != "true" ]; then
+                        warn "IP aliasing not yet configured"
+                        if confirm "Configure IP aliasing now?"; then
+                            setup_vllm_alias "enable" || {
+                                error "IP aliasing failed - cannot deploy LiteLLM"
+                                pause
+                                continue
+                            }
+                        else
+                            error "IP aliasing required for alias mode"
+                            pause
+                            continue
+                        fi
+                    fi
+                    
                     if confirm "Deploy LLM services to $env? (vLLM aliased to production)"; then
-                        info "Skipping vLLM deployment (aliased to production)"
+                        info "Skipping vLLM/ColPali deployment (aliased to production)"
                         echo ""
-                        info "Configuring LiteLLM to use production vLLM endpoints..."
-                        deploy_service "litellm" "$env" "EXTRA_ARGS=\"-e vllm_use_production=true\""
+                        deploy_service "litellm" "$env"
                     fi
                 else
                     if confirm "Deploy ALL LLM services (vLLM, ColPali, LiteLLM) to $env?"; then
@@ -463,7 +570,7 @@ llm_services_menu() {
             2)
                 if [ "$env" = "test" ] && [ "$VLLM_MODE" = "alias" ]; then
                     warn "vLLM is aliased to production in test mode"
-                    info "To deploy a test vLLM, change vLLM mode first (option 5)"
+                    info "To deploy a test vLLM, change vLLM mode first (option 6)"
                     pause
                 else
                     vllm_submenu "$env"
@@ -472,7 +579,7 @@ llm_services_menu() {
             3)
                 if [ "$env" = "test" ] && [ "$VLLM_MODE" = "alias" ]; then
                     warn "ColPali is aliased to production in test mode"
-                    info "To deploy test ColPali, change vLLM mode first (option 5)"
+                    info "To deploy test ColPali, change vLLM mode first (option 6)"
                     pause
                 else
                     if confirm "Deploy ColPali (visual embeddings) to $env?"; then
@@ -482,25 +589,58 @@ llm_services_menu() {
                 fi
                 ;;
             4)
-                if confirm "Deploy LiteLLM (gateway) to $env?"; then
-                    if [ "$env" = "test" ] && [ "$VLLM_MODE" = "alias" ]; then
-                        info "Configuring LiteLLM to use production vLLM endpoints..."
-                        deploy_service "litellm" "$env" "EXTRA_ARGS=\"-e vllm_use_production=true\""
-                    else
-                        deploy_service "litellm" "$env"
+                # Ensure IP aliasing is configured before deploying LiteLLM in alias mode
+                if [ "$env" = "test" ] && [ "$VLLM_MODE" = "alias" ]; then
+                    if [ "$ALIAS_CONFIGURED" != "true" ]; then
+                        warn "IP aliasing not yet configured"
+                        if confirm "Configure IP aliasing now?"; then
+                            setup_vllm_alias "enable" || {
+                                error "IP aliasing failed - LiteLLM may not work correctly"
+                                if ! confirm "Continue anyway?"; then
+                                    pause
+                                    continue
+                                fi
+                            }
+                        fi
                     fi
+                fi
+                
+                if confirm "Deploy LiteLLM (gateway) to $env?"; then
+                    deploy_service "litellm" "$env"
                 fi
                 pause
                 ;;
             5)
                 if [ "$env" = "test" ]; then
-                    select_vllm_mode
+                    # Configure IP aliasing submenu
+                    echo ""
+                    echo -e "  ${CYAN}1)${NC} Enable IP aliasing (test -> production)"
+                    echo -e "  ${CYAN}2)${NC} Disable IP aliasing"
+                    echo -e "  ${CYAN}3)${NC} Check aliasing status"
+                    echo -e "  ${CYAN}4)${NC} Cancel"
+                    echo ""
+                    read -p "Select option [1-4]: " alias_choice
+                    case "$alias_choice" in
+                        1) setup_vllm_alias "enable" ;;
+                        2) setup_vllm_alias "disable" ;;
+                        3) setup_vllm_alias "status" ;;
+                        *) ;;
+                    esac
                     pause
                 else
                     return 0
                 fi
                 ;;
             6)
+                if [ "$env" = "test" ]; then
+                    select_vllm_mode
+                    pause
+                else
+                    error "Invalid choice"
+                    pause
+                fi
+                ;;
+            7)
                 if [ "$env" = "test" ]; then
                     return 0
                 else
