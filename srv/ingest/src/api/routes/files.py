@@ -136,6 +136,11 @@ async def get_file_metadata(fileId: str, request: Request):
                 for row in strategy_rows
             ]
             
+            # Merge metadata with fallbacks for page_count and word_count
+            metadata = file_row["metadata"] or {}
+            if "page_count" not in metadata and status_row and status_row["total_pages"]:
+                metadata["page_count"] = status_row["total_pages"]
+            
             return JSONResponse(
                 status_code=status.HTTP_200_OK,
                 content={
@@ -156,7 +161,7 @@ async def get_file_metadata(fileId: str, request: Request):
                     "extractedAuthor": file_row["extracted_author"],
                     "extractedDate": file_row["extracted_date"].isoformat() if file_row["extracted_date"] else None,
                     "extractedKeywords": file_row["extracted_keywords"],
-                    "metadata": file_row["metadata"],
+                    "metadata": metadata,
                     "permissions": file_row["permissions"],
                     "processingStrategies": strategies,
                     "status": {
