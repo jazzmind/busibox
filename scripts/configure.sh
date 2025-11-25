@@ -40,8 +40,11 @@ verify_ansible_connectivity() {
     info "Testing Ansible connectivity to all hosts..."
     echo ""
     
+    # Get vault flags
+    local vault_flags=$(get_vault_flags)
+    
     cd "${REPO_ROOT}/provision/ansible"
-    if ansible -i "inventory/${inv}" all -m ping; then
+    if ansible -i "inventory/${inv}" all -m ping $vault_flags; then
         echo ""
         success "All hosts reachable"
         cd "${REPO_ROOT}"
@@ -51,6 +54,17 @@ verify_ansible_connectivity() {
         error "Some hosts unreachable"
         cd "${REPO_ROOT}"
         return 1
+    fi
+}
+
+# Detect vault password method
+get_vault_flags() {
+    local vault_pass_file="$HOME/.vault_pass"
+    
+    if [ -f "$vault_pass_file" ]; then
+        echo "--vault-password-file $vault_pass_file"
+    else
+        echo "--ask-vault-pass"
     fi
 }
 
@@ -100,10 +114,13 @@ verify_inventory_vars() {
         "proxy_ip"
     )
     
+    # Get vault flags
+    local vault_flags=$(get_vault_flags)
+    
     cd "${REPO_ROOT}/provision/ansible"
     
     for var in "${required_vars[@]}"; do
-        local result=$(ansible -i "inventory/${inv}" localhost -m debug -a "var=$var" 2>/dev/null)
+        local result=$(ansible -i "inventory/${inv}" localhost -m debug -a "var=$var" $vault_flags 2>/dev/null)
         if echo "$result" | grep -q "VARIABLE IS NOT DEFINED"; then
             list_item "error" "Missing variable: $var"
             ((errors++))
@@ -131,13 +148,16 @@ verify_service_health() {
     info "Checking service health for $inv..."
     echo ""
     
+    # Get vault flags
+    local vault_flags=$(get_vault_flags)
+    
     cd "${REPO_ROOT}/provision/ansible"
     
     # Get IPs from inventory
-    local pg_ip=$(ansible -i "inventory/${inv}" localhost -m debug -a "var=pg_ip" 2>/dev/null | grep "pg_ip" | awk -F'"' '{print $2}')
-    local milvus_ip=$(ansible -i "inventory/${inv}" localhost -m debug -a "var=milvus_ip" 2>/dev/null | grep "milvus_ip" | awk -F'"' '{print $2}')
-    local files_ip=$(ansible -i "inventory/${inv}" localhost -m debug -a "var=files_ip" 2>/dev/null | grep "files_ip" | awk -F'"' '{print $2}')
-    local ingest_ip=$(ansible -i "inventory/${inv}" localhost -m debug -a "var=ingest_ip" 2>/dev/null | grep "ingest_ip" | awk -F'"' '{print $2}')
+    local pg_ip=$(ansible -i "inventory/${inv}" localhost -m debug -a "var=pg_ip" $vault_flags 2>/dev/null | grep "pg_ip" | awk -F'"' '{print $2}')
+    local milvus_ip=$(ansible -i "inventory/${inv}" localhost -m debug -a "var=milvus_ip" $vault_flags 2>/dev/null | grep "milvus_ip" | awk -F'"' '{print $2}')
+    local files_ip=$(ansible -i "inventory/${inv}" localhost -m debug -a "var=files_ip" $vault_flags 2>/dev/null | grep "files_ip" | awk -F'"' '{print $2}')
+    local ingest_ip=$(ansible -i "inventory/${inv}" localhost -m debug -a "var=ingest_ip" $vault_flags 2>/dev/null | grep "ingest_ip" | awk -F'"' '{print $2}')
     
     cd "${REPO_ROOT}"
     
