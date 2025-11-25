@@ -451,6 +451,37 @@ class IngestWorker:
                 extracted_keywords=metadata.get("keywords", []),
             )
             
+            # Update metadata JSON with page_count and word_count
+            try:
+                conn = self.postgres_service._get_connection()
+                with conn.cursor() as cur:
+                    # Calculate word count from extracted text
+                    word_count = len(extraction_result.text.split())
+                    
+                    # Update metadata JSON field
+                    cur.execute("""
+                        UPDATE ingestion_files
+                        SET metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb
+                        WHERE file_id = %s
+                    """, (
+                        json.dumps({"page_count": extraction_result.page_count, "word_count": word_count}),
+                        file_id
+                    ))
+                    conn.commit()
+                    logger.debug(
+                        "Updated metadata with page_count and word_count",
+                        file_id=file_id,
+                        page_count=extraction_result.page_count,
+                        word_count=word_count
+                    )
+                self.postgres_service._return_connection(conn)
+            except Exception as e:
+                logger.warning(
+                    "Failed to update metadata JSON",
+                    file_id=file_id,
+                    error=str(e)
+                )
+            
             # Stage 4: Chunking
             chunking_start = self.history.log_stage_start(
                 file_id, "chunking",
