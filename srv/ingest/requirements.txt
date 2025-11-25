@@ -12,9 +12,9 @@ psycopg2-binary>=2.9.9,<3.0.0
 asyncpg>=0.29.0,<0.30.0
 
 # Vector Database - compatible with Milvus v2.6.x
+# Milvus 2.6+ handles BM25 sparse vectors internally via Function API
 pymilvus>=2.6.0,<2.7.0
-rank-bm25>=0.2.2,<0.3.0  # BM25 sparse vectors
-scipy>=1.11.0,<2.0.0  # Sparse matrix support for BM25
+scipy>=1.11.0,<2.0.0  # Scientific computing utilities
 
 # Object Storage
 minio>=7.2.3,<8.0.0

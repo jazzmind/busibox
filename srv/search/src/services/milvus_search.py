@@ -71,23 +71,26 @@ class MilvusSearchService:
         filters: Optional[Dict] = None,
     ) -> List[Dict]:
         """
-        Pure BM25 keyword search.
+        Full-text BM25 keyword search using Milvus 2.6+ built-in full-text search.
+        
+        Milvus automatically converts the raw text query to a sparse BM25 vector
+        using the BM25 Function defined in the collection schema.
         
         Args:
-            query: Search query string
+            query: Search query string (raw text)
             user_id: User ID for permission filtering
             top_k: Number of results to return
             filters: Additional filters
         
         Returns:
-            List of search results with scores
+            List of search results with BM25 scores
         """
         if not self.connected:
             self.connect()
         
         try:
             logger.info(
-                "Performing keyword search",
+                "Performing full-text search (BM25)",
                 user_id=user_id,
                 query=query[:100],
                 top_k=top_k,
@@ -99,16 +102,17 @@ class MilvusSearchService:
                 file_ids_str = '", "'.join(filters["file_ids"])
                 filter_expr += f' && file_id in ["{file_ids_str}"]'
             
-            # BM25 search using text_sparse field
-            # Note: This assumes the text_sparse field is populated with BM25 embeddings
-            # during ingestion using Milvus BM25 function
+            # Milvus 2.6+ full-text search
+            # Pass raw text query - Milvus uses BM25 Function to convert to sparse vector
             search_params = {
-                "metric_type": "IP",  # Inner product for sparse vectors
-                "params": {},
+                "metric_type": "BM25",  # Use BM25 metric for full-text search
+                "params": {
+                    "drop_ratio_search": 0.2,  # Drop low-importance terms for efficiency
+                },
             }
             
             results = self.collection.search(
-                data=[[query]],  # Text query for BM25
+                data=[query],  # Raw text query - Milvus handles BM25 conversion
                 anns_field="text_sparse",
                 param=search_params,
                 limit=top_k,
@@ -126,7 +130,7 @@ class MilvusSearchService:
             search_results = self._process_results(results, include_sparse_score=True)
             
             logger.info(
-                "Keyword search completed",
+                "Full-text search completed",
                 user_id=user_id,
                 result_count=len(search_results),
             )
@@ -135,12 +139,17 @@ class MilvusSearchService:
         
         except Exception as e:
             logger.error(
-                "Keyword search failed",
+                "Full-text search failed",
                 user_id=user_id,
                 error=str(e),
                 exc_info=True,
             )
-            raise
+            # Return empty results on failure to allow hybrid search to fall back to dense-only
+            logger.warning(
+                "Falling back to dense-only search due to BM25 search failure",
+                user_id=user_id,
+            )
+            return []
     
     def semantic_search(
         self,
