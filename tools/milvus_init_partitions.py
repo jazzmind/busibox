@@ -43,9 +43,11 @@ def check_collection_exists():
 def verify_partition_support():
     """Verify collection supports partitions"""
     if not check_collection_exists():
-        print(f"✗ Collection '{COLLECTION_NAME}' does not exist")
-        print("  Run milvus_init.py or hybrid_schema.py first to create the collection")
-        return False
+        print(f"⚠ Collection '{COLLECTION_NAME}' does not exist yet")
+        print("  This is normal for initial deployment.")
+        print("  The collection will be created by the ingest service or hybrid_schema.py")
+        print("  Partitions will be created automatically when documents are uploaded.")
+        return None  # None = collection doesn't exist yet (not an error)
     
     collection = Collection(COLLECTION_NAME)
     
@@ -97,7 +99,17 @@ def main():
     try:
         connect_milvus()
         
-        if not verify_partition_support():
+        result = verify_partition_support()
+        
+        if result is None:
+            # Collection doesn't exist yet - this is OK for initial deployment
+            print("\n" + "="*60)
+            print("⚠ Milvus partition initialization skipped (no collection)")
+            print("  Partitions will be created when documents are ingested.")
+            print("="*60)
+            sys.exit(0)  # Exit successfully - not an error
+        
+        if result is False:
             print("\n✗ Partition support verification failed")
             sys.exit(1)
         
