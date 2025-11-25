@@ -1,4 +1,4 @@
-.PHONY: ping all files pg milvus nginx search search-api agent ingest ingest-api ingest-worker ingest-update-tests apps openwebui deploy-apps deploy-ai-portal deploy-agent-client deploy-doc-intel deploy-foundation deploy-project-analysis deploy-innovation verify verify-health verify-smoke test test-menu test-ingest test-ingest-all test-ingest-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-apps test-all
+.PHONY: ping all files pg milvus nginx search search-api agent ingest ingest-api ingest-worker ingest-update-tests apps openwebui deploy deploy-apps deploy-ai-portal deploy-agent-client deploy-doc-intel deploy-foundation deploy-project-analysis deploy-innovation configure verify verify-health verify-smoke test test-menu test-ingest test-ingest-all test-ingest-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-apps test-all
 # Default to production inventory (can override with: make all INV=inventory/test)
 INV=inventory/production
 
@@ -25,6 +25,20 @@ else
   APPS_IP = 10.96.200.201
   MILVUS_IP = 10.96.200.204
 endif
+
+# ========================================================================
+# Interactive Menus
+# ========================================================================
+
+configure:
+	@./configure-menu.sh
+
+deploy:
+	@./deploy-menu.sh
+
+# ========================================================================
+# Direct Commands
+# ========================================================================
 
 ping:
 	ansible -i $(INV) all -m ping
