@@ -20,6 +20,9 @@ ANSIBLE_DIR="${REPO_ROOT}/provision/ansible"
 # Source UI library
 source "${SCRIPT_DIR}/lib/ui.sh"
 
+# vLLM mode for test environment: "alias" (use production) or "deploy" (own container)
+VLLM_MODE="alias"
+
 # Display welcome
 clear
 box "Busibox Deployment" 70
@@ -51,6 +54,36 @@ get_vault_flags() {
     else
         echo "--ask-vault-pass"
     fi
+}
+
+# Select vLLM mode for test environment
+select_vllm_mode() {
+    echo ""
+    box "vLLM Configuration" 70
+    echo ""
+    info "For TEST environment, you can either:"
+    echo ""
+    echo -e "  ${CYAN}1)${NC} Alias to production vLLM ${GREEN}(default, saves resources)${NC}"
+    echo -e "     Test services will use production vLLM endpoints"
+    echo ""
+    echo -e "  ${CYAN}2)${NC} Deploy test vLLM container ${YELLOW}(isolated testing)${NC}"
+    echo -e "     Requires GPU resources and significant memory"
+    echo ""
+    
+    read -p "$(echo -e "${BOLD}Select option [1-2, default=1]:${NC} ")" vllm_choice
+    echo ""
+    
+    case "$vllm_choice" in
+        2)
+            VLLM_MODE="deploy"
+            warn "Test environment will deploy its own vLLM container"
+            info "This requires GPU resources and significant memory"
+            ;;
+        *)
+            VLLM_MODE="alias"
+            success "Test environment will use production vLLM"
+            ;;
+    esac
 }
 
 # Deploy service
@@ -377,6 +410,17 @@ llm_services_menu() {
         clear
         box "LLM Services - $env" 70
         echo ""
+        
+        # Show vLLM mode for test environment
+        if [ "$env" = "test" ]; then
+            if [ "$VLLM_MODE" = "alias" ]; then
+                echo -e "  ${GREEN}vLLM Mode: Aliased to Production${NC}"
+            else
+                echo -e "  ${YELLOW}vLLM Mode: Deploy Test Container${NC}"
+            fi
+            echo ""
+        fi
+        
         info "Select LLM service to deploy"
         echo ""
         
@@ -384,38 +428,85 @@ llm_services_menu() {
         echo -e "  ${CYAN}2)${NC} Deploy vLLM & Models"
         echo -e "  ${CYAN}3)${NC} Deploy ColPali (visual embeddings)"
         echo -e "  ${CYAN}4)${NC} Deploy LiteLLM (gateway)"
-        echo -e "  ${CYAN}5)${NC} Back"
+        if [ "$env" = "test" ]; then
+            echo -e "  ${CYAN}5)${NC} Change vLLM Mode"
+            echo -e "  ${CYAN}6)${NC} Back"
+        else
+            echo -e "  ${CYAN}5)${NC} Back"
+        fi
         echo ""
         
-        read -p "Select option [1-5]: " choice
+        local max_option=5
+        [ "$env" = "test" ] && max_option=6
+        
+        read -p "Select option [1-$max_option]: " choice
         echo ""
         
         case "$choice" in
             1)
-                if confirm "Deploy ALL LLM services (vLLM, ColPali, LiteLLM) to $env?"; then
-                    deploy_service "vllm" "$env" && \
-                    deploy_service "colpali" "$env" && \
-                    deploy_service "litellm" "$env"
+                if [ "$env" = "test" ] && [ "$VLLM_MODE" = "alias" ]; then
+                    if confirm "Deploy LLM services to $env? (vLLM aliased to production)"; then
+                        info "Skipping vLLM deployment (aliased to production)"
+                        echo ""
+                        info "Configuring LiteLLM to use production vLLM endpoints..."
+                        deploy_service "litellm" "$env" "EXTRA_ARGS=\"-e vllm_use_production=true\""
+                    fi
+                else
+                    if confirm "Deploy ALL LLM services (vLLM, ColPali, LiteLLM) to $env?"; then
+                        deploy_service "vllm" "$env" && \
+                        deploy_service "colpali" "$env" && \
+                        deploy_service "litellm" "$env"
+                    fi
                 fi
                 pause
                 ;;
             2)
-                vllm_submenu "$env"
+                if [ "$env" = "test" ] && [ "$VLLM_MODE" = "alias" ]; then
+                    warn "vLLM is aliased to production in test mode"
+                    info "To deploy a test vLLM, change vLLM mode first (option 5)"
+                    pause
+                else
+                    vllm_submenu "$env"
+                fi
                 ;;
             3)
-                if confirm "Deploy ColPali (visual embeddings) to $env?"; then
-                    deploy_service "colpali" "$env"
+                if [ "$env" = "test" ] && [ "$VLLM_MODE" = "alias" ]; then
+                    warn "ColPali is aliased to production in test mode"
+                    info "To deploy test ColPali, change vLLM mode first (option 5)"
+                    pause
+                else
+                    if confirm "Deploy ColPali (visual embeddings) to $env?"; then
+                        deploy_service "colpali" "$env"
+                    fi
+                    pause
                 fi
-                pause
                 ;;
             4)
                 if confirm "Deploy LiteLLM (gateway) to $env?"; then
-                    deploy_service "litellm" "$env"
+                    if [ "$env" = "test" ] && [ "$VLLM_MODE" = "alias" ]; then
+                        info "Configuring LiteLLM to use production vLLM endpoints..."
+                        deploy_service "litellm" "$env" "EXTRA_ARGS=\"-e vllm_use_production=true\""
+                    else
+                        deploy_service "litellm" "$env"
+                    fi
                 fi
                 pause
                 ;;
             5)
-                return 0
+                if [ "$env" = "test" ]; then
+                    select_vllm_mode
+                    pause
+                else
+                    return 0
+                fi
+                ;;
+            6)
+                if [ "$env" = "test" ]; then
+                    return 0
+                else
+                    error "Invalid choice"
+                    pause
+                fi
                 ;;
             *)
                 error "Invalid choice"
@@ -596,7 +687,18 @@ deployment_menu() {
     
     while true; do
         echo ""
-        menu "Deploy Services - $env Environment" \
+        
+        # Show vLLM mode for test environment
+        local menu_title="Deploy Services - $env Environment"
+        if [ "$env" = "test" ]; then
+            if [ "$VLLM_MODE" = "alias" ]; then
+                menu_title="Deploy Services - $env (vLLM: Production)"
+            else
+                menu_title="Deploy Services - $env (vLLM: Test Container)"
+            fi
+        fi
+        
+        menu "$menu_title" \
             "Deploy All Services" \
             "Deploy Core Services (files, database, vectorstore)" \
             "Deploy LLM Services (vllm, litellm, colpali)" \
@@ -653,6 +755,14 @@ main() {
     ENV=$(select_environment)
     
     success "Selected environment: $ENV"
+    
+    # For test environment, select vLLM mode
+    if [ "$ENV" = "test" ]; then
+        select_vllm_mode
+    else
+        # Production always deploys its own vLLM
+        VLLM_MODE="deploy"
+    fi
     
     # Show deployment menu
     deployment_menu "$ENV"

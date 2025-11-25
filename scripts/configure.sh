@@ -27,6 +27,205 @@ echo ""
 info "Configure models, GPUs, and container settings"
 echo ""
 
+# Global environment variable (set by select_environment)
+SELECTED_ENV=""
+
+# ========================================================================
+# Verification Functions
+# ========================================================================
+
+verify_ansible_connectivity() {
+    local inv="$1"
+    echo ""
+    info "Testing Ansible connectivity to all hosts..."
+    echo ""
+    
+    cd "${REPO_ROOT}/provision/ansible"
+    if ansible -i "inventory/${inv}" all -m ping; then
+        echo ""
+        success "All hosts reachable"
+        cd "${REPO_ROOT}"
+        return 0
+    else
+        echo ""
+        error "Some hosts unreachable"
+        cd "${REPO_ROOT}"
+        return 1
+    fi
+}
+
+verify_vault_access() {
+    local vault_pass_file="$HOME/.vault_pass"
+    
+    echo ""
+    info "Testing vault access..."
+    echo ""
+    
+    if [ -f "$vault_pass_file" ]; then
+        success "Vault password file found: $vault_pass_file"
+        
+        cd "${REPO_ROOT}/provision/ansible"
+        if ansible-vault view roles/secrets/vars/vault.yml --vault-password-file "$vault_pass_file" > /dev/null 2>&1; then
+            success "Vault decryption successful"
+            cd "${REPO_ROOT}"
+            return 0
+        else
+            error "Vault decryption failed"
+            cd "${REPO_ROOT}"
+            return 1
+        fi
+    else
+        warn "Vault password file not found at $vault_pass_file"
+        info "You will be prompted for vault password during operations"
+        return 0
+    fi
+}
+
+verify_inventory_vars() {
+    local inv="$1"
+    
+    echo ""
+    info "Verifying inventory variables for $inv..."
+    echo ""
+    
+    local errors=0
+    local required_vars=(
+        "network_base_octets"
+        "pg_ip"
+        "milvus_ip"
+        "ingest_ip"
+        "agent_ip"
+        "apps_ip"
+        "files_ip"
+        "proxy_ip"
+    )
+    
+    cd "${REPO_ROOT}/provision/ansible"
+    
+    for var in "${required_vars[@]}"; do
+        local result=$(ansible -i "inventory/${inv}" localhost -m debug -a "var=$var" 2>/dev/null)
+        if echo "$result" | grep -q "VARIABLE IS NOT DEFINED"; then
+            list_item "error" "Missing variable: $var"
+            ((errors++))
+        else
+            list_item "done" "$var defined"
+        fi
+    done
+    
+    cd "${REPO_ROOT}"
+    
+    echo ""
+    if [ $errors -gt 0 ]; then
+        error "Found $errors missing variable(s)"
+        return 1
+    else
+        success "All required variables defined"
+        return 0
+    fi
+}
+
+verify_service_health() {
+    local inv="$1"
+    
+    echo ""
+    info "Checking service health for $inv..."
+    echo ""
+    
+    cd "${REPO_ROOT}/provision/ansible"
+    
+    # Get IPs from inventory
+    local pg_ip=$(ansible -i "inventory/${inv}" localhost -m debug -a "var=pg_ip" 2>/dev/null | grep "pg_ip" | awk -F'"' '{print $2}')
+    local milvus_ip=$(ansible -i "inventory/${inv}" localhost -m debug -a "var=milvus_ip" 2>/dev/null | grep "milvus_ip" | awk -F'"' '{print $2}')
+    local files_ip=$(ansible -i "inventory/${inv}" localhost -m debug -a "var=files_ip" 2>/dev/null | grep "files_ip" | awk -F'"' '{print $2}')
+    local ingest_ip=$(ansible -i "inventory/${inv}" localhost -m debug -a "var=ingest_ip" 2>/dev/null | grep "ingest_ip" | awk -F'"' '{print $2}')
+    
+    cd "${REPO_ROOT}"
+    
+    # PostgreSQL
+    echo -n "  PostgreSQL ($pg_ip): "
+    if ssh root@$pg_ip 'systemctl is-active postgresql' > /dev/null 2>&1; then
+        echo -e "${GREEN}✓ Running${NC}"
+    else
+        echo -e "${RED}✗ Not running${NC}"
+    fi
+    
+    # Milvus
+    echo -n "  Milvus ($milvus_ip): "
+    if curl -sf "http://$milvus_ip:9091/healthz" > /dev/null 2>&1; then
+        echo -e "${GREEN}✓ Running${NC}"
+    else
+        echo -e "${YELLOW}⚠ Not responding (may not be deployed)${NC}"
+    fi
+    
+    # MinIO
+    echo -n "  MinIO ($files_ip): "
+    if curl -sf "http://$files_ip:9000/minio/health/live" > /dev/null 2>&1; then
+        echo -e "${GREEN}✓ Running${NC}"
+    else
+        echo -e "${YELLOW}⚠ Not responding (may not be deployed)${NC}"
+    fi
+    
+    # Ingest API
+    echo -n "  Ingest API ($ingest_ip): "
+    if curl -sf "http://$ingest_ip:8000/health" > /dev/null 2>&1; then
+        echo -e "${GREEN}✓ Running${NC}"
+    else
+        echo -e "${YELLOW}⚠ Not responding (may not be deployed)${NC}"
+    fi
+    
+    # Search API
+    echo -n "  Search API ($milvus_ip): "
+    if curl -sf "http://$milvus_ip:8001/health" > /dev/null 2>&1; then
+        echo -e "${GREEN}✓ Running${NC}"
+    else
+        echo -e "${YELLOW}⚠ Not responding (may not be deployed)${NC}"
+    fi
+    
+    echo ""
+}
+
+verify_all_configuration() {
+    # Select environment if not already selected
+    if [ -z "$SELECTED_ENV" ]; then
+        SELECTED_ENV=$(select_environment)
+    fi
+    
+    local inv="$SELECTED_ENV"
+    
+    header "Full Configuration Verification ($inv)" 70
+    
+    local errors=0
+    
+    echo ""
+    echo -e "${BLUE}[1/4] Ansible Connectivity${NC}"
+    separator
+    verify_ansible_connectivity "$inv" || ((errors++))
+    
+    echo ""
+    echo -e "${BLUE}[2/4] Vault Access${NC}"
+    separator
+    verify_vault_access || ((errors++))
+    
+    echo ""
+    echo -e "${BLUE}[3/4] Inventory Variables${NC}"
+    separator
+    verify_inventory_vars "$inv" || ((errors++))
+    
+    echo ""
+    echo -e "${BLUE}[4/4] Service Health${NC}"
+    separator
+    verify_service_health "$inv"
+    
+    echo ""
+    separator 70
+    if [ $errors -eq 0 ]; then
+        success "All verification checks passed!"
+    else
+        warn "$errors check(s) had issues"
+    fi
+    separator 70
+}
+
 # Model Configuration Menu
 model_configuration() {
     while true; do
@@ -358,34 +557,51 @@ main_menu() {
     while true; do
         echo ""
         menu "Busibox Configuration" \
+            "Verify Configuration (recommended first step)" \
             "Model Configuration" \
             "Container Configuration" \
             "Secrets & Configuration" \
+            "Change Environment" \
             "Exit"
         
-        read -p "$(echo -e "${BOLD}Select option [1-4]:${NC} ")" choice
+        read -p "$(echo -e "${BOLD}Select option [1-6]:${NC} ")" choice
         
         case $choice in
             1)
-                model_configuration
+                verify_all_configuration
+                pause
                 ;;
             2)
-                container_configuration
+                model_configuration
                 ;;
             3)
-                secrets_configuration
+                container_configuration
                 ;;
             4)
+                secrets_configuration
+                ;;
+            5)
+                SELECTED_ENV=""
+                SELECTED_ENV=$(select_environment)
+                success "Changed to: $SELECTED_ENV"
+                pause
+                ;;
+            6)
                 echo ""
                 info "Exiting..."
                 exit 0
                 ;;
             *)
-                error "Invalid selection. Please enter 1-4."
+                error "Invalid selection. Please enter 1-6."
                 ;;
         esac
     done
 }
+
+# Select environment first
+SELECTED_ENV=$(select_environment)
+success "Selected environment: $SELECTED_ENV"
+echo ""
 
 # Run main menu
 main_menu
