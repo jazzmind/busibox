@@ -34,6 +34,8 @@ applications:
       - redis_url
       - jwt_secret
       - litellm_api_key
+      - management_client_id      # Admin OAuth credentials
+      - management_client_secret  # Admin OAuth credentials
     env:
       LOG_LEVEL: "{{ log_level }}"
       MILVUS_HOST: "{{ milvus_ip }}"
@@ -44,6 +46,10 @@ applications:
       TOKEN_SERVICE_URL: "http://{{ agent_ip }}:4111"
       MASTRA_API_URL: "http://{{ agent_ip }}:4111"
       LITELLM_BASE_URL: "http://{{ litellm_ip }}:{{ litellm_port }}/v1"
+      # AI Provider Configuration
+      AI_PROVIDER: "litellm"
+      # Search API for RAG document search
+      SEARCH_API_URL: "http://{{ search_api_ip }}:8003"
   
   # ============================================================================
   # Public Web Applications
@@ -126,6 +132,8 @@ applications:
       - session_secret
       - sso_jwt_secret
       - oauth_client_secret
+      - admin_client_id       # OAuth client credentials
+      - admin_client_secret   # OAuth client credentials
     env:
       NODE_ENV: "{{ node_env }}"
       MASTRA_API_URL: "http://{{ agent_api_host }}:{{ agent_api_port }}"
@@ -134,6 +142,10 @@ applications:
       AI_PORTAL_URL: "https://{{ full_domain }}"
       PORT: "3001"
       DEPLOYMENT_MODE: "busibox"
+      # OAuth service audiences for multi-service auth
+      AGENT_API_AUD: "https://busibox.local/agent"
+      SEARCH_API_AUD: "https://busibox.local/search"
+      DOCUMENTS_API_AUD: "https://busibox.local/documents"
   
   - name: doc-intel
     github_repo: jazzmind/docintel
