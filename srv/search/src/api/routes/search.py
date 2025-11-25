@@ -57,6 +57,8 @@ async def search(
     """
     start_time = time.time()
     user_id = request.state.user_id
+    # Get authorization header for JWT passthrough to downstream services
+    authorization = getattr(request.state, 'authorization', None)
     
     try:
         logger.info(
@@ -84,7 +86,11 @@ async def search(
         
         elif search_request.mode == "semantic":
             # Pure semantic search
-            query_embedding = await embedding_service.embed_query(search_request.query, user_id=user_id)
+            query_embedding = await embedding_service.embed_query(
+                search_request.query, 
+                user_id=user_id,
+                authorization=authorization
+            )
             
             if not query_embedding:
                 raise HTTPException(
@@ -101,7 +107,11 @@ async def search(
         
         elif search_request.mode == "hybrid":
             # Hybrid search (dense + sparse)
-            query_embedding = await embedding_service.embed_query(search_request.query, user_id=user_id)
+            query_embedding = await embedding_service.embed_query(
+                search_request.query, 
+                user_id=user_id,
+                authorization=authorization
+            )
             
             if not query_embedding:
                 raise HTTPException(
@@ -326,6 +336,7 @@ async def explain_result(
     Provides detailed scoring breakdown and semantic matches.
     """
     user_id = request.state.user_id
+    authorization = getattr(request.state, 'authorization', None)
     
     try:
         # Get the document
@@ -342,7 +353,11 @@ async def explain_result(
             )
         
         # Generate query embedding
-        query_embedding = await embedding_service.embed_query(explain_request.query, user_id=user_id)
+        query_embedding = await embedding_service.embed_query(
+            explain_request.query, 
+            user_id=user_id,
+            authorization=authorization
+        )
         
         if not query_embedding:
             raise HTTPException(
