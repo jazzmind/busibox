@@ -33,7 +33,7 @@ python-pptx>=0.6.21,<1.0.0  # PowerPoint extraction
 openpyxl>=3.1.2,<4.0.0  # Excel extraction
 odfpy>=1.4.1,<2.0.0  # OpenDocument (ODT) extraction
 lxml>=4.9.3,<6.0.0  # XML parsing
-marker-pdf>=1.10.1,<2.0.0  # High-quality PDF to markdown
+marker-pdf[full]>=1.10.1,<2.0.0  # High-quality document to markdown (PDF, DOCX, PPTX, XLSX, HTML, EPUB, images)
 # tatr - Table extraction (optional, not available on PyPI - would need manual install)
 pdf2image>=1.16.3,<2.0.0  # PDF page images for ColPali
 pytesseract>=0.3.10,<0.4.0  # OCR for scanned PDFs
