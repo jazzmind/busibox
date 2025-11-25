@@ -650,25 +650,56 @@ class IngestWorker:
                         "Generating markdown from extracted text"
                     )
                     
-                    # Prepare image metadata for markdown generator
+                    # Get extraction method from metadata
+                    extraction_method = extraction_result.metadata.get("extraction_method", "simple")
+                    
+                    # Prepare image references (HTMLRenderer will convert to API URLs)
                     image_refs = []
                     for i, img_meta in enumerate(images_metadata):
+                        # Use relative path - HTMLRenderer converts to API URLs
                         image_refs.append({
                             'path': f'images/image_{i}.png',
                             'caption': f'Image {i+1}'
                         })
                     
-                    markdown_content, md_metadata = self.markdown_generator.generate(
-                        extraction_result.text,
-                        extraction_method="text",  # Default to text extraction
-                        images=image_refs if image_refs else None
-                    )
+                    # Use existing markdown from Marker if available, otherwise generate
+                    if extraction_result.markdown:
+                        logger.info(
+                            "Using markdown from extraction",
+                            file_id=file_id,
+                            extraction_method=extraction_method,
+                            markdown_length=len(extraction_result.markdown)
+                        )
+                        markdown_content = extraction_result.markdown
+                        
+                        # Insert image references if we have images
+                        if image_refs:
+                            markdown_content = self.markdown_generator._insert_image_references(
+                                markdown_content, 
+                                image_refs
+                            )
+                        
+                        # Extract metadata
+                        md_metadata = self.markdown_generator._extract_metadata(markdown_content)
+                    else:
+                        # Generate markdown from text (for simple extraction or when Marker didn't produce markdown)
+                        logger.info(
+                            "Generating markdown from text",
+                            file_id=file_id,
+                            extraction_method=extraction_method
+                        )
+                        markdown_content, md_metadata = self.markdown_generator.generate(
+                            extraction_result.text,
+                            extraction_method=extraction_method,
+                            images=image_refs if image_refs else None
+                        )
                     
                     logger.info(
                         "Markdown generation complete",
                         file_id=file_id,
                         markdown_length=len(markdown_content),
-                        heading_count=md_metadata.get('heading_count', 0)
+                        heading_count=md_metadata.get('heading_count', 0),
+                        extraction_method=extraction_method
                     )
                 except Exception as md_err:
                     logger.warning(
