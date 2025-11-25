@@ -44,17 +44,27 @@ verify_ansible_connectivity() {
     local vault_flags=$(get_vault_flags)
     
     cd "${REPO_ROOT}/provision/ansible"
-    if ansible -i "inventory/${inv}" all -m ping $vault_flags; then
-        echo ""
-        success "All hosts reachable"
-        cd "${REPO_ROOT}"
-        return 0
+    
+    # Run ping and capture output (don't fail on unreachable hosts)
+    local output
+    output=$(ansible -i "inventory/${inv}" all -m ping $vault_flags 2>&1) || true
+    
+    echo "$output"
+    
+    # Count results
+    local success_count=$(echo "$output" | grep -c "SUCCESS" || echo "0")
+    local unreachable_count=$(echo "$output" | grep -c "UNREACHABLE" || echo "0")
+    
+    echo ""
+    if [ "$unreachable_count" -gt 0 ]; then
+        warn "$success_count host(s) reachable, $unreachable_count host(s) unreachable"
+        info "Unreachable hosts may not be created yet - this is normal for initial setup"
     else
-        echo ""
-        error "Some hosts unreachable"
-        cd "${REPO_ROOT}"
-        return 1
+        success "All $success_count host(s) reachable"
     fi
+    
+    cd "${REPO_ROOT}"
+    return 0  # Don't fail - unreachable hosts are expected during initial setup
 }
 
 # Detect vault password method
@@ -153,55 +163,55 @@ verify_service_health() {
     
     cd "${REPO_ROOT}/provision/ansible"
     
-    # Get IPs from inventory
-    local pg_ip=$(ansible -i "inventory/${inv}" localhost -m debug -a "var=pg_ip" $vault_flags 2>/dev/null | grep "pg_ip" | awk -F'"' '{print $2}')
-    local milvus_ip=$(ansible -i "inventory/${inv}" localhost -m debug -a "var=milvus_ip" $vault_flags 2>/dev/null | grep "milvus_ip" | awk -F'"' '{print $2}')
-    local files_ip=$(ansible -i "inventory/${inv}" localhost -m debug -a "var=files_ip" $vault_flags 2>/dev/null | grep "files_ip" | awk -F'"' '{print $2}')
-    local ingest_ip=$(ansible -i "inventory/${inv}" localhost -m debug -a "var=ingest_ip" $vault_flags 2>/dev/null | grep "ingest_ip" | awk -F'"' '{print $2}')
+    # Get IPs from inventory (with fallback to empty string)
+    local pg_ip=$(ansible -i "inventory/${inv}" localhost -m debug -a "var=pg_ip" $vault_flags 2>/dev/null | grep "pg_ip" | awk -F'"' '{print $2}' || echo "")
+    local milvus_ip=$(ansible -i "inventory/${inv}" localhost -m debug -a "var=milvus_ip" $vault_flags 2>/dev/null | grep "milvus_ip" | awk -F'"' '{print $2}' || echo "")
+    local files_ip=$(ansible -i "inventory/${inv}" localhost -m debug -a "var=files_ip" $vault_flags 2>/dev/null | grep "files_ip" | awk -F'"' '{print $2}' || echo "")
+    local ingest_ip=$(ansible -i "inventory/${inv}" localhost -m debug -a "var=ingest_ip" $vault_flags 2>/dev/null | grep "ingest_ip" | awk -F'"' '{print $2}' || echo "")
     
     cd "${REPO_ROOT}"
     
-    # PostgreSQL
-    echo -n "  PostgreSQL ($pg_ip): "
-    if ssh root@$pg_ip 'systemctl is-active postgresql' > /dev/null 2>&1; then
-        echo -e "${GREEN}✓ Running${NC}"
-    else
-        echo -e "${RED}✗ Not running${NC}"
-    fi
+    local running=0
+    local not_running=0
     
-    # Milvus
-    echo -n "  Milvus ($milvus_ip): "
-    if curl -sf "http://$milvus_ip:9091/healthz" > /dev/null 2>&1; then
-        echo -e "${GREEN}✓ Running${NC}"
-    else
-        echo -e "${YELLOW}⚠ Not responding (may not be deployed)${NC}"
-    fi
+    # Helper function to check service
+    check_service() {
+        local name="$1"
+        local ip="$2"
+        local check_cmd="$3"
+        
+        if [ -z "$ip" ]; then
+            echo -e "  $name: ${YELLOW}⚠ IP not configured${NC}"
+            ((not_running++))
+            return
+        fi
+        
+        echo -n "  $name ($ip): "
+        if eval "$check_cmd" > /dev/null 2>&1; then
+            echo -e "${GREEN}✓ Running${NC}"
+            ((running++))
+        else
+            echo -e "${YELLOW}⚠ Not responding${NC}"
+            ((not_running++))
+        fi
+    }
     
-    # MinIO
-    echo -n "  MinIO ($files_ip): "
-    if curl -sf "http://$files_ip:9000/minio/health/live" > /dev/null 2>&1; then
-        echo -e "${GREEN}✓ Running${NC}"
-    else
-        echo -e "${YELLOW}⚠ Not responding (may not be deployed)${NC}"
-    fi
-    
-    # Ingest API
-    echo -n "  Ingest API ($ingest_ip): "
-    if curl -sf "http://$ingest_ip:8000/health" > /dev/null 2>&1; then
-        echo -e "${GREEN}✓ Running${NC}"
-    else
-        echo -e "${YELLOW}⚠ Not responding (may not be deployed)${NC}"
-    fi
-    
-    # Search API
-    echo -n "  Search API ($milvus_ip): "
-    if curl -sf "http://$milvus_ip:8001/health" > /dev/null 2>&1; then
-        echo -e "${GREEN}✓ Running${NC}"
-    else
-        echo -e "${YELLOW}⚠ Not responding (may not be deployed)${NC}"
-    fi
+    # Check each service
+    check_service "PostgreSQL" "$pg_ip" "ssh -o ConnectTimeout=5 root@$pg_ip 'systemctl is-active postgresql'"
+    check_service "Milvus" "$milvus_ip" "curl -sf --connect-timeout 5 'http://$milvus_ip:9091/healthz'"
+    check_service "MinIO" "$files_ip" "curl -sf --connect-timeout 5 'http://$files_ip:9000/minio/health/live'"
+    check_service "Ingest API" "$ingest_ip" "curl -sf --connect-timeout 5 'http://$ingest_ip:8000/health'"
+    check_service "Search API" "$milvus_ip" "curl -sf --connect-timeout 5 'http://$milvus_ip:8001/health'"
     
     echo ""
+    if [ "$not_running" -gt 0 ]; then
+        info "$running service(s) running, $not_running service(s) not responding"
+        info "Services may not be deployed yet - this is normal for initial setup"
+    else
+        success "All $running service(s) running"
+    fi
+    
+    return 0  # Don't fail - services may not be deployed yet
 }
 
 verify_all_configuration() {
