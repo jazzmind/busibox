@@ -896,13 +896,13 @@ main() {
     
     success "Selected environment: $ENV"
     
-    # For test environment, select vLLM mode
-    if [ "$ENV" = "test" ]; then
-        select_vllm_mode
-    else
-        # Production always deploys its own vLLM
+    # For test environment, default to alias mode (can be changed in LLM Services menu)
+    # For production, always deploy its own vLLM
+    if [ "$ENV" != "test" ]; then
         VLLM_MODE="deploy"
     fi
+    # Note: Test env defaults to VLLM_MODE="alias" (set at top of script)
+    # Can be changed via LLM Services > Change vLLM Mode option
     
     # Show deployment menu
     deployment_menu "$ENV"
