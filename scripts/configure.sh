@@ -210,11 +210,12 @@ verify_service_health() {
     }
     
     # Check each service (use || true to prevent set -e from exiting)
+    # Ports: PostgreSQL 5432, Milvus 9091 (health), MinIO 9000, Ingest API 8002, Search API 8003, Agent API 4111
     check_service "PostgreSQL" "$postgres_ip" "ssh -o ConnectTimeout=5 -o BatchMode=yes root@$postgres_ip 'systemctl is-active postgresql'" || true
     check_service "Milvus" "$milvus_ip" "curl -sf --connect-timeout 5 'http://$milvus_ip:9091/healthz'" || true
     check_service "MinIO" "$minio_ip" "curl -sf --connect-timeout 5 'http://$minio_ip:9000/minio/health/live'" || true
-    check_service "Ingest API" "$ingest_ip" "curl -sf --connect-timeout 5 'http://$ingest_ip:8000/health'" || true
-    check_service "Search API" "$milvus_ip" "curl -sf --connect-timeout 5 'http://$milvus_ip:8001/health'" || true
+    check_service "Ingest API" "$ingest_ip" "curl -sf --connect-timeout 5 'http://$ingest_ip:8002/health'" || true
+    check_service "Search API" "$milvus_ip" "curl -sf --connect-timeout 5 'http://$milvus_ip:8003/health'" || true
     check_service "Agent API" "$agent_ip" "curl -sf --connect-timeout 5 'http://$agent_ip:4111/health'" || true
     
     echo ""
