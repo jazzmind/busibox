@@ -39,10 +39,14 @@ class Config(BaseSettings):
     embedding_model: str = "bge-large-en-v1.5"
     embedding_dim: int = 1024
     
+    # LiteLLM (for reranker proxy)
+    litellm_base_url: str = os.getenv("LITELLM_BASE_URL", "http://10.96.200.207:4000")
+    litellm_api_key: str = os.getenv("LITELLM_API_KEY", "")
+    
     # Reranking
-    reranker_model: str = "BAAI/bge-reranker-v2-m3"
+    reranker_model: str = os.getenv("RERANKER_MODEL", "reranking")  # Model name in litellm registry
     reranker_device: str = "cpu"  # or "cuda"
-    enable_reranking: bool = True
+    enable_reranking: bool = os.getenv("ENABLE_RERANKING", "true").lower() == "true"
     
     # Search defaults
     default_search_limit: int = 10

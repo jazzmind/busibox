@@ -229,19 +229,19 @@ def create_indexes(collection):
     else:
         print("    Index on text_dense already exists")
     
-    # Index 2: Sparse BM25 vectors
+    # Index 2: Sparse BM25 vectors (for Milvus 2.6+ BM25 Function)
     if "text_sparse" not in existing_index_fields:
         print("  Creating SPARSE_INVERTED_INDEX on text_sparse...")
         sparse_index_params = {
             "index_type": "SPARSE_INVERTED_INDEX",
-            "metric_type": "IP",  # Inner product for sparse vectors
+            "metric_type": "BM25",  # Use BM25 metric for Milvus 2.6+ full-text search
         }
         collection.create_index(
             field_name="text_sparse",
             index_params=sparse_index_params
         )
         indexes_created.append("text_sparse")
-        print("    ✓ text_sparse index created (SPARSE_INVERTED_INDEX, IP)")
+        print("    ✓ text_sparse index created (SPARSE_INVERTED_INDEX, BM25)")
     else:
         print("    Index on text_sparse already exists")
     
