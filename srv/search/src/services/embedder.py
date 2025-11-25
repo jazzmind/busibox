@@ -20,13 +20,19 @@ class EmbeddingService:
         self.embedding_dim = config.get("embedding_dim", 1024)
         self.timeout = 30.0
     
-    async def embed_query(self, query: str, user_id: Optional[str] = None) -> Optional[List[float]]:
+    async def embed_query(
+        self, 
+        query: str, 
+        user_id: Optional[str] = None,
+        authorization: Optional[str] = None
+    ) -> Optional[List[float]]:
         """
         Generate embedding for a search query.
         
         Args:
             query: Search query text
-            user_id: User ID for authentication (optional, required for ingest service)
+            user_id: User ID for authentication (legacy, optional)
+            authorization: Authorization header value for JWT passthrough (preferred)
         
         Returns:
             Embedding vector or None on failure
@@ -38,8 +44,10 @@ class EmbeddingService:
                 model=self.model,
             )
             
-            # Prepare headers with user ID for authentication
+            # Prepare headers - prefer JWT passthrough, fall back to X-User-Id
             headers = {}
+            if authorization:
+                headers["Authorization"] = authorization
             if user_id:
                 headers["X-User-Id"] = user_id
             
@@ -79,13 +87,19 @@ class EmbeddingService:
             )
             return None
     
-    async def embed_batch(self, texts: List[str], user_id: Optional[str] = None) -> Optional[List[List[float]]]:
+    async def embed_batch(
+        self, 
+        texts: List[str], 
+        user_id: Optional[str] = None,
+        authorization: Optional[str] = None
+    ) -> Optional[List[List[float]]]:
         """
         Generate embeddings for multiple texts.
         
         Args:
             texts: List of texts to embed
-            user_id: User ID for authentication (optional, required for ingest service)
+            user_id: User ID for authentication (legacy, optional)
+            authorization: Authorization header value for JWT passthrough (preferred)
         
         Returns:
             List of embedding vectors or None on failure
@@ -97,8 +111,10 @@ class EmbeddingService:
                 model=self.model,
             )
             
-            # Prepare headers with user ID for authentication
+            # Prepare headers - prefer JWT passthrough, fall back to X-User-Id
             headers = {}
+            if authorization:
+                headers["Authorization"] = authorization
             if user_id:
                 headers["X-User-Id"] = user_id
             
