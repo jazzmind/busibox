@@ -124,7 +124,7 @@ applications:
       - type: path
         domain: "{{ full_domain }}"
         path: /agents
-        strip_path: true  # Strip /agents prefix so Next.js receives requests at root
+        strip_path: false  # Don't strip - Next.js handles basePath via NEXT_PUBLIC_BASE_PATH
     secrets:
       - database_url
       - agent_api_key
@@ -140,6 +140,8 @@ applications:
       TOKEN_SERVICE_URL: "http://{{ agent_api_host }}:{{ agent_api_port }}"
       AGENT_API_URL: "http://{{ agent_api_host }}:{{ agent_api_port }}"
       AI_PORTAL_URL: "https://{{ full_domain }}"
+      NEXT_PUBLIC_APP_URL: "https://{{ full_domain }}/agents"
+      NEXT_PUBLIC_BASE_PATH: "/agents"
       PORT: "3001"
       DEPLOYMENT_MODE: "busibox"
       # OAuth service audiences for multi-service auth
