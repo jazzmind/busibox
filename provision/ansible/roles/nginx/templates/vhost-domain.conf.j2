@@ -34,7 +34,10 @@ server {
     location {{ route.path }} {
 {% if route.strip_path is defined and route.strip_path %}
         # Strip path prefix before proxying
-        rewrite ^{{ route.path }}(.*)$ $1 break;
+        # Handle exact path match (e.g., /agents -> /)
+        rewrite ^{{ route.path }}$ / break;
+        # Handle subpaths (e.g., /agents/foo -> /foo)
+        rewrite ^{{ route.path }}(/.*)$ $1 break;
 {% endif %}
         
         proxy_pass http://{{ app.container_ip }}:{{ app.port }};
