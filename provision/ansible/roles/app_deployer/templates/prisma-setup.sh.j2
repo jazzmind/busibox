@@ -74,4 +74,21 @@ echo "========================================"
 echo "DATABASE SETUP COMPLETE"
 echo "========================================"
 
+{% if busibox_env == 'test' %}
+# Run database seeding in test environment
+if [ -f "package.json" ] && grep -q '"db:seed"' package.json; then
+  echo ""
+  echo "========================================"
+  echo "SEEDING DATABASE (TEST ENVIRONMENT)"
+  echo "========================================"
+  
+  if npm run db:seed 2>&1; then
+    echo "✓ Database seeded successfully"
+  else
+    echo "⚠ Database seeding failed (non-fatal)"
+    # Don't fail deployment if seeding fails
+  fi
+fi
+{% endif %}
+
 
