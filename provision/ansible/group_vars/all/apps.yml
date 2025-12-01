@@ -26,6 +26,7 @@ applications:
     port: 4111
     deploy_path: /srv/agent
     health_endpoint: /auth/health
+    process_manager: systemd  # Use systemd for consistent logging via journalctl
     routes: []  # Internal only - no NGINX routing
     secrets:
       - database_url
@@ -120,6 +121,7 @@ applications:
     deploy_path: /srv/apps/agent-client
     health_endpoint: /api/health
     build_command: "npm run build"
+    process_manager: systemd  # Use systemd for consistent logging via journalctl
     routes:
       - type: subdomain
         subdomain: "agents{{ env_subdomain_suffix | default('') }}"
@@ -160,6 +162,7 @@ applications:
     deploy_path: /srv/apps/doc-intel
     health_endpoint: /api/health
     build_command: "npm run build"
+    process_manager: systemd  # Use systemd for consistent logging via journalctl
     routes:
       - type: subdomain
         subdomain: "docs{{ env_subdomain_suffix | default('') }}"
@@ -191,6 +194,7 @@ applications:
     deploy_path: /srv/apps/foundation
     health_endpoint: /api/health
     build_command: "npm run build"
+    process_manager: systemd  # Use systemd for consistent logging via journalctl
     routes:
       - type: subdomain
         subdomain: "foundation{{ env_subdomain_suffix | default('') }}"
@@ -232,6 +236,7 @@ applications:
     deploy_path: /srv/apps/project-analysis
     health_endpoint: /api/health
     build_command: "npm run build"
+    process_manager: systemd  # Use systemd for consistent logging via journalctl
     routes:
       - type: subdomain
         subdomain: "projects{{ env_subdomain_suffix | default('') }}"
