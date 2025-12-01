@@ -1133,32 +1133,44 @@ class IngestWorker:
                 
                 try:
                     from processors.multi_flow_processor import MultiFlowProcessor
+                    import asyncio
                     
-                    multi_flow = MultiFlowProcessor(config=self.config)
+                    # Build config with multi-flow settings
+                    multi_flow_config = {
+                        **self.config,
+                        "max_parallel_strategies": processing_config.get("max_parallel_strategies", 3),
+                        "marker_enabled": processing_config.get("marker_enabled", False),
+                        "colpali_enabled": processing_config.get("colpali_enabled", True),
+                    }
                     
-                    # Process with multiple strategies for comparison
-                    max_strategies = processing_config.get("max_parallel_strategies", 3)
-                    results = multi_flow.process_with_strategies(
-                        file_path=temp_file_path,
-                        mime_type=mime_type,
-                        file_id=file_id,
-                        user_id=user_id,
-                        max_strategies=max_strategies,
-                        marker_enabled=processing_config.get("marker_enabled", False),
-                        colpali_enabled=processing_config.get("colpali_enabled", True),
-                    )
+                    multi_flow = MultiFlowProcessor(config=multi_flow_config)
+                    
+                    # Process document with multiple strategies
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        results = loop.run_until_complete(
+                            multi_flow.process_document(
+                                file_path=temp_file_path,
+                                mime_type=mime_type,
+                                file_id=file_id,
+                                original_filename=original_filename,
+                            )
+                        )
+                    finally:
+                        loop.close()
                     
                     logger.info(
                         "Multi-flow comparison completed",
                         file_id=file_id,
                         strategies_run=len(results),
                         results_summary={
-                            strategy.value: {
+                            strategy_name: {
                                 "success": result.success,
-                                "chunk_count": len(result.chunks) if result.success else 0,
+                                "text_length": len(result.text) if result.text else 0,
                                 "processing_time": result.processing_time_seconds,
                             }
-                            for strategy, result in results.items()
+                            for strategy_name, result in results.items()
                         },
                     )
                     
@@ -1167,10 +1179,11 @@ class IngestWorker:
                         conn = self.postgres_service._get_connection()
                         try:
                             with conn.cursor() as cur:
-                                for strategy, result in results.items():
+                                for strategy_name, result in results.items():
                                     # Calculate metrics
                                     text_length = len(result.text) if result.text else 0
-                                    chunk_count = len(result.chunks) if result.chunks else 0
+                                    # Chunk count from metadata or embedding count
+                                    chunk_count = result.metadata.get("chunk_count", 0) if result.metadata else 0
                                     embedding_count = len(result.embeddings) if result.embeddings else 0
                                     visual_embedding_count = len(result.visual_embeddings) if result.visual_embeddings else 0
                                     
@@ -1196,7 +1209,7 @@ class IngestWorker:
                                             created_at = NOW()
                                     """, (
                                         file_id,
-                                        strategy.value,
+                                        strategy_name,  # Already a string
                                         result.success,
                                         text_length,
                                         chunk_count,
