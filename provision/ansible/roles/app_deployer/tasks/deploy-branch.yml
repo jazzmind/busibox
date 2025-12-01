@@ -271,12 +271,21 @@
   register: port_cleanup
   failed_when: false
 
+# Set process manager (default to pm2 for backwards compatibility)
+- name: Set process manager
+  set_fact:
+    process_manager: "{{ app_to_deploy.process_manager | default('pm2') }}"
+
+# ============================================================================
+# PM2 Process Manager
+# ============================================================================
 - name: Check if PM2 is managing the application
   shell: pm2 list | grep -q "{{ app_to_deploy.name }}"
   delegate_to: "{{ app_to_deploy.container_ip }}"
   register: pm2_check
   failed_when: false
   changed_when: false
+  when: process_manager == 'pm2'
 
 - name: Stop application with PM2 (if already running)
   shell: |
@@ -284,7 +293,7 @@
     pm2 stop {{ app_to_deploy.name }} || true
     pm2 delete {{ app_to_deploy.name }} || true
   delegate_to: "{{ app_to_deploy.container_ip }}"
-  when: pm2_check.rc == 0
+  when: process_manager == 'pm2' and pm2_check.rc == 0
   register: stop_result
 
 - name: Start application with PM2 and environment variables
@@ -301,6 +310,43 @@
     pm2 save
   delegate_to: "{{ app_to_deploy.container_ip }}"
   register: start_result
+  when: process_manager == 'pm2'
+
+# ============================================================================
+# Systemd Process Manager
+# ============================================================================
+- name: Deploy systemd service file
+  template:
+    src: app-systemd.service.j2
+    dest: "/etc/systemd/system/{{ app_to_deploy.name }}.service"
+    mode: '0644'
+  delegate_to: "{{ app_to_deploy.container_ip }}"
+  vars:
+    app: "{{ app_to_deploy }}"
+  when: process_manager == 'systemd'
+  register: systemd_service
+
+- name: Reload systemd daemon
+  systemd:
+    daemon_reload: yes
+  delegate_to: "{{ app_to_deploy.container_ip }}"
+  when: process_manager == 'systemd' and systemd_service.changed
+
+- name: Stop application with systemd (if already running)
+  systemd:
+    name: "{{ app_to_deploy.name }}"
+    state: stopped
+  delegate_to: "{{ app_to_deploy.container_ip }}"
+  failed_when: false
+  when: process_manager == 'systemd'
+
+- name: Start and enable application with systemd
+  systemd:
+    name: "{{ app_to_deploy.name }}"
+    state: started
+    enabled: yes
+  delegate_to: "{{ app_to_deploy.container_ip }}"
+  when: process_manager == 'systemd'
 
 - name: Wait for application to start
   wait_for:
@@ -335,10 +381,15 @@
       Application: {{ app_to_deploy.name }}
       Branch: {{ branch_to_deploy }}
       Deploy path: {{ app_to_deploy.deploy_path }}
+      Process Manager: {{ process_manager }}
       Status: Running on port {{ app_to_deploy.port }}
       
       View logs:
+      {% if process_manager == 'systemd' %}
+        ssh root@{{ app_to_deploy.container_ip }} "journalctl -u {{ app_to_deploy.name }} -f"
+      {% else %}
         ssh root@{{ app_to_deploy.container_ip }} "pm2 logs {{ app_to_deploy.name }}"
+      {% endif %}
       
       Health check:
         curl http://{{ app_to_deploy.container_ip }}:{{ app_to_deploy.port }}{{ health_check_path }}
