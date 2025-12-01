@@ -129,6 +129,26 @@
     msg: "{{ 'RBAC schema migration applied successfully' if rbac_schema_result.changed else 'RBAC schema already exists' }}"
   tags: [ingest, ingest_migrations]
 
+- name: Check if security model migration has been applied (owner_id column)
+  shell: |
+    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -tAc \
+    "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='ingestion_files' AND column_name='owner_id');"
+  register: security_model_check
+  changed_when: false
+  tags: [ingest, ingest_migrations]
+
+- name: Apply security model migration (owner_id, visibility, document_roles)
+  shell: |
+    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -f /srv/ingest/migrations/003_security_model.sql
+  when: security_model_check.stdout == 'f'
+  register: security_model_result
+  tags: [ingest, ingest_migrations]
+
+- name: Display security model migration status
+  debug:
+    msg: "{{ 'Security model migration applied successfully' if security_model_result.changed else 'Security model migration already applied' }}"
+  tags: [ingest, ingest_migrations]
+
 - name: Check if RLS policies are enabled
   shell: |
     PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -tAc \
