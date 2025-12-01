@@ -110,7 +110,6 @@ applications:
       NEXT_PUBLIC_BASE_PATH: "/portal"
       SEARCH_API_IP: "{{ search_api_ip }}"
       MILVUS_HOST: "{{ search_api_ip }}"
-      OPENAI_API_KEY: "{{ openai_api_key }}"
   
   - name: agent-client
     github_repo: jazzmind/agent-client
