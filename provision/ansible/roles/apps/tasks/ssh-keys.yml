@@ -92,7 +92,7 @@
 # ============================================================================
 
 - name: Test SSH connection from apps to ingest
-  shell: ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{{ ingest_ip }} "echo 'SSH to ingest: OK'"
+  shell: "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{{ ingest_ip }} 'echo SSH_OK'"
   delegate_to: "{{ apps_ip }}"
   register: ssh_test_ingest
   changed_when: false
@@ -100,7 +100,7 @@
   tags: [apps, apps_ssh]
 
 - name: Test SSH connection from apps to agent
-  shell: ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{{ agent_ip }} "echo 'SSH to agent: OK'"
+  shell: "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{{ agent_ip }} 'echo SSH_OK'"
   delegate_to: "{{ apps_ip }}"
   register: ssh_test_agent
   changed_when: false
@@ -108,7 +108,7 @@
   tags: [apps, apps_ssh]
 
 - name: Test SSH connection from apps to milvus
-  shell: ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{{ milvus_ip }} "echo 'SSH to milvus: OK'"
+  shell: "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{{ milvus_ip }} 'echo SSH_OK'"
   delegate_to: "{{ apps_ip }}"
   register: ssh_test_milvus
   changed_when: false
@@ -117,10 +117,6 @@
 
 - name: Display SSH test results
   debug:
-    msg: |
-      SSH Connection Tests:
-      - Ingest ({{ ingest_ip }}): {{ ssh_test_ingest.stdout | default('FAILED: ' + (ssh_test_ingest.stderr | default('Unknown error'))) }}
-      - Agent ({{ agent_ip }}): {{ ssh_test_agent.stdout | default('FAILED: ' + (ssh_test_agent.stderr | default('Unknown error'))) }}
-      - Milvus ({{ milvus_ip }}): {{ ssh_test_milvus.stdout | default('FAILED: ' + (ssh_test_milvus.stderr | default('Unknown error'))) }}
+    msg: "SSH Tests - Ingest: {{ 'OK' if ssh_test_ingest.rc == 0 else 'FAILED' }}, Agent: {{ 'OK' if ssh_test_agent.rc == 0 else 'FAILED' }}, Milvus: {{ 'OK' if ssh_test_milvus.rc == 0 else 'FAILED' }}"
   tags: [apps, apps_ssh]
 
