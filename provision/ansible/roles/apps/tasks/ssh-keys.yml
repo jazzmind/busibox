@@ -1,6 +1,7 @@
 ---
 # SSH key setup for container-to-container communication
-# Enables apps container to SSH to ingest container for log viewing
+# Enables apps container to SSH to other containers for log viewing via journalctl
+# Target containers: ingest-lxc, agent-lxc, milvus-lxc
 
 - name: Generate SSH key pair on apps container for root user
   openssh_keypair:
@@ -20,6 +21,10 @@
   register: apps_public_key
   tags: [apps, apps_ssh]
 
+# ============================================================================
+# Ingest Container (ingest-lxc) - for ingest-api and ingest-worker logs
+# ============================================================================
+
 - name: Ensure .ssh directory exists on ingest container
   file:
     path: /root/.ssh
@@ -38,16 +43,84 @@
   delegate_to: "{{ ingest_ip }}"
   tags: [apps, apps_ssh]
 
+# ============================================================================
+# Agent Container (agent-lxc) - for agent-server logs
+# ============================================================================
+
+- name: Ensure .ssh directory exists on agent container
+  file:
+    path: /root/.ssh
+    state: directory
+    mode: '0700'
+    owner: root
+    group: root
+  delegate_to: "{{ agent_ip }}"
+  tags: [apps, apps_ssh]
+
+- name: Add apps container public key to agent container authorized_keys
+  authorized_key:
+    user: root
+    key: "{{ apps_public_key.content | b64decode }}"
+    state: present
+  delegate_to: "{{ agent_ip }}"
+  tags: [apps, apps_ssh]
+
+# ============================================================================
+# Milvus Container (milvus-lxc) - for search-api logs
+# ============================================================================
+
+- name: Ensure .ssh directory exists on milvus container
+  file:
+    path: /root/.ssh
+    state: directory
+    mode: '0700'
+    owner: root
+    group: root
+  delegate_to: "{{ milvus_ip }}"
+  tags: [apps, apps_ssh]
+
+- name: Add apps container public key to milvus container authorized_keys
+  authorized_key:
+    user: root
+    key: "{{ apps_public_key.content | b64decode }}"
+    state: present
+  delegate_to: "{{ milvus_ip }}"
+  tags: [apps, apps_ssh]
+
+# ============================================================================
+# Test SSH connections
+# ============================================================================
+
 - name: Test SSH connection from apps to ingest
-  shell: ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{{ ingest_ip }} "echo 'SSH connection successful'"
+  shell: ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{{ ingest_ip }} "echo 'SSH to ingest: OK'"
   delegate_to: "{{ apps_ip }}"
-  register: ssh_test
+  register: ssh_test_ingest
   changed_when: false
   failed_when: false
   tags: [apps, apps_ssh]
 
-- name: Display SSH test result
+- name: Test SSH connection from apps to agent
+  shell: ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{{ agent_ip }} "echo 'SSH to agent: OK'"
+  delegate_to: "{{ apps_ip }}"
+  register: ssh_test_agent
+  changed_when: false
+  failed_when: false
+  tags: [apps, apps_ssh]
+
+- name: Test SSH connection from apps to milvus
+  shell: ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{{ milvus_ip }} "echo 'SSH to milvus: OK'"
+  delegate_to: "{{ apps_ip }}"
+  register: ssh_test_milvus
+  changed_when: false
+  failed_when: false
+  tags: [apps, apps_ssh]
+
+- name: Display SSH test results
   debug:
-    msg: "SSH test result: {{ ssh_test.stdout | default('FAILED: ' + (ssh_test.stderr | default('Unknown error'))) }}"
+    msg: |
+      SSH Connection Tests:
+      - Ingest ({{ ingest_ip }}): {{ ssh_test_ingest.stdout | default('FAILED: ' + (ssh_test_ingest.stderr | default('Unknown error'))) }}
+      - Agent ({{ agent_ip }}): {{ ssh_test_agent.stdout | default('FAILED: ' + (ssh_test_agent.stderr | default('Unknown error'))) }}
+      - Milvus ({{ milvus_ip }}): {{ ssh_test_milvus.stdout | default('FAILED: ' + (ssh_test_milvus.stderr | default('Unknown error'))) }}
   tags: [apps, apps_ssh]
 
