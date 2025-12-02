@@ -106,12 +106,15 @@ applications:
       BASE_URL: "https://{{ full_domain }}/portal"
       SSO_TOKEN_EXPIRY: "900"
       PORT: "3000"
+      # Log viewing - hosts for remote journalctl access
       INGEST_API_HOST: "{{ ingest_ip }}"
+      MILVUS_HOST: "{{ milvus_ip }}"
+      AGENT_HOST: "{{ agent_ip }}"
+      # Other service URLs
       NEXT_PUBLIC_INGEST_API_URL: "http://{{ ingest_ip }}:8002"
       DEPLOYMENT_MODE: "busibox"
       NEXT_PUBLIC_BASE_PATH: "/portal"
       SEARCH_API_IP: "{{ search_api_ip }}"
-      MILVUS_HOST: "{{ milvus_ip }}"
   
   - name: agent-client
     github_repo: jazzmind/agent-client
