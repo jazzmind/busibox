@@ -308,6 +308,8 @@ applications:
       NEXT_PUBLIC_APP_URL: "https://{{ full_domain }}/innovation"
       BASE_URL: "https://{{ full_domain }}/innovation"
       AI_PORTAL_URL: "https://{{ full_domain }}"
+      NEXT_PUBLIC_AI_PORTAL_URL: "https://{{ full_domain }}"
       PORT: "3005"
       DEPLOYMENT_MODE: "busibox"
+      NEXT_PUBLIC_DEPLOYMENT_MODE: "busibox"
       NEXT_PUBLIC_BASE_PATH: "/innovation"
