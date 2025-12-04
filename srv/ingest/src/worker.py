@@ -1133,7 +1133,7 @@ class IngestWorker:
                 
                 try:
                     from processors.multi_flow_processor import MultiFlowProcessor
-                    import asyncio
+                    # asyncio is already imported at module level
                     
                     # Build config with multi-flow settings
                     multi_flow_config = {
