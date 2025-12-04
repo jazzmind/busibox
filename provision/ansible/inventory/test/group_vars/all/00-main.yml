@@ -104,6 +104,20 @@ vllm_host: "0.0.0.0"  # Listen on all interfaces for IP aliasing support
 # When use_production_vllm is false, test services connect to test vLLM (10.96.201.208)
 
 # ============================================================================
+# GPU-Heavy Features - Test Environment
+# ============================================================================
+# Test shares the same physical GPU with production, so GPU memory is limited.
+# These settings prevent test from competing with production for GPU resources.
+
+# Marker PDF extraction - force CPU mode on test (GPU shared with production)
+# Setting marker_use_gpu to false prevents GPU memory conflicts
+marker_use_gpu: false
+marker_gpu_device: cpu
+
+# ColPali - use production service (already handled by use_production_vllm)
+# The colpali_base_url will point to production vllm_ip:9006
+
+# ============================================================================
 # LLM Model Configuration
 # ============================================================================
 # HuggingFace Authentication (for gated models like PaliGemma)
