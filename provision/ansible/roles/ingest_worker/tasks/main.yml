@@ -168,6 +168,14 @@
       WorkingDirectory=/srv/ingest/src
       EnvironmentFile=/srv/ingest/.env
       ExecStart=/srv/ingest/venv/bin/python worker.py
+      
+      # Proper cleanup - kill all child processes and release GPU memory
+      KillMode=control-group
+      KillSignal=SIGTERM
+      TimeoutStopSec=30
+      # Force kill any remaining processes (including GPU child processes)
+      ExecStopPost=/bin/bash -c 'pkill -9 -f "/srv/ingest/venv/bin/python" || true'
+      
       Restart=always
       RestartSec=10
       StandardOutput=journal
