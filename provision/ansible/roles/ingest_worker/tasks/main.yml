@@ -144,9 +144,10 @@
       TIMEOUT_LARGE=1200
       
       # ColPali configuration (vision embeddings for PDFs)
+      # Uses production ColPali via vllm_ip when use_production_vllm is true
       COLPALI_BASE_URL={{ colpali_base_url | default('http://' + vllm_ip + ':9006/v1') }}
       COLPALI_API_KEY={{ colpali_api_key | default('EMPTY') }}
-      COLPALI_ENABLED={{ colpali_enabled | default('false') }}
+      COLPALI_ENABLED={{ colpali_enabled | default('true') }}
       
       # Marker configuration (PDF extraction)
       MARKER_ENABLED={{ marker_enabled | default('false') }}

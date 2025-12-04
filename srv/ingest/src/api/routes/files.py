@@ -898,6 +898,21 @@ async def reprocess_file(fileId: str, request: Request):
                 chunks_deleted=deleted_chunks,
             )
             
+            # Delete existing processing history
+            await conn.execute("""
+                DELETE FROM processing_history WHERE file_id = $1
+            """, uuid.UUID(fileId))
+            
+            # Delete existing processing strategy results
+            await conn.execute("""
+                DELETE FROM processing_strategy_results WHERE file_id = $1
+            """, uuid.UUID(fileId))
+            
+            logger.info(
+                "Cleared processing history",
+                file_id=fileId,
+            )
+            
             # Delete existing vectors from Milvus
             try:
                 milvus_service.delete_file_vectors(fileId)
