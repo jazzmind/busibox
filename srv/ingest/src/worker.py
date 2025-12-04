@@ -721,7 +721,7 @@ class IngestWorker:
                         
                         # Insert image references if we have images
                         if image_refs:
-                            markdown_content = self.markdown_generator._insert_image_references(
+                            markdown_content = self.markdown_generator._insert_images_by_position(
                                 markdown_content, 
                                 image_refs
                             )
