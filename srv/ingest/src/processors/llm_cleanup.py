@@ -73,6 +73,14 @@ Output clean, well-formatted markdown."""
             or "http://10.96.200.207:4000"  # Fallback to litellm-lxc IP
         )
         
+        # Get LiteLLM API key (required for authenticated LiteLLM servers)
+        self.litellm_api_key = (
+            config.get("litellm_api_key")
+            or os.getenv("LITELLM_API_KEY")
+            or os.getenv("LITELLM_MASTER_KEY")  # Fallback to master key if set
+            or ""
+        )
+        
         # Get model from registry - try "cleanup" first, then "parsing" as fallback
         # Both map to phi-4 currently but can change via model registry
         registry = get_registry()
@@ -133,9 +141,15 @@ Output clean, well-formatted markdown."""
                 model=self.model
             )
             
+            # Prepare headers with API key if available
+            headers = {"Content-Type": "application/json"}
+            if self.litellm_api_key:
+                headers["Authorization"] = f"Bearer {self.litellm_api_key}"
+            
             async with httpx.AsyncClient(timeout=60.0) as client:
                 response = await client.post(
                     f"{self.litellm_base_url}/chat/completions",
+                    headers=headers,
                     json={
                         "model": self.model,
                         "messages": [

@@ -109,8 +109,10 @@ vllm_host: "0.0.0.0"  # Listen on all interfaces for IP aliasing support
 # Test shares the same physical GPU with production, so GPU memory is limited.
 # These settings prevent test from competing with production for GPU resources.
 
-# Marker PDF extraction - force CPU mode on test (GPU shared with production)
-# Setting marker_use_gpu to false prevents GPU memory conflicts
+# Marker PDF extraction - DISABLED on test
+# Marker's Surya models have complex GPU/CUDA requirements that don't work well
+# in containerized CPU-only mode. Falls back to pdfplumber (less accurate but reliable)
+marker_enabled: false
 marker_use_gpu: false
 marker_gpu_device: cpu
 

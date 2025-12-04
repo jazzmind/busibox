@@ -66,6 +66,10 @@ class Config:
         # LLM cleanup configuration (fixes text quality issues)
         self.llm_cleanup_enabled = os.getenv("LLM_CLEANUP_ENABLED", "true").lower() == "true"
         
+        # LiteLLM configuration (for LLM cleanup)
+        self.litellm_base_url = os.getenv("LITELLM_BASE_URL", "http://10.96.200.207:4000")
+        self.litellm_api_key = os.getenv("LITELLM_API_KEY", "")
+        
         # Processing configuration
         self.chunk_size_min = int(os.getenv("CHUNK_SIZE_MIN", "400"))
         self.chunk_size_max = int(os.getenv("CHUNK_SIZE_MAX", "800"))
@@ -111,6 +115,8 @@ class Config:
             "multi_flow_enabled": self.multi_flow_enabled,
             "max_parallel_strategies": self.max_parallel_strategies,
             "llm_cleanup_enabled": self.llm_cleanup_enabled,
+            "litellm_base_url": self.litellm_base_url,
+            "litellm_api_key": self.litellm_api_key,
             "chunk_size": self.chunk_size_max,  # For backward compatibility
             "chunk_overlap": int(self.chunk_size_max * self.chunk_overlap_pct),
             "chunk_size_min": self.chunk_size_min,
