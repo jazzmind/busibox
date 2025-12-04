@@ -149,8 +149,8 @@
       COLPALI_API_KEY={{ colpali_api_key | default('EMPTY') }}
       COLPALI_ENABLED={{ colpali_enabled | default('true') }}
       
-      # Marker configuration (PDF extraction)
-      MARKER_ENABLED={{ marker_enabled | default('false') }}
+      # Marker configuration (PDF extraction - gold standard, pdfplumber is fallback)
+      MARKER_ENABLED={{ marker_enabled | default('true') }}
       MARKER_USE_GPU={{ marker_use_gpu | default('true') }}
       MARKER_GPU_DEVICE={{ marker_gpu_device | default('cuda') }}
       

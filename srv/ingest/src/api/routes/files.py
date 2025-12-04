@@ -841,10 +841,28 @@ async def reprocess_file(fileId: str, request: Request):
     4. Reset ingestion status to 'queued'
     5. Add job back to Redis queue for reprocessing
     
+    Request Body (optional JSON):
+        processing_config: Processing configuration (llm_cleanup_enabled, marker_enabled, etc.)
+    
     Returns:
         Success message with file_id
     """
     user_id = request.state.user_id
+    
+    # Parse optional processing config from request body
+    processing_config = {}
+    try:
+        body = await request.json()
+        processing_config = body.get("processing_config", {})
+        if processing_config:
+            logger.info(
+                "Reprocess with custom processing config",
+                file_id=fileId,
+                config=processing_config,
+            )
+    except Exception:
+        # No body or invalid JSON - use defaults
+        pass
     
     config = Config().to_dict()
     postgres_service = PostgresService(config)
@@ -958,6 +976,10 @@ async def reprocess_file(fileId: str, request: Request):
                     "mime_type": mime_type,  # Required for text extraction
                     "reprocess": "true",  # Flag to indicate this is a reprocess
                 }
+                
+                # Include processing config if provided
+                if processing_config:
+                    job_data["processing_config"] = json.dumps(processing_config)
                 
                 stream_name = config.get("redis_stream", "jobs:ingestion")
                 await redis_client.xadd(stream_name, job_data)
