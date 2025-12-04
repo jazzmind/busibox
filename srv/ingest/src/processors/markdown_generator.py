@@ -6,7 +6,7 @@ Handles headings, tables, lists, and image references.
 """
 
 import re
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
 import structlog
 
 logger = structlog.get_logger()
@@ -25,7 +25,8 @@ class MarkdownGenerator:
         self, 
         text: str, 
         extraction_method: str = "simple",
-        images: Optional[List[dict]] = None
+        images: Optional[List[dict]] = None,
+        page_breaks: Optional[List[int]] = None
     ) -> Tuple[str, dict]:
         """
         Generate markdown from extracted text.
@@ -33,7 +34,8 @@ class MarkdownGenerator:
         Args:
             text: Extracted text content
             extraction_method: Method used for extraction (simple, marker)
-            images: List of extracted images with metadata
+            images: List of extracted images with metadata (path, page_number, caption)
+            page_breaks: List of character positions where page breaks occur
 
         Returns:
             Tuple of (markdown_content, metadata)
@@ -46,13 +48,12 @@ class MarkdownGenerator:
 
             # Different processing based on extraction method
             if extraction_method == "marker":
-                markdown = self._process_marker_output(text)
+                markdown = self._process_marker_output(text, images)
             else:
                 markdown = self._process_simple_text(text)
-
-            # Insert image references
-            if images:
-                markdown = self._insert_image_references(markdown, images)
+                # For simple extraction, insert images by page position
+                if images:
+                    markdown = self._insert_images_by_position(markdown, images, page_breaks)
 
             # Extract metadata
             metadata = self._extract_metadata(markdown)
@@ -72,12 +73,11 @@ class MarkdownGenerator:
             logger.error("Failed to generate markdown", error=str(e), exc_info=True)
             raise
 
-    def _process_marker_output(self, text: str) -> str:
+    def _process_marker_output(self, text: str, images: Optional[List[dict]] = None) -> str:
         """
         Process text that was extracted using Marker.
-        Marker already provides markdown-like formatting.
+        Marker already provides markdown-like formatting with inline image references.
         """
-        # Marker output is already in markdown format, but may need cleanup
         markdown = text
 
         # Clean up excessive whitespace
@@ -89,7 +89,117 @@ class MarkdownGenerator:
         # Clean up table formatting
         markdown = self._normalize_tables(markdown)
 
+        # Check if Marker output already has inline image references
+        existing_images = re.findall(r'!\[([^\]]*)\]\(([^\)]+)\)', markdown)
+        
+        if existing_images:
+            # Marker has inline images - just update paths to use consistent naming
+            logger.debug("Found inline images from Marker", count=len(existing_images))
+            # The HTML renderer will handle path resolution
+        elif images:
+            # No inline images in Marker output - insert them by page position
+            markdown = self._insert_images_by_position(markdown, images)
+
         return markdown.strip()
+
+    def _insert_images_by_position(
+        self, 
+        markdown: str, 
+        images: List[dict],
+        page_breaks: Optional[List[int]] = None
+    ) -> str:
+        """
+        Insert images inline based on their page numbers.
+        
+        Images are inserted after content from their respective pages,
+        typically after paragraph breaks following that page's content.
+        """
+        if not images:
+            return markdown
+
+        # Group images by page number
+        images_by_page: Dict[int, List[dict]] = {}
+        unpositioned_images: List[dict] = []
+        
+        for img in images:
+            page_num = img.get('page_number') or img.get('page')
+            if page_num:
+                if page_num not in images_by_page:
+                    images_by_page[page_num] = []
+                images_by_page[page_num].append(img)
+            else:
+                unpositioned_images.append(img)
+
+        # If we have page information, try to insert images at appropriate positions
+        if images_by_page:
+            markdown = self._insert_images_at_page_positions(markdown, images_by_page)
+        
+        # Append any unpositioned images at the end
+        if unpositioned_images:
+            image_section = "\n\n---\n\n**Additional Images:**\n\n"
+            for i, img in enumerate(unpositioned_images):
+                image_path = img.get('path', f'image_{i}.png')
+                caption = img.get('caption', f'Image {i+1}')
+                image_section += f"![{caption}]({image_path})\n\n"
+            markdown += image_section
+
+        return markdown
+
+    def _insert_images_at_page_positions(
+        self, 
+        markdown: str, 
+        images_by_page: Dict[int, List[dict]]
+    ) -> str:
+        """
+        Insert images at positions corresponding to their page numbers.
+        
+        Strategy: Look for page markers, section breaks, or distribute evenly
+        based on content length.
+        """
+        lines = markdown.split('\n')
+        total_lines = len(lines)
+        max_page = max(images_by_page.keys())
+        
+        # Estimate lines per page
+        lines_per_page = max(1, total_lines // max_page) if max_page > 0 else total_lines
+        
+        # Track which images have been inserted
+        result_lines = []
+        current_line = 0
+        
+        for page_num in sorted(images_by_page.keys()):
+            # Calculate target line for this page's images
+            target_line = min(page_num * lines_per_page, total_lines)
+            
+            # Add lines up to target
+            while current_line < target_line and current_line < total_lines:
+                result_lines.append(lines[current_line])
+                current_line += 1
+            
+            # Find a good insertion point (after a blank line or heading)
+            insert_idx = len(result_lines)
+            for i in range(min(10, len(result_lines))):
+                check_idx = len(result_lines) - 1 - i
+                if check_idx >= 0 and (not result_lines[check_idx].strip() or result_lines[check_idx].startswith('#')):
+                    insert_idx = check_idx + 1
+                    break
+            
+            # Create image markdown
+            image_md = []
+            for img in images_by_page[page_num]:
+                image_path = img.get('path', f'page_{page_num}_image.png')
+                caption = img.get('caption', f'Page {page_num} Image')
+                image_md.append(f"\n![{caption}]({image_path})\n")
+            
+            # Insert images
+            result_lines.insert(insert_idx, '\n'.join(image_md))
+        
+        # Add remaining lines
+        while current_line < total_lines:
+            result_lines.append(lines[current_line])
+            current_line += 1
+        
+        return '\n'.join(result_lines)
 
     def _process_simple_text(self, text: str) -> str:
         """
@@ -184,23 +294,6 @@ class MarkdownGenerator:
         # This is a placeholder for more sophisticated table normalization
         return markdown
 
-    def _insert_image_references(self, markdown: str, images: List[dict]) -> str:
-        """
-        Insert image references into markdown at appropriate positions.
-        """
-        if not images:
-            return markdown
-
-        # For now, append images at the end or insert them at logical breaks
-        # More sophisticated placement can be added later
-        image_section = "\n\n## Images\n\n"
-        for i, img in enumerate(images):
-            image_path = img.get('path', f'image_{i}.png')
-            caption = img.get('caption', f'Image {i+1}')
-            image_section += f"![{caption}]({image_path})\n\n"
-
-        return markdown + image_section
-
     def _extract_metadata(self, markdown: str) -> dict:
         """
         Extract metadata from generated markdown.
@@ -254,5 +347,3 @@ class MarkdownGenerator:
         markdown = re.sub(r'<iframe[\s\S]*?</iframe>', '', markdown, flags=re.IGNORECASE)
 
         return markdown
-
-
