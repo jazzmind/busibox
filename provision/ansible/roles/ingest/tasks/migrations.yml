@@ -169,3 +169,30 @@
     msg: "{{ 'RLS policies applied successfully' if rls_result.changed else 'RLS policies already enabled' }}"
   tags: [ingest, ingest_migrations]
 
+# ============================================================================
+# TEST MIGRATION (for debugging migration system)
+# ============================================================================
+
+- name: Run test migration (always runs to verify system works)
+  shell: |
+    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -f /srv/ingest/migrations/999_test_migration.sql
+  register: test_migration_result
+  tags: [ingest, ingest_migrations, test_migration]
+
+- name: Display test migration result
+  debug:
+    msg: "Test migration output: {{ test_migration_result.stdout | default('no output') }}"
+  tags: [ingest, ingest_migrations, test_migration]
+
+- name: Verify test migration ran
+  shell: |
+    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -tAc \
+    "SELECT COUNT(*) FROM migration_test;"
+  register: test_migration_count
+  tags: [ingest, ingest_migrations, test_migration]
+
+- name: Display test migration count
+  debug:
+    msg: "Test migration table has {{ test_migration_count.stdout }} rows - migrations ARE running!"
+  tags: [ingest, ingest_migrations, test_migration]
+
