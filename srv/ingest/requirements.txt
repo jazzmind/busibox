@@ -33,8 +33,13 @@ python-pptx>=1.0.2,<2.0.0  # PowerPoint extraction (updated for marker-pdf[full]
 openpyxl>=3.1.2,<4.0.0  # Excel extraction
 odfpy>=1.4.1,<2.0.0  # OpenDocument (ODT) extraction
 lxml>=4.9.3,<6.0.0  # XML parsing
-marker-pdf[full]==1.10.1  # High-quality document to markdown (PDF, DOCX, PPTX, XLSX, HTML, EPUB, images)
-accelerate>=0.25.0,<2.0.0  # Required by marker-pdf/surya for GPU model loading
+# Marker PDF extraction - PINNED VERSIONS for GPU compatibility
+# marker-pdf 1.10.1 + surya-ocr 0.17.0 + transformers 4.57 has meta tensor bug on GPU
+# These versions work together on GPU:
+marker-pdf[full]==1.6.2
+surya-ocr>=0.13.1,<0.14.0
+transformers>=4.36.0,<4.46.0  # 4.46+ has meta tensor issues with surya
+accelerate>=0.25.0,<2.0.0  # Required for GPU model loading
 # tatr - Table extraction (optional, not available on PyPI - would need manual install)
 pdf2image>=1.16.3,<2.0.0  # PDF page images for ColPali
 pytesseract>=0.3.10,<0.4.0  # OCR for scanned PDFs
