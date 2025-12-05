@@ -10,14 +10,15 @@ VAULT_FLAGS=$(shell [ -f $(VAULT_PASS_FILE) ] && echo "--vault-password-file $(V
 # Extra arguments (can override with: make vllm-embedding EXTRA_ARGS="-e skip_model_check=true")
 EXTRA_ARGS=
 
-# Container IPs - production uses 10.96.200.x, test uses 10.96.200.x
+# Container IPs - production uses 10.96.200.x, test uses 10.96.201.x
 # For production, IPs are static and defined in group_vars
-# For test, they may be different - check inventory/test/group_vars
+# For test, they use the TEST network (10.96.201.x)
 ifeq ($(INV),inventory/test)
-  INGEST_IP = 10.96.200.206
-  AGENT_IP = 10.96.200.202
-  APPS_IP = 10.96.200.201
-  MILVUS_IP = 10.96.200.204
+  # Test IPs (10.96.201.0/21 network)
+  INGEST_IP = 10.96.201.206
+  AGENT_IP = 10.96.201.202
+  APPS_IP = 10.96.201.201
+  MILVUS_IP = 10.96.201.204
 else
   # Production IPs (10.96.200.0/21 network)
   INGEST_IP = 10.96.200.206
