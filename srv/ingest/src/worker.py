@@ -393,14 +393,24 @@ class IngestWorker:
             if processing_config and "marker_enabled" in processing_config:
                 self.text_extractor.marker_enabled = original_marker_enabled
             
+            extraction_method = extraction_result.metadata.get("extraction_method", "unknown")
+            method_display = {
+                "marker": "✓ Marker (high quality)",
+                "remote_marker": "✓ Remote Marker (production)",
+                "pdfplumber": "⚠ pdfplumber fallback",
+                "remote_marker_failed": "⚠ Remote Marker failed → pdfplumber",
+                "remote_marker_error": "⚠ Remote Marker error → pdfplumber",
+            }.get(extraction_method, extraction_method)
+            
             self.history.log_substep(
                 file_id, "parsing", "text_extraction",
-                f"Extracted {len(extraction_result.text)} chars, {extraction_result.page_count} pages",
+                f"Extracted {len(extraction_result.text)} chars, {extraction_result.page_count} pages ({method_display})",
                 metadata={
                     "text_length": len(extraction_result.text),
                     "page_count": extraction_result.page_count,
                     "table_count": len(extraction_result.tables) if extraction_result.tables else 0,
-                    "method": extraction_result.metadata.get("extraction_method", "unknown"),
+                    "method": extraction_method,
+                    "marker_used": extraction_method in ("marker", "remote_marker"),
                 },
                 started_at=extract_start
             )

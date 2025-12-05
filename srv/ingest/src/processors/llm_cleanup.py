@@ -81,36 +81,39 @@ Output clean, well-formatted markdown."""
             or ""
         )
         
-        # Get model from registry - try "cleanup" first, then "parsing" as fallback
-        # Both map to phi-4 currently but can change via model registry
+        # Get model config from registry, but use PURPOSE NAME for LiteLLM
+        # LiteLLM is configured with model_name: cleanup, parsing, etc.
+        # The registry tells us config (temp, max_tokens), but we call LiteLLM with purpose name
         registry = get_registry()
         try:
-            self.model = registry.get_model("cleanup")
             self.model_config = registry.get_config("cleanup")
+            self.model = "cleanup"  # Use purpose name for LiteLLM, not underlying model
             logger.info(
                 "LLM cleanup initialized",
                 enabled=self.enabled,
-                model=self.model,
+                litellm_model=self.model,  # What we send to LiteLLM
+                underlying_model=self.model_config.get("model"),  # What LiteLLM routes to
                 base_url=self.litellm_base_url
             )
         except (ValueError, KeyError) as e:
             # Fallback to "parsing" model if "cleanup" not found
             try:
                 logger.warning("Cleanup model not found, trying parsing model", error=str(e))
-                self.model = registry.get_model("parsing")
                 self.model_config = registry.get_config("parsing")
+                self.model = "parsing"  # Use purpose name for LiteLLM
                 logger.info(
                     "LLM cleanup initialized with parsing model",
                     enabled=self.enabled,
-                    model=self.model,
+                    litellm_model=self.model,
+                    underlying_model=self.model_config.get("model"),
                     base_url=self.litellm_base_url
                 )
             except Exception as e2:
-                # Final fallback - should not happen if model registry is configured
+                # Final fallback - use cleanup as model name (should work with LiteLLM)
                 logger.error("Failed to get cleanup or parsing model from registry", error=str(e2))
-                self.model = "phi-4"  # Default model name (should match LiteLLM config)
+                self.model = "cleanup"  # LiteLLM model name (not underlying model)
                 self.model_config = {"temperature": 0.1, "max_tokens": 32768}
-                logger.warning("Using hardcoded fallback model", model=self.model)
+                logger.warning("Using fallback model config", model=self.model)
     
     async def cleanup_chunk(self, text: str) -> str:
         """
