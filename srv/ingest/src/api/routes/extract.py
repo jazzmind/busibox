@@ -130,3 +130,4 @@ async def extract_text(
         except Exception:
             pass
 
+
