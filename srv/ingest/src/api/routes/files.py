@@ -120,6 +120,17 @@ async def get_file_metadata(fileId: str, request: Request):
                 ORDER BY created_at ASC
             """, uuid.UUID(fileId))
             
+            # Get page_count and word_count from processing_history metadata (fallback)
+            history_metadata_row = await conn.fetchrow("""
+                SELECT metadata
+                FROM processing_history
+                WHERE file_id = $1 
+                  AND metadata IS NOT NULL 
+                  AND (metadata->>'page_count' IS NOT NULL OR metadata->>'text_length' IS NOT NULL)
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, uuid.UUID(fileId))
+            
             strategies = [
                 {
                     "strategy": row["processing_strategy"],
@@ -138,8 +149,41 @@ async def get_file_metadata(fileId: str, request: Request):
             
             # Merge metadata with fallbacks for page_count and word_count
             metadata = file_row["metadata"] or {}
-            if "page_count" not in metadata and status_row and status_row["total_pages"]:
-                metadata["page_count"] = status_row["total_pages"]
+            history_meta = history_metadata_row["metadata"] if history_metadata_row else {}
+            
+            # Fallback for page_count from multiple sources
+            if "page_count" not in metadata or metadata["page_count"] is None:
+                # Try processing history first (most reliable)
+                if history_meta and history_meta.get("page_count"):
+                    metadata["page_count"] = history_meta["page_count"]
+                # Then try status table
+                elif status_row and status_row["total_pages"]:
+                    metadata["page_count"] = status_row["total_pages"]
+                # Finally try strategy metadata
+                elif strategies:
+                    for strategy in strategies:
+                        if strategy.get("success") and strategy.get("metadata"):
+                            strat_meta = strategy["metadata"]
+                            if isinstance(strat_meta, dict) and strat_meta.get("page_count"):
+                                metadata["page_count"] = strat_meta["page_count"]
+                                break
+            
+            # Fallback for word_count from multiple sources
+            if "word_count" not in metadata or metadata["word_count"] is None:
+                # Try processing history text_length first
+                if history_meta and history_meta.get("text_length"):
+                    # Estimate words from characters (average 5 chars per word)
+                    metadata["word_count"] = history_meta["text_length"] // 5
+                else:
+                    # Try to calculate from successful strategy text_length
+                    for strategy in strategies:
+                        if strategy.get("success") and strategy.get("textLength"):
+                            metadata["word_count"] = strategy["textLength"] // 5
+                            break
+                # If still no word_count, estimate from chunk_count
+                if ("word_count" not in metadata or metadata["word_count"] is None) and file_row["chunk_count"]:
+                    # Rough estimate: ~200 words per chunk on average
+                    metadata["word_count"] = file_row["chunk_count"] * 200
             
             return JSONResponse(
                 status_code=status.HTTP_200_OK,
