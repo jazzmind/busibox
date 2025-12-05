@@ -39,7 +39,7 @@ def _create_resilient_converter(artifact_dict):
     class ResilientPdfConverter(PdfConverter):
         def build_document(self, filepath: str):
             """Build document with resilient processor handling."""
-            from marker.providers import provider_from_filepath
+            from marker.providers.registry import provider_from_filepath
             from marker.builders.document import DocumentBuilder
             from marker.builders.structure import StructureBuilder
             from marker.builders.line import LineBuilder
