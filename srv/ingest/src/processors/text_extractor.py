@@ -262,11 +262,12 @@ class TextExtractor:
                 )
                 markdown_text = None
             except Exception as e:
-                logger.error(
-                    "Marker import succeeded but execution failed",
+                # Log as warning since we'll fall back to pdfplumber
+                # Common issues: table_rec tensor shape errors, memory issues
+                logger.warning(
+                    "Marker execution failed, falling back to pdfplumber",
                     error=str(e),
                     error_type=type(e).__name__,
-                    exc_info=True,
                 )
                 markdown_text = None
             

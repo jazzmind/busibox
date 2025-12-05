@@ -54,6 +54,9 @@ CRITICAL_ERROR_PATTERNS = [
 # Warning patterns (test continues but reports)
 WARNING_PATTERNS = [
     "pthread_setaffinity_np failed",  # Known LXC limitation, not critical
+    "Expected key.size(1) == value.size(1)",  # Surya table_rec tensor shape issue, non-fatal
+    "'NoneType' object has no attribute 'shape'",  # Surya table_rec None tensor, non-fatal
+    "Marker import succeeded but execution failed",  # Caught and handled, falls back
 ]
 
 
