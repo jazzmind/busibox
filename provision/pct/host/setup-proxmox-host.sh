@@ -327,7 +327,52 @@ fi
 
 echo ""
 
-# 8. Summary
+# 8. Setup convenience aliases
+echo "=========================================="
+echo "Step 8: Setting up Shell Aliases"
+echo "=========================================="
+
+# Create .bash_aliases if it doesn't exist
+touch ~/.bash_aliases
+
+# Check if aliases already exist
+if ! grep -q "Busibox deployment aliases" ~/.bash_aliases 2>/dev/null; then
+    cat >> ~/.bash_aliases << 'ALIAS_EOF'
+
+# Busibox deployment aliases
+alias deploy='cd ~/busibox && git pull && make deploy'
+alias configure='cd ~/busibox && git pull && make configure'
+alias setup='cd ~/busibox && git pull && make setup'
+alias test-deploy='cd ~/busibox && git pull && make test'
+alias prod-deploy='cd ~/busibox && git pull && make production'
+ALIAS_EOF
+    echo "✓ Aliases added to ~/.bash_aliases"
+else
+    echo "✓ Aliases already configured"
+fi
+
+# Ensure .bashrc sources .bash_aliases
+if ! grep -q "bash_aliases" ~/.bashrc 2>/dev/null; then
+    cat >> ~/.bashrc << 'BASHRC_EOF'
+
+# Source bash aliases if they exist
+if [ -f ~/.bash_aliases ]; then
+    . ~/.bash_aliases
+fi
+BASHRC_EOF
+    echo "✓ Updated .bashrc to source aliases"
+fi
+
+echo ""
+echo "Available aliases (after re-login or 'source ~/.bashrc'):"
+echo "  deploy       - Pull latest and run 'make deploy'"
+echo "  configure    - Pull latest and run 'make configure'"  
+echo "  setup        - Pull latest and run 'make setup'"
+echo "  test-deploy  - Pull latest and run 'make test'"
+echo "  prod-deploy  - Pull latest and run 'make production'"
+echo ""
+
+# 9. Summary
 echo "=========================================="
 echo "Setup Complete!"
 echo "=========================================="
