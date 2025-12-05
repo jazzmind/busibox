@@ -1,23 +1,29 @@
 ---
 # LiteLLM Handlers
+# Note: Handlers need tags to run when playbook is run with --tags
+# The flush_handlers in configure.yml ensures these run immediately after config changes
 
 - name: reload systemd
   systemd:
     daemon_reload: yes
+  tags: [litellm, litellm_configure]
 
 - name: restart litellm
   systemd:
     name: litellm
     state: restarted
   when: litellm_start_service | default(true)
+  tags: [litellm, litellm_configure]
 
 - name: stop litellm
   systemd:
     name: litellm
     state: stopped
+  tags: [litellm, litellm_configure]
 
 - name: start litellm
   systemd:
     name: litellm
     state: started
+  tags: [litellm, litellm_configure]
 

@@ -356,7 +356,7 @@ test_purpose() {
         "research")
             test_purpose_research
             ;;
-        "default"|"chat"|"agent"|"cleanup"|"parsing"|"classify"|"vision")
+        "default"|"chat"|"agent"|"cleanup"|"parsing"|"classify"|"vision"|"tool_calling")
             test_purpose_chat "$purpose" "Provide a brief response demonstrating this model's capabilities."
             ;;
         *)

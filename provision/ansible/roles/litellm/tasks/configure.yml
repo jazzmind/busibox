@@ -86,7 +86,14 @@
     group: "{{ litellm_group }}"
     mode: '0640'
   notify: restart litellm
-  tags: [litellm_configure]
+  register: litellm_config_result
+  tags: [litellm, litellm_configure]
+
+# Flush handlers immediately to ensure litellm restarts when config changes
+# This is critical because handlers normally run at end of play
+- name: Flush handlers to restart litellm if config changed
+  meta: flush_handlers
+  tags: [litellm, litellm_configure]
 
 - name: Debug - Display generated LiteLLM config (model_list section)
   shell: "grep -A 50 '^model_list:' {{ litellm_config_dir }}/config.yaml | head -100"
@@ -119,6 +126,11 @@
     group: "{{ litellm_group }}"
     mode: '0640'
   notify: restart litellm
+  tags: [litellm_configure]
+
+# Flush handlers to ensure litellm restarts after service/env changes
+- name: Flush handlers after service configuration
+  meta: flush_handlers
   tags: [litellm_configure]
 
 # Operational Tools (always deployed)
