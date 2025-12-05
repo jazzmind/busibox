@@ -254,13 +254,20 @@ Output clean, well-formatted markdown."""
         
         return False
     
-    async def cleanup_chunks(self, chunks: List, max_concurrent: int = 5) -> List:
+    async def cleanup_chunks(
+        self, 
+        chunks: List, 
+        max_concurrent: int = None,
+        on_chunk_cleaned: callable = None,
+    ) -> List:
         """
-        Clean up multiple chunks in parallel.
+        Clean up multiple chunks in parallel with incremental progress.
         
         Args:
             chunks: List of Chunk objects
-            max_concurrent: Maximum concurrent LLM requests (default 5)
+            max_concurrent: Maximum concurrent LLM requests (default from env or 3)
+            on_chunk_cleaned: Optional callback(chunk_index, cleaned_text) called 
+                              as each chunk completes - use to save progress incrementally
             
         Returns:
             List of cleaned Chunk objects
@@ -270,6 +277,10 @@ Output clean, well-formatted markdown."""
         if not self.enabled:
             logger.info("LLM cleanup disabled, skipping")
             return chunks
+        
+        # Get batch size from env or use sensible default
+        if max_concurrent is None:
+            max_concurrent = int(os.getenv("LLM_CLEANUP_BATCH_SIZE", "3"))
         
         logger.info(
             "Starting LLM cleanup for chunks",
@@ -281,36 +292,70 @@ Output clean, well-formatted markdown."""
         # Create semaphore to limit concurrent requests
         semaphore = asyncio.Semaphore(max_concurrent)
         
+        # Track progress
+        cleaned_count = 0
+        failed_count = 0
+        completed_count = 0
+        
         async def cleanup_with_semaphore(chunk, index):
             """Clean a single chunk with concurrency limiting."""
+            nonlocal cleaned_count, failed_count, completed_count
+            
             async with semaphore:
                 try:
                     cleaned_text = await self.cleanup_chunk(chunk.text)
+                    
+                    # Update chunk immediately
+                    if cleaned_text != chunk.text:
+                        chunk.text = cleaned_text
+                        cleaned_count += 1
+                    
+                    # Call progress callback if provided (for incremental saves)
+                    if on_chunk_cleaned:
+                        try:
+                            await on_chunk_cleaned(index, cleaned_text)
+                        except Exception as cb_err:
+                            logger.warning(
+                                "Chunk cleaned callback failed",
+                                chunk_index=index,
+                                error=str(cb_err)
+                            )
+                    
+                    completed_count += 1
+                    
+                    # Log progress every 5 chunks
+                    if completed_count % 5 == 0:
+                        logger.info(
+                            "LLM cleanup progress",
+                            completed=completed_count,
+                            total=len(chunks),
+                            cleaned=cleaned_count,
+                            failed=failed_count
+                        )
+                    
                     return index, cleaned_text, None
+                    
                 except Exception as e:
+                    failed_count += 1
+                    completed_count += 1
                     logger.warning(
                         "Chunk cleanup failed",
                         chunk_index=index,
-                        error=str(e)
+                        error=str(e),
+                        completed=completed_count,
+                        total=len(chunks)
                     )
                     return index, chunk.text, e  # Return original on failure
         
         # Process all chunks in parallel (limited by semaphore)
+        # Use asyncio.as_completed to process results as they arrive
         tasks = [
-            cleanup_with_semaphore(chunk, i)
+            asyncio.create_task(cleanup_with_semaphore(chunk, i))
             for i, chunk in enumerate(chunks)
         ]
-        results = await asyncio.gather(*tasks)
         
-        # Apply results back to chunks
-        cleaned_count = 0
-        failed_count = 0
-        for index, cleaned_text, error in results:
-            if error:
-                failed_count += 1
-            elif cleaned_text != chunks[index].text:
-                chunks[index].text = cleaned_text
-                cleaned_count += 1
+        # Wait for all tasks, but they update chunks in place as they complete
+        await asyncio.gather(*tasks, return_exceptions=True)
         
         logger.info(
             "LLM cleanup complete",
