@@ -155,6 +155,11 @@
       MARKER_GPU_DEVICE={{ marker_gpu_device | default('cuda') }}
       # Remote Marker service URL - if set, calls remote API instead of local Marker
       MARKER_SERVICE_URL={{ marker_service_url | default('') }}
+      # Surya batch sizes - control VRAM usage (40MB per batch item for recognition)
+      # Default 512 = ~20GB VRAM, set lower to share GPU with other services
+      RECOGNITION_BATCH_SIZE={{ recognition_batch_size | default('128') }}
+      DETECTOR_BATCH_SIZE={{ detector_batch_size | default('32') }}
+      LAYOUT_BATCH_SIZE={{ layout_batch_size | default('16') }}
       
       # Worker configuration
       WORKER_ID={{ ansible_hostname }}

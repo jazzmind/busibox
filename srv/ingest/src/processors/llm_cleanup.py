@@ -149,6 +149,26 @@ Output clean, well-formatted markdown."""
             if self.litellm_api_key:
                 headers["Authorization"] = f"Bearer {self.litellm_api_key}"
             
+            # Calculate max_tokens based on input - cleanup output should be similar length
+            # phi-4/cleanup model has ~12K context, so we need input + output < 12K tokens
+            # Rough estimate: 4 chars per token
+            estimated_input_tokens = len(text) // 4
+            system_prompt_tokens = len(self.SYSTEM_PROMPT) // 4
+            
+            # Cap output tokens to leave room for input + system prompt
+            # Model context: ~12000, leave buffer for safety
+            available_for_output = 10000 - estimated_input_tokens - system_prompt_tokens
+            max_output_tokens = min(max(available_for_output, 512), 4096)
+            
+            # Skip cleanup if input is too long for the model
+            if estimated_input_tokens + system_prompt_tokens > 9000:
+                logger.warning(
+                    "Input too long for cleanup model, skipping",
+                    estimated_tokens=estimated_input_tokens,
+                    text_length=len(text),
+                )
+                return text
+            
             async with httpx.AsyncClient(timeout=60.0) as client:
                 response = await client.post(
                     f"{self.litellm_base_url}/chat/completions",
@@ -160,7 +180,7 @@ Output clean, well-formatted markdown."""
                             {"role": "user", "content": text}
                         ],
                         "temperature": self.model_config.get("temperature", 0.1),
-                        "max_tokens": self.model_config.get("max_tokens", 32768),
+                        "max_tokens": max_output_tokens,
                     }
                 )
                 
