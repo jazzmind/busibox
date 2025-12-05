@@ -24,6 +24,66 @@ from docx import Document
 logger = structlog.get_logger()
 
 
+def _create_resilient_converter(artifact_dict):
+    """
+    Create a resilient PDF converter that doesn't fail the entire extraction
+    when individual processors (like table recognition) fail.
+    
+    This patches Marker's PdfConverter.build_document to wrap each processor
+    call in try/except, allowing text extraction to succeed even if
+    table processing fails.
+    """
+    from marker.converters.pdf import PdfConverter
+    
+    # Create a subclass that overrides build_document with resilient processing
+    class ResilientPdfConverter(PdfConverter):
+        def build_document(self, filepath: str):
+            """Build document with resilient processor handling."""
+            from marker.providers import provider_from_filepath
+            from marker.builders.document import DocumentBuilder
+            from marker.builders.structure import StructureBuilder
+            from marker.builders.line import LineBuilder
+            from marker.builders.ocr import OcrBuilder
+            
+            provider_cls = provider_from_filepath(filepath)
+            layout_builder = self.resolve_dependencies(self.layout_builder_class)
+            line_builder = self.resolve_dependencies(LineBuilder)
+            ocr_builder = self.resolve_dependencies(OcrBuilder)
+            provider = provider_cls(filepath, self.config)
+            document = DocumentBuilder(self.config)(
+                provider, layout_builder, line_builder, ocr_builder
+            )
+            structure_builder_cls = self.resolve_dependencies(StructureBuilder)
+            structure_builder_cls(document)
+
+            # Run processors with individual error handling
+            failed_processors = []
+            for processor in self.processor_list:
+                processor_name = processor.__class__.__name__
+                try:
+                    processor(document)
+                except Exception as e:
+                    # Log the failure but continue with other processors
+                    logger.warning(
+                        "Marker processor failed, continuing without it",
+                        processor=processor_name,
+                        error=str(e),
+                        error_type=type(e).__name__,
+                    )
+                    failed_processors.append(processor_name)
+            
+            if failed_processors:
+                logger.info(
+                    "Marker completed with some processor failures",
+                    failed_processors=failed_processors,
+                    total_processors=len(self.processor_list),
+                )
+
+            return document
+    
+    return ResilientPdfConverter(artifact_dict=artifact_dict)
+
+
 class ExtractionResult:
     """Result of text extraction."""
     
@@ -54,16 +114,21 @@ class TextExtractor:
     
     @classmethod
     def get_marker_models(cls):
-        """Get or create cached Marker models (singleton pattern)."""
+        """Get or create cached Marker models (singleton pattern).
+        
+        Uses ResilientPdfConverter which wraps individual processors in
+        try/except so that table recognition failures don't cause the
+        entire extraction to fall back to pdfplumber.
+        """
         if cls._marker_models is None:
             try:
-                from marker.converters.pdf import PdfConverter
                 from marker.models import create_model_dict
                 
                 logger.info("Loading Marker models (will be cached for reuse)...")
                 cls._marker_models = create_model_dict()
-                cls._marker_converter = PdfConverter(artifact_dict=cls._marker_models)
-                logger.info("Marker models loaded and cached", models=list(cls._marker_models.keys()))
+                # Use resilient converter that handles processor failures gracefully
+                cls._marker_converter = _create_resilient_converter(cls._marker_models)
+                logger.info("Marker models loaded and cached (resilient mode)", models=list(cls._marker_models.keys()))
             except Exception as e:
                 logger.error("Failed to load Marker models", error=str(e))
                 raise
