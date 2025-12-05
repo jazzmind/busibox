@@ -1434,8 +1434,22 @@ class IngestWorker:
 
 
 def signal_handler(signum, frame):
-    """Handle shutdown signals."""
-    logger.info("Received signal", signal=signum)
+    """Handle shutdown signals with GPU cleanup."""
+    logger.info("Received signal, cleaning up", signal=signum)
+    
+    # Clean up GPU memory before exiting
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            # Reset all CUDA memory
+            for i in range(torch.cuda.device_count()):
+                with torch.cuda.device(i):
+                    torch.cuda.empty_cache()
+            logger.info("Cleared CUDA cache on shutdown")
+    except Exception as e:
+        logger.warning("Failed to clear CUDA cache on shutdown", error=str(e))
+    
     sys.exit(0)
 
 

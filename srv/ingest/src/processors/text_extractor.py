@@ -276,6 +276,15 @@ class TextExtractor:
         if not extraction_method or extraction_method == "unknown":
             extraction_method = "marker" if markdown_text else "pdfplumber"
         
+        # Clear GPU memory after extraction to prevent accumulation
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                logger.debug("Cleared CUDA cache after PDF extraction")
+        except Exception:
+            pass  # Not critical if this fails
+        
         return ExtractionResult(
             text=text_content,
             markdown=markdown_text,

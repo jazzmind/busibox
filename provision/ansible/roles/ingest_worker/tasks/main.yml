@@ -182,6 +182,9 @@
       EnvironmentFile=/srv/ingest/.env
       ExecStart=/srv/ingest/venv/bin/python worker.py
       
+      # Clean up any orphan GPU processes before starting
+      ExecStartPre=/bin/bash -c 'pkill -9 -f "surya|marker" 2>/dev/null || true; sleep 1'
+      
       # Proper cleanup - kill all child processes and release GPU memory
       KillMode=control-group
       KillSignal=SIGTERM
