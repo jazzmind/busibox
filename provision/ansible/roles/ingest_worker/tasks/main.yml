@@ -217,6 +217,13 @@
       # Max boxes per table - reduce if getting tensor shape errors on complex tables
       TABLE_REC_MAX_BOXES={{ table_rec_max_boxes | default('100') }}
       
+      # ONNX Runtime - disable CPU affinity (not supported in LXC containers)
+      OMP_NUM_THREADS={{ omp_num_threads | default('4') }}
+      
+      # ColPali batch size - process pages in batches to avoid GPU OOM
+      # Each page uses ~200MB VRAM, batch_size=3 is safe for most GPUs
+      COLPALI_BATCH_SIZE={{ colpali_batch_size | default('3') }}
+      
       # Worker configuration
       WORKER_ID={{ ansible_hostname }}
     mode: "0600"
