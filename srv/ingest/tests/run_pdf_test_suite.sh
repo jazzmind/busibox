@@ -7,7 +7,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
-SAMPLES_DIR="$REPO_ROOT/samples/docs"
+# Testdocs repo is cloned and symlinked as 'samples'
+# Test docs are in pdf/general/ subdirectory
+SAMPLES_DIR="$REPO_ROOT/samples/pdf/general"
+# Fallback to old location for backwards compatibility
+if [ ! -d "$SAMPLES_DIR" ]; then
+    SAMPLES_DIR="$REPO_ROOT/samples/docs"
+fi
 
 echo "======================================================================"
 echo "PDF PROCESSING TEST SUITE"

@@ -27,7 +27,7 @@ from processors.processing_strategy import (
 from shared.config import Config
 
 
-# Test document definitions from samples/docs/
+# Test document definitions from testdocs/pdf/general/ (via samples symlink)
 TEST_DOCUMENTS = [
     {
         "id": "doc01_rfp_project_management",
@@ -210,8 +210,14 @@ def config():
 
 @pytest.fixture
 def samples_dir():
-    """Get path to samples/docs directory."""
+    """Get path to testdocs/pdf/general directory (via samples symlink for backwards compat)."""
     repo_root = Path(__file__).parent.parent.parent.parent
+    # New structure: testdocs repo is cloned and symlinked as 'samples'
+    # Test docs are in pdf/general/ subdirectory
+    samples_path = repo_root / "samples" / "pdf" / "general"
+    if samples_path.exists():
+        return samples_path
+    # Fallback to old location for local development
     return repo_root / "samples" / "docs"
 
 

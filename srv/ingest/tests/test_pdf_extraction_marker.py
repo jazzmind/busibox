@@ -161,10 +161,12 @@ def test_pdf_extraction_marker():
     if samples_dir_env:
         samples_dir = Path(samples_dir_env)
     else:
-        # Default locations
+        # Default locations (new testdocs structure, then old structure)
+        base_samples = Path(__file__).parent.parent.parent.parent / "samples"
         for path in [
             Path("/tmp/test_samples"),
-            Path(__file__).parent.parent.parent.parent / "samples" / "docs",
+            base_samples / "pdf" / "general",  # New testdocs structure
+            base_samples / "docs",  # Old structure fallback
         ]:
             if path.exists():
                 samples_dir = path

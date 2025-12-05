@@ -18,12 +18,29 @@ from shared.config import Config
 load_dotenv()
 
 
-# Sample files paths
+# Sample files paths - supports both new (testdocs repo) and old (samples/) structure
 SAMPLES_DIR = Path(__file__).parent.parent.parent.parent / "samples"
-SAMPLE_PDF_DIAGRAM = SAMPLES_DIR / "diagram.pdf"
-SAMPLE_PDF_BEGINNING = SAMPLES_DIR / "inthebeginning.pdf"
-SAMPLE_PDF_DOCS = list((SAMPLES_DIR / "docs").glob("*/source.pdf"))
-SAMPLE_IMAGE = SAMPLES_DIR / "cat.jpg"
+
+# New testdocs structure has files organized by type
+# pdf/text/ for simple text PDFs, pdf/general/ for doc01-doc10, image/ for images
+SAMPLE_PDF_DIAGRAM = SAMPLES_DIR / "pdf" / "plans" / "doc2_washington" / "683 Washington Street As-Built (06-26-25) Sheet 1 (Rev 1) (09-14-25).pdf"
+if not SAMPLE_PDF_DIAGRAM.exists():
+    SAMPLE_PDF_DIAGRAM = SAMPLES_DIR / "diagram.pdf"  # Old location fallback
+
+SAMPLE_PDF_BEGINNING = SAMPLES_DIR / "pdf" / "text" / "inthebeginning.pdf"
+if not SAMPLE_PDF_BEGINNING.exists():
+    SAMPLE_PDF_BEGINNING = SAMPLES_DIR / "inthebeginning.pdf"  # Old location fallback
+
+# New location: pdf/general/, old location: docs/
+_pdf_general_dir = SAMPLES_DIR / "pdf" / "general"
+if _pdf_general_dir.exists():
+    SAMPLE_PDF_DOCS = list(_pdf_general_dir.glob("*/source.pdf"))
+else:
+    SAMPLE_PDF_DOCS = list((SAMPLES_DIR / "docs").glob("*/source.pdf"))
+
+SAMPLE_IMAGE = SAMPLES_DIR / "image" / "cat.jpg"
+if not SAMPLE_IMAGE.exists():
+    SAMPLE_IMAGE = SAMPLES_DIR / "cat.jpg"  # Old location fallback
 
 
 @pytest.fixture(scope="session")

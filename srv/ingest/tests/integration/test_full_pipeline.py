@@ -24,11 +24,14 @@ class TestFullDocumentPipeline:
         Upload a real PDF and verify complete processing pipeline.
         This is the ONE test that actually matters.
         """
-        # Use a real sample PDF
-        sample_pdf = Path(__file__).parent.parent.parent / "samples" / "inthebeginning.pdf"
+        # Use a real sample PDF (new structure: pdf/text/, old: root)
+        samples_dir = Path(__file__).parent.parent.parent / "samples"
+        sample_pdf = samples_dir / "pdf" / "text" / "inthebeginning.pdf"
+        if not sample_pdf.exists():
+            sample_pdf = samples_dir / "inthebeginning.pdf"  # Fallback to old location
         
         if not sample_pdf.exists():
-            pytest.skip(f"Sample PDF not found: {sample_pdf}")
+            pytest.skip(f"Sample PDF not found in either location")
         
         # Step 1: Upload the document
         with open(sample_pdf, "rb") as f:
@@ -136,11 +139,14 @@ class TestFullDocumentPipeline:
         """
         Test that reprocessing a document works correctly.
         """
-        # Upload a document
-        sample_pdf = Path(__file__).parent.parent.parent / "samples" / "diagram.pdf"
+        # Upload a document (new structure: pdf/plans/, old: root)
+        samples_dir = Path(__file__).parent.parent.parent / "samples"
+        sample_pdf = samples_dir / "pdf" / "plans" / "doc2_washington" / "683 Washington Street As-Built (06-26-25) Sheet 1 (Rev 1) (09-14-25).pdf"
+        if not sample_pdf.exists():
+            sample_pdf = samples_dir / "diagram.pdf"  # Fallback to old location
         
         if not sample_pdf.exists():
-            pytest.skip(f"Sample PDF not found: {sample_pdf}")
+            pytest.skip("Sample PDF not found in either location")
         
         with open(sample_pdf, "rb") as f:
             files = {"file": ("diagram.pdf", f, "application/pdf")}
@@ -195,13 +201,26 @@ class TestFullDocumentPipeline:
         Test processing multiple documents concurrently.
         Verifies the system can handle concurrent load.
         """
+        # Build list of sample PDFs with fallback paths
+        samples_dir = Path(__file__).parent.parent.parent / "samples"
+        
+        def find_sample(new_path, old_path):
+            """Find sample file in new or old location."""
+            new_full = samples_dir / new_path
+            if new_full.exists():
+                return new_full
+            old_full = samples_dir / old_path
+            if old_full.exists():
+                return old_full
+            return None
+        
         sample_pdfs = [
-            Path(__file__).parent.parent.parent / "samples" / "inthebeginning.pdf",
-            Path(__file__).parent.parent.parent / "samples" / "diagram.pdf",
+            find_sample("pdf/text/inthebeginning.pdf", "inthebeginning.pdf"),
+            find_sample("pdf/plans/doc2_washington/683 Washington Street As-Built (06-26-25) Sheet 1 (Rev 1) (09-14-25).pdf", "diagram.pdf"),
         ]
         
         # Filter to existing files
-        existing_pdfs = [pdf for pdf in sample_pdfs if pdf.exists()]
+        existing_pdfs = [pdf for pdf in sample_pdfs if pdf is not None]
         if len(existing_pdfs) < 2:
             pytest.skip("Need at least 2 sample PDFs")
         

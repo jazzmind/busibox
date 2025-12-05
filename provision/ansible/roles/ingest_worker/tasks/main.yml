@@ -58,11 +58,43 @@
     dest: /srv/ingest/src/
     mode: "0644"
 
-- name: Copy sample files for testing
-  copy:
-    src: "{{ playbook_dir }}/../../samples/"
-    dest: /srv/ingest/samples/
-    mode: "0644"
+# Test documents are in a separate git repo for efficiency (large files)
+# Clone/pull the testdocs repo to get sample files
+- name: Install git for testdocs repo
+  apt:
+    name: git
+    state: present
+  when: testdocs_enabled | default(true)
+
+- name: Clone testdocs repo (first time)
+  git:
+    repo: "{{ testdocs_repo | default('https://github.com/jazzmind/busibox-testdocs.git') }}"
+    dest: /srv/ingest/testdocs
+    depth: 1
+    version: "{{ testdocs_branch | default('main') }}"
+    force: no
+  register: testdocs_clone
+  when: testdocs_enabled | default(true)
+  ignore_errors: yes
+
+- name: Update testdocs repo (if already cloned)
+  git:
+    repo: "{{ testdocs_repo | default('https://github.com/jazzmind/busibox-testdocs.git') }}"
+    dest: /srv/ingest/testdocs
+    depth: 1
+    version: "{{ testdocs_branch | default('main') }}"
+    update: yes
+  when: 
+    - testdocs_enabled | default(true)
+    - testdocs_clone is failed or testdocs_clone.changed == false
+
+- name: Create samples symlink to testdocs (backwards compatibility)
+  file:
+    src: /srv/ingest/testdocs
+    dest: /srv/ingest/samples
+    state: link
+    force: yes
+  when: testdocs_enabled | default(true)
 
 - name: Copy requirements.txt
   copy:

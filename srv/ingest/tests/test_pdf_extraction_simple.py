@@ -49,8 +49,15 @@ def test_pdf_extraction():
     else:
         # Try to find repo root (go up from tests -> src -> srv -> busibox)
         repo_root = Path(__file__).parent.parent.parent.parent
-        samples_dir = repo_root / "samples" / "docs"
-        print(f"Using repo root path: {samples_dir}")
+        # Check new testdocs structure first, then old structure
+        new_path = repo_root / "samples" / "pdf" / "general"
+        old_path = repo_root / "samples" / "docs"
+        if new_path.exists():
+            samples_dir = new_path
+            print(f"Using new testdocs structure: {samples_dir}")
+        else:
+            samples_dir = old_path
+            print(f"Using old structure path: {samples_dir}")
     
     print("\n" + "="*80)
     print("PDF EXTRACTION TEST - SIMPLE STRATEGY")

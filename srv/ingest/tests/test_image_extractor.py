@@ -17,14 +17,27 @@ class TestImageExtractor:
         """Setup test fixtures"""
         self.extractor = ImageExtractor()
         self.test_data_dir = Path(__file__).parent.parent / "samples"
+    
+    def _find_sample(self, new_path, old_path):
+        """Find sample file in new or old location."""
+        new_full = self.test_data_dir / new_path
+        if new_full.exists():
+            return new_full
+        old_full = self.test_data_dir / old_path
+        if old_full.exists():
+            return old_full
+        return None
 
     def test_extract_images_from_pdf(self):
         """Test extracting images from a PDF file"""
         # Use architectural blueprint PDF which definitely has diagrams/images
-        pdf_path = self.test_data_dir / "683 Washington Street As-Built (06-26-25) Sheet 1 (Rev 1) (09-14-25).pdf"
+        pdf_path = self._find_sample(
+            "pdf/plans/doc2_washington/683 Washington Street As-Built (06-26-25) Sheet 1 (Rev 1) (09-14-25).pdf",
+            "683 Washington Street As-Built (06-26-25) Sheet 1 (Rev 1) (09-14-25).pdf"
+        )
         
-        if not pdf_path.exists():
-            pytest.skip(f"Sample PDF not found: {pdf_path}")
+        if pdf_path is None:
+            pytest.skip("Sample PDF not found in either location")
         
         metadata_list, images_data = self.extractor.extract_from_pdf(str(pdf_path))
         
@@ -89,10 +102,13 @@ class TestImageExtractor:
     def test_image_quality_preservation(self):
         """Test that image quality is preserved during extraction"""
         # Use financial statements PDF which has logos/charts
-        pdf_path = self.test_data_dir / "docs" / "doc10_nestle_2022_financial_statements" / "source.pdf"
+        pdf_path = self._find_sample(
+            "pdf/general/doc10_nestle_2022_financial_statements/source.pdf",
+            "docs/doc10_nestle_2022_financial_statements/source.pdf"
+        )
         
-        if not pdf_path.exists():
-            pytest.skip(f"Sample PDF not found: {pdf_path}")
+        if pdf_path is None:
+            pytest.skip("Sample PDF not found in either location")
         
         metadata_list, images_data = self.extractor.extract_from_pdf(str(pdf_path))
         
