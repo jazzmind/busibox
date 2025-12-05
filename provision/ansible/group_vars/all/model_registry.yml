@@ -106,6 +106,7 @@ model_purposes:
   parsing: "phi-4"   # Document parsing and structure extraction
   cleanup: "phi-4"   # Text cleanup and formatting  
   fast: "phi-4"   # Fast model for quick operations
+  tool_calling: "qwen3-30b"   # Tool calling model for tool calling tasks
   
   # Embeddings (dedicated services)
   embedding: "bge-large"   # Text embedding generation
