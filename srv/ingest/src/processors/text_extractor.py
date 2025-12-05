@@ -52,6 +52,16 @@ class TextExtractor:
         self.config = config
         self.temp_dir = config.get("temp_dir", "/tmp/ingest")
         self.marker_enabled = config.get("marker_enabled", True)  # Can disable to save memory
+        
+        # Remote Marker service URL - if set, calls remote service instead of local Marker
+        # This allows test environment to use production Marker service
+        self.marker_service_url = config.get("marker_service_url") or os.getenv("MARKER_SERVICE_URL")
+        if self.marker_service_url:
+            logger.info(
+                "Using remote Marker service",
+                url=self.marker_service_url,
+            )
+        
         os.makedirs(self.temp_dir, exist_ok=True)
     
     def extract(self, file_path: str, mime_type: str) -> ExtractionResult:
@@ -111,11 +121,19 @@ class TextExtractor:
         text_content = ""
         tables = []
         page_count = 0
+        extraction_method = "unknown"
         
         # Check if Marker is enabled (can be disabled to save memory)
         if not self.marker_enabled:
             logger.info("Marker disabled, using pdfplumber fallback", file_path=file_path)
             markdown_text = None  # Skip Marker, go straight to pdfplumber
+        elif self.marker_service_url:
+            # Use remote Marker service
+            markdown_text, page_count, extraction_method = self._extract_pdf_remote_marker(file_path)
+            if markdown_text:
+                text_content = markdown_text
+                # Extract page images locally for ColPali
+                page_images = self._extract_pdf_page_images(file_path)
         else:
             # Try Marker first (best quality)
             # Marker v1.x uses a different API than v0.x
@@ -254,14 +272,74 @@ class TextExtractor:
             # Trigger OCR processing (implemented separately)
             text_content = self._ocr_pdf(file_path)
         
+        # Determine extraction method for metadata
+        if not extraction_method or extraction_method == "unknown":
+            extraction_method = "marker" if markdown_text else "pdfplumber"
+        
         return ExtractionResult(
             text=text_content,
             markdown=markdown_text,
             page_images=page_images,
             page_count=page_count,
             tables=tables,
-            metadata={"extraction_method": "marker" if markdown_text else "pdfplumber"},
+            metadata={"extraction_method": extraction_method},
         )
+    
+    def _extract_pdf_remote_marker(self, file_path: str) -> Tuple[Optional[str], int, str]:
+        """
+        Extract text from PDF using remote Marker service.
+        
+        Args:
+            file_path: Path to PDF file
+            
+        Returns:
+            Tuple of (markdown_text, page_count, extraction_method)
+        """
+        import httpx
+        
+        logger.info(
+            "Calling remote Marker service",
+            file_path=file_path,
+            service_url=self.marker_service_url,
+        )
+        
+        try:
+            with open(file_path, "rb") as f:
+                files = {"file": (Path(file_path).name, f, "application/pdf")}
+                
+                with httpx.Client(timeout=300.0) as client:  # 5 minute timeout for large PDFs
+                    response = client.post(
+                        f"{self.marker_service_url}/extract",
+                        files=files,
+                    )
+                    
+                    if response.status_code != 200:
+                        logger.warning(
+                            "Remote Marker service failed",
+                            status=response.status_code,
+                            response=response.text[:200],
+                        )
+                        return None, 0, "remote_marker_failed"
+                    
+                    result = response.json()
+                    markdown_text = result.get("text", "") or result.get("markdown", "")
+                    page_count = result.get("page_count", 0)
+                    
+                    logger.info(
+                        "Remote Marker extraction complete",
+                        text_length=len(markdown_text),
+                        page_count=page_count,
+                    )
+                    
+                    return markdown_text, page_count, "remote_marker"
+                    
+        except Exception as e:
+            logger.error(
+                "Remote Marker service error",
+                error=str(e),
+                error_type=type(e).__name__,
+            )
+            return None, 0, "remote_marker_error"
     
     def _extract_pdf_page_images(self, file_path: str) -> List[str]:
         """Extract page images from PDF for ColPali.

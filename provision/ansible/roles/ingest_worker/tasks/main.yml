@@ -153,6 +153,8 @@
       MARKER_ENABLED={{ marker_enabled | default('true') }}
       MARKER_USE_GPU={{ marker_use_gpu | default('true') }}
       MARKER_GPU_DEVICE={{ marker_gpu_device | default('cuda') }}
+      # Remote Marker service URL - if set, calls remote API instead of local Marker
+      MARKER_SERVICE_URL={{ marker_service_url | default('') }}
       
       # Worker configuration
       WORKER_ID={{ ansible_hostname }}

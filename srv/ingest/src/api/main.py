@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.middleware.jwt_auth import JWTAuthMiddleware
 from api.middleware.logging import LoggingMiddleware
-from api.routes import embeddings, files, health, markdown, roles, search, status, upload
+from api.routes import embeddings, extract, files, health, markdown, roles, search, status, upload
 
 # Configure structured logging
 structlog.configure(
@@ -147,6 +147,7 @@ app.include_router(files.router, prefix="/files", tags=["Files"])
 app.include_router(markdown.router, prefix="/files", tags=["Markdown"])
 app.include_router(roles.router, prefix="/files", tags=["Roles"])
 app.include_router(health.router, prefix="/health", tags=["Health"])
+app.include_router(extract.router, tags=["Extract"])  # Remote Marker extraction
 
 
 @app.on_event("startup")
