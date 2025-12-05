@@ -195,7 +195,8 @@ test-ingest-coverage:
 	@echo ""
 
 # Testdocs repository - cloned to server via git (more efficient than copying large files)
-TESTDOCS_REPO = https://github.com/jazzmind/busibox-testdocs.git
+# Uses GitHub token from ~/.github_token on the server (deployed by Ansible)
+TESTDOCS_REPO = jazzmind/busibox-testdocs
 TESTDOCS_DIR = /tmp/testdocs
 SAMPLES_DIR = $(TESTDOCS_DIR)/pdf/general
 
@@ -210,14 +211,22 @@ ensure-testdocs:
 		echo "📥 Cloning testdocs repository to server..."; \
 		echo "   Repo: $(TESTDOCS_REPO)"; \
 		echo "   Destination: $(TESTDOCS_DIR)"; \
-		if ! ssh root@$(INGEST_IP) 'rm -rf $(TESTDOCS_DIR) && git clone --depth 1 $(TESTDOCS_REPO) $(TESTDOCS_DIR)'; then \
+		if ! ssh root@$(INGEST_IP) '\
+			TOKEN=""; \
+			if [ -f ~/.github_token ]; then \
+				TOKEN=$$(cat ~/.github_token); \
+				REPO_URL="https://$${TOKEN}@github.com/$(TESTDOCS_REPO).git"; \
+			else \
+				REPO_URL="https://github.com/$(TESTDOCS_REPO).git"; \
+			fi; \
+			rm -rf $(TESTDOCS_DIR) && git clone --depth 1 "$${REPO_URL}" $(TESTDOCS_DIR) \
+		'; then \
 			echo ""; \
 			echo "ERROR: Failed to clone testdocs repository"; \
 			echo ""; \
-			echo "If the repo is private, options:"; \
-			echo "  1. Make jazzmind/busibox-testdocs public"; \
-			echo "  2. Add SSH key to server and use git@github.com:jazzmind/busibox-testdocs.git"; \
-			echo "  3. Use a GitHub personal access token"; \
+			echo "Ensure GitHub token is deployed to ingest server:"; \
+			echo "  1. Run: make ingest  (deploys ~/.github_token from vault)"; \
+			echo "  2. Or manually: ssh root@$(INGEST_IP) and create ~/.github_token"; \
 			echo ""; \
 			exit 1; \
 		fi; \
