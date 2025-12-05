@@ -274,6 +274,230 @@ class IngestWorker:
         
         return False
     
+    def _load_chunks_from_db(self, file_id: str) -> Optional[List]:
+        """Load existing chunks from database for partial reprocessing."""
+        try:
+            conn = self.postgres_service._get_connection()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT chunk_index, content, metadata, embedding
+                        FROM ingestion_chunks
+                        WHERE file_id = %s
+                        ORDER BY chunk_index
+                    """, (file_id,))
+                    
+                    rows = cur.fetchall()
+                    if not rows:
+                        return None
+                    
+                    # Convert to Chunk objects
+                    chunks = []
+                    for chunk_index, content, metadata, embedding in rows:
+                        chunk = Chunk(
+                            text=content,
+                            index=chunk_index,
+                            metadata=metadata or {},
+                        )
+                        # Store embedding if present
+                        if embedding:
+                            chunk.embedding = embedding
+                        chunks.append(chunk)
+                    
+                    return chunks
+            finally:
+                self.postgres_service._return_connection(conn)
+        
+        except Exception as e:
+            logger.error("Failed to load chunks from DB", file_id=file_id, error=str(e), exc_info=True)
+            return None
+    
+    def _fast_reprocess(
+        self,
+        file_id: str,
+        user_id: str,
+        chunks: List,
+        start_stage: str,
+        visibility: str,
+        role_ids: Optional[List[str]],
+        processing_config: dict,
+        start_time: float,
+    ):
+        """
+        Fast path for partial reprocessing - just re-embed and/or re-index.
+        
+        This is used when chunks already exist and we just need to regenerate
+        embeddings or re-index into Milvus.
+        """
+        total_chunks = len(chunks)
+        
+        logger.info(
+            "Fast reprocess starting",
+            file_id=file_id,
+            start_stage=start_stage,
+            chunk_count=total_chunks,
+        )
+        
+        self.history.log_stage_start(
+            file_id, start_stage,
+            f"Fast reprocess from {start_stage} with {total_chunks} existing chunks",
+            metadata={"chunk_count": total_chunks, "fast_path": True}
+        )
+        
+        # Stage: Embedding (if starting from embedding)
+        if start_stage == "embedding":
+            embedding_start = self.history.log_stage_start(
+                file_id, "embedding",
+                f"Starting embedding generation for {total_chunks} chunks",
+                metadata={"chunk_count": total_chunks}
+            )
+            
+            self.postgres_service.update_status(
+                file_id=file_id,
+                stage="embedding",
+                progress=60,
+            )
+            
+            # Generate text embeddings
+            text_embedding_start = time.time()
+            text_embeddings = self.embedding_service.generate_embeddings(
+                [chunk.text for chunk in chunks]
+            )
+            
+            # Assign embeddings to chunks
+            for i, chunk in enumerate(chunks):
+                if i < len(text_embeddings):
+                    chunk.embedding = text_embeddings[i]
+            
+            self.history.log_substep(
+                file_id, "embedding", "text_embeddings",
+                f"Generated {len(text_embeddings)} text embeddings",
+                metadata={"count": len(text_embeddings)},
+                started_at=text_embedding_start
+            )
+            
+            # Save embeddings to database
+            self._save_chunk_embeddings(file_id, chunks)
+            
+            self.history.log_stage_complete(
+                file_id, "embedding",
+                f"Completed embedding generation: {len(text_embeddings)} text",
+                metadata={"text_count": len(text_embeddings)},
+                started_at=embedding_start
+            )
+        
+        # Stage: Indexing (always runs in fast path)
+        indexing_start = self.history.log_stage_start(
+            file_id, "indexing",
+            f"Starting Milvus indexing for {total_chunks} chunks",
+            metadata={"chunk_count": total_chunks}
+        )
+        
+        self.postgres_service.update_status(
+            file_id=file_id,
+            stage="indexing",
+            progress=80,
+        )
+        
+        # Prepare vectors for Milvus
+        text_vectors = []
+        for chunk in chunks:
+            if hasattr(chunk, 'embedding') and chunk.embedding:
+                text_vectors.append({
+                    "file_id": file_id,
+                    "chunk_index": chunk.index,
+                    "embedding": chunk.embedding,
+                    "text": chunk.text[:1000],  # Truncate for storage
+                    "metadata": chunk.metadata,
+                })
+        
+        # Insert into Milvus
+        if text_vectors:
+            try:
+                self.milvus_service.insert_text_vectors(
+                    file_id=file_id,
+                    user_id=user_id,
+                    vectors=text_vectors,
+                    visibility=visibility,
+                    role_ids=role_ids,
+                )
+                self.history.log_substep(
+                    file_id, "indexing", "milvus_text_insert",
+                    f"Inserted {len(text_vectors)} text vectors into Milvus",
+                    metadata={"count": len(text_vectors)},
+                    started_at=indexing_start
+                )
+            except Exception as e:
+                logger.error(
+                    "Failed to insert text vectors",
+                    file_id=file_id,
+                    error=str(e),
+                    exc_info=True,
+                )
+        
+        self.history.log_stage_complete(
+            file_id, "indexing",
+            f"Completed Milvus indexing: {len(text_vectors)} total vectors",
+            metadata={"total_vectors": len(text_vectors)},
+            started_at=indexing_start
+        )
+        
+        # Mark as completed
+        processing_time = time.time() - start_time
+        self.postgres_service.update_status(
+            file_id=file_id,
+            stage="completed",
+            progress=100,
+            chunks_processed=total_chunks,
+            total_chunks=total_chunks,
+        )
+        
+        self.postgres_service.update_file_metadata(
+            file_id=file_id,
+            chunk_count=total_chunks,
+            vector_count=len(text_vectors),
+            processing_duration_seconds=int(processing_time),
+        )
+        
+        self.history.log_stage_complete(
+            file_id, "completed",
+            f"Fast reprocess complete: {total_chunks} chunks, {len(text_vectors)} vectors in {processing_time:.0f}s",
+            metadata={
+                "chunk_count": total_chunks,
+                "vector_count": len(text_vectors),
+                "processing_time_seconds": processing_time,
+                "fast_path": True,
+            },
+            started_at=start_time
+        )
+        
+        logger.info(
+            "Fast reprocess completed",
+            file_id=file_id,
+            chunk_count=total_chunks,
+            vector_count=len(text_vectors),
+            processing_time_seconds=processing_time,
+        )
+    
+    def _save_chunk_embeddings(self, file_id: str, chunks: List):
+        """Save chunk embeddings back to database."""
+        try:
+            conn = self.postgres_service._get_connection()
+            try:
+                with conn.cursor() as cur:
+                    for chunk in chunks:
+                        if hasattr(chunk, 'embedding') and chunk.embedding:
+                            cur.execute("""
+                                UPDATE ingestion_chunks
+                                SET embedding = %s
+                                WHERE file_id = %s AND chunk_index = %s
+                            """, (chunk.embedding, file_id, chunk.index))
+                    conn.commit()
+            finally:
+                self.postgres_service._return_connection(conn)
+        except Exception as e:
+            logger.error("Failed to save chunk embeddings", file_id=file_id, error=str(e), exc_info=True)
+    
     def process_job(self, job_id: str, job_data: dict, trace_id: str):
         """
         Process a single ingestion job.
@@ -324,6 +548,20 @@ class IngestWorker:
                     error=str(e),
                 )
         
+        # Get start_stage for partial reprocessing
+        # Stages in order: parsing, chunking, cleanup, markdown, embedding, indexing
+        start_stage = job_data.get("start_stage", "parsing")
+        stage_order = ["parsing", "chunking", "cleanup", "markdown", "embedding", "indexing"]
+        start_stage_idx = stage_order.index(start_stage) if start_stage in stage_order else 0
+        
+        if start_stage != "parsing":
+            logger.info(
+                "Partial reprocessing - starting from stage",
+                file_id=file_id,
+                start_stage=start_stage,
+                skipping_stages=stage_order[:start_stage_idx],
+            )
+        
         start_time = time.time()
         temp_file_path = None
         
@@ -361,6 +599,39 @@ class IngestWorker:
                     processing_time_seconds=time.time() - start_time,
                 )
                 return
+            
+            # For partial reprocessing, load existing data if starting from later stage
+            existing_chunks = None
+            if start_stage in ["embedding", "indexing"]:
+                # Fast path: just re-embed or re-index existing chunks
+                existing_chunks = self._load_chunks_from_db(file_id)
+                if existing_chunks:
+                    logger.info(
+                        "Fast path: partial reprocess from existing chunks",
+                        file_id=file_id,
+                        chunk_count=len(existing_chunks),
+                        start_stage=start_stage,
+                    )
+                    # Run the fast path and return
+                    self._fast_reprocess(
+                        file_id=file_id,
+                        user_id=user_id,
+                        chunks=existing_chunks,
+                        start_stage=start_stage,
+                        visibility=visibility,
+                        role_ids=role_ids,
+                        processing_config=processing_config,
+                        start_time=start_time,
+                    )
+                    return
+                else:
+                    logger.warning(
+                        "No existing chunks found, starting from parsing",
+                        file_id=file_id,
+                        requested_start_stage=start_stage,
+                    )
+                    start_stage = "parsing"
+                    start_stage_idx = 0
             
             # Stage 1: Parsing
             parsing_start = self.history.log_stage_start(
