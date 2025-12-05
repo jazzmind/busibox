@@ -80,19 +80,63 @@ class ColPaliEmbedder:
             
             # Read and encode images as base64
             encoded_images = []
-            for image_path in page_image_paths:
+            valid_page_indices = []
+            for idx, image_path in enumerate(page_image_paths):
                 try:
+                    # Check if file exists and has content
+                    if not os.path.exists(image_path):
+                        logger.warning(
+                            "Image file not found, skipping",
+                            image_path=image_path,
+                            page_index=idx,
+                        )
+                        continue
+                    
+                    file_size = os.path.getsize(image_path)
+                    if file_size == 0:
+                        logger.warning(
+                            "Empty image file, skipping",
+                            image_path=image_path,
+                            page_index=idx,
+                        )
+                        continue
+                    
+                    # Minimum valid image size (at least a few KB for a real image)
+                    if file_size < 100:
+                        logger.warning(
+                            "Image file too small, likely corrupted",
+                            image_path=image_path,
+                            file_size=file_size,
+                            page_index=idx,
+                        )
+                        continue
+                    
                     with open(image_path, "rb") as f:
                         image_data = f.read()
                         encoded_image = base64.b64encode(image_data).decode("utf-8")
                         encoded_images.append(encoded_image)
+                        valid_page_indices.append(idx)
                 except Exception as e:
                     logger.warning(
-                        "Failed to read image file",
+                        "Failed to read image file, skipping",
                         image_path=image_path,
+                        page_index=idx,
                         error=str(e),
                     )
-                    return None
+                    continue
+            
+            if not encoded_images:
+                logger.warning(
+                    "No valid images to process",
+                    original_count=len(page_image_paths),
+                )
+                return None
+            
+            logger.info(
+                "Prepared images for ColPali",
+                valid_count=len(encoded_images),
+                skipped_count=len(page_image_paths) - len(encoded_images),
+            )
             
             # Call ColPali API
             async with httpx.AsyncClient(timeout=60.0) as client:
