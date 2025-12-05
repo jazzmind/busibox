@@ -259,11 +259,20 @@ def test_pdf_extraction_marker():
             failed += 1
             results.append({"id": doc_id, "status": "FAIL", "error": str(e)})
     
-    # Clean up GPU memory
+    # Clean up Marker models and GPU memory
+    try:
+        # Clean up cached Marker models
+        from processors.text_extractor import TextExtractor
+        TextExtractor.cleanup_marker_models()
+        print("✓ Marker models cleaned up")
+    except Exception as e:
+        print(f"⚠ Could not cleanup Marker models: {e}")
+    
     try:
         import torch
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+            print("✓ GPU memory cleared")
     except Exception:
         pass
     
