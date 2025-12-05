@@ -47,6 +47,47 @@ class ExtractionResult:
 class TextExtractor:
     """Extract text from various file formats."""
     
+    # Class-level cache for Marker models to avoid reloading on every extraction
+    # This prevents OOM when processing multiple documents
+    _marker_models = None
+    _marker_converter = None
+    
+    @classmethod
+    def get_marker_models(cls):
+        """Get or create cached Marker models (singleton pattern)."""
+        if cls._marker_models is None:
+            try:
+                from marker.converters.pdf import PdfConverter
+                from marker.models import create_model_dict
+                
+                logger.info("Loading Marker models (will be cached for reuse)...")
+                cls._marker_models = create_model_dict()
+                cls._marker_converter = PdfConverter(artifact_dict=cls._marker_models)
+                logger.info("Marker models loaded and cached", models=list(cls._marker_models.keys()))
+            except Exception as e:
+                logger.error("Failed to load Marker models", error=str(e))
+                raise
+        return cls._marker_models, cls._marker_converter
+    
+    @classmethod
+    def cleanup_marker_models(cls):
+        """Clean up cached Marker models to free GPU memory."""
+        if cls._marker_models is not None:
+            logger.info("Cleaning up Marker models...")
+            del cls._marker_models
+            del cls._marker_converter
+            cls._marker_models = None
+            cls._marker_converter = None
+            
+            # Force GPU memory cleanup
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    logger.info("GPU memory cleared")
+            except Exception:
+                pass
+    
     def __init__(self, config: dict):
         """Initialize text extractor."""
         self.config = config
@@ -185,12 +226,9 @@ class TextExtractor:
                     
                     logger.info("Using Marker v1.x for PDF extraction", file_path=file_path, device=device)
                     
-                    # Create model dict with default models
-                    # This downloads models on first use (cached after)
-                    artifact_dict = create_model_dict()
-                    
-                    # Create converter with models
-                    converter = PdfConverter(artifact_dict=artifact_dict)
+                    # Use cached models to avoid OOM on multiple extractions
+                    # Models are loaded once and reused across all extractions
+                    artifact_dict, converter = self.get_marker_models()
                     
                     # Convert PDF to markdown
                     result = converter(file_path)
