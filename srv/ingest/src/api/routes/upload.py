@@ -147,7 +147,7 @@ async def upload_file(
     
     # Initialize services
     minio_service = MinIOService(config)
-    postgres_service = PostgresService(config)
+    postgres_service = PostgresService(config, request)
     redis_service = RedisService(config)
     
     await postgres_service.connect()

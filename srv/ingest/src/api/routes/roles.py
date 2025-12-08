@@ -80,7 +80,7 @@ async def get_document_roles(file_id: str, request: Request):
     user_id = request.state.user_id
     
     config = Config().to_dict()
-    postgres_service = PostgresService(config)
+    postgres_service = PostgresService(config, request)
     await postgres_service.connect()
     
     try:
@@ -152,7 +152,7 @@ async def update_document_roles(
     user_update_roles = getattr(request.state, "role_ids_update", [])
     
     config = Config().to_dict()
-    postgres_service = PostgresService(config)
+    postgres_service = PostgresService(config, request)
     milvus_service = MilvusService(config)
     
     await postgres_service.connect()
@@ -364,7 +364,7 @@ async def share_document(
     user_create_roles = getattr(request.state, "role_ids_create", [])
     
     config = Config().to_dict()
-    postgres_service = PostgresService(config)
+    postgres_service = PostgresService(config, request)
     milvus_service = MilvusService(config)
     
     await postgres_service.connect()

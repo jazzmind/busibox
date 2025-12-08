@@ -44,11 +44,11 @@ async def get_file_metadata(fileId: str, request: Request):
     user_id = request.state.user_id
     
     config = Config().to_dict()
-    postgres_service = PostgresService(config)
+    postgres_service = PostgresService(config, request)
     await postgres_service.connect()
     
     try:
-        async with postgres_service.pool.acquire() as conn:
+        async with postgres_service.acquire(request) as conn:
             # Get file record
             file_row = await conn.fetchrow("""
                 SELECT 
@@ -269,13 +269,13 @@ async def download_file(fileId: str, request: Request):
     user_id = request.state.user_id
     
     config = Config().to_dict()
-    postgres_service = PostgresService(config)
+    postgres_service = PostgresService(config, request)
     minio_service = MinIOService(config)
     
     await postgres_service.connect()
     
     try:
-        async with postgres_service.pool.acquire() as conn:
+        async with postgres_service.acquire(request) as conn:
             # Get file record
             file_row = await conn.fetchrow("""
                 SELECT user_id, storage_path, original_filename, mime_type
@@ -379,13 +379,13 @@ async def get_presigned_url(fileId: str, request: Request, expiry: int = 3600):
     user_id = request.state.user_id
     
     config = Config().to_dict()
-    postgres_service = PostgresService(config)
+    postgres_service = PostgresService(config, request)
     minio_service = MinIOService(config)
     
     await postgres_service.connect()
     
     try:
-        async with postgres_service.pool.acquire() as conn:
+        async with postgres_service.acquire(request) as conn:
             # Get file record
             file_row = await conn.fetchrow("""
                 SELECT user_id, storage_path, original_filename, mime_type
@@ -498,11 +498,11 @@ async def get_file_chunks(
     user_id = request.state.user_id
     
     config = Config().to_dict()
-    postgres_service = PostgresService(config)
+    postgres_service = PostgresService(config, request)
     await postgres_service.connect()
     
     try:
-        async with postgres_service.pool.acquire() as conn:
+        async with postgres_service.acquire(request) as conn:
             # Verify file exists and user owns it
             file_row = await conn.fetchrow("""
                 SELECT user_id, chunk_count
@@ -604,13 +604,13 @@ async def search_within_document(
     user_id = request.state.user_id
     
     config = Config().to_dict()
-    postgres_service = PostgresService(config)
+    postgres_service = PostgresService(config, request)
     milvus_service = MilvusService(config)
     
     await postgres_service.connect()
     
     try:
-        async with postgres_service.pool.acquire() as conn:
+        async with postgres_service.acquire(request) as conn:
             # Verify file exists and user owns it
             file_row = await conn.fetchrow("""
                 SELECT user_id
@@ -733,14 +733,14 @@ async def delete_file(fileId: str, request: Request):
     user_id = request.state.user_id
     
     config = Config().to_dict()
-    postgres_service = PostgresService(config)
+    postgres_service = PostgresService(config, request)
     minio_service = MinIOService(config)
     milvus_service = MilvusService(config)
     
     await postgres_service.connect()
     
     try:
-        async with postgres_service.pool.acquire() as conn:
+        async with postgres_service.acquire(request) as conn:
             # Get file record
             file_row = await conn.fetchrow("""
                 SELECT user_id, storage_path
@@ -823,6 +823,89 @@ async def delete_file(fileId: str, request: Request):
         await postgres_service.disconnect()
 
 
+@router.post("/{fileId}/move")
+async def move_file(fileId: str, request: Request):
+    """
+    Move a document between visibility modes and update role bindings.
+
+    Body:
+      - visibility: 'personal' or 'shared'
+      - roleIds: [] required if visibility='shared'
+
+    Rules:
+      - Moving to personal is allowed only if actor is the owner.
+      - Moving to shared requires roleIds.
+    """
+    body = await request.json()
+    target_visibility = body.get("visibility")
+    role_ids = body.get("roleIds", [])
+    actor_id = request.state.user_id
+
+    if target_visibility not in ("personal", "shared"):
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"error": "visibility must be 'personal' or 'shared'"},
+        )
+
+    if target_visibility == "shared" and (not isinstance(role_ids, list) or len(role_ids) == 0):
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"error": "roleIds required for shared visibility"},
+        )
+
+    config = Config().to_dict()
+    postgres_service = PostgresService(config, request)
+    await postgres_service.connect()
+
+    # Fetch current record under RLS
+    async with postgres_service.acquire(request) as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT file_id, owner_id, visibility
+            FROM ingestion_files
+            WHERE file_id = $1
+            """,
+            uuid.UUID(fileId),
+        )
+
+        if not row:
+            return JSONResponse(status_code=status.HTTP_404_NOT_FOUND, content={"error": "File not found"})
+
+        owner_id = str(row["owner_id"])
+        current_visibility = row["visibility"]
+
+        # Guard: shared -> personal requires ownership
+        if target_visibility == "personal" and actor_id != owner_id:
+            return JSONResponse(
+                status_code=status.HTTP_403_FORBIDDEN,
+                content={"error": "Only the owner can move a shared file to personal"},
+            )
+
+    # Update visibility + roles atomically
+    try:
+        await postgres_service.update_document_visibility_and_roles(
+            file_id=fileId,
+            visibility=target_visibility,
+            role_ids=role_ids,
+            actor_id=actor_id,
+        )
+        await postgres_service.insert_audit(
+            actor_id=actor_id,
+            action="file.move",
+            resource_type="file",
+            resource_id=fileId,
+            details={
+                "from_visibility": current_visibility,
+                "to_visibility": target_visibility,
+                "role_ids": role_ids,
+            },
+        )
+    except Exception as exc:
+        logger.error("Failed to move file", error=str(exc))
+        return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"error": "Failed to move file"})
+
+    return {"status": "ok", "visibility": target_visibility, "roleIds": role_ids}
+
 @router.post("/{fileId}/reprocess")
 async def reprocess_file(fileId: str, request: Request):
     """
@@ -847,13 +930,13 @@ async def reprocess_file(fileId: str, request: Request):
     user_id = request.state.user_id
     
     config = Config().to_dict()
-    postgres_service = PostgresService(config)
+    postgres_service = PostgresService(config, request)
     milvus_service = MilvusService(config)
     
     await postgres_service.connect()
     
     try:
-        async with postgres_service.pool.acquire() as conn:
+        async with postgres_service.acquire(request) as conn:
             # Get file record
             file_row = await conn.fetchrow("""
                 SELECT user_id, filename, storage_path, mime_type, original_filename
@@ -1015,12 +1098,12 @@ async def export_file(
     user_id = request.state.user_id
     
     config = Config().to_dict()
-    postgres_service = PostgresService(config)
+    postgres_service = PostgresService(config, request)
     
     await postgres_service.connect()
     
     try:
-        async with postgres_service.pool.acquire() as conn:
+        async with postgres_service.acquire(request) as conn:
             # Get file metadata and verify ownership
             file_row = await conn.fetchrow("""
                 SELECT file_id, filename, original_filename, user_id

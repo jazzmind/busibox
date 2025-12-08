@@ -6,9 +6,12 @@ Handles database operations for file metadata, status tracking, and role managem
 
 import uuid
 from typing import Dict, List, Optional
+from contextlib import asynccontextmanager
 
 import asyncpg
 import structlog
+
+from api.middleware.jwt_auth import set_rls_session_vars
 
 logger = structlog.get_logger()
 
@@ -16,7 +19,7 @@ logger = structlog.get_logger()
 class PostgresService:
     """Service for PostgreSQL operations."""
     
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, request=None):
         """Initialize PostgreSQL connection pool."""
         self.config = config
         self.host = config.get("postgres_host", "10.96.200.203")
@@ -24,6 +27,7 @@ class PostgresService:
         self.database = config.get("postgres_db", "busibox")
         self.user = config.get("postgres_user", "postgres")
         self.password = config.get("postgres_password", "")
+        self.request = request
         
         self.pool: Optional[asyncpg.Pool] = None
     
@@ -47,6 +51,19 @@ class PostgresService:
             await self.pool.close()
             self.pool = None
             logger.info("PostgreSQL connection pool closed")
+
+    async def _apply_rls(self, conn, request=None):
+        """Set RLS session variables for this connection if request is provided."""
+        req = request or self.request
+        if not req:
+            return
+        await set_rls_session_vars(conn, req)
+
+    @asynccontextmanager
+    async def acquire(self, request=None):
+        async with self.acquire() as conn:
+            await self._apply_rls(conn, request)
+            yield conn
     
     async def check_duplicate(self, content_hash: str) -> Optional[Dict]:
         """
@@ -55,7 +72,7 @@ class PostgresService:
         Returns:
             Existing file record if found, None otherwise
         """
-        async with self.pool.acquire() as conn:
+        async with self.acquire() as conn:
             row = await conn.fetchrow("""
                 SELECT 
                     file_id,
@@ -115,7 +132,7 @@ class PostgresService:
             file_id
         """
         import json
-        async with self.pool.acquire() as conn:
+        async with self.acquire() as conn:
             # Start transaction
             async with conn.transaction():
                 # Create file record with owner_id and visibility
@@ -175,6 +192,75 @@ class PostgresService:
             )
             
             return file_id
+
+    async def update_document_visibility_and_roles(
+        self,
+        file_id: str,
+        visibility: str,
+        role_ids: Optional[List[str]],
+        actor_id: str,
+    ):
+        """
+        Update a document's visibility and its document_roles atomically.
+        """
+        if visibility not in ("personal", "shared"):
+            raise ValueError("visibility must be 'personal' or 'shared'")
+
+        async with self.acquire() as conn:
+            async with conn.transaction():
+                # Update visibility
+                await conn.execute(
+                    """
+                    UPDATE ingestion_files
+                    SET visibility = $2, updated_at = NOW()
+                    WHERE file_id = $1
+                    """,
+                    uuid.UUID(file_id),
+                    visibility,
+                )
+
+                # Clear existing roles
+                await conn.execute(
+                    "DELETE FROM document_roles WHERE file_id = $1",
+                    uuid.UUID(file_id),
+                )
+
+                # Insert new roles for shared
+                if visibility == "shared" and role_ids:
+                    for role_id in role_ids:
+                        await conn.execute(
+                            """
+                            INSERT INTO document_roles (file_id, role_id, role_name, added_by)
+                            VALUES ($1, $2, $3, $4)
+                            ON CONFLICT (file_id, role_id) DO NOTHING
+                            """,
+                            uuid.UUID(file_id),
+                            uuid.UUID(role_id),
+                            f"Role-{role_id[:8]}",
+                            uuid.UUID(actor_id),
+                        )
+
+    async def insert_audit(
+        self,
+        actor_id: str,
+        action: str,
+        resource_type: str,
+        resource_id: Optional[str],
+        details: dict,
+    ):
+        """Insert audit record."""
+        async with self.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO audit_logs (actor_id, action, resource_type, resource_id, details)
+                VALUES ($1, $2, $3, $4, $5)
+                """,
+                uuid.UUID(actor_id),
+                action,
+                resource_type,
+                uuid.UUID(resource_id) if resource_id else None,
+                details,
+            )
     
     async def update_status(
         self,
@@ -188,7 +274,7 @@ class PostgresService:
         total_pages: int = None,
     ) -> None:
         """Update ingestion status for a file."""
-        async with self.pool.acquire() as conn:
+        async with self.acquire() as conn:
             fields = ["stage = $2", "updated_at = NOW()"]
             params = [uuid.UUID(file_id), stage]
             param_num = 3
@@ -237,7 +323,7 @@ class PostgresService:
 
     async def delete_file(self, file_id: str) -> None:
         """Delete a file record and all associated data."""
-        async with self.pool.acquire() as conn:
+        async with self.acquire() as conn:
             # The CASCADE on foreign keys will delete status and chunks automatically
             await conn.execute(
                 "DELETE FROM ingestion_files WHERE file_id = $1",
@@ -246,7 +332,7 @@ class PostgresService:
 
     async def get_file_metadata(self, file_id: str) -> Optional[Dict]:
         """Get file metadata by file_id."""
-        async with self.pool.acquire() as conn:
+        async with self.acquire() as conn:
             row = await conn.fetchrow("""
                 SELECT 
                     f.file_id::text,
@@ -296,7 +382,7 @@ class PostgresService:
         Creates a new file record linked to existing vectors via content_hash.
         """
         import json
-        async with self.pool.acquire() as conn:
+        async with self.acquire() as conn:
             # Copy file record from existing file
             existing = await conn.fetchrow("""
                 SELECT 
@@ -360,7 +446,7 @@ class PostgresService:
         Returns:
             List of role dictionaries with role_id, role_name, added_at, added_by
         """
-        async with self.pool.acquire() as conn:
+        async with self.acquire() as conn:
             rows = await conn.fetch("""
                 SELECT 
                     role_id::text,
@@ -387,7 +473,7 @@ class PostgresService:
         Raises:
             Exception if role already assigned
         """
-        async with self.pool.acquire() as conn:
+        async with self.acquire() as conn:
             await conn.execute("""
                 INSERT INTO document_roles (
                     file_id, role_id, role_name, added_by
@@ -417,7 +503,7 @@ class PostgresService:
         
         Note: The trigger will prevent removing the last role from a shared document.
         """
-        async with self.pool.acquire() as conn:
+        async with self.acquire() as conn:
             await conn.execute("""
                 DELETE FROM document_roles
                 WHERE file_id = $1 AND role_id = $2
@@ -440,7 +526,7 @@ class PostgresService:
         """
         Update document visibility (personal/shared).
         """
-        async with self.pool.acquire() as conn:
+        async with self.acquire() as conn:
             await conn.execute("""
                 UPDATE ingestion_files
                 SET visibility = $2,

@@ -64,7 +64,7 @@ async def get_markdown(fileId: str, request: Request):
     user_id = request.state.user_id
 
     config = Config().to_dict()
-    postgres_service = PostgresService(config)
+    postgres_service = PostgresService(config, request)
     minio_service = MinIOService(config)
     postgres_service.connect()
 
@@ -145,7 +145,7 @@ async def get_html(fileId: str, request: Request):
     user_id = request.state.user_id
 
     config = Config().to_dict()
-    postgres_service = PostgresService(config)
+    postgres_service = PostgresService(config, request)
     minio_service = MinIOService(config)
     postgres_service.connect()
 
@@ -235,7 +235,7 @@ async def get_image(fileId: str, imageIndex: int, request: Request):
     user_id = request.state.user_id
 
     config = Config().to_dict()
-    postgres_service = PostgresService(config)
+    postgres_service = PostgresService(config, request)
     minio_service = MinIOService(config)
     postgres_service.connect()
 

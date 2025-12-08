@@ -8,11 +8,14 @@ import json
 import uuid
 from datetime import datetime
 from typing import Dict, List, Optional
+from contextlib import contextmanager
 
 import psycopg2
 import psycopg2.extras
 import psycopg2.pool
 import structlog
+
+from api.middleware.jwt_auth import set_rls_session_vars_sync
 
 logger = structlog.get_logger()
 
@@ -62,16 +65,33 @@ class PostgresService:
             self.pool = None
             logger.info("PostgreSQL connection pool closed")
     
-    def _get_connection(self):
-        """Get connection from pool."""
+    def _get_connection(self, request=None):
+        """Get connection from pool and set RLS session variables."""
         if not self.pool:
             self.connect()
-        return self.pool.getconn()
+        conn = self.pool.getconn()
+        if request:
+            try:
+                cursor = conn.cursor()
+                set_rls_session_vars_sync(cursor, request)
+                cursor.close()
+            except Exception as exc:
+                logger.error("Failed to set RLS session vars (sync)", error=str(exc))
+        return conn
     
     def _return_connection(self, conn):
         """Return connection to pool."""
         if self.pool:
             self.pool.putconn(conn)
+
+    @contextmanager
+    def connection(self, request=None):
+        """Context manager that applies RLS session vars."""
+        conn = self._get_connection(request)
+        try:
+            yield conn
+        finally:
+            self._return_connection(conn)
     
     def update_status(
         self,

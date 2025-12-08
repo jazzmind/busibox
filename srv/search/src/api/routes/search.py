@@ -160,8 +160,8 @@ async def search(
         total_results = len(results)
         results = results[search_request.offset:search_request.offset + search_request.limit]
         
-        # Enrich results with metadata from PostgreSQL
-        results = await _enrich_results(results, user_id)
+        # Enrich results with metadata from PostgreSQL (RLS-aware)
+        results = await _enrich_results(results, request)
         
         # Apply highlighting if requested
         if search_request.highlight and search_request.highlight.enabled:
@@ -441,13 +441,21 @@ async def explain_result(
         )
 
 
-async def _enrich_results(results: list, user_id: str) -> list:
+async def _set_rls_session_vars(conn, request: Request):
+    """Set session variables for RLS on ingestion DB."""
+    user_id = getattr(request.state, "user_id", "")
+    readable_role_ids = getattr(request.state, "readable_role_ids", [])
+    await conn.execute("SET LOCAL app.user_id = $1", user_id)
+    await conn.execute("SET LOCAL app.user_role_ids_read = $1", ",".join(readable_role_ids))
+
+
+async def _enrich_results(results: list, request: Request) -> list:
     """
     Enrich search results with metadata from PostgreSQL.
     
     Args:
         results: Search results from Milvus
-        user_id: User ID for validation
+        request: Request (for RLS session vars)
     
     Returns:
         Enriched results with filenames
@@ -464,6 +472,7 @@ async def _enrich_results(results: list, user_id: str) -> list:
         conn = await asyncpg.connect(db_url)
         
         try:
+            await _set_rls_session_vars(conn, request)
             # Get unique file IDs
             file_ids = list(set(result["file_id"] for result in results))
             
@@ -471,8 +480,8 @@ async def _enrich_results(results: list, user_id: str) -> list:
             file_rows = await conn.fetch("""
                 SELECT file_id, filename
                 FROM ingestion_files
-                WHERE file_id = ANY($1::uuid[]) AND user_id = $2
-            """, file_ids, user_id)
+                WHERE file_id = ANY($1::uuid[])
+            """, file_ids)
             
             # Build filename lookup
             filename_lookup = {
