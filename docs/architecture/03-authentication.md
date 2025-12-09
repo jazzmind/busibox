@@ -27,8 +27,6 @@
   - Validates HS256 JWT (default audience `search-api`).
   - Builds Milvus partition list: `personal_{user_id}` + `role_{role_id}` for readable roles.
   - Accepts legacy `x-user-id` during migration.
-- **Agent API**
-  - Presently a stub; do not rely on it for auth. Future implementation should mirror ingest/search JWT patterns.
 
 ## Identity & Roles
 - JWT payload format expected by ingest/search:
