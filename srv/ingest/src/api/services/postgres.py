@@ -30,6 +30,7 @@ class PostgresService:
         self.request = request
         
         self.pool: Optional[asyncpg.Pool] = None
+        self._document_roles_ready: bool = False
     
     async def connect(self):
         """Create connection pool."""
@@ -44,6 +45,33 @@ class PostgresService:
                 max_size=10,
             )
             logger.info("PostgreSQL connection pool created")
+
+    async def _ensure_document_roles(self, conn):
+        """
+        Defensive: ensure document_roles table exists (for environments where
+        migrations have not been applied yet). Uses IF NOT EXISTS so it is safe
+        to run repeatedly.
+        """
+        if self._document_roles_ready:
+            return
+
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS document_roles (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                file_id UUID NOT NULL REFERENCES ingestion_files(file_id) ON DELETE CASCADE,
+                role_id UUID NOT NULL,
+                role_name VARCHAR(100) NOT NULL,
+                added_at TIMESTAMP DEFAULT NOW(),
+                added_by UUID,
+                UNIQUE(file_id, role_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_document_roles_file ON document_roles(file_id);
+            CREATE INDEX IF NOT EXISTS idx_document_roles_role ON document_roles(role_id);
+            CREATE INDEX IF NOT EXISTS idx_document_roles_name ON document_roles(role_name);
+            """
+        )
+        self._document_roles_ready = True
     
     async def disconnect(self):
         """Close connection pool."""
@@ -142,6 +170,7 @@ class PostgresService:
         """
         import json
         async with self.acquire() as conn:
+            await self._ensure_document_roles(conn)
             # Start transaction
             async with conn.transaction():
                 # Create file record with owner_id and visibility
@@ -216,6 +245,7 @@ class PostgresService:
             raise ValueError("visibility must be 'personal' or 'shared'")
 
         async with self.acquire() as conn:
+            await self._ensure_document_roles(conn)
             async with conn.transaction():
                 # Update visibility
                 await conn.execute(
@@ -458,6 +488,7 @@ class PostgresService:
             List of role dictionaries with role_id, role_name, added_at, added_by
         """
         async with self.acquire() as conn:
+            await self._ensure_document_roles(conn)
             rows = await conn.fetch("""
                 SELECT 
                     role_id::text,
@@ -485,6 +516,7 @@ class PostgresService:
             Exception if role already assigned
         """
         async with self.acquire() as conn:
+            await self._ensure_document_roles(conn)
             await conn.execute("""
                 INSERT INTO document_roles (
                     file_id, role_id, role_name, added_by
@@ -515,6 +547,7 @@ class PostgresService:
         Note: The trigger will prevent removing the last role from a shared document.
         """
         async with self.acquire() as conn:
+            await self._ensure_document_roles(conn)
             await conn.execute("""
                 DELETE FROM document_roles
                 WHERE file_id = $1 AND role_id = $2
