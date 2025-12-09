@@ -1,4 +1,4 @@
-.PHONY: ping all files pg milvus nginx search search-api agent ingest ingest-api ingest-worker ingest-update-tests apps openwebui deploy-apps deploy-ai-portal deploy-agent-client deploy-doc-intel deploy-foundation deploy-project-analysis deploy-innovation verify verify-health verify-smoke test test-menu test-ingest test-ingest-all test-ingest-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-apps test-all
+.PHONY: ping all files pg milvus nginx search search-api agent ingest ingest-api ingest-worker ingest-update-tests apps openwebui deploy-apps deploy-ai-portal deploy-agent-client deploy-doc-intel deploy-foundation deploy-project-analysis deploy-innovation verify verify-health verify-smoke test test-menu test-ingest test-ingest-all test-ingest-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-apps test-all configure generate-token-keys deploy-agent-server
 # Default to production inventory (can override with: make all INV=inventory/test)
 INV=inventory/production
 
@@ -115,6 +115,17 @@ deploy-project-analysis:
 
 deploy-innovation:
 	ansible-playbook -i $(INV) -l apps --tags app_deployer,secrets site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=innovation"
+
+# Deploy agent-server (internal API service)
+deploy-agent-server:
+	ansible-playbook -i $(INV) -l agent --tags app_deployer,secrets site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=agent-server"
+
+# Configuration targets
+configure:
+	@bash ../../scripts/configure.sh
+
+generate-token-keys:
+	@bash ../../scripts/generate-token-service-keys.sh
 
 # Verification targets
 verify: verify-health verify-smoke

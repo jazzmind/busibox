@@ -549,14 +549,21 @@ secrets_configuration() {
     while true; do
         echo ""
         menu "Secrets & Configuration" \
+            "Generate TOKEN_SERVICE Keys (agent-server)" \
             "Edit Ansible Vault (secrets)" \
             "View Vault Variables (masked)" \
             "Back to Main Menu"
         
-        read -p "$(echo -e "${BOLD}Select option [1-3]:${NC} ")" choice
+        read -p "$(echo -e "${BOLD}Select option [1-4]:${NC} ")" choice
         
         case $choice in
             1)
+                bash "${REPO_ROOT}/scripts/generate-token-service-keys.sh" || {
+                    error "TOKEN_SERVICE key generation failed"
+                }
+                pause
+                ;;
+            2)
                 header "Edit Ansible Vault" 70
                 echo ""
                 info "Opening encrypted vault for editing"
@@ -571,7 +578,7 @@ secrets_configuration() {
                 
                 pause
                 ;;
-            2)
+            3)
                 header "View Vault Variables" 70
                 echo ""
                 info "Showing vault structure (sensitive values masked)"
@@ -587,11 +594,11 @@ secrets_configuration() {
                 
                 pause
                 ;;
-            3)
+            4)
                 return 0
                 ;;
             *)
-                error "Invalid selection. Please enter 1-3."
+                error "Invalid selection. Please enter 1-4."
                 ;;
         esac
     done
