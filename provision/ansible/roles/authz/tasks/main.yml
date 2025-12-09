@@ -46,6 +46,15 @@
     mode: "0644"
   tags: [authz]
 
+- name: Ensure Python venv deps are installed
+  apt:
+    name:
+      - python3-venv
+      - python3-pip
+    state: present
+    update_cache: false
+  tags: [authz]
+
 - name: Create virtualenv
   command: python3 -m venv "{{ authz_venv_dir }}"
   args:
