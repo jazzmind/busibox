@@ -183,7 +183,10 @@ service_tests_menu() {
                 header "Authz Service Tests" 70
                 echo ""
                 if confirm "Run authz pytest on authz-lxc in $env?"; then
-                    ansible -i "$inv" authz -m shell -a "cd /srv/authz && source venv/bin/activate && pip install -q -r requirements.test.txt && pytest -q" || {
+                    local vault_flags
+                    vault_flags="$(get_vault_flags)"
+                    # ansible ad-hoc uses ANSIBLE_CONFIG; ensure we stay in ansible dir
+                    ANSIBLE_CONFIG="${ANSIBLE_DIR}/ansible.cfg" ansible -i "$inv" authz -m shell -a "cd /srv/authz && source venv/bin/activate && pip install -q -r requirements.test.txt && pytest -q" $vault_flags || {
                         error "Authz tests failed"
                     }
                 fi
