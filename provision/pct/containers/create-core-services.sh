@@ -13,9 +13,10 @@
 #   bash provision/pct/containers/create-core-services.sh [test|production]
 #
 # Containers Created:
-#   - proxy-lxc  - nginx reverse proxy (main entry point)
-#   - apps-lxc   - Next.js applications
-#   - agent-lxc  - Agent API server
+#   - proxy-lxc   - nginx reverse proxy (main entry point)
+#   - apps-lxc    - Next.js applications
+#   - agent-lxc   - Agent API server
+#   - authz-lxc   - Authorization service (RLS token issuer)
 
 set -euo pipefail
 
@@ -39,6 +40,7 @@ if [[ "$MODE" == "test" ]]; then
   IP_PROXY="$IP_PROXY_TEST"
   IP_APPS="$IP_APPS_TEST"
   IP_AGENT="$IP_AGENT_TEST"
+  IP_AUTHZ="$IP_AUTHZ_TEST"
 else
   echo "==> Creating core services in PRODUCTION mode"
   source "${PCT_DIR}/vars.env"
@@ -83,6 +85,10 @@ CREATED_CONTAINERS+=("$CT_APPS")
 create_ct "$CT_AGENT" "$IP_AGENT" "${PREFIX}agent-lxc" unpriv || cleanup_on_error
 CREATED_CONTAINERS+=("$CT_AGENT")
 
+# Create authz container
+create_ct "$CT_AUTHZ" "$IP_AUTHZ" "${PREFIX}authz-lxc" unpriv || cleanup_on_error
+CREATED_CONTAINERS+=("$CT_AUTHZ")
+
 echo ""
 echo "=========================================="
 echo "Core services created successfully!"
@@ -91,5 +97,6 @@ echo "Containers:"
 echo "  - ${PREFIX}proxy-lxc:  $CT_PROXY @ $IP_PROXY"
 echo "  - ${PREFIX}apps-lxc:   $CT_APPS @ $IP_APPS"
 echo "  - ${PREFIX}agent-lxc:  $CT_AGENT @ $IP_AGENT"
+echo "  - ${PREFIX}authz-lxc:  $CT_AUTHZ @ $IP_AUTHZ"
 echo "=========================================="
 
