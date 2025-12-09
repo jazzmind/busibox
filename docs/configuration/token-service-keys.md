@@ -44,9 +44,10 @@ This script will:
 5. Re-encrypt the vault
 
 **Requirements:**
-- agent-server repository cloned alongside busibox
-- Node.js 20+ installed
+- Python 3.11+ with `cryptography` library (uses standalone key generator in `scripts/lib/`)
 - `~/.vault_pass` file OR you'll be prompted for vault password
+
+**Note:** This uses a standalone Python key generator built into busibox - no need for the agent-server repository!
 
 ### Manual Method (If Needed)
 
