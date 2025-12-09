@@ -43,15 +43,15 @@ fi
 case "$APP_NAME" in
     ai-portal)
         DEPLOY_PATH="/srv/apps/ai-portal"
-        CONTAINER_IP="10.96.200.10"  # apps-lxc
+        CONTAINER_IP="10.96.200.201"  # apps-lxc
         ;;
     agent-client)
         DEPLOY_PATH="/srv/apps/agent-client"
-        CONTAINER_IP="10.96.200.10"  # apps-lxc
+        CONTAINER_IP="10.96.200.201"  # apps-lxc
         ;;
     doc-intel)
         DEPLOY_PATH="/srv/apps/doc-intel"
-        CONTAINER_IP="10.96.200.10"  # apps-lxc
+        CONTAINER_IP="10.96.200.201"  # apps-lxc
         ;;
     *)
         echo -e "${RED}Error: Unknown app '$APP_NAME'${NC}"
@@ -61,7 +61,7 @@ esac
 
 # Adjust for test environment
 if [ "$ENVIRONMENT" == "test" ]; then
-    CONTAINER_IP="10.96.208.10"  # test-apps-lxc
+    CONTAINER_IP="10.96.201.201"  # test-apps-lxc
 fi
 
 echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"

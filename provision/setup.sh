@@ -133,16 +133,16 @@ check_containers_exist() {
   local missing=()
   
   if [[ "$mode" == "test" ]]; then
-    # Check test containers (300-308)
-    for ctid in 300 301 302 303 304 305 306 307 308; do
+    # Check test containers (300-310)
+    for ctid in 300 301 302 303 304 305 306 307 308 309 310; do
       if ! pct status "$ctid" &>/dev/null; then
         exists=false
         missing+=("$ctid")
       fi
     done
   else
-    # Check production containers (200-208)
-    for ctid in 200 201 202 203 204 205 206 207 208; do
+    # Check production containers (200-210)
+    for ctid in 200 201 202 203 204 205 206 207 208 209 210; do
       if ! pct status "$ctid" &>/dev/null; then
         exists=false
         missing+=("$ctid")
@@ -165,16 +165,16 @@ list_existing_containers() {
   local existing=()
   
   if [[ "$mode" == "test" ]]; then
-    # Check test containers (300-308)
-    for ctid in 300 301 302 303 304 305 306 307 308; do
+    # Check test containers (300-310)
+    for ctid in 300 301 302 303 304 305 306 307 308 309 310; do
       if pct status "$ctid" &>/dev/null; then
         local name=$(pct config "$ctid" | grep "hostname:" | awk '{print $2}')
         existing+=("$ctid:$name")
       fi
     done
   else
-    # Check production containers (200-208)
-    for ctid in 200 201 202 203 204 205 206 207 208; do
+    # Check production containers (200-210)
+    for ctid in 200 201 202 203 204 205 206 207 208 209 210; do
       if pct status "$ctid" &>/dev/null; then
         local name=$(pct config "$ctid" | grep "hostname:" | awk '{print $2}')
         existing+=("$ctid:$name")
@@ -266,8 +266,8 @@ step_individual_containers() {
   
   # Select environment first
   echo "Select environment:"
-  echo "  1) Production (200-208)"
-  echo "  2) Test (300-308)"
+  echo "  1) Production (200-210)"
+  echo "  2) Test (300-310)"
   echo ""
   read -p "Choose [1-2]: " -n 1 -r env_choice
   echo ""
@@ -432,8 +432,8 @@ step_container_creation() {
   
   # Select environment
   echo "Select deployment environment:"
-  echo "  1) Production (containers 200-208)"
-  echo "  2) Test (containers 300-308)"
+  echo "  1) Production (containers 200-210)"
+  echo "  2) Test (containers 300-310)"
   echo "  3) Individual container management (create/recreate specific)"
   echo "  4) Skip container creation"
   echo ""

@@ -33,14 +33,17 @@ search_api_ip: "{{ milvus_ip }}"  # Search API runs on milvus container
 minio_ip: "{{ network_base_octets }}.205"
 ingest_ip: "{{ network_base_octets }}.206"
 
-# LLM Service IPs: .207-.210 (to allow room for more infrastructure)
+# LLM Service IPs: .207-.209 (to allow room for more infrastructure)
 litellm_ip: "{{ network_base_octets }}.207"
 # vLLM IP Configuration - Test environment can use production vLLM by default
 # Set use_production_vllm: true to use production vLLM (default, saves GPU memory)
 # Set use_production_vllm: false to use test vLLM container (requires manual deployment)
 use_production_vllm: true
 vllm_ip: "{{ (use_production_vllm | default(true)) | ternary(network_base_octets_production + '.208', network_base_octets + '.208') }}"
-ollama_ip: "{{ network_base_octets }}.210"
+ollama_ip: "{{ network_base_octets }}.209"
+
+# Authz Service IP
+authz_ip: "{{ network_base_octets }}.210"
 
 # ============================================================================
 # Domain Configuration - Test

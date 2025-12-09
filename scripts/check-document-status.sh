@@ -8,6 +8,8 @@ set -e
 INGEST_IP="10.96.200.206"
 VLLM_IP="10.96.200.208"  # vLLM container (embedding model, not Ollama)
 LITELLM_IP="10.96.200.207"
+OLLAMA_IP="10.96.200.209"
+AUTHZ_IP="10.96.200.210"
 
 echo "================================"
 echo "Document Processing Status"

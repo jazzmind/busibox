@@ -281,7 +281,8 @@ function getContainerIP(containerName: string): string | null {
     'ingest-lxc': '10.96.200.206',
     'litellm-lxc': '10.96.200.207',
     'vllm-lxc': '10.96.200.208',
-    'ollama-lxc': '10.96.200.210',
+    'ollama-lxc': '10.96.200.209',
+    'authz-lxc': '10.96.200.210',
   };
 
   // Handle variations like "milvus" -> "milvus-lxc"
@@ -830,7 +831,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         { id: 206, name: 'ingest-lxc', ip: '10.96.200.206', purpose: 'Worker and Redis' },
         { id: 207, name: 'litellm-lxc', ip: '10.96.200.207', purpose: 'LiteLLM gateway' },
         { id: 208, name: 'vllm-lxc', ip: '10.96.200.208', purpose: 'vLLM inference server' },
-        { id: 210, name: 'ollama-lxc', ip: '10.96.200.210', purpose: 'Ollama LLM server' },
+        { id: 209, name: 'ollama-lxc', ip: '10.96.200.209', purpose: 'Ollama LLM server' },
+        { id: 210, name: 'authz-lxc', ip: '10.96.200.210', purpose: 'Authz server' },
       ];
 
       return {

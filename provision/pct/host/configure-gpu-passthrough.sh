@@ -31,7 +31,7 @@
 #
 #   # Single GPU to multiple containers (sharing)
 #   bash configure-gpu-passthrough.sh 208 0
-#   bash configure-gpu-passthrough.sh 210 0  # Share GPU 0
+#   bash configure-gpu-passthrough.sh 209 0  # Share GPU 0
 #
 # REQUIREMENTS:
 #   - NVIDIA drivers installed on Proxmox host
@@ -101,7 +101,7 @@ Examples:
 
   # Share GPU with multiple containers
   $0 208 0
-  $0 210 0
+  $0 209 0
 
   # Force reconfiguration
   $0 208 0,1 --force

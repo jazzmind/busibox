@@ -128,7 +128,7 @@ deploy_containers() {
   
   # Verify containers exist
   log_info "Verifying containers exist..."
-  local prod_ctids=(200 201 202 203 204 205 206 207 208 209)
+  local prod_ctids=(200 201 202 203 204 205 206 207 208 209 210)
   
   for ctid in "${prod_ctids[@]}"; do
     if pct status "$ctid" &>/dev/null; then
@@ -393,13 +393,24 @@ Commands:
   help       - Show this help message
 
 Production Environment:
-  Container IDs: 200-209
-  IP Range: 10.96.200.207-210 (LLM), 10.96.200.200-206 (services)
+  Container IDs: 200-210
+  IP Range: 10.96.200.207-209 (LLM), 10.96.200.200-206, 210 (services)
   
 LLM Services:
   - LiteLLM:  10.96.200.207:4000 (unified API)
-  - Ollama:   10.96.200.208:11434 (GPU 0)
-  - vLLM:     10.96.200.209:8000 (GPU 1)
+  - vLLM:     10.96.200.208:8000 
+  - vLLM:     10.96.200.208:8001...
+  - Ollama:   10.96.200.209:11434
+
+Services:
+  - Authz:    10.96.200.210
+  - Ingest:   10.96.200.206
+  - Files:    10.96.200.205
+  - PostgreSQL: 10.96.200.203
+  - Milvus:    10.96.200.204
+  - Proxy:    10.96.200.200
+  - Apps:     10.96.200.201
+  - Agent:    10.96.200.202
 
 Examples:
   bash deploy-production.sh full        # Complete deployment
