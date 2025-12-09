@@ -27,6 +27,17 @@ echo ""
 info "Run infrastructure and service tests"
 echo ""
 
+# Detect vault password method (shared with deploy script)
+get_vault_flags() {
+    local vault_pass_file="$HOME/.vault_pass"
+    
+    if [ -f "$vault_pass_file" ]; then
+        echo "--vault-password-file $vault_pass_file"
+    else
+        echo "--ask-vault-pass"
+    fi
+}
+
 # Infrastructure tests
 run_infrastructure_tests() {
     local test_type="$1"
