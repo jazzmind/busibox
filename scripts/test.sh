@@ -197,7 +197,7 @@ service_tests_menu() {
                     local vault_flags
                     vault_flags="$(get_vault_flags)"
                     # ansible ad-hoc uses ANSIBLE_CONFIG; ensure we stay in ansible dir
-                    ANSIBLE_CONFIG="${ANSIBLE_DIR}/ansible.cfg" ansible -i "$inv" authz -m shell -a "cd /srv/authz && source venv/bin/activate && pip install -q -r requirements.test.txt && pytest -q" $vault_flags || {
+                    ANSIBLE_CONFIG="${ANSIBLE_DIR}/ansible.cfg" ansible -i "$inv" authz -m shell -a "bash -lc 'cd /srv/authz && source venv/bin/activate && pip install -q -r requirements.test.txt && pytest -q'" $vault_flags || {
                         error "Authz tests failed"
                     }
                 fi
