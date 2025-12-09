@@ -197,6 +197,13 @@ service_tests_menu() {
                     local vault_flags
                     vault_flags="$(get_vault_flags)"
                     # ansible ad-hoc uses ANSIBLE_CONFIG; ensure we stay in ansible dir
+                    # Sync test requirements and tests to authz-lxc
+                    ANSIBLE_CONFIG="${ANSIBLE_DIR}/ansible.cfg" ansible -i "$inv" authz -m copy -a "src=${REPO_ROOT}/srv/authz/requirements.test.txt dest=/srv/authz/app/ mode=0644" $vault_flags || {
+                        error "Failed to copy authz test requirements"
+                    }
+                    ANSIBLE_CONFIG="${ANSIBLE_DIR}/ansible.cfg" ansible -i "$inv" authz -m copy -a "src=${REPO_ROOT}/srv/authz/tests/ dest=/srv/authz/app/tests/ mode=0644" $vault_flags || {
+                        error "Failed to copy authz tests"
+                    }
                     ANSIBLE_CONFIG="${ANSIBLE_DIR}/ansible.cfg" ansible -i "$inv" authz -m shell -a "bash -lc 'cd /srv/authz/app && source ../venv/bin/activate && pip install -q -r requirements.test.txt && pytest -q'" $vault_flags || {
                         error "Authz tests failed"
                     }
