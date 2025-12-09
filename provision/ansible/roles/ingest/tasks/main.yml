@@ -76,6 +76,16 @@
     mode: "0644"
   tags: [ingest, ingest_deploy, ingest_tests, ingest_update_tests]
 
+- name: Ensure test document repository is present on controller
+  git:
+    repo: "{{ test_docs_repo_url }}"
+    dest: "{{ test_docs_repo_path }}"
+    version: main
+    force: false
+  delegate_to: localhost
+  run_once: true
+  tags: [ingest, ingest_deploy, ingest_tests]
+
 - name: Copy test document repository
   copy:
     src: "{{ test_docs_repo_path }}/"

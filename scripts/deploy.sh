@@ -444,18 +444,20 @@ core_services_menu() {
         echo -e "  ${CYAN}2)${NC} Deploy Files (MinIO)"
         echo -e "  ${CYAN}3)${NC} Deploy Database (PostgreSQL)"
         echo -e "  ${CYAN}4)${NC} Deploy Vectorstore (Milvus)"
-        echo -e "  ${CYAN}5)${NC} Back"
+        echo -e "  ${CYAN}5)${NC} Deploy Authz (RLS token service)"
+        echo -e "  ${CYAN}6)${NC} Back"
         echo ""
         
-        read -p "Select option [1-5]: " choice
+        read -p "Select option [1-6]: " choice
         echo ""
         
         case "$choice" in
             1)
-                if confirm "Deploy ALL core services (files, pg, milvus) to $env?"; then
+                if confirm "Deploy ALL core services (files, pg, milvus, authz) to $env?"; then
                     deploy_service "files" "$env" && \
                     deploy_service "pg" "$env" && \
-                    deploy_service "milvus" "$env"
+                    deploy_service "milvus" "$env" && \
+                    deploy_service "authz" "$env"
                 fi
                 pause
                 ;;
@@ -478,6 +480,12 @@ core_services_menu() {
                 pause
                 ;;
             5)
+                if confirm "Deploy Authz (RLS token service) to $env?"; then
+                    deploy_service "authz" "$env"
+                fi
+                pause
+                ;;
+            6)
                 return 0
                 ;;
             *)

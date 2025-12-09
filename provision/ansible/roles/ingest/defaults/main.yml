@@ -20,5 +20,6 @@ llm_cleanup_enabled: true
 # Test document service
 test_docs_repo_path: "{{ lookup('env', 'BUSIBOX_TESTDOCS_PATH') | default(playbook_dir + '/../../busibox-testdocs', true) }}"
 test_docs_target_path: "/srv/test-docs"
+test_docs_repo_url: "https://github.com/jazzmind/busibox-testdocs.git"
 test_docs_state_path: "/srv/ingest/test-docs-state.json"
 

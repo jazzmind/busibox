@@ -39,6 +39,9 @@ files:
 pg:
 	ansible-playbook -i $(INV) -l pg site.yml $(VAULT_FLAGS)
 
+authz:
+	ansible-playbook -i $(INV) -l authz site.yml $(VAULT_FLAGS)
+
 litellm:
 	ansible-playbook -i $(INV) -l litellm site.yml $(VAULT_FLAGS)
 
