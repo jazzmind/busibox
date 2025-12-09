@@ -9,8 +9,7 @@
 #   bash scripts/generate-token-service-keys.sh
 #
 # REQUIRES:
-#   - agent-server repository cloned alongside busibox
-#   - Node.js 20+ installed
+#   - Python 3.11+ with cryptography library
 #   - ~/.vault_pass file OR will prompt for vault password
 #
 set -euo pipefail
@@ -23,7 +22,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 source "${SCRIPT_DIR}/lib/ui.sh"
 
 # Paths
-AGENT_SERVER_DIR="${REPO_ROOT}/../agent-server"
+KEY_GENERATOR_DIR="${SCRIPT_DIR}/lib"
 VAULT_FILE="${REPO_ROOT}/provision/ansible/roles/secrets/vars/vault.yml"
 VAULT_PASS_FILE="$HOME/.vault_pass"
 
@@ -36,19 +35,22 @@ get_vault_flags() {
     fi
 }
 
-# Check if agent-server exists
-check_agent_server() {
-    if [ ! -d "$AGENT_SERVER_DIR" ]; then
-        error "agent-server repository not found at: $AGENT_SERVER_DIR"
-        echo ""
-        info "Expected location: ${REPO_ROOT}/../agent-server"
-        info "Clone it with: git clone git@github.com:jazzmind/agent-server.git ${REPO_ROOT}/../agent-server"
+# Check if Python and cryptography library are available
+check_key_generator() {
+    if ! command -v python3 &> /dev/null; then
+        error "python3 not found - required for key generation"
         return 1
     fi
     
-    if [ ! -f "$AGENT_SERVER_DIR/package.json" ]; then
-        error "Invalid agent-server directory (missing package.json)"
-        return 1
+    # Check if cryptography library is installed
+    if ! python3 -c "import cryptography" 2>/dev/null; then
+        warn "cryptography library not found"
+        info "Installing cryptography library..."
+        if ! python3 -m pip install cryptography --quiet 2>/dev/null; then
+            error "Failed to install cryptography library"
+            info "Try: python3 -m pip install cryptography"
+            return 1
+        fi
     fi
     
     return 0
@@ -69,49 +71,40 @@ check_existing_keys() {
     fi
 }
 
-# Generate keys using agent-server setup-auth
+# Generate keys using standalone key generator
 generate_keys() {
     header "Generating TOKEN_SERVICE Keys" 70
     echo ""
     
-    info "Checking agent-server repository..."
-    if ! check_agent_server; then
+    info "Checking key generator..."
+    if ! check_key_generator; then
         return 1
     fi
-    success "Found agent-server at: $AGENT_SERVER_DIR"
-    echo ""
-    
-    info "Installing dependencies..."
-    cd "$AGENT_SERVER_DIR"
-    if [ ! -d "node_modules" ]; then
-        npm install --silent > /dev/null 2>&1 || {
-            error "Failed to install dependencies"
-            return 1
-        }
-    fi
-    success "Dependencies ready"
+    success "Key generator ready"
     echo ""
     
     info "Generating Ed25519 keypair..."
     echo ""
     
-    # Run setup-auth and capture output
+    # Run key generator and capture output
     local output
-    output=$(npm run setup-auth 2>&1) || {
+    output=$(python3 "${KEY_GENERATOR_DIR}/generate_jwk_keys.py" 2>&1) || {
         error "Failed to generate keys"
         echo "$output"
         return 1
     }
     
-    # Extract the keys from output
+    # Parse JSON output
+    local kid
     local private_key
     local public_key
     
-    private_key=$(echo "$output" | grep "TOKEN_SERVICE_PRIVATE_KEY=" | sed "s/TOKEN_SERVICE_PRIVATE_KEY=//")
-    public_key=$(echo "$output" | grep "TOKEN_SERVICE_PUBLIC_KEY=" | sed "s/TOKEN_SERVICE_PUBLIC_KEY=//")
+    kid=$(echo "$output" | grep -o '"kid":"[^"]*"' | head -1 | cut -d'"' -f4)
+    private_key=$(echo "$output" | grep -o '"privateKey":"[^"]*"' | cut -d'"' -f4 | sed 's/\\"/"/g')
+    public_key=$(echo "$output" | grep -o '"publicKey":"[^"]*"' | cut -d'"' -f4 | sed 's/\\"/"/g')
     
     if [ -z "$private_key" ] || [ -z "$public_key" ]; then
-        error "Failed to extract keys from setup-auth output"
+        error "Failed to extract keys from generator output"
         echo ""
         echo "Output:"
         echo "$output"
@@ -121,9 +114,7 @@ generate_keys() {
     success "Keys generated successfully"
     echo ""
     
-    # Display key info (kid only, not the full keys)
-    local kid
-    kid=$(echo "$private_key" | grep -oE '"kid":"[^"]*"' | cut -d'"' -f4)
+    # Display key info
     info "Key ID: $kid"
     info "Algorithm: EdDSA (Ed25519)"
     echo ""
