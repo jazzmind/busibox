@@ -354,21 +354,42 @@ class TextExtractor:
         # Fallback to pdfplumber if Marker failed or disabled
         if not text_content or page_count == 0:
             logger.info("Using pdfplumber fallback", file_path=file_path)
-            with pdfplumber.open(file_path) as pdf:
-                page_count = len(pdf.pages)
-                text_parts = []
-                
-                for page in pdf.pages:
-                    # Default extraction works best - layout=True adds too much whitespace
-                    page_text = page.extract_text()
-                    if page_text:
-                        text_parts.append(page_text)
-                
-                text_content = "\n\n".join(text_parts)  # Double newline between pages
-                
-                # Extract page images if not already done
-                if not page_images:
-                    page_images = self._extract_pdf_page_images(file_path)
+            try:
+                with pdfplumber.open(file_path) as pdf:
+                    page_count = len(pdf.pages)
+                    text_parts = []
+                    
+                    for page in pdf.pages:
+                        try:
+                            # Default extraction works best - layout=True adds too much whitespace
+                            page_text = page.extract_text()
+                            if page_text:
+                                text_parts.append(page_text)
+                        except (IndexError, KeyError) as e:
+                            # Some malformed PDFs cause pdfplumber to fail on specific pages
+                            logger.warning(
+                                "pdfplumber failed on page, skipping",
+                                page_number=page.page_number,
+                                error=str(e),
+                                error_type=type(e).__name__,
+                            )
+                            continue
+                    
+                    text_content = "\n\n".join(text_parts)  # Double newline between pages
+                    
+                    # Extract page images if not already done
+                    if not page_images:
+                        page_images = self._extract_pdf_page_images(file_path)
+            except Exception as e:
+                logger.error(
+                    "pdfplumber extraction failed completely",
+                    error=str(e),
+                    error_type=type(e).__name__,
+                    file_path=file_path,
+                )
+                # Continue with empty text - will trigger OCR or other fallback
+                text_content = ""
+                page_count = 0
         
         # Detect scanned PDFs (no extractable text)
         if not text_content.strip() and page_count > 0:

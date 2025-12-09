@@ -112,13 +112,13 @@ vllm_host: "0.0.0.0"  # Listen on all interfaces for IP aliasing support
 # Test shares the same physical GPU with production, so GPU memory is limited.
 # These settings prevent test from competing with production for GPU resources.
 
-# Marker PDF extraction - use production Marker via remote service
-# Test calls production ingest API's /extract endpoint instead of running Marker locally
-# This allows test to get accurate Marker processing without GPU/memory issues
-marker_enabled: true  # Keep enabled so we use Marker results (via remote service)
-marker_use_gpu: false  # Not used when using remote service
-marker_gpu_device: cpu  # Not used when using remote service
-marker_service_url: "http://{{ network_base_octets_production }}.206:8002"  # Production ingest API
+# Marker PDF extraction - DISABLED for test (requires GPU/auth not available)
+# Test environment uses pdfplumber fallback instead of Marker
+# Production has Marker service with GPU support
+marker_enabled: false  # Disabled - test doesn't have GPU/auth for Marker
+marker_use_gpu: false
+marker_gpu_device: cpu
+marker_service_url: ""  # Empty - don't call production Marker (auth issues)
 
 # ColPali - use production service (already handled by use_production_vllm)
 # The colpali_base_url will point to production vllm_ip:9006
