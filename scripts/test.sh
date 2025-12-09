@@ -169,10 +169,11 @@ service_tests_menu() {
             "Search Service Tests" \
             "Agent Service Tests" \
             "Apps Service Tests" \
+            "Authz Service Tests (local pytest)" \
             "All Service Tests" \
             "Back to Main Menu"
         
-        read -p "$(echo -e "${BOLD}Select option [1-6]:${NC} ")" choice
+        read -p "$(echo -e "${BOLD}Select option [1-7]:${NC} ")" choice
         
         cd "$ANSIBLE_DIR"
         local inv="inventory/${env}"
@@ -201,6 +202,16 @@ service_tests_menu() {
                 pause
                 ;;
             5)
+                header "Authz Service Tests" 70
+                echo ""
+                cd "$REPO_ROOT"
+                if confirm "Install authz test deps and run local pytest?"; then
+                    python3 -m pip install -r srv/authz/requirements.txt -r srv/authz/requirements.test.txt && \
+                    python3 -m pytest srv/authz/tests
+                fi
+                pause
+                ;;
+            6)
                 header "All Service Tests" 70
                 echo ""
                 if confirm "Run ALL service tests on $env? (This may take a while)"; then
@@ -208,12 +219,12 @@ service_tests_menu() {
                 fi
                 pause
                 ;;
-            6)
+            7)
                 cd "$REPO_ROOT"
                 return 0
                 ;;
             *)
-                error "Invalid selection. Please enter 1-6."
+                error "Invalid selection. Please enter 1-7."
                 ;;
         esac
         

@@ -1,0 +1,88 @@
+---
+# Standalone authz service (separate from ingest)
+
+- name: Ensure authz group exists
+  group:
+    name: "{{ authz_group }}"
+    state: present
+  tags: [authz]
+
+- name: Ensure authz user exists
+  user:
+    name: "{{ authz_user }}"
+    group: "{{ authz_group }}"
+    create_home: false
+    shell: /usr/sbin/nologin
+    state: present
+  tags: [authz]
+
+- name: Create authz directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ authz_user }}"
+    group: "{{ authz_group }}"
+    mode: "0755"
+  loop:
+    - "{{ authz_base_dir }}"
+    - "{{ authz_app_dir }}"
+  tags: [authz]
+
+- name: Sync authz source
+  copy:
+    src: "{{ authz_src_dir }}/src/"
+    dest: "{{ authz_app_dir }}/src/"
+    owner: "{{ authz_user }}"
+    group: "{{ authz_group }}"
+    mode: "0644"
+  tags: [authz]
+
+- name: Copy requirements.txt
+  copy:
+    src: "{{ authz_src_dir }}/requirements.txt"
+    dest: "{{ authz_app_dir }}/requirements.txt"
+    owner: "{{ authz_user }}"
+    group: "{{ authz_group }}"
+    mode: "0644"
+  tags: [authz]
+
+- name: Create virtualenv
+  command: python3 -m venv "{{ authz_venv_dir }}"
+  args:
+    creates: "{{ authz_venv_dir }}/bin/activate"
+  tags: [authz]
+
+- name: Install authz dependencies
+  pip:
+    requirements: "{{ authz_app_dir }}/requirements.txt"
+    virtualenv: "{{ authz_venv_dir }}"
+  tags: [authz]
+
+- name: Render env file
+  template:
+    src: authz.env.j2
+    dest: "{{ authz_base_dir }}/.env"
+    owner: "{{ authz_user }}"
+    group: "{{ authz_group }}"
+    mode: "0600"
+  tags: [authz]
+
+- name: Install systemd service
+  template:
+    src: authz.service.j2
+    dest: /etc/systemd/system/{{ authz_service_name }}.service
+    mode: "0644"
+  notify: Restart authz service
+  tags: [authz]
+
+- name: Reload systemd
+  systemd:
+    daemon_reload: true
+  tags: [authz]
+
+- name: Enable and start authz service
+  systemd:
+    name: "{{ authz_service_name }}"
+    enabled: true
+    state: started
+  tags: [authz]

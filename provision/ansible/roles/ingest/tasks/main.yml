@@ -91,7 +91,7 @@
     src: "{{ test_docs_repo_path }}/"
     dest: "{{ test_docs_target_path }}/"
     mode: "0644"
-  ignore_errors: yes  # Allow deploy even if repo path is missing; surface via status API
+  ignore_errors: true  # Allow deploy even if repo path is missing; surface via status API
   tags: [ingest, ingest_deploy, ingest_tests]
 
 - name: Upgrade pip and install wheel in venv

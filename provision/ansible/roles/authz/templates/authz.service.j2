@@ -1,0 +1,15 @@
+[Unit]
+Description=Authz Service
+After=network.target
+
+[Service]
+User={{ authz_user }}
+Group={{ authz_group }}
+WorkingDirectory={{ authz_app_dir }}
+EnvironmentFile={{ authz_base_dir }}/.env
+ExecStart={{ authz_venv_dir }}/bin/uvicorn main:app --host 0.0.0.0 --port {{ authz_service_port }} --app-dir {{ authz_app_dir }}/src
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

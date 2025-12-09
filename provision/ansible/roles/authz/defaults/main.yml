@@ -1,0 +1,23 @@
+---
+# Authz role defaults
+authz_user: authz
+authz_group: authz
+authz_base_dir: /srv/authz
+authz_src_dir: "{{ playbook_dir }}/../../srv/authz"
+authz_service_name: authz
+authz_service_port: 8010
+authz_venv_dir: "{{ authz_base_dir }}/venv"
+authz_app_dir: "{{ authz_base_dir }}/app"
+
+# Postgres connection (uses busibox DB)
+authz_postgres_host: "{{ postgres_host }}"
+authz_postgres_port: "{{ postgres_port | default(5432) }}"
+authz_postgres_db: "{{ postgres_db | default('busibox') }}"
+authz_postgres_user: "{{ postgres_user }}"
+authz_postgres_password: "{{ secrets.postgresql.password }}"
+
+# JWT and token settings
+authz_jwt_secret: "{{ secrets.sso.jwt_secret | default(secrets.service.jwt_secret | default('change-me')) }}"
+authz_jwt_issuer: "authz-service"
+authz_jwt_audience: "busibox-services"
+authz_token_ttl: 900

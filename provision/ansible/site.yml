@@ -40,6 +40,13 @@
     - role: ingest
       tags: [ingest, ingest_api, ingest_worker]
 
+- hosts: authz
+  roles:
+    - role: node_common
+      tags: [authz, node_common]
+    - role: authz
+      tags: [authz]
+
 - hosts: proxy
   roles:
     - role: secrets
