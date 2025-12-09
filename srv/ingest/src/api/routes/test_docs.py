@@ -74,7 +74,7 @@ def _save_state(state: Dict[str, str]) -> None:
 
 def _find_role_id(request: Request, role_name: str) -> Optional[str]:
     """Find a role id by name from the JWT context."""
-    roles = getattr(request.state, "roles", [])
+    roles = getattr(request.state, "user_roles", [])
     for role in roles:
         if getattr(role, "name", "").lower() == role_name.lower():
             return getattr(role, "id", None)
