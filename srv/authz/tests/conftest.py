@@ -2,6 +2,7 @@ import os
 import sys
 import importlib
 import pytest
+import pytest_asyncio
 import httpx
 from fastapi import FastAPI
 
@@ -71,7 +72,7 @@ def authz_app(reload_authz, monkeypatch):
     return app, authz, audit_log
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def authz_client(authz_app):
     app, authz, audit_log = authz_app
     transport = httpx.ASGITransport(app=app)
