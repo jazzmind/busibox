@@ -298,7 +298,7 @@ step_individual_containers() {
     echo "=========================================="
     echo ""
     echo "Available container groups:"
-    echo "  1) Core services (proxy, apps, agent)"
+    echo "  1) Core services (authz, proxy, apps, agent)"
     echo "  2) Data services (postgres, milvus, minio)"
     echo "  3) Worker services (ingest, litellm)"
     echo "  4) vLLM (all GPUs)"

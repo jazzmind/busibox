@@ -165,11 +165,11 @@ service_tests_menu() {
     while true; do
         echo ""
         menu "Service Tests - $env Environment" \
+            "Authz Service Tests" \
             "Ingest Service Tests" \
             "Search Service Tests" \
             "Agent Service Tests" \
             "Apps Service Tests" \
-            "Authz Service Tests (local pytest)" \
             "All Service Tests" \
             "Back to Main Menu"
         
@@ -180,12 +180,22 @@ service_tests_menu() {
         
         case $choice in
             1)
-                ingest_tests_menu "$env"
+                header "Authz Service Tests" 70
+                echo ""
+                if confirm "Run authz pytest on authz-lxc in $env?"; then
+                    ansible -i "$inv" authz -m shell -a "cd /srv/authz && source venv/bin/activate && pip install -q -r requirements.test.txt && pytest -q" || {
+                        error "Authz tests failed"
+                    }
+                fi
+                pause
                 ;;
             2)
-                search_tests_menu "$env"
+                ingest_tests_menu "$env"
                 ;;
             3)
+                search_tests_menu "$env"
+                ;;
+            4)
                 header "Agent Service Tests" 70
                 echo ""
                 if confirm "Run agent tests on $env?"; then
@@ -193,21 +203,11 @@ service_tests_menu() {
                 fi
                 pause
                 ;;
-            4)
+            5)
                 header "Apps Service Tests" 70
                 echo ""
                 if confirm "Run apps tests on $env?"; then
                     make test-apps INV="$inv"
-                fi
-                pause
-                ;;
-            5)
-                header "Authz Service Tests" 70
-                echo ""
-                cd "$REPO_ROOT"
-                if confirm "Install authz test deps and run local pytest?"; then
-                    python3 -m pip install -r srv/authz/requirements.txt -r srv/authz/requirements.test.txt && \
-                    python3 -m pytest srv/authz/tests
                 fi
                 pause
                 ;;

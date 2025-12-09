@@ -1,7 +1,21 @@
-# Visual Organization Guide
+# Visual Organization Guide (Authoritative)
 
-**Created**: 2025-10-30
-**Purpose**: Visual reference for file organization in Busibox
+**Created**: 2025-10-30  
+**Last Updated**: 2025-12-09  
+**Status**: Active  
+**Category**: Reference  
+**Related Docs**:  
+- `.cursor/rules/001-documentation-organization.md`  
+- `.cursor/rules/002-script-organization.md`  
+- `CLAUDE.md`
+
+**Scope**: This file is the single canonical reference for how documentation and scripts are organized. `ORGANIZATION_RULES_SUMMARY.md` now simply points here.
+
+## At a Glance
+- Documentation lives under `docs/` by category (architecture, deployment, configuration, troubleshooting, reference, guides, session-notes).
+- Scripts are organized by execution context: `provision/pct/` (Proxmox host), `scripts/` (admin workstation), `provision/ansible/roles/*/files` (in-container static), `provision/ansible/roles/*/templates` (in-container templated).
+- All docs use kebab-case filenames and include metadata (Created, Last Updated, Status, Category, Related Docs).
+- Use this guide plus `.cursor/rules/001` and `.cursor/rules/002` when creating or moving any file.
 
 ## Documentation Organization
 

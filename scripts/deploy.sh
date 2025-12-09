@@ -441,10 +441,10 @@ core_services_menu() {
         echo ""
         
         echo -e "  ${CYAN}1)${NC} Deploy All Core Services"
+        echo -e "  ${CYAN}5)${NC} Deploy Authz (RLS token service)"
         echo -e "  ${CYAN}2)${NC} Deploy Files (MinIO)"
         echo -e "  ${CYAN}3)${NC} Deploy Database (PostgreSQL)"
         echo -e "  ${CYAN}4)${NC} Deploy Vectorstore (Milvus)"
-        echo -e "  ${CYAN}5)${NC} Deploy Authz (RLS token service)"
         echo -e "  ${CYAN}6)${NC} Back"
         echo ""
         
@@ -848,7 +848,7 @@ deployment_menu() {
         
         menu "$menu_title" \
             "Deploy All Services" \
-            "Deploy Core Services (files, database, vectorstore)" \
+            "Deploy Core Services (authz, files, database, vectorstore)" \
             "Deploy LLM Services (vllm, litellm, colpali)" \
             "Deploy APIs (ingest, search, agent)" \
             "Deploy Apps" \
