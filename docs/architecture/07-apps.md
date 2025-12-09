@@ -28,6 +28,14 @@
 - SSE for ingestion status is proxied: browser connects to app endpoint, which forwards to ingest `/status/{fileId}`.
 - Role data originates from the app’s identity provider and is forwarded via JWTs to backend services.
 
+## Agent-Server Integration (ai-portal, agent-client)
+- **Base URL**: `MASTRA_API_URL` (e.g., `http://10.96.200.207:4111`) for agent-server.
+- **ai-portal (planned)**: mint user HS256 JWT (`SSO_JWT_SECRET`, `iss=ai-portal`, `aud=agent-server`) and call `agent-server /api/chat`, streaming tokens + `ROUTING_DEBUG`; keep legacy app-side routing as fallback until migration is complete.
+- **agent-client (Agent Manager UI)**:
+  - Configure `MASTRA_API_URL`, `ADMIN_CLIENT_ID`, `ADMIN_CLIENT_SECRET`.
+  - Admin token fetched via `/token` (audience `${MASTRA_API_URL}/admin`) and used for `/admin/agents` — new hardcoded agents appear here (`web-search-agent`, `rag-search-agent`, `attachment-agent`, `chat-agent`, plus legacy `documentAgent`, `weatherAgent`).
+- **Debug**: `/api/chat` responses prepend `<!-- ROUTING_DEBUG:... -->`; UI can surface routing, doc results, and decisions.
+
 ## Deployment Notes
 - Provisioning and deploy automation live under `provision/ansible` (see `make deploy-apps`, `make deploy-ai-portal` in CLAUDE.md).
 - Environment variables for app endpoints should match container IPs in `provision/pct/vars.env` (e.g., `NEXT_PUBLIC_INGEST_API_URL=http://10.96.200.206:8000`).

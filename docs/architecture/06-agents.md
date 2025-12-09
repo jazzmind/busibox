@@ -2,37 +2,50 @@
 
 **Created**: 2025-12-09  
 **Last Updated**: 2025-12-09  
-**Status**: Draft  
+**Status**: Active  
 **Category**: Architecture  
 **Related Docs**:  
 - `architecture/00-overview.md`  
 - `architecture/02-ai.md`  
 - `architecture/05-search.md`
 
-## Current State
+## Current State (agent-server, Mastra-based)
 - **Container**: `agent-lxc` (CT 202)
-- **Code**: `srv/agent`
-- **Port**: Intended `8001`
+- **Code**: `agent-server` (Mastra)
+- **Port**: 4111 (internal)
 - **Exposure**: Internal-only
-- **Implementation**: FastAPI skeleton with stub routes for auth/files/search/agent/webhooks; no production logic or integrations are wired.
+- **Implementation**: Mastra agents + tools with a streaming `/api/chat` endpoint.
 
-## Intended Responsibilities
-- Orchestrate agent-style requests (RAG):
-  - Accept user prompt + context directives.
-  - Call Search API for retrieval.
-  - Call liteLLM for synthesis/chain execution.
-  - Enforce RBAC using the same JWT/role model as ingest/search.
+## Responsibilities
+- Orchestrate agent-style requests (RAG + web + attachment decisions):
+  - Accept user prompt, toggles (web/doc), attachments metadata.
+  - Call Search API for retrieval (document-search tool).
+  - Call liteLLM via OpenAI-compatible API for synthesis.
+  - Enforce RBAC using the same JWT/role model as apps/search/ingest.
 - Provide a stable surface for apps to invoke AI workflows without duplicating search/LLM calls.
 
 ## What to Rely On Today
-- Do **not** rely on `srv/agent` for ingestion or search; those are provided by dedicated services.
-- Use Search API for retrieval and liteLLM directly (or via planned agent endpoints) for generation until the agent service is completed.
+- Use `agent-server /api/chat` for streaming chat with debug marker; legacy app-side logic remains as fallback.
+- Retrieval is delegated to Search API via the `document-search` tool (grounded RAG).
+- Web search tool is currently a placeholder (returns “not configured”) until a provider is added.
 
-## Next Steps (when implementing)
-- Mirror JWT middleware behavior from ingest/search (HS256, audience-specific).
-- Remove upload/webhook stubs; delegate ingestion to `ingest-lxc`.
-- Add thin orchestration layer that composes:
-  - Search API call (partitions derived from user roles).
-  - liteLLM call for synthesis/rerank.
-  - Response packaging with citations.
-- Add observability consistent with other services (structlog, health endpoints).
+## Auth
+- End-user JWT: HS256 (`SSO_JWT_SECRET`, `iss=ai-portal`, `aud=agent-server`).
+- Tools: `document-search` forwards Authorization to Search API; if missing, can mint scoped token via AuthZ (`AUTHZ_API_URL`) using user roles/userId; falls back to `SEARCH_API_SERVICE_KEY` if set.
+- Admin APIs (`/admin/*`) still use EdDSA public keys (`TOKEN_SERVICE_PUBLIC_KEY`) for client credential tokens.
+
+## Built-in Agents (hardcoded, listed via `/admin/agents`)
+- `rag-search-agent`: uses `document-search` tool; grounded answers with citations.
+- `web-search-agent`: placeholder web search (provider not configured).
+- `attachment-agent`: heuristic action/modelHint for attachments.
+- `chat-agent`: final responder; uses provided doc/web/attachment context, avoids fabrication.
+- (Legacy) `documentAgent`, `weatherAgent` remain available.
+
+## Chat Endpoint
+- **Path**: `POST /api/chat`
+- **Behavior**: attachment decision → optional doc search → chat synthesis via liteLLM; streams tokens and prepends `<!-- ROUTING_DEBUG:... -->`.
+- **Inputs**: `content`, `enableDocumentSearch`, `enableWebSearch`, `attachmentIds?`, `model?`, `conversationId?`
+- **Outputs**: streaming text + routing debug; doc results included in debug payload for UI display.
+
+## App Integration (high level)
+- Apps should mint a user HS256 JWT and call `agent-server /api/chat`, streaming the response to the UI; keep legacy in-app routing as fallback until fully migrated.
