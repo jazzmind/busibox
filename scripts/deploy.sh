@@ -441,10 +441,10 @@ core_services_menu() {
         echo ""
         
         echo -e "  ${CYAN}1)${NC} Deploy All Core Services"
-        echo -e "  ${CYAN}5)${NC} Deploy Authz (RLS token service)"
-        echo -e "  ${CYAN}2)${NC} Deploy Files (MinIO)"
-        echo -e "  ${CYAN}3)${NC} Deploy Database (PostgreSQL)"
-        echo -e "  ${CYAN}4)${NC} Deploy Vectorstore (Milvus)"
+        echo -e "  ${CYAN}2)${NC} Deploy Authz (RLS token service)"
+        echo -e "  ${CYAN}3)${NC} Deploy Files (MinIO)"
+        echo -e "  ${CYAN}4)${NC} Deploy Database (PostgreSQL)"
+        echo -e "  ${CYAN}5)${NC} Deploy Vectorstore (Milvus)"
         echo -e "  ${CYAN}6)${NC} Back"
         echo ""
         
@@ -462,26 +462,26 @@ core_services_menu() {
                 pause
                 ;;
             2)
+                if confirm "Deploy Authz (RLS token service) to $env?"; then
+                    deploy_service "authz" "$env"
+                fi
+                pause
+                ;;
+            3)
                 if confirm "Deploy Files (MinIO) to $env?"; then
                     deploy_service "files" "$env"
                 fi
                 pause
                 ;;
-            3)
+            4)
                 if confirm "Deploy Database (PostgreSQL) to $env?"; then
                     deploy_service "pg" "$env"
                 fi
                 pause
                 ;;
-            4)
+            5)
                 if confirm "Deploy Vectorstore (Milvus) to $env?"; then
                     deploy_service "milvus" "$env"
-                fi
-                pause
-                ;;
-            5)
-                if confirm "Deploy Authz (RLS token service) to $env?"; then
-                    deploy_service "authz" "$env"
                 fi
                 pause
                 ;;
