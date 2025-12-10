@@ -11,10 +11,13 @@ settings = get_settings()
 # Configure OpenAI client to use LiteLLM via environment variables
 # This is the standard way OpenAI clients discover custom endpoints
 os.environ["OPENAI_BASE_URL"] = str(settings.litellm_base_url)
-os.environ["OPENAI_API_KEY"] = "litellm-placeholder"  # LiteLLM doesn't require a real key
+
+# Get LiteLLM API key from environment (set by Ansible deployment)
+litellm_api_key = os.getenv("LITELLM_API_KEY", "sk-1234")  # Default for local dev
+os.environ["OPENAI_API_KEY"] = litellm_api_key
 
 # Create OpenAI-compatible model using standard provider
-# The model will automatically use the OPENAI_BASE_URL we set above
+# The model will automatically use the OPENAI_BASE_URL and OPENAI_API_KEY we set above
 model = OpenAIModel(
     model_name=settings.default_model,
     provider="openai",
