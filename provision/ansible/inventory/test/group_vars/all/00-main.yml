@@ -97,6 +97,11 @@ litellm_port: 4000
 litellm_drop_params: false  # CRITICAL: Must be false to pass tools to vLLM
 litellm_add_function_to_prompt: true  # Add function definitions to prompt for models that need it
 
+# LLM Cleanup - DISABLED for test (causes timeouts, not needed for RAG/role testing)
+# Test environment focuses on search and permissions, not text quality
+# Production has LLM cleanup enabled for better extraction quality
+llm_cleanup_enabled: false
+
 ollama_host: "{{ ollama_ip }}"
 ollama_port: 11434
 
