@@ -18,7 +18,10 @@ User=root
 Group=root
 WorkingDirectory={{ app.deploy_path }}
 
-# Environment variables
+# Load environment from .env file
+EnvironmentFile=-{{ app.deploy_path }}/.env
+
+# Environment variables from apps.yml
 {% if app.env is defined %}
 {% for key, value in app.env.items() %}
 Environment="{{ key }}={{ value }}"
