@@ -117,8 +117,18 @@ deploy-innovation:
 	ansible-playbook -i $(INV) -l apps --tags app_deployer,secrets site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=innovation"
 
 # Deploy agent-server (internal API service)
+# Usage:
+#   make deploy-agent-server                    # Deploy from latest release (production)
+#   make deploy-agent-server BRANCH=main        # Deploy from branch (test/dev)
+#   make deploy-agent-server INV=inventory/test # Deploy to test environment
 deploy-agent-server:
+ifdef BRANCH
+	@echo "Deploying agent-server from branch: $(BRANCH)"
+	ansible-playbook -i $(INV) -l agent --tags app_deployer,secrets site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=agent-server deploy_from_branch=true deploy_branch=$(BRANCH)"
+else
+	@echo "Deploying agent-server from latest release"
 	ansible-playbook -i $(INV) -l agent --tags app_deployer,secrets site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=agent-server"
+endif
 
 # Configuration targets
 configure:
