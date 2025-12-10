@@ -1,4 +1,8 @@
 ## Python project configuration for the rebuilt agent server
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "agent-server"
 version = "0.1.0"
@@ -42,6 +46,11 @@ reload = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+exclude = ["alembic*", "tests*", "scripts*"]
 
 [tool.ruff]
 line-length = 100
