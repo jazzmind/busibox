@@ -33,6 +33,92 @@ logger = structlog.get_logger()
 router = APIRouter()
 
 
+async def check_file_access(
+    conn,
+    file_id: uuid.UUID,
+    user_id: str,
+    request: Request
+) -> tuple[bool, Optional[dict], Optional[str]]:
+    """
+    Check if user has access to a file based on visibility and roles.
+    
+    Args:
+        conn: Database connection
+        file_id: File UUID
+        user_id: User ID
+        request: Request object with role_ids_read in state
+    
+    Returns:
+        (has_access, file_row, error_message)
+    """
+    # Get file with visibility and role information
+    file_row = await conn.fetchrow("""
+        SELECT 
+            f.file_id,
+            f.user_id,
+            f.owner_id,
+            f.visibility,
+            f.filename,
+            f.original_filename,
+            f.mime_type,
+            f.chunk_count,
+            f.vector_count,
+            f.markdown_content,
+            f.extraction_method,
+            f.created_at,
+            COALESCE(
+                (SELECT json_agg(role_id) 
+                 FROM document_roles 
+                 WHERE file_id = f.file_id),
+                '[]'::json
+            ) as role_ids
+        FROM ingestion_files f
+        WHERE f.file_id = $1
+    """, file_id)
+    
+    if not file_row:
+        return False, None, "File not found"
+    
+    # Convert to dict for easier access
+    file_dict = dict(file_row)
+    visibility = file_dict.get("visibility", "personal")
+    file_role_ids = file_dict.get("role_ids", [])
+    owner_id = str(file_dict.get("owner_id", ""))
+    
+    # Personal files: only owner can access
+    if visibility == "personal":
+        if user_id == owner_id:
+            return True, file_dict, None
+        else:
+            return False, file_dict, "Unauthorized: personal file owned by another user"
+    
+    # Shared files: check role intersection
+    if visibility == "shared":
+        # Get user's readable role IDs from request state
+        user_role_ids = getattr(request.state, "role_ids_read", [])
+        
+        # Check if user has at least one matching role
+        if not file_role_ids:
+            # Shared file with no roles - only owner can access
+            if user_id == owner_id:
+                return True, file_dict, None
+            else:
+                return False, file_dict, "Unauthorized: shared file with no roles"
+        
+        # Check for role intersection
+        file_role_set = set(str(r) for r in file_role_ids)
+        user_role_set = set(str(r) for r in user_role_ids)
+        
+        if file_role_set & user_role_set:
+            # User has at least one matching role
+            return True, file_dict, None
+        else:
+            return False, file_dict, f"Unauthorized: file requires roles {file_role_set}, user has {user_role_set}"
+    
+    # Unknown visibility - deny access
+    return False, file_dict, f"Unknown visibility: {visibility}"
+
+
 @router.get("/{fileId}")
 async def get_file_metadata(fileId: str, request: Request):
     """
@@ -49,11 +135,25 @@ async def get_file_metadata(fileId: str, request: Request):
     
     try:
         async with postgres_service.acquire(request) as conn:
-            # Get file record
+            # Check file access based on visibility and roles
+            has_access, file_data, error_msg = await check_file_access(
+                conn, uuid.UUID(fileId), user_id, request
+            )
+            
+            if not has_access:
+                status_code = status.HTTP_404_NOT_FOUND if error_msg == "File not found" else status.HTTP_403_FORBIDDEN
+                return JSONResponse(
+                    status_code=status_code,
+                    content={"error": error_msg}
+                )
+            
+            # Get full file record with all metadata
             file_row = await conn.fetchrow("""
                 SELECT 
                     f.file_id,
                     f.user_id,
+                    f.owner_id,
+                    f.visibility,
                     f.filename,
                     f.original_filename,
                     f.mime_type,
@@ -78,19 +178,6 @@ async def get_file_metadata(fileId: str, request: Request):
                 FROM ingestion_files f
                 WHERE f.file_id = $1
             """, uuid.UUID(fileId))
-            
-            if not file_row:
-                return JSONResponse(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    content={"error": "File not found"}
-                )
-            
-            # Verify ownership
-            if str(file_row["user_id"]) != user_id:
-                return JSONResponse(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    content={"error": "Unauthorized access"}
-                )
             
             # Get status
             status_row = await conn.fetchrow("""
@@ -331,25 +418,25 @@ async def download_file(fileId: str, request: Request):
     
     try:
         async with postgres_service.acquire(request) as conn:
-            # Get file record
+            # Check file access based on visibility and roles
+            has_access, file_data, error_msg = await check_file_access(
+                conn, uuid.UUID(fileId), user_id, request
+            )
+            
+            if not has_access:
+                status_code = status.HTTP_404_NOT_FOUND if error_msg == "File not found" else status.HTTP_403_FORBIDDEN
+                return JSONResponse(
+                    status_code=status_code,
+                    content={"error": error_msg}
+                )
+            
+            # Get file from MinIO using storage_path from file_data
+            # Note: storage_path not in check_file_access, need to fetch it
             file_row = await conn.fetchrow("""
-                SELECT user_id, storage_path, original_filename, mime_type
+                SELECT storage_path, original_filename, mime_type
                 FROM ingestion_files
                 WHERE file_id = $1
             """, uuid.UUID(fileId))
-            
-            if not file_row:
-                return JSONResponse(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    content={"error": "File not found"}
-                )
-            
-            # Verify ownership
-            if str(file_row["user_id"]) != user_id:
-                return JSONResponse(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    content={"error": "Unauthorized access"}
-                )
             
             storage_path = file_row["storage_path"]
             original_filename = file_row["original_filename"]
@@ -558,23 +645,16 @@ async def get_file_chunks(
     
     try:
         async with postgres_service.acquire(request) as conn:
-            # Verify file exists and user owns it
-            file_row = await conn.fetchrow("""
-                SELECT user_id, chunk_count
-                FROM ingestion_files
-                WHERE file_id = $1
-            """, uuid.UUID(fileId))
+            # Check file access based on visibility and roles
+            has_access, file_data, error_msg = await check_file_access(
+                conn, uuid.UUID(fileId), user_id, request
+            )
             
-            if not file_row:
+            if not has_access:
+                status_code = status.HTTP_404_NOT_FOUND if error_msg == "File not found" else status.HTTP_403_FORBIDDEN
                 return JSONResponse(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    content={"error": "File not found"}
-                )
-            
-            if str(file_row["user_id"]) != user_id:
-                return JSONResponse(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    content={"error": "Unauthorized access"}
+                    status_code=status_code,
+                    content={"error": error_msg}
                 )
             
             # Get chunks
@@ -598,7 +678,7 @@ async def get_file_chunks(
                 status_code=status.HTTP_200_OK,
                 content={
                     "fileId": fileId,
-                    "total": file_row["chunk_count"],
+                    "total": file_data["chunk_count"],
                     "limit": limit,
                     "offset": offset,
                     "chunks": [
@@ -660,23 +740,16 @@ async def get_file_vectors(
     
     try:
         async with postgres_service.acquire(request) as conn:
-            # Verify file exists and user owns it
-            file_row = await conn.fetchrow("""
-                SELECT user_id, chunk_count, vector_count
-                FROM ingestion_files
-                WHERE file_id = $1
-            """, uuid.UUID(fileId))
+            # Check file access based on visibility and roles
+            has_access, file_data, error_msg = await check_file_access(
+                conn, uuid.UUID(fileId), user_id, request
+            )
             
-            if not file_row:
+            if not has_access:
+                status_code = status.HTTP_404_NOT_FOUND if error_msg == "File not found" else status.HTTP_403_FORBIDDEN
                 return JSONResponse(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    content={"error": "File not found"}
-                )
-            
-            if str(file_row["user_id"]) != user_id:
-                return JSONResponse(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    content={"error": "Unauthorized access"}
+                    status_code=status_code,
+                    content={"error": error_msg}
                 )
             
             # Get vectors (embeddings from chunks)
@@ -699,7 +772,7 @@ async def get_file_vectors(
                 status_code=status.HTTP_200_OK,
                 content={
                     "fileId": fileId,
-                    "total": file_row["vector_count"] or 0,
+                    "total": file_data["vector_count"] or 0,
                     "limit": limit,
                     "offset": offset,
                     "vectors": [
@@ -756,31 +829,19 @@ async def get_file_markdown(
     
     try:
         async with postgres_service.acquire(request) as conn:
-            # Verify file exists and get markdown
-            file_row = await conn.fetchrow("""
-                SELECT 
-                    user_id,
-                    markdown_content,
-                    original_filename,
-                    extraction_method,
-                    created_at
-                FROM ingestion_files
-                WHERE file_id = $1
-            """, uuid.UUID(fileId))
+            # Check file access based on visibility and roles
+            has_access, file_data, error_msg = await check_file_access(
+                conn, uuid.UUID(fileId), user_id, request
+            )
             
-            if not file_row:
+            if not has_access:
+                status_code = status.HTTP_404_NOT_FOUND if error_msg == "File not found" else status.HTTP_403_FORBIDDEN
                 return JSONResponse(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    content={"error": "File not found"}
+                    status_code=status_code,
+                    content={"error": error_msg}
                 )
             
-            if str(file_row["user_id"]) != user_id:
-                return JSONResponse(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    content={"error": "Unauthorized access"}
-                )
-            
-            markdown_content = file_row["markdown_content"]
+            markdown_content = file_data["markdown_content"]
             
             if not markdown_content:
                 return JSONResponse(
@@ -792,11 +853,11 @@ async def get_file_markdown(
                 status_code=status.HTTP_200_OK,
                 content={
                     "fileId": fileId,
-                    "filename": file_row["original_filename"],
+                    "filename": file_data["original_filename"],
                     "markdown": markdown_content,
-                    "extractionMethod": file_row["extraction_method"],
+                    "extractionMethod": file_data["extraction_method"],
                     "length": len(markdown_content),
-                    "createdAt": file_row["created_at"].isoformat(),
+                    "createdAt": file_data["created_at"].isoformat(),
                 }
             )
     
