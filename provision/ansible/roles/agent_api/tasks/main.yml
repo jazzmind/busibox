@@ -101,6 +101,30 @@
     mode: "0600"
   notify: Restart agent-api
 
+- name: Make migration script executable
+  file:
+    path: /srv/agent/scripts/run-migrations.sh
+    mode: "0755"
+    owner: "{{ agent_api_user }}"
+    group: "{{ agent_api_user }}"
+
+- name: Run database migrations
+  shell: |
+    cd /srv/agent
+    source .venv/bin/activate
+    bash scripts/run-migrations.sh
+  become: yes
+  become_user: "{{ agent_api_user }}"
+  environment:
+    DATABASE_URL: "{{ secrets['agent-server'].database_url }}"
+  register: migration_result
+  changed_when: "'Running migration' in migration_result.stdout"
+
+- name: Display migration output
+  debug:
+    var: migration_result.stdout_lines
+  when: migration_result.stdout_lines is defined
+
 - name: Deploy agent service systemd unit
   template:
     src: agent-api.service.j2
