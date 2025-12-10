@@ -242,6 +242,14 @@ async def upload_file(
                 )
                 parsed_processing_config = {}
         
+        # Add force_reprocess flag to processing config if requested
+        if force_reprocess == "true":
+            parsed_processing_config["force_reprocess"] = True
+            logger.info(
+                "Force reprocess enabled, skipping duplicate detection",
+                file_id=file_id,
+            )
+        
         # New file - create record with visibility and roles
         await postgres_service.create_file_record(
             file_id=file_id,
