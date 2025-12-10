@@ -1,17 +1,16 @@
 # Wes's Tasks
 
-1) Get role testing working - prove roles are working
-2) Get agent-client working - prove chat works with docs/agent server on test environment
+What I'd delagate now:
+- improving ingestion:
+  [ ] long docs - split them
+  [ ] lots of visuals - how does colpali handle them?
 
+- tool calling model for phi-4
+  [ ] how does it work?
+  
+- improving apps
+  [ ] project analysis - needs to work better
 
-## Busibox Tasks
-
-[x] Get document manager library working on live environment
-[x] Get ingest properly using Marker / Colpali to extract text from PDFs
-[ ] Demonstrate that extraction is high quality with tables, images, etc.
-[ ] Make sure search works on text
-[ ] How does search work with colpali?
-[ ] Make sure chat RAG works via direct search API
 
 --- 
 
