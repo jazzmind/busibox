@@ -13,11 +13,16 @@ class Settings(BaseSettings):
     app_name: str = "agent-server"
     environment: str = Field("development", description="environment name (development/test/prod)")
     debug: bool = False
+    log_level: str = Field("INFO", description="Logging level (DEBUG/INFO/WARNING/ERROR)")
 
     # Model/provider configuration
     default_model: str = Field(
         "anthropic:claude-3-5-sonnet",
         description="Default model identifier passed to Pydantic AI Agent",
+    )
+    litellm_base_url: AnyHttpUrl = Field(
+        "http://localhost:4000/v1",
+        description="Base URL for LiteLLM proxy",
     )
 
     # Busibox service endpoints
@@ -67,6 +72,7 @@ class Settings(BaseSettings):
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = False
+        extra = "ignore"  # Ignore extra fields from .env that aren't in the model
 
 
 @lru_cache(maxsize=1)
