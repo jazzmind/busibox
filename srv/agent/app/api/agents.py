@@ -2,6 +2,7 @@ import uuid
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +23,16 @@ from app.schemas.definitions import (
 from app.services.agent_registry import agent_registry
 
 router = APIRouter(prefix="/agents", tags=["agents"])
+
+
+class WeatherRequest(BaseModel):
+    """Request to get weather via weather agent."""
+    query: str
+
+
+class WeatherResponse(BaseModel):
+    """Response from weather agent."""
+    response: str
 
 
 @router.get("", response_model=List[AgentDefinitionRead])
@@ -114,3 +125,18 @@ async def create_eval(
     await session.commit()
     await session.refresh(record)
     return EvalDefinitionRead.model_validate(record)
+
+
+@router.post("/weather/query", response_model=WeatherResponse)
+async def query_weather_agent(
+    payload: WeatherRequest,
+    principal: Principal = Depends(get_principal),
+) -> WeatherResponse:
+    """
+    Query the weather agent directly (for testing).
+    This endpoint demonstrates LiteLLM integration and external API tool calling.
+    """
+    from app.agents.weather_agent import weather_agent
+    
+    result = await weather_agent.run(payload.query)
+    return WeatherResponse(response=str(result.data))
