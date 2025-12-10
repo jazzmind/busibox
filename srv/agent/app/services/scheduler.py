@@ -20,7 +20,7 @@ class RunScheduler:
     def _ensure_started(self) -> None:
         """Start scheduler if not already started."""
         if not self._started:
-        self._scheduler.start()
+            self._scheduler.start()
             self._started = True
 
     def schedule_agent_run(
