@@ -21,8 +21,6 @@
 
 - hosts: agent
   roles:
-    - role: node_common
-      tags: [agent, node_common]
     - role: secrets
       tags: [agent, secrets]
     - role: app_deployer

@@ -62,6 +62,14 @@ def _patch_transformers_loading():
 
 _patch_transformers_loading()
 
+# Early logging setup for debugging import issues
+import logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+logger_early = logging.getLogger(__name__)
+logger_early.info("=" * 80)
+logger_early.info("WORKER MODULE LOADING - Starting imports")
+logger_early.info("=" * 80)
+
 from shared.config import Config
 from services.file_service import FileService
 from services.postgres_service import PostgresService
@@ -72,11 +80,15 @@ from processors.chunker import Chunker, Chunk
 from processors.embedder import Embedder
 from processors.classifier import DocumentClassifier
 from processors.metadata_extractor import MetadataExtractor
-from processors.colpali import ColPaliEmbedder
+# ColPali import is deferred to avoid ONNX initialization at import time
+# It will be imported conditionally in the worker's connect() method
 from processors.llm_cleanup import LLMCleanup
 from processors.markdown_generator import MarkdownGenerator
 from processors.image_extractor import ImageExtractor
 from worker import ErrorHandler, HistoryLogger
+
+logger_early.info("All imports successful")
+logger_early.info("=" * 80)
 
 # Configure structured logging
 structlog.configure(
@@ -184,14 +196,18 @@ class IngestWorker:
         self.metadata_extractor = MetadataExtractor(self.config)
         
         # Initialize ColPali only if enabled (requires GPU/ONNX)
+        # Import is deferred to avoid ONNX initialization at module import time
         # Wrap in try-except to handle missing GPU gracefully
         try:
             colpali_enabled = self.config.get("colpali_enabled", False)
             if colpali_enabled:
+                logger.info("ColPali enabled, importing ColPaliEmbedder...")
+                from processors.colpali import ColPaliEmbedder
                 self.colpali = ColPaliEmbedder(self.config)
                 logger.info("ColPali embedder initialized")
             else:
                 logger.info("ColPali disabled, skipping initialization")
+                self.colpali = None
         except Exception as e:
             logger.warning(
                 "Failed to initialize ColPali (GPU/ONNX not available), visual embeddings disabled",
