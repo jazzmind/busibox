@@ -36,7 +36,7 @@ Environment="NODE_ENV=production"
 {% if app.start_command is defined %}
 ExecStart=/bin/bash -c '{{ app.start_command }}'
 {% else %}
-ExecStart=/usr/bin/npm start -- -p {{ app.port }}
+ExecStart=/usr/bin/npm start
 {% endif %}
 
 # Restart configuration
