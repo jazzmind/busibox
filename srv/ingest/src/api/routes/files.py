@@ -75,7 +75,17 @@ async def check_file_access(
     # Convert to dict for easier access
     file_dict = dict(file_row)
     visibility = file_dict.get("visibility", "personal")
-    file_role_ids = file_dict.get("role_ids", [])
+    
+    # Parse role_ids - it comes back as JSON from the query
+    import json
+    role_ids_raw = file_dict.get("role_ids", [])
+    if isinstance(role_ids_raw, str):
+        file_role_ids = json.loads(role_ids_raw)
+    elif isinstance(role_ids_raw, list):
+        file_role_ids = role_ids_raw
+    else:
+        file_role_ids = []
+    
     owner_id = str(file_dict.get("owner_id", ""))
     
     # Personal files: only owner can access
