@@ -245,6 +245,71 @@ async def get_test_docs_status(request: Request):
     }
 
 
+@router.post("/test-docs/cleanup")
+async def cleanup_test_docs(request: Request):
+    """
+    Delete all test documents and clear state.
+    
+    This forces a fresh re-upload on next seed, useful for testing
+    ingestion pipeline changes.
+    """
+    if not request.headers.get("Authorization"):
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"error": "Authorization header required"},
+        )
+
+    state = _load_state()
+    deleted = []
+    errors = []
+
+    headers = {
+        "Authorization": request.headers.get("Authorization", ""),
+        "X-User-Id": getattr(request.state, "user_id", ""),
+    }
+
+    # Delete all files from state
+    for doc_id, file_id in state.items():
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.delete(
+                    f"http://{API_HOST}:{API_PORT}/files/{file_id}",
+                    headers=headers
+                )
+                if response.status_code >= 400:
+                    errors.append({
+                        "docId": doc_id,
+                        "fileId": file_id,
+                        "error": response.text
+                    })
+                else:
+                    deleted.append({
+                        "docId": doc_id,
+                        "fileId": file_id
+                    })
+        except Exception as e:
+            errors.append({
+                "docId": doc_id,
+                "fileId": file_id,
+                "error": str(e)
+            })
+
+    # Clear state file
+    _save_state({})
+    
+    logger.info(
+        "Test docs cleanup completed",
+        deleted_count=len(deleted),
+        error_count=len(errors)
+    )
+
+    return {
+        "deleted": deleted,
+        "errors": errors,
+        "message": f"Deleted {len(deleted)} documents, {len(errors)} errors"
+    }
+
+
 @router.post("/test-docs/seed")
 async def seed_test_docs(request: Request):
     """
@@ -253,6 +318,8 @@ async def seed_test_docs(request: Request):
     These documents work with basic pdfplumber extraction and don't require
     GPU services (Marker/ColPali). Use /test-docs/seed-complex for documents
     that require advanced extraction.
+    
+    Use /test-docs/cleanup first to force fresh re-upload.
     """
     if not request.headers.get("Authorization"):
         return JSONResponse(
