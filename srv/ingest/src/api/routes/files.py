@@ -722,6 +722,204 @@ async def get_file_chunks(
         await postgres_service.disconnect()
 
 
+@router.get("/{fileId}/vectors")
+async def get_file_vectors(
+    fileId: str,
+    request: Request,
+    limit: int = 100,
+    offset: int = 0
+):
+    """
+    Get vector embeddings for a file's chunks from Milvus.
+    
+    Args:
+        fileId: File identifier
+        limit: Number of vectors to return (default: 100)
+        offset: Offset for pagination (default: 0)
+    
+    Returns:
+        List of chunk embeddings with metadata from Milvus
+    """
+    user_id = request.state.user_id
+    
+    config = Config().to_dict()
+    postgres_service = PostgresService(config, request)
+    await postgres_service.connect()
+    
+    try:
+        async with postgres_service.acquire(request) as conn:
+            # Check file access based on visibility and roles
+            has_access, file_data, error_msg = await check_file_access(
+                conn, uuid.UUID(fileId), user_id, request
+            )
+            
+            if not has_access:
+                status_code = status.HTTP_404_NOT_FOUND if error_msg == "File not found" else status.HTTP_403_FORBIDDEN
+                return JSONResponse(
+                    status_code=status_code,
+                    content={"error": error_msg}
+                )
+            
+            # Get vector count from PostgreSQL
+            vector_count_row = await conn.fetchrow("""
+                SELECT vector_count FROM ingestion_files WHERE file_id = $1
+            """, uuid.UUID(fileId))
+            
+            vector_count = vector_count_row["vector_count"] if vector_count_row else 0
+            
+            if vector_count == 0:
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content={"error": "No vectors available for this file"}
+                )
+            
+            # Query Milvus for vectors
+            # Note: Vectors are stored in Milvus, not PostgreSQL
+            # We'll return metadata about vectors from chunks table
+            chunks_with_vectors = await conn.fetch("""
+                SELECT 
+                    chunk_index,
+                    text,
+                    page_number,
+                    token_count,
+                    created_at
+                FROM ingestion_chunks
+                WHERE file_id = $1
+                ORDER BY chunk_index
+                LIMIT $2 OFFSET $3
+            """, uuid.UUID(fileId), limit, offset)
+            
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={
+                    "fileId": fileId,
+                    "total": vector_count,
+                    "limit": limit,
+                    "offset": offset,
+                    "note": "Vectors stored in Milvus - showing chunk metadata",
+                    "chunks": [
+                        {
+                            "chunkIndex": chunk["chunk_index"],
+                            "text": chunk["text"][:200] + "..." if len(chunk["text"]) > 200 else chunk["text"],
+                            "pageNumber": chunk["page_number"],
+                            "tokenCount": chunk["token_count"],
+                            "hasVector": True,  # If in this result, it has a vector
+                            "createdAt": chunk["created_at"].isoformat(),
+                        }
+                        for chunk in chunks_with_vectors
+                    ]
+                }
+            )
+    
+    except Exception as e:
+        logger.error(
+            "Failed to get file vectors",
+            file_id=fileId,
+            user_id=user_id,
+            error=str(e),
+            exc_info=True,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": "Failed to retrieve vectors", "details": str(e)}
+        )
+    
+    finally:
+        await postgres_service.disconnect()
+
+
+@router.get("/{fileId}/markdown")
+async def get_file_markdown(
+    fileId: str,
+    request: Request
+):
+    """
+    Get markdown representation of a file from MinIO.
+    
+    Args:
+        fileId: File identifier
+    
+    Returns:
+        Markdown content with metadata
+    """
+    user_id = request.state.user_id
+    
+    config = Config().to_dict()
+    postgres_service = PostgresService(config, request)
+    minio_service = MinIOService(config)
+    await postgres_service.connect()
+    
+    try:
+        async with postgres_service.acquire(request) as conn:
+            # Check file access based on visibility and roles
+            has_access, file_data, error_msg = await check_file_access(
+                conn, uuid.UUID(fileId), user_id, request
+            )
+            
+            if not has_access:
+                status_code = status.HTTP_404_NOT_FOUND if error_msg == "File not found" else status.HTTP_403_FORBIDDEN
+                return JSONResponse(
+                    status_code=status_code,
+                    content={"error": error_msg}
+                )
+            
+            # Get markdown metadata from PostgreSQL
+            markdown_row = await conn.fetchrow("""
+                SELECT 
+                    original_filename,
+                    markdown_path,
+                    has_markdown,
+                    image_count,
+                    created_at
+                FROM ingestion_files
+                WHERE file_id = $1
+            """, uuid.UUID(fileId))
+            
+            if not markdown_row or not markdown_row["has_markdown"] or not markdown_row["markdown_path"]:
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content={"error": "Markdown not available for this file"}
+                )
+            
+            # Fetch markdown content from MinIO
+            import asyncio
+            loop = asyncio.get_event_loop()
+            markdown_content = await loop.run_in_executor(
+                None,
+                minio_service.get_file_content,
+                markdown_row["markdown_path"]
+            )
+            
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={
+                    "fileId": fileId,
+                    "filename": markdown_row["original_filename"],
+                    "markdown": markdown_content,
+                    "hasImages": markdown_row["image_count"] > 0 if markdown_row["image_count"] else False,
+                    "imageCount": markdown_row["image_count"] or 0,
+                    "length": len(markdown_content),
+                    "createdAt": markdown_row["created_at"].isoformat(),
+                }
+            )
+    
+    except Exception as e:
+        logger.error(
+            "Failed to get file markdown",
+            file_id=fileId,
+            user_id=user_id,
+            error=str(e),
+            exc_info=True,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": "Failed to retrieve markdown", "details": str(e)}
+        )
+    
+    finally:
+        await postgres_service.disconnect()
+
+
 class DocumentSearchRequest(BaseModel):
     """Request model for single-document search."""
     query: str = Field(..., description="Search query")
