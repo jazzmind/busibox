@@ -94,14 +94,17 @@ generate_keys() {
         return 1
     }
     
-    # Parse JSON output using Python (parse each field separately)
+    # Parse JSON output using Python
+    # The privateKey and publicKey fields are JSON-stringified, so we need to parse them
+    # to get the actual JSON objects (not Python dict strings)
     local kid
     local private_key
     local public_key
     
     kid=$(echo "$output" | python3 -c "import json, sys; print(json.load(sys.stdin)['kid'])")
-    private_key=$(echo "$output" | python3 -c "import json, sys; print(json.load(sys.stdin)['privateKey'])")
-    public_key=$(echo "$output" | python3 -c "import json, sys; print(json.load(sys.stdin)['publicKey'])")
+    # These are already JSON strings, but we keep them as-is (they have proper double quotes)
+    private_key=$(echo "$output" | python3 -c "import json, sys; data = json.load(sys.stdin); print(data['privateKey'])")
+    public_key=$(echo "$output" | python3 -c "import json, sys; data = json.load(sys.stdin); print(data['publicKey'])")
     
     if [ -z "$private_key" ] || [ -z "$public_key" ]; then
         error "Failed to extract keys from generator output"
