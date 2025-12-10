@@ -8,17 +8,6 @@
     home: /srv/agent
     shell: /bin/bash
 
-- name: Create agent directories
-  file:
-    path: "{{ item }}"
-    state: directory
-    owner: "{{ agent_api_user }}"
-    group: "{{ agent_api_user }}"
-    mode: "0755"
-  loop:
-    - /srv/agent
-    - "{{ agent_api_log_path }}"
-
 - name: Install system dependencies
   apt:
     name:
@@ -31,6 +20,28 @@
       - rsync
     state: present
     update_cache: yes
+
+- name: Stop agent-api service if running (to allow cleanup)
+  systemd:
+    name: agent-api
+    state: stopped
+  ignore_errors: yes
+
+- name: Clean up old agent directory (from previous Node.js deployment)
+  file:
+    path: /srv/agent
+    state: absent
+
+- name: Create agent directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ agent_api_user }}"
+    group: "{{ agent_api_user }}"
+    mode: "0755"
+  loop:
+    - /srv/agent
+    - "{{ agent_api_log_path }}"
 
 - name: Copy agent service source code
   synchronize:
@@ -46,9 +57,14 @@
       - "--exclude=.env"
       - "--exclude=htmlcov"
       - "--exclude=.coverage"
-  become: yes
-  become_user: "{{ agent_api_user }}"
   notify: Restart agent-api
+
+- name: Fix ownership of agent directory
+  file:
+    path: /srv/agent
+    owner: "{{ agent_api_user }}"
+    group: "{{ agent_api_user }}"
+    recurse: yes
 
 - name: Create Python virtual environment
   command: python3 -m venv "{{ agent_api_venv_path }}"
@@ -110,3 +126,4 @@
   delay: 5
   register: health_check
   until: health_check is success
+
