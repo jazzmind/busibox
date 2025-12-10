@@ -2,11 +2,17 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
+
+# Use JSON for SQLite compatibility, JSONB for PostgreSQL
+try:
+    from sqlalchemy.dialects.postgresql import JSONB as JSONType
+except ImportError:
+    JSONType = JSON  # type: ignore
 
 
 def _uuid() -> uuid.UUID:
@@ -26,9 +32,9 @@ class AgentDefinition(Base):
     description: Mapped[Optional[str]] = mapped_column(Text)
     model: Mapped[str] = mapped_column(String(255))
     instructions: Mapped[str] = mapped_column(Text)
-    tools: Mapped[dict] = mapped_column(JSONB, default=dict)
-    workflow: Mapped[Optional[dict]] = mapped_column(JSONB)
-    scopes: Mapped[list] = mapped_column(JSONB, default=list)
+    tools: Mapped[dict] = mapped_column(JSON, default=dict)
+    workflow: Mapped[Optional[dict]] = mapped_column(JSON)
+    scopes: Mapped[list] = mapped_column(JSON, default=list)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -43,9 +49,9 @@ class ToolDefinition(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
     description: Mapped[Optional[str]] = mapped_column(Text)
-    schema: Mapped[dict] = mapped_column(JSONB, default=dict)
+    schema: Mapped[dict] = mapped_column(JSON, default=dict)
     entrypoint: Mapped[str] = mapped_column(String(255), comment="registered adapter name")
-    scopes: Mapped[list] = mapped_column(JSONB, default=list)
+    scopes: Mapped[list] = mapped_column(JSON, default=list)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -60,7 +66,7 @@ class WorkflowDefinition(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
     description: Mapped[Optional[str]] = mapped_column(Text)
-    steps: Mapped[list] = mapped_column(JSONB, default=list)
+    steps: Mapped[list] = mapped_column(JSON, default=list)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -75,7 +81,7 @@ class EvalDefinition(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
     description: Mapped[Optional[str]] = mapped_column(Text)
-    config: Mapped[dict] = mapped_column(JSONB, default=dict)
+    config: Mapped[dict] = mapped_column(JSON, default=dict)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -90,7 +96,7 @@ class RagDatabase(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
     description: Mapped[Optional[str]] = mapped_column(Text)
-    config: Mapped[dict] = mapped_column(JSONB, default=dict)
+    config: Mapped[dict] = mapped_column(JSON, default=dict)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(
@@ -106,7 +112,7 @@ class RagDocument(Base):
         UUID(as_uuid=True), ForeignKey("rag_databases.id", ondelete="CASCADE"), index=True
     )
     path: Mapped[str] = mapped_column(String(255))
-    metadata: Mapped[dict] = mapped_column(JSONB, default=dict)
+    doc_metadata: Mapped[dict] = mapped_column("metadata", JSON, default=dict)  # Use column name 'metadata' but attribute 'doc_metadata'
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=_now, onupdate=_now
@@ -122,9 +128,9 @@ class RunRecord(Base):
     agent_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     workflow_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
     status: Mapped[str] = mapped_column(String(50), default="pending")
-    input: Mapped[dict] = mapped_column(JSONB, default=dict)
-    output: Mapped[Optional[dict]] = mapped_column(JSONB)
-    events: Mapped[list] = mapped_column(JSONB, default=list)
+    input: Mapped[dict] = mapped_column(JSON, default=dict)
+    output: Mapped[Optional[dict]] = mapped_column(JSON)
+    events: Mapped[list] = mapped_column(JSON, default=list)
     created_by: Mapped[Optional[str]] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(
@@ -137,7 +143,7 @@ class TokenGrant(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     subject: Mapped[str] = mapped_column(String(255), index=True)
-    scopes: Mapped[list] = mapped_column(JSONB, default=list)
+    scopes: Mapped[list] = mapped_column(JSON, default=list)
     token: Mapped[str] = mapped_column(Text)
     expires_at: Mapped[datetime] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
