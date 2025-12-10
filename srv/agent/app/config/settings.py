@@ -48,8 +48,8 @@ class Settings(BaseSettings):
         "http://localhost:8080/oauth/token",
         description="Token endpoint for OAuth2 client-credentials exchange",
     )
-    auth_client_id: str = Field(..., description="Client ID for token exchange")
-    auth_client_secret: str = Field(..., description="Client secret for token exchange")
+    auth_client_id: str = Field("test-client-id", description="Client ID for token exchange")
+    auth_client_secret: str = Field("test-client-secret", description="Client secret for token exchange")
 
     # Database configuration
     database_url: str = Field(

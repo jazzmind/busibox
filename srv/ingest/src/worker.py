@@ -1666,8 +1666,23 @@ class IngestWorker:
         self.running = True
         logger.info("Worker started", worker_id=self.worker_id)
         
+        # Heartbeat counter for periodic logging
+        heartbeat_counter = 0
+        heartbeat_interval = 12  # Log every 60 seconds (12 * 5 second blocks)
+        
         while self.running:
             try:
+                # Periodic heartbeat logging
+                heartbeat_counter += 1
+                if heartbeat_counter >= heartbeat_interval:
+                    logger.info(
+                        "Worker heartbeat - listening for jobs",
+                        worker_id=self.worker_id,
+                        stream=self.stream_name,
+                        consumer_group=self.consumer_group,
+                    )
+                    heartbeat_counter = 0
+                
                 # Read from stream (block for 5 seconds)
                 messages = self.redis_client.xreadgroup(
                     groupname=self.consumer_group,
@@ -1679,6 +1694,10 @@ class IngestWorker:
                 
                 if not messages:
                     continue
+                
+                # Reset heartbeat counter when we get a message
+                heartbeat_counter = 0
+                logger.info("Received job from Redis stream")
                 
                 # Process message
                 for stream, message_list in messages:
@@ -1763,24 +1782,42 @@ def signal_handler(signum, frame):
 
 def main():
     """Main entry point."""
+    logger.info("=" * 80)
+    logger.info("INGEST WORKER STARTING")
+    logger.info("=" * 80)
+    
     # Setup signal handlers
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
+    logger.info("Signal handlers registered")
     
     # Load configuration
     config = Config().to_dict()
+    logger.info(
+        "Configuration loaded",
+        redis_host=config.get("redis_host"),
+        redis_port=config.get("redis_port"),
+        stream_name=config.get("redis_stream_name"),
+        consumer_group=config.get("redis_consumer_group"),
+    )
     
     # Create and start worker
     worker = IngestWorker(config)
     
     try:
+        logger.info("Connecting to services...")
         worker.connect()
+        logger.info("=" * 80)
+        logger.info("WORKER READY - Listening for jobs")
+        logger.info("=" * 80)
         worker.run()
     except Exception as e:
         logger.error("Worker failed", error=str(e), exc_info=True)
         sys.exit(1)
     finally:
+        logger.info("Worker shutting down...")
         worker.disconnect()
+        logger.info("Worker stopped")
 
 
 if __name__ == "__main__":

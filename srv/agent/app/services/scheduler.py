@@ -15,7 +15,13 @@ class RunScheduler:
 
     def __init__(self) -> None:
         self._scheduler = AsyncIOScheduler()
-        self._scheduler.start()
+        self._started = False
+    
+    def _ensure_started(self) -> None:
+        """Start scheduler if not already started."""
+        if not self._started:
+            self._scheduler.start()
+            self._started = True
 
     def schedule_agent_run(
         self,
@@ -27,6 +33,8 @@ class RunScheduler:
         purpose: str,
         cron: str,
     ) -> None:
+        self._ensure_started()  # Start scheduler on first use
+        
         async def _job() -> None:
             async with session_factory() as session:  # type: ignore[call-arg]
                 await create_run(
