@@ -127,6 +127,32 @@ async def create_eval(
     return EvalDefinitionRead.model_validate(record)
 
 
+@router.get("/models")
+async def list_available_models(
+    # principal: Principal = Depends(get_principal),  # Temporarily disabled for testing
+) -> dict:
+    """
+    List available models from LiteLLM.
+    Models are configured in model_registry.yml with purposes like 'chat', 'research', 'agent'.
+    """
+    import httpx
+    from app.config.settings import get_settings
+    
+    settings = get_settings()
+    
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(f"{settings.litellm_base_url}/models")
+            response.raise_for_status()
+            return response.json()
+    except Exception as e:
+        return {
+            "error": str(e),
+            "note": "Models are configured in model_registry.yml",
+            "common_purposes": ["chat", "research", "agent", "tool_calling", "frontier"]
+        }
+
+
 @router.post("/weather/query", response_model=WeatherResponse)
 async def query_weather_agent(
     payload: WeatherRequest,

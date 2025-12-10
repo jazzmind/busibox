@@ -8,9 +8,9 @@ agent_api_src_path: /srv/agent
 agent_api_log_path: /var/log/agent
 
 # Default model
-# Use a model that's configured in LiteLLM
-# Common options: gpt-4, gpt-3.5-turbo, claude-3-sonnet, ollama/llama2
-default_model: "gpt-4"
+# Use model purpose from model_registry.yml
+# Options: chat, research, agent, tool_calling, frontier, etc.
+default_model: "research"
 
 # Service endpoints
 search_api_url: "http://{{ hostvars[groups['search'][0]]['ansible_host'] if 'search' in groups else '127.0.0.1' }}:8003"
