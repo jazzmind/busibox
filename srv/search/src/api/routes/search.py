@@ -445,8 +445,10 @@ async def _set_rls_session_vars(conn, request: Request):
     """Set session variables for RLS on ingestion DB."""
     user_id = getattr(request.state, "user_id", "")
     readable_role_ids = getattr(request.state, "readable_role_ids", [])
-    await conn.execute("SET LOCAL app.user_id = $1", user_id)
-    await conn.execute("SET LOCAL app.user_role_ids_read = $1", ",".join(readable_role_ids))
+    # PostgreSQL SET command doesn't support parameterized queries
+    # Use string formatting with proper escaping
+    await conn.execute(f"SET LOCAL app.user_id = '{user_id}'")
+    await conn.execute(f"SET LOCAL app.user_role_ids_read = '{','.join(readable_role_ids)}'")
 
 
 async def _enrich_results(results: list, request: Request) -> list:
