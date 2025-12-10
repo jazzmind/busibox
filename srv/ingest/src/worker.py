@@ -624,14 +624,21 @@ class IngestWorker:
             finally:
                 self.postgres_service._return_connection(conn)
             
-            # Check for duplicate
-            if self._check_duplicate(file_id, content_hash):
+            # Check for duplicate (skip if force_reprocess requested)
+            force_reprocess = processing_config.get("force_reprocess", False)
+            if not force_reprocess and self._check_duplicate(file_id, content_hash):
                 logger.info(
                     "Job completed (duplicate)",
                     file_id=file_id,
                     processing_time_seconds=time.time() - start_time,
                 )
                 return
+            
+            if force_reprocess:
+                logger.info(
+                    "Force reprocess enabled, skipping duplicate check",
+                    file_id=file_id,
+                )
             
             # For partial reprocessing, load existing data if starting from later stage
             existing_chunks = None
