@@ -214,12 +214,23 @@ async def _fetch_status(file_id: str, request: Request) -> Dict:
 @router.get("/test-docs/status")
 async def get_test_docs_status(request: Request):
     """
-    Return status for each predefined test document.
+    Return status for each predefined test document that the user has access to.
+    Only returns documents where user has the required role.
     """
     state = _load_state()
     documents: List[Dict] = []
+    
+    # Get user's roles
+    user_roles = getattr(request.state, "user_roles", [])
+    user_role_names = set(getattr(role, "name", "").lower() for role in user_roles)
 
     for doc in TEST_DOCS:
+        # Check if user has the required role for this document
+        doc_role = doc["role"].replace("test-role-", "")  # Extract 'a', 'b', 'c'
+        if doc_role not in user_role_names:
+            # User doesn't have access to this document - skip it
+            continue
+        
         doc_status: Dict[str, Optional[str]] = {
             "id": doc["id"],
             "name": doc["name"],

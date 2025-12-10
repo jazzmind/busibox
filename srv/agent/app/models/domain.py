@@ -33,7 +33,7 @@ class AgentDefinition(Base):
     model: Mapped[str] = mapped_column(String(255))
     instructions: Mapped[str] = mapped_column(Text)
     tools: Mapped[dict] = mapped_column(JSON, default=dict)
-    workflow: Mapped[Optional[dict]] = mapped_column(JSON)
+    workflows: Mapped[Optional[dict]] = mapped_column(JSON)  # Note: column name is 'workflows' (plural)
     scopes: Mapped[list] = mapped_column(JSON, default=list)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
