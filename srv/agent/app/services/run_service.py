@@ -93,7 +93,7 @@ async def create_run(
             )
             
             # Success - extract output
-    run_record.status = "succeeded"
+            run_record.status = "succeeded"
             if hasattr(result, "output"):
                 run_record.output = result.output
             elif hasattr(result, "data"):
