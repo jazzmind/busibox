@@ -1,0 +1,512 @@
+openapi: 3.1.0
+info:
+  title: Busibox Agent Server API
+  version: 1.0.0
+  description: |
+    Production-grade agent server with Pydantic AI for executing AI agents with tool calls,
+    dynamic agent/workflow management, and OAuth2 token forwarding to Busibox services.
+    
+    ## Authentication
+    All endpoints (except `/health`) require Bearer token authentication with Busibox JWT.
+    
+    ## Rate Limiting
+    - Agent execution: 100 concurrent runs per user
+    - API requests: 1000 requests per minute per user
+    
+servers:
+  - url: http://agent-lxc:8000
+    description: Production (agent-lxc container)
+  - url: http://localhost:8000
+    description: Local development
+
+security:
+  - BearerAuth: []
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      description: Returns server health status (no auth required)
+      security: []
+      responses:
+        '200':
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /auth/exchange:
+    post:
+      summary: Exchange user token for downstream token
+      description: |
+        Exchange the current user's JWT token for a scoped downstream token
+        for calling Busibox services (search/ingest/RAG). Tokens are cached
+        and reused until expiry.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scopes:
+                  type: array
+                  items:
+                    type: string
+                  example: ["search.read", "ingest.write"]
+                purpose:
+                  type: string
+                  description: Purpose of token (e.g., "agent-run", "manual-search")
+                  example: agent-run
+              required:
+                - scopes
+                - purpose
+      responses:
+        '200':
+          description: Token exchanged successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenExchangeResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /agents:
+    get:
+      summary: List active agents
+      description: Returns all active agent definitions available for execution
+      responses:
+        '200':
+          description: List of agents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AgentDefinitionRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /agents/definitions:
+    post:
+      summary: Create agent definition
+      description: Create a new agent definition (admin only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentDefinitionCreate'
+      responses:
+        '201':
+          description: Agent created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentDefinitionRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /agents/definitions/{agent_id}:
+    put:
+      summary: Update agent definition
+      description: Update an existing agent definition (admin only)
+      parameters:
+        - name: agent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentDefinitionCreate'
+      responses:
+        '200':
+          description: Agent updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentDefinitionRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /runs:
+    post:
+      summary: Execute agent run
+      description: |
+        Execute an agent with the provided input. Returns immediately with run ID.
+        Use SSE stream or GET /runs/{run_id} to monitor progress.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunCreate'
+      responses:
+        '202':
+          description: Run accepted and queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunRead'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Agent not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /runs/{run_id}:
+    get:
+      summary: Get run details
+      description: Retrieve run status, input, output, and events
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Run details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunRead'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /runs/schedule:
+    post:
+      summary: Schedule agent run
+      description: Schedule an agent to run on a cron schedule (admin only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                agent_id:
+                  type: string
+                  format: uuid
+                cron:
+                  type: string
+                  description: Cron expression (5 fields)
+                  example: "0 9 * * *"
+                input:
+                  type: object
+                  description: Input payload for agent
+                scopes:
+                  type: array
+                  items:
+                    type: string
+                  example: ["search.read", "ingest.write"]
+                purpose:
+                  type: string
+                  example: scheduled-ingestion
+              required:
+                - agent_id
+                - cron
+                - input
+                - scopes
+                - purpose
+      responses:
+        '201':
+          description: Schedule created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  schedule_id:
+                    type: string
+                  message:
+                    type: string
+                    example: Schedule created successfully
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /streams/runs/{run_id}:
+    get:
+      summary: Stream run updates
+      description: |
+        Server-Sent Events (SSE) stream for real-time run status updates.
+        Emits events: status (status changes), output (final output), error (failures).
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  SSE events in format:
+                  event: status
+                  data: running
+                  
+                  event: output
+                  data: {"message": "...", "tool_results": [...]}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Busibox JWT token
+
+  schemas:
+    TokenExchangeResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+          description: Downstream bearer token
+        token_type:
+          type: string
+          example: bearer
+        expires_at:
+          type: string
+          format: date-time
+          description: Token expiry timestamp
+        scopes:
+          type: array
+          items:
+            type: string
+          example: ["search.read", "ingest.write"]
+      required:
+        - access_token
+        - token_type
+        - expires_at
+        - scopes
+
+    AgentDefinitionCreate:
+      type: object
+      properties:
+        name:
+          type: string
+          pattern: '^[a-zA-Z0-9-]+$'
+          maxLength: 120
+          example: chat-agent
+        display_name:
+          type: string
+          maxLength: 255
+          example: Chat Agent with RAG
+        description:
+          type: string
+          example: Conversational agent with search and RAG capabilities
+        model:
+          type: string
+          example: anthropic:claude-3-5-sonnet
+        instructions:
+          type: string
+          maxLength: 10000
+          example: You are a helpful assistant. Use search and RAG tools to answer questions.
+        tools:
+          type: object
+          properties:
+            names:
+              type: array
+              items:
+                type: string
+              example: ["search", "ingest", "rag"]
+          default: {}
+        workflow:
+          type: object
+          nullable: true
+          description: Optional workflow definition
+        scopes:
+          type: array
+          items:
+            type: string
+          example: ["agent.execute", "search.read"]
+          default: []
+        is_active:
+          type: boolean
+          default: true
+      required:
+        - name
+        - model
+        - instructions
+
+    AgentDefinitionRead:
+      allOf:
+        - $ref: '#/components/schemas/AgentDefinitionCreate'
+        - type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            version:
+              type: integer
+              example: 1
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+          required:
+            - id
+            - version
+            - created_at
+            - updated_at
+
+    RunCreate:
+      type: object
+      properties:
+        agent_id:
+          type: string
+          format: uuid
+        workflow_id:
+          type: string
+          format: uuid
+          nullable: true
+        input:
+          type: object
+          description: Input payload (typically includes "prompt" key)
+          example:
+            prompt: Search for recent documents about AI
+      required:
+        - agent_id
+        - input
+
+    RunRead:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        agent_id:
+          type: string
+          format: uuid
+        workflow_id:
+          type: string
+          format: uuid
+          nullable: true
+        status:
+          type: string
+          enum: [pending, running, succeeded, failed, timeout]
+        input:
+          type: object
+        output:
+          type: object
+          nullable: true
+        events:
+          type: array
+          items:
+            type: object
+            properties:
+              timestamp:
+                type: string
+                format: date-time
+              type:
+                type: string
+                example: tool_call
+              data:
+                type: object
+        created_by:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - agent_id
+        - status
+        - input
+        - created_at
+        - updated_at
+
+    Error:
+      type: object
+      properties:
+        detail:
+          type: string
+          description: Error message
+      required:
+        - detail
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    
+    Unauthorized:
+      description: Authentication required or invalid token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    
+    Forbidden:
+      description: Insufficient permissions
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'

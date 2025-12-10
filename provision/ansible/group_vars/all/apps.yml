@@ -18,40 +18,7 @@ applications:
   # ============================================================================
   # Internal API Services
   # ============================================================================
-  
-  - name: agent-server
-    container: agent-lxc
-    container_ip: "{{ agent_ip }}"
-    port: 8000
-    deploy_path: /srv/agent
-    health_endpoint: /health
-    process_manager: systemd  # Use systemd for consistent logging via journalctl
-    local_src: "{{ playbook_dir }}/../../srv/agent"
-    marker_file: "pyproject.toml"
-    start_command: "/srv/agent/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000"
-    routes: []  # Internal only - no NGINX routing
-    secrets:
-      - database_url
-      - auth_client_id
-      - auth_client_secret
-      - auth_jwks_url
-      - auth_token_url
-      - redis_url
-      - search_api_url
-      - ingest_api_url
-      - rag_api_url
-    env:
-      LOG_LEVEL: "{{ log_level }}"
-      DEFAULT_MODEL: "anthropic:claude-3-5-sonnet"
-      DATABASE_URL: "{{ secrets.database_url | default('') }}"
-      AUTH_CLIENT_ID: "{{ secrets.auth_client_id | default('') }}"
-      AUTH_CLIENT_SECRET: "{{ secrets.auth_client_secret | default('') }}"
-      AUTH_JWKS_URL: "{{ secrets.auth_jwks_url | default('') }}"
-      AUTH_TOKEN_URL: "{{ secrets.auth_token_url | default('') }}"
-      SEARCH_API_URL: "{{ secrets.search_api_url | default('') }}"
-      INGEST_API_URL: "{{ secrets.ingest_api_url | default('') }}"
-      RAG_API_URL: "{{ secrets.rag_api_url | default('') }}"
-  
+ 
   # ============================================================================
   # Public Web Applications
   # ============================================================================
@@ -114,9 +81,9 @@ applications:
       NEXT_PUBLIC_INGEST_API_URL: "http://{{ ingest_ip }}:8002"
       DEPLOYMENT_MODE: "busibox"
       NEXT_PUBLIC_BASE_PATH: "/portal"
-      # Search API (part of ingest-api service)
+      # Search API (deployed to milvus-lxc, colocated with Milvus for low-latency)
       SEARCH_API_HOST: "{{ search_api_ip }}"
-      SEARCH_API_PORT: "8002"
+      SEARCH_API_PORT: "8003"
   
   - name: agent-client
     github_repo: jazzmind/agent-client

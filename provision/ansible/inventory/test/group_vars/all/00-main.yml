@@ -29,7 +29,7 @@ apps_ip: "{{ network_base_octets }}.201"
 agent_ip: "{{ network_base_octets }}.202"
 postgres_ip: "{{ network_base_octets }}.203"
 milvus_ip: "{{ network_base_octets }}.204"
-search_api_ip: "{{ ingest_ip }}"  # Search API runs on ingest container (port 8003)
+search_api_ip: "{{ milvus_ip }}"  # Search API runs on milvus-lxc container (port 8003)
 minio_ip: "{{ network_base_octets }}.205"
 ingest_ip: "{{ network_base_octets }}.206"
 

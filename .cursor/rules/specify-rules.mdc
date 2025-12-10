@@ -7,6 +7,8 @@ Auto-generated from all feature plans. Last updated: 2025-10-14
 - Bash 5.x (scripts), Ansible 2.14+ (configuration management), NGINX 1.18+ (reverse proxy) (002-deploy-app-servers)
 - Python 3.11+ + FastAPI 0.104+, pymilvus 2.6+ (BM25 function support), redis-py 5.0+, boto3 (MinIO S3), psycopg 3.1+ (PostgreSQL async) (004-updated-ingestion-service)
 - PostgreSQL 15+ (metadata, status), Milvus 2.6+ (vectors with BM25), MinIO (S3-compatible file storage), Redis 7.0+ (Streams for job queue) (004-updated-ingestion-service)
+- Python 3.11+ + FastAPI 0.115+, Pydantic AI 0.0.20+, SQLAlchemy 2.0+ (async), asyncpg, APScheduler 3.10+, python-jose (JWT), httpx, OpenTelemetry SDK, sse-starlette (005-i-want-to)
+- PostgreSQL 15+ (agent definitions, runs, tokens, workflows, scorers) (005-i-want-to)
 
 ## Project Structure
 ```
@@ -21,9 +23,9 @@ tests/
 : Follow standard conventions
 
 ## Recent Changes
+- 005-i-want-to: Added Python 3.11+ + FastAPI 0.115+, Pydantic AI 0.0.20+, SQLAlchemy 2.0+ (async), asyncpg, APScheduler 3.10+, python-jose (JWT), httpx, OpenTelemetry SDK, sse-starlette
 - 004-updated-ingestion-service: Added Python 3.11+ + FastAPI 0.104+, pymilvus 2.6+ (BM25 function support), redis-py 5.0+, boto3 (MinIO S3), psycopg 3.1+ (PostgreSQL async)
 - 002-deploy-app-servers: Added Bash 5.x (scripts), Ansible 2.14+ (configuration management), NGINX 1.18+ (reverse proxy)
-- 001-create-an-initial: Added
 
 <!-- MANUAL ADDITIONS START -->
 <!-- MANUAL ADDITIONS END -->

@@ -161,3 +161,72 @@ srv/agent/                      # Agent server root (deployed to agent-lxc)
 ## Complexity Tracking
 
 *No constitution violations - this section is not applicable.*
+
+## Phase 0: Research ✅ COMPLETE
+
+**Output**: `research.md`
+
+All technical decisions resolved:
+- Pydantic AI 0.0.20+ for agent framework
+- FastAPI 0.115+ with async/await
+- SQLAlchemy 2.0 async with asyncpg
+- APScheduler 3.10+ for cron scheduling
+- OpenTelemetry SDK 1.27+ for observability
+- OAuth2 client-credentials for token exchange
+
+Best practices documented for:
+- Agent design patterns (tool registry, dependency injection, structured outputs)
+- Error handling (tool failures, timeouts, database errors)
+- Testing strategy (unit/integration/e2e with 90%+ coverage)
+- Performance optimization (connection pooling, token caching, agent registry)
+- Security (input validation, token security, execution isolation)
+
+## Phase 1: Design & Contracts ✅ COMPLETE
+
+**Outputs**: `data-model.md`, `contracts/openapi.yaml`, `quickstart.md`, agent context updated
+
+### Data Model
+- 8 core entities defined: AgentDefinition, ToolDefinition, WorkflowDefinition, RunRecord, TokenGrant, EvalDefinition, RagDatabase, RagDocument
+- Complete SQL DDL with indexes and constraints
+- Entity relationships and validation rules documented
+- Data access patterns defined
+
+### API Contracts
+- OpenAPI 3.1.0 specification with 9 endpoints
+- Authentication via Bearer token (Busibox JWT)
+- Request/response schemas for all operations
+- Error responses and status codes defined
+- SSE streaming contract for run updates
+
+### Quickstart Guide
+- Local development setup (dependencies, environment, database)
+- Quick test: execute agent with tool calls
+- Create custom agent example
+- Testing instructions (unit/integration/e2e)
+- Deployment to production via Ansible
+- Troubleshooting guide
+
+### Agent Context
+- Cursor IDE context updated with Python 3.11+, FastAPI, Pydantic AI, SQLAlchemy, APScheduler, OpenTelemetry
+- Technology stack registered for future feature development
+
+## Constitution Re-Check ✅ PASS
+
+All gates remain passing after Phase 1 design:
+- ✅ Infrastructure as Code: Schema DDL versioned, deployment via Ansible
+- ✅ Service Isolation: Runs in agent-lxc with JWT auth and token forwarding
+- ✅ Observability: Health endpoint, structured logging, OpenTelemetry tracing
+- ✅ Extensibility: Dynamic definitions, tool registry, model-agnostic
+- ✅ Test-Driven: 90%+ coverage requirement, unit/integration/e2e tests
+- ✅ Documentation: API contracts, data model, quickstart all complete
+- ✅ Simplicity: Standard stack, no over-engineering, justified complexity
+
+## Next Phase: Tasks (Phase 2)
+
+Run `/speckit.tasks` to generate implementation tasks from this plan.
+
+The tasks phase will create:
+- Prioritized task list with dependencies
+- Effort estimates and milestones
+- Testing checkpoints
+- Deployment steps
