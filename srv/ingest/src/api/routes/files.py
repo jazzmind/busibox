@@ -52,20 +52,13 @@ async def check_file_access(
         (has_access, file_row, error_message)
     """
     # Get file with visibility and role information
+    # Only query essential columns that exist in all contexts
     file_row = await conn.fetchrow("""
         SELECT 
             f.file_id,
             f.user_id,
             f.owner_id,
             f.visibility,
-            f.filename,
-            f.original_filename,
-            f.mime_type,
-            f.chunk_count,
-            f.vector_count,
-            f.markdown_content,
-            f.extraction_method,
-            f.created_at,
             COALESCE(
                 (SELECT json_agg(role_id) 
                  FROM document_roles 
@@ -657,6 +650,11 @@ async def get_file_chunks(
                     content={"error": error_msg}
                 )
             
+            # Get chunk count
+            chunk_count_row = await conn.fetchrow("""
+                SELECT chunk_count FROM ingestion_files WHERE file_id = $1
+            """, uuid.UUID(fileId))
+            
             # Get chunks
             chunks = await conn.fetch("""
                 SELECT 
@@ -678,7 +676,7 @@ async def get_file_chunks(
                 status_code=status.HTTP_200_OK,
                 content={
                     "fileId": fileId,
-                    "total": file_data["chunk_count"],
+                    "total": chunk_count_row["chunk_count"] if chunk_count_row else 0,
                     "limit": limit,
                     "offset": offset,
                     "chunks": [
@@ -752,6 +750,11 @@ async def get_file_vectors(
                     content={"error": error_msg}
                 )
             
+            # Get vector count
+            vector_count_row = await conn.fetchrow("""
+                SELECT vector_count FROM ingestion_files WHERE file_id = $1
+            """, uuid.UUID(fileId))
+            
             # Get vectors (embeddings from chunks)
             vectors = await conn.fetch("""
                 SELECT 
@@ -772,7 +775,7 @@ async def get_file_vectors(
                 status_code=status.HTTP_200_OK,
                 content={
                     "fileId": fileId,
-                    "total": file_data["vector_count"] or 0,
+                    "total": vector_count_row["vector_count"] if vector_count_row else 0,
                     "limit": limit,
                     "offset": offset,
                     "vectors": [
@@ -841,9 +844,18 @@ async def get_file_markdown(
                     content={"error": error_msg}
                 )
             
-            markdown_content = file_data["markdown_content"]
+            # Get markdown content and metadata
+            markdown_row = await conn.fetchrow("""
+                SELECT 
+                    markdown_content,
+                    original_filename,
+                    extraction_method,
+                    created_at
+                FROM ingestion_files
+                WHERE file_id = $1
+            """, uuid.UUID(fileId))
             
-            if not markdown_content:
+            if not markdown_row or not markdown_row["markdown_content"]:
                 return JSONResponse(
                     status_code=status.HTTP_404_NOT_FOUND,
                     content={"error": "Markdown not available for this file"}
@@ -853,11 +865,11 @@ async def get_file_markdown(
                 status_code=status.HTTP_200_OK,
                 content={
                     "fileId": fileId,
-                    "filename": file_data["original_filename"],
-                    "markdown": markdown_content,
-                    "extractionMethod": file_data["extraction_method"],
-                    "length": len(markdown_content),
-                    "createdAt": file_data["created_at"].isoformat(),
+                    "filename": markdown_row["original_filename"],
+                    "markdown": markdown_row["markdown_content"],
+                    "extractionMethod": markdown_row["extraction_method"],
+                    "length": len(markdown_row["markdown_content"]),
+                    "createdAt": markdown_row["created_at"].isoformat(),
                 }
             )
     
