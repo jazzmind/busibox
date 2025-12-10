@@ -634,6 +634,189 @@ async def get_file_chunks(
         await postgres_service.disconnect()
 
 
+@router.get("/{fileId}/vectors")
+async def get_file_vectors(
+    fileId: str,
+    request: Request,
+    limit: int = 100,
+    offset: int = 0
+):
+    """
+    Get vector embeddings for a file's chunks.
+    
+    Args:
+        fileId: File identifier
+        limit: Number of vectors to return (default: 100)
+        offset: Offset for pagination (default: 0)
+    
+    Returns:
+        List of chunk embeddings with metadata
+    """
+    user_id = request.state.user_id
+    
+    config = Config().to_dict()
+    postgres_service = PostgresService(config, request)
+    await postgres_service.connect()
+    
+    try:
+        async with postgres_service.acquire(request) as conn:
+            # Verify file exists and user owns it
+            file_row = await conn.fetchrow("""
+                SELECT user_id, chunk_count, vector_count
+                FROM ingestion_files
+                WHERE file_id = $1
+            """, uuid.UUID(fileId))
+            
+            if not file_row:
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content={"error": "File not found"}
+                )
+            
+            if str(file_row["user_id"]) != user_id:
+                return JSONResponse(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    content={"error": "Unauthorized access"}
+                )
+            
+            # Get vectors (embeddings from chunks)
+            vectors = await conn.fetch("""
+                SELECT 
+                    chunk_index,
+                    embedding,
+                    text,
+                    page_number,
+                    token_count,
+                    created_at
+                FROM ingestion_chunks
+                WHERE file_id = $1
+                AND embedding IS NOT NULL
+                ORDER BY chunk_index
+                LIMIT $2 OFFSET $3
+            """, uuid.UUID(fileId), limit, offset)
+            
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={
+                    "fileId": fileId,
+                    "total": file_row["vector_count"] or 0,
+                    "limit": limit,
+                    "offset": offset,
+                    "vectors": [
+                        {
+                            "chunkIndex": vec["chunk_index"],
+                            "embedding": vec["embedding"],
+                            "text": vec["text"][:200] + "..." if len(vec["text"]) > 200 else vec["text"],  # Preview
+                            "pageNumber": vec["page_number"],
+                            "tokenCount": vec["token_count"],
+                            "dimension": len(vec["embedding"]) if vec["embedding"] else 0,
+                            "createdAt": vec["created_at"].isoformat(),
+                        }
+                        for vec in vectors
+                    ]
+                }
+            )
+    
+    except Exception as e:
+        logger.error(
+            "Failed to get file vectors",
+            file_id=fileId,
+            user_id=user_id,
+            error=str(e),
+            exc_info=True,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": "Failed to retrieve vectors", "details": str(e)}
+        )
+    
+    finally:
+        await postgres_service.disconnect()
+
+
+@router.get("/{fileId}/markdown")
+async def get_file_markdown(
+    fileId: str,
+    request: Request
+):
+    """
+    Get markdown representation of a file.
+    
+    Args:
+        fileId: File identifier
+    
+    Returns:
+        Markdown content with metadata
+    """
+    user_id = request.state.user_id
+    
+    config = Config().to_dict()
+    postgres_service = PostgresService(config, request)
+    await postgres_service.connect()
+    
+    try:
+        async with postgres_service.acquire(request) as conn:
+            # Verify file exists and get markdown
+            file_row = await conn.fetchrow("""
+                SELECT 
+                    user_id,
+                    markdown_content,
+                    original_filename,
+                    extraction_method,
+                    created_at
+                FROM ingestion_files
+                WHERE file_id = $1
+            """, uuid.UUID(fileId))
+            
+            if not file_row:
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content={"error": "File not found"}
+                )
+            
+            if str(file_row["user_id"]) != user_id:
+                return JSONResponse(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    content={"error": "Unauthorized access"}
+                )
+            
+            markdown_content = file_row["markdown_content"]
+            
+            if not markdown_content:
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content={"error": "Markdown not available for this file"}
+                )
+            
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={
+                    "fileId": fileId,
+                    "filename": file_row["original_filename"],
+                    "markdown": markdown_content,
+                    "extractionMethod": file_row["extraction_method"],
+                    "length": len(markdown_content),
+                    "createdAt": file_row["created_at"].isoformat(),
+                }
+            )
+    
+    except Exception as e:
+        logger.error(
+            "Failed to get file markdown",
+            file_id=fileId,
+            user_id=user_id,
+            error=str(e),
+            exc_info=True,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": "Failed to retrieve markdown", "details": str(e)}
+        )
+    
+    finally:
+        await postgres_service.disconnect()
+
+
 class DocumentSearchRequest(BaseModel):
     """Request model for single-document search."""
     query: str = Field(..., description="Search query")

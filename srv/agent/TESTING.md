@@ -308,3 +308,4 @@ pytest tests/ --cov=app --cov-report=term-missing
 3. ✅ Add e2e tests for complete user journeys
 4. ✅ Set up CI/CD pipeline with automated testing
 5. ✅ Add integration tests with real Busibox services
+
