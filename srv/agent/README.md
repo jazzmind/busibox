@@ -42,3 +42,4 @@ Key env vars (see `app/config/settings.py`):
 - `/runs` executes agent with Busibox token forwarding and stores run/output.
 - `/streams/runs/{id}` SSE for status/output.
 - `/runs/schedule` cron scheduling (APS Scheduler).
+

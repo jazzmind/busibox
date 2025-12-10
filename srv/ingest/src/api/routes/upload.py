@@ -57,12 +57,13 @@ async def upload_file(
     processing_config: Optional[str] = Form(None),
     visibility: str = Form("personal"),
     role_ids: Optional[str] = Form(None),
+    force_reprocess: Optional[str] = Form(None),
 ):
     """
     Upload a document for processing with role-based access control.
     
     Supports chunked upload with streaming. Calculates SHA-256 hash during upload.
-    Detects duplicates and reuses vectors if content already processed.
+    Detects duplicates and reuses vectors if content already processed (unless force_reprocess=true).
     
     Headers:
         Authorization: Bearer <JWT> (preferred) - JWT with user identity and role permissions
@@ -171,8 +172,9 @@ async def upload_file(
             storage_path,
         )
         
-        # Check for duplicate
-        existing = await postgres_service.check_duplicate(content_hash)
+        # Check for duplicate (skip if force_reprocess requested)
+        should_check_duplicate = force_reprocess != "true"
+        existing = await postgres_service.check_duplicate(content_hash) if should_check_duplicate else None
         
         if existing:
             # Duplicate detected - reuse vectors

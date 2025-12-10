@@ -59,3 +59,4 @@ class PostgresService:
                 uuid.UUID(resource_id) if resource_id else None,
                 details or {},
             )
+

@@ -456,3 +456,4 @@ curl -X POST \
 - **Data Model**: `data-model.md` - Database schema and entities
 - **API Contracts**: `contracts/openapi.yaml` - Full API specification
 - **Implementation Plan**: `plan.md` - Technical architecture and structure
+

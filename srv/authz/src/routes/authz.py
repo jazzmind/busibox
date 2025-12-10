@@ -135,3 +135,4 @@ async def write_audit(actor_id: str, action: str, resource_type: str, resource_i
         user_id=caller_user or actor_id,
         role_ids=[r.get("id") for r in caller_roles if isinstance(r, dict) and r.get("id")] if isinstance(caller_roles, list) else [],
     )
+

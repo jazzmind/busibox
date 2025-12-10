@@ -242,3 +242,4 @@ ansible-vault view roles/secrets/vars/vault.yml | grep token_service
 - **JWK**: JSON Web Key (RFC 7517)
 - **EdDSA**: Edwards-curve Digital Signature Algorithm (RFC 8032)
 - **OAuth 2.0**: Authorization framework (RFC 6749)
+

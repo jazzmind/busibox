@@ -21,3 +21,4 @@ authz_jwt_secret: "{{ secrets.sso.jwt_secret | default(secrets.service.jwt_secre
 authz_jwt_issuer: "authz-service"
 authz_jwt_audience: "busibox-services"
 authz_token_ttl: 900
+

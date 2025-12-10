@@ -90,3 +90,4 @@ ssh root@$INGEST_IP 'journalctl -u ingest-api -n 10 --no-pager | grep -i error' 
 
 echo ""
 echo "=== Diagnosis Complete ==="
+

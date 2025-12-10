@@ -156,6 +156,7 @@ async def _seed_doc(
                 "enable_visual_embeddings": True,
             }
         ),
+        "force_reprocess": "true",  # Always reprocess test docs (skip duplicate detection)
     }
 
     files = {

@@ -60,3 +60,4 @@ echo ""
 echo "=== Fix Complete ==="
 echo ""
 echo "Now try uploading a file again. The worker should process it."
+

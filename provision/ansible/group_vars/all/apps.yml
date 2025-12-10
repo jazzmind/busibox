@@ -18,6 +18,47 @@ applications:
   # ============================================================================
   # Internal API Services
   # ============================================================================
+  
+  - name: agent-server
+    local_src: srv/agent  # Deploy from local source (Python project)
+    marker_file: pyproject.toml
+    container: agent-lxc
+    container_ip: "{{ agent_ip }}"
+    port: 8000
+    deploy_path: /srv/agent
+    health_endpoint: /health
+    start_command: ".venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    process_manager: systemd
+    routes: []  # Internal only - no NGINX routing
+    secrets:
+      - database_url
+      - redis_url
+      - litellm_api_key
+      - management_client_id      # OAuth client ID for token exchange
+      - management_client_secret  # OAuth client secret for token exchange
+    env:
+      APP_NAME: "agent-server"
+      ENVIRONMENT: "{{ environment }}"
+      DEBUG: "false"
+      LOG_LEVEL: "{{ log_level }}"
+      # Model configuration
+      DEFAULT_MODEL: "anthropic:claude-3-5-sonnet"
+      # Busibox service endpoints
+      SEARCH_API_URL: "http://{{ search_api_ip }}:8003"
+      INGEST_API_URL: "http://{{ ingest_ip }}:8001"
+      RAG_API_URL: "http://{{ milvus_ip }}:8004"
+      # Auth configuration
+      AUTH_TOKEN_URL: "http://{{ agent_ip }}:8080/oauth/token"
+      AUTH_CLIENT_ID: "{{ management_client_id }}"
+      AUTH_CLIENT_SECRET: "{{ management_client_secret }}"
+      # Database
+      DATABASE_URL: "{{ database_url }}"
+      # Redis
+      REDIS_URL: "{{ redis_url }}"
+      # CORS
+      CORS_ORIGINS: "*"
+      # LiteLLM
+      LITELLM_BASE_URL: "http://{{ litellm_ip }}:{{ litellm_port }}/v1"
  
   # ============================================================================
   # Public Web Applications

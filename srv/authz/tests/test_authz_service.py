@@ -168,3 +168,4 @@ async def test_audit_missing_required_fields(authz_app):
         assert resp.status_code == 400
 
     assert audit_log == []
+

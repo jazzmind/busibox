@@ -37,3 +37,4 @@
 1. FR-006: Updated with tiered limits - Simple agents (30s/512MB), Complex agents (5min/2GB), Batch agents (30min/4GB)
 
 **Next Steps**: Specification is complete and ready for `/speckit.plan` phase.
+

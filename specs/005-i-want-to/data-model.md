@@ -440,3 +440,4 @@ CREATE INDEX idx_token_grants_lookup ON token_grants(subject, expires_at);
 **Rollback**: Each migration must have documented rollback SQL
 
 **Testing**: Validate schema changes on test database before production
+

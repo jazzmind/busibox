@@ -31,6 +31,28 @@ async def run_agent(
     return RunRead.model_validate(run_record)
 
 
+@router.get("/{run_id}", response_model=RunRead)
+async def get_run(
+    run_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+) -> RunRead:
+    """
+    Retrieve a run by ID with full execution history.
+    """
+    from app.models.domain import RunRecord
+    
+    run_record = await session.get(RunRecord, run_id)
+    if not run_record:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+    
+    # Optional: Check if user has permission to view this run
+    # if run_record.created_by != principal.sub and "admin" not in principal.roles:
+    #     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    
+    return RunRead.model_validate(run_record)
+
+
 @router.post("/schedule", status_code=status.HTTP_202_ACCEPTED)
 async def schedule_run(
     payload: RunCreate,

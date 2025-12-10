@@ -34,3 +34,4 @@ class Config:
             "jwt_audience": self.jwt_audience,
             "authz_token_ttl": self.authz_token_ttl,
         }
+
