@@ -1,26 +1,23 @@
 """Weather agent that provides weather information using tool calling."""
-from openai import AsyncOpenAI
+import os
 from pydantic_ai import Agent
-from pydantic_ai.models.openai import OpenAIModel, Provider
+from pydantic_ai.models.openai import OpenAIModel
 
 from app.config.settings import get_settings
 from app.tools.weather_tool import weather_tool
 
 settings = get_settings()
 
-# Create AsyncOpenAI client pointing to LiteLLM
-litellm_client = AsyncOpenAI(
-    base_url=str(settings.litellm_base_url),
-    api_key="litellm-placeholder",  # LiteLLM doesn't require a real key for local models
-)
+# Configure OpenAI client to use LiteLLM via environment variables
+# This is the standard way OpenAI clients discover custom endpoints
+os.environ["OPENAI_BASE_URL"] = str(settings.litellm_base_url)
+os.environ["OPENAI_API_KEY"] = "litellm-placeholder"  # LiteLLM doesn't require a real key
 
-# Create a Provider wrapper for the client
-litellm_provider = Provider(client=litellm_client)
-
-# Create OpenAI-compatible model using custom provider
+# Create OpenAI-compatible model using standard provider
+# The model will automatically use the OPENAI_BASE_URL we set above
 model = OpenAIModel(
     model_name=settings.default_model,
-    provider=litellm_provider,
+    provider="openai",
 )
 
 # Create the weather agent with tool calling
