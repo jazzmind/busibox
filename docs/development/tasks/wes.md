@@ -1,9 +1,8 @@
 # Wes's Tasks
 
-1) search not running
-2) make sure search works
-3) use UI library on ai-portal, make sure it works right
-4) use UI library on agent-client, make sure it works right
+1) make sure reranking works with GPU
+2) use UI library on agent-client, make sure it works right
+3) build out agent client to support all the agent server functionality
 
 
 What I'd delagate now:
