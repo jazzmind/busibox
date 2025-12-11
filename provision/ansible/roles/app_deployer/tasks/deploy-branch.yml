@@ -135,27 +135,20 @@
   shell: |
     echo "=== Checking GitHub token file ==="
     if [ -f ~/.github_token ]; then
-      echo "Token file exists at ~/.github_token"
-      echo "Token starts with: $(head -c 10 ~/.github_token)..."
+      echo "Token file exists"
+      head -c 10 ~/.github_token
+      echo "..."
     else
-      echo "Token file NOT found at ~/.github_token"
+      echo "Token file NOT found"
     fi
     
     echo ""
     echo "=== Checking .npmrc file ==="
-    if [ -f {{ app_to_deploy.deploy_path }}/.npmrc ]; then
+    if [ -f "{{ app_to_deploy.deploy_path }}/.npmrc" ]; then
       echo ".npmrc exists"
-      cat {{ app_to_deploy.deploy_path }}/.npmrc
+      cat "{{ app_to_deploy.deploy_path }}/.npmrc"
     else
       echo ".npmrc NOT found"
-    fi
-    
-    echo ""
-    echo "=== Testing token in environment ==="
-    if [ -f ~/.github_token ]; then
-      export GITHUB_TOKEN=$(cat ~/.github_token)
-      echo "Token exported, length: $${#GITHUB_TOKEN}"
-      echo "Token in env: $${GITHUB_TOKEN:+yes}"
     fi
   delegate_to: "{{ app_to_deploy.container_ip }}"
   register: debug_output
