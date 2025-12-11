@@ -134,11 +134,15 @@
 - name: Install dependencies
   shell: |
     cd {{ app_to_deploy.deploy_path }}
-    npm install --production=false
+    # Set GITHUB_TOKEN from file for npm authentication
+    if [ -f ~/.github_token ]; then
+      GITHUB_TOKEN=$(cat ~/.github_token) npm install --production=false
+    else
+      npm install --production=false
+    fi
   delegate_to: "{{ app_to_deploy.container_ip }}"
   environment:
     NODE_ENV: "{{ app_to_deploy.env.NODE_ENV | default('production') }}"
-    GITHUB_TOKEN: "{{ secrets.github_token | default('') }}"
   register: npm_install
   failed_when: npm_install.rc != 0
 

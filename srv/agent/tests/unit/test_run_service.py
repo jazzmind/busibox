@@ -40,7 +40,9 @@ class TestCreateRun:
             # Setup mocks
             mock_token.return_value = MagicMock(access_token="test-token")
             mock_agent = AsyncMock()
-            mock_result = MagicMock(output={"message": "test response"})
+            mock_result = MagicMock()
+            mock_result.data = MagicMock()
+            mock_result.data.model_dump = MagicMock(return_value={"message": "test response"})
             mock_agent.run.return_value = mock_result
             mock_registry.get.return_value = mock_agent
             

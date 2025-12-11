@@ -37,27 +37,26 @@ The `${GITHUB_TOKEN}` placeholder requires the environment variable to be set.
 
 ## Solution
 
-The deployment scripts now pass the `GITHUB_TOKEN` environment variable to npm:
+The deployment scripts now pass the `GITHUB_TOKEN` environment variable to npm by reading it from `~/.github_token` on the container:
 
 ### 1. Branch Deployment (deploy-branch.yml)
 
-The script loads secrets from the vault and passes the token via Ansible's `environment:` directive:
+The script reads the token from the file and sets it inline for the npm command:
 
 ```yaml
-- name: Load secrets for GitHub authentication
-  include_vars:
-    file: "{{ playbook_dir }}/roles/secrets/vars/vault.yml"
-  no_log: true
-
 - name: Install dependencies
   shell: |
     cd {{ app_to_deploy.deploy_path }}
-    npm install --production=false
+    # Set GITHUB_TOKEN from file for npm authentication
+    if [ -f ~/.github_token ]; then
+      GITHUB_TOKEN=$(cat ~/.github_token) npm install --production=false
+    else
+      npm install --production=false
+    fi
   delegate_to: "{{ app_to_deploy.container_ip }}"
-  environment:
-    NODE_ENV: "{{ app_to_deploy.env.NODE_ENV | default('production') }}"
-    GITHUB_TOKEN: "{{ secrets.github_token | default('') }}"
 ```
+
+This uses the shell pattern `VAR=value command` to set the environment variable only for that specific command execution.
 
 ### 2. Release Deployment (deploywatch-app.sh.j2)
 
@@ -153,7 +152,7 @@ Watch for the "Install dependencies" task - it should complete without 401 error
 
 - **Ansible vault**: `provision/ansible/roles/secrets/vars/vault.yml`
 - **Token deployment**: `provision/ansible/roles/app_deployer/tasks/main.yml` (lines 77-89)
-- **Branch deployment**: `provision/ansible/roles/app_deployer/tasks/deploy-branch.yml` (lines 6-11, 135-143)
+- **Branch deployment**: `provision/ansible/roles/app_deployer/tasks/deploy-branch.yml` (lines 134-144)
 - **Release deployment**: `provision/ansible/roles/app_deployer/templates/deploywatch-app.sh.j2` (line 324)
 
 ## Common Issues

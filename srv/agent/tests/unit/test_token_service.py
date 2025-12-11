@@ -29,8 +29,14 @@ def _principal() -> Principal:
 
 
 @pytest.mark.asyncio
-async def test_returns_cached_token_when_valid(test_session: AsyncSession, test_token: TokenGrant):
+async def test_returns_cached_token_when_valid(monkeypatch, test_session: AsyncSession, test_token: TokenGrant):
     principal = _principal()
+
+    # Mock exchange_token to ensure it's not called (should use cached token)
+    async def should_not_be_called(*args, **kwargs):
+        raise AssertionError("Should not exchange token when valid cached token exists")
+    
+    monkeypatch.setattr("app.services.token_service.exchange_token", should_not_be_called)
 
     token = await get_or_exchange_token(
         session=test_session,
