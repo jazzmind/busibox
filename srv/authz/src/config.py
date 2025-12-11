@@ -35,3 +35,4 @@ class Config:
             "authz_token_ttl": self.authz_token_ttl,
         }
 
+

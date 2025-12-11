@@ -109,3 +109,4 @@ class TestRunsAPI:
         # Should fail without Authorization header
         assert response.status_code in [401, 422]  # 422 if header validation fails first
 
+

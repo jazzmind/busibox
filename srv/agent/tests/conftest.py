@@ -141,3 +141,4 @@ def mock_jwt_token() -> str:
     # In real tests, generate a valid JWT with test keys
     return "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0LXVzZXItMTIzIiwiZW1haWwiOiJ0ZXN0QGV4YW1wbGUuY29tIiwicm9sZXMiOlsidXNlciJdLCJzY29wZXMiOlsic2VhcmNoLnJlYWQiLCJpbmdlc3Qud3JpdGUiXX0.test-signature"
 
+

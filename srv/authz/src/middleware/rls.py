@@ -11,3 +11,4 @@ async def set_rls_session_vars(conn, user_id: str | None, role_ids: list[str] | 
     await conn.execute("SET app.user_role_ids_read = $1", json.dumps(role_ids or []))
     await conn.execute("SET app.user_role_ids_write = $1", json.dumps(role_ids or []))
 
+

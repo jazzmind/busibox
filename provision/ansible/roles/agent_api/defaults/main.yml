@@ -26,3 +26,4 @@ litellm_base_url: "http://{{ litellm_host }}:{{ litellm_port }}/v1"
 redis_host: "{{ hostvars[groups['ingest'][0]]['ansible_host'] if 'ingest' in groups else '127.0.0.1' }}"
 redis_port: 6379
 
+

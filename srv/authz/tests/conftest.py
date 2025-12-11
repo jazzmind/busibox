@@ -79,3 +79,4 @@ async def authz_client(authz_app):
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         yield client, audit_log
 
+

@@ -168,3 +168,4 @@ class TestWeatherAgentEndToEnd:
             keyword in response_text
             for keyword in ["not found", "couldn't find", "unable", "sorry", "error"]
         )
+

@@ -169,3 +169,4 @@ async def test_audit_missing_required_fields(authz_app):
 
     assert audit_log == []
 
+
