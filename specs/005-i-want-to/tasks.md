@@ -75,10 +75,10 @@
 
 **Independent Test**: Define scorer; run scorer on completed run; scores persisted; aggregated metrics returned.
 
-- **T028**: Implement scorer definitions CRUD (if required) and validation
-- **T029**: Implement scorer execution against RunRecords; persist scores (extend RunRecord or new table if needed)
-- **T030**: Add aggregation endpoint or query for scores (avg/min/max/percentiles); add integration tests
-- **Checkpoint**: Scorer run produces stored scores and aggregates
+- [X] **T028**: Implement scorer definitions CRUD (if required) and validation ✓
+- [X] **T029**: Implement scorer execution against RunRecords; persist scores (extend RunRecord or new table if needed) ✓
+- [X] **T030**: Add aggregation endpoint or query for scores (avg/min/max/percentiles); add integration tests ✓
+- ✅ **Checkpoint**: Scorer run produces stored scores and aggregates
 
 ## Phase 8 — Polish & Cross-Cutting
 
