@@ -164,6 +164,17 @@
   debug:
     var: debug_output.stdout_lines
 
+- name: Clean npm cache and node_modules
+  shell: |
+    cd {{ app_to_deploy.deploy_path }}
+    echo "Cleaning node_modules and caches..."
+    rm -rf node_modules
+    rm -rf .next
+    rm -rf .turbo
+    npm cache clean --force
+  delegate_to: "{{ app_to_deploy.container_ip }}"
+  register: clean_result
+
 - name: Install dependencies
   shell: |
     cd {{ app_to_deploy.deploy_path }}
