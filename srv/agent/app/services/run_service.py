@@ -19,6 +19,7 @@ from opentelemetry import trace
 from pydantic_ai import Agent
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import attributes
 
 from app.agents.core import BusiboxDeps
 from app.clients.busibox import BusiboxClient
@@ -78,6 +79,8 @@ def add_run_event(
         run_record.events = []
     
     run_record.events.append(event)
+    # Mark the events field as modified so SQLAlchemy persists the change
+    attributes.flag_modified(run_record, "events")
 
 
 async def get_run_by_id(session: AsyncSession, run_id: uuid.UUID) -> Optional[RunRecord]:
