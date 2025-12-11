@@ -765,6 +765,7 @@ try:
     max_model_len = None
     max_num_seqs = None
     cpu_offload_gb = None
+    hf_overrides = None
     # Tool calling parameters from registry
     tool_calling = None
     tool_call_parser = None
@@ -780,6 +781,7 @@ try:
                 max_model_len = config.get('max_model_len')
                 max_num_seqs = config.get('max_num_seqs')
                 cpu_offload_gb = config.get('cpu_offload_gb')
+                hf_overrides = config.get('hf_overrides')
                 # Extract tool calling parameters
                 tool_calling = config.get('tool_calling', False)
                 tool_call_parser = config.get('tool_call_parser')
@@ -847,6 +849,8 @@ try:
             config_data['models'][model_name]['max_num_seqs'] = max_num_seqs
         if cpu_offload_gb is not None:
             config_data['models'][model_name]['cpu_offload_gb'] = cpu_offload_gb
+        if hf_overrides is not None:
+            config_data['models'][model_name]['hf_overrides'] = hf_overrides
         # Add tool calling parameters if configured
         if tool_calling is not None:
             config_data['models'][model_name]['tool_calling'] = tool_calling
@@ -1020,6 +1024,8 @@ try:
                         config_data['models'][model_name]['max_num_seqs'] = model_config['max_num_seqs']
                     if 'cpu_offload_gb' in model_config:
                         config_data['models'][model_name]['cpu_offload_gb'] = model_config['cpu_offload_gb']
+                    if 'hf_overrides' in model_config:
+                        config_data['models'][model_name]['hf_overrides'] = model_config['hf_overrides']
         else:
             # Preserve existing analyzed data, but update provider/model_key if changed
             config_data['models'][model_name]['provider'] = provider
