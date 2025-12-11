@@ -467,23 +467,24 @@ class MilvusSearchService:
             suffix = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
             instruction = "Given a search query, retrieve relevant passages that answer the query"
             
-            # Format the query (same for all documents)
+            # Format the query (text_1 - same for all documents)
             formatted_query = f"{prefix}<Instruct>: {instruction}\n<Query>: {query}\n"
             
-            # Format each document
+            # Format each document (text_2 - array of documents)
             formatted_documents = [
                 f"<Document>: {result['text'][:2000]}{suffix}"  # Limit to 2000 chars
                 for result in results
             ]
             
             # Call vLLM reranker via /score endpoint
+            # API format: text_1 (query) vs text_2 (array of documents)
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
                     f"{self.reranker_base_url}/score",
                     json={
                         "model": self.reranker_model,
-                        "prompt": formatted_query,
-                        "text": formatted_documents,
+                        "text_1": formatted_query,
+                        "text_2": formatted_documents,
                     },
                     headers={
                         "Authorization": f"Bearer {self.reranker_api_key}",
