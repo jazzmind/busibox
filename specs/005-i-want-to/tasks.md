@@ -25,8 +25,8 @@
 
 **Independent Test**: POST `/runs` with prompt → SSE shows status transitions → final GET `/runs/{id}` returns output + events; downstream tool calls hit mocked Busibox services.
 
-- **T010**: Define/validate core Pydantic AI agents and outputs (`agents/core.py`) — chat & rag agents with tools
-- **T011**: Implement tool adapters (search, ingest, rag) using Busibox client; add unit tests (mock HTTP)
+- [X] **T010**: Define/validate core Pydantic AI agents and outputs (`agents/core.py`) — chat & rag agents with tools ✓
+- [X] **T011**: Implement tool adapters (search, ingest, rag) using Busibox client; add unit tests (mock HTTP) ✓
 - **T012**: Implement run service execution flow (`services/run_service.py`): create run, token exchange, execute agent, persist output/events/status
 - **T013**: Implement `/runs` POST endpoint (accept input, return RunRead) and `/runs/{id}` GET; add integration tests
 - **T014**: Implement SSE stream `/streams/runs/{id}`; add integration test with polling DB changes
