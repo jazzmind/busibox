@@ -31,10 +31,10 @@ class MilvusSearchService:
         
         # Reranker configuration
         self.reranker_enabled = config.get("reranker_enabled", True)
-        self.reranker_base_url = config.get("litellm_base_url", "http://10.96.200.207:4000")
-        self.reranker_api_key = config.get("litellm_api_key", "")
-        # Always use "reranking" model purpose for liteLLM reranker (not the local reranker model name)
-        self.reranker_model = "reranking"
+        # Call vLLM reranker directly (not through liteLLM) since liteLLM doesn't support /rerank for openai provider
+        self.reranker_base_url = config.get("vllm_reranker_url", "http://10.96.200.208:8002/v1")
+        self.reranker_api_key = "EMPTY"  # vLLM doesn't require auth
+        self.reranker_model = config.get("vllm_reranker_model", "Qwen/Qwen3-Reranker-0.6B")
         
         # Cache of existing partitions
         self._partition_cache: Optional[set] = None
