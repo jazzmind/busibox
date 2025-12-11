@@ -256,32 +256,21 @@
     msg: "{{ migration_result.stdout_lines + migration_result.stderr_lines }}"
   when: migration_result is defined
 
-- name: Debug - Check installed package
+- name: Debug - Check deployed file content
   shell: |
     cd {{ app_to_deploy.deploy_path }}
-    echo "=== Checking @jazzmind/busibox-ui installation ==="
-    npm list @jazzmind/busibox-ui || echo "Package not found in npm list"
+    echo "=== Checking deployed file ==="
+    echo "File: src/app/(authenticated)/admin/libraries/page.tsx"
+    head -15 "src/app/(authenticated)/admin/libraries/page.tsx"
     echo ""
-    echo "=== Checking package contents ==="
-    if [ -d "node_modules/@jazzmind/busibox-ui" ]; then
-      echo "Package directory exists"
-      ls -la node_modules/@jazzmind/busibox-ui/
-      echo ""
-      echo "=== Checking dist/index.d.ts ==="
-      if [ -f "node_modules/@jazzmind/busibox-ui/dist/index.d.ts" ]; then
-        head -20 node_modules/@jazzmind/busibox-ui/dist/index.d.ts
-      else
-        echo "index.d.ts not found"
-      fi
-    else
-      echo "Package directory not found"
-    fi
+    echo "=== Checking git status ==="
+    git log --oneline -1 || echo "Not a git repo"
   delegate_to: "{{ app_to_deploy.container_ip }}"
-  register: package_check
+  register: file_check
 
-- name: Display package check
+- name: Display file check
   debug:
-    var: package_check.stdout_lines
+    var: file_check.stdout_lines
 
 - name: Build application
   shell: |
