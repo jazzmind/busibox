@@ -82,11 +82,11 @@
 
 ## Phase 8 — Polish & Cross-Cutting
 
-- **T031**: Harden error handling: tool call failures, DB retries, timeout messaging
-- **T032**: Add rate limiting/config for runs and streams (if required by ops policy)
-- **T033**: OTel exporter configuration + sampling controls; ensure trace/span IDs in logs
-- **T034**: Documentation sweep: update README, quickstart, OpenAPI annotations; ensure spec/plan alignment
-- **T035**: Deployment validation: Ansible role for local_src deploy, systemd service, health checks (test `make agent` for test/prod)
+- [X] **T031**: Harden error handling: tool call failures, DB retries, timeout messaging ✓
+- [X] **T032**: Add rate limiting/config for runs and streams (if required by ops policy) ✓
+- [X] **T033**: OTel exporter configuration + sampling controls; ensure trace/span IDs in logs ✓
+- [X] **T034**: Documentation sweep: update README, quickstart, OpenAPI annotations; ensure spec/plan alignment ✓
+- [X] **T035**: Deployment validation: Ansible role for local_src deploy, systemd service, health checks (test `make agent` for test/prod) ✓
 
 ## Dependencies & Order
 
