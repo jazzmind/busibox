@@ -37,22 +37,31 @@ The `${GITHUB_TOKEN}` placeholder requires the environment variable to be set.
 
 ## Solution
 
-The deployment scripts now export the `GITHUB_TOKEN` environment variable before running `npm install`:
+The deployment scripts now pass the `GITHUB_TOKEN` environment variable to npm:
 
 ### 1. Branch Deployment (deploy-branch.yml)
 
+The script loads secrets from the vault and passes the token via Ansible's `environment:` directive:
+
 ```yaml
+- name: Load secrets for GitHub authentication
+  include_vars:
+    file: "{{ playbook_dir }}/roles/secrets/vars/vault.yml"
+  no_log: true
+
 - name: Install dependencies
   shell: |
     cd {{ app_to_deploy.deploy_path }}
-    # Export GitHub token for npm authentication to GitHub Packages
-    if [ -f ~/.github_token ]; then
-      export GITHUB_TOKEN=$(cat ~/.github_token)
-    fi
     npm install --production=false
+  delegate_to: "{{ app_to_deploy.container_ip }}"
+  environment:
+    NODE_ENV: "{{ app_to_deploy.env.NODE_ENV | default('production') }}"
+    GITHUB_TOKEN: "{{ secrets.github_token | default('') }}"
 ```
 
 ### 2. Release Deployment (deploywatch-app.sh.j2)
+
+The deploywatch script exports the token from `~/.github_token` before running npm:
 
 ```bash
 install_dependencies() {
@@ -144,7 +153,7 @@ Watch for the "Install dependencies" task - it should complete without 401 error
 
 - **Ansible vault**: `provision/ansible/roles/secrets/vars/vault.yml`
 - **Token deployment**: `provision/ansible/roles/app_deployer/tasks/main.yml` (lines 77-89)
-- **Branch deployment**: `provision/ansible/roles/app_deployer/tasks/deploy-branch.yml` (line 127)
+- **Branch deployment**: `provision/ansible/roles/app_deployer/tasks/deploy-branch.yml` (lines 6-11, 135-143)
 - **Release deployment**: `provision/ansible/roles/app_deployer/templates/deploywatch-app.sh.j2` (line 324)
 
 ## Common Issues

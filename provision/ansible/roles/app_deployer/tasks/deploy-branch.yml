@@ -3,6 +3,13 @@
 # Purpose: Deploy an application directly from a GitHub branch without requiring a release
 # This is useful for development/testing and continuous deployment workflows
 
+- name: Load secrets for GitHub authentication
+  include_vars:
+    file: "{{ playbook_dir }}/roles/secrets/vars/vault.yml"
+  no_log: true
+  tags:
+    - always
+
 - name: Check if deploy_app is defined
   assert:
     that:
@@ -127,14 +134,11 @@
 - name: Install dependencies
   shell: |
     cd {{ app_to_deploy.deploy_path }}
-    # Export GitHub token for npm authentication to GitHub Packages
-    if [ -f ~/.github_token ]; then
-      export GITHUB_TOKEN=$(cat ~/.github_token)
-    fi
     npm install --production=false
   delegate_to: "{{ app_to_deploy.container_ip }}"
   environment:
     NODE_ENV: "{{ app_to_deploy.env.NODE_ENV | default('production') }}"
+    GITHUB_TOKEN: "{{ secrets.github_token | default('') }}"
   register: npm_install
   failed_when: npm_install.rc != 0
 
