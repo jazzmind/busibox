@@ -52,11 +52,11 @@
 
 **Independent Test**: POST `/runs/schedule` with cron → job registered → run executes at schedule with fresh token → run result stored.
 
-- **T021**: Implement scheduler service (`services/scheduler.py`) using APScheduler with async jobs
-- **T022**: Implement `/runs/schedule` endpoint and persist schedule metadata (reuse run records for results); add integration test (short cron, e.g., every minute)
-- **T023**: Add token pre-refresh before scheduled execution; add unit test
-- **T024**: Add cancel API or config for schedules (if supported in scope) and verify disable behavior
-- **Checkpoint**: Scheduled job executes and stores run output
+- [X] **T021**: Implement scheduler service (`services/scheduler.py`) using APScheduler with async jobs ✓
+- [X] **T022**: Implement `/runs/schedule` endpoint and persist schedule metadata (reuse run records for results); add integration test (short cron, e.g., every minute) ✓
+- [X] **T023**: Add token pre-refresh before scheduled execution; add unit test ✓
+- [X] **T024**: Add cancel API or config for schedules (if supported in scope) and verify disable behavior ✓
+- ✅ **Checkpoint**: Scheduled job executes and stores run output
 
 ## Phase 6 — US4 (P3) Define and Execute Workflows
 

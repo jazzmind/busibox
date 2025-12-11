@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import get_principal
 from app.db.session import SessionLocal, get_session
 from app.schemas.auth import Principal
-from app.schemas.run import RunCreate, RunRead
+from app.schemas.run import RunCreate, RunRead, ScheduleCreate, ScheduleRead
 from app.services.run_service import create_run, get_run_by_id, list_runs
 from app.services.scheduler import run_scheduler
 
@@ -173,22 +173,139 @@ async def list_agent_runs(
     return [RunRead.model_validate(run) for run in runs]
 
 
-@router.post("/schedule", status_code=status.HTTP_202_ACCEPTED)
+@router.post("/schedule", response_model=ScheduleRead, status_code=status.HTTP_201_CREATED)
 async def schedule_run(
-    payload: RunCreate,
-    cron: str,
+    payload: ScheduleCreate,
     principal: Principal = Depends(get_principal),
-):
+) -> ScheduleRead:
     """
-    Schedule a cron-based agent run. Uses shared scheduler.
+    Schedule a cron-based agent run with automatic token refresh.
+    
+    The scheduler will:
+    1. Refresh the authentication token before each execution
+    2. Execute the agent run at the specified cron schedule
+    3. Persist run results to the database
+    
+    Args:
+        payload: Schedule creation payload with agent_id, input, cron, and tier
+        principal: Authenticated user principal
+        
+    Returns:
+        ScheduleRead: Created schedule with job_id and next_run_time
+        
+    Raises:
+        HTTPException: 400 if cron expression is invalid, 404 if agent not found
     """
-    run_scheduler.schedule_agent_run(
-        session_factory=SessionLocal,
-        principal=principal,
-        agent_id=payload.agent_id,
-        payload=payload.input,
-        scopes=["search.read", "ingest.write", "rag.query"],
-        purpose="agent-run",
-        cron=cron,
-    )
-    return {"status": "scheduled", "cron": cron}
+    try:
+        # Default scopes if not provided
+        scopes = payload.scopes if payload.scopes else ["agent.execute", "search.read"]
+        
+        # Schedule the job
+        job_id = run_scheduler.schedule_agent_run(
+            session_factory=SessionLocal,
+            principal=principal,
+            agent_id=payload.agent_id,
+            payload=payload.input,
+            scopes=scopes,
+            purpose=payload.purpose,
+            cron=payload.cron,
+            agent_tier=payload.agent_tier,
+        )
+        
+        # Get job metadata
+        job_metadata = run_scheduler.get_job(job_id)
+        if not job_metadata:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to retrieve scheduled job metadata"
+            )
+        
+        logger.info(
+            f"Scheduled job {job_id} for agent {payload.agent_id} by {principal.sub}, "
+            f"next run: {job_metadata.next_run_time}"
+        )
+        
+        return ScheduleRead(
+            job_id=job_metadata.job_id,
+            agent_id=job_metadata.agent_id,
+            cron=job_metadata.cron,
+            principal_sub=job_metadata.principal_sub,
+            next_run_time=job_metadata.next_run_time,
+        )
+        
+    except ValueError as e:
+        logger.error(f"Invalid schedule request: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid schedule configuration: {str(e)}"
+        )
+    except Exception as e:
+        logger.error(f"Failed to schedule run: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to schedule run: {str(e)}"
+        )
+
+
+@router.get("/schedule", response_model=List[ScheduleRead])
+async def list_schedules(
+    principal: Principal = Depends(get_principal),
+) -> List[ScheduleRead]:
+    """
+    List all scheduled jobs.
+    
+    Returns:
+        List of scheduled jobs with metadata
+    """
+    jobs = run_scheduler.list_jobs()
+    return [
+        ScheduleRead(
+            job_id=job.job_id,
+            agent_id=job.agent_id,
+            cron=job.cron,
+            principal_sub=job.principal_sub,
+            next_run_time=job.next_run_time,
+        )
+        for job in jobs
+    ]
+
+
+@router.delete("/schedule/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def cancel_schedule(
+    job_id: str,
+    principal: Principal = Depends(get_principal),
+) -> None:
+    """
+    Cancel a scheduled job.
+    
+    Args:
+        job_id: Job identifier to cancel
+        principal: Authenticated user principal
+        
+    Raises:
+        HTTPException: 404 if job not found
+    """
+    # Check if job exists and belongs to user (or user is admin)
+    job_metadata = run_scheduler.get_job(job_id)
+    if not job_metadata:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Scheduled job {job_id} not found"
+        )
+    
+    # Authorization: only owner or admin can cancel
+    if job_metadata.principal_sub != principal.sub and "admin" not in principal.roles:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only cancel your own scheduled jobs"
+        )
+    
+    # Cancel the job
+    success = run_scheduler.cancel_job(job_id)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to cancel job {job_id}"
+        )
+    
+    logger.info(f"Cancelled scheduled job {job_id} by {principal.sub}")
