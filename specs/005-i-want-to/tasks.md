@@ -17,7 +17,7 @@
 - [X] **T006**: Implement auth middleware/deps for JWT validation (Busibox JWKS) in `app/auth/tokens.py` and `dependencies.py`; add unit tests ✓
 - [X] **T007**: Implement OAuth2 token exchange + caching in `token_service.py` and `token_grants` usage; add unit tests ✓
 - [X] **T008**: Implement Busibox HTTP client with token forwarding (`clients/busibox.py`); add unit tests (mock HTTPX) ✓
-- **T009**: Wire structured logging + OTel initialization (tracing hooks for requests and agent executions)
+- [X] **T009**: Wire structured logging + OTel initialization (tracing hooks for requests and agent executions) ✓
 
 ## Phase 3 — US1 (P1) Execute Core Agent with Tool Calls
 
@@ -25,14 +25,14 @@
 
 **Independent Test**: POST `/runs` with prompt → SSE shows status transitions → final GET `/runs/{id}` returns output + events; downstream tool calls hit mocked Busibox services.
 
-- **T010**: Define/validate core Pydantic AI agents and outputs (`agents/core.py`) — chat & rag agents with tools
-- **T011**: Implement tool adapters (search, ingest, rag) using Busibox client; add unit tests (mock HTTP)
-- **T012**: Implement run service execution flow (`services/run_service.py`): create run, token exchange, execute agent, persist output/events/status
-- **T013**: Implement `/runs` POST endpoint (accept input, return RunRead) and `/runs/{id}` GET; add integration tests
-- **T014**: Implement SSE stream `/streams/runs/{id}`; add integration test with polling DB changes
-- **T015**: Enforce tiered execution limits (Simple 30s/512MB, Complex 5m/2GB, Batch 30m/4GB) in run execution; add timeout tests
-- **T016**: Add logging + tracing for run lifecycle and tool calls; verify spans/log fields in tests (smoke)
-- **Checkpoint**: US1 executable end-to-end with mocks (runs API + SSE + persistence)
+- [X] **T010**: Define/validate core Pydantic AI agents and outputs (`agents/core.py`) — chat & rag agents with tools ✓
+- [X] **T011**: Implement tool adapters (search, ingest, rag) using Busibox client; add unit tests (mock HTTP) ✓
+- [X] **T012**: Implement run service execution flow (`services/run_service.py`): create run, token exchange, execute agent, persist output/events/status ✓
+- [X] **T013**: Implement `/runs` POST endpoint (accept input, return RunRead) and `/runs/{id}` GET; add integration tests ✓
+- [X] **T014**: Implement SSE stream `/streams/runs/{id}`; add integration test with polling DB changes ✓
+- [X] **T015**: Enforce tiered execution limits (Simple 30s/512MB, Complex 5m/2GB, Batch 30m/4GB) in run execution; add timeout tests ✓
+- [X] **T016**: Add logging + tracing for run lifecycle and tool calls; verify spans/log fields in tests (smoke) ✓
+- ✅ **Checkpoint**: US1 executable end-to-end with mocks (runs API + SSE + persistence)
 
 ## Phase 4 — US2 (P2) Create and Manage Dynamic Agents
 

@@ -127,6 +127,10 @@
 - name: Install dependencies
   shell: |
     cd {{ app_to_deploy.deploy_path }}
+    # Export GitHub token for npm authentication to GitHub Packages
+    if [ -f ~/.github_token ]; then
+      export GITHUB_TOKEN=$(cat ~/.github_token)
+    fi
     npm install --production=false
   delegate_to: "{{ app_to_deploy.container_ip }}"
   environment:
