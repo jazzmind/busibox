@@ -34,3 +34,41 @@ class RunRead(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class ScheduleCreate(BaseModel):
+    """Schema for creating a scheduled agent run."""
+    
+    agent_id: uuid.UUID = Field(description="Agent UUID to execute")
+    input: Dict[str, Any] = Field(
+        default_factory=dict, description="Input payload with 'prompt' and other fields"
+    )
+    cron: str = Field(
+        description="Cron expression (5 fields: minute hour day month day_of_week)",
+        pattern=r"^[\d\*\-,/]+ [\d\*\-,/]+ [\d\*\-,/]+ [\d\*\-,/]+ [\d\*\-,/]+$",
+    )
+    agent_tier: str = Field(
+        "simple",
+        description="Execution tier: simple (30s/512MB), complex (5min/2GB), batch (30min/4GB)",
+        pattern="^(simple|complex|batch)$",
+    )
+    scopes: List[str] = Field(
+        default_factory=list,
+        description="Required scopes for execution (defaults to agent.execute)",
+    )
+    purpose: str = Field(
+        "scheduled-run",
+        description="Purpose for token exchange",
+    )
+
+
+class ScheduleRead(BaseModel):
+    """Schema for reading scheduled job information."""
+    
+    job_id: str = Field(description="Unique job identifier")
+    agent_id: uuid.UUID = Field(description="Agent UUID being executed")
+    cron: str = Field(description="Cron expression")
+    principal_sub: str = Field(description="User who created the schedule")
+    next_run_time: Optional[datetime] = Field(
+        None, description="Next scheduled execution time"
+    )
