@@ -325,6 +325,12 @@ deploy_application() {
 install_dependencies() {
     cd "${DEPLOY_PATH}"
     
+    # Export GitHub token for npm authentication to GitHub Packages
+    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+        export GITHUB_TOKEN
+        log_info "GitHub token available for npm authentication"
+    fi
+    
     # Node.js application
     if [[ -f "package.json" ]]; then
         log_info "Installing Node.js dependencies"
