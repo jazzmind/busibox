@@ -10,13 +10,20 @@ from app.db.session import engine
 from app.models.base import Base
 from app.services.agent_registry import agent_registry
 from app.db.session import SessionLocal
-from app.utils.logging import setup_logging
+from app.utils.logging import setup_logging, setup_tracing, instrument_fastapi
 
-logger = logging.getLogger(__name__)
 settings = get_settings()
 
+# Initialize logging and tracing before creating app
+setup_logging(settings)
+setup_tracing(settings)
+
+logger = logging.getLogger(__name__)
+
 app = FastAPI(title=settings.app_name, debug=settings.debug)
-setup_logging()
+
+# Instrument FastAPI with OpenTelemetry
+instrument_fastapi(app)
 
 app.add_middleware(
     CORSMiddleware,
