@@ -236,12 +236,14 @@ async def test_rag_tool_validates_inputs(mock_deps):
 
 def test_chat_agent_has_all_tools():
     """Test chat_agent is configured with all expected tools."""
-    # Verify agent has tools registered
-    assert chat_agent.tools is not None
-    assert len(chat_agent.tools) == 3
+    # Verify agent has tools registered (Pydantic AI 1.29.0 uses _function_toolset)
+    assert chat_agent._function_toolset is not None
+    tools = chat_agent._function_toolset.tools
+    assert tools is not None
+    assert len(tools) == 3
 
     # Verify tool names
-    tool_names = [tool.name for tool in chat_agent.tools]
+    tool_names = list(tools.keys())
     assert "search_tool" in tool_names
     assert "ingest_tool" in tool_names
     assert "rag_tool" in tool_names
@@ -249,20 +251,24 @@ def test_chat_agent_has_all_tools():
 
 def test_rag_agent_has_search_and_rag_tools():
     """Test rag_agent is configured with search and RAG tools."""
-    assert rag_agent.tools is not None
-    assert len(rag_agent.tools) == 2
+    assert rag_agent._function_toolset is not None
+    tools = rag_agent._function_toolset.tools
+    assert tools is not None
+    assert len(tools) == 2
 
-    tool_names = [tool.name for tool in rag_agent.tools]
+    tool_names = list(tools.keys())
     assert "search_tool" in tool_names
     assert "rag_tool" in tool_names
 
 
 def test_search_agent_has_search_tool():
     """Test search_agent is configured with search tool only."""
-    assert search_agent.tools is not None
-    assert len(search_agent.tools) == 1
+    assert search_agent._function_toolset is not None
+    tools = search_agent._function_toolset.tools
+    assert tools is not None
+    assert len(tools) == 1
 
-    tool_names = [tool.name for tool in search_agent.tools]
+    tool_names = list(tools.keys())
     assert "search_tool" in tool_names
 
 

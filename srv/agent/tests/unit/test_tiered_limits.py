@@ -58,8 +58,12 @@ async def test_create_run_enforces_timeout_simple_tier(test_session):
     agent_id = uuid.uuid4()
 
     # Mock agent that takes too long
+    async def slow_run(*args, **kwargs):
+        await asyncio.sleep(60)
+        return MagicMock()
+    
     mock_agent = MagicMock()
-    mock_agent.run = AsyncMock(side_effect=lambda *args, **kwargs: asyncio.sleep(60))
+    mock_agent.run = AsyncMock(side_effect=slow_run)
 
     with patch("app.services.run_service.agent_registry.get", return_value=mock_agent):
         with patch("app.services.run_service.get_or_exchange_token") as mock_token:
@@ -89,8 +93,12 @@ async def test_create_run_enforces_timeout_complex_tier(test_session):
     agent_id = uuid.uuid4()
 
     # Mock agent that takes too long
+    async def slow_run(*args, **kwargs):
+        await asyncio.sleep(400)
+        return MagicMock()
+    
     mock_agent = MagicMock()
-    mock_agent.run = AsyncMock(side_effect=lambda *args, **kwargs: asyncio.sleep(400))
+    mock_agent.run = AsyncMock(side_effect=slow_run)
 
     with patch("app.services.run_service.agent_registry.get", return_value=mock_agent):
         with patch("app.services.run_service.get_or_exchange_token") as mock_token:
@@ -202,8 +210,12 @@ async def test_create_run_different_tiers_have_different_limits(test_session):
     agent_id = uuid.uuid4()
 
     # Mock agent that takes 35 seconds (exceeds simple but not complex)
+    async def slow_run(*args, **kwargs):
+        await asyncio.sleep(35)
+        return MagicMock()
+    
     mock_agent = MagicMock()
-    mock_agent.run = AsyncMock(side_effect=lambda *args, **kwargs: asyncio.sleep(35))
+    mock_agent.run = AsyncMock(side_effect=slow_run)
 
     with patch("app.services.run_service.agent_registry.get", return_value=mock_agent):
         with patch("app.services.run_service.get_or_exchange_token") as mock_token:
