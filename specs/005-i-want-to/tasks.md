@@ -17,7 +17,7 @@
 - [X] **T006**: Implement auth middleware/deps for JWT validation (Busibox JWKS) in `app/auth/tokens.py` and `dependencies.py`; add unit tests ✓
 - [X] **T007**: Implement OAuth2 token exchange + caching in `token_service.py` and `token_grants` usage; add unit tests ✓
 - [X] **T008**: Implement Busibox HTTP client with token forwarding (`clients/busibox.py`); add unit tests (mock HTTPX) ✓
-- **T009**: Wire structured logging + OTel initialization (tracing hooks for requests and agent executions)
+- [X] **T009**: Wire structured logging + OTel initialization (tracing hooks for requests and agent executions) ✓
 
 ## Phase 3 — US1 (P1) Execute Core Agent with Tool Calls
 
