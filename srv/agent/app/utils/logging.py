@@ -15,11 +15,22 @@ from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
-from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
-from pythonjsonlogger import jsonlogger
+
+# Optional imports for enhanced instrumentation
+try:
+    from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+    HAS_SQLALCHEMY_INSTRUMENTATION = True
+except ImportError:
+    HAS_SQLALCHEMY_INSTRUMENTATION = False
+
+try:
+    from pythonjsonlogger import jsonlogger
+    HAS_JSON_LOGGER = True
+except ImportError:
+    HAS_JSON_LOGGER = False
 
 from app.config.settings import Settings
 
@@ -50,16 +61,22 @@ def setup_logging(settings: Settings) -> None:
     Args:
         settings: Application settings with log_level configuration
     """
-    # Create JSON formatter with trace context
-    log_format = "%(asctime)s %(levelname)s %(name)s %(trace_id)s %(span_id)s %(message)s"
-    formatter = jsonlogger.JsonFormatter(
-        log_format,
-        rename_fields={
-            "asctime": "timestamp",
-            "levelname": "level",
-            "name": "logger",
-        },
-    )
+    # Create JSON formatter with trace context (if available)
+    if HAS_JSON_LOGGER:
+        log_format = "%(asctime)s %(levelname)s %(name)s %(trace_id)s %(span_id)s %(message)s"
+        formatter = jsonlogger.JsonFormatter(
+            log_format,
+            rename_fields={
+                "asctime": "timestamp",
+                "levelname": "level",
+                "name": "logger",
+            },
+        )
+    else:
+        # Fallback to standard formatter
+        formatter = logging.Formatter(
+            "%(asctime)s | %(levelname)s | %(name)s | %(trace_id)s | %(span_id)s | %(message)s"
+        )
 
     # Configure root logger
     root_logger = logging.getLogger()
@@ -120,7 +137,9 @@ def setup_tracing(settings: Settings, app_name: Optional[str] = None) -> None:
 
     # Instrument libraries
     HTTPXClientInstrumentor().instrument()
-    SQLAlchemyInstrumentor().instrument(enable_commenter=True)
+    
+    if HAS_SQLALCHEMY_INSTRUMENTATION:
+        SQLAlchemyInstrumentor().instrument(enable_commenter=True)
 
 
 def instrument_fastapi(app) -> None:
