@@ -33,6 +33,10 @@ class SearchRequest(BaseModel):
     limit: int = Field(10, description="Number of results to return", ge=1, le=100)
     offset: int = Field(0, description="Offset for pagination", ge=0)
     rerank: bool = Field(True, description="Enable reranking")
+    reranker_model: Optional[Literal["qwen3-gpu", "baai-gpu", "baai-cpu", "none"]] = Field(
+        "qwen3-gpu",
+        description="Reranker model to use: qwen3-gpu (fast), baai-gpu (accurate), baai-cpu (slow), none (disabled)"
+    )
     rerank_k: int = Field(100, description="Number of candidates before reranking", ge=10, le=500)
     dense_weight: float = Field(0.7, description="Weight for dense semantic search", ge=0.0, le=1.0)
     sparse_weight: float = Field(0.3, description="Weight for sparse BM25 search", ge=0.0, le=1.0)

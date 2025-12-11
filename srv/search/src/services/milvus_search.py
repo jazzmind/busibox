@@ -330,6 +330,7 @@ class MilvusSearchService:
         sparse_weight: float = 0.3,
         filters: Optional[Dict] = None,
         use_reranker: bool = True,
+        reranker_model: str = "qwen3-gpu",
         partition_names: Optional[List[str]] = None,
         readable_role_ids: Optional[List[str]] = None,
     ) -> List[Dict]:
@@ -347,6 +348,7 @@ class MilvusSearchService:
             sparse_weight: Weight for sparse search
             filters: Additional filters
             use_reranker: Whether to apply reranking after RRF fusion
+            reranker_model: Which reranker to use (qwen3-gpu, baai-gpu, baai-cpu, none)
             partition_names: Explicit partition names to search (overrides auto-build)
             readable_role_ids: Role IDs user can read (used to build partition list)
         
@@ -403,13 +405,14 @@ class MilvusSearchService:
             )
             
             # Apply reranking if enabled
-            if use_reranker and self.reranker_enabled:
+            if use_reranker and self.reranker_enabled and reranker_model != "none":
                 # Rerank with more candidates than final top_k for better quality
                 rerank_candidates = min(len(fused_results), rerank_k // 2)  # Use half of rerank_k candidates
                 fused_results = await self.rerank_results(
                     query=query_text,
                     results=fused_results[:rerank_candidates],
                     top_k=top_k,
+                    reranker_model=reranker_model,
                 )
             else:
                 # Take top-k after fusion
@@ -438,19 +441,21 @@ class MilvusSearchService:
         query: str,
         results: List[Dict],
         top_k: Optional[int] = None,
+        reranker_model: str = "qwen3-gpu",
     ) -> List[Dict]:
         """
-        Rerank search results using vLLM reranker model.
+        Rerank search results using specified reranker model.
         
         Args:
             query: Original search query
             results: Search results to rerank
             top_k: Number of top results to return (None = return all)
+            reranker_model: Which reranker to use (qwen3-gpu, baai-gpu, baai-cpu, none)
         
         Returns:
             Reranked results with reranker scores
         """
-        if not self.reranker_enabled or not results:
+        if not self.reranker_enabled or not results or reranker_model == "none":
             logger.debug("Reranker disabled or no results, skipping reranking")
             return results[:top_k] if top_k else results
         
@@ -458,31 +463,77 @@ class MilvusSearchService:
             logger.info(
                 "Reranking results",
                 result_count=len(results),
-                reranker_model=self.reranker_model,
+                reranker_model=reranker_model,
             )
             
-            # Format query and documents for Qwen3-Reranker using vLLM's /score endpoint
-            # Template format required by Qwen3-Reranker
-            prefix = '<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be "yes" or "no".<|im_end|>\n<|im_start|>user\n'
-            suffix = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
-            instruction = "Given a search query, retrieve relevant passages that answer the query"
+            # Route to appropriate reranker based on model type
+            if reranker_model == "baai-cpu":
+                return await self._rerank_with_local_model(query, results, top_k)
+            elif reranker_model in ["qwen3-gpu", "baai-gpu"]:
+                return await self._rerank_with_vllm(query, results, top_k, reranker_model)
+            else:
+                logger.warning(f"Unknown reranker model: {reranker_model}, skipping reranking")
+                return results[:top_k] if top_k else results
+        
+        except Exception as e:
+            logger.warning(
+                "Reranking failed, returning original results",
+                error=str(e),
+                exc_info=True,
+            )
+            return results[:top_k] if top_k else results
+    
+    async def _rerank_with_vllm(
+        self,
+        query: str,
+        results: List[Dict],
+        top_k: Optional[int],
+        reranker_model: str,
+    ) -> List[Dict]:
+        """Rerank using vLLM GPU reranker (Qwen3 or BAAI)."""
+        try:
+            # Map reranker_model to actual model names and URLs
+            model_config = {
+                "qwen3-gpu": {
+                    "model_name": "Qwen/Qwen3-Reranker-0.6B",
+                    "url": "http://10.96.200.208:8002/v1",
+                    "use_template": True,  # Qwen3 needs special template
+                },
+                "baai-gpu": {
+                    "model_name": "BAAI/bge-reranker-v2-m3",
+                    "url": "http://10.96.200.208:8003/v1",  # Different port for BAAI
+                    "use_template": False,  # BAAI uses simple format
+                },
+            }
             
-            # Format the query (text_1 - same for all documents)
-            formatted_query = f"{prefix}<Instruct>: {instruction}\n<Query>: {query}\n"
+            config = model_config.get(reranker_model)
+            if not config:
+                logger.warning(f"Unknown vLLM reranker: {reranker_model}")
+                return results[:top_k] if top_k else results
             
-            # Format each document (text_2 - array of documents)
-            formatted_documents = [
-                f"<Document>: {result['text'][:2000]}{suffix}"  # Limit to 2000 chars
-                for result in results
-            ]
+            # Format query and documents based on model type
+            if config["use_template"]:
+                # Qwen3-Reranker template format
+                prefix = '<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be "yes" or "no".<|im_end|>\n<|im_start|>user\n'
+                suffix = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+                instruction = "Given a search query, retrieve relevant passages that answer the query"
+                formatted_query = f"{prefix}<Instruct>: {instruction}\n<Query>: {query}\n"
+                formatted_documents = [
+                    f"<Document>: {result['text'][:2000]}{suffix}"
+                    for result in results
+                ]
+            else:
+                # Simple format for BAAI
+                formatted_query = query
+                formatted_documents = [result['text'][:2000] for result in results]
             
             # Call vLLM reranker via /score endpoint
-            # API format: text_1 (query) vs text_2 (array of documents)
-            reranker_url = f"{self.reranker_base_url}/score"
+            reranker_url = f"{config['url']}/score"
             logger.info(
                 "Calling vLLM reranker",
                 url=reranker_url,
-                model=self.reranker_model,
+                model=config['model_name'],
+                reranker_type=reranker_model,
                 num_documents=len(formatted_documents),
             )
             
@@ -490,12 +541,12 @@ class MilvusSearchService:
                 response = await client.post(
                     reranker_url,
                     json={
-                        "model": self.reranker_model,
+                        "model": config['model_name'],
                         "text_1": formatted_query,
                         "text_2": formatted_documents,
                     },
                     headers={
-                        "Authorization": f"Bearer {self.reranker_api_key}",
+                        "Authorization": "Bearer EMPTY",
                         "Content-Type": "application/json",
                     },
                 )
@@ -507,7 +558,7 @@ class MilvusSearchService:
                 
                 if response.status_code != 200:
                     logger.warning(
-                        "Reranker API request failed, returning original results",
+                        "Reranker API request failed",
                         status_code=response.status_code,
                         response=response.text[:500],
                     )
@@ -516,12 +567,11 @@ class MilvusSearchService:
                 rerank_data = response.json()
                 
                 # Parse vLLM score response
-                # Expected format: {"data": [{"score": 0.95}, ...]}
                 if "data" not in rerank_data:
-                    logger.warning("Unexpected reranker response format, returning original results")
+                    logger.warning("Unexpected reranker response format")
                     return results[:top_k] if top_k else results
                 
-                # Map reranker scores back to results and sort by score
+                # Map scores back to results
                 reranked_results = []
                 for idx, score_item in enumerate(rerank_data["data"]):
                     if idx < len(results):
@@ -529,27 +579,85 @@ class MilvusSearchService:
                         relevance_score = score_item.get("score", 0.0)
                         result["rerank_score"] = relevance_score
                         result["original_score"] = result["score"]
-                        result["score"] = relevance_score  # Replace score with rerank score
+                        result["score"] = relevance_score
                         reranked_results.append(result)
                 
-                # Sort by rerank score (descending)
+                # Sort by rerank score
                 reranked_results.sort(key=lambda x: x["rerank_score"], reverse=True)
                 
-                # Take top_k results
                 if top_k:
                     reranked_results = reranked_results[:top_k]
                 
                 logger.info(
-                    "Reranking completed",
+                    "vLLM reranking completed",
+                    reranker_type=reranker_model,
                     original_count=len(results),
                     reranked_count=len(reranked_results),
                 )
                 
                 return reranked_results
-        
+                
         except Exception as e:
             logger.warning(
-                "Reranking failed, returning original results",
+                "vLLM reranking failed",
+                reranker_model=reranker_model,
+                error=str(e),
+                exc_info=True,
+            )
+            return results[:top_k] if top_k else results
+    
+    async def _rerank_with_local_model(
+        self,
+        query: str,
+        results: List[Dict],
+        top_k: Optional[int],
+    ) -> List[Dict]:
+        """Rerank using local CPU-based BAAI reranker."""
+        try:
+            from sentence_transformers import CrossEncoder
+            
+            logger.info(
+                "Reranking with local CPU model",
+                result_count=len(results),
+                model="BAAI/bge-reranker-v2-m3",
+            )
+            
+            # Initialize model (cached after first use)
+            if not hasattr(self, '_cpu_reranker'):
+                self._cpu_reranker = CrossEncoder('BAAI/bge-reranker-v2-m3', max_length=512, device='cpu')
+            
+            # Prepare query-document pairs
+            pairs = [[query, result['text'][:2000]] for result in results]
+            
+            # Get scores
+            scores = self._cpu_reranker.predict(pairs)
+            
+            # Map scores back to results
+            reranked_results = []
+            for idx, score in enumerate(scores):
+                result = results[idx].copy()
+                result["rerank_score"] = float(score)
+                result["original_score"] = result["score"]
+                result["score"] = float(score)
+                reranked_results.append(result)
+            
+            # Sort by rerank score
+            reranked_results.sort(key=lambda x: x["rerank_score"], reverse=True)
+            
+            if top_k:
+                reranked_results = reranked_results[:top_k]
+            
+            logger.info(
+                "Local CPU reranking completed",
+                original_count=len(results),
+                reranked_count=len(reranked_results),
+            )
+            
+            return reranked_results
+            
+        except Exception as e:
+            logger.warning(
+                "Local CPU reranking failed",
                 error=str(e),
                 exc_info=True,
             )

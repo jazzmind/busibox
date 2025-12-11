@@ -68,7 +68,7 @@ available_models:
     provider: "vllm"
     model: "qwen3-reranker-0.6b"
     model_name: "Qwen/Qwen3-Reranker-0.6B"
-    description: "Search result reranking"
+    description: "Search result reranking (GPU, fast)"
     # vLLM tuning parameters
     gpu_memory_utilization: 0.2  # Tiny model - only 20% GPU (leave room for overhead)
     max_model_len: 4096  # Reranker uses short sequences
@@ -76,6 +76,24 @@ available_models:
     cpu_offload_gb: 0  # Minimal CPU offload
     # Reranker-specific configuration
     hf_overrides: '{"architectures": ["Qwen3ForSequenceClassification"], "classifier_from_token": ["no", "yes"], "is_original_qwen3_reranker": true}'
+
+  "bge-reranker-v2-m3-gpu":
+    provider: "vllm"
+    model: "bge-reranker-v2-m3"
+    model_name: "BAAI/bge-reranker-v2-m3"
+    description: "BAAI reranker (GPU, high accuracy)"
+    # vLLM tuning parameters
+    gpu_memory_utilization: 0.3  # Larger model needs more GPU
+    max_model_len: 8192  # Longer sequences
+    max_num_seqs: 16  # Fewer concurrent requests
+    cpu_offload_gb: 0
+
+  "bge-reranker-v2-m3-cpu":
+    provider: "local"
+    model: "bge-reranker-v2-m3"
+    model_name: "BAAI/bge-reranker-v2-m3"
+    description: "BAAI reranker (CPU, slower but always available)"
+    device: "cpu"
 
   "bge-large":
     provider: "fastembed"
