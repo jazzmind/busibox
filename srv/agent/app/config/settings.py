@@ -68,6 +68,16 @@ class Settings(BaseSettings):
     # CORS
     cors_origins: List[str] = Field(default_factory=lambda: ["*"])
 
+    # OpenTelemetry configuration
+    otlp_endpoint: Optional[AnyHttpUrl] = Field(
+        None,
+        description="OTLP endpoint for trace export (e.g., http://localhost:4317)",
+    )
+    otel_service_name: Optional[str] = Field(
+        None,
+        description="Override service name for traces (defaults to app_name)",
+    )
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

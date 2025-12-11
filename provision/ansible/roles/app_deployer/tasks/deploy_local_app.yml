@@ -1,0 +1,89 @@
+---
+# Deploy a single application from local source
+# Called with loop_var: app
+
+- name: Ensure deploy path exists (local src)
+  file:
+    path: "{{ app.deploy_path }}"
+    state: directory
+    mode: "0755"
+    owner: root
+    group: root
+  when:
+    - inventory_hostname is match('.*' + app.container + '.*')
+
+- name: Sync local source to target
+  synchronize:
+    src: "{{ app.local_src }}/"
+    dest: "{{ app.deploy_path }}/"
+    delete: yes
+    rsync_opts:
+      - "--exclude=.git"
+      - "--exclude=.venv"
+      - "--exclude=__pycache__"
+      - "--exclude=*.pyc"
+  when:
+    - inventory_hostname is match('.*' + app.container + '.*')
+
+- name: Create virtualenv for application
+  command: python3 -m venv {{ app.deploy_path }}/venv
+  args:
+    creates: "{{ app.deploy_path }}/venv/bin/activate"
+  when:
+    - inventory_hostname is match('.*' + app.container + '.*')
+
+- name: Upgrade pip inside venv
+  command: "{{ app.deploy_path }}/venv/bin/pip install --upgrade pip"
+  when:
+    - inventory_hostname is match('.*' + app.container + '.*')
+
+- name: Install application (pyproject)
+  command: "{{ app.deploy_path }}/venv/bin/pip install ."
+  args:
+    chdir: "{{ app.deploy_path }}"
+  when:
+    - inventory_hostname is match('.*' + app.container + '.*')
+
+- name: Write version marker
+  copy:
+    content: "{{ ansible_date_time.iso8601 }}"
+    dest: "{{ app.deploy_path }}/.version"
+    mode: "0644"
+  when:
+    - inventory_hostname is match('.*' + app.container + '.*')
+
+- name: Deploy systemd service for local app
+  template:
+    src: "{{ playbook_dir }}/roles/app_deployer/templates/app-systemd.service.j2"
+    dest: "/etc/systemd/system/{{ app.name }}.service"
+    mode: "0644"
+  vars:
+    app: "{{ app }}"
+  when:
+    - inventory_hostname is match('.*' + app.container + '.*')
+
+- name: Reload systemd
+  command: systemctl daemon-reload
+  when:
+    - inventory_hostname is match('.*' + app.container + '.*')
+
+- name: Enable and restart service
+  service:
+    name: "{{ app.name }}"
+    state: restarted
+    enabled: yes
+  when:
+    - inventory_hostname is match('.*' + app.container + '.*')
+
+- name: Health check local app
+  uri:
+    url: "http://localhost:{{ app.port }}{{ app.health_endpoint }}"
+    status_code: 200
+    timeout: 30
+  register: local_health
+  until: local_health.status == 200
+  retries: 10
+  delay: 3
+  when:
+    - inventory_hostname is match('.*' + app.container + '.*')
+    - app.health_endpoint is defined
