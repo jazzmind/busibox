@@ -1,9 +1,23 @@
+"""
+Run service for executing agent runs with token exchange and persistence.
+
+Provides:
+- Agent execution with tiered timeout limits
+- Token exchange and caching for downstream services
+- Event tracking for run lifecycle
+- Error handling and recovery
+- OpenTelemetry tracing integration
+"""
+
 import asyncio
 import logging
 import uuid
-from typing import Any, Dict
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
+from opentelemetry import trace
 from pydantic_ai import Agent
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.core import BusiboxDeps
@@ -14,18 +28,111 @@ from app.services.agent_registry import agent_registry
 from app.services.token_service import get_or_exchange_token
 
 logger = logging.getLogger(__name__)
+tracer = trace.get_tracer(__name__)
 
-# Tiered execution limits (timeout in seconds)
-AGENT_TIMEOUTS = {
-    "simple": 30,
-    "complex": 300,  # 5 minutes
-    "batch": 1800,  # 30 minutes
+# Tiered execution limits (timeout in seconds, memory in MB)
+AGENT_LIMITS = {
+    "simple": {"timeout": 30, "memory_mb": 512},
+    "complex": {"timeout": 300, "memory_mb": 2048},  # 5 minutes, 2GB
+    "batch": {"timeout": 1800, "memory_mb": 4096},  # 30 minutes, 4GB
 }
 
 
 def get_agent_timeout(agent_tier: str = "simple") -> int:
-    """Get timeout for agent tier (Simple: 30s, Complex: 5min, Batch: 30min)"""
-    return AGENT_TIMEOUTS.get(agent_tier, AGENT_TIMEOUTS["simple"])
+    """Get timeout for agent tier (Simple: 30s, Complex: 5min, Batch: 30min)."""
+    return AGENT_LIMITS.get(agent_tier, AGENT_LIMITS["simple"])["timeout"]
+
+
+def get_agent_memory_limit(agent_tier: str = "simple") -> int:
+    """Get memory limit for agent tier in MB."""
+    return AGENT_LIMITS.get(agent_tier, AGENT_LIMITS["simple"])["memory_mb"]
+
+
+def add_run_event(
+    run_record: RunRecord,
+    event_type: str,
+    data: Optional[Dict[str, Any]] = None,
+    error: Optional[str] = None,
+) -> None:
+    """
+    Add an event to the run record's event log.
+    
+    Args:
+        run_record: Run record to update
+        event_type: Event type (started, tool_call, completion, error, timeout)
+        data: Optional event data
+        error: Optional error message
+    """
+    event = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "type": event_type,
+    }
+    
+    if data:
+        event["data"] = data
+    
+    if error:
+        event["error"] = error
+    
+    if not isinstance(run_record.events, list):
+        run_record.events = []
+    
+    run_record.events.append(event)
+
+
+async def get_run_by_id(session: AsyncSession, run_id: uuid.UUID) -> Optional[RunRecord]:
+    """
+    Retrieve a run record by ID.
+    
+    Args:
+        session: Database session
+        run_id: Run UUID
+        
+    Returns:
+        RunRecord if found, None otherwise
+    """
+    stmt = select(RunRecord).where(RunRecord.id == run_id)
+    result = await session.execute(stmt)
+    return result.scalars().first()
+
+
+async def list_runs(
+    session: AsyncSession,
+    agent_id: Optional[uuid.UUID] = None,
+    created_by: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> List[RunRecord]:
+    """
+    List run records with optional filtering.
+    
+    Args:
+        session: Database session
+        agent_id: Filter by agent ID
+        created_by: Filter by user subject
+        status: Filter by status
+        limit: Maximum number of results
+        offset: Pagination offset
+        
+    Returns:
+        List of RunRecord objects
+    """
+    stmt = select(RunRecord).order_by(RunRecord.created_at.desc())
+    
+    if agent_id:
+        stmt = stmt.where(RunRecord.agent_id == agent_id)
+    
+    if created_by:
+        stmt = stmt.where(RunRecord.created_by == created_by)
+    
+    if status:
+        stmt = stmt.where(RunRecord.status == status)
+    
+    stmt = stmt.limit(limit).offset(offset)
+    
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
 
 
 async def create_run(
@@ -51,86 +158,168 @@ async def create_run(
     
     Returns:
         RunRecord with execution results
+        
+    Raises:
+        ValueError: If agent_tier is invalid or payload is malformed
     """
-    # Create run record
+    # Validate inputs
+    if agent_tier not in AGENT_LIMITS:
+        raise ValueError(f"Invalid agent_tier: {agent_tier}. Must be one of: {list(AGENT_LIMITS.keys())}")
+    
+    if not payload.get("prompt"):
+        raise ValueError("Payload must contain 'prompt' field")
+    
+    # Create run record with initial event
     run_record = RunRecord(
         agent_id=agent_id,
-        status="running",
+        status="pending",
         input=payload,
         created_by=principal.sub,
         events=[],
     )
+    add_run_event(run_record, "created", data={"agent_tier": agent_tier})
+    
     session.add(run_record)
     await session.commit()
     await session.refresh(run_record)
-
-    try:
-        # Exchange token for downstream services
-        token = await get_or_exchange_token(session, principal, scopes=scopes, purpose=purpose)
-        client = BusiboxClient(token.access_token)
-        
-        # Get agent from registry
+    
+    # Start tracing span for run execution
+    with tracer.start_as_current_span(
+        "agent_run",
+        attributes={
+            "run.id": str(run_record.id),
+            "agent.id": str(agent_id),
+            "agent.tier": agent_tier,
+            "user.sub": principal.sub,
+        },
+    ) as span:
         try:
-            agent: Agent[BusiboxDeps, object] = agent_registry.get(agent_id)
-        except KeyError as e:
-            logger.error(f"Agent {agent_id} not found in registry: {e}")
-            run_record.status = "failed"
-            run_record.output = {"error": f"Agent not found: {agent_id}"}
-            await session.commit()
-            await session.refresh(run_record)
-            return run_record
-        
-        deps = BusiboxDeps(principal=principal, busibox_client=client)
-        
-        # Execute agent with timeout
-        timeout = get_agent_timeout(agent_tier)
-        logger.info(f"Executing agent {agent_id} with {timeout}s timeout (tier: {agent_tier})")
-        
-        try:
-            result = await asyncio.wait_for(
-                agent.run(payload.get("prompt", ""), deps=deps),
-                timeout=timeout
+            # Exchange token for downstream services
+            logger.info(f"Exchanging token for run {run_record.id}")
+            add_run_event(run_record, "token_exchange_started")
+            
+            token = await get_or_exchange_token(session, principal, scopes=scopes, purpose=purpose)
+            client = BusiboxClient(token.access_token)
+            
+            add_run_event(run_record, "token_exchange_completed")
+            
+            # Get agent from registry
+            try:
+                agent: Agent[BusiboxDeps, object] = agent_registry.get(agent_id)
+                add_run_event(run_record, "agent_loaded", data={"agent_id": str(agent_id)})
+            except KeyError as e:
+                logger.error(f"Agent {agent_id} not found in registry: {e}")
+                run_record.status = "failed"
+                run_record.output = {"error": f"Agent not found: {agent_id}"}
+                add_run_event(run_record, "error", error=f"Agent not found: {agent_id}")
+                span.set_status(trace.Status(trace.StatusCode.ERROR, "Agent not found"))
+                await session.commit()
+                await session.refresh(run_record)
+                return run_record
+            
+            deps = BusiboxDeps(principal=principal, busibox_client=client)
+            
+            # Execute agent with timeout
+            timeout = get_agent_timeout(agent_tier)
+            memory_limit = get_agent_memory_limit(agent_tier)
+            
+            logger.info(
+                f"Executing agent {agent_id} with {timeout}s timeout, "
+                f"{memory_limit}MB memory limit (tier: {agent_tier})"
             )
             
-            # Success - extract output
-            run_record.status = "succeeded"
-            if hasattr(result, "output"):
-                run_record.output = result.output
-            elif hasattr(result, "data"):
-                run_record.output = {"data": result.data}
-            else:
-                run_record.output = {"result": str(result)}
+            run_record.status = "running"
+            add_run_event(
+                run_record,
+                "execution_started",
+                data={"timeout": timeout, "memory_limit_mb": memory_limit},
+            )
+            await session.commit()
             
-            logger.info(f"Agent {agent_id} run {run_record.id} succeeded")
+            span.set_attribute("run.timeout", timeout)
+            span.set_attribute("run.memory_limit_mb", memory_limit)
             
-        except asyncio.TimeoutError:
-            logger.warning(f"Agent {agent_id} run {run_record.id} timed out after {timeout}s")
-            run_record.status = "timeout"
-            run_record.output = {
-                "error": f"Execution exceeded {timeout}s timeout limit for {agent_tier} tier",
-                "timeout": timeout,
-                "tier": agent_tier
-            }
+            try:
+                result = await asyncio.wait_for(
+                    agent.run(payload.get("prompt", ""), deps=deps), timeout=timeout
+                )
+                
+                # Success - extract output
+                run_record.status = "succeeded"
+                
+                # Extract output based on result type
+                if hasattr(result, "data"):
+                    output_data = result.data
+                    if hasattr(output_data, "model_dump"):
+                        run_record.output = output_data.model_dump()
+                    elif hasattr(output_data, "dict"):
+                        run_record.output = output_data.dict()
+                    else:
+                        run_record.output = {"data": output_data}
+                else:
+                    run_record.output = {"result": str(result)}
+                
+                add_run_event(run_record, "execution_completed", data={"status": "succeeded"})
+                logger.info(f"Agent {agent_id} run {run_record.id} succeeded")
+                span.set_status(trace.Status(trace.StatusCode.OK))
+                
+            except asyncio.TimeoutError:
+                logger.warning(f"Agent {agent_id} run {run_record.id} timed out after {timeout}s")
+                run_record.status = "timeout"
+                run_record.output = {
+                    "error": f"Execution exceeded {timeout}s timeout limit for {agent_tier} tier",
+                    "timeout": timeout,
+                    "tier": agent_tier,
+                }
+                add_run_event(
+                    run_record,
+                    "timeout",
+                    error=f"Exceeded {timeout}s timeout",
+                    data={"timeout": timeout, "tier": agent_tier},
+                )
+                span.set_status(trace.Status(trace.StatusCode.ERROR, "Timeout"))
+            
+            except Exception as e:
+                # Tool call failure or agent execution error
+                logger.error(f"Agent {agent_id} run {run_record.id} failed: {e}", exc_info=True)
+                run_record.status = "failed"
+                run_record.output = {
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                }
+                add_run_event(
+                    run_record,
+                    "execution_failed",
+                    error=str(e),
+                    data={"error_type": type(e).__name__},
+                )
+                span.set_status(trace.Status(trace.StatusCode.ERROR, str(e)))
         
         except Exception as e:
-            # Tool call failure or agent execution error
-            logger.error(f"Agent {agent_id} run {run_record.id} failed: {e}", exc_info=True)
+            # Token exchange or setup failure
+            logger.error(f"Run {run_record.id} setup failed: {e}", exc_info=True)
             run_record.status = "failed"
             run_record.output = {
-                "error": str(e),
+                "error": f"Setup failed: {str(e)}",
                 "error_type": type(e).__name__,
             }
-    
-    except Exception as e:
-        # Token exchange or setup failure
-        logger.error(f"Run {run_record.id} setup failed: {e}", exc_info=True)
-        run_record.status = "failed"
-        run_record.output = {
-            "error": f"Setup failed: {str(e)}",
-            "error_type": type(e).__name__,
-        }
-    
-    # Persist final state
-    await session.commit()
-    await session.refresh(run_record)
-    return run_record
+            add_run_event(
+                run_record, "setup_failed", error=str(e), data={"error_type": type(e).__name__}
+            )
+            span.set_status(trace.Status(trace.StatusCode.ERROR, f"Setup failed: {str(e)}"))
+        
+        # Persist final state
+        await session.commit()
+        await session.refresh(run_record)
+        
+        logger.info(
+            f"Run {run_record.id} completed with status: {run_record.status}",
+            extra={
+                "run_id": str(run_record.id),
+                "agent_id": str(agent_id),
+                "status": run_record.status,
+                "created_by": principal.sub,
+            },
+        )
+        
+        return run_record

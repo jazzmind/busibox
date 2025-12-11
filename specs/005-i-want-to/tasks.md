@@ -27,7 +27,7 @@
 
 - [X] **T010**: Define/validate core Pydantic AI agents and outputs (`agents/core.py`) — chat & rag agents with tools ✓
 - [X] **T011**: Implement tool adapters (search, ingest, rag) using Busibox client; add unit tests (mock HTTP) ✓
-- **T012**: Implement run service execution flow (`services/run_service.py`): create run, token exchange, execute agent, persist output/events/status
+- [X] **T012**: Implement run service execution flow (`services/run_service.py`): create run, token exchange, execute agent, persist output/events/status ✓
 - **T013**: Implement `/runs` POST endpoint (accept input, return RunRead) and `/runs/{id}` GET; add integration tests
 - **T014**: Implement SSE stream `/streams/runs/{id}`; add integration test with polling DB changes
 - **T015**: Enforce tiered execution limits (Simple 30s/512MB, Complex 5m/2GB, Batch 30m/4GB) in run execution; add timeout tests
