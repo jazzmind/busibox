@@ -97,11 +97,28 @@ async def create_workflow(
     principal: Principal = Depends(get_principal),
     session: AsyncSession = Depends(get_session),
 ) -> WorkflowDefinitionRead:
-    record = WorkflowDefinition(**payload.model_dump())
-    session.add(record)
-    await session.commit()
-    await session.refresh(record)
-    return WorkflowDefinitionRead.model_validate(record)
+    """
+    Create a new workflow definition with step validation.
+    
+    Raises:
+        HTTPException: 400 if workflow validation fails
+    """
+    try:
+        # Validate workflow steps
+        from app.workflows.engine import validate_workflow_steps
+        validate_workflow_steps(payload.steps)
+        
+        record = WorkflowDefinition(**payload.model_dump())
+        session.add(record)
+        await session.commit()
+        await session.refresh(record)
+        return WorkflowDefinitionRead.model_validate(record)
+        
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid workflow definition: {str(e)}"
+        )
 
 
 @router.get("/evals", response_model=List[EvalDefinitionRead])

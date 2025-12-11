@@ -21,6 +21,7 @@ from app.schemas.auth import Principal
 from app.schemas.run import RunCreate, RunRead, ScheduleCreate, ScheduleRead
 from app.services.run_service import create_run, get_run_by_id, list_runs
 from app.services.scheduler import run_scheduler
+from app.workflows.engine import execute_workflow
 
 logger = logging.getLogger(__name__)
 
@@ -309,3 +310,70 @@ async def cancel_schedule(
         )
     
     logger.info(f"Cancelled scheduled job {job_id} by {principal.sub}")
+
+
+@router.post("/workflow", response_model=RunRead, status_code=status.HTTP_202_ACCEPTED)
+async def execute_workflow_run(
+    workflow_id: uuid.UUID,
+    input_data: Dict[str, Any],
+    scopes: Optional[List[str]] = None,
+    purpose: str = "workflow-execution",
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+) -> RunRead:
+    """
+    Execute a multi-step workflow.
+    
+    The workflow will:
+    1. Execute steps sequentially
+    2. Pass outputs between steps
+    3. Persist step events to run record
+    4. Handle errors gracefully
+    
+    Args:
+        workflow_id: Workflow definition UUID
+        input_data: Initial workflow input
+        scopes: Required scopes (defaults to agent.execute)
+        purpose: Purpose for token exchange
+        principal: Authenticated user principal
+        session: Database session
+        
+    Returns:
+        RunRead: Run record with workflow execution results
+        
+    Raises:
+        HTTPException: 404 if workflow not found, 400 if validation fails
+    """
+    try:
+        # Default scopes
+        if not scopes:
+            scopes = ["agent.execute", "search.read", "ingest.write"]
+        
+        # Execute workflow
+        run_record = await execute_workflow(
+            session=session,
+            principal=principal,
+            workflow_id=workflow_id,
+            input_data=input_data,
+            scopes=scopes,
+            purpose=purpose,
+        )
+        
+        logger.info(
+            f"Workflow execution completed, run {run_record.id}, status: {run_record.status}",
+            extra={
+                "run_id": str(run_record.id),
+                "workflow_id": str(workflow_id),
+                "status": run_record.status,
+                "created_by": principal.sub,
+            },
+        )
+        
+        return RunRead.model_validate(run_record)
+        
+    except Exception as e:
+        logger.error(f"Workflow execution failed: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Workflow execution failed: {str(e)}"
+        )

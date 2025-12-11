@@ -88,6 +88,20 @@ async def search(
                 filters=filters,
                 readable_role_ids=readable_role_ids,
             )
+            
+            # Apply reranking if requested
+            if search_request.rerank and len(results) > 0:
+                logger.info(
+                    "Applying reranking to keyword results",
+                    num_results=len(results),
+                    reranker_model=search_request.reranker_model,
+                )
+                results = await milvus_service.rerank_results(
+                    query=search_request.query,
+                    results=results,
+                    top_k=search_request.limit,
+                    reranker_model=search_request.reranker_model or "qwen3-gpu",
+                )
         
         elif search_request.mode == "semantic":
             # Pure semantic search with role-based partitions
@@ -110,6 +124,20 @@ async def search(
                 filters=filters,
                 readable_role_ids=readable_role_ids,
             )
+            
+            # Apply reranking if requested
+            if search_request.rerank and len(results) > 0:
+                logger.info(
+                    "Applying reranking to semantic results",
+                    num_results=len(results),
+                    reranker_model=search_request.reranker_model,
+                )
+                results = await milvus_service.rerank_results(
+                    query=search_request.query,
+                    results=results,
+                    top_k=search_request.limit,
+                    reranker_model=search_request.reranker_model or "qwen3-gpu",
+                )
         
         elif search_request.mode == "hybrid":
             # Hybrid search (dense + sparse) with role-based partitions
@@ -143,19 +171,6 @@ async def search(
             raise HTTPException(
                 status_code=400,
                 detail=f"Invalid search mode: {search_request.mode}"
-            )
-        
-        # Apply reranking if requested
-        if search_request.rerank and len(results) > 0:
-            logger.info(
-                "Applying reranking",
-                num_results=len(results),
-                top_k=search_request.limit,
-            )
-            results = reranking_service.rerank(
-                query=search_request.query,
-                results=results,
-                top_k=search_request.limit,
             )
         
         # Apply offset for pagination

@@ -64,10 +64,10 @@
 
 **Independent Test**: Create workflow with 2–3 steps; execute; verify steps run in order, outputs chained, state saved in run events.
 
-- **T025**: Extend workflow model handling in `WorkflowDefinition` and validation of steps/branches
-- **T026**: Implement workflow execution engine (sequential + simple branching) leveraging agents/tools; persist step events
-- **T027**: Add workflow endpoints (create/list if needed) or reuse existing agents API if in scope; add integration tests
-- **Checkpoint**: Workflow run with multiple steps completes with persisted events
+- [X] **T025**: Extend workflow model handling in `WorkflowDefinition` and validation of steps/branches ✓
+- [X] **T026**: Implement workflow execution engine (sequential + simple branching) leveraging agents/tools; persist step events ✓
+- [X] **T027**: Add workflow endpoints (create/list if needed) or reuse existing agents API if in scope; add integration tests ✓
+- ✅ **Checkpoint**: Workflow run with multiple steps completes with persisted events
 
 ## Phase 7 — US5 (P4) Evaluate Agent Performance with Scorers
 
@@ -75,18 +75,18 @@
 
 **Independent Test**: Define scorer; run scorer on completed run; scores persisted; aggregated metrics returned.
 
-- **T028**: Implement scorer definitions CRUD (if required) and validation
-- **T029**: Implement scorer execution against RunRecords; persist scores (extend RunRecord or new table if needed)
-- **T030**: Add aggregation endpoint or query for scores (avg/min/max/percentiles); add integration tests
-- **Checkpoint**: Scorer run produces stored scores and aggregates
+- [X] **T028**: Implement scorer definitions CRUD (if required) and validation ✓
+- [X] **T029**: Implement scorer execution against RunRecords; persist scores (extend RunRecord or new table if needed) ✓
+- [X] **T030**: Add aggregation endpoint or query for scores (avg/min/max/percentiles); add integration tests ✓
+- ✅ **Checkpoint**: Scorer run produces stored scores and aggregates
 
 ## Phase 8 — Polish & Cross-Cutting
 
-- **T031**: Harden error handling: tool call failures, DB retries, timeout messaging
-- **T032**: Add rate limiting/config for runs and streams (if required by ops policy)
-- **T033**: OTel exporter configuration + sampling controls; ensure trace/span IDs in logs
-- **T034**: Documentation sweep: update README, quickstart, OpenAPI annotations; ensure spec/plan alignment
-- **T035**: Deployment validation: Ansible role for local_src deploy, systemd service, health checks (test `make agent` for test/prod)
+- [X] **T031**: Harden error handling: tool call failures, DB retries, timeout messaging ✓
+- [X] **T032**: Add rate limiting/config for runs and streams (if required by ops policy) ✓
+- [X] **T033**: OTel exporter configuration + sampling controls; ensure trace/span IDs in logs ✓
+- [X] **T034**: Documentation sweep: update README, quickstart, OpenAPI annotations; ensure spec/plan alignment ✓
+- [X] **T035**: Deployment validation: Ansible role for local_src deploy, systemd service, health checks (test `make agent` for test/prod) ✓
 
 ## Dependencies & Order
 
