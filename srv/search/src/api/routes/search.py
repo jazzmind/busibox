@@ -134,6 +134,8 @@ async def search(
                 dense_weight=search_request.dense_weight,
                 sparse_weight=search_request.sparse_weight,
                 filters=filters,
+                use_reranker=search_request.rerank,
+                reranker_model=search_request.reranker_model or "qwen3-gpu",
                 readable_role_ids=readable_role_ids,
             )
         
