@@ -33,7 +33,8 @@ class MilvusSearchService:
         self.reranker_enabled = config.get("reranker_enabled", True)
         self.reranker_base_url = config.get("litellm_base_url", "http://10.96.200.207:4000")
         self.reranker_api_key = config.get("litellm_api_key", "")
-        self.reranker_model = config.get("reranker_model", "reranking")  # Model purpose from registry
+        # Always use "reranking" model purpose for liteLLM reranker (not the local reranker model name)
+        self.reranker_model = "reranking"
         
         # Cache of existing partitions
         self._partition_cache: Optional[set] = None

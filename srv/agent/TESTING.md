@@ -1,312 +1,257 @@
-# Testing Guide: Agent Server
+# Agent Server Testing Guide
 
-## Local Testing (No External Dependencies)
+## Overview
 
-The test suite is designed to run **completely standalone** with no external service dependencies.
+The agent server has comprehensive test coverage with unit, integration, and e2e tests. Tests can be run locally or on deployed infrastructure.
 
-### Quick Start
+## Quick Start
+
+### Local Testing
 
 ```bash
-cd /Users/wessonnenreich/Code/sonnenreich/busibox/srv/agent
+# Setup virtual environment (first time only)
+cd /path/to/busibox/srv/agent
+bash scripts/setup-venv.sh
+source venv/bin/activate
 
-# 1. Install dependencies (if not already done)
-pip install -e ".[dev]"
+# Run all tests
+make test
 
-# 2. Run all tests
-pytest tests/ -v
-
-# 3. Run with coverage
-pytest tests/ --cov=app --cov-report=html --cov-report=term
-
-# 4. Run specific test file
-pytest tests/unit/test_run_service.py -v
-
-# 5. Run only integration tests
-pytest tests/integration/ -v
+# Run specific test suites
+make test-unit           # Fast, isolated unit tests
+make test-integration    # Integration tests with DB
+make test-cov            # Tests with coverage report
 ```
 
-### Environment Variables for Tests
+### Deployed Testing (via MCP)
 
-**✅ NO environment variables required for tests!**
+```bash
+# From busibox/provision/ansible directory
 
-Tests use:
-- **In-memory SQLite** database (`sqlite+aiosqlite:///:memory:`)
-- **Mock HTTP clients** for Busibox services (search/ingest/RAG)
-- **Mock JWT validation** (no real auth service needed)
-- **Mock token exchange** (no real OAuth server needed)
+# Test environment
+make test-agent INV=inventory/test
+make test-agent-unit INV=inventory/test
+make test-agent-integration INV=inventory/test
+make test-agent-coverage INV=inventory/test
 
-### Test Structure
+# Production environment
+make test-agent
+make test-agent-unit
+make test-agent-integration
+make test-agent-coverage
+
+# Interactive test menu
+make test-menu
+```
+
+## Test Structure
 
 ```
 tests/
-├── conftest.py              # Shared fixtures (DB, mocks, test data)
-├── test_health.py           # Smoke test (FastAPI boots)
-├── unit/
-│   └── test_run_service.py  # Run service logic tests
-└── integration/
-    └── test_api_runs.py     # API endpoint tests
+├── conftest.py              # Shared fixtures (DB, auth, agents)
+├── test_health.py           # Smoke test
+├── unit/                    # Fast, isolated tests
+│   ├── test_auth_tokens.py  # JWT validation, claims
+│   ├── test_token_service.py # Token caching/exchange
+│   ├── test_busibox_client.py # HTTP client
+│   └── test_run_service.py  # Run execution logic
+└── integration/             # Tests with real DB
+    ├── test_api_runs.py     # Runs API endpoints
+    └── test_weather_agent.py # LiteLLM integration
 ```
 
-### Test Fixtures (from conftest.py)
+## Test Categories
 
-- `test_engine` - In-memory SQLite database engine
-- `test_session` - Async database session
-- `test_client` - FastAPI test HTTP client
-- `mock_principal` - Mock authenticated user
-- `admin_principal` - Mock admin user
-- `test_agent` - Sample agent definition
-- `test_run` - Sample run record
-- `test_token` - Sample token grant
+### Unit Tests (`tests/unit/`)
 
-### Running Tests with Different Verbosity
+**Purpose**: Fast, isolated tests with mocked dependencies
 
-```bash
-# Minimal output
-pytest tests/
+**Coverage**:
+- JWT validation (exp/nbf/iat, issuer/audience, signature)
+- Token caching and refresh logic
+- HTTP client request formatting
+- Run service execution flow
+- Agent timeout handling
 
-# Verbose (show test names)
-pytest tests/ -v
-
-# Very verbose (show test details)
-pytest tests/ -vv
-
-# Show print statements
-pytest tests/ -s
-
-# Stop on first failure
-pytest tests/ -x
-
-# Run only failed tests from last run
-pytest tests/ --lf
-```
-
-### Coverage Reports
-
-```bash
-# Generate HTML coverage report
-pytest tests/ --cov=app --cov-report=html
-
-# Open report in browser
-open htmlcov/index.html  # macOS
-xdg-open htmlcov/index.html  # Linux
-
-# Terminal coverage report
-pytest tests/ --cov=app --cov-report=term-missing
-```
-
-### Test Categories
-
-#### Unit Tests (`tests/unit/`)
-
-Test individual functions/classes in isolation with mocks:
-
+**Run**:
 ```bash
 pytest tests/unit/ -v
+# or
+make test-unit
 ```
 
-**What's tested**:
-- Timeout calculation (`get_agent_timeout`)
-- Run creation with success/failure/timeout scenarios
-- Agent registry operations
-- Token service logic
-- Error handling paths
+### Integration Tests (`tests/integration/`)
 
-#### Integration Tests (`tests/integration/`)
+**Purpose**: Test API endpoints with real database
 
-Test API endpoints with real FastAPI app:
+**Coverage**:
+- Runs API (POST /runs, GET /runs/{id})
+- SSE streaming (/streams/runs/{id})
+- Agent execution with mocked Busibox services
+- Weather agent with LiteLLM (requires LiteLLM running)
 
+**Run**:
 ```bash
 pytest tests/integration/ -v
+# or
+make test-integration
 ```
 
-**What's tested**:
-- POST `/runs` - Create agent run
-- GET `/runs/{id}` - Retrieve run details
-- Error responses (404, 401)
-- Request/response schemas
+### E2E Tests (future)
 
-### Debugging Tests
+**Purpose**: Full stack tests with all services
 
-```bash
-# Run with Python debugger
-pytest tests/ --pdb
+**Coverage** (planned):
+- Agent execution with real search/ingest/RAG calls
+- Scheduled runs
+- Workflow execution
 
-# Drop into debugger on failure
-pytest tests/ --pdb --maxfail=1
+## Test Fixtures
 
-# Show local variables on failure
-pytest tests/ -l
-
-# Increase log output
-pytest tests/ --log-cli-level=DEBUG
-```
-
-### Writing New Tests
-
-**Unit Test Template**:
+### Database Fixtures
 
 ```python
-import pytest
-from unittest.mock import AsyncMock, patch
+@pytest.fixture
+async def test_session(test_engine) -> AsyncSession:
+    """In-memory SQLite session for fast tests"""
 
-@pytest.mark.asyncio
-async def test_my_feature(test_session, mock_principal):
-    """Test description."""
-    # Arrange
-    with patch("app.services.my_service.external_call") as mock_call:
-        mock_call.return_value = {"result": "success"}
-        
-        # Act
-        result = await my_function(test_session, mock_principal)
-        
-        # Assert
-        assert result.status == "success"
-        mock_call.assert_called_once()
+@pytest.fixture
+async def test_agent(test_session) -> AgentDefinition:
+    """Pre-created agent definition"""
+
+@pytest.fixture
+async def test_run(test_session, test_agent) -> RunRecord:
+    """Pre-created run record"""
 ```
 
-**Integration Test Template**:
+### Auth Fixtures
 
 ```python
-import pytest
-from httpx import AsyncClient
+@pytest.fixture
+def mock_principal() -> Principal:
+    """Mock authenticated user"""
 
+@pytest.fixture
+def admin_principal() -> Principal:
+    """Mock admin user"""
+
+@pytest.fixture
+def mock_jwt_token() -> str:
+    """Mock JWT token string"""
+```
+
+## Writing Tests
+
+### Unit Test Example
+
+```python
 @pytest.mark.asyncio
-async def test_my_endpoint(test_client: AsyncClient):
-    """Test endpoint description."""
-    # Arrange
-    with patch("app.api.my_route.get_principal") as mock_auth:
-        mock_auth.return_value = Principal(sub="test-user", roles=["user"])
+async def test_token_cache_hit(test_session, test_token):
+    """Test that cached tokens are returned"""
+    principal = Principal(sub="user-123", ...)
+    
+    token = await get_or_exchange_token(
+        session=test_session,
+        principal=principal,
+        scopes=["search.read"],
+        purpose="test",
+    )
+    
+    assert token.access_token == test_token.token
+```
+
+### Integration Test Example
+
+```python
+@pytest.mark.asyncio
+async def test_create_run_endpoint(test_client, test_agent):
+    """Test POST /runs endpoint"""
+    with patch("app.api.runs.get_principal") as mock_auth:
+        mock_auth.return_value = Principal(sub="test-user", ...)
         
-        # Act
         response = await test_client.post(
-            "/my-endpoint",
-            json={"data": "value"},
+            "/runs",
+            json={"agent_id": str(test_agent.id), "input": {"prompt": "test"}},
             headers={"Authorization": "Bearer test-token"}
         )
         
-        # Assert
-        assert response.status_code == 200
-        assert response.json()["status"] == "success"
+        assert response.status_code == 202
+        assert response.json()["status"] in ["running", "succeeded"]
 ```
 
-## Integration Testing with Busibox Services
+## Coverage Requirements
 
-For testing with real Busibox services (search/ingest/RAG), you'll need a running Busibox environment.
+- **Overall**: 90%+ (FR-033, SC-005)
+- **Auth/Token**: 100% (security-critical)
+- **Agent Execution**: 80%+ (complex logic)
 
-### Prerequisites
-
-1. **Busibox services running** (test or production environment)
-2. **Environment variables set** (see `.env.example`)
-3. **Valid OAuth credentials** for token exchange
-
-### Setup for Integration Testing
-
+**Generate coverage report**:
 ```bash
-# 1. Copy .env.example to .env
-cp .env.example .env
-
-# 2. Update .env with real service URLs and credentials
-# Edit .env with your Busibox configuration
-
-# 3. Run integration tests (skip mocked tests)
-pytest tests/integration/ -v -m "not mock"
+pytest tests/ --cov=app --cov-report=html --cov-report=term
+# View report: open htmlcov/index.html
 ```
 
-### Environment Variables for Integration Tests
+## Continuous Integration
 
-```bash
-# Required for real Busibox integration
-export DATABASE_URL="postgresql+asyncpg://user:pass@host:5432/db"
-export SEARCH_API_URL="http://10.96.200.30:8003"
-export INGEST_API_URL="http://10.96.200.31:8001"
-export RAG_API_URL="http://10.96.200.32:8004"
-export AUTH_TOKEN_URL="http://10.96.200.33:8080/oauth/token"
-export AUTH_CLIENT_ID="agent-server-client"
-export AUTH_CLIENT_SECRET="your-secret"
-export REDIS_URL="redis://10.96.200.34:6379/0"
-```
-
-## CI/CD Testing
-
-Tests are designed to run in CI/CD pipelines with no external dependencies:
-
-```yaml
-# Example GitHub Actions workflow
-- name: Run tests
-  run: |
-    pip install -e ".[dev]"
-    pytest tests/ --cov=app --cov-report=xml
-
-- name: Upload coverage
-  uses: codecov/codecov-action@v3
-```
+Tests run automatically:
+1. **Pre-deployment**: Unit tests must pass before deploying
+2. **Post-deployment**: Integration tests verify deployment
+3. **Scheduled**: Nightly e2e tests on production
 
 ## Troubleshooting
 
-### Import Errors
+### Tests fail with "pytest not found"
 
 ```bash
-# Ensure package is installed in editable mode
-pip install -e ".[dev]"
-
-# Or install dependencies directly
-pip install pytest pytest-asyncio httpx
+# Install test dependencies
+pip install -r requirements.test.txt
+# or
+make install-dev
 ```
 
-### Database Errors
+### Tests fail with database errors
 
 ```bash
-# Tests use in-memory SQLite - no setup needed
-# If you see SQLite errors, check that aiosqlite is installed
-pip install aiosqlite
+# Tests use in-memory SQLite by default
+# Check conftest.py for TEST_DATABASE_URL
+
+# For PostgreSQL tests (integration):
+createdb agent_server_test
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_server_test pytest
 ```
 
-### Async Errors
+### Tests fail with auth errors
 
 ```bash
-# Ensure pytest-asyncio is installed
-pip install pytest-asyncio
+# Unit tests mock auth - check fixtures in conftest.py
+# Integration tests require valid JWT - check test setup
 
-# Check pyproject.toml has:
-# [tool.pytest.ini_options]
-# asyncio_mode = "auto"
+# For deployed tests, ensure auth service is running:
+curl http://authz-lxc:8080/.well-known/jwks.json
 ```
 
-### Mock Errors
+### Tests timeout
 
 ```bash
-# If mocks aren't working, check patch paths
-# Use full module path: "app.services.run_service.agent_registry"
-# Not relative: "agent_registry"
+# Increase timeout for slow tests
+pytest tests/ -v --timeout=60
+
+# Or skip slow tests
+pytest tests/unit/ -v  # Only fast unit tests
 ```
 
-## Test Coverage Goals
+## Best Practices
 
-- **Overall**: 90%+ coverage
-- **Critical paths**: 100% coverage (run service, auth, API endpoints)
-- **Error handling**: All error paths tested
-- **Edge cases**: Timeouts, failures, invalid input
+1. **Test Isolation**: Each test should be independent
+2. **Mock External Services**: Use mocks for Busibox APIs in unit tests
+3. **Use Fixtures**: Reuse common setup via pytest fixtures
+4. **Clear Names**: Test names should describe what they test
+5. **Fast Feedback**: Keep unit tests fast (<100ms each)
+6. **Coverage**: Aim for high coverage, but focus on critical paths
 
-### Current Coverage
+## Related Documentation
 
-```bash
-# Check current coverage
-pytest tests/ --cov=app --cov-report=term-missing
-
-# Expected output:
-# app/services/run_service.py    95%
-# app/api/runs.py                 90%
-# app/auth/tokens.py              85%
-# ... (more files)
-# TOTAL                           90%
-```
-
-## Next Steps
-
-1. ✅ Run tests locally to verify setup
-2. ✅ Add more unit tests for uncovered modules
-3. ✅ Add e2e tests for complete user journeys
-4. ✅ Set up CI/CD pipeline with automated testing
-5. ✅ Add integration tests with real Busibox services
-
-
+- **Quickstart**: `quickstart.md` - Setup and first test
+- **Research**: `research.md` - Testing strategy and patterns
+- **Tasks**: `tasks.md` - Test implementation tasks
+- **Busibox Testing**: `/provision/ansible/TESTING.md` - Infrastructure tests

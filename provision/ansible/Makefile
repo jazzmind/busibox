@@ -172,7 +172,7 @@ test: test-menu
 test-menu:
 	@./test-menu.sh
 
-test-all-targets: test-ingest test-search test-agent test-apps
+test-all-targets: test-ingest test-search test-agent-unit test-apps
 	@echo "================================"
 	@echo "All tests passed!"
 	@echo "================================"
@@ -320,8 +320,36 @@ test-agent:
 	@echo "Container: agent-lxc ($(AGENT_IP))"
 	@echo ""
 	@echo "=== Agent API Tests (pytest) ==="
-	@ssh root@$(AGENT_IP) 'cd /srv/agent && source venv/bin/activate && pytest' || (echo "Agent tests FAILED" && exit 1)
+	@ssh root@$(AGENT_IP) 'cd /srv/agent && bash scripts/run-tests.sh all' || (echo "Agent tests FAILED" && exit 1)
 	@echo "✓ Agent tests passed"
+	@echo ""
+
+test-agent-unit:
+	@echo "Running agent unit tests only..."
+	@echo "Container: agent-lxc ($(AGENT_IP))"
+	@echo ""
+	@ssh root@$(AGENT_IP) 'cd /srv/agent && bash scripts/run-tests.sh unit' || (echo "Agent unit tests FAILED" && exit 1)
+	@echo "✓ Agent unit tests passed"
+	@echo ""
+
+test-agent-integration:
+	@echo "Running agent integration tests..."
+	@echo "Container: agent-lxc ($(AGENT_IP))"
+	@echo ""
+	@echo "⚠️  Warning: Requires auth, search, ingest services running"
+	@echo ""
+	@ssh root@$(AGENT_IP) 'cd /srv/agent && bash scripts/run-tests.sh integration' || (echo "Agent integration tests FAILED" && exit 1)
+	@echo "✓ Agent integration tests passed"
+	@echo ""
+
+test-agent-coverage:
+	@echo "Running agent tests with coverage..."
+	@echo "Container: agent-lxc ($(AGENT_IP))"
+	@echo ""
+	@ssh root@$(AGENT_IP) 'cd /srv/agent && bash scripts/run-tests.sh coverage' || (echo "Agent tests FAILED" && exit 1)
+	@echo "✓ Agent tests passed with coverage"
+	@echo ""
+	@echo "Coverage report: ssh root@$(AGENT_IP) and view /srv/agent/htmlcov/index.html"
 	@echo ""
 
 test-apps:
