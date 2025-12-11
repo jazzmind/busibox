@@ -4,99 +4,15 @@
 # This runs the generated deploywatch scripts or synchronizes local sources
 
 - name: Deploy applications from local sources
-  block:
-    - name: Ensure deploy path exists (local src)
-      file:
-        path: "{{ item.deploy_path }}"
-        state: directory
-        mode: "0755"
-        owner: root
-        group: root
-      when:
-        - inventory_hostname is match('.*' + item.container + '.*')
-
-    - name: Sync local source to target
-      synchronize:
-        src: "{{ item.local_src }}/"
-        dest: "{{ item.deploy_path }}/"
-        delete: yes
-        rsync_opts:
-          - "--exclude=.git"
-          - "--exclude=.venv"
-          - "--exclude=__pycache__"
-          - "--exclude=*.pyc"
-      when:
-        - inventory_hostname is match('.*' + item.container + '.*')
-
-    - name: Create virtualenv for application
-      command: python3 -m venv {{ item.deploy_path }}/venv
-      args:
-        creates: "{{ item.deploy_path }}/venv/bin/activate"
-      when:
-        - inventory_hostname is match('.*' + item.container + '.*')
-
-    - name: Upgrade pip inside venv
-      command: "{{ item.deploy_path }}/venv/bin/pip install --upgrade pip"
-      when:
-        - inventory_hostname is match('.*' + item.container + '.*')
-
-    - name: Install application (pyproject)
-      command: "{{ item.deploy_path }}/venv/bin/pip install ."
-      args:
-        chdir: "{{ item.deploy_path }}"
-      when:
-        - inventory_hostname is match('.*' + item.container + '.*')
-
-    - name: Write version marker
-      copy:
-        content: "{{ ansible_date_time.iso8601 }}"
-        dest: "{{ item.deploy_path }}/.version"
-        mode: "0644"
-      when:
-        - inventory_hostname is match('.*' + item.container + '.*')
-
-    - name: Deploy systemd service for local app
-      template:
-        src: "{{ playbook_dir }}/roles/app_deployer/templates/app-systemd.service.j2"
-        dest: "/etc/systemd/system/{{ item.name }}.service"
-        mode: "0644"
-      vars:
-        app: "{{ item }}"
-      when:
-        - inventory_hostname is match('.*' + item.container + '.*')
-
-    - name: Reload systemd and restart app
-      block:
-        - name: Reload systemd
-          command: systemctl daemon-reload
-        - name: Enable and restart service
-          service:
-            name: "{{ item.name }}"
-            state: restarted
-            enabled: yes
-      when:
-        - inventory_hostname is match('.*' + item.container + '.*')
-
-    - name: Health check local app
-      uri:
-        url: "http://localhost:{{ item.port }}{{ item.health_endpoint }}"
-        status_code: 200
-        timeout: 30
-      register: local_health
-      until: local_health.status == 200
-      retries: 10
-      delay: 3
-      when:
-        - inventory_hostname is match('.*' + item.container + '.*')
-        - item.health_endpoint is defined
-  loop: "{{ applications }}"
+  include_tasks: deploy_local_app.yml
+  loop: "{{ applications | selectattr('local_src', 'defined') | list }}"
   loop_control:
-    label: "{{ item.name }}"
+    loop_var: app
+    label: "{{ app.name }}"
   when:
     - applications is defined
     - applications | length > 0
-    - item.local_src is defined
-    - deploy_app is not defined or deploy_app == item.name
+    - deploy_app is not defined or deploy_app == app.name
   tags:
     - deploy
 

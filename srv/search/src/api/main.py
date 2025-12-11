@@ -12,6 +12,7 @@ from api.routes import search, health
 from shared.config import config
 
 # Configure structured logging
+import sys
 structlog.configure(
     processors=[
         structlog.processors.TimeStamper(fmt="iso"),
@@ -20,7 +21,8 @@ structlog.configure(
         structlog.processors.JSONRenderer()
     ],
     context_class=dict,
-    logger_factory=structlog.PrintLoggerFactory(),
+    logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
+    cache_logger_on_first_use=True,
 )
 
 logger = structlog.get_logger()
