@@ -74,6 +74,8 @@ available_models:
     max_model_len: 4096  # Reranker uses short sequences
     max_num_seqs: 32  # Fewer concurrent requests needed
     cpu_offload_gb: 0  # Minimal CPU offload
+    # Reranker-specific configuration
+    hf_overrides: '{"architectures": ["Qwen3ForSequenceClassification"], "classifier_from_token": ["no", "yes"], "is_original_qwen3_reranker": true}'
 
   "bge-large":
     provider: "fastembed"

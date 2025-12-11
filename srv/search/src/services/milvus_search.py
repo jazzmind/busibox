@@ -461,26 +461,29 @@ class MilvusSearchService:
                 reranker_model=self.reranker_model,
             )
             
-            # Prepare query-document pairs for reranking
-            # Format: [{"query": "...", "document": "..."}]
-            pairs = [
-                {
-                    "query": query,
-                    "document": result["text"][:2000],  # Limit to 2000 chars for performance
-                }
+            # Format query and documents for Qwen3-Reranker using vLLM's /score endpoint
+            # Template format required by Qwen3-Reranker
+            prefix = '<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be "yes" or "no".<|im_end|>\n<|im_start|>user\n'
+            suffix = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+            instruction = "Given a search query, retrieve relevant passages that answer the query"
+            
+            # Format the query (same for all documents)
+            formatted_query = f"{prefix}<Instruct>: {instruction}\n<Query>: {query}\n"
+            
+            # Format each document
+            formatted_documents = [
+                f"<Document>: {result['text'][:2000]}{suffix}"  # Limit to 2000 chars
                 for result in results
             ]
             
-            # Call reranker via liteLLM (compatible with OpenAI embeddings API)
-            # Most reranker models use the embeddings endpoint but return relevance scores
+            # Call vLLM reranker via /score endpoint
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
-                    f"{self.reranker_base_url}/rerank",
+                    f"{self.reranker_base_url}/score",
                     json={
                         "model": self.reranker_model,
-                        "query": query,
-                        "documents": [result["text"][:2000] for result in results],
-                        "top_n": top_k or len(results),
+                        "prompt": formatted_query,
+                        "text": formatted_documents,
                     },
                     headers={
                         "Authorization": f"Bearer {self.reranker_api_key}",
@@ -498,24 +501,29 @@ class MilvusSearchService:
                 
                 rerank_data = response.json()
                 
-                # Parse reranker response
-                # Expected format: {"results": [{"index": 0, "relevance_score": 0.95}, ...]}
-                if "results" not in rerank_data:
+                # Parse vLLM score response
+                # Expected format: {"data": [{"score": 0.95}, ...]}
+                if "data" not in rerank_data:
                     logger.warning("Unexpected reranker response format, returning original results")
                     return results[:top_k] if top_k else results
                 
-                # Map reranker scores back to results
+                # Map reranker scores back to results and sort by score
                 reranked_results = []
-                for rerank_item in rerank_data["results"]:
-                    idx = rerank_item["index"]
-                    relevance_score = rerank_item["relevance_score"]
-                    
+                for idx, score_item in enumerate(rerank_data["data"]):
                     if idx < len(results):
                         result = results[idx].copy()
+                        relevance_score = score_item.get("score", 0.0)
                         result["rerank_score"] = relevance_score
                         result["original_score"] = result["score"]
                         result["score"] = relevance_score  # Replace score with rerank score
                         reranked_results.append(result)
+                
+                # Sort by rerank score (descending)
+                reranked_results.sort(key=lambda x: x["rerank_score"], reverse=True)
+                
+                # Take top_k results
+                if top_k:
+                    reranked_results = reranked_results[:top_k]
                 
                 logger.info(
                     "Reranking completed",
