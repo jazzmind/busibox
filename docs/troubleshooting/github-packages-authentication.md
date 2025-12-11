@@ -24,44 +24,62 @@ This occurs even though:
 
 ## Root Cause
 
-The GitHub token is available in the `~/.github_token` file, but npm needs it as an **environment variable** named `GITHUB_TOKEN` to authenticate with GitHub Packages.
+There are two requirements for npm to authenticate with GitHub Packages:
 
-Applications using GitHub Packages have a `.npmrc` file like:
+1. **The `.npmrc` configuration file** must be present in the project root
+2. **The `GITHUB_TOKEN` environment variable** must be set when running npm
+
+The `.npmrc` file tells npm how to authenticate:
 
 ```
 @jazzmind:registry=https://npm.pkg.github.com
 //npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
 ```
 
-The `${GITHUB_TOKEN}` placeholder requires the environment variable to be set.
+### The Problem
+
+The `.npmrc` file was **gitignored** in the ai-portal repository, so it wasn't included when GitHub created the deployment tarball. Without this file, npm had no way to know it should use the GITHUB_TOKEN for authentication, even when the token was available.
 
 ## Solution
 
-The deployment scripts now pass the `GITHUB_TOKEN` environment variable to npm by reading it from `~/.github_token` on the container:
+The fix required two changes:
 
-### 1. Branch Deployment (deploy-branch.yml)
+### 1. Commit `.npmrc` to the Repository
 
-The script reads the token from the file and sets it inline for the npm command:
+The `.npmrc` file must be committed to git so it's included in deployments:
 
+```bash
+# Remove .npmrc from .gitignore
+# Edit .gitignore and remove the line: .npmrc
+
+# Commit the .npmrc file
+git add .npmrc .gitignore
+git commit -m "fix: include .npmrc for GitHub Packages authentication"
+git push
+```
+
+**Why is this safe?** The `.npmrc` file uses an environment variable (`${GITHUB_TOKEN}`) rather than hardcoding the token, so it contains no secrets.
+
+### 2. Ensure GITHUB_TOKEN is Available During Deployment
+
+The deployment scripts set the `GITHUB_TOKEN` environment variable by reading from `~/.github_token`:
+
+**Branch Deployment (deploy-branch.yml)**:
 ```yaml
 - name: Install dependencies
   shell: |
     cd {{ app_to_deploy.deploy_path }}
     # Set GITHUB_TOKEN from file for npm authentication
     if [ -f ~/.github_token ]; then
-      GITHUB_TOKEN=$(cat ~/.github_token) npm install --production=false
+      export GITHUB_TOKEN=$(cat ~/.github_token)
+      echo "Running npm with GITHUB_TOKEN set"
     else
-      npm install --production=false
+      echo "WARNING: No token file found"
     fi
-  delegate_to: "{{ app_to_deploy.container_ip }}"
+    npm install --production=false
 ```
 
-This uses the shell pattern `VAR=value command` to set the environment variable only for that specific command execution.
-
-### 2. Release Deployment (deploywatch-app.sh.j2)
-
-The deploywatch script exports the token from `~/.github_token` before running npm:
-
+**Release Deployment (deploywatch-app.sh.j2)**:
 ```bash
 install_dependencies() {
     cd "${DEPLOY_PATH}"
@@ -115,17 +133,39 @@ make deploy-ai-portal  # Or whichever app needs it
 
 ## Verification
 
-### 1. Check Token is Deployed
+### 1. Check `.npmrc` is in Repository
+
+Verify the `.npmrc` file is committed and not gitignored:
+
+```bash
+cd /path/to/ai-portal
+git ls-files .npmrc  # Should show: .npmrc
+grep -q "^\.npmrc$" .gitignore && echo "ERROR: .npmrc is gitignored!" || echo "OK: .npmrc not gitignored"
+```
+
+### 2. Check Token is Deployed
 
 SSH into the container and verify the token file exists:
 
 ```bash
 ssh root@<container-ip>
 cat ~/.github_token
-# Should show your token (starts with ghp_)
+# Should show your token (starts with ghp_ or github_pat_)
 ```
 
-### 2. Test npm Authentication Manually
+### 3. Check `.npmrc` is Deployed
+
+After deployment, verify the `.npmrc` file exists in the deployment directory:
+
+```bash
+ssh root@<container-ip>
+cat /srv/apps/ai-portal/.npmrc
+# Should show:
+# @jazzmind:registry=https://npm.pkg.github.com
+# //npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
+```
+
+### 4. Test npm Authentication Manually
 
 On the container, test if npm can authenticate:
 
@@ -137,7 +177,7 @@ npm install --dry-run
 
 If it works, you should see packages being resolved without 401 errors.
 
-### 3. Test Full Deployment
+### 5. Test Full Deployment
 
 Deploy the application:
 
