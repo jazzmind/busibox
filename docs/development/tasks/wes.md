@@ -1,5 +1,11 @@
 # Wes's Tasks
 
+1) search not running
+2) make sure search works
+3) use UI library on ai-portal, make sure it works right
+4) use UI library on agent-client, make sure it works right
+
+
 What I'd delagate now:
 - improving ingestion:
   [ ] long docs - split them
