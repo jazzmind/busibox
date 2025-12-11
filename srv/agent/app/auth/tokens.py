@@ -1,4 +1,3 @@
-import json
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
@@ -6,12 +5,13 @@ from typing import Dict, List, Optional
 import httpx
 from jose import jwk, jwt
 from jose.utils import base64url_decode
-from pydantic import ValidationError
 
 from app.config.settings import get_settings
 from app.schemas.auth import Principal, TokenExchangeResponse
 
 settings = get_settings()
+
+CLAIM_LEEWAY_SECONDS = 30
 
 
 class JWKSCache:
@@ -56,23 +56,66 @@ async def _verify_signature(token: str, jwks: Dict) -> Dict:
     return jwt.get_unverified_claims(token)
 
 
+def _validate_claims(claims: Dict) -> None:
+    now = datetime.now(timezone.utc)
+    leeway = timedelta(seconds=CLAIM_LEEWAY_SECONDS)
+
+    exp = claims.get("exp")
+    if exp is not None:
+        exp_dt = datetime.fromtimestamp(exp, tz=timezone.utc)
+        if exp_dt <= now - leeway:
+            raise jwt.ExpiredSignatureError("token expired")
+
+    nbf = claims.get("nbf")
+    if nbf is not None:
+        nbf_dt = datetime.fromtimestamp(nbf, tz=timezone.utc)
+        if nbf_dt > now + leeway:
+            raise jwt.JWTError("token not yet valid")
+
+    iat = claims.get("iat")
+    if iat is not None:
+        iat_dt = datetime.fromtimestamp(iat, tz=timezone.utc)
+        if iat_dt > now + leeway:
+            raise jwt.JWTError("token issued in the future")
+
+
+def _extract_scopes(claims: Dict) -> List[str]:
+    if "scope" in claims and isinstance(claims["scope"], str):
+        return claims["scope"].split()
+    if "scp" in claims and isinstance(claims["scp"], list):
+        return [str(scope) for scope in claims["scp"]]
+    return []
+
+
 async def validate_bearer(token: str) -> Principal:
     jwks = await jwks_cache.get()
     claims = await _verify_signature(token, jwks)
 
+    _validate_claims(claims)
+
     if settings.auth_issuer and claims.get("iss") != settings.auth_issuer:
         raise jwt.JWTError("issuer mismatch")
-    if settings.auth_audience and settings.auth_audience not in claims.get("aud", []):
-        raise jwt.JWTError("audience mismatch")
+
+    audience_claim = claims.get("aud")
+    if settings.auth_audience:
+        if isinstance(audience_claim, list):
+            if settings.auth_audience not in audience_claim:
+                raise jwt.JWTError("audience mismatch")
+        elif audience_claim and audience_claim != settings.auth_audience:
+            raise jwt.JWTError("audience mismatch")
 
     try:
         sub = claims["sub"]
     except KeyError as exc:
         raise jwt.JWTError("sub missing") from exc
 
-    scopes: List[str] = claims.get("scope", "").split() if claims.get("scope") else []
-    roles: List[str] = claims.get("roles", [])
-    principal = Principal(sub=sub, scopes=scopes, roles=roles, token=token)
+    principal = Principal(
+        sub=sub,
+        scopes=_extract_scopes(claims),
+        roles=claims.get("roles", []),
+        email=claims.get("email"),
+        token=token,
+    )
     return principal
 
 

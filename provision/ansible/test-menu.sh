@@ -221,8 +221,42 @@ case "$main_choice" in
         esac
         ;;
     4)
-        echo -e "${GREEN}Running agent service tests...${NC}"
-        make test-agent INV="$INV"
+        echo ""
+        echo -e "${BLUE}Agent Service Tests${NC}"
+        echo "Select test type:"
+        echo "  1) Unit tests"
+        echo "  2) Integration tests"
+        echo "  3) All agent tests"
+        echo "  4) Tests with coverage"
+        echo "  5) Back to main menu"
+        echo ""
+        read -p "Choice: " agent_choice
+        
+        case "$agent_choice" in
+            1)
+                echo -e "${GREEN}Running agent unit tests...${NC}"
+                make test-agent-unit INV="$INV"
+                ;;
+            2)
+                echo -e "${GREEN}Running agent integration tests...${NC}"
+                make test-agent-integration INV="$INV"
+                ;;
+            3)
+                echo -e "${GREEN}Running all agent tests...${NC}"
+                make test-agent INV="$INV"
+                ;;
+            4)
+                echo -e "${GREEN}Running agent tests with coverage...${NC}"
+                make test-agent-coverage INV="$INV"
+                ;;
+            5)
+                exec "$0" "$@"
+                ;;
+            *)
+                echo -e "${RED}Invalid choice${NC}"
+                exit 1
+                ;;
+        esac
         ;;
     5)
         echo -e "${GREEN}Running apps (AI Portal) tests...${NC}"

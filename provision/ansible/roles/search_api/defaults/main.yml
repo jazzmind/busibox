@@ -23,9 +23,11 @@ embedding_service_url: "http://{{ hostvars[groups['ingest'][0]]['ansible_host'] 
 embedding_model: bge-large-en-v1.5
 
 # Reranking settings
+# Local reranker model (for RerankingService)
 reranker_model: "BAAI/bge-reranker-v2-m3"
 reranker_device: cpu
 enable_reranking: true
+# Note: liteLLM reranker uses "reranking" model purpose (hardcoded in MilvusSearchService)
 
 # Redis (optional)
 redis_host: "{{ hostvars[groups['ingest'][0]]['ansible_host'] if 'ingest' in groups else '' }}"
