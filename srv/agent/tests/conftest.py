@@ -115,9 +115,10 @@ async def test_run(test_session: AsyncSession, test_agent: AgentDefinition, mock
 @pytest.fixture
 async def test_token(test_session: AsyncSession, mock_principal: Principal) -> TokenGrant:
     """Create test token grant."""
+    scopes = sorted(["search.read", "ingest.write"])
     token = TokenGrant(
         subject=mock_principal.sub,
-        scopes=["search.read", "ingest.write"],
+        scopes=scopes,
         token="test-access-token-123",
         expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
     )

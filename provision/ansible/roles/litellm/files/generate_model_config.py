@@ -37,7 +37,7 @@ def main():
     excluded_purposes = {
         'embedding',         # FastEmbed service (dedicated embedding endpoint)
         'visual-embedding',  # ColPali service (dedicated visual embedding endpoint)
-        'reranking'          # Search service calls reranker directly
+        # Note: reranking IS served through LiteLLM via /rerank endpoint
     }
     
     for purpose, model_key in model_purposes.items():

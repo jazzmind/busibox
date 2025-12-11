@@ -20,6 +20,7 @@ class TokenExchangeResponse(BaseModel):
 
 class Principal(BaseModel):
     sub: str
+    email: Optional[str] = None
     roles: List[str] = Field(default_factory=list)
     scopes: List[str] = Field(default_factory=list)
     token: Optional[str] = None
