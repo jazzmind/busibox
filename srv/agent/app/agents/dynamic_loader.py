@@ -37,12 +37,38 @@ async def load_active_agents(session: AsyncSession) -> Dict[uuid.UUID, Agent[Bus
     return agents
 
 
+def validate_tool_references(tool_names: List[str]) -> None:
+    """
+    Validate that all tool names reference entries in the TOOL_REGISTRY.
+    
+    Args:
+        tool_names: List of tool names to validate
+        
+    Raises:
+        ValueError: If any tool name is not in the registry
+    """
+    invalid_tools = [name for name in tool_names if name not in TOOL_REGISTRY]
+    if invalid_tools:
+        available = ", ".join(sorted(TOOL_REGISTRY.keys()))
+        raise ValueError(
+            f"Invalid tool references: {', '.join(invalid_tools)}. "
+            f"Available tools: {available}"
+        )
+
+
 async def register_agent(
     session: AsyncSession, payload: AgentDefinitionCreate
 ) -> tuple[uuid.UUID, Agent[BusiboxDeps, object]]:
     """
     Persist a new agent definition and return a hydrated Agent instance.
+    
+    Raises:
+        ValueError: If any tool references are invalid
     """
+    # Validate tool references before persisting
+    tool_names = payload.tools.get("names", [])
+    validate_tool_references(tool_names)
+    
     definition = AgentDefinition(
         name=payload.name,
         display_name=payload.display_name,
@@ -58,8 +84,7 @@ async def register_agent(
     await session.commit()
     await session.refresh(definition)
     agent = Agent[BusiboxDeps, object](model=definition.model, instructions=definition.instructions)
-    for tool_name in payload.tools.get("names", []):
-        tool_fn = TOOL_REGISTRY.get(tool_name)
-        if tool_fn:
-            agent.tool(tool_fn)  # type: ignore[arg-type]
+    for tool_name in tool_names:
+        tool_fn = TOOL_REGISTRY[tool_name]  # Safe to use [] now after validation
+        agent.tool(tool_fn)  # type: ignore[arg-type]
     return definition.id, agent

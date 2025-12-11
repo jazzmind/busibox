@@ -40,11 +40,11 @@
 
 **Independent Test**: POST `/agents/definitions` → persists; registry refresh loads agent; `/agents` lists active; executing the new agent works.
 
-- **T017**: Implement agent definition CRUD (create/update/list) in `api/agents.py` with validation; add integration tests
-- **T018**: Implement dynamic loader + registry refresh (`agents/dynamic_loader.py`, `services/agent_registry.py`); add unit tests
-- **T019**: Add registry refresh on startup and manual trigger (e.g., after create); ensure thread/async safety
-- **T020**: Validate tool references against registry on create/update; add negative tests
-- **Checkpoint**: Dynamic agent created, loaded, and executable via `/runs`
+- [X] **T017**: Implement agent definition CRUD (create/update/list) in `api/agents.py` with validation; add integration tests ✓
+- [X] **T018**: Implement dynamic loader + registry refresh (`agents/dynamic_loader.py`, `services/agent_registry.py`); add unit tests ✓
+- [X] **T019**: Add registry refresh on startup and manual trigger (e.g., after create); ensure thread/async safety ✓
+- [X] **T020**: Validate tool references against registry on create/update; add negative tests ✓
+- ✅ **Checkpoint**: Dynamic agent created, loaded, and executable via `/runs`
 
 ## Phase 5 — US3 (P3) Schedule Long-Running Agent Tasks
 
