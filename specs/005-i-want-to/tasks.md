@@ -29,7 +29,7 @@
 - [X] **T011**: Implement tool adapters (search, ingest, rag) using Busibox client; add unit tests (mock HTTP) ✓
 - [X] **T012**: Implement run service execution flow (`services/run_service.py`): create run, token exchange, execute agent, persist output/events/status ✓
 - [X] **T013**: Implement `/runs` POST endpoint (accept input, return RunRead) and `/runs/{id}` GET; add integration tests ✓
-- **T014**: Implement SSE stream `/streams/runs/{id}`; add integration test with polling DB changes
+- [X] **T014**: Implement SSE stream `/streams/runs/{id}`; add integration test with polling DB changes ✓
 - **T015**: Enforce tiered execution limits (Simple 30s/512MB, Complex 5m/2GB, Batch 30m/4GB) in run execution; add timeout tests
 - **T016**: Add logging + tracing for run lifecycle and tool calls; verify spans/log fields in tests (smoke)
 - **Checkpoint**: US1 executable end-to-end with mocks (runs API + SSE + persistence)
