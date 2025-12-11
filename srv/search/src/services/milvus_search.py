@@ -478,9 +478,17 @@ class MilvusSearchService:
             
             # Call vLLM reranker via /score endpoint
             # API format: text_1 (query) vs text_2 (array of documents)
+            reranker_url = f"{self.reranker_base_url}/score"
+            logger.info(
+                "Calling vLLM reranker",
+                url=reranker_url,
+                model=self.reranker_model,
+                num_documents=len(formatted_documents),
+            )
+            
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
-                    f"{self.reranker_base_url}/score",
+                    reranker_url,
                     json={
                         "model": self.reranker_model,
                         "text_1": formatted_query,
@@ -490,6 +498,11 @@ class MilvusSearchService:
                         "Authorization": f"Bearer {self.reranker_api_key}",
                         "Content-Type": "application/json",
                     },
+                )
+                
+                logger.info(
+                    "vLLM reranker response received",
+                    status_code=response.status_code,
                 )
                 
                 if response.status_code != 200:
