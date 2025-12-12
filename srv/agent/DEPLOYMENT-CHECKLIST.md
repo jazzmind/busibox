@@ -130,7 +130,7 @@ curl -X POST http://<test-agent-ip>:8000/agents/definitions \
   -d '{
     "name": "test-personal-agent",
     "display_name": "Test Personal Agent",
-    "model": "claude-3-5-sonnet",  # Via LiteLLM
+    "model": "agent",  # Via LiteLLM (maps to qwen3-30b)
     "instructions": "You are a test assistant",
     "tools": {"names": []},
     "scopes": []
@@ -335,7 +335,7 @@ curl -X POST http://<test-agent-ip>:8000/agents/definitions \
   -H "Content-Type: application/json" \
   -d '{
     "name": "version-test-agent",
-    "model": "claude-3-5-sonnet",  # Via LiteLLM
+    "model": "agent",  # Via LiteLLM (maps to qwen3-30b)
     "instructions": "Test agent",
     "tools": {"names": ["search"]},
     "scopes": ["search.read"]

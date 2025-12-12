@@ -17,8 +17,8 @@ class Settings(BaseSettings):
 
     # Model/provider configuration
     default_model: str = Field(
-        "claude-3-5-sonnet",
-        description="Default model identifier for LiteLLM (e.g., claude-3-5-sonnet, gpt-4, etc.)",
+        "agent",
+        description="Default model purpose for LiteLLM (e.g., agent, fast, frontier, etc.)",
     )
     litellm_base_url: AnyHttpUrl = Field(
         "http://localhost:4000/v1",

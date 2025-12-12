@@ -114,8 +114,9 @@ Response:
 
 # Create OpenAI-compatible model using LiteLLM
 # The model will automatically use the OPENAI_BASE_URL and OPENAI_API_KEY we set above
+# Use "fast" purpose for quick dispatcher routing decisions
 model = OpenAIModel(
-    model_name="claude-3-5-sonnet",  # LiteLLM will route to local model
+    model_name="fast",  # LiteLLM routes to fast model (phi-4)
     provider="openai",
 )
 

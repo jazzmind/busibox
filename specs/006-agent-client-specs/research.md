@@ -46,8 +46,9 @@ class RoutingDecision(BaseModel):
     alternatives: list[str]
 
 # Create OpenAI-compatible model
+# Use task-based model purposes from model_registry.yml
 model = OpenAIModel(
-    model_name="claude-3-5-sonnet",  # LiteLLM routes to local model
+    model_name="fast",  # LiteLLM routes to fast model (phi-4)
     provider="openai",
 )
 
