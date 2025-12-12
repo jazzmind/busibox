@@ -20,7 +20,8 @@ def _uuid() -> uuid.UUID:
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    # Return timezone-naive UTC datetime for PostgreSQL TIMESTAMP WITHOUT TIME ZONE
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class AgentDefinition(Base):
