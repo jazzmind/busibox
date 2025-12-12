@@ -143,3 +143,29 @@ def mock_jwt_token() -> str:
     return "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0LXVzZXItMTIzIiwiZW1haWwiOiJ0ZXN0QGV4YW1wbGUuY29tIiwicm9sZXMiOlsidXNlciJdLCJzY29wZXMiOlsic2VhcmNoLnJlYWQiLCJpbmdlc3Qud3JpdGUiXX0.test-signature"
 
 
+# Additional fixtures for new tests
+
+@pytest.fixture
+def mock_user_id() -> str:
+    """Mock user ID for testing."""
+    return "test-user-123"
+
+
+@pytest.fixture
+def mock_token() -> str:
+    """Mock bearer token for testing."""
+    return "mock-token-test-user"
+
+
+@pytest.fixture
+async def db_session(test_session: AsyncSession) -> AsyncSession:
+    """Alias for test_session for consistency."""
+    return test_session
+
+
+@pytest.fixture
+async def client(test_client: AsyncClient) -> AsyncClient:
+    """Alias for test_client for consistency."""
+    return test_client
+
+
