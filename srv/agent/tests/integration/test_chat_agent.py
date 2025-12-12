@@ -15,9 +15,10 @@ class TestChatAgent:
         result = await chat_agent.run("Hello! What can you help me with?")
         
         # Verify we got a response
-        assert result.data is not None
-        assert len(str(result.data)) > 0
-        print(f"\nChat agent response: {result.data}")
+        assert result is not None
+        response_text = str(result)
+        assert len(response_text) > 0
+        print(f"\nChat agent response: {response_text}")
 
     @pytest.mark.asyncio
     async def test_chat_agent_with_context(self):
@@ -33,17 +34,17 @@ Based on this context, when is the project deadline?"""
         result = await chat_agent.run(query)
         
         # Verify response mentions the deadline
-        response = str(result.data).lower()
+        response = str(result).lower()
         assert "december" in response or "31" in response or "2024" in response
-        print(f"\nChat agent with context: {result.data}")
+        print(f"\nChat agent with context: {response}")
 
     @pytest.mark.asyncio
     async def test_chat_agent_concise_response(self):
         """Test chat agent provides concise responses."""
         result = await chat_agent.run("What is 2 + 2?")
         
-        # Verify response is concise (under 100 characters for simple math)
-        response = str(result.data)
+        # Verify response is concise (under 200 characters for simple math)
+        response = str(result)
         assert len(response) < 200  # Generous limit
         assert "4" in response
-        print(f"\nChat agent concise: {result.data}")
+        print(f"\nChat agent concise: {response}")

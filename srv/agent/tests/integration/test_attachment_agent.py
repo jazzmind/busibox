@@ -13,9 +13,9 @@ class TestAttachmentAgent:
         """Test attachment agent handles no attachments."""
         result = await attachment_agent.run("No files attached")
         
-        response = str(result.data).lower()
+        response = str(result).lower()
         assert "none" in response or "no" in response
-        print(f"\nAttachment agent (no files): {result.data}")
+        print(f"\nAttachment agent (no files): {response}")
 
     @pytest.mark.asyncio
     async def test_attachment_agent_image_file(self):
@@ -23,9 +23,9 @@ class TestAttachmentAgent:
         query = "I have an image file: photo.jpg (image/jpeg, 2.5MB)"
         result = await attachment_agent.run(query)
         
-        response = str(result.data).lower()
+        response = str(result).lower()
         assert "upload" in response or "multimodal" in response or "image" in response
-        print(f"\nAttachment agent (image): {result.data}")
+        print(f"\nAttachment agent (image): {response}")
 
     @pytest.mark.asyncio
     async def test_attachment_agent_pdf_file(self):
@@ -33,9 +33,9 @@ class TestAttachmentAgent:
         query = "I have a PDF document: report.pdf (application/pdf, 1.2MB)"
         result = await attachment_agent.run(query)
         
-        response = str(result.data).lower()
+        response = str(result).lower()
         assert "upload" in response or "document" in response or "text" in response
-        print(f"\nAttachment agent (PDF): {result.data}")
+        print(f"\nAttachment agent (PDF): {response}")
 
     @pytest.mark.asyncio
     async def test_attachment_agent_archive_file(self):
@@ -43,6 +43,6 @@ class TestAttachmentAgent:
         query = "I have an archive: data.zip (application/zip, 5MB)"
         result = await attachment_agent.run(query)
         
-        response = str(result.data).lower()
+        response = str(result).lower()
         assert "extract" in response or "preprocess" in response or "archive" in response
-        print(f"\nAttachment agent (archive): {result.data}")
+        print(f"\nAttachment agent (archive): {response}")
