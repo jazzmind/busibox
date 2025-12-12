@@ -136,9 +136,9 @@
 
 - name: Grant database permissions for migrations
   shell: |
-    PGPASSWORD="{{ secrets['postgres'].password }}" psql \
-      -h {{ hostvars[groups['pg'][0]]['ansible_host'] }} \
-      -U postgres \
+    PGPASSWORD='{{ secrets.postgresql.password }}' psql \
+      -h {{ postgres_host }} \
+      -U {{ postgres_user }} \
       -d busibox \
       -c "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO agent_server;" \
       -c "GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO agent_server;" \
