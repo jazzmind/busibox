@@ -57,10 +57,19 @@ def validate_tool_references(tool_names: List[str]) -> None:
 
 
 async def register_agent(
-    session: AsyncSession, payload: AgentDefinitionCreate
+    session: AsyncSession,
+    payload: AgentDefinitionCreate,
+    created_by: Optional[str] = None,
+    is_builtin: bool = False
 ) -> tuple[uuid.UUID, Agent[BusiboxDeps, object]]:
     """
     Persist a new agent definition and return a hydrated Agent instance.
+    
+    Args:
+        session: Database session
+        payload: Agent definition data
+        created_by: User ID who created the agent (for personal agents)
+        is_builtin: Whether this is a built-in system agent (default: False)
     
     Raises:
         ValueError: If any tool references are invalid
@@ -79,6 +88,8 @@ async def register_agent(
         workflow=payload.workflow,
         scopes=payload.scopes,
         is_active=payload.is_active,
+        is_builtin=is_builtin,
+        created_by=created_by,
     )
     session.add(definition)
     await session.commit()
