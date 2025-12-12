@@ -14,10 +14,10 @@ from app.models.base import Base
 from app.models.domain import AgentDefinition, RunRecord, TokenGrant
 from app.schemas.auth import Principal
 
-# Test database URL (use in-memory SQLite for fast tests)
-TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
-
+# Use the actual database from settings (PostgreSQL)
+# This ensures tests use the same database types (JSONB, UUID, etc.)
 settings = get_settings()
+TEST_DATABASE_URL = settings.database_url
 
 
 @pytest.fixture(scope="session")
