@@ -20,10 +20,11 @@ settings = get_settings()
 TEST_DATABASE_URL = settings.database_url
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="function")
 def event_loop():
-    """Create event loop for async tests."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
+    """Create event loop for async tests (function-scoped to avoid conflicts)."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     yield loop
     loop.close()
 
