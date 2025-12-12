@@ -30,6 +30,8 @@ dependencies = [
   "opentelemetry-instrumentation-sqlalchemy>=0.48b0",
   "opentelemetry-exporter-otlp>=1.27.0",
   "python-json-logger>=2.0.7",
+  "structlog>=24.1.0",
+  "croniter>=2.0.1",
 ]
 
 [project.optional-dependencies]

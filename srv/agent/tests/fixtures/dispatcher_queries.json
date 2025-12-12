@@ -1,0 +1,136 @@
+{
+  "test_queries": [
+    {
+      "id": "doc-001",
+      "query": "What does our Q4 report say about revenue?",
+      "category": "document_search",
+      "available_tools": ["doc_search", "web_search"],
+      "enabled_tools": ["doc_search", "web_search"],
+      "expected_tools": ["doc_search"],
+      "expected_confidence_min": 0.8,
+      "reasoning": "Query asks about specific internal document"
+    },
+    {
+      "id": "web-001",
+      "query": "What's the weather today in San Francisco?",
+      "category": "web_search",
+      "available_tools": ["doc_search", "web_search"],
+      "enabled_tools": ["doc_search", "web_search"],
+      "expected_tools": ["web_search"],
+      "expected_confidence_min": 0.8,
+      "reasoning": "Query asks for current external information"
+    },
+    {
+      "id": "doc-002",
+      "query": "Search our files for information about the merger",
+      "category": "document_search",
+      "available_tools": ["doc_search", "web_search", "rag"],
+      "enabled_tools": ["doc_search", "web_search", "rag"],
+      "expected_tools": ["doc_search"],
+      "expected_confidence_min": 0.8,
+      "reasoning": "Explicitly asks to search internal files"
+    },
+    {
+      "id": "web-002",
+      "query": "Find the latest news about artificial intelligence",
+      "category": "web_search",
+      "available_tools": ["doc_search", "web_search"],
+      "enabled_tools": ["doc_search", "web_search"],
+      "expected_tools": ["web_search"],
+      "expected_confidence_min": 0.8,
+      "reasoning": "Latest news requires external web search"
+    },
+    {
+      "id": "disabled-001",
+      "query": "What does our Q4 report say?",
+      "category": "document_search_disabled",
+      "available_tools": ["doc_search", "web_search"],
+      "enabled_tools": ["web_search"],
+      "expected_tools": [],
+      "expected_confidence_min": 0.0,
+      "expected_confidence_max": 0.5,
+      "reasoning": "doc_search disabled, should not route there"
+    },
+    {
+      "id": "no-tools-001",
+      "query": "Help me analyze this data",
+      "category": "no_tools_available",
+      "available_tools": ["doc_search", "web_search"],
+      "enabled_tools": [],
+      "expected_tools": [],
+      "expected_confidence": 0.0,
+      "reasoning": "No tools enabled, should return confidence=0"
+    },
+    {
+      "id": "file-001",
+      "query": "Analyze this spreadsheet",
+      "category": "file_attachment",
+      "available_tools": ["doc_search", "web_search", "file_processor"],
+      "enabled_tools": ["doc_search", "web_search", "file_processor"],
+      "attachments": [{"name": "data.xlsx", "type": "spreadsheet", "url": "s3://..."}],
+      "expected_tools": ["file_processor"],
+      "expected_confidence_min": 0.7,
+      "reasoning": "File attachment requires file-capable tool"
+    },
+    {
+      "id": "ambiguous-001",
+      "query": "Tell me about AI",
+      "category": "ambiguous",
+      "available_tools": ["doc_search", "web_search"],
+      "enabled_tools": ["doc_search", "web_search"],
+      "expected_confidence_max": 0.7,
+      "reasoning": "Ambiguous query, could be internal docs or web search"
+    },
+    {
+      "id": "rag-001",
+      "query": "What are the key themes in our research papers about machine learning?",
+      "category": "rag_search",
+      "available_tools": ["doc_search", "rag", "web_search"],
+      "enabled_tools": ["doc_search", "rag", "web_search"],
+      "expected_tools": ["rag"],
+      "expected_confidence_min": 0.8,
+      "reasoning": "Semantic search across multiple documents best handled by RAG"
+    },
+    {
+      "id": "ingest-001",
+      "query": "Process and index this document",
+      "category": "document_ingestion",
+      "available_tools": ["doc_search", "ingest", "web_search"],
+      "enabled_tools": ["doc_search", "ingest", "web_search"],
+      "attachments": [{"name": "report.pdf", "type": "pdf", "url": "s3://..."}],
+      "expected_tools": ["ingest"],
+      "expected_confidence_min": 0.8,
+      "reasoning": "Document processing and indexing requires ingest tool"
+    },
+    {
+      "id": "multi-001",
+      "query": "Search our documents and also check the web for related information",
+      "category": "multi_tool",
+      "available_tools": ["doc_search", "web_search"],
+      "enabled_tools": ["doc_search", "web_search"],
+      "expected_tools": ["doc_search", "web_search"],
+      "expected_confidence_min": 0.7,
+      "reasoning": "Explicitly asks for both internal and external search"
+    },
+    {
+      "id": "agent-001",
+      "query": "Use my research assistant to analyze this topic",
+      "category": "specific_agent",
+      "available_tools": ["doc_search"],
+      "enabled_tools": ["doc_search"],
+      "available_agents": ["research-assistant-id"],
+      "enabled_agents": ["research-assistant-id"],
+      "expected_agents": ["research-assistant-id"],
+      "expected_confidence_min": 0.9,
+      "reasoning": "User explicitly requests specific agent"
+    }
+  ],
+  "accuracy_target": 0.95,
+  "confidence_threshold": 0.7,
+  "notes": [
+    "Test set covers: document search, web search, RAG, ingestion, file attachments, disabled tools, multi-tool, specific agents",
+    "Expected accuracy: 95%+ (SC-002)",
+    "Confidence < 0.7 should trigger requires_disambiguation=true",
+    "Disabled tools should never be selected regardless of query relevance"
+  ]
+}
