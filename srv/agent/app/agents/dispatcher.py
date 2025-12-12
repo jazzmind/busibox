@@ -101,10 +101,9 @@ Response:
 """
 
 # Create dispatcher agent with Claude 3.5 Sonnet
-dispatcher_agent = Agent(
+dispatcher_agent = Agent[None, RoutingDecision](
     model="anthropic:claude-3-5-sonnet",
     system_prompt=DISPATCHER_SYSTEM_PROMPT,
-    result_type=RoutingDecision,
     model_settings={
         "temperature": 0.3,  # Low temperature for consistent routing
         "max_tokens": 1000,
