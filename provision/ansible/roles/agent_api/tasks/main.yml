@@ -92,6 +92,13 @@
   become_user: "{{ agent_api_user }}"
   notify: Restart agent-api
 
+- name: Install test dependencies
+  pip:
+    requirements: "{{ agent_api_src_path }}/requirements.test.txt"
+    virtualenv: "{{ agent_api_venv_path }}"
+  become: yes
+  become_user: "{{ agent_api_user }}"
+
 - name: Deploy agent service environment file
   template:
     src: agent-api.env.j2
