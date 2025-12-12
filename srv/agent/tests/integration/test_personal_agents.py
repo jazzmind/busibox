@@ -20,18 +20,75 @@ from app.models.domain import AgentDefinition
 
 
 @pytest.fixture
+def user_a_principal():
+    """Principal for User A."""
+    from app.schemas.auth import Principal
+    return Principal(
+        sub="user-a",
+        email="user-a@example.com",
+        roles=["user"],
+        scopes=["agent.read", "agent.write"],
+    )
+
+
+@pytest.fixture
+def user_b_principal():
+    """Principal for User B."""
+    from app.schemas.auth import Principal
+    return Principal(
+        sub="user-b",
+        email="user-b@example.com",
+        roles=["user"],
+        scopes=["agent.read", "agent.write"],
+    )
+
+
+@pytest.fixture
 async def user_a_token() -> str:
     """JWT token for User A."""
-    # TODO: Generate actual JWT token with sub="user-a"
-    # For now, return a mock token that will be validated by auth system
-    return "mock-token-user-a"
+    return "Bearer mock-token-user-a"
 
 
 @pytest.fixture
 async def user_b_token() -> str:
     """JWT token for User B."""
-    # TODO: Generate actual JWT token with sub="user-b"
-    return "mock-token-user-b"
+    return "Bearer mock-token-user-b"
+
+
+@pytest.fixture
+async def user_a_client(user_a_principal):
+    """HTTP client authenticated as User A."""
+    from httpx import ASGITransport, AsyncClient
+    from app.auth.dependencies import get_principal
+    from app.main import app
+    
+    async def override_get_principal():
+        return user_a_principal
+    
+    app.dependency_overrides[get_principal] = override_get_principal
+    
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        yield client
+    
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+async def user_b_client(user_b_principal):
+    """HTTP client authenticated as User B."""
+    from httpx import ASGITransport, AsyncClient
+    from app.auth.dependencies import get_principal
+    from app.main import app
+    
+    async def override_get_principal():
+        return user_b_principal
+    
+    app.dependency_overrides[get_principal] = override_get_principal
+    
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        yield client
+    
+    app.dependency_overrides.clear()
 
 
 @pytest.fixture
@@ -57,9 +114,8 @@ async def builtin_agent_id(db_session: AsyncSession) -> uuid.UUID:
 
 @pytest.mark.asyncio
 async def test_personal_agent_filtering_user_a_creates_agent(
-    client: AsyncClient,
+    user_a_client: AsyncClient,
     db_session: AsyncSession,
-    user_a_token: str,
 ):
     """
     Test: User A creates personal agent → User A sees it in list.
@@ -68,7 +124,7 @@ async def test_personal_agent_filtering_user_a_creates_agent(
     personal agent named "My Research Assistant", Then only I can see it in my agent list.
     """
     # Create personal agent as User A
-    response = await client.post(
+    response = await user_a_client.post(
         "/agents/definitions",
         json={
             "name": "user-a-research-assistant",
@@ -80,7 +136,6 @@ async def test_personal_agent_filtering_user_a_creates_agent(
             "scopes": [],
             "is_active": True,
         },
-        headers={"Authorization": f"Bearer {user_a_token}"},
     )
     
     assert response.status_code == 201
@@ -92,10 +147,7 @@ async def test_personal_agent_filtering_user_a_creates_agent(
     assert agent_data["created_by"] == "user-a"  # Should match token sub
     
     # User A lists agents - should see their personal agent
-    response = await client.get(
-        "/agents",
-        headers={"Authorization": f"Bearer {user_a_token}"},
-    )
+    response = await user_a_client.get("/agents")
     
     assert response.status_code == 200
     agents = response.json()
@@ -105,10 +157,9 @@ async def test_personal_agent_filtering_user_a_creates_agent(
 
 @pytest.mark.asyncio
 async def test_personal_agent_not_visible_to_other_users(
-    client: AsyncClient,
+    user_a_client: AsyncClient,
+    user_b_client: AsyncClient,
     db_session: AsyncSession,
-    user_a_token: str,
-    user_b_token: str,
 ):
     """
     Test: User A creates personal agent → User B cannot see it.
@@ -116,7 +167,7 @@ async def test_personal_agent_not_visible_to_other_users(
     Acceptance Scenario 1 (continued): User B should not see User A's personal agent.
     """
     # Create personal agent as User A
-    response = await client.post(
+    response = await user_a_client.post(
         "/agents/definitions",
         json={
             "name": "user-a-private-agent",
@@ -126,17 +177,13 @@ async def test_personal_agent_not_visible_to_other_users(
             "tools": {"names": []},
             "scopes": [],
         },
-        headers={"Authorization": f"Bearer {user_a_token}"},
     )
     
     assert response.status_code == 201
     agent_id = response.json()["id"]
     
     # User B lists agents - should NOT see User A's agent
-    response = await client.get(
-        "/agents",
-        headers={"Authorization": f"Bearer {user_b_token}"},
-    )
+    response = await user_b_client.get("/agents")
     
     assert response.status_code == 200
     agents = response.json()
@@ -146,10 +193,9 @@ async def test_personal_agent_not_visible_to_other_users(
 
 @pytest.mark.asyncio
 async def test_builtin_agents_visible_to_all_users(
-    client: AsyncClient,
+    user_a_client: AsyncClient,
+    user_b_client: AsyncClient,
     builtin_agent_id: uuid.UUID,
-    user_a_token: str,
-    user_b_token: str,
 ):
     """
     Test: Built-in agents visible to all users.
@@ -158,10 +204,7 @@ async def test_builtin_agents_visible_to_all_users(
     Then I see all built-in agents plus only my own personal agents.
     """
     # User A should see built-in agent
-    response = await client.get(
-        "/agents",
-        headers={"Authorization": f"Bearer {user_a_token}"},
-    )
+    response = await user_a_client.get("/agents")
     
     assert response.status_code == 200
     agents = response.json()
@@ -169,10 +212,7 @@ async def test_builtin_agents_visible_to_all_users(
     assert str(builtin_agent_id) in agent_ids, "User A should see built-in agent"
     
     # User B should also see built-in agent
-    response = await client.get(
-        "/agents",
-        headers={"Authorization": f"Bearer {user_b_token}"},
-    )
+    response = await user_b_client.get("/agents")
     
     assert response.status_code == 200
     agents = response.json()
@@ -182,10 +222,9 @@ async def test_builtin_agents_visible_to_all_users(
 
 @pytest.mark.asyncio
 async def test_unauthorized_access_to_personal_agent_returns_404(
-    client: AsyncClient,
+    user_a_client: AsyncClient,
+    user_b_client: AsyncClient,
     db_session: AsyncSession,
-    user_a_token: str,
-    user_b_token: str,
 ):
     """
     Test: User B tries to access User A's personal agent by ID → 404 Not Found.
@@ -210,45 +249,32 @@ async def test_unauthorized_access_to_personal_agent_returns_404(
     await db_session.refresh(agent)
     
     # User A can access their own agent
-    response = await client.get(
-        f"/agents/{agent.id}",
-        headers={"Authorization": f"Bearer {user_a_token}"},
-    )
+    response = await user_a_client.get(f"/agents/{agent.id}")
     assert response.status_code == 200
     
     # User B tries to access User A's agent → 404 (not 403, to hide existence)
-    response = await client.get(
-        f"/agents/{agent.id}",
-        headers={"Authorization": f"Bearer {user_b_token}"},
-    )
+    response = await user_b_client.get(f"/agents/{agent.id}")
     assert response.status_code == 404
     assert response.json()["detail"] == "Agent not found"
 
 
 @pytest.mark.asyncio
 async def test_builtin_agent_accessible_to_all_users(
-    client: AsyncClient,
+    user_a_client: AsyncClient,
+    user_b_client: AsyncClient,
     builtin_agent_id: uuid.UUID,
-    user_a_token: str,
-    user_b_token: str,
 ):
     """
     Test: Built-in agents accessible to all users via direct ID access.
     """
     # User A can access built-in agent
-    response = await client.get(
-        f"/agents/{builtin_agent_id}",
-        headers={"Authorization": f"Bearer {user_a_token}"},
-    )
+    response = await user_a_client.get(f"/agents/{builtin_agent_id}")
     assert response.status_code == 200
     agent = response.json()
     assert agent["is_builtin"] is True
     
     # User B can also access built-in agent
-    response = await client.get(
-        f"/agents/{builtin_agent_id}",
-        headers={"Authorization": f"Bearer {user_b_token}"},
-    )
+    response = await user_b_client.get(f"/agents/{builtin_agent_id}")
     assert response.status_code == 200
     agent = response.json()
     assert agent["is_builtin"] is True
@@ -256,14 +282,13 @@ async def test_builtin_agent_accessible_to_all_users(
 
 @pytest.mark.asyncio
 async def test_personal_agent_created_with_correct_ownership(
-    client: AsyncClient,
+    user_a_client: AsyncClient,
     db_session: AsyncSession,
-    user_a_token: str,
 ):
     """
     Test: Personal agents created with is_builtin=False and created_by set to user.
     """
-    response = await client.post(
+    response = await user_a_client.post(
         "/agents/definitions",
         json={
             "name": "ownership-test-agent",
@@ -271,7 +296,6 @@ async def test_personal_agent_created_with_correct_ownership(
             "instructions": "Test agent",
             "tools": {"names": []},
         },
-        headers={"Authorization": f"Bearer {user_a_token}"},
     )
     
     assert response.status_code == 201

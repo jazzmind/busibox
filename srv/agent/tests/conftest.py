@@ -164,8 +164,19 @@ async def db_session(test_session: AsyncSession) -> AsyncSession:
 
 
 @pytest.fixture
-async def client(test_client: AsyncClient) -> AsyncClient:
-    """Alias for test_client for consistency."""
-    return test_client
+async def client(mock_principal: Principal) -> AsyncClient:
+    """Test HTTP client with mocked auth (uses mock_principal)."""
+    from httpx import ASGITransport
+    from app.auth.dependencies import get_principal
+    
+    async def override_get_principal():
+        return mock_principal
+    
+    app.dependency_overrides[get_principal] = override_get_principal
+    
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        yield client
+    
+    app.dependency_overrides.clear()
 
 
