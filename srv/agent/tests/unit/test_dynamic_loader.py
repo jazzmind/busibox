@@ -68,14 +68,14 @@ async def test_load_active_agents_with_agents(test_session: AsyncSession):
     # Create test agent definitions
     agent1 = AgentDefinition(
         name="test-agent-1",
-        model="anthropic:claude-3-5-sonnet",
+        model="agent",  # LiteLLM task purpose
         instructions="Test instructions",
         tools={"names": ["search", "rag"]},
         is_active=True,
     )
     agent2 = AgentDefinition(
         name="test-agent-2",
-        model="openai:gpt-4",
+        model="fast",  # LiteLLM task purpose
         instructions="Another test",
         tools={"names": ["ingest"]},
         is_active=True,
@@ -83,7 +83,7 @@ async def test_load_active_agents_with_agents(test_session: AsyncSession):
     # Inactive agent should not be loaded
     agent3 = AgentDefinition(
         name="inactive-agent",
-        model="openai:gpt-4",
+        model="agent",  # LiteLLM task purpose
         instructions="Inactive",
         tools={"names": []},
         is_active=False,
@@ -116,7 +116,7 @@ async def test_register_agent_success(test_session: AsyncSession):
         name="new-agent",
         display_name="New Agent",
         description="Test agent",
-        model="anthropic:claude-3-5-sonnet",
+        model="agent",  # LiteLLM task purpose
         instructions="Be helpful",
         tools={"names": ["search", "rag"]},
         scopes=["agent.execute", "search.read"],
@@ -135,7 +135,7 @@ async def test_register_agent_success(test_session: AsyncSession):
     definition = await test_session.get(AgentDefinition, agent_id)
     assert definition is not None
     assert definition.name == "new-agent"
-    assert definition.model == "anthropic:claude-3-5-sonnet"
+    assert definition.model == "agent"
     assert definition.tools == {"names": ["search", "rag"]}
     assert definition.is_active is True
 
@@ -145,7 +145,7 @@ async def test_register_agent_invalid_tools(test_session: AsyncSession):
     """Test register_agent raises ValueError for invalid tool references."""
     payload = AgentDefinitionCreate(
         name="bad-agent",
-        model="anthropic:claude-3-5-sonnet",
+        model="agent",
         instructions="Test",
         tools={"names": ["search", "invalid_tool"]},
     )
@@ -166,7 +166,7 @@ async def test_register_agent_no_tools(test_session: AsyncSession):
     """Test register_agent works with no tools."""
     payload = AgentDefinitionCreate(
         name="no-tools-agent",
-        model="anthropic:claude-3-5-sonnet",
+        model="agent",
         instructions="Simple agent",
         tools={"names": []},
     )
@@ -184,7 +184,7 @@ async def test_load_active_agents_skips_invalid_tools(test_session: AsyncSession
     # Create agent with invalid tool (this might happen if tool was removed from registry)
     agent = AgentDefinition(
         name="agent-with-old-tool",
-        model="anthropic:claude-3-5-sonnet",
+        model="agent",
         instructions="Test",
         tools={"names": ["search", "deprecated_tool"]},  # deprecated_tool not in registry
         is_active=True,

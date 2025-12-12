@@ -20,7 +20,7 @@ async def test_agent(test_session):
     agent = AgentDefinition(
         name="test-agent",
         display_name="Test Agent",
-        model="anthropic:claude-3-5-sonnet",
+        model="agent",
         instructions="Test instructions",
         is_active=True,
     )

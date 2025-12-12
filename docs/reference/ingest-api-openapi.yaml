@@ -1,0 +1,1200 @@
+openapi: 3.1.0
+info:
+  title: Busibox Ingestion Service API
+  version: 1.0.0
+  description: |
+    Document ingestion and processing API for the Busibox platform.
+    
+    ## Features
+    
+    - **File Upload**: Chunked streaming upload with metadata and role-based access control
+    - **Real-time Status**: Server-Sent Events (SSE) for processing updates
+    - **Hybrid Search**: Dense semantic + sparse BM25 + visual ColPali embeddings
+    - **Content Deduplication**: Automatic detection and vector reuse
+    - **Role Management**: Share documents with role-based permissions
+    - **Health Monitoring**: Service health checks for all dependencies
+    
+    ## Pipeline Stages
+    
+    1. **Upload** → File stored in MinIO with SHA-256 hash
+    2. **Parsing** → Text extraction (Marker, TATR, OCR)
+    3. **Classification** → Document type and language detection
+    4. **Chunking** → Semantic text chunking (400-800 tokens)
+    5. **Embedding** → Dense (FastEmbed bge-large 1024-d) + BM25 + ColPali pooled
+    6. **Indexing** → Store in Milvus vector database with partitioning
+    
+    ## Authentication
+    
+    All endpoints require authentication via one of:
+    - `Authorization: Bearer <JWT>` header (preferred) - JWT with user identity and role permissions
+    - `X-User-Id` header (legacy) - User UUID for backward compatibility
+    
+    JWT tokens contain user identity and document role memberships with CRUD permissions,
+    enabling Row-Level Security (RLS) enforcement in the database.
+    
+    ## Rate Limits
+    
+    - Upload: 100 MB max file size
+    - Concurrent uploads: 10 per user
+    - Status polling: 1 request/second recommended
+    
+  contact:
+    name: Busibox Infrastructure Team
+    email: infra@busibox.local
+    
+servers:
+  - url: http://ingest-lxc:8002
+    description: Production (ingest-lxc container)
+  - url: http://10.96.200.29:8002
+    description: Test environment
+  - url: http://localhost:8002
+    description: Local development
+
+security:
+  - BearerAuth: []
+  - UserIdHeader: []
+
+tags:
+  - name: Upload
+    description: File upload with chunked streaming, metadata, and role assignment
+  - name: Search
+    description: Semantic document search with hybrid retrieval
+  - name: Embeddings
+    description: Text embedding generation with FastEmbed
+  - name: Status
+    description: Real-time processing status via SSE and polling
+  - name: Files
+    description: File metadata retrieval, deletion, and chunk browsing
+  - name: Markdown
+    description: Markdown content retrieval
+  - name: Roles
+    description: Document role management (add/remove roles, share documents)
+  - name: Extract
+    description: Remote text extraction via Marker
+  - name: Authz
+    description: Authorization and permission checks
+  - name: Health
+    description: Service health checks and diagnostics
+  - name: Test Docs
+    description: Test document generation and utilities
+
+paths:
+  /upload:
+    post:
+      summary: Upload a document for processing
+      description: |
+        Upload a file with role-based access control. Supports chunked streaming upload
+        with SHA-256 hash calculation. Detects duplicates and reuses vectors if content
+        already processed (unless force_reprocess=true).
+        
+        **Supported file types:**
+        - PDF (application/pdf)
+        - DOCX (application/vnd.openxmlformats-officedocument.wordprocessingml.document)
+        - Text (text/plain, text/html, text/markdown)
+        - CSV (text/csv)
+        - JSON (application/json)
+        - Video (video/mp4) - stored but not processed
+        - Images (image/jpeg, image/png, image/webp) - stored but not processed
+        
+        **Visibility modes:**
+        - `personal`: Only visible to uploader (default)
+        - `shared`: Visible to users with specified role memberships
+      tags: [Upload]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Document file
+                metadata:
+                  type: string
+                  description: Optional JSON metadata string
+                  example: '{"tags": ["report", "Q4"], "department": "finance"}'
+                processing_config:
+                  type: string
+                  description: Optional JSON processing configuration
+                  example: '{"extraction_strategy": "marker", "chunk_size": 500}'
+                visibility:
+                  type: string
+                  enum: [personal, shared]
+                  default: personal
+                  description: Document visibility setting
+                role_ids:
+                  type: string
+                  description: Comma-separated role UUIDs (required if visibility='shared')
+                  example: "role-uuid-1,role-uuid-2"
+                force_reprocess:
+                  type: string
+                  enum: ["true", "false"]
+                  default: "false"
+                  description: Force reprocessing even if duplicate detected
+      responses:
+        '200':
+          description: File uploaded successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          description: Insufficient permissions for specified roles
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  hint:
+                    type: string
+        '413':
+          description: File too large (>100MB)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /status/{fileId}:
+    get:
+      summary: Stream processing status updates (SSE)
+      description: |
+        Server-Sent Events endpoint that streams real-time processing status.
+        
+        The stream will emit:
+        - Current status immediately upon connection
+        - Updates whenever processing stage changes
+        - Final status when processing completes or fails
+        - Automatic close when processing is terminal (completed/failed)
+        
+        **Event types:**
+        - `status`: Processing status update
+        - `close`: Stream ending (processing complete)
+      tags: [Status]
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+      responses:
+        '200':
+          description: SSE stream of status updates
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              example: |
+                event: status
+                data: {"fileId":"file-123","stage":"parsing","progress":10,"chunksProcessed":0,"totalChunks":0}
+                
+                event: status
+                data: {"fileId":"file-123","stage":"chunking","progress":40,"chunksProcessed":0,"totalChunks":42}
+                
+                event: status
+                data: {"fileId":"file-123","stage":"completed","progress":100,"chunksProcessed":42,"totalChunks":42}
+                
+                event: close
+                data: {"message":"Processing complete"}
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /search:
+    post:
+      summary: Search documents
+      description: |
+        Perform semantic search across user's documents using hybrid search.
+        
+        **Features:**
+        - Dense semantic search using bge-large-en-v1.5 (local FastEmbed)
+        - Sparse BM25 keyword search
+        - Weighted combination of both approaches
+        - User permission filtering (only searches accessible documents)
+        - Pagination support
+        
+        **How it works:**
+        1. Query is embedded using the same model as documents
+        2. Milvus performs hybrid search (dense + BM25)
+        3. Results are filtered by user permissions (RLS)
+        4. Top-k results are returned with relevance scores
+      tags: [Search]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SearchRequest'
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/embeddings:
+    post:
+      summary: Generate embeddings
+      description: |
+        Generate text embeddings using FastEmbed (bge-large-en-v1.5).
+        Compatible with OpenAI embeddings API format.
+      tags: [Embeddings]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - input
+              properties:
+                input:
+                  oneOf:
+                    - type: string
+                    - type: array
+                      items:
+                        type: string
+                  description: Text or array of texts to embed
+                  example: "What is machine learning?"
+                model:
+                  type: string
+                  default: "bge-large-en-v1.5"
+                  description: Embedding model (currently only bge-large-en-v1.5 supported)
+      responses:
+        '200':
+          description: Embeddings generated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  object:
+                    type: string
+                    example: "list"
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        object:
+                          type: string
+                          example: "embedding"
+                        embedding:
+                          type: array
+                          items:
+                            type: number
+                          description: 1024-dimensional embedding vector
+                        index:
+                          type: integer
+                  model:
+                    type: string
+                    example: "bge-large-en-v1.5"
+                  usage:
+                    type: object
+                    properties:
+                      prompt_tokens:
+                        type: integer
+                      total_tokens:
+                        type: integer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /files/{fileId}:
+    get:
+      summary: Get file metadata
+      description: Retrieve metadata for a processed file with RLS filtering
+      tags: [Files]
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+      responses:
+        '200':
+          description: File metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileMetadata'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    
+    delete:
+      summary: Delete a file and its vectors
+      description: |
+        Delete file from MinIO, remove vectors from Milvus, and delete metadata from PostgreSQL.
+        This is a cascading delete operation. Requires update permission on the document.
+      tags: [Files]
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+      responses:
+        '204':
+          description: File deleted successfully
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /files/{fileId}/download:
+    get:
+      summary: Download original file
+      description: Download the original file from MinIO storage
+      tags: [Files]
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+      responses:
+        '200':
+          description: File content
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /files/{fileId}/chunks:
+    get:
+      summary: Get document chunks
+      description: Retrieve text chunks for a file with pagination
+      tags: [Files]
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 200
+          description: Maximum number of chunks to return
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+          description: Pagination offset
+      responses:
+        '200':
+          description: Document chunks
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  file_id:
+                    type: string
+                    format: uuid
+                  total_chunks:
+                    type: integer
+                  chunks:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        chunk_index:
+                          type: integer
+                        text:
+                          type: string
+                        page_number:
+                          type: integer
+                          nullable: true
+                        metadata:
+                          type: object
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /files/{fileId}/search:
+    post:
+      summary: Search within a single document
+      description: Perform semantic search within a specific document
+      tags: [Files]
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - query
+              properties:
+                query:
+                  type: string
+                  description: Search query
+                limit:
+                  type: integer
+                  default: 10
+                  maximum: 100
+      responses:
+        '200':
+          description: Search results within document
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /files/{fileId}/reprocess:
+    post:
+      summary: Reprocess document
+      description: |
+        Delete chunks and vectors, then re-run ingestion pipeline.
+        Useful for applying new extraction strategies or fixing processing errors.
+        Requires update permission on the document.
+      tags: [Files]
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                processing_config:
+                  type: object
+                  description: Optional processing configuration overrides
+      responses:
+        '202':
+          description: Reprocessing started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  fileId:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    example: queued
+                  message:
+                    type: string
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /files/{fileId}/export:
+    get:
+      summary: Export document
+      description: |
+        Export document in various formats (markdown, html, text, docx, pdf).
+        Reconstructs document from processed chunks.
+      tags: [Files]
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+        - name: format
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [markdown, html, text, docx, pdf]
+          description: Export format
+      responses:
+        '200':
+          description: Exported document
+          content:
+            text/markdown:
+              schema:
+                type: string
+            text/html:
+              schema:
+                type: string
+            text/plain:
+              schema:
+                type: string
+            application/vnd.openxmlformats-officedocument.wordprocessingml.document:
+              schema:
+                type: string
+                format: binary
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /files/{fileId}/markdown:
+    get:
+      summary: Get markdown content
+      description: Retrieve the markdown representation of a document
+      tags: [Markdown]
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+      responses:
+        '200':
+          description: Markdown content
+          content:
+            text/markdown:
+              schema:
+                type: string
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /files/{fileId}/roles:
+    get:
+      summary: Get document roles
+      description: |
+        Get roles assigned to a document.
+        Requires read access to the document.
+      tags: [Roles]
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+      responses:
+        '200':
+          description: Document roles
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentRolesResponse'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    
+    put:
+      summary: Update document roles
+      description: |
+        Add or remove roles from a document.
+        Requires update permission on the document and create permission on roles being added.
+      tags: [Roles]
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateRolesRequest'
+      responses:
+        '200':
+          description: Roles updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentRolesResponse'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /files/{fileId}/share:
+    post:
+      summary: Convert personal document to shared
+      description: |
+        Convert a personal document to shared with specified roles.
+        Requires ownership of the document and create permission on specified roles.
+      tags: [Roles]
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ShareDocumentRequest'
+      responses:
+        '200':
+          description: Document shared successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentRolesResponse'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /extract:
+    post:
+      summary: Extract text from document
+      description: |
+        Remote text extraction via Marker service.
+        Uploads document to Marker and returns extracted markdown.
+      tags: [Extract]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: Extracted text
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  markdown:
+                    type: string
+                  metadata:
+                    type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /authz/check:
+    post:
+      summary: Check permissions
+      description: |
+        Check if user has specific permissions on a resource.
+        Used for authorization checks in UI.
+      tags: [Authz]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - resource_type
+                - resource_id
+                - permission
+              properties:
+                resource_type:
+                  type: string
+                  enum: [file, role]
+                resource_id:
+                  type: string
+                  format: uuid
+                permission:
+                  type: string
+                  enum: [read, create, update, delete]
+      responses:
+        '200':
+          description: Permission check result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  allowed:
+                    type: boolean
+                  reason:
+                    type: string
+                    nullable: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /health:
+    get:
+      summary: Health check
+      description: |
+        Check if service and dependencies are healthy.
+        
+        **Dependencies checked:**
+        - PostgreSQL (critical)
+        - MinIO (critical)
+        - Redis (critical)
+        - Milvus
+        - liteLLM
+        
+        **Status levels:**
+        - `healthy`: All services up
+        - `degraded`: Some non-critical services down
+        - `unhealthy`: Critical services down
+      tags: [Health]
+      security: []
+      responses:
+        '200':
+          description: Service is healthy or degraded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Service is unhealthy (critical services down)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Busibox JWT token containing user identity and role permissions.
+        Enables Row-Level Security (RLS) enforcement.
+    
+    UserIdHeader:
+      type: apiKey
+      in: header
+      name: X-User-Id
+      description: |
+        Legacy user ID header (fallback if JWT not provided).
+        Use Bearer token authentication instead.
+
+  parameters:
+    FileId:
+      name: fileId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: File UUID
+
+  schemas:
+    UploadResponse:
+      type: object
+      required:
+        - fileId
+        - filename
+        - sizeBytes
+        - status
+      properties:
+        fileId:
+          type: string
+          format: uuid
+          description: Unique identifier for the uploaded file
+        filename:
+          type: string
+          description: Original filename
+        sizeBytes:
+          type: integer
+          format: int64
+          description: File size in bytes
+        mimeType:
+          type: string
+          description: MIME type of the file
+        status:
+          type: string
+          enum: [queued, processing]
+          description: Initial processing status
+        duplicate:
+          type: boolean
+          description: Whether this is a duplicate (vectors reused)
+        visibility:
+          type: string
+          enum: [personal, shared]
+          description: Document visibility setting
+        roles:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: Role IDs (if shared)
+        sha256:
+          type: string
+          description: SHA-256 hash of file content
+        createdAt:
+          type: string
+          format: date-time
+
+    StatusUpdate:
+      type: object
+      required:
+        - fileId
+        - stage
+        - progress
+      properties:
+        fileId:
+          type: string
+          format: uuid
+        stage:
+          type: string
+          enum:
+            - queued
+            - parsing
+            - classifying
+            - extracting_metadata
+            - chunking
+            - embedding
+            - indexing
+            - completed
+            - failed
+          description: Current processing stage
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Overall progress percentage
+        chunksProcessed:
+          type: integer
+          nullable: true
+        totalChunks:
+          type: integer
+          nullable: true
+        pagesProcessed:
+          type: integer
+          nullable: true
+        totalPages:
+          type: integer
+          nullable: true
+        errorMessage:
+          type: string
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+
+    FileMetadata:
+      type: object
+      required:
+        - fileId
+        - userId
+        - filename
+        - mimeType
+        - sizeBytes
+        - createdAt
+      properties:
+        fileId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        filename:
+          type: string
+        originalFilename:
+          type: string
+        mimeType:
+          type: string
+        sizeBytes:
+          type: integer
+          format: int64
+        storagePath:
+          type: string
+          description: S3 path in MinIO
+        sha256:
+          type: string
+          description: SHA-256 hash
+        documentType:
+          type: string
+          nullable: true
+        language:
+          type: string
+          nullable: true
+        classificationConfidence:
+          type: number
+          format: float
+          nullable: true
+        chunkCount:
+          type: integer
+        vectorCount:
+          type: integer
+        processingDurationSeconds:
+          type: integer
+          nullable: true
+        extractedTitle:
+          type: string
+          nullable: true
+        extractedAuthor:
+          type: string
+          nullable: true
+        extractedDate:
+          type: string
+          format: date
+          nullable: true
+        extractedKeywords:
+          type: array
+          items:
+            type: string
+          nullable: true
+        metadata:
+          type: object
+          additionalProperties: true
+        visibility:
+          type: string
+          enum: [personal, shared]
+        roles:
+          type: array
+          items:
+            type: string
+            format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        currentStatus:
+          $ref: '#/components/schemas/StatusUpdate'
+
+    SearchRequest:
+      type: object
+      required:
+        - query
+      properties:
+        query:
+          type: string
+          description: Search query
+        limit:
+          type: integer
+          default: 10
+          maximum: 100
+        offset:
+          type: integer
+          default: 0
+        rerank_k:
+          type: integer
+          default: 50
+          description: Number of results to retrieve before reranking
+        dense_weight:
+          type: number
+          format: float
+          default: 0.7
+          description: Weight for dense semantic search (0-1)
+        sparse_weight:
+          type: number
+          format: float
+          default: 0.3
+          description: Weight for sparse BM25 search (0-1)
+
+    SearchResponse:
+      type: object
+      required:
+        - query
+        - results
+        - total
+        - limit
+        - offset
+      properties:
+        query:
+          type: string
+        results:
+          type: array
+          items:
+            type: object
+            properties:
+              file_id:
+                type: string
+                format: uuid
+              filename:
+                type: string
+              chunk_index:
+                type: integer
+              page_number:
+                type: integer
+                nullable: true
+              text:
+                type: string
+              score:
+                type: number
+                format: float
+              dense_score:
+                type: number
+                format: float
+                nullable: true
+              sparse_score:
+                type: number
+                format: float
+                nullable: true
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+
+    DocumentRolesResponse:
+      type: object
+      required:
+        - file_id
+        - visibility
+        - roles
+      properties:
+        file_id:
+          type: string
+          format: uuid
+        visibility:
+          type: string
+          enum: [personal, shared]
+        roles:
+          type: array
+          items:
+            type: object
+            properties:
+              role_id:
+                type: string
+                format: uuid
+              role_name:
+                type: string
+              added_at:
+                type: string
+                format: date-time
+                nullable: true
+              added_by:
+                type: string
+                format: uuid
+                nullable: true
+
+    UpdateRolesRequest:
+      type: object
+      properties:
+        add_role_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          default: []
+          description: Role IDs to add
+        add_role_names:
+          type: array
+          items:
+            type: string
+          default: []
+          description: Role names (paired with add_role_ids)
+        remove_role_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          default: []
+          description: Role IDs to remove
+
+    ShareDocumentRequest:
+      type: object
+      required:
+        - role_ids
+        - role_names
+      properties:
+        role_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          minItems: 1
+          description: Role IDs to assign
+        role_names:
+          type: array
+          items:
+            type: string
+          minItems: 1
+          description: Role names (paired with role_ids)
+
+    HealthResponse:
+      type: object
+      required:
+        - status
+        - checks
+        - healthy
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+        checks:
+          type: object
+          properties:
+            postgres:
+              $ref: '#/components/schemas/DependencyStatus'
+            minio:
+              $ref: '#/components/schemas/DependencyStatus'
+            redis:
+              $ref: '#/components/schemas/DependencyStatus'
+            milvus:
+              $ref: '#/components/schemas/DependencyStatus'
+            litellm:
+              $ref: '#/components/schemas/DependencyStatus'
+        healthy:
+          type: string
+          example: "5/5"
+          description: Number of healthy services / total services
+
+    DependencyStatus:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum: [healthy, unhealthy]
+        response_time_ms:
+          type: number
+          format: float
+          description: Response time in milliseconds
+        error:
+          type: string
+          nullable: true
+        collections:
+          type: integer
+          description: Number of Milvus collections (Milvus only)
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+        hint:
+          type: string
+          description: Helpful hint for resolving the error
+        supported_types:
+          type: array
+          items:
+            type: string
+          description: List of supported MIME types (for upload errors)
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    
+    Forbidden:
+      description: Insufficient permissions
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+

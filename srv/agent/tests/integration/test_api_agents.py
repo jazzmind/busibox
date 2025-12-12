@@ -29,14 +29,14 @@ async def test_list_agents_with_data(test_client: AsyncClient, test_session, moc
     # Create test agents
     agent1 = AgentDefinition(
         name="agent-1",
-        model="anthropic:claude-3-5-sonnet",
+        model="agent",
         instructions="Test 1",
         tools={"names": ["search"]},
         is_active=True,
     )
     agent2 = AgentDefinition(
         name="agent-2",
-        model="openai:gpt-4",
+        model="agent",
         instructions="Test 2",
         tools={"names": ["rag"]},
         is_active=True,
@@ -44,7 +44,7 @@ async def test_list_agents_with_data(test_client: AsyncClient, test_session, moc
     # Inactive agent should not appear
     agent3 = AgentDefinition(
         name="inactive",
-        model="openai:gpt-4",
+        model="agent",
         instructions="Inactive",
         tools={"names": []},
         is_active=False,
@@ -75,7 +75,7 @@ async def test_create_agent_definition_success(test_client: AsyncClient, mock_jw
         "name": "new-agent",
         "display_name": "New Agent",
         "description": "Test agent",
-        "model": "anthropic:claude-3-5-sonnet",
+        "model": "agent",
         "instructions": "Be helpful and concise",
         "tools": {"names": ["search", "rag"]},
         "scopes": ["agent.execute", "search.read"],
@@ -94,7 +94,7 @@ async def test_create_agent_definition_success(test_client: AsyncClient, mock_jw
     # Verify response structure
     assert "id" in data
     assert data["name"] == "new-agent"
-    assert data["model"] == "anthropic:claude-3-5-sonnet"
+    assert data["model"] == "agent"
     assert data["tools"] == {"names": ["search", "rag"]}
     assert "version" in data
     assert "created_at" in data
@@ -106,7 +106,7 @@ async def test_create_agent_definition_invalid_tools(test_client: AsyncClient, m
     """Test POST /agents/definitions rejects invalid tool references."""
     payload = {
         "name": "bad-agent",
-        "model": "anthropic:claude-3-5-sonnet",
+        "model": "agent",
         "instructions": "Test",
         "tools": {"names": ["search", "invalid_tool"]},
     }
@@ -126,7 +126,7 @@ async def test_create_agent_definition_minimal(test_client: AsyncClient, mock_jw
     """Test POST /agents/definitions with minimal required fields."""
     payload = {
         "name": "minimal-agent",
-        "model": "anthropic:claude-3-5-sonnet",
+        "model": "agent",
         "instructions": "Simple instructions",
     }
     
@@ -148,7 +148,7 @@ async def test_create_agent_definition_requires_auth(test_client: AsyncClient):
     """Test POST /agents/definitions requires authentication."""
     payload = {
         "name": "test",
-        "model": "anthropic:claude-3-5-sonnet",
+        "model": "agent",
         "instructions": "Test",
     }
     
@@ -280,7 +280,7 @@ async def test_agent_crud_workflow(test_client: AsyncClient, mock_jwt_token: str
     # 2. Create agent
     create_payload = {
         "name": "workflow-test-agent",
-        "model": "anthropic:claude-3-5-sonnet",
+        "model": "agent",
         "instructions": "Test agent for workflow",
         "tools": {"names": ["search"]},
     }

@@ -25,7 +25,7 @@ async def custom_eval_id(db_session: AsyncSession, mock_user_id: str) -> uuid.UU
         config={
             "criteria": "Accuracy",
             "pass_threshold": 0.8,
-            "model": "anthropic:claude-3-5-sonnet"
+            "model": "agent"
         },
         is_active=True,
         created_by=mock_user_id,
@@ -80,7 +80,7 @@ async def test_update_evaluator_increments_version(
             "config": {
                 "criteria": "Updated criteria",
                 "pass_threshold": 0.9,
-                "model": "anthropic:claude-3-5-sonnet"
+                "model": "agent"
             }
         },
         headers={"Authorization": f"Bearer {mock_token}"},

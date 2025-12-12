@@ -18,7 +18,7 @@ async def test_schedule_run_success(test_client: AsyncClient, test_session, mock
     # Create test agent
     agent = AgentDefinition(
         name="test-agent",
-        model="anthropic:claude-3-5-sonnet",
+        model="agent",
         instructions="Test",
         tools={"names": ["search"]},
         is_active=True,
@@ -109,7 +109,7 @@ async def test_list_schedules_with_data(test_client: AsyncClient, test_session, 
     # Create test agent
     agent = AgentDefinition(
         name="schedule-test-agent",
-        model="anthropic:claude-3-5-sonnet",
+        model="agent",
         instructions="Test",
         tools={"names": []},
         is_active=True,
@@ -159,7 +159,7 @@ async def test_cancel_schedule_success(test_client: AsyncClient, test_session, m
     # Create test agent
     agent = AgentDefinition(
         name="cancel-test-agent",
-        model="anthropic:claude-3-5-sonnet",
+        model="agent",
         instructions="Test",
         tools={"names": []},
         is_active=True,
@@ -222,7 +222,7 @@ async def test_schedule_workflow(test_client: AsyncClient, test_session, mock_jw
     # Create test agent
     agent = AgentDefinition(
         name="workflow-schedule-agent",
-        model="anthropic:claude-3-5-sonnet",
+        model="agent",
         instructions="Test workflow",
         tools={"names": ["search"]},
         is_active=True,

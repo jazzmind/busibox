@@ -155,7 +155,7 @@ async def test_delete_tool_in_use_returns_409(
     # Create agent that uses the tool
     agent = AgentDefinition(
         name="agent-using-tool",
-        model="anthropic:claude-3-5-sonnet",
+        model="agent",
         instructions="Test agent",
         tools={"names": ["custom_test_tool"]},
         scopes=[],

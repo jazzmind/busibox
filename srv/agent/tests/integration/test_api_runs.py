@@ -18,7 +18,7 @@ async def test_agent(test_session):
     agent = AgentDefinition(
         name="test-agent",
         display_name="Test Agent",
-        model="anthropic:claude-3-5-sonnet",
+        model="agent",
         instructions="Test instructions",
         tools={"names": ["search"]},
         scopes=["search.read"],
@@ -200,7 +200,7 @@ async def test_list_runs_filter_by_agent(test_session, test_agent, mock_principa
     other_agent = AgentDefinition(
         name="other-agent",
         display_name="Other Agent",
-        model="anthropic:claude-3-5-sonnet",
+        model="agent",
         instructions="Other instructions",
         is_active=True,
     )

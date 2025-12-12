@@ -84,7 +84,7 @@ async def test_agent(test_session: AsyncSession) -> AgentDefinition:
         name="test-chat-agent",
         display_name="Test Chat Agent",
         description="Test agent for unit tests",
-        model="anthropic:claude-3-5-sonnet",
+        model="agent",
         instructions="You are a test assistant. Be concise.",
         tools={"names": ["search", "ingest"]},
         scopes=["search.read", "ingest.write"],

@@ -1,0 +1,758 @@
+openapi: 3.1.0
+info:
+  title: Busibox Search API
+  version: 1.0.0
+  description: |
+    Sophisticated search API for the Busibox platform with multiple search modes,
+    reranking, highlighting, and semantic alignment features.
+    
+    ## Features
+    
+    - **Keyword search**: Fast BM25 full-text search
+    - **Semantic search**: Dense vector similarity search with bge-large-en-v1.5
+    - **Hybrid search**: Combined keyword + semantic with RRF fusion (recommended)
+    - **Reranking**: Cross-encoder reranking for improved accuracy
+    - **Highlighting**: Search term highlighting in results
+    - **Semantic alignment**: Visualize query-document similarity with matched spans
+    - **MMR**: Maximal Marginal Relevance for diverse results
+    - **Role-based filtering**: Automatic partition filtering based on user permissions
+    
+    ## Search Modes
+    
+    ### Keyword Search
+    Pure BM25 full-text search. Fast and effective for exact term matching.
+    
+    ### Semantic Search
+    Dense vector similarity search using embeddings. Understands meaning and context.
+    
+    ### Hybrid Search (Recommended)
+    Combines keyword and semantic search with Reciprocal Rank Fusion (RRF).
+    Provides best of both worlds - exact matching and semantic understanding.
+    
+    ## Authentication
+    
+    All endpoints require authentication via:
+    - `Authorization: Bearer <JWT>` header (preferred) - JWT with user identity and role permissions
+    - `X-User-Id` header (legacy) - User UUID for backward compatibility
+    
+    JWT tokens enable automatic role-based partition filtering in Milvus,
+    ensuring users only search documents they have permission to access.
+    
+  contact:
+    name: Busibox Infrastructure Team
+    email: infra@busibox.local
+    
+servers:
+  - url: http://search-lxc:8001
+    description: Production (search-lxc container)
+  - url: http://10.96.200.28:8001
+    description: Test environment
+  - url: http://localhost:8001
+    description: Local development
+
+security:
+  - BearerAuth: []
+  - UserIdHeader: []
+
+tags:
+  - name: search
+    description: Search operations with multiple modes
+  - name: health
+    description: Service health checks
+
+paths:
+  /:
+    get:
+      summary: Service information
+      description: Returns basic service information and available endpoints
+      security: []
+      tags: [search]
+      responses:
+        '200':
+          description: Service info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  service:
+                    type: string
+                    example: "Busibox Search API"
+                  version:
+                    type: string
+                    example: "1.0.0"
+                  status:
+                    type: string
+                    example: operational
+                  docs:
+                    type: string
+                    example: "/docs"
+                  health:
+                    type: string
+                    example: "/health"
+
+  /search:
+    post:
+      summary: Main search endpoint
+      description: |
+        Main search endpoint with multiple modes and role-based partition filtering.
+        
+        **Modes:**
+        - `keyword`: Pure BM25 keyword search
+        - `semantic`: Pure dense vector search
+        - `hybrid`: Combined dense + BM25 with RRF fusion (recommended)
+        
+        **Access control:**
+        Only searches partitions the user has read permission on (via JWT role claims).
+        
+        **Optional features:**
+        - Reranking with cross-encoder for improved accuracy
+        - Highlighting with configurable fragment size
+        - Semantic alignment visualization for top results
+        
+        **Performance:**
+        - Keyword: ~10-50ms
+        - Semantic: ~50-100ms
+        - Hybrid: ~100-200ms
+        - Hybrid + reranking: ~500-1000ms
+      tags: [search]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SearchRequest'
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+        '400':
+          description: Invalid search mode or parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /search/keyword:
+    post:
+      summary: Keyword search (BM25)
+      description: |
+        Pure BM25 keyword search endpoint.
+        Fast full-text search with exact term matching.
+        
+        Best for:
+        - Exact term queries
+        - Technical terms, codes, IDs
+        - Known phrases
+      tags: [search]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SearchRequest'
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /search/semantic:
+    post:
+      summary: Semantic search (vector)
+      description: |
+        Pure dense vector semantic search endpoint.
+        Understands meaning and context beyond exact keywords.
+        
+        Best for:
+        - Conceptual queries
+        - Natural language questions
+        - Finding similar content
+        - Cross-lingual search (if model supports)
+      tags: [search]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SearchRequest'
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /search/mmr:
+    post:
+      summary: Search with MMR diversity
+      description: |
+        Search with Maximal Marginal Relevance for diversity.
+        
+        MMR reduces redundancy by penalizing results similar to already-selected ones.
+        Useful for:
+        - Exploratory search
+        - Avoiding duplicate information
+        - Diverse result sets
+        
+        **Algorithm:**
+        1. Perform initial search (any mode)
+        2. Select top result
+        3. For remaining results, balance relevance vs. diversity
+        4. Repeat until desired number of results
+        
+        **Parameters:**
+        - `lambda_param`: Balance between relevance (1.0) and diversity (0.0)
+        - `diversity_threshold`: Similarity threshold for considering items similar
+      tags: [search]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MMRSearchRequest'
+      responses:
+        '200':
+          description: Diversified search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /search/explain:
+    post:
+      summary: Explain search result
+      description: |
+        Explain why a specific document was retrieved for a query.
+        
+        Provides detailed scoring breakdown:
+        - Dense similarity score (cosine)
+        - Sparse BM25 score
+        - Rerank score (if available)
+        - Semantic matches (aligned spans)
+        - Highlighted term contributions
+        
+        Uses role-based partition filtering to ensure user has access to the document.
+        
+        Useful for:
+        - Debugging search results
+        - Understanding relevance
+        - Improving queries
+        - Building trust in search
+      tags: [search]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExplainRequest'
+      responses:
+        '200':
+          description: Explanation of search result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExplainResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Document not found or access denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /health:
+    get:
+      summary: Health check
+      description: |
+        Check health of search service and its dependencies.
+        
+        **Dependencies checked:**
+        - Milvus vector database (critical)
+        - PostgreSQL database (critical)
+        - Reranker model
+        - Embedding service
+        - Redis cache (if enabled)
+        
+        **Status levels:**
+        - `healthy`: All critical services up
+        - `degraded`: Some non-critical services down
+        - `unhealthy`: Critical services down
+      tags: [health]
+      security: []
+      responses:
+        '200':
+          description: Service is healthy or degraded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Service is unhealthy (critical services down)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Busibox JWT token containing user identity and role permissions.
+        Enables automatic role-based partition filtering in Milvus.
+    
+    UserIdHeader:
+      type: apiKey
+      in: header
+      name: X-User-Id
+      description: |
+        Legacy user ID header (fallback if JWT not provided).
+        Use Bearer token authentication instead.
+
+  schemas:
+    SearchRequest:
+      type: object
+      required:
+        - query
+      properties:
+        query:
+          type: string
+          description: Search query
+          example: "What are the key findings in the Q4 report?"
+        mode:
+          type: string
+          enum: [keyword, semantic, hybrid]
+          default: hybrid
+          description: Search mode
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 10
+          description: Maximum number of results to return
+        offset:
+          type: integer
+          minimum: 0
+          default: 0
+          description: Pagination offset
+        rerank:
+          type: boolean
+          default: false
+          description: Apply cross-encoder reranking for improved accuracy
+        rerank_k:
+          type: integer
+          minimum: 1
+          maximum: 200
+          default: 50
+          description: Number of results to retrieve before reranking
+        reranker_model:
+          type: string
+          default: "qwen3-gpu"
+          description: Reranker model to use
+          example: "qwen3-gpu"
+        dense_weight:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          default: 0.7
+          description: Weight for dense semantic search in hybrid mode
+        sparse_weight:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          default: 0.3
+          description: Weight for sparse BM25 search in hybrid mode
+        filters:
+          type: object
+          description: Optional metadata filters
+          properties:
+            file_id:
+              type: string
+              format: uuid
+              description: Filter by specific file
+            document_type:
+              type: string
+              description: Filter by document type
+            date_from:
+              type: string
+              format: date
+              description: Filter by date range (from)
+            date_to:
+              type: string
+              format: date
+              description: Filter by date range (to)
+        highlight:
+          type: object
+          description: Highlighting configuration
+          properties:
+            enabled:
+              type: boolean
+              default: false
+            fragment_size:
+              type: integer
+              default: 150
+              description: Size of highlighted fragments in characters
+            num_fragments:
+              type: integer
+              default: 3
+              description: Maximum number of fragments to return
+
+    SearchResponse:
+      type: object
+      required:
+        - query
+        - mode
+        - total
+        - limit
+        - offset
+        - execution_time_ms
+        - results
+      properties:
+        query:
+          type: string
+          description: Original search query
+        mode:
+          type: string
+          enum: [keyword, semantic, hybrid]
+          description: Search mode used
+        total:
+          type: integer
+          description: Total number of results (before pagination)
+        limit:
+          type: integer
+          description: Requested limit
+        offset:
+          type: integer
+          description: Requested offset
+        execution_time_ms:
+          type: integer
+          description: Total execution time in milliseconds
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchResult'
+
+    SearchResult:
+      type: object
+      required:
+        - file_id
+        - filename
+        - chunk_index
+        - text
+        - score
+      properties:
+        file_id:
+          type: string
+          format: uuid
+          description: File UUID
+        filename:
+          type: string
+          description: Original filename
+        chunk_index:
+          type: integer
+          description: Chunk index within file
+        page_number:
+          type: integer
+          nullable: true
+          description: Page number (for PDFs)
+        text:
+          type: string
+          description: Chunk text content
+        score:
+          type: number
+          format: float
+          description: Final relevance score
+        scores:
+          $ref: '#/components/schemas/SearchScores'
+        highlights:
+          type: array
+          nullable: true
+          items:
+            $ref: '#/components/schemas/HighlightFragment'
+          description: Highlighted fragments (if highlighting enabled)
+        semantic_alignment:
+          $ref: '#/components/schemas/SemanticAlignment'
+          nullable: true
+          description: Semantic alignment data (for top results)
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Additional metadata
+
+    SearchScores:
+      type: object
+      properties:
+        dense:
+          type: number
+          format: float
+          nullable: true
+          description: Dense semantic similarity score
+        sparse:
+          type: number
+          format: float
+          nullable: true
+          description: Sparse BM25 score
+        rerank:
+          type: number
+          format: float
+          nullable: true
+          description: Reranker score (if reranking applied)
+        final:
+          type: number
+          format: float
+          description: Final combined score
+
+    HighlightFragment:
+      type: object
+      required:
+        - text
+        - score
+      properties:
+        text:
+          type: string
+          description: Fragment text with <em> tags around matches
+        score:
+          type: number
+          format: float
+          description: Fragment relevance score
+
+    SemanticAlignment:
+      type: object
+      required:
+        - query_tokens
+        - matched_spans
+      properties:
+        query_tokens:
+          type: array
+          items:
+            type: string
+          description: Tokenized query
+        document_tokens:
+          type: array
+          items:
+            type: string
+          nullable: true
+          description: Tokenized document
+        alignment_matrix:
+          type: array
+          items:
+            type: array
+            items:
+              type: number
+              format: float
+          nullable: true
+          description: Token-to-token similarity matrix
+        matched_spans:
+          type: array
+          items:
+            $ref: '#/components/schemas/MatchedSpan'
+          description: Semantically matched spans
+
+    MatchedSpan:
+      type: object
+      required:
+        - query_span
+        - document_span
+        - similarity
+      properties:
+        query_span:
+          type: object
+          properties:
+            start:
+              type: integer
+            end:
+              type: integer
+            text:
+              type: string
+        document_span:
+          type: object
+          properties:
+            start:
+              type: integer
+            end:
+              type: integer
+            text:
+              type: string
+        similarity:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          description: Semantic similarity score
+
+    MMRSearchRequest:
+      allOf:
+        - $ref: '#/components/schemas/SearchRequest'
+        - type: object
+          properties:
+            lambda_param:
+              type: number
+              format: float
+              minimum: 0
+              maximum: 1
+              default: 0.7
+              description: Balance between relevance (1) and diversity (0)
+            diversity_threshold:
+              type: number
+              format: float
+              minimum: 0
+              maximum: 1
+              default: 0.7
+              description: Cosine similarity threshold for considering items similar
+
+    ExplainRequest:
+      type: object
+      required:
+        - query
+        - file_id
+        - chunk_index
+      properties:
+        query:
+          type: string
+          description: Search query
+        file_id:
+          type: string
+          format: uuid
+          description: File UUID
+        chunk_index:
+          type: integer
+          description: Chunk index within file
+
+    ExplainResponse:
+      type: object
+      required:
+        - query
+        - document
+        - explanation
+      properties:
+        query:
+          type: string
+          description: Original query
+        document:
+          type: object
+          properties:
+            file_id:
+              type: string
+              format: uuid
+            chunk_index:
+              type: integer
+            text:
+              type: string
+        explanation:
+          type: object
+          properties:
+            dense_score:
+              type: number
+              format: float
+              nullable: true
+              description: Cosine similarity score
+            sparse_score:
+              type: number
+              format: float
+              nullable: true
+              description: BM25 score
+            rerank_score:
+              type: number
+              format: float
+              nullable: true
+              description: Cross-encoder reranker score
+            semantic_matches:
+              type: array
+              items:
+                $ref: '#/components/schemas/MatchedSpan'
+              description: Semantically matched spans
+            highlighted_matches:
+              type: array
+              items:
+                $ref: '#/components/schemas/HighlightFragment'
+              description: Highlighted term matches
+
+    HealthResponse:
+      type: object
+      required:
+        - status
+        - milvus
+        - postgres
+        - reranker
+        - embedder
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+          description: Overall service status
+        milvus:
+          type: string
+          enum: [connected, unavailable]
+          description: Milvus vector database status
+        postgres:
+          type: string
+          enum: [connected, unavailable]
+          description: PostgreSQL database status
+        reranker:
+          type: string
+          enum: [loaded, unavailable]
+          description: Reranker model status
+        embedder:
+          type: string
+          enum: [available, unavailable]
+          description: Embedding service status
+        cache:
+          type: string
+          enum: [connected, unavailable]
+          nullable: true
+          description: Redis cache status (if enabled)
+
+    ErrorResponse:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: string
+          description: Error message
+
+  responses:
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+

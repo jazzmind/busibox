@@ -21,21 +21,21 @@ class Settings(BaseSettings):
         description="Default model purpose for LiteLLM (e.g., agent, fast, frontier, etc.)",
     )
     litellm_base_url: AnyHttpUrl = Field(
-        "http://localhost:4000/v1",
+        "http://10.96.200.207:4000/v1",
         description="Base URL for LiteLLM proxy (OpenAI-compatible endpoint)",
     )
 
     # Busibox service endpoints
     search_api_url: AnyHttpUrl = Field(
-        "http://localhost:8002",
+        "http://10.96.200.204:8003",
         description="Base URL for Busibox search API",
     )
     ingest_api_url: AnyHttpUrl = Field(
-        "http://localhost:8001",
+        "http://10.96.200.206:8001",
         description="Base URL for Busibox ingest API",
     )
     rag_api_url: AnyHttpUrl = Field(
-        "http://localhost:8003",
+        "http://10.96.200.204:8003",
         description="Base URL for RAG/vector database API",
     )
 
