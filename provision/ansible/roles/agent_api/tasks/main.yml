@@ -136,17 +136,16 @@
 
 - name: Grant database permissions for migrations
   shell: |
-    PGPASSWORD='{{ secrets.postgresql.password }}' psql \
-      -h {{ postgres_host }} \
-      -U {{ postgres_user }} \
-      -d busibox \
-      -c "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO agent_server;" \
-      -c "GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO agent_server;" \
-      -c "GRANT ALL PRIVILEGES ON SCHEMA public TO agent_server;" \
-      -c "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO agent_server;" \
-      -c "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO agent_server;"
+    su - postgres -c "psql -d busibox << 'EOF'
+    GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO agent_server;
+    GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO agent_server;
+    GRANT ALL PRIVILEGES ON SCHEMA public TO agent_server;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO agent_server;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO agent_server;
+    EOF
+    "
+  delegate_to: "{{ groups['pg'][0] }}"
   become: yes
-  become_user: "{{ agent_api_user }}"
   register: grant_result
   failed_when: false
   changed_when: false
