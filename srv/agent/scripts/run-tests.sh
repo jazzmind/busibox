@@ -7,6 +7,9 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 cd "$PROJECT_ROOT"
 
+# Set PYTHONPATH to include project root
+export PYTHONPATH="$PROJECT_ROOT:${PYTHONPATH:-}"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
