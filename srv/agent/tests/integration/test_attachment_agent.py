@@ -46,3 +46,6 @@ class TestAttachmentAgent:
         response = str(result).lower()
         assert "extract" in response or "preprocess" in response or "archive" in response
         print(f"\nAttachment agent (archive): {response}")
+
+
+

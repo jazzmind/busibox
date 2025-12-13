@@ -386,3 +386,6 @@ async def test_get_score_aggregates_with_runs(test_session: AsyncSession):
     assert aggregates["successful_runs"] == 2
     assert aggregates["success_rate"] == pytest.approx(0.667, abs=0.01)
     assert aggregates["agent_id"] == str(agent_id)
+
+
+

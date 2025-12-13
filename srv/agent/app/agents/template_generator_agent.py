@@ -105,3 +105,6 @@ When generating a template, provide a JSON object with:
 Remember: You are creating templates that will be used to analyze important business documents. The templates must be comprehensive, accurate, and designed to extract actionable business intelligence from complex documents.""",
     retries=2,
 )
+
+
+

@@ -219,3 +219,6 @@ async def test_score_workflow(test_client: AsyncClient, test_session, mock_jwt_t
     assert aggregates_response.status_code == 200
     aggregates = aggregates_response.json()
     assert aggregates["successful_runs"] >= 1
+
+
+

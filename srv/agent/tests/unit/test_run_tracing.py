@@ -332,3 +332,6 @@ async def test_create_run_logs_errors_with_context(test_session, caplog):
     error_messages = [r.message for r in error_logs]
     assert any("failed" in msg.lower() for msg in error_messages)
     assert any("Test error" in msg for msg in error_messages)
+
+
+

@@ -114,3 +114,6 @@ async def test_delete_evaluator_returns_204(
     # Verify evaluator is soft-deleted
     evaluator = await db_session.get(EvalDefinition, custom_eval_id)
     assert evaluator.is_active is False
+
+
+

@@ -1,7 +1,7 @@
 # Wes's Tasks
+
 1) use UI library on agent-client, make sure it works right
 2) build out agent client to support all the agent server functionality
-
 
 What I'd delagate now:
 - improving ingestion:
@@ -14,9 +14,7 @@ What I'd delagate now:
 - improving apps
   [ ] project analysis - needs to work better
 
-
 --- 
-
 1) Get agent client/server working on test environment
 2) Make sure chat works with docs/agent server on test environment
 --- deploy to production ---
@@ -27,6 +25,3 @@ What I'd delagate now:
 1) Ability to add charts to a report
 2) Ability to add time series data - e.g. upload the same sheet for multiple months
 3) Ability to add a report to a dashboard
-
-
-$30/sq foot for floor, $35/sq foot for roof

@@ -48,3 +48,6 @@ Based on this context, when is the project deadline?"""
         assert len(response) < 200  # Generous limit
         assert "4" in response
         print(f"\nChat agent concise: {response}")
+
+
+

@@ -161,3 +161,6 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_agent_definitions_name'), table_name='agent_definitions')
     op.drop_table('agent_definitions')
 
+
+
+

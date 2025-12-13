@@ -50,3 +50,6 @@ echo ""
 echo "Next steps:"
 echo "  - Run tests: bash scripts/run-tests.sh"
 echo "  - Or via make: make test-agent INV=inventory/test"
+
+
+

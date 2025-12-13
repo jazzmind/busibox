@@ -201,3 +201,6 @@ async def test_load_active_agents_skips_invalid_tools(test_session: AsyncSession
     # Agent should have search tool but not the invalid one
     from pydantic_ai import Agent
     assert isinstance(agents[agent.id], Agent)
+
+
+

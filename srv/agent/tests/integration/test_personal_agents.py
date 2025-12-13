@@ -320,3 +320,6 @@ async def test_personal_agent_created_with_correct_ownership(
     
     assert db_agent.is_builtin is False
     assert db_agent.created_by == "user-a"
+
+
+

@@ -282,3 +282,6 @@ def test_agents_have_instructions():
 
     assert search_agent.instructions is not None
     assert len(str(search_agent.instructions)) > 0
+
+
+

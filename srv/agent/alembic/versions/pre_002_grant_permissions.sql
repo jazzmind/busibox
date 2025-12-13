@@ -9,3 +9,6 @@ GRANT ALL PRIVILEGES ON SCHEMA public TO agent_server;
 -- Ensure agent_server can create tables
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO agent_server;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO agent_server;
+
+
+
