@@ -146,3 +146,6 @@ def test_user_settings_defaults():
     settings = UserSettings(enabled_tools=["doc_search"])
     assert settings.enabled_tools == ["doc_search"]
     assert settings.enabled_agents == []
+
+
+

@@ -61,3 +61,6 @@ class DispatcherResponse(BaseModel):
     """Response from dispatcher with routing decision."""
     routing_decision: RoutingDecision
     execution_plan: Optional[List[ExecutionStep]] = Field(default=None, description="Sequential execution plan (optional)")
+
+
+

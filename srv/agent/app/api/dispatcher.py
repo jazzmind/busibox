@@ -87,3 +87,6 @@ async def route_user_query(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Routing failed: {str(e)}"
         )
+
+
+

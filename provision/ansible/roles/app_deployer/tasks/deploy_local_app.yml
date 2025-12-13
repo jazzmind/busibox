@@ -87,3 +87,6 @@
   when:
     - inventory_hostname is match('.*' + app.container + '.*')
     - app.health_endpoint is defined
+
+
+

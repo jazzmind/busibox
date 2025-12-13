@@ -636,3 +636,6 @@ async def update_chat_settings(
             detail="Failed to update chat settings"
         )
 
+
+
+

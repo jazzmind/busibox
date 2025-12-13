@@ -183,3 +183,6 @@ def downgrade() -> None:
     op.drop_column('tool_definitions', 'is_builtin')
     op.drop_column('agent_definitions', 'created_by')
     op.drop_column('agent_definitions', 'is_builtin')
+
+
+

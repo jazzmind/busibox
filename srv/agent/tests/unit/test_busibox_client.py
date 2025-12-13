@@ -71,3 +71,6 @@ async def test_rag_query(monkeypatch):
     call = stub_client.calls[0]
     assert "/databases/main/query" in call["url"]
     assert call["json"] == {"query": "find", "top_k": 2}
+
+
+

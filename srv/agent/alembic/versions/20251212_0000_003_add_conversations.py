@@ -107,3 +107,6 @@ def downgrade() -> None:
     op.drop_index('idx_conversations_user_id', table_name='conversations')
     op.drop_table('conversations')
 
+
+
+

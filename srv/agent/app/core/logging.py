@@ -80,3 +80,6 @@ def get_logger(name: str) -> structlog.BoundLogger:
 
 # Configure structlog on module import
 configure_structlog()
+
+
+

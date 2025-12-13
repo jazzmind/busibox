@@ -367,3 +367,6 @@ async def test_dispatcher_response_time_under_2_seconds(client: AsyncClient, moc
     print(f"  Max: {max(response_times):.3f}s")
     
     assert p95_latency < 2.0, f"P95 latency {p95_latency:.3f}s exceeds 2s target"
+
+
+

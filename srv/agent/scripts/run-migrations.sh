@@ -44,3 +44,6 @@ alembic upgrade head
 
 echo "✓ Migrations completed successfully"
 
+
+
+

@@ -271,3 +271,6 @@ async def test_create_run_logs_tier_information(test_session, caplog):
     # Verify tier information is logged
     log_messages = [record.message for record in caplog.records]
     assert any("1800s timeout" in msg and "4096MB memory limit" in msg for msg in log_messages)
+
+
+

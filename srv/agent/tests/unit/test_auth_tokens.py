@@ -103,3 +103,6 @@ async def test_validate_bearer_signature_failure(monkeypatch):
 
     with pytest.raises(jwt.JWTError):
         await validate_bearer(token)
+
+
+

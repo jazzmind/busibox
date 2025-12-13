@@ -116,3 +116,6 @@ def test_setup_tracing_with_otlp_endpoint():
     # Verify tracer provider is set
     provider = trace.get_tracer_provider()
     assert provider is not None
+
+
+

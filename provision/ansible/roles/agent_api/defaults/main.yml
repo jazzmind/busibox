@@ -27,3 +27,6 @@ redis_host: "{{ hostvars[groups['ingest'][0]]['ansible_host'] if 'ingest' in gro
 redis_port: 6379
 
 
+
+
+
