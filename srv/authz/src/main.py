@@ -1,7 +1,7 @@
 import uvicorn
 from fastapi import FastAPI
 
-from routes import authz
+from routes import authz, internal, oauth
 
 app = FastAPI(title="Authz Service", version="1.0.0")
 
@@ -17,6 +17,8 @@ async def ready():
 
 
 app.include_router(authz.router)
+app.include_router(oauth.router)
+app.include_router(internal.router)
 
 
 if __name__ == "__main__":

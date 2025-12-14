@@ -17,6 +17,17 @@ from shared.config import Config
 # Load environment variables from .env file before running tests
 load_dotenv()
 
+@pytest.fixture(autouse=True)
+def set_auth_env(monkeypatch):
+    """
+    Tests use authz-style RS256 tokens (no legacy X-User-Id).
+    """
+    monkeypatch.setenv("AUTHZ_ISSUER", "busibox-authz")
+    monkeypatch.setenv("AUTHZ_AUDIENCE", "ingest-api")
+    monkeypatch.setenv("JWT_ALGORITHMS", "RS256")
+    monkeypatch.setenv("AUTHZ_JWKS_URL", "http://test/.well-known/jwks.json")
+    yield
+
 
 # Sample files paths - supports both new (testdocs repo) and old (samples/) structure
 SAMPLES_DIR = Path(__file__).parent.parent.parent.parent / "samples"
@@ -110,13 +121,51 @@ async def async_client():
     """
     from api.main import app
     import uuid
+    import time
+    import jwt as pyjwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
     
     test_user_id = str(uuid.uuid4())
+
+    # Create an in-memory RSA key and patch the JWKS client used by middleware.
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_key = private_key.public_key()
+
+    class _SigningKey:
+        def __init__(self, key):
+            self.key = key
+
+    class _FakeJwksClient:
+        def get_signing_key_from_jwt(self, _token: str):
+            return _SigningKey(public_key)
+
+    from api.middleware import jwt_auth as jwt_auth_mod
+    jwt_auth_mod.jwks_client = _FakeJwksClient()
+
+    now = int(time.time())
+    token = pyjwt.encode(
+        {
+            "iss": "busibox-authz",
+            "sub": test_user_id,
+            "aud": "ingest-api",
+            "iat": now,
+            "nbf": now,
+            "exp": now + 3600,
+            "jti": str(uuid.uuid4()),
+            "typ": "access",
+            "scope": "ingest.write search.read",
+            "roles": [
+                {"id": str(uuid.uuid4()), "name": "TestRole", "permissions": ["read", "create", "update", "delete"]}
+            ],
+        },
+        private_key,
+        algorithm="RS256",
+        headers={"kid": "test-kid"},
+    )
     
     async with AsyncClient(app=app, base_url="http://test") as client:
-        # Add test user headers (note: X-User-Id not X-User-ID)
         client.headers.update({
-            "X-User-Id": test_user_id
+            "Authorization": f"Bearer {token}"
         })
         yield client
 
@@ -128,13 +177,50 @@ async def async_client_different_user():
     """
     from api.main import app
     import uuid
+    import time
+    import jwt as pyjwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
     
     different_user_id = str(uuid.uuid4())
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_key = private_key.public_key()
+
+    class _SigningKey:
+        def __init__(self, key):
+            self.key = key
+
+    class _FakeJwksClient:
+        def get_signing_key_from_jwt(self, _token: str):
+            return _SigningKey(public_key)
+
+    from api.middleware import jwt_auth as jwt_auth_mod
+    jwt_auth_mod.jwks_client = _FakeJwksClient()
+
+    now = int(time.time())
+    token = pyjwt.encode(
+        {
+            "iss": "busibox-authz",
+            "sub": different_user_id,
+            "aud": "ingest-api",
+            "iat": now,
+            "nbf": now,
+            "exp": now + 3600,
+            "jti": str(uuid.uuid4()),
+            "typ": "access",
+            "scope": "ingest.write search.read",
+            "roles": [
+                {"id": str(uuid.uuid4()), "name": "TestRole", "permissions": ["read", "create", "update", "delete"]}
+            ],
+        },
+        private_key,
+        algorithm="RS256",
+        headers={"kid": "test-kid"},
+    )
     
     async with AsyncClient(app=app, base_url="http://test") as client:
-        # Different user (note: X-User-Id not X-User-ID)
         client.headers.update({
-            "X-User-Id": different_user_id
+            "Authorization": f"Bearer {token}"
         })
         yield client
 

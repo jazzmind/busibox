@@ -40,7 +40,7 @@ async def test_returns_cached_token_when_valid(monkeypatch, test_session: AsyncS
         session=test_session,
         principal=mock_principal,
         scopes=["ingest.write", "search.read"],  # order should be normalized
-        purpose="test-purpose",
+        purpose="ingest",
     )
 
     assert token.access_token == test_token.token
@@ -52,7 +52,7 @@ async def test_exchanges_when_expired(monkeypatch, test_session: AsyncSession):
     principal = _principal()
     expired = TokenGrant(
         subject=principal.sub,
-        scopes=["ingest.write", "search.read"],
+        scopes=["aud:ingest-api", "ingest.write", "search.read"],
         token="stale-token",
         expires_at=_past(),
     )
@@ -73,7 +73,7 @@ async def test_exchanges_when_expired(monkeypatch, test_session: AsyncSession):
         session=test_session,
         principal=principal,
         scopes=["search.read", "ingest.write"],
-        purpose="agent-run",
+        purpose="ingest",
     )
 
     assert token.access_token == "fresh-token"
@@ -88,7 +88,7 @@ async def test_refreshes_token_near_expiry(monkeypatch, test_session: AsyncSessi
     principal = _principal()
     near_expiry = TokenGrant(
         subject=principal.sub,
-        scopes=["ingest.write", "search.read"],
+        scopes=["aud:ingest-api", "ingest.write", "search.read"],
         token="almost-expired",
         expires_at=datetime.now(timezone.utc) + EXPIRY_REFRESH_BUFFER / 2,
     )
@@ -109,7 +109,7 @@ async def test_refreshes_token_near_expiry(monkeypatch, test_session: AsyncSessi
         session=test_session,
         principal=principal,
         scopes=["search.read", "ingest.write"],
-        purpose="agent-run",
+        purpose="ingest",
     )
 
     assert token.access_token == "refreshed-token"

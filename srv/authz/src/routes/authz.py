@@ -1,8 +1,11 @@
 """
-Authorization and audit endpoints (standalone authz service).
+Audit endpoints (standalone authz service).
+
+Token issuance has moved to OAuth2-style endpoints in `routes/oauth.py`.
 """
 
-from typing import List, Optional
+import json
+from typing import Optional, List
 
 import jwt
 import structlog
@@ -16,75 +19,41 @@ router = APIRouter()
 logger = structlog.get_logger()
 
 config = Config()
-JWT_SECRET = config.jwt_secret
-JWT_ISSUER = config.jwt_issuer
-JWT_AUDIENCE = config.jwt_audience
-DEFAULT_TTL_SECONDS = config.authz_token_ttl
+JWT_ISSUER = config.issuer
 
 
-def issue_token(user_id: str, roles: List[dict], audience: str = JWT_AUDIENCE, ttl_seconds: int = DEFAULT_TTL_SECONDS):
-    payload = {
-        "sub": user_id,
-        "roles": roles,
-        "aud": audience,
-        "iss": JWT_ISSUER,
-        "typ": "access",
-    }
-    # exp handled by jwt.encode options
-    token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")
-    return token
-
-
-def _extract_actor_from_headers(request: Request) -> tuple[Optional[str], List[str]]:
+async def _extract_actor_from_headers(pg: PostgresService, request: Request) -> tuple[Optional[str], List[dict]]:
     """
     Best-effort extract actor and roles from Authorization header if present.
-    Token is expected to be HS256 JWT with sub and roles fields.
+    Token is expected to be a signed JWT with `sub` and `roles` fields.
     """
     auth = request.headers.get("authorization") or ""
     if not auth.lower().startswith("bearer "):
         return None, []
     token = auth.split(" ", 1)[1]
     try:
-        data = jwt.decode(token, JWT_SECRET, algorithms=["HS256"], audience=JWT_AUDIENCE, options={"verify_exp": False})
+        headers = jwt.get_unverified_header(token)
+        kid = headers.get("kid")
+        if not kid:
+            return None, []
+        # Look up public key via active JWKS keys stored in DB.
+        jwks = await pg.list_public_jwks()
+        key_data = next((k for k in jwks if k.get("kid") == kid), None)
+        if not key_data:
+            return None, []
+        public_key = jwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(key_data))
+        data = jwt.decode(
+            token,
+            public_key,
+            algorithms=["RS256"],
+            issuer=JWT_ISSUER,
+            options={"verify_aud": False},  # audit context does not require audience
+        )
         actor = data.get("sub")
         roles = data.get("roles") or []
         return actor, roles
     except Exception:
         return None, []
-
-
-@router.post("/authz/token")
-async def create_token(request: Request):
-    """
-    Issue a scoped JWT for downstream services (search, ingest, agent).
-    Body:
-      - userId: str
-      - roles: [{ id, name, permissions: ['read','create','update','delete'] }]
-      - audience: optional
-    """
-    body = await request.json()
-    user_id = body.get("userId")
-    roles = body.get("roles", [])
-    audience = body.get("audience", JWT_AUDIENCE)
-
-    if not user_id or not isinstance(user_id, str):
-        return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": "userId required"})
-    if not isinstance(roles, list):
-        return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": "roles must be a list"})
-
-    token = issue_token(user_id, roles, audience)
-
-    # Audit
-    await write_audit(
-        actor_id=user_id,
-        action="authz.token.issued",
-        resource_type="authz_token",
-        resource_id=None,
-        details={"audience": audience, "role_count": len(roles)},
-        request=request,
-    )
-
-    return {"token": token, "audience": audience, "roles": roles}
 
 
 @router.post("/authz/audit")
@@ -125,7 +94,7 @@ async def write_audit(actor_id: str, action: str, resource_type: str, resource_i
     await pg.connect()
 
     # attempt to propagate caller context if supplied
-    caller_user, caller_roles = _extract_actor_from_headers(request)
+    caller_user, caller_roles = await _extract_actor_from_headers(pg, request)
     await pg.insert_audit(
         actor_id=actor_id,
         action=action,

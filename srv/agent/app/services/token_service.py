@@ -4,7 +4,7 @@ from typing import List
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.tokens import exchange_token
+from app.auth.tokens import _audience_for_purpose, exchange_token
 from app.models.domain import TokenGrant
 from app.schemas.auth import Principal, TokenExchangeResponse
 
@@ -23,7 +23,11 @@ async def get_or_exchange_token(
     Fetch a cached downstream token if valid; otherwise perform exchange and persist.
     """
     now = datetime.now(timezone.utc)
-    scopes_key = _normalize_scopes(scopes)
+    # Tokens are audience-bound; incorporate inferred audience into the cache key
+    # without changing the DB schema by adding a pseudo-scope marker.
+    audience = _audience_for_purpose(purpose, scopes)
+    scopes_key = _normalize_scopes(scopes + [f"aud:{audience}"])
+    scopes_out = _normalize_scopes(scopes)
 
     stmt = (
         select(TokenGrant)
@@ -43,10 +47,10 @@ async def get_or_exchange_token(
             access_token=grant.token,
             token_type="bearer",
             expires_at=grant.expires_at,
-            scopes=scopes_key,
+            scopes=scopes_out,
         )
 
-    exchanged = await exchange_token(principal, scopes=scopes_key, purpose=purpose)
+    exchanged = await exchange_token(principal, scopes=scopes_out, purpose=purpose)
     record = TokenGrant(
         subject=principal.sub,
         scopes=scopes_key,
@@ -55,4 +59,10 @@ async def get_or_exchange_token(
     )
     session.add(record)
     await session.commit()
-    return exchanged
+    # Exchange function returns requested scopes; override to avoid leaking pseudo marker.
+    return TokenExchangeResponse(
+        access_token=exchanged.access_token,
+        token_type=exchanged.token_type,
+        expires_at=exchanged.expires_at,
+        scopes=scopes_out,
+    )

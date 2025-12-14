@@ -2,10 +2,66 @@
 Pytest configuration and fixtures for search API tests.
 """
 
+import time
 import pytest
 import asyncio
 from typing import Dict, List
 from unittest.mock import Mock, AsyncMock, patch
+
+import jwt as pyjwt
+from cryptography.hazmat.primitives.asymmetric import rsa
+
+
+@pytest.fixture(autouse=True)
+def set_auth_env(monkeypatch):
+    """
+    Tests use authz-style RS256 tokens (no legacy X-User-Id).
+    """
+    monkeypatch.setenv("AUTHZ_ISSUER", "busibox-authz")
+    monkeypatch.setenv("AUTHZ_AUDIENCE", "search-api")
+    monkeypatch.setenv("JWT_ALGORITHMS", "RS256")
+    monkeypatch.setenv("AUTHZ_JWKS_URL", "http://test/.well-known/jwks.json")
+    yield
+
+
+@pytest.fixture
+def auth_header(sample_user_id: str):
+    """
+    Returns an Authorization header and patches the JWKS client used by middleware.
+    """
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_key = private_key.public_key()
+
+    class _SigningKey:
+        def __init__(self, key):
+            self.key = key
+
+    class _FakeJwksClient:
+        def get_signing_key_from_jwt(self, _token: str):
+            return _SigningKey(public_key)
+
+    from api.middleware import jwt_auth as jwt_auth_mod
+    jwt_auth_mod.jwks_client = _FakeJwksClient()
+
+    now = int(time.time())
+    token = pyjwt.encode(
+        {
+            "iss": "busibox-authz",
+            "sub": sample_user_id,
+            "aud": "search-api",
+            "iat": now,
+            "nbf": now,
+            "exp": now + 3600,
+            "jti": "test-jti",
+            "typ": "access",
+            "scope": "search.read",
+            "roles": [],
+        },
+        private_key,
+        algorithm="RS256",
+        headers={"kid": "test-kid"},
+    )
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture(scope="session")

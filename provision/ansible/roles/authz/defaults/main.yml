@@ -16,11 +16,22 @@ authz_postgres_db: "{{ postgres_db | default('busibox') }}"
 authz_postgres_user: "{{ postgres_user }}"
 authz_postgres_password: "{{ secrets.postgresql.password }}"
 
-# JWT and token settings
-authz_jwt_secret: "{{ secrets.sso.jwt_secret | default(secrets.service.jwt_secret | default('change-me')) }}"
-authz_jwt_issuer: "authz-service"
-authz_jwt_audience: "busibox-services"
-authz_token_ttl: 900
+# Token settings
+authz_issuer: "busibox-authz"
+authz_access_token_ttl: 900
+
+# Signing configuration
+authz_signing_alg: "RS256"
+authz_rsa_key_size: 2048
+
+# Encrypt private keys at rest (recommended)
+authz_key_encryption_passphrase: "{{ secrets.jwt_secret | default(secrets.sso.jwt_secret | default('change-me')) }}"
+
+# Bootstrap OAuth client for ai-portal
+authz_bootstrap_client_id: "ai-portal"
+authz_bootstrap_client_secret: "{{ secrets.jwt_secret | default(secrets.sso.jwt_secret | default('change-me')) }}"
+authz_bootstrap_allowed_audiences: "ingest-api,search-api,agent-api"
+authz_bootstrap_allowed_scopes: ""
 
 
 

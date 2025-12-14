@@ -47,11 +47,11 @@ class Settings(BaseSettings):
         None, description="Expected audience for Busibox JWT tokens"
     )
     auth_jwks_url: Optional[AnyHttpUrl] = Field(
-        None, description="JWKS endpoint for Busibox auth"
+        None, description="JWKS endpoint for Busibox auth (authz)"
     )
     auth_token_url: AnyHttpUrl = Field(
-        "http://localhost:8080/oauth/token",
-        description="Token endpoint for OAuth2 client-credentials exchange",
+        "http://10.96.200.210:8010/oauth/token",
+        description="Token endpoint for OAuth2 token exchange",
     )
     auth_client_id: str = Field("test-client-id", description="Client ID for token exchange")
     auth_client_secret: str = Field("test-client-secret", description="Client secret for token exchange")

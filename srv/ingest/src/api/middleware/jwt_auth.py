@@ -14,7 +14,6 @@ Sets PostgreSQL session variables for Row-Level Security (RLS):
 """
 
 import os
-import uuid
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional
 
@@ -30,16 +29,17 @@ logger = structlog.get_logger()
 # Configuration
 # ============================================================================
 
-JWT_SECRET = os.environ.get("JWT_SECRET") or \
-             os.environ.get("SERVICE_JWT_SECRET") or \
-             os.environ.get("SSO_JWT_SECRET") or \
-             "default-service-secret-change-in-production"
+AUTHZ_JWKS_URL = (
+    os.environ.get("AUTHZ_JWKS_URL")
+    or os.environ.get("JWT_JWKS_URL")
+    or "http://10.96.200.210:8010/.well-known/jwks.json"
+)
 
-JWT_ISSUER = os.environ.get("JWT_ISSUER", "ai-portal")
-JWT_AUDIENCE = os.environ.get("JWT_AUDIENCE", "ingest-api")
+JWT_ISSUER = os.environ.get("AUTHZ_ISSUER") or os.environ.get("JWT_ISSUER", "busibox-authz")
+JWT_AUDIENCE = os.environ.get("AUTHZ_AUDIENCE") or os.environ.get("JWT_AUDIENCE", "ingest-api")
+JWT_ALGORITHMS = [a.strip() for a in os.environ.get("JWT_ALGORITHMS", "RS256").split(",") if a.strip()]
 
-# Allow legacy X-User-Id header during migration
-ALLOW_LEGACY_HEADER = os.environ.get("ALLOW_LEGACY_AUTH", "true").lower() == "true"
+jwks_client = jwt.PyJWKClient(AUTHZ_JWKS_URL)
 
 
 # ============================================================================
@@ -110,12 +110,14 @@ def parse_jwt_token(token: str) -> Optional[dict]:
     Returns decoded payload or None if invalid.
     """
     try:
+        signing_key = jwks_client.get_signing_key_from_jwt(token)
         payload = jwt.decode(
             token,
-            JWT_SECRET,
-            algorithms=["HS256"],
+            signing_key.key,
+            algorithms=JWT_ALGORITHMS,
             audience=JWT_AUDIENCE,
-            issuer=JWT_ISSUER
+            issuer=JWT_ISSUER,
+            options={"require": ["exp", "iat", "sub", "iss", "aud", "jti"]},
         )
         return payload
     except jwt.ExpiredSignatureError:
@@ -163,8 +165,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
     Middleware to validate JWT tokens and extract user context.
     
     Supports both:
-    1. JWT via Authorization: Bearer <token> (preferred)
-    2. Legacy X-User-Id header (for backward compatibility)
+    1. JWT via Authorization: Bearer <token> (required)
     """
     
     async def dispatch(self, request: Request, call_next: Callable):
@@ -174,11 +175,11 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
         if request.url.path.startswith("/health") or request.url.path == "/":
             return await call_next(request)
         
-        # Try JWT authentication first
-        auth_header = request.headers.get("Authorization")
+        # JWT authentication
+        auth_header = request.headers.get("authorization")
         user_context = None
         
-        if auth_header and auth_header.startswith("Bearer "):
+        if auth_header and auth_header.lower().startswith("bearer "):
             token = auth_header[7:]  # Remove "Bearer " prefix
             payload = parse_jwt_token(token)
             
@@ -197,28 +198,6 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
                     content={"error": "Invalid or expired JWT token"}
                 )
         
-        # Fall back to legacy X-User-Id header if allowed
-        elif ALLOW_LEGACY_HEADER:
-            user_id_header = request.headers.get("X-User-Id")
-            
-            if user_id_header:
-                try:
-                    user_id = str(uuid.UUID(user_id_header))
-                    user_context = UserContext(
-                        user_id=user_id,
-                        is_legacy=True
-                    )
-                    logger.debug(
-                        "Legacy auth (X-User-Id)",
-                        user_id=user_id,
-                        path=request.url.path
-                    )
-                except ValueError:
-                    return JSONResponse(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        content={"error": "Invalid X-User-Id format (must be UUID)"}
-                    )
-        
         # No authentication provided
         if not user_context:
             logger.warning(
@@ -228,7 +207,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
             )
             return JSONResponse(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                content={"error": "Missing Authorization header or X-User-Id"}
+                content={"error": "Missing Authorization header"}
             )
         
         # Attach user context to request state

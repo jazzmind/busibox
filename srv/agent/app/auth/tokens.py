@@ -12,6 +12,7 @@ from app.schemas.auth import Principal, TokenExchangeResponse
 settings = get_settings()
 
 CLAIM_LEEWAY_SECONDS = 30
+TOKEN_EXCHANGE_GRANT = "urn:ietf:params:oauth:grant-type:token-exchange"
 
 
 class JWKSCache:
@@ -123,14 +124,16 @@ async def exchange_token(
     principal: Principal, scopes: List[str], purpose: str
 ) -> TokenExchangeResponse:
     """
-    Exchange a user token for a longer-lived downstream token using OAuth2 client credentials.
-    Scopes are purpose-scoped (search/ingest/rag) to minimize blast radius.
+    Exchange a user token for a downstream token using OAuth2 token exchange (RFC 8693 style).
+    Tokens are audience-bound to a single downstream service.
     """
+    audience = _audience_for_purpose(purpose, scopes)
     payload = {
-        "grant_type": "client_credentials",
+        "grant_type": TOKEN_EXCHANGE_GRANT,
         "client_id": settings.auth_client_id,
         "client_secret": settings.auth_client_secret,
         "scope": " ".join(scopes),
+        "audience": audience,
         "requested_subject": principal.sub,
         "requested_purpose": purpose,
     }
@@ -147,3 +150,24 @@ async def exchange_token(
         expires_at=expires_at,
         scopes=scopes,
     )
+
+
+def _audience_for_purpose(purpose: str, scopes: List[str]) -> str:
+    """
+    Infer the downstream audience from purpose and/or scopes.
+
+    We keep this mapping local to agent-server so we don't have to change its DB schema
+    (TokenGrant is keyed on scopes), while still ensuring tokens are audience-bound.
+    """
+    p = (purpose or "").lower()
+    if "ingest" in p:
+        return "ingest-api"
+    if "search" in p or "rag" in p:
+        return "search-api"
+    # fallback: infer by scope prefix
+    for s in scopes:
+        if s.startswith("ingest."):
+            return "ingest-api"
+        if s.startswith("search."):
+            return "search-api"
+    return "agent-api"

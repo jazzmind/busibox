@@ -13,6 +13,7 @@ python-jose[cryptography]>=3.3.0
 redis>=5.0.8
 apscheduler>=3.10.4
 sse-starlette>=2.1.0
+structlog>=24.4.0
 opentelemetry-api>=1.27.0
 opentelemetry-sdk>=1.27.0
 opentelemetry-instrumentation-fastapi>=0.48b0

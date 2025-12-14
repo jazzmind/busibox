@@ -1,9 +1,16 @@
 import os
-from typing import Dict
+from typing import Dict, List, Optional
 
 
 class Config:
-    """Minimal config for authz service."""
+    """
+    Config for authz service.
+
+    `srv/authz` is evolving into the Busibox internal Authorization Server:
+    - Issues internal access tokens (asymmetric signing + JWKS)
+    - Supports OAuth2 token exchange / client credentials flows
+    - Stores internal RBAC (users, roles, bindings) in PostgreSQL
+    """
 
     def __init__(self):
         self.postgres_host = os.getenv("POSTGRES_HOST", "10.96.200.203")
@@ -12,15 +19,36 @@ class Config:
         self.postgres_user = os.getenv("POSTGRES_USER", "busibox_user")
         self.postgres_password = os.getenv("POSTGRES_PASSWORD", "")
 
-        self.jwt_secret = (
-            os.getenv("JWT_SECRET")
-            or os.getenv("SERVICE_JWT_SECRET")
-            or os.getenv("SSO_JWT_SECRET")
-            or "default-service-secret-change-in-production"
-        )
-        self.jwt_issuer = os.getenv("JWT_ISSUER", "authz-service")
-        self.jwt_audience = os.getenv("JWT_AUDIENCE", "busibox-services")
-        self.authz_token_ttl = int(os.getenv("AUTHZ_TOKEN_TTL", "900"))
+        # Token issuer used by *downstream services* when validating internal access tokens.
+        self.issuer = os.getenv("AUTHZ_ISSUER", os.getenv("JWT_ISSUER", "busibox-authz"))
+
+        # Default token TTL for internal access tokens minted by authz (seconds).
+        self.access_token_ttl = int(os.getenv("AUTHZ_ACCESS_TOKEN_TTL", os.getenv("AUTHZ_TOKEN_TTL", "900")))
+
+        # JWKS / signing configuration (asymmetric; published via /.well-known/jwks.json)
+        self.signing_alg = os.getenv("AUTHZ_SIGNING_ALG", "RS256")
+        self.rsa_key_size = int(os.getenv("AUTHZ_RSA_KEY_SIZE", "2048"))
+
+        # Optional: encrypt stored private keys at rest (strongly recommended).
+        # If unset, keys are stored unencrypted in PostgreSQL (internal-only deployments only).
+        self.key_encryption_passphrase: Optional[str] = os.getenv("AUTHZ_KEY_ENCRYPTION_PASSPHRASE")
+
+        # Optional: bootstrap an OAuth client (e.g. ai-portal) on startup.
+        self.bootstrap_client_id: Optional[str] = os.getenv("AUTHZ_BOOTSTRAP_CLIENT_ID")
+        self.bootstrap_client_secret: Optional[str] = os.getenv("AUTHZ_BOOTSTRAP_CLIENT_SECRET")
+        self.bootstrap_client_allowed_audiences: List[str] = [
+            s.strip()
+            for s in (os.getenv("AUTHZ_BOOTSTRAP_ALLOWED_AUDIENCES", "ingest-api,search-api,agent-api").split(","))
+            if s.strip()
+        ]
+        self.bootstrap_client_allowed_scopes: List[str] = [
+            s.strip()
+            for s in (os.getenv("AUTHZ_BOOTSTRAP_ALLOWED_SCOPES", "").split(","))
+            if s.strip()
+        ]
+
+        # Optional: shared bootstrap admin token for internal management endpoints.
+        self.admin_token: Optional[str] = os.getenv("AUTHZ_ADMIN_TOKEN")
 
     def to_dict(self) -> Dict:
         return {
@@ -29,10 +57,16 @@ class Config:
             "postgres_db": self.postgres_db,
             "postgres_user": self.postgres_user,
             "postgres_password": self.postgres_password,
-            "jwt_secret": self.jwt_secret,
-            "jwt_issuer": self.jwt_issuer,
-            "jwt_audience": self.jwt_audience,
-            "authz_token_ttl": self.authz_token_ttl,
+            "issuer": self.issuer,
+            "access_token_ttl": self.access_token_ttl,
+            "signing_alg": self.signing_alg,
+            "rsa_key_size": self.rsa_key_size,
+            "key_encryption_passphrase": self.key_encryption_passphrase,
+            "bootstrap_client_id": self.bootstrap_client_id,
+            "bootstrap_client_secret": self.bootstrap_client_secret,
+            "bootstrap_client_allowed_audiences": self.bootstrap_client_allowed_audiences,
+            "bootstrap_client_allowed_scopes": self.bootstrap_client_allowed_scopes,
+            "admin_token": self.admin_token,
         }
 
 

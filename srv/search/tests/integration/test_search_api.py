@@ -26,6 +26,7 @@ class TestSearchAPI:
         mock_embedder,
         mock_milvus,
         test_client,
+        auth_header,
         sample_search_results,
         sample_embedding,
     ):
@@ -62,7 +63,7 @@ class TestSearchAPI:
                 "limit": 10,
                 "rerank": True,
             },
-            headers={"X-User-Id": "test-user"},
+            headers=auth_header,
         )
         
         assert response.status_code == 200
@@ -80,6 +81,7 @@ class TestSearchAPI:
         mock_embedder,
         mock_milvus,
         test_client,
+        auth_header,
         sample_search_results,
     ):
         """Test keyword-only search endpoint."""
@@ -91,7 +93,7 @@ class TestSearchAPI:
                 "query": "specific term",
                 "limit": 5,
             },
-            headers={"X-User-Id": "test-user"},
+            headers=auth_header,
         )
         
         assert response.status_code == 200
@@ -105,6 +107,7 @@ class TestSearchAPI:
         mock_embedder,
         mock_milvus,
         test_client,
+        auth_header,
         sample_search_results,
         sample_embedding,
     ):
@@ -118,7 +121,7 @@ class TestSearchAPI:
                 "query": "conceptual question",
                 "limit": 5,
             },
-            headers={"X-User-Id": "test-user"},
+            headers=auth_header,
         )
         
         assert response.status_code == 200
@@ -139,7 +142,7 @@ class TestSearchAPI:
             # HTTPException raised by middleware - this is expected
             pass
     
-    def test_search_invalid_mode(self, test_client):
+    def test_search_invalid_mode(self, test_client, auth_header):
         """Test search with invalid mode."""
         response = test_client.post(
             "/search",
@@ -147,7 +150,7 @@ class TestSearchAPI:
                 "query": "test",
                 "mode": "invalid_mode",
             },
-            headers={"X-User-Id": "test-user"},
+            headers=auth_header,
         )
         
         assert response.status_code in [400, 422]
@@ -161,6 +164,7 @@ class TestSearchAPI:
         mock_milvus,
         mock_embedder,
         test_client,
+        auth_header,
         sample_embedding,
     ):
         """Test explain endpoint."""
@@ -185,7 +189,7 @@ class TestSearchAPI:
                 "file_id": "file-123",
                 "chunk_index": 0,
             },
-            headers={"X-User-Id": "test-user"},
+            headers=auth_header,
         )
         
         assert response.status_code == 200
@@ -223,6 +227,7 @@ class TestSearchFlow:
         mock_embedder,
         mock_milvus,
         test_client,
+        auth_header,
         sample_search_results,
         sample_embedding,
     ):
@@ -264,7 +269,7 @@ class TestSearchFlow:
                 "rerank": True,
                 "highlight": {"enabled": True},
             },
-            headers={"X-User-Id": "test-user"},
+            headers=auth_header,
         )
         
         assert response.status_code == 200
@@ -301,6 +306,7 @@ class TestSearchFiltering:
         mock_embedder,
         mock_milvus,
         test_client,
+        auth_header,
         sample_embedding,
     ):
         """Test filtering by file IDs."""
@@ -330,7 +336,7 @@ class TestSearchFiltering:
                     "file_ids": ["file-123"],
                 },
             },
-            headers={"X-User-Id": "test-user"},
+            headers=auth_header,
         )
         
         assert response.status_code == 200
