@@ -688,6 +688,18 @@ service_tests_menu() {
                 if confirm "Run authz pytest on authz-lxc in $env?"; then
                     local vault_flags
                     vault_flags="$(get_vault_flags)"
+                    
+                    # Extract test credentials from vault
+                    info "Extracting test credentials from vault..."
+                    TEST_DB_PASSWORD=$(ansible-vault view "${ANSIBLE_DIR}/roles/secrets/vars/vault.yml" $vault_flags 2>/dev/null | grep 'password: 0f78' | awk '{print $2}')
+                    AUTHZ_ADMIN_TOKEN=$(ansible-vault view "${ANSIBLE_DIR}/roles/secrets/vars/vault.yml" $vault_flags 2>/dev/null | grep 'authz_admin_token:' | awk '{print $2}')
+                    
+                    if [ -z "$TEST_DB_PASSWORD" ]; then
+                        error "Could not extract TEST_DB_PASSWORD from vault"
+                        pause
+                        continue
+                    fi
+                    
                     # ansible ad-hoc uses ANSIBLE_CONFIG; ensure we stay in ansible dir
                     # Sync test requirements and tests to authz-lxc
                     ANSIBLE_CONFIG="${ANSIBLE_DIR}/ansible.cfg" ansible -i "$inv" authz -m copy -a "src=${REPO_ROOT}/srv/authz/requirements.test.txt dest=/srv/authz/app/ mode=0644" $vault_flags || {
@@ -696,7 +708,10 @@ service_tests_menu() {
                     ANSIBLE_CONFIG="${ANSIBLE_DIR}/ansible.cfg" ansible -i "$inv" authz -m copy -a "src=${REPO_ROOT}/srv/authz/tests/ dest=/srv/authz/app/tests/ mode=0644" $vault_flags || {
                         error "Failed to copy authz tests"
                     }
-                    ANSIBLE_CONFIG="${ANSIBLE_DIR}/ansible.cfg" ansible -i "$inv" authz -m shell -a "bash -lc 'cd /srv/authz/app && source ../venv/bin/activate && pip install -q -r requirements.test.txt && pytest -q'" $vault_flags || {
+                    
+                    # Run tests with real database credentials
+                    info "Running tests with real database integration..."
+                    ANSIBLE_CONFIG="${ANSIBLE_DIR}/ansible.cfg" ansible -i "$inv" authz -m shell -a "bash -lc 'cd /srv/authz/app && source ../venv/bin/activate && pip install -q -r requirements.test.txt && export TEST_DB_USER=busibox_test_user TEST_DB_PASSWORD=${TEST_DB_PASSWORD} TEST_DB_NAME=busibox_test TEST_DB_HOST=10.96.201.203 AUTHZ_ADMIN_TOKEN=${AUTHZ_ADMIN_TOKEN} && pytest -v --tb=short'" $vault_flags || {
                         error "Authz tests failed"
                     }
                 fi
