@@ -1,3 +1,4 @@
+import json
 import uuid
 from contextlib import asynccontextmanager
 from typing import Any, Optional, List
@@ -342,8 +343,8 @@ class PostgresService:
                 idp_provider,
                 idp_tenant_id,
                 idp_object_id,
-                idp_roles,
-                idp_groups,
+                json.dumps(idp_roles) if idp_roles else '[]',  # Convert list to JSON string for JSONB column
+                json.dumps(idp_groups) if idp_groups else '[]',  # Convert list to JSON string for JSONB column
             )
 
             # Replace role assignments atomically (best-effort).
