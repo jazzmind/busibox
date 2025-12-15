@@ -280,9 +280,10 @@ async def test_remove_user_role(admin_app, monkeypatch):
             json={"user_id": user_id, "role_id": role_id},
         )
 
-        # Remove user-role binding (use content instead of json for DELETE)
+        # Remove user-role binding (httpx.delete doesn't support json/content, use request())
         import json as json_lib
-        resp = await client.delete(
+        resp = await client.request(
+            "DELETE",
             "/admin/user-roles",
             headers={"Authorization": "Bearer test-admin-token", "Content-Type": "application/json"},
             content=json_lib.dumps({"user_id": user_id, "role_id": role_id}),

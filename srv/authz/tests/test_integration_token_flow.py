@@ -28,12 +28,16 @@ def full_authz_app(reload_authz, monkeypatch):
     import config as cfg
     import main
 
-    # Reload config and oauth module to pick up environment variables
+    # Reload config first to pick up environment variables
     importlib.reload(cfg)
+    # Create new config instance BEFORE reloading oauth (so oauth uses new config)
+    new_config = cfg.Config()
+    # Now reload oauth and admin modules
     importlib.reload(oauth)
-    # Update oauth.config and admin.config to use reloaded config
-    oauth.config = cfg.Config()
-    admin.config = cfg.Config()
+    importlib.reload(admin)
+    # Update their config references to use the new config instance
+    oauth.config = new_config
+    admin.config = new_config
 
     from test_authz_service import FakePG
 
