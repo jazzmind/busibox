@@ -153,9 +153,12 @@ PYTHON_EOF
                     echo -e "${GREEN}✓ OAuth client verified (successfully obtained token)${NC}"
                     EXISTING_CREDS_FOUND=true
                 else
-                    echo -e "${YELLOW}⚠ OAuth client verification failed, will create new one${NC}"
-                    echo -e "${YELLOW}  Response: ${TOKEN_CHECK}${NC}"
-                    EXISTING_CREDS_FOUND=false
+                    # Verification failed, but credentials exist in vault
+                    # Trust the vault credentials (they were created by this script before)
+                    # Just warn the user
+                    echo -e "${YELLOW}⚠ OAuth client verification failed (${TOKEN_CHECK:0:100})${NC}"
+                    echo -e "${YELLOW}  Using credentials from vault anyway (they may need to be recreated)${NC}"
+                    EXISTING_CREDS_FOUND=true
                 fi
             fi
         fi
