@@ -7,7 +7,7 @@
 set -euo pipefail
 
 AGENT_IP="10.96.200.202"
-AGENT_PORT="4111"
+AGENT_PORT="8000"
 DEPLOY_PATH="/srv/agent"
 
 echo "==================================="

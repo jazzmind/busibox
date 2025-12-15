@@ -328,7 +328,7 @@ class PostgresService:
         async with self.acquire(user_id, None) as conn:
             rows = await conn.fetch(
                 """
-                SELECT r.id::text AS id, r.name AS name
+                SELECT r.id::text AS id, r.name AS name, r.description, r.created_at, r.updated_at
                 FROM authz_user_roles ur
                 JOIN authz_roles r ON r.id = ur.role_id
                 WHERE ur.user_id = $1
@@ -337,6 +337,111 @@ class PostgresService:
                 uid,
             )
             return [dict(r) for r in rows]
+
+    # ---------------------------------------------------------------------
+    # RBAC admin operations
+    # ---------------------------------------------------------------------
+
+    async def create_role(self, *, name: str, description: str | None) -> dict:
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO authz_roles (id, name, description)
+                VALUES (gen_random_uuid(), $1, $2)
+                RETURNING id::text, name, description, created_at, updated_at
+                """,
+                name,
+                description,
+            )
+            return dict(row)
+
+    async def list_roles(self) -> List[dict]:
+        async with self.acquire(None, None) as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id::text, name, description, created_at, updated_at
+                FROM authz_roles
+                ORDER BY name
+                """
+            )
+            return [dict(r) for r in rows]
+
+    async def get_role(self, role_id: str) -> dict | None:
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id::text, name, description, created_at, updated_at
+                FROM authz_roles
+                WHERE id = $1
+                """,
+                uuid.UUID(role_id),
+            )
+            return dict(row) if row else None
+
+    async def update_role(self, *, role_id: str, name: str | None, description: str | None) -> dict | None:
+        async with self.acquire(None, None) as conn:
+            # Build dynamic update query
+            updates = []
+            params = []
+            param_idx = 1
+
+            if name is not None:
+                updates.append(f"name = ${param_idx}")
+                params.append(name)
+                param_idx += 1
+
+            if description is not None:
+                updates.append(f"description = ${param_idx}")
+                params.append(description)
+                param_idx += 1
+
+            if not updates:
+                return await self.get_role(role_id)
+
+            updates.append("updated_at = now()")
+            params.append(uuid.UUID(role_id))
+
+            query = f"""
+                UPDATE authz_roles
+                SET {', '.join(updates)}
+                WHERE id = ${param_idx}
+                RETURNING id::text, name, description, created_at, updated_at
+            """
+
+            row = await conn.fetchrow(query, *params)
+            return dict(row) if row else None
+
+    async def delete_role(self, role_id: str) -> bool:
+        async with self.acquire(None, None) as conn:
+            result = await conn.execute(
+                "DELETE FROM authz_roles WHERE id = $1",
+                uuid.UUID(role_id),
+            )
+            return result != "DELETE 0"
+
+    async def add_user_role(self, *, user_id: str, role_id: str) -> dict:
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO authz_user_roles (user_id, role_id)
+                VALUES ($1, $2)
+                ON CONFLICT (user_id, role_id) DO UPDATE
+                  SET created_at = authz_user_roles.created_at
+                RETURNING user_id::text, role_id::text, created_at
+                """,
+                uuid.UUID(user_id),
+                uuid.UUID(role_id),
+            )
+            return dict(row)
+
+    async def remove_user_role(self, *, user_id: str, role_id: str) -> bool:
+        async with self.acquire(None, None) as conn:
+            result = await conn.execute(
+                "DELETE FROM authz_user_roles WHERE user_id = $1 AND role_id = $2",
+                uuid.UUID(user_id),
+                uuid.UUID(role_id),
+            )
+            return result != "DELETE 0"
 
 
 

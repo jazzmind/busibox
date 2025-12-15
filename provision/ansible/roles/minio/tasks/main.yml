@@ -92,7 +92,7 @@
 
 - name: Check if agent API is accessible
   uri:
-    url: "http://{{ agent_api_host | default('localhost') }}:{{ agent_api_port | default(4111) }}/auth/health"
+    url: "http://{{ agent_api_host | default('localhost') }}:{{ agent_api_port | default(8000) }}/auth/health"
     method: GET
     status_code: 200
     timeout: 5

@@ -194,8 +194,8 @@ echo -e "${BLUE}=== Application Services ===${NC}"
 echo ""
 
 # Agent Server
-test_port "agent-server" "$AGENT_IP" "4111"
-test_http "agent-server Health" "http://${AGENT_IP}:4111/auth/health" "200"
+test_port "agent-server" "$AGENT_IP" "8000"
+test_http "agent-server Health" "http://${AGENT_IP}:8000/auth/health" "200"
 
 # Ingest Services
 test_port "ingest-api" "$INGEST_IP" "8002"
