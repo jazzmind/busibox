@@ -58,7 +58,7 @@ class OAuthTokenRequest(BaseModel):
 
 class OAuthTokenResponse(BaseModel):
     access_token: str
-    token_type: str = "bearer"
+    token_type: str = "Bearer"  # OAuth2 spec requires capital B
     expires_in: int = Field(..., ge=1)
     scope: str = ""
 
