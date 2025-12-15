@@ -112,7 +112,7 @@ async def test_complete_token_exchange_flow(full_authz_app):
         assert exchange_resp.status_code == 200
         token_data = exchange_resp.json()
         assert "access_token" in token_data
-        assert token_data["token_type"] == "bearer"
+        assert token_data["token_type"] == "Bearer"  # OAuth2 spec requires capital B
         assert token_data["expires_in"] > 0
 
         access_token = token_data["access_token"]
