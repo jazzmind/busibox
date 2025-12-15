@@ -109,6 +109,8 @@ async def test_complete_token_exchange_flow(full_authz_app):
                 "requested_purpose": "integration-test",
             },
         )
+        if exchange_resp.status_code != 200:
+            print(f"ERROR: Token exchange failed with {exchange_resp.status_code}: {exchange_resp.json()}")
         assert exchange_resp.status_code == 200
         token_data = exchange_resp.json()
         assert "access_token" in token_data
