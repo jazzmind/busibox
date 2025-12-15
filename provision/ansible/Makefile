@@ -366,7 +366,16 @@ test-authz:
 		exit 1; \
 	fi
 	@echo "=== Authz Service Tests (pytest) ==="
-	@ssh -o StrictHostKeyChecking=no root@$(AUTHZ_IP) 'cd /srv/authz/app && source ../venv/bin/activate && pip install -q -r requirements.test.txt 2>/dev/null; pytest -v --tb=short' || (echo "Authz tests FAILED" && exit 1)
+	@echo "Extracting test credentials from vault..."
+	@TEST_DB_USER=$$(ansible-vault view roles/secrets/vars/vault.yml $(VAULT_FLAGS) 2>/dev/null | grep -A 1 'postgres_user:' | tail -1 | awk '{print $$2}' | tr -d '"' || echo "busibox_test_user"); \
+	TEST_DB_PASSWORD=$$(ansible-vault view roles/secrets/vars/vault.yml $(VAULT_FLAGS) 2>/dev/null | grep -A 5 'postgresql:' | grep 'password:' | head -1 | awk '{print $$2}' | tr -d '"'); \
+	AUTHZ_ADMIN_TOKEN=$$(ansible-vault view roles/secrets/vars/vault.yml $(VAULT_FLAGS) 2>/dev/null | grep -A 5 'authz_test_credentials:' | grep 'admin_token:' | awk '{print $$2}' | tr -d '"'); \
+	if [ -z "$$TEST_DB_PASSWORD" ]; then \
+		echo "ERROR: Could not extract TEST_DB_PASSWORD from vault"; \
+		exit 1; \
+	fi; \
+	echo "Running tests with real database integration..."; \
+	ssh -o StrictHostKeyChecking=no root@$(AUTHZ_IP) "cd /srv/authz/app && source ../venv/bin/activate && pip install -q -r requirements.test.txt 2>/dev/null; export TEST_DB_USER='$$TEST_DB_USER' TEST_DB_PASSWORD='$$TEST_DB_PASSWORD' TEST_DB_NAME='busibox_test' TEST_DB_HOST='10.96.201.203' AUTHZ_ADMIN_TOKEN='$$AUTHZ_ADMIN_TOKEN' && pytest -v --tb=short" || (echo "Authz tests FAILED" && exit 1)
 	@echo "✓ Authz tests passed"
 	@echo ""
 
