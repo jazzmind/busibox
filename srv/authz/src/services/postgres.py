@@ -242,6 +242,7 @@ class PostgresService:
             return dict(row) if row else None
 
     async def list_public_jwks(self) -> List[dict]:
+        import json
         async with self.acquire(None, None) as conn:
             rows = await conn.fetch(
                 """
@@ -251,7 +252,8 @@ class PostgresService:
                 ORDER BY created_at DESC
                 """
             )
-            return [dict(r)["public_jwk"] for r in rows]
+            # JSONB columns are returned as strings, need to parse them
+            return [json.loads(dict(r)["public_jwk"]) if isinstance(dict(r)["public_jwk"], str) else dict(r)["public_jwk"] for r in rows]
 
     # ---------------------------------------------------------------------
     # RBAC sync (initially driven by ai-portal)
