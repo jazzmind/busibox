@@ -89,7 +89,7 @@ BOOTSTRAP_CLIENT_SECRET=$(pct exec ${AUTHZ_CTID} -- grep AUTHZ_BOOTSTRAP_CLIENT_
 
 # Check for existing credentials in vault
 # Note: The vault file is shared between test and production environments
-VAULT_FILE="provision/ansible/roles/secrets/vars/vault.yml"
+VAULT_FILE="roles/secrets/vars/vault.yml"
 EXISTING_CREDS_FOUND=false
 TEST_USER_ID=""
 TEST_USER_EMAIL="test@busibox.local"
