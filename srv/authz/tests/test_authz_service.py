@@ -60,8 +60,40 @@ class FakePG:
         return [v["public_jwk"] for v in self.keys.values()]
 
     async def upsert_roles(self, roles):
+        """Upsert roles and return mapping of role names to IDs."""
+        name_to_id = {}
         for r in roles:
-            self.roles[r["id"]] = r
+            role_id = r["id"]
+            role_name = r["name"]
+            # Check if role with this name already exists
+            existing = None
+            for rid, role_data in self.roles.items():
+                if role_data.get("name") == role_name:
+                    existing = rid
+                    break
+            if existing:
+                # Update existing role
+                self.roles[existing].update(r)
+                name_to_id[role_name] = existing
+            else:
+                # Create new role
+                self.roles[role_id] = r
+                name_to_id[role_name] = role_id
+        return name_to_id
+
+    async def get_role_by_id(self, role_id: str):
+        """Get role by ID."""
+        role = self.roles.get(role_id)
+        if role:
+            return {"id": role_id, "name": role.get("name"), "description": role.get("description")}
+        return None
+
+    async def get_role_by_name(self, name: str):
+        """Get role by name."""
+        for role_id, role_data in self.roles.items():
+            if role_data.get("name") == name:
+                return {"id": role_id, "name": name, "description": role_data.get("description")}
+        return None
 
     async def upsert_user_and_roles(
         self,
@@ -86,8 +118,115 @@ class FakePG:
         for rid in u["role_ids"]:
             r = self.roles.get(rid)
             if r:
-                out.append({"id": r["id"], "name": r["name"]})
+                out.append({"id": r["id"], "name": r["name"], "description": r.get("description")})
         return out
+
+    # Admin RBAC methods
+    async def create_role(self, *, name: str, description: str | None) -> dict:
+        import uuid
+        from datetime import datetime
+        role_id = str(uuid.uuid4())
+        now = datetime.now()
+        role = {
+            "id": role_id,
+            "name": name,
+            "description": description,
+            "created_at": now,
+            "updated_at": now,
+        }
+        self.roles[role_id] = role
+        return role
+
+    async def list_roles(self) -> list:
+        from datetime import datetime
+        return [
+            {
+                "id": role_id,
+                "name": role_data.get("name"),
+                "description": role_data.get("description"),
+                "created_at": role_data.get("created_at", datetime.now()),
+                "updated_at": role_data.get("updated_at", datetime.now()),
+            }
+            for role_id, role_data in self.roles.items()
+        ]
+
+    async def get_role(self, role_id: str) -> dict | None:
+        role = self.roles.get(role_id)
+        if role:
+            from datetime import datetime
+            return {
+                "id": role_id,
+                "name": role.get("name"),
+                "description": role.get("description"),
+                "created_at": role.get("created_at", datetime.now()),
+                "updated_at": role.get("updated_at", datetime.now()),
+            }
+        return None
+
+    async def update_role(self, *, role_id: str, name: str | None, description: str | None) -> dict | None:
+        role = self.roles.get(role_id)
+        if not role:
+            return None
+        if name is not None:
+            role["name"] = name
+        if description is not None:
+            role["description"] = description
+        from datetime import datetime
+        role["updated_at"] = datetime.now()
+        return await self.get_role(role_id)
+
+    async def delete_role(self, role_id: str) -> bool:
+        if role_id in self.roles:
+            del self.roles[role_id]
+            return True
+        return False
+
+    async def add_user_role(self, *, user_id: str, role_id: str) -> dict:
+        if user_id not in self.users:
+            self.users[user_id] = {"email": "", "role_ids": []}
+        if role_id not in self.users[user_id]["role_ids"]:
+            self.users[user_id]["role_ids"].append(role_id)
+        role = self.roles.get(role_id)
+        if role:
+            return {"id": role_id, "name": role.get("name")}
+        return {"id": role_id, "name": "Unknown"}
+
+    async def remove_user_role(self, *, user_id: str, role_id: str) -> bool:
+        if user_id in self.users:
+            if role_id in self.users[user_id]["role_ids"]:
+                self.users[user_id]["role_ids"].remove(role_id)
+                return True
+        return False
+
+    async def create_oauth_client(
+        self,
+        *,
+        client_id: str,
+        client_secret_hash: str,
+        allowed_audiences: list,
+        allowed_scopes: list,
+        is_active: bool = True,
+    ) -> None:
+        await self.upsert_oauth_client(
+            client_id=client_id,
+            client_secret_hash=client_secret_hash,
+            allowed_audiences=allowed_audiences,
+            allowed_scopes=allowed_scopes,
+            is_active=is_active,
+        )
+
+    async def list_oauth_clients(self) -> list:
+        from datetime import datetime
+        return [
+            {
+                "client_id": client_id,
+                "allowed_audiences": client_data.get("allowed_audiences", []),
+                "allowed_scopes": client_data.get("allowed_scopes", []),
+                "is_active": client_data.get("is_active", True),
+                "created_at": client_data.get("created_at", datetime.now()),
+            }
+            for client_id, client_data in self.clients.items()
+        ]
 
 
 @pytest.fixture
