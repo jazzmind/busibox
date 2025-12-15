@@ -172,7 +172,15 @@ if [ "$EXISTING_CREDS_FOUND" = false ]; then
     echo -e "${BLUE}No existing credentials found, generating new ones...${NC}"
     
     # Generate new test credentials
-    TEST_USER_ID="test-user-$(date +%s)"
+    # Use UUID for user_id (required by authz database schema)
+    if command -v uuidgen &> /dev/null; then
+        TEST_USER_ID=$(uuidgen)
+    elif command -v python3 &> /dev/null; then
+        TEST_USER_ID=$(python3 -c "import uuid; print(uuid.uuid4())")
+    else
+        # Fallback: generate UUID-like string (not ideal but works)
+        TEST_USER_ID="$(openssl rand -hex 4)-$(openssl rand -hex 2)-$(openssl rand -hex 2)-$(openssl rand -hex 2)-$(openssl rand -hex 6)"
+    fi
     TEST_USER_EMAIL="test@busibox.local"
     TEST_CLIENT_ID="test-client-$(date +%s)"
     TEST_CLIENT_SECRET=$(openssl rand -hex 32)
