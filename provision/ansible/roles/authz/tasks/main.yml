@@ -35,7 +35,21 @@
     owner: "{{ authz_user }}"
     group: "{{ authz_group }}"
     mode: "0644"
+  register: authz_source_sync
   notify: Restart authz service
+  tags: [authz]
+
+- name: Clear Python cache after code sync
+  file:
+    path: "{{ authz_app_dir }}/src/__pycache__"
+    state: absent
+  failed_when: false
+  tags: [authz]
+
+- name: Restart authz service after code deployment
+  systemd:
+    name: "{{ authz_service_name }}"
+    state: restarted
   tags: [authz]
 
 - name: Copy requirements.txt
@@ -85,7 +99,15 @@
   pip:
     requirements: "{{ authz_app_dir }}/requirements.txt"
     virtualenv: "{{ authz_venv_dir }}"
+  register: authz_deps_install
   notify: Restart authz service
+  tags: [authz]
+
+- name: Restart authz service after dependency changes
+  systemd:
+    name: "{{ authz_service_name }}"
+    state: restarted
+  when: authz_deps_install.changed
   tags: [authz]
 
 - name: Render env file
@@ -95,7 +117,15 @@
     owner: "{{ authz_user }}"
     group: "{{ authz_group }}"
     mode: "0600"
+  register: authz_env_file
   notify: Restart authz service
+  tags: [authz]
+
+- name: Restart authz service after env file changes
+  systemd:
+    name: "{{ authz_service_name }}"
+    state: restarted
+  when: authz_env_file.changed
   tags: [authz]
 
 - name: Install systemd service
