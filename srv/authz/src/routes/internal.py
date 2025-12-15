@@ -77,6 +77,11 @@ async def sync_user(request: Request):
                 role = await pg.get_role_by_name(role_id_or_name)
                 if role:
                     resolved_role_ids.append(role["id"])
+                else:
+                    # Still not found, check if it's in the roles we just upserted
+                    if role_id_or_name in [r["id"] for r in su.roles]:
+                        # It's a role we just upserted, use it directly
+                        resolved_role_ids.append(role_id_or_name)
         except ValueError:
             # Not a UUID, treat as role name
             role = await pg.get_role_by_name(role_id_or_name)
