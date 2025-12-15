@@ -11,10 +11,16 @@ from fastapi import FastAPI
 
 
 @pytest.fixture
-def oauth_app_with_form(reload_authz, monkeypatch):
+def oauth_app_with_form(reload_authz, monkeypatch, set_env):
     """OAuth app that supports form-encoded requests."""
+    import importlib
     import routes.oauth as oauth
+    import config as cfg
     from test_authz_service import FakePG
+
+    # Reload config to pick up test environment variables
+    importlib.reload(cfg)
+    oauth.config = cfg.Config()
 
     fake = FakePG()
     monkeypatch.setattr(oauth, "_pg", fake)
@@ -39,8 +45,8 @@ async def test_token_endpoint_with_form_encoded_body(oauth_app_with_form):
             "grant_type": "client_credentials",
             "client_id": "test-client",
             "client_secret": "test-client-secret",
-            "audience": "test-api",
-            "scope": "test.read",
+            "audience": "ingest-api",  # Use allowed audience from conftest
+            "scope": "ingest.write",  # Use allowed scope from conftest
         }
 
         resp = await client.post(
@@ -70,8 +76,8 @@ async def test_token_endpoint_with_json_body(oauth_app_with_form):
             "grant_type": "client_credentials",
             "client_id": "test-client",
             "client_secret": "test-client-secret",
-            "audience": "test-api",
-            "scope": "test.read",
+            "audience": "search-api",  # Use allowed audience from conftest
+            "scope": "search.read",  # Use allowed scope from conftest
         }
 
         resp = await client.post(
@@ -114,8 +120,8 @@ async def test_token_exchange_with_form_encoding(oauth_app_with_form):
             "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
             "client_id": "test-client",
             "client_secret": "test-client-secret",
-            "audience": "test-api",
-            "scope": "test.read",
+            "audience": "agent-api",  # Use allowed audience from conftest
+            "scope": "agent.execute",  # Use allowed scope from conftest
             "requested_subject": "user-123",
         }
 
