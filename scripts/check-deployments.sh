@@ -55,7 +55,7 @@ check_nginx() {
 }
 
 echo "=== Direct Service Checks ==="
-check_service "agent-server" "${AGENT_IP}" "4111" "/auth/health"
+check_service "agent-api" "${AGENT_IP}" "8000" "/auth/health"
 check_service "ai-portal" "${APPS_IP}" "3000" "/api/health"
 check_service "agent-client" "${APPS_IP}" "3001" "/api/health"
 check_service "doc-intel" "${APPS_IP}" "3002" "/api/health"

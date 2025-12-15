@@ -41,7 +41,7 @@ if [ -z "$APP_NAME" ]; then
     echo "  - project-analysis (port 3004) - Project data visualization"
     echo "  - innovation       (port 3005) - Innovation project manager"
     echo ""
-    echo "Note: agent-server (port 4111) is deployed separately via 'make agent'"
+    echo "Note: agent-server (port 8000) is deployed separately via 'make agent'"
     exit 1
 fi
 
