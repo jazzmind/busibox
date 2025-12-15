@@ -85,10 +85,14 @@ async def chat(
             },
         )
         
+        # Generate request ID for tracing
+        request_id = str(uuid.uuid4())
+        
         # Route query
         routing_response = await route_query(
             request=dispatcher_request,
             user_id=principal.sub,
+            request_id=request_id,
             session=session,
         )
         

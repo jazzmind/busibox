@@ -165,9 +165,17 @@ async def upload_file(
             mime_type=file.content_type,
         )
         
+        # Read file content to calculate size and hash
+        file_content = await file.read()
+        file_size = len(file_content)
+        
+        # Reset file pointer for upload
+        import io
+        file_stream = io.BytesIO(file_content)
+        
         # Upload file and calculate hash
         content_hash = await minio_service.upload_file_stream(
-            file.file,
+            file_stream,
             storage_path,
         )
         
