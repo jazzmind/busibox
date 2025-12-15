@@ -770,6 +770,7 @@ main_menu() {
     while true; do
         echo ""
         menu "Busibox Test Suite - $env Environment" \
+            "Bootstrap Test Credentials (Required for most tests)" \
             "Infrastructure Tests (Full Suite)" \
             "Infrastructure Tests (Provision Only)" \
             "Infrastructure Tests (Verify Only)" \
@@ -777,31 +778,49 @@ main_menu() {
             "All Tests (Infrastructure + Services)" \
             "Exit"
         
-        read -p "$(echo -e "${BOLD}Select option [1-6]:${NC} ")" choice
+        read -p "$(echo -e "${BOLD}Select option [1-7]:${NC} ")" choice
         
         case $choice in
             1)
+                header "Bootstrap Test Credentials" 70
+                echo ""
+                info "This will create or retrieve test credentials for integration testing"
+                info "Credentials are stored in Ansible vault and available to all services"
+                echo ""
+                
+                if confirm "Bootstrap test credentials for $env environment?"; then
+                    cd "$ANSIBLE_DIR"
+                    make bootstrap-test-creds INV="inventory/${env}"
+                    cd "$REPO_ROOT"
+                    echo ""
+                    success "Test credentials are ready!"
+                    echo ""
+                    info "Copy the .env variables from the output above to your local test environment"
+                fi
+                pause
+                ;;
+            2)
                 if confirm "Run full infrastructure test suite?"; then
                     run_infrastructure_tests "full"
                 fi
                 pause
                 ;;
-            2)
+            3)
                 if confirm "Run infrastructure provisioning tests?"; then
                     run_infrastructure_tests "provision"
                 fi
                 pause
                 ;;
-            3)
+            4)
                 if confirm "Run infrastructure verification tests?"; then
                     run_infrastructure_tests "verify"
                 fi
                 pause
                 ;;
-            4)
+            5)
                 service_tests_menu "$env"
                 ;;
-            5)
+            6)
                 header "All Tests" 70
                 echo ""
                 warn "This will run infrastructure tests followed by all service tests"
@@ -823,13 +842,13 @@ main_menu() {
                 fi
                 pause
                 ;;
-            6)
+            7)
                 echo ""
                 info "Exiting..."
                 return 0
                 ;;
             *)
-                error "Invalid selection. Please enter 1-6."
+                error "Invalid selection. Please enter 1-7."
                 ;;
         esac
     done
