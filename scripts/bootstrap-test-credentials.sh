@@ -142,23 +142,20 @@ PYTHON_EOF
             if [ -n "$TEST_CLIENT_ID" ] && [ -n "$TEST_CLIENT_SECRET" ] && [ -n "$TEST_USER_ID" ]; then
                 echo -e "${GREEN}✓ Found existing credentials in vault${NC}"
                 
-                # Verify OAuth client exists in authz (if we have bootstrap credentials)
-                if [ -n "$BOOTSTRAP_CLIENT_SECRET" ]; then
-                    echo -e "${BLUE}Verifying OAuth client exists in authz...${NC}"
-                    CLIENT_CHECK=$(curl -s -X GET "${AUTHZ_URL}/admin/oauth-clients" \
-                        -H "Content-Type: application/json" \
-                        -d "{\"auth_client_id\": \"${BOOTSTRAP_CLIENT_ID}\", \"auth_client_secret\": \"${BOOTSTRAP_CLIENT_SECRET}\"}" 2>&1 || echo "")
-                    
-                    if echo "$CLIENT_CHECK" | grep -q "\"client_id\": \"${TEST_CLIENT_ID}\""; then
-                        echo -e "${GREEN}✓ OAuth client verified in authz${NC}"
-                        EXISTING_CREDS_FOUND=true
-                    else
-                        echo -e "${YELLOW}⚠ OAuth client not found in authz, will create new one${NC}"
-                        EXISTING_CREDS_FOUND=false
-                    fi
-                else
-                    echo -e "${YELLOW}⚠ Cannot verify OAuth client (no bootstrap credentials), assuming it exists${NC}"
+                # Try to verify OAuth client exists by attempting to get a token
+                # This is a better verification than listing clients (which requires admin auth)
+                echo -e "${BLUE}Verifying OAuth client exists in authz...${NC}"
+                TOKEN_CHECK=$(curl -s -X POST "${AUTHZ_URL}/oauth/token" \
+                    -H "Content-Type: application/x-www-form-urlencoded" \
+                    -d "grant_type=client_credentials&client_id=${TEST_CLIENT_ID}&client_secret=${TEST_CLIENT_SECRET}&audience=ingest-api" 2>&1 || echo "")
+                
+                if echo "$TOKEN_CHECK" | grep -q "access_token"; then
+                    echo -e "${GREEN}✓ OAuth client verified (successfully obtained token)${NC}"
                     EXISTING_CREDS_FOUND=true
+                else
+                    echo -e "${YELLOW}⚠ OAuth client verification failed, will create new one${NC}"
+                    echo -e "${YELLOW}  Response: ${TOKEN_CHECK}${NC}"
+                    EXISTING_CREDS_FOUND=false
                 fi
             fi
         fi
