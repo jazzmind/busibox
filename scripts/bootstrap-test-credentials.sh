@@ -228,17 +228,58 @@ if [ "$EXISTING_CREDS_FOUND" = false ]; then
     if [ "$CLIENT_CREATED" = true ]; then
         echo -e "${BLUE}Creating test user...${NC}"
         
-        # Generate UUIDs for roles (required by authz database schema)
-        if command -v uuidgen &> /dev/null; then
-            ADMIN_ROLE_ID=$(uuidgen)
-            USER_ROLE_ID=$(uuidgen)
-        elif command -v python3 &> /dev/null; then
-            ADMIN_ROLE_ID=$(python3 -c "import uuid; print(uuid.uuid4())")
-            USER_ROLE_ID=$(python3 -c "import uuid; print(uuid.uuid4())")
-        else
-            # Fallback: generate UUID-like strings
-            ADMIN_ROLE_ID="$(openssl rand -hex 4)-$(openssl rand -hex 2)-$(openssl rand -hex 2)-$(openssl rand -hex 2)-$(openssl rand -hex 6)"
-            USER_ROLE_ID="$(openssl rand -hex 4)-$(openssl rand -hex 2)-$(openssl rand -hex 2)-$(openssl rand -hex 2)-$(openssl rand -hex 6)"
+        # Get existing roles or create new ones
+        # First, try to get existing roles by name
+        EXISTING_ROLES=$(curl -s -X GET "${AUTHZ_URL}/admin/roles" \
+            -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+            -H "Content-Type: application/json" 2>&1 || echo "[]")
+        
+        ADMIN_ROLE_ID=""
+        USER_ROLE_ID=""
+        
+        # Try to find existing roles
+        if echo "$EXISTING_ROLES" | grep -q "\"name\": \"Admin\""; then
+            ADMIN_ROLE_ID=$(echo "$EXISTING_ROLES" | grep -o '"id": "[^"]*"' | head -1 | cut -d'"' -f4)
+            echo -e "${BLUE}  Found existing Admin role: ${ADMIN_ROLE_ID}${NC}"
+        fi
+        if echo "$EXISTING_ROLES" | grep -q "\"name\": \"User\""; then
+            USER_ROLE_ID=$(echo "$EXISTING_ROLES" | grep -o '"id": "[^"]*"' | tail -1 | cut -d'"' -f4)
+            echo -e "${BLUE}  Found existing User role: ${USER_ROLE_ID}${NC}"
+        fi
+        
+        # Generate UUIDs for new roles if they don't exist
+        if [ -z "$ADMIN_ROLE_ID" ]; then
+            if command -v uuidgen &> /dev/null; then
+                ADMIN_ROLE_ID=$(uuidgen)
+            elif command -v python3 &> /dev/null; then
+                ADMIN_ROLE_ID=$(python3 -c "import uuid; print(uuid.uuid4())")
+            else
+                ADMIN_ROLE_ID="$(openssl rand -hex 4)-$(openssl rand -hex 2)-$(openssl rand -hex 2)-$(openssl rand -hex 2)-$(openssl rand -hex 6)"
+            fi
+        fi
+        if [ -z "$USER_ROLE_ID" ]; then
+            if command -v uuidgen &> /dev/null; then
+                USER_ROLE_ID=$(uuidgen)
+            elif command -v python3 &> /dev/null; then
+                USER_ROLE_ID=$(python3 -c "import uuid; print(uuid.uuid4())")
+            else
+                USER_ROLE_ID="$(openssl rand -hex 4)-$(openssl rand -hex 2)-$(openssl rand -hex 2)-$(openssl rand -hex 2)-$(openssl rand -hex 6)"
+            fi
+        fi
+        
+        # Only include roles in sync if they don't exist (to avoid duplicate name error)
+        ROLES_JSON="[]"
+        if ! echo "$EXISTING_ROLES" | grep -q "\"name\": \"Admin\""; then
+            ROLES_JSON="[{\"id\": \"${ADMIN_ROLE_ID}\", \"name\": \"Admin\", \"description\": \"Administrator role\"}"
+        fi
+        if ! echo "$EXISTING_ROLES" | grep -q "\"name\": \"User\""; then
+            if [ "$ROLES_JSON" = "[]" ]; then
+                ROLES_JSON="[{\"id\": \"${USER_ROLE_ID}\", \"name\": \"User\", \"description\": \"Standard user role\"}]"
+            else
+                ROLES_JSON="${ROLES_JSON}, {\"id\": \"${USER_ROLE_ID}\", \"name\": \"User\", \"description\": \"Standard user role\"}]"
+            fi
+        elif [ "$ROLES_JSON" != "[]" ]; then
+            ROLES_JSON="${ROLES_JSON}]"
         fi
         
         SYNC_USER_RESPONSE=$(curl -s -X POST "${AUTHZ_URL}/internal/sync/user" \
@@ -248,10 +289,7 @@ if [ "$EXISTING_CREDS_FOUND" = false ]; then
                 \"client_secret\": \"${TEST_CLIENT_SECRET}\",
                 \"user_id\": \"${TEST_USER_ID}\",
                 \"email\": \"${TEST_USER_EMAIL}\",
-                \"roles\": [
-                    {\"id\": \"${ADMIN_ROLE_ID}\", \"name\": \"Admin\", \"description\": \"Administrator role\"},
-                    {\"id\": \"${USER_ROLE_ID}\", \"name\": \"User\", \"description\": \"Standard user role\"}
-                ],
+                \"roles\": ${ROLES_JSON},
                 \"user_role_ids\": [\"${ADMIN_ROLE_ID}\", \"${USER_ROLE_ID}\"]
             }" 2>&1 || true)
 

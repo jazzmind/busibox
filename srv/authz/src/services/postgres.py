@@ -294,19 +294,39 @@ class PostgresService:
             return
         async with self.acquire(None, None) as conn:
             for r in roles:
-                await conn.execute(
-                    """
-                    INSERT INTO authz_roles (id, name, description)
-                    VALUES ($1, $2, $3)
-                    ON CONFLICT (id) DO UPDATE
-                      SET name = EXCLUDED.name,
-                          description = EXCLUDED.description,
-                          updated_at = now()
-                    """,
-                    uuid.UUID(r["id"]),
-                    r["name"],
-                    r.get("description"),
+                # First, check if a role with this name already exists
+                existing = await conn.fetchrow(
+                    "SELECT id FROM authz_roles WHERE name = $1",
+                    r["name"]
                 )
+                if existing:
+                    # Role with this name exists, use its ID and update description if provided
+                    role_id = existing["id"]
+                    await conn.execute(
+                        """
+                        UPDATE authz_roles
+                        SET description = COALESCE($1, description),
+                            updated_at = now()
+                        WHERE id = $2
+                        """,
+                        r.get("description"),
+                        role_id,
+                    )
+                else:
+                    # Role doesn't exist, insert with provided ID
+                    await conn.execute(
+                        """
+                        INSERT INTO authz_roles (id, name, description)
+                        VALUES ($1, $2, $3)
+                        ON CONFLICT (id) DO UPDATE
+                          SET name = EXCLUDED.name,
+                              description = EXCLUDED.description,
+                              updated_at = now()
+                        """,
+                        uuid.UUID(r["id"]),
+                        r["name"],
+                        r.get("description"),
+                    )
 
     async def upsert_user_and_roles(
         self,
