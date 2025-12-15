@@ -150,16 +150,17 @@ class PostgresService:
 
     async def insert_audit(self, actor_id: str, action: str, resource_type: str, resource_id: str | None, details: dict, user_id: str | None, role_ids: List[str] | None):
         async with self.acquire(user_id, role_ids) as conn:
+            import json
             await conn.execute(
                 """
                 INSERT INTO audit_logs (actor_id, action, resource_type, resource_id, details)
-                VALUES ($1, $2, $3, $4, $5)
+                VALUES ($1, $2, $3, $4, $5::jsonb)
                 """,
                 uuid.UUID(actor_id),
                 action,
                 resource_type,
                 uuid.UUID(resource_id) if resource_id else None,
-                details or {},
+                json.dumps(details or {}),
             )
 
     # ---------------------------------------------------------------------

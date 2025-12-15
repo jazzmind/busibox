@@ -4,12 +4,24 @@ set -euo pipefail
 #==============================================================================
 # Bootstrap Test Credentials for Busibox Integration Testing
 #
-# EXECUTION CONTEXT: Admin workstation
+# EXECUTION CONTEXT: Admin workstation OR Proxmox host
 #
 # DESCRIPTION:
 #   Creates test user, OAuth client, and admin credentials in the authz service
 #   for use in local and service integration testing. Stores credentials in
 #   ansible vault for use by all services.
+#
+#   IMPORTANT - Container/Database Reference:
+#   - authz service: 10.96.201.210 (container 310)
+#   - pg database:   10.96.201.203 (container 303)
+#   - agent service: 10.96.201.202 (container 302)
+#   
+#   Credentials are stored in PostgreSQL (10.96.201.203) in tables:
+#   - authz_oauth_clients (NOT oauth_clients - note the prefix!)
+#   - authz_users (NOT users - note the prefix!)
+#   
+#   Database password is in /srv/authz/.env on authz container (10.96.201.210)
+#   See: docs/reference/test-environment-containers.md for full details
 #
 # USAGE:
 #   bash scripts/bootstrap-test-credentials.sh [test|production] [--force|-f]
@@ -25,8 +37,8 @@ set -euo pipefail
 #   - Authz service must be running
 #
 # OUTPUTS:
-#   - Test user created in authz
-#   - Test OAuth client created
+#   - Test user created in authz (stored in pg database 10.96.201.203)
+#   - Test OAuth client created (stored in pg database 10.96.201.203)
 #   - Credentials saved to ansible vault
 #   - .env variables printed to stdout
 #
@@ -34,6 +46,11 @@ set -euo pipefail
 #   bash scripts/bootstrap-test-credentials.sh test
 #   # Credentials are saved to provision/ansible/roles/secrets/vars/vault.yml
 #   # Copy the output .env variables to busibox-app/.env
+#
+# VERIFICATION:
+#   # From Proxmox host, verify credentials in database:
+#   PGPASSWORD='...' psql -h 10.96.201.203 -U busibox_test_user -d busibox_test \
+#     -c "SELECT client_id FROM authz_oauth_clients ORDER BY created_at DESC LIMIT 5;"
 #==============================================================================
 
 # Colors for output
