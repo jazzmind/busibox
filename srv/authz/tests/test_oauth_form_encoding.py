@@ -15,6 +15,7 @@ def oauth_app_with_form(reload_authz, monkeypatch):
     """OAuth app that supports form-encoded requests."""
     import importlib
     import routes.oauth as oauth
+    import routes.internal as internal
     import config as cfg
     from test_authz_service import FakePG
 
@@ -26,9 +27,11 @@ def oauth_app_with_form(reload_authz, monkeypatch):
 
     fake = FakePG()
     monkeypatch.setattr(oauth, "_pg", fake)
+    monkeypatch.setattr(internal, "pg", fake)
 
     app = FastAPI()
     app.include_router(oauth.router)
+    app.include_router(internal.router)  # Needed for /internal/sync/user
     return app, fake
 
 
