@@ -354,7 +354,6 @@ async def get_file_metadata(fileId: str, request: Request):
     finally:
         # Don't disconnect - pg_service is a singleton shared across requests
         pass
-        pass
 
 
 @router.get("/{fileId}/history")
@@ -509,7 +508,6 @@ async def download_file(fileId: str, request: Request):
     
     finally:
         # Don't disconnect - pg_service is a singleton shared across requests
-        pass
         pass
 
 
@@ -1468,7 +1466,6 @@ async def reprocess_file(fileId: str, request: Request):
     
     finally:
         # Don't disconnect - pg_service is a singleton shared across requests
-        pass
         pass
 
 

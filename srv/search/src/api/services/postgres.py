@@ -48,3 +48,4 @@ class PostgresService:
             await self.connect()
         return self.pool.acquire()
 
+
