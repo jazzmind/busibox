@@ -45,6 +45,7 @@
     owner: "{{ authz_user }}"
     group: "{{ authz_group }}"
     mode: "0644"
+  notify: Restart authz service
   tags: [authz]
 
 - name: Copy test requirements
@@ -84,6 +85,7 @@
   pip:
     requirements: "{{ authz_app_dir }}/requirements.txt"
     virtualenv: "{{ authz_venv_dir }}"
+  notify: Restart authz service
   tags: [authz]
 
 - name: Render env file
@@ -114,6 +116,28 @@
     name: "{{ authz_service_name }}"
     enabled: true
     state: started
+  tags: [authz]
+
+- name: Verify authz service is running
+  systemd:
+    name: "{{ authz_service_name }}"
+  register: authz_service_status
+  tags: [authz]
+
+- name: Check authz service health
+  uri:
+    url: "http://localhost:{{ authz_service_port }}/health/live"
+    method: GET
+    status_code: 200
+  delegate_to: "{{ inventory_hostname }}"
+  register: authz_health_check
+  failed_when: false
+  tags: [authz]
+
+- name: Warn if authz service is not healthy
+  debug:
+    msg: "Warning: Authz service may not be responding correctly. Check logs with: journalctl -u {{ authz_service_name }} -n 50"
+  when: authz_health_check.status != 200
   tags: [authz]
 
 

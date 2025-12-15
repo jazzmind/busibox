@@ -107,8 +107,15 @@ fi
 echo -e "${BLUE}Creating OAuth client...${NC}"
 
 # Get bootstrap client credentials from authz service env
-BOOTSTRAP_CLIENT_ID=$(ssh root@${AUTHZ_HOST} "grep AUTHZ_BOOTSTRAP_CLIENT_ID /srv/authz/.env | cut -d= -f2" 2>/dev/null || echo "ai-portal")
-BOOTSTRAP_CLIENT_SECRET=$(ssh root@${AUTHZ_HOST} "grep AUTHZ_BOOTSTRAP_CLIENT_SECRET /srv/authz/.env | cut -d= -f2" 2>/dev/null || echo "")
+# Determine container ID based on environment
+if [ "$ENV" = "test" ]; then
+    AUTHZ_CTID=310
+else
+    AUTHZ_CTID=210
+fi
+
+BOOTSTRAP_CLIENT_ID=$(pct exec ${AUTHZ_CTID} -- grep AUTHZ_BOOTSTRAP_CLIENT_ID /srv/authz/.env 2>/dev/null | cut -d= -f2 || echo "ai-portal")
+BOOTSTRAP_CLIENT_SECRET=$(pct exec ${AUTHZ_CTID} -- grep AUTHZ_BOOTSTRAP_CLIENT_SECRET /srv/authz/.env 2>/dev/null | cut -d= -f2 || echo "")
 
 if [ -z "$BOOTSTRAP_CLIENT_SECRET" ]; then
     echo -e "${YELLOW}⚠ Could not get bootstrap client credentials${NC}"
