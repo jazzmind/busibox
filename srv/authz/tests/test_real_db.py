@@ -146,8 +146,8 @@ class TestOAuthClientOperations:
                 (client_id, client_secret_hash, allowed_audiences, allowed_scopes)
                 VALUES ($1, $2, $3, $4)
             """, client_id, client_secret_hash, 
-                '["ingest-api", "agent-api"]', 
-                '["ingest.read", "agent.execute"]')
+                ["ingest-api", "agent-api"],  # Pass as array, not JSON string
+                ["ingest.read", "agent.execute"])
             
             # Verify it was created
             row = await conn.fetchrow(
@@ -157,7 +157,7 @@ class TestOAuthClientOperations:
             
             assert row is not None
             assert row['client_id'] == client_id
-            assert row['allowed_audiences'] == '["ingest-api", "agent-api"]'
+            assert row['allowed_audiences'] == ["ingest-api", "agent-api"]
     
     @pytest.mark.asyncio
     async def test_list_oauth_clients(self, db_pool, clean_test_data):
@@ -169,7 +169,7 @@ class TestOAuthClientOperations:
                 INSERT INTO authz_oauth_clients 
                 (client_id, client_secret_hash, allowed_audiences, allowed_scopes)
                 VALUES ($1, $2, $3, $4)
-            """, client_id, "hash", '[]', '[]')
+            """, client_id, "hash", [], [])
             
             # List all test clients
             rows = await conn.fetch("""
@@ -192,9 +192,9 @@ class TestRBACOperations:
             role_id = f"test-role-{datetime.now().timestamp()}"
             
             await conn.execute("""
-                INSERT INTO authz_roles (id, name, permissions)
+                INSERT INTO authz_roles (id, name, description)
                 VALUES ($1, $2, $3)
-            """, role_id, "Test Role", '["read", "write"]')
+            """, role_id, "Test Role", "Test role description")
             
             # Verify it was created
             row = await conn.fetchrow(
@@ -215,9 +215,9 @@ class TestRBACOperations:
             
             # Create role
             await conn.execute("""
-                INSERT INTO authz_roles (id, name, permissions)
+                INSERT INTO authz_roles (id, name, description)
                 VALUES ($1, $2, $3)
-            """, role_id, "Test Role", '[]')
+            """, role_id, "Test Role", "Test role")
             
             # Create user
             await conn.execute("""
@@ -252,10 +252,10 @@ class TestRBACOperations:
             
             # Create roles
             await conn.execute("""
-                INSERT INTO authz_roles (id, name, permissions)
+                INSERT INTO authz_roles (id, name, description)
                 VALUES ($1, $2, $3), ($4, $5, $6)
-            """, role1_id, "Role 1", '["read"]',
-                 role2_id, "Role 2", '["write"]')
+            """, role1_id, "Role 1", "Role 1 desc",
+                 role2_id, "Role 2", "Role 2 desc")
             
             # Create user
             await conn.execute("""
@@ -340,13 +340,13 @@ class TestAuditLog:
             columns = await conn.fetch("""
                 SELECT column_name 
                 FROM information_schema.columns
-                WHERE table_name = 'authz_audit_log'
+                WHERE table_name = 'audit_logs'
             """)
             
             column_names = [row['column_name'] for row in columns]
             
             assert 'id' in column_names
-            assert 'timestamp' in column_names
+            assert 'created_at' in column_names  # Note: column is called created_at, not timestamp
             assert 'actor_id' in column_names
             assert 'action' in column_names
             assert 'resource_type' in column_names
@@ -355,19 +355,23 @@ class TestAuditLog:
     async def test_write_audit_log(self, db_pool, clean_test_data):
         """Test writing to audit log."""
         async with db_pool.acquire() as conn:
+            import uuid
+            test_actor_id = uuid.uuid4()
+            test_resource_id = uuid.uuid4()
+            
             await conn.execute("""
-                INSERT INTO authz_audit_log 
+                INSERT INTO audit_logs 
                 (actor_id, action, resource_type, resource_id, details)
                 VALUES ($1, $2, $3, $4, $5)
-            """, "test-user", "test_action", "test_resource", 
-                 "test-id", '{"test": true}')
+            """, test_actor_id, "test_action", "test_resource", 
+                 test_resource_id, '{"test": true}')
             
             # Verify it was written
             rows = await conn.fetch("""
-                SELECT * FROM authz_audit_log 
-                WHERE actor_id = 'test-user'
+                SELECT * FROM audit_logs 
+                WHERE actor_id = $1
                 AND action = 'test_action'
-            """)
+            """, test_actor_id)
             
             assert len(rows) >= 1
 

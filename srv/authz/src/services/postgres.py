@@ -224,7 +224,7 @@ class PostgresService:
                 kid,
                 alg,
                 private_key_pem,
-                json.dumps(public_jwk),  # Convert dict to JSON string
+                public_jwk,  # asyncpg handles JSONB conversion automatically
                 is_active,
             )
 
