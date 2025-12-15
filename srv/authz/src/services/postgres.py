@@ -209,6 +209,7 @@ class PostgresService:
     # ---------------------------------------------------------------------
 
     async def insert_signing_key(self, *, kid: str, alg: str, private_key_pem: bytes, public_jwk: dict, is_active: bool = True) -> None:
+        import json
         async with self.acquire(None, None) as conn:
             await conn.execute(
                 """
@@ -223,7 +224,7 @@ class PostgresService:
                 kid,
                 alg,
                 private_key_pem,
-                public_jwk,
+                json.dumps(public_jwk),  # Convert dict to JSON string
                 is_active,
             )
 
