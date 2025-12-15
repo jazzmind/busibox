@@ -193,31 +193,13 @@ else
 fi
 
 if [ "$EXISTING_CREDS_FOUND" = false ]; then
-    # Create test user via internal sync endpoint
-    echo -e "${BLUE}Creating test user...${NC}"
-    SYNC_USER_RESPONSE=$(curl -s -X POST "${AUTHZ_URL}/internal/sync/user" \
-        -H "Content-Type: application/json" \
-        -d "{
-            \"user_id\": \"${TEST_USER_ID}\",
-            \"email\": \"${TEST_USER_EMAIL}\",
-            \"roles\": [
-                {\"id\": \"admin\", \"name\": \"Admin\", \"permissions\": [\"*\"]},
-                {\"id\": \"user\", \"name\": \"User\", \"permissions\": [\"read\", \"write\"]}
-            ]
-        }" 2>&1 || true)
-
-    if echo "$SYNC_USER_RESPONSE" | grep -q "ok"; then
-        echo -e "${GREEN}✓ Test user created${NC}"
-    else
-        echo -e "${YELLOW}⚠ Could not create user via API (may need manual setup)${NC}"
-    fi
-
-    # Create OAuth client via admin endpoint using bootstrap client credentials for auth
+    # Create OAuth client FIRST (needed for user creation)
     echo -e "${BLUE}Creating OAuth client...${NC}"
 
     if [ -z "$BOOTSTRAP_CLIENT_SECRET" ]; then
         echo -e "${YELLOW}⚠ Could not get bootstrap client credentials${NC}"
         echo -e "${YELLOW}  OAuth client will need to be created manually${NC}"
+        CLIENT_CREATED=false
     else
         # Include bootstrap client credentials in body for authentication (per admin.py _require_admin_auth)
         # The endpoint expects: client_id/client_secret for auth + client_id/client_secret/audiences/scopes for the new client
@@ -234,10 +216,53 @@ if [ "$EXISTING_CREDS_FOUND" = false ]; then
 
         if echo "$CREATE_CLIENT_RESPONSE" | grep -q "client_id"; then
             echo -e "${GREEN}✓ OAuth client created${NC}"
+            CLIENT_CREATED=true
         else
             echo -e "${YELLOW}⚠ Could not create OAuth client via API: ${CREATE_CLIENT_RESPONSE}${NC}"
             echo -e "${YELLOW}  You may need to create it manually${NC}"
+            CLIENT_CREATED=false
         fi
+    fi
+
+    # Create test user via internal sync endpoint (requires OAuth client credentials)
+    if [ "$CLIENT_CREATED" = true ]; then
+        echo -e "${BLUE}Creating test user...${NC}"
+        
+        # Generate UUIDs for roles (required by authz database schema)
+        if command -v uuidgen &> /dev/null; then
+            ADMIN_ROLE_ID=$(uuidgen)
+            USER_ROLE_ID=$(uuidgen)
+        elif command -v python3 &> /dev/null; then
+            ADMIN_ROLE_ID=$(python3 -c "import uuid; print(uuid.uuid4())")
+            USER_ROLE_ID=$(python3 -c "import uuid; print(uuid.uuid4())")
+        else
+            # Fallback: generate UUID-like strings
+            ADMIN_ROLE_ID="$(openssl rand -hex 4)-$(openssl rand -hex 2)-$(openssl rand -hex 2)-$(openssl rand -hex 2)-$(openssl rand -hex 6)"
+            USER_ROLE_ID="$(openssl rand -hex 4)-$(openssl rand -hex 2)-$(openssl rand -hex 2)-$(openssl rand -hex 2)-$(openssl rand -hex 6)"
+        fi
+        
+        SYNC_USER_RESPONSE=$(curl -s -X POST "${AUTHZ_URL}/internal/sync/user" \
+            -H "Content-Type: application/json" \
+            -d "{
+                \"client_id\": \"${TEST_CLIENT_ID}\",
+                \"client_secret\": \"${TEST_CLIENT_SECRET}\",
+                \"user_id\": \"${TEST_USER_ID}\",
+                \"email\": \"${TEST_USER_EMAIL}\",
+                \"roles\": [
+                    {\"id\": \"${ADMIN_ROLE_ID}\", \"name\": \"Admin\", \"description\": \"Administrator role\"},
+                    {\"id\": \"${USER_ROLE_ID}\", \"name\": \"User\", \"description\": \"Standard user role\"}
+                ],
+                \"user_role_ids\": [\"${ADMIN_ROLE_ID}\", \"${USER_ROLE_ID}\"]
+            }" 2>&1 || true)
+
+        if echo "$SYNC_USER_RESPONSE" | grep -q "ok"; then
+            echo -e "${GREEN}✓ Test user created${NC}"
+        else
+            echo -e "${YELLOW}⚠ Could not create user via API: ${SYNC_USER_RESPONSE}${NC}"
+            echo -e "${YELLOW}  User may need to be created manually${NC}"
+        fi
+    else
+        echo -e "${YELLOW}⚠ Skipping user creation (OAuth client not created)${NC}"
     fi
 else
     echo -e "${GREEN}✓ Using existing test user and OAuth client${NC}"
