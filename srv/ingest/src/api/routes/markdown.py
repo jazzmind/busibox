@@ -129,6 +129,7 @@ async def get_markdown(fileId: str, request: Request):
         )
     finally:
         # Don't close - pg_service is a singleton shared across requests
+        pass
 
 
 @router.get("/{fileId}/html")
@@ -215,7 +216,7 @@ async def get_html(fileId: str, request: Request):
         )
     finally:
         # Don't close - pg_service is a singleton shared across requests
-
+        pass
 
 @router.get("/{fileId}/images/{imageIndex}")
 async def get_image(fileId: str, imageIndex: int, request: Request):
@@ -330,3 +331,4 @@ async def get_image(fileId: str, imageIndex: int, request: Request):
         )
     finally:
         # Don't close - pg_service is a singleton shared across requests
+        pass

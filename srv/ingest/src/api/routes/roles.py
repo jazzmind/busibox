@@ -125,7 +125,7 @@ async def get_document_roles(file_id: str, request: Request):
     
     finally:
         # Don't disconnect - pg_service is a singleton shared across requests
-
+        pass
 
 @router.put("/{file_id}/roles")
 async def update_document_roles(
