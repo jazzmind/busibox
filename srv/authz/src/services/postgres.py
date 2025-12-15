@@ -224,7 +224,7 @@ class PostgresService:
                 kid,
                 alg,
                 private_key_pem,
-                public_jwk,  # asyncpg handles JSONB conversion automatically
+                json.dumps(public_jwk),  # JSONB columns need JSON string input
                 is_active,
             )
 
