@@ -11,16 +11,18 @@ from fastapi import FastAPI
 
 
 @pytest.fixture
-def oauth_app_with_form(reload_authz, monkeypatch, set_env):
+def oauth_app_with_form(reload_authz, monkeypatch):
     """OAuth app that supports form-encoded requests."""
     import importlib
     import routes.oauth as oauth
     import config as cfg
     from test_authz_service import FakePG
 
-    # Reload config to pick up test environment variables
+    # Reload config to pick up test environment variables (set by set_env fixture)
     importlib.reload(cfg)
-    oauth.config = cfg.Config()
+    new_config = cfg.Config()
+    importlib.reload(oauth)
+    oauth.config = new_config
 
     fake = FakePG()
     monkeypatch.setattr(oauth, "_pg", fake)
