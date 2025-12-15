@@ -379,7 +379,7 @@ class OAuthClientResponse(BaseModel):
     created_at: str
 
 
-@router.post("/oauth-clients", status_code=status.HTTP_201_CREATED)
+@router.post("/admin/oauth-clients", status_code=status.HTTP_201_CREATED)
 async def create_oauth_client(
     client_data: OAuthClientCreate, request: Request
 ) -> OAuthClientResponse:
@@ -416,7 +416,7 @@ async def create_oauth_client(
     )
 
 
-@router.get("/oauth-clients")
+@router.get("/admin/oauth-clients")
 async def list_oauth_clients(request: Request) -> List[OAuthClientResponse]:
     """List all OAuth clients."""
     await _require_admin_auth(request)
