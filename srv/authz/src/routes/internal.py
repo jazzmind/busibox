@@ -61,20 +61,15 @@ async def sync_user(request: Request):
     await pg.connect()
     # Upsert roles and get mapping of role names to IDs
     role_name_to_id = await pg.upsert_roles([r.model_dump() for r in su.roles])
-    print(f"DEBUG internal.py: upserted roles, name_to_id={role_name_to_id}")
     
     # Resolve user_role_ids: if provided IDs don't exist, try to resolve by role name
     resolved_role_ids = []
-    print(f"DEBUG internal.py: user_role_ids to resolve={su.user_role_ids}")
     for role_id_or_name in su.user_role_ids:
-        print(f"DEBUG internal.py: processing role_id_or_name={role_id_or_name}, type={type(role_id_or_name)}")
         # Check if it's a UUID (role ID)
         try:
-            parsed_uuid = uuid.UUID(role_id_or_name)
-            print(f"DEBUG internal.py: successfully parsed as UUID: {parsed_uuid}")
+            uuid.UUID(role_id_or_name)
             # It's a UUID, check if it exists
             role = await pg.get_role_by_id(role_id_or_name)
-            print(f"DEBUG internal.py: get_role_by_id({role_id_or_name}) returned {role}")
             if role:
                 resolved_role_ids.append(role_id_or_name)
             else:
