@@ -71,6 +71,15 @@
     mode: "0644"
   tags: [authz]
 
+- name: Copy pytest configuration
+  copy:
+    src: "{{ authz_src_dir }}/pytest.ini"
+    dest: "{{ authz_app_dir }}/pytest.ini"
+    owner: "{{ authz_user }}"
+    group: "{{ authz_group }}"
+    mode: "0644"
+  tags: [authz]
+
 - name: Copy authz tests
   copy:
     src: "{{ authz_src_dir }}/tests/"
