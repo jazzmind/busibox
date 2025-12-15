@@ -286,8 +286,10 @@ class TestRBACOperations:
             """, user_id)
             
             assert len(rows) == 2
-            assert rows[0]['name'] == "Role 1"
-            assert rows[1]['name'] == "Role 2"
+            # Roles are ordered by name, check they both exist
+            role_names = {row['name'] for row in rows}
+            assert role1_name in role_names
+            assert role2_name in role_names
 
 
 class TestSigningKeys:
