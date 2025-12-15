@@ -202,6 +202,10 @@ async def upload_file(
                 status_code=status.HTTP_200_OK,
                 content={
                     "fileId": file_id,
+                    "filename": file.filename,
+                    "mimeType": file.content_type,
+                    "sizeBytes": file_size,
+                    "url": f"/files/{file_id}",
                     "status": "completed",
                     "duplicate": True,
                     "message": "File already processed, vectors reused",
