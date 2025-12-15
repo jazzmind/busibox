@@ -151,11 +151,12 @@ async def get_html(fileId: str, request: Request):
         user_uuid = uuid.UUID(user_id)
 
         # Get file metadata
-        file_data = _get_file_metadata(
+        file_data = await _get_file_metadata(
             postgres_service,
             file_uuid,
             user_uuid,
-            ["file_id", "user_id", "original_filename", "markdown_path", "has_markdown", "image_count"]
+            ["file_id", "user_id", "original_filename", "markdown_path", "has_markdown", "image_count"],
+            request=request
         )
 
         if not file_data:
@@ -247,11 +248,12 @@ async def get_image(fileId: str, imageIndex: int, request: Request):
             )
 
         # Get file metadata
-        file_data = _get_file_metadata(
+        file_data = await _get_file_metadata(
             postgres_service,
             file_uuid,
             user_uuid,
-            ["file_id", "user_id", "images_path", "image_count"]
+            ["file_id", "user_id", "images_path", "image_count"],
+            request=request
         )
 
         if not file_data:
