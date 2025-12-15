@@ -354,6 +354,7 @@ async def get_file_metadata(fileId: str, request: Request):
     finally:
         # Don't disconnect - pg_service is a singleton shared across requests
         pass
+        pass
 
 
 @router.get("/{fileId}/history")
@@ -401,6 +402,7 @@ async def get_processing_history(fileId: str, request: Request):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"error": "Failed to retrieve processing history"}
         )
+        pass
 
 
 @router.get("/{fileId}/download")
@@ -507,6 +509,7 @@ async def download_file(fileId: str, request: Request):
     
     finally:
         # Don't disconnect - pg_service is a singleton shared across requests
+        pass
         pass
 
 
@@ -621,6 +624,7 @@ async def get_presigned_url(fileId: str, request: Request, expiry: int = 3600):
     
     finally:
         # Don't disconnect - pg_service is a singleton shared across requests
+        pass
 
 
 @router.get("/{fileId}/chunks")
@@ -720,6 +724,7 @@ async def get_file_chunks(
     
     finally:
         # Don't disconnect - pg_service is a singleton shared across requests
+        pass
 
 
 @router.get("/{fileId}/vectors")
@@ -825,6 +830,7 @@ async def get_file_vectors(
     
     finally:
         # Don't disconnect - pg_service is a singleton shared across requests
+        pass
 
 
 @router.get("/{fileId}/markdown")
@@ -917,6 +923,7 @@ async def get_file_markdown(
     
     finally:
         # Don't disconnect - pg_service is a singleton shared across requests
+        pass
 
 
 class DocumentSearchRequest(BaseModel):
@@ -1058,6 +1065,7 @@ async def search_within_document(
     
     finally:
         # Don't disconnect - pg_service is a singleton shared across requests
+        pass
 
 
 @router.delete("/{fileId}")
@@ -1161,6 +1169,7 @@ async def delete_file(fileId: str, request: Request):
     
     finally:
         # Don't disconnect - pg_service is a singleton shared across requests
+        pass
 
 
 @router.post("/{fileId}/move")
@@ -1460,6 +1469,7 @@ async def reprocess_file(fileId: str, request: Request):
     finally:
         # Don't disconnect - pg_service is a singleton shared across requests
         pass
+        pass
 
 
 @router.get("/{fileId}/export")
@@ -1745,4 +1755,5 @@ async def export_file(
     
     finally:
         # Don't disconnect - pg_service is a singleton shared across requests
+        pass
 
