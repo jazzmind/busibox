@@ -57,6 +57,8 @@ async def test_token_endpoint_with_form_encoded_body(oauth_app_with_form):
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
 
+        if resp.status_code != 200:
+            print(f"ERROR: {resp.status_code} - {resp.json()}")
         assert resp.status_code == 200
         token_data = resp.json()
         assert "access_token" in token_data
