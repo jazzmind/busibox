@@ -26,12 +26,14 @@ def full_authz_app(reload_authz, monkeypatch):
     import routes.internal as internal
     import routes.oauth as oauth
     import config as cfg
+    import main
 
     # Reload config and oauth module to pick up environment variables
     importlib.reload(cfg)
     importlib.reload(oauth)
-    # Update oauth.config to use reloaded config
+    # Update oauth.config and admin.config to use reloaded config
     oauth.config = cfg.Config()
+    admin.config = cfg.Config()
 
     from test_authz_service import FakePG
 
@@ -41,6 +43,7 @@ def full_authz_app(reload_authz, monkeypatch):
     monkeypatch.setattr(oauth, "_pg", fake)
     monkeypatch.setattr(internal, "pg", fake)
     monkeypatch.setattr(admin, "pg", fake)
+    monkeypatch.setattr(main, "pg", fake)  # For write_audit in authz.py
     monkeypatch.setattr(authz, "PostgresService", lambda *_args, **_kwargs: fake)
 
     app = FastAPI()

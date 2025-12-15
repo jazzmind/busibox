@@ -273,12 +273,15 @@ def authz_app(reload_authz, monkeypatch):
     import routes.oauth as oauth
     import routes.internal as internal
     import routes.authz as authz
+    import main
 
     fake = FakePG()
 
     # Patch module-level PostgresService instances
     monkeypatch.setattr(oauth, "_pg", fake)
     monkeypatch.setattr(internal, "pg", fake)
+    # Patch main.pg (used by write_audit in authz.py)
+    monkeypatch.setattr(main, "pg", fake)
     # Patch audit route to use fake DB (it otherwise tries to connect to localhost)
     monkeypatch.setattr(authz, "PostgresService", lambda *_args, **_kwargs: fake)
 
