@@ -20,10 +20,18 @@ from fastapi import FastAPI
 @pytest.fixture
 def full_authz_app(reload_authz, monkeypatch):
     """Full authz app with all routers."""
+    import importlib
     import routes.admin as admin
     import routes.authz as authz
     import routes.internal as internal
     import routes.oauth as oauth
+    import config as cfg
+
+    # Reload config and oauth module to pick up environment variables
+    importlib.reload(cfg)
+    importlib.reload(oauth)
+    # Update oauth.config to use reloaded config
+    oauth.config = cfg.Config()
 
     from test_authz_service import FakePG
 
