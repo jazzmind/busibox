@@ -98,10 +98,11 @@ async def chat(
         
         # For now, return a simple response based on routing decision
         # In a full implementation, this would execute the selected tools/agents
+        decision = routing_response.routing_decision
         response_text = (
-            f"Query routed to: {', '.join(routing_response.selected_tools or ['none'])}. "
-            f"Confidence: {routing_response.confidence:.2f}. "
-            f"Reasoning: {routing_response.reasoning}"
+            f"Query routed to: {', '.join(decision.selected_tools or ['none'])}. "
+            f"Confidence: {decision.confidence:.2f}. "
+            f"Reasoning: {decision.reasoning}"
         )
         
         logger.info(
@@ -109,7 +110,7 @@ async def chat(
             extra={
                 "user_sub": principal.sub,
                 "response_length": len(response_text),
-                "confidence": routing_response.confidence,
+                "confidence": decision.confidence,
             },
         )
         
