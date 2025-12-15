@@ -66,7 +66,7 @@ AUTHZ_URL="http://${AUTHZ_HOST}:${AUTHZ_PORT}"
 
 # Check if authz service is running
 echo -e "${BLUE}Checking authz service...${NC}"
-if ! curl -s -f "${AUTHZ_URL}/health" > /dev/null 2>&1; then
+if ! curl -s -f "${AUTHZ_URL}/health/live" > /dev/null 2>&1; then
     echo -e "${RED}Error: Cannot connect to authz service at ${AUTHZ_URL}${NC}"
     echo -e "${YELLOW}Make sure the authz service is running:${NC}"
     echo "  cd provision/ansible"
