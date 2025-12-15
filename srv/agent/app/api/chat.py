@@ -37,6 +37,17 @@ class ChatResponse(BaseModel):
     success: bool = Field(default=True, description="Success flag")
 
 
+@router.get("/slow-endpoint")
+async def slow_endpoint():
+    """
+    Test endpoint that simulates a slow response.
+    Used for testing timeout handling in clients.
+    """
+    import asyncio
+    await asyncio.sleep(5)  # Sleep for 5 seconds
+    return {"message": "This endpoint is intentionally slow"}
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat(
     payload: ChatRequest,
