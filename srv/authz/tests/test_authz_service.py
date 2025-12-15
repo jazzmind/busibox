@@ -61,6 +61,7 @@ class FakePG:
 
     async def upsert_roles(self, roles):
         """Upsert roles and return mapping of role names to IDs."""
+        from datetime import datetime
         name_to_id = {}
         for r in roles:
             role_id = r["id"]
@@ -74,10 +75,23 @@ class FakePG:
             if existing:
                 # Update existing role
                 self.roles[existing].update(r)
+                # Ensure id field is set
+                self.roles[existing]["id"] = existing
+                if "created_at" not in self.roles[existing]:
+                    self.roles[existing]["created_at"] = datetime.now()
+                if "updated_at" not in self.roles[existing]:
+                    self.roles[existing]["updated_at"] = datetime.now()
                 name_to_id[role_name] = existing
             else:
-                # Create new role
-                self.roles[role_id] = r
+                # Create new role - ensure it has all required fields
+                role_data = {
+                    "id": role_id,
+                    "name": role_name,
+                    "description": r.get("description"),
+                    "created_at": datetime.now(),
+                    "updated_at": datetime.now(),
+                }
+                self.roles[role_id] = role_data
                 name_to_id[role_name] = role_id
         return name_to_id
 
@@ -85,7 +99,14 @@ class FakePG:
         """Get role by ID."""
         role = self.roles.get(role_id)
         if role:
-            return {"id": role_id, "name": role.get("name"), "description": role.get("description")}
+            from datetime import datetime
+            return {
+                "id": role_id,
+                "name": role.get("name"),
+                "description": role.get("description"),
+                "created_at": role.get("created_at", datetime.now()),
+                "updated_at": role.get("updated_at", datetime.now()),
+            }
         return None
 
     async def get_role_by_name(self, name: str):
@@ -123,9 +144,11 @@ class FakePG:
             r = self.roles.get(rid)
             if r:
                 from datetime import datetime
+                # Ensure id field exists (use rid if not in role dict)
+                role_id = r.get("id", rid)
                 out.append({
-                    "id": r["id"],
-                    "name": r["name"],
+                    "id": role_id,
+                    "name": r.get("name", "Unknown"),
                     "description": r.get("description"),
                     "created_at": r.get("created_at", datetime.now()),
                     "updated_at": r.get("updated_at", datetime.now()),
