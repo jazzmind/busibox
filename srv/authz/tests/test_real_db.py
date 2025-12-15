@@ -205,7 +205,7 @@ class TestRBACOperations:
             
             assert row is not None
             assert row['name'] == "Test Role"
-            assert row['permissions'] == '["read", "write"]'
+            assert row['description'] == "Test role description"
     
     @pytest.mark.asyncio
     async def test_create_user_and_assign_role(self, db_pool, clean_test_data):
@@ -274,7 +274,7 @@ class TestRBACOperations:
             
             # Get user roles
             rows = await conn.fetch("""
-                SELECT r.id, r.name, r.permissions
+                SELECT r.id, r.name, r.description
                 FROM authz_user_roles ur
                 JOIN authz_roles r ON ur.role_id = r.id
                 WHERE ur.user_id = $1
