@@ -191,11 +191,12 @@ class TestRBACOperations:
         import uuid
         async with db_pool.acquire() as conn:
             role_id = uuid.uuid4()
+            role_name = f"Test Role {role_id}"  # Make name unique
             
             await conn.execute("""
                 INSERT INTO authz_roles (id, name, description)
                 VALUES ($1, $2, $3)
-            """, role_id, "Test Role", "Test role description")
+            """, role_id, role_name, "Test role description")
             
             # Verify it was created
             row = await conn.fetchrow(
@@ -204,7 +205,7 @@ class TestRBACOperations:
             )
             
             assert row is not None
-            assert row['name'] == "Test Role"
+            assert row['name'] == role_name
             assert row['description'] == "Test role description"
     
     @pytest.mark.asyncio
@@ -214,12 +215,13 @@ class TestRBACOperations:
         async with db_pool.acquire() as conn:
             user_id = uuid.uuid4()
             role_id = uuid.uuid4()
+            role_name = f"Test Role {role_id}"  # Make name unique
             
             # Create role
             await conn.execute("""
                 INSERT INTO authz_roles (id, name, description)
                 VALUES ($1, $2, $3)
-            """, role_id, "Test Role", "Test role")
+            """, role_id, role_name, "Test role")
             
             # Create user
             await conn.execute("""
@@ -242,7 +244,7 @@ class TestRBACOperations:
             """, user_id)
             
             assert len(rows) == 1
-            assert rows[0]['name'] == "Test Role"
+            assert rows[0]['name'] == role_name
     
     @pytest.mark.asyncio
     async def test_get_user_roles(self, db_pool, clean_test_data):
@@ -252,13 +254,15 @@ class TestRBACOperations:
             user_id = uuid.uuid4()
             role1_id = uuid.uuid4()
             role2_id = uuid.uuid4()
+            role1_name = f"Role 1 {role1_id}"  # Make names unique
+            role2_name = f"Role 2 {role2_id}"
             
             # Create roles
             await conn.execute("""
                 INSERT INTO authz_roles (id, name, description)
                 VALUES ($1, $2, $3), ($4, $5, $6)
-            """, role1_id, "Role 1", "Role 1 desc",
-                 role2_id, "Role 2", "Role 2 desc")
+            """, role1_id, role1_name, "Role 1 desc",
+                 role2_id, role2_name, "Role 2 desc")
             
             # Create user
             await conn.execute("""
