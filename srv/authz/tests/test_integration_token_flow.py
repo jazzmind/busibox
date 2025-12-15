@@ -95,6 +95,12 @@ async def test_complete_token_exchange_flow(full_authz_app):
             },
         )
         assert sync_resp.status_code == 200
+        
+        # Debug: Check what's in FakePG after sync
+        print(f"DEBUG: FakePG roles after sync: {fake.roles}")
+        print(f"DEBUG: FakePG users after sync: {fake.users}")
+        user_roles = await fake.get_user_roles(user_id)
+        print(f"DEBUG: get_user_roles returned: {user_roles}")
 
         # Step 3: Exchange for service-scoped access token
         exchange_resp = await client.post(
