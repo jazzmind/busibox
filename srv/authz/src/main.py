@@ -6,15 +6,23 @@ from routes import admin, authz, internal, oauth
 from services.postgres import PostgresService
 from config import Config
 
+# Global PostgresService instance (singleton)
+config = Config()
+pg = PostgresService(config.to_dict())
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize database schema and bootstrap on startup."""
     print("[AUTHZ] Initializing database schema...")
-    config = Config()
-    pg = PostgresService(config.to_dict())
+    await pg.connect()
     await pg.ensure_schema()
     print("[AUTHZ] Database schema initialized")
+    
+    # Set shared PostgresService instance in route modules
+    oauth.set_pg_service(pg)
+    admin.set_pg_service(pg)
+    internal.set_pg_service(pg)
     
     # Run bootstrap (creates signing keys and optional OAuth client)
     from routes.oauth import _ensure_bootstrap
@@ -24,7 +32,7 @@ async def lifespan(app: FastAPI):
     yield
     
     # Cleanup on shutdown
-    await pg.close()
+    await pg.disconnect()
     print("[AUTHZ] Shutdown complete")
 
 

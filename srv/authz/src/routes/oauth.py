@@ -21,14 +21,19 @@ from oauth.claims import AccessTokenClaims
 from oauth.client_auth import verify_client_secret
 from oauth.contracts import OAuthTokenRequest, OAuthTokenResponse, TOKEN_EXCHANGE_GRANT
 from oauth.keys import generate_rsa_signing_key, load_private_key
-from services.postgres import PostgresService
 
 logger = structlog.get_logger()
 router = APIRouter()
 
 config = Config()
 
-_pg = PostgresService(config.to_dict())
+# PostgresService instance - will be set by main.py
+_pg = None
+
+def set_pg_service(pg_service):
+    """Set the shared PostgresService instance."""
+    global _pg
+    _pg = pg_service
 
 
 async def _ensure_bootstrap() -> None:

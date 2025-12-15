@@ -89,8 +89,7 @@ async def audit(request: Request):
 
 async def write_audit(actor_id: str, action: str, resource_type: str, resource_id: Optional[str], details: dict, request: Request):
     """Insert audit log entry."""
-    cfg = config.to_dict()
-    pg = PostgresService(cfg)
+    from main import pg  # Use shared PostgresService instance from main
     await pg.connect()
 
     # attempt to propagate caller context if supplied

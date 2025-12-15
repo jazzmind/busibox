@@ -21,11 +21,17 @@ from pydantic import BaseModel, Field
 
 from config import Config
 from oauth.client_auth import verify_client_secret
-from services.postgres import PostgresService
 
 router = APIRouter()
 config = Config()
-pg = PostgresService(config.to_dict())
+
+# PostgresService instance - will be set by main.py
+pg = None
+
+def set_pg_service(pg_service):
+    """Set the shared PostgresService instance."""
+    global pg
+    pg = pg_service
 
 
 # ============================================================================

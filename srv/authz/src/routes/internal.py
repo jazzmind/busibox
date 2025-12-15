@@ -13,11 +13,17 @@ from fastapi import APIRouter, HTTPException, Request, status
 from config import Config
 from oauth.client_auth import verify_client_secret
 from oauth.contracts import SyncUser
-from services.postgres import PostgresService
 
 router = APIRouter()
 config = Config()
-pg = PostgresService(config.to_dict())
+
+# PostgresService instance - will be set by main.py
+pg = None
+
+def set_pg_service(pg_service):
+    """Set the shared PostgresService instance."""
+    global pg
+    pg = pg_service
 
 
 async def _require_oauth_client(body: dict) -> dict:
