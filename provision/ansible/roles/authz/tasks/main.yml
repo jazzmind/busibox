@@ -35,6 +35,7 @@
     owner: "{{ authz_user }}"
     group: "{{ authz_group }}"
     mode: "0644"
+  notify: Restart authz service
   tags: [authz]
 
 - name: Copy requirements.txt
@@ -92,6 +93,7 @@
     owner: "{{ authz_user }}"
     group: "{{ authz_group }}"
     mode: "0600"
+  notify: Restart authz service
   tags: [authz]
 
 - name: Install systemd service
