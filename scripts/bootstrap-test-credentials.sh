@@ -220,12 +220,28 @@ if [ "$EXISTING_CREDS_FOUND" = false ]; then
     TEST_USER_EMAIL="test@busibox.local"
     TEST_CLIENT_ID="test-client-$(date +%s)"
     TEST_CLIENT_SECRET=$(openssl rand -hex 32)
-    ADMIN_TOKEN=$(openssl rand -hex 32)
     
     echo -e "${BLUE}Creating test user and OAuth client...${NC}"
 else
     echo -e "${GREEN}Using existing credentials${NC}"
     echo ""
+fi
+
+# Always fetch admin token from authz service if not already set
+# This ensures we use the token that's actually configured in the running service
+ADMIN_TOKEN_GENERATED=false
+if [ -z "$ADMIN_TOKEN" ]; then
+    echo -e "${BLUE}Fetching admin token from authz service...${NC}"
+    ADMIN_TOKEN=$(ssh root@${AUTHZ_IP} "grep '^AUTHZ_ADMIN_TOKEN=' /srv/authz/.env 2>/dev/null | cut -d'=' -f2" 2>/dev/null || echo "")
+    
+    if [ -z "$ADMIN_TOKEN" ]; then
+        echo -e "${YELLOW}⚠ Could not fetch admin token from authz service${NC}"
+        echo -e "${YELLOW}  Generating new admin token${NC}"
+        ADMIN_TOKEN=$(openssl rand -hex 32)
+        ADMIN_TOKEN_GENERATED=true
+    else
+        echo -e "${GREEN}✓ Using admin token from authz service${NC}"
+    fi
 fi
 
 if [ "$EXISTING_CREDS_FOUND" = false ]; then
@@ -544,4 +560,30 @@ echo -e "${BLUE}To use in service tests, services can access via environment var
 echo -e "  AUTHZ_TEST_CLIENT_ID (from vault: {{ secrets.test_credentials.authz_test_client_id }})"
 echo -e "  AUTHZ_TEST_CLIENT_SECRET (from vault: {{ secrets.test_credentials.authz_test_client_secret }})"
 echo ""
+
+# Warn if admin token was generated
+if [ "$ADMIN_TOKEN_GENERATED" = true ]; then
+    echo -e "${RED}========================================${NC}"
+    echo -e "${RED}⚠️  IMPORTANT: New Admin Token Generated${NC}"
+    echo -e "${RED}========================================${NC}"
+    echo ""
+    echo -e "${YELLOW}A new admin token was generated because one was not found in the authz service.${NC}"
+    echo -e "${YELLOW}You MUST update the authz service configuration and restart it:${NC}"
+    echo ""
+    echo -e "${BLUE}1. Update the authz service .env file:${NC}"
+    echo -e "   ssh root@${AUTHZ_IP}"
+    echo -e "   echo 'AUTHZ_ADMIN_TOKEN=${ADMIN_TOKEN}' >> /srv/authz/.env"
+    echo ""
+    echo -e "${BLUE}2. Restart the authz service:${NC}"
+    echo -e "   systemctl restart authz"
+    echo ""
+    echo -e "${BLUE}OR redeploy the authz service from ansible:${NC}"
+    echo -e "   cd provision/ansible"
+    echo -e "   make authz INV=inventory/${ENV}"
+    echo ""
+    echo -e "${YELLOW}Until you do this, the admin token will not work!${NC}"
+    echo -e "${RED}========================================${NC}"
+    echo ""
+fi
+
 echo -e "${GREEN}Done!${NC}"
