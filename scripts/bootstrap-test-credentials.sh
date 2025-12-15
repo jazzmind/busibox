@@ -8,7 +8,8 @@ set -euo pipefail
 #
 # DESCRIPTION:
 #   Creates test user, OAuth client, and admin credentials in the authz service
-#   for use in local integration testing. Outputs .env variables to copy/paste.
+#   for use in local and service integration testing. Stores credentials in
+#   ansible vault for use by all services.
 #
 # USAGE:
 #   bash scripts/bootstrap-test-credentials.sh [test|production]
@@ -16,15 +17,19 @@ set -euo pipefail
 # DEPENDENCIES:
 #   - jq (for JSON parsing)
 #   - curl (for HTTP requests)
+#   - python3 (for YAML manipulation)
+#   - ansible-vault (for encrypting credentials)
 #   - Authz service must be running
 #
 # OUTPUTS:
 #   - Test user created in authz
 #   - Test OAuth client created
+#   - Credentials saved to ansible vault
 #   - .env variables printed to stdout
 #
 # EXAMPLE:
 #   bash scripts/bootstrap-test-credentials.sh test
+#   # Credentials are saved to inventory/test/group_vars/all/vault.yml
 #   # Copy the output .env variables to busibox-app/.env
 #==============================================================================
 
@@ -71,17 +76,6 @@ fi
 echo -e "${GREEN}✓ Authz service is running${NC}"
 echo ""
 
-# Get bootstrap client credentials from JWKS endpoint
-echo -e "${BLUE}Getting bootstrap client info...${NC}"
-JWKS_RESPONSE=$(curl -s "${AUTHZ_URL}/.well-known/jwks.json")
-
-if [ -z "$JWKS_RESPONSE" ] || [ "$JWKS_RESPONSE" = "null" ]; then
-    echo -e "${RED}Error: Could not get JWKS from authz service${NC}"
-    exit 1
-fi
-
-echo -e "${GREEN}✓ Bootstrap client exists${NC}"
-
 # Generate test credentials
 TEST_USER_ID="test-user-$(date +%s)"
 TEST_USER_EMAIL="test@busibox.local"
@@ -89,47 +83,7 @@ TEST_CLIENT_ID="test-client-$(date +%s)"
 TEST_CLIENT_SECRET=$(openssl rand -hex 32)
 ADMIN_TOKEN=$(openssl rand -hex 32)
 
-echo ""
-echo -e "${BLUE}Creating test OAuth client...${NC}"
-
-# Create test OAuth client using bootstrap client
-# Note: This requires the bootstrap client secret which should be in ansible vault
-BOOTSTRAP_CLIENT_ID="bootstrap-client"
-
-# Try to get bootstrap secret from ansible vault
-VAULT_FILE="provision/ansible/roles/secrets/vars/vault.yml"
-if [ -f "$VAULT_FILE" ]; then
-    echo -e "${YELLOW}Note: Bootstrap client secret needed from ansible vault${NC}"
-    echo -e "${YELLOW}Run: ansible-vault view $VAULT_FILE | grep authz_bootstrap_client_secret${NC}"
-    echo ""
-fi
-
-# For now, we'll use the admin token approach if available
-# Check if we can access the authz admin endpoint
-echo -e "${BLUE}Attempting to create test client via admin endpoint...${NC}"
-
-# Try to create client with a temporary admin token
-# (In production, this would use the actual admin token from vault)
-CREATE_CLIENT_RESPONSE=$(curl -s -X POST "${AUTHZ_URL}/admin/oauth/clients" \
-    -H "Content-Type: application/json" \
-    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
-    -d "{
-        \"client_id\": \"${TEST_CLIENT_ID}\",
-        \"client_secret\": \"${TEST_CLIENT_SECRET}\",
-        \"allowed_audiences\": [\"ingest-api\", \"agent-api\", \"search-api\", \"authz\"],
-        \"allowed_scopes\": [\"ingest.read\", \"ingest.write\", \"agent.execute\", \"search.read\", \"audit.write\", \"rbac.read\"]
-    }" 2>&1 || true)
-
-# Check if client creation succeeded
-if echo "$CREATE_CLIENT_RESPONSE" | grep -q "client_id"; then
-    echo -e "${GREEN}✓ Test OAuth client created${NC}"
-else
-    echo -e "${YELLOW}⚠ Could not create client via API (may need manual setup)${NC}"
-    echo -e "${YELLOW}Response: ${CREATE_CLIENT_RESPONSE}${NC}"
-fi
-
-echo ""
-echo -e "${BLUE}Creating test user...${NC}"
+echo -e "${BLUE}Creating test user and OAuth client...${NC}"
 
 # Create test user via internal sync endpoint
 SYNC_USER_RESPONSE=$(curl -s -X POST "${AUTHZ_URL}/internal/sync/user" \
@@ -146,7 +100,7 @@ SYNC_USER_RESPONSE=$(curl -s -X POST "${AUTHZ_URL}/internal/sync/user" \
 if echo "$SYNC_USER_RESPONSE" | grep -q "ok"; then
     echo -e "${GREEN}✓ Test user created${NC}"
 else
-    echo -e "${YELLOW}⚠ Could not create user via API${NC}"
+    echo -e "${YELLOW}⚠ Could not create user via API (may need manual setup)${NC}"
 fi
 
 echo ""
@@ -156,36 +110,62 @@ echo -e "${GREEN}========================================${NC}"
 echo ""
 
 # Save credentials to ansible vault
-INVENTORY_DIR="provision/ansible/inventory/${ENV}"
-VAULT_FILE="${INVENTORY_DIR}/group_vars/all/vault.yml"
-VAULT_PASS_FILE="${HOME}/.vault_pass"
+VAULT_FILE="provision/ansible/inventory/${ENV}/group_vars/all/vault.yml"
 
-echo -e "${BLUE}Merging credentials into ansible vault...${NC}"
-
-# Check if vault password file exists
-if [ ! -f "$VAULT_PASS_FILE" ]; then
-    echo -e "${RED}Error: Vault password file not found at ${VAULT_PASS_FILE}${NC}"
-    echo -e "${YELLOW}Please create it with: echo 'your-vault-password' > ~/.vault_pass && chmod 600 ~/.vault_pass${NC}"
-    exit 1
-fi
-
-# Decrypt vault to temp file
-TEMP_VAULT=$(mktemp)
-TEMP_SCRIPT=$(mktemp)
-trap "rm -f $TEMP_VAULT $TEMP_SCRIPT" EXIT
-
-if ! ansible-vault decrypt "$VAULT_FILE" --vault-password-file="$VAULT_PASS_FILE" --output="$TEMP_VAULT" 2>/dev/null; then
-    echo -e "${RED}Error: Failed to decrypt vault${NC}"
-    echo -e "${YELLOW}Make sure your vault password is correct in ${VAULT_PASS_FILE}${NC}"
-    exit 1
-fi
-
-# Create Python script to merge credentials
-cat > "$TEMP_SCRIPT" <<'PYTHON_EOF'
+if [ ! -f "$VAULT_FILE" ]; then
+    echo -e "${RED}Error: Vault file not found: ${VAULT_FILE}${NC}"
+    echo -e "${YELLOW}Skipping vault update. Credentials will only be printed below.${NC}"
+    echo ""
+else
+    echo -e "${BLUE}Merging credentials into vault: ${VAULT_FILE}...${NC}"
+    
+    # Check if vault is encrypted
+    WAS_ENCRYPTED=false
+    WORKING_VAULT=""
+    if head -n1 "$VAULT_FILE" | grep -q "^\$ANSIBLE_VAULT"; then
+        echo -e "${BLUE}Vault is encrypted, decrypting temporarily...${NC}"
+        TEMP_VAULT=$(mktemp)
+        trap "rm -f $TEMP_VAULT" EXIT
+        
+        # Try with vault password file first, then prompt
+        VAULT_PASS_FILE="${HOME}/.vault_pass"
+        if [ -f "$VAULT_PASS_FILE" ]; then
+            if ansible-vault decrypt "$VAULT_FILE" --output="$TEMP_VAULT" --vault-password-file="$VAULT_PASS_FILE" 2>/dev/null; then
+                WORKING_VAULT="$TEMP_VAULT"
+                WAS_ENCRYPTED=true
+            else
+                echo -e "${RED}Failed to decrypt vault with ${VAULT_PASS_FILE}${NC}"
+                echo -e "${YELLOW}Skipping vault update. Credentials will only be printed below.${NC}"
+                echo ""
+                rm -f "$TEMP_VAULT"
+            fi
+        else
+            if ansible-vault decrypt "$VAULT_FILE" --output="$TEMP_VAULT" 2>/dev/null; then
+                WORKING_VAULT="$TEMP_VAULT"
+                WAS_ENCRYPTED=true
+            else
+                echo -e "${RED}Failed to decrypt vault${NC}"
+                echo -e "${YELLOW}Skipping vault update. Credentials will only be printed below.${NC}"
+                echo ""
+                rm -f "$TEMP_VAULT"
+            fi
+        fi
+    else
+        echo -e "${YELLOW}Warning: Vault file is not encrypted!${NC}"
+        WORKING_VAULT="$VAULT_FILE"
+    fi
+    
+    if [ -n "$WORKING_VAULT" ]; then
+        # Create Python script to merge credentials into vault
+        TEMP_SCRIPT=$(mktemp)
+        trap "rm -f $TEMP_VAULT $TEMP_SCRIPT" EXIT
+        
+        cat > "$TEMP_SCRIPT" <<'PYTHON_EOF'
 import sys
 import yaml
+from pathlib import Path
 
-def merge_test_credentials(vault_file, client_id, client_secret, admin_token, user_id, user_email):
+def merge_test_credentials(vault_file, client_id, client_secret, user_id, user_email, admin_token):
     """Merge test credentials into existing vault YAML"""
     
     # Load existing vault
@@ -196,24 +176,27 @@ def merge_test_credentials(vault_file, client_id, client_secret, admin_token, us
     if 'secrets' not in vault_data:
         vault_data['secrets'] = {}
     
-    # Create or update test_credentials section
+    # Ensure test_credentials key exists under secrets
+    if 'test_credentials' not in vault_data['secrets']:
+        vault_data['secrets']['test_credentials'] = {}
+    
+    # Update test credentials under secrets
     vault_data['secrets']['test_credentials'] = {
         'authz_test_client_id': client_id,
         'authz_test_client_secret': client_secret,
-        'authz_admin_token': admin_token,
         'test_user_id': user_id,
-        'test_user_email': user_email
+        'test_user_email': user_email,
+        'authz_admin_token': admin_token
     }
     
     # Write back to file
     with open(vault_file, 'w') as f:
         f.write('---\n')
         f.write('# Ansible Vault - Encrypted Deployment Configuration\n')
-        f.write('# This file is encrypted with ansible-vault\n')
         f.write('#\n')
         f.write('# Test credentials updated by bootstrap-test-credentials.sh\n')
         f.write('\n')
-        yaml.dump(vault_data, f, default_flow_style=False, sort_keys=False, width=120, allow_unicode=True)
+        yaml.dump(vault_data, f, default_flow_style=False, sort_keys=False, width=120)
     
     return True
 
@@ -221,42 +204,56 @@ if __name__ == '__main__':
     vault_file = sys.argv[1]
     client_id = sys.argv[2]
     client_secret = sys.argv[3]
-    admin_token = sys.argv[4]
-    user_id = sys.argv[5]
-    user_email = sys.argv[6]
+    user_id = sys.argv[4]
+    user_email = sys.argv[5]
+    admin_token = sys.argv[6]
     
-    try:
-        merge_test_credentials(vault_file, client_id, client_secret, admin_token, user_id, user_email)
-        print("SUCCESS")
-    except Exception as e:
-        print(f"ERROR: {e}", file=sys.stderr)
-        sys.exit(1)
+    success = merge_test_credentials(vault_file, client_id, client_secret, user_id, user_email, admin_token)
+    sys.exit(0 if success else 1)
 PYTHON_EOF
-
-# Run Python script to merge
-if ! python3 "$TEMP_SCRIPT" "$TEMP_VAULT" "$TEST_CLIENT_ID" "$TEST_CLIENT_SECRET" "$ADMIN_TOKEN" "$TEST_USER_ID" "$TEST_USER_EMAIL" 2>/dev/null; then
-    echo -e "${RED}Error: Failed to merge credentials into vault${NC}"
-    exit 1
+        
+        # Run Python script to merge credentials
+        if python3 "$TEMP_SCRIPT" "$WORKING_VAULT" "$TEST_CLIENT_ID" "$TEST_CLIENT_SECRET" "$TEST_USER_ID" "$TEST_USER_EMAIL" "$ADMIN_TOKEN"; then
+            echo -e "${GREEN}✓ Credentials merged into vault${NC}"
+            
+            # Re-encrypt if it was encrypted
+            if [ "$WAS_ENCRYPTED" = true ]; then
+                echo -e "${BLUE}Re-encrypting vault...${NC}"
+                if [ -f "$VAULT_PASS_FILE" ]; then
+                    if ansible-vault encrypt "$WORKING_VAULT" --output="$VAULT_FILE" --vault-password-file="$VAULT_PASS_FILE" 2>/dev/null; then
+                        echo -e "${GREEN}✓ Vault re-encrypted${NC}"
+                    else
+                        echo -e "${RED}Failed to re-encrypt vault${NC}"
+                    fi
+                else
+                    if ansible-vault encrypt "$WORKING_VAULT" --output="$VAULT_FILE" 2>/dev/null; then
+                        echo -e "${GREEN}✓ Vault re-encrypted${NC}"
+                    else
+                        echo -e "${RED}Failed to re-encrypt vault${NC}"
+                    fi
+                fi
+            else
+                cp "$WORKING_VAULT" "$VAULT_FILE"
+            fi
+            
+            echo ""
+            echo -e "${GREEN}✓ Test credentials saved to vault!${NC}"
+            echo ""
+            echo -e "${YELLOW}Credentials are now available to all ansible playbooks and services:${NC}"
+            echo -e "${YELLOW}  - Agent API tests: {{ secrets.test_credentials.authz_test_client_id }}${NC}"
+            echo -e "${YELLOW}  - Search API tests: {{ secrets.test_credentials.authz_test_client_id }}${NC}"
+            echo -e "${YELLOW}  - Ingest API tests: {{ secrets.test_credentials.authz_test_client_id }}${NC}"
+            echo -e "${YELLOW}  - AI Portal tests: {{ secrets.test_credentials.authz_test_client_id }}${NC}"
+            echo -e "${YELLOW}  - Agent Client tests: {{ secrets.test_credentials.authz_test_client_id }}${NC}"
+            echo ""
+        else
+            echo -e "${RED}Failed to merge credentials${NC}"
+        fi
+        
+        rm -f "$TEMP_SCRIPT" "$TEMP_VAULT"
+    fi
 fi
 
-# Re-encrypt vault
-if ! ansible-vault encrypt "$TEMP_VAULT" --vault-password-file="$VAULT_PASS_FILE" --output="$VAULT_FILE" 2>/dev/null; then
-    echo -e "${RED}Error: Failed to re-encrypt vault${NC}"
-    exit 1
-fi
-
-echo -e "${GREEN}✓ Credentials saved to encrypted vault${NC}"
-echo ""
-echo -e "${YELLOW}These credentials are now available to all ansible playbooks and services:${NC}"
-echo -e "${YELLOW}  - Agent API tests: Can use {{ secrets.test_credentials.authz_test_client_id }}${NC}"
-echo -e "${YELLOW}  - Search API tests: Can use {{ secrets.test_credentials.authz_test_client_id }}${NC}"
-echo -e "${YELLOW}  - Ingest API tests: Can use {{ secrets.test_credentials.authz_test_client_id }}${NC}"
-echo -e "${YELLOW}  - AI Portal tests: Can use {{ secrets.test_credentials.authz_test_client_id }}${NC}"
-echo -e "${YELLOW}  - Agent Client tests: Can use {{ secrets.test_credentials.authz_test_client_id }}${NC}"
-echo ""
-echo -e "${BLUE}To use in service templates, add to .env.j2 files:${NC}"
-echo -e "  AUTHZ_TEST_CLIENT_ID={{ secrets.test_credentials.authz_test_client_id }}"
-echo -e "  AUTHZ_TEST_CLIENT_SECRET={{ secrets.test_credentials.authz_test_client_secret }}"
 echo ""
 echo -e "${BLUE}Copy these variables to your busibox-app/.env file:${NC}"
 echo ""
@@ -272,10 +269,6 @@ echo ""
 echo "# Test OAuth Client (for getting service tokens)"
 echo "AUTHZ_TEST_CLIENT_ID=${TEST_CLIENT_ID}"
 echo "AUTHZ_TEST_CLIENT_SECRET=${TEST_CLIENT_SECRET}"
-echo ""
-echo "# Bootstrap Client (fallback)"
-echo "AUTHZ_BOOTSTRAP_CLIENT_ID=${BOOTSTRAP_CLIENT_ID}"
-echo "# AUTHZ_BOOTSTRAP_CLIENT_SECRET=<get-from-ansible-vault>"
 echo ""
 echo "# Admin Token (for RBAC admin operations)"
 echo "AUTHZ_ADMIN_TOKEN=${ADMIN_TOKEN}"
@@ -301,17 +294,8 @@ fi
 echo ""
 echo "# ============================================"
 echo ""
-echo -e "${YELLOW}Note: If the OAuth client creation failed, you may need to:${NC}"
-echo -e "${YELLOW}1. Get the bootstrap client secret from ansible vault:${NC}"
-echo "   cd provision/ansible"
-echo "   ansible-vault view roles/secrets/vars/vault.yml | grep authz_bootstrap"
-echo ""
-echo -e "${YELLOW}2. Use the bootstrap credentials to create the test client manually${NC}"
-echo ""
-echo -e "${BLUE}To test the credentials:${NC}"
-echo "  cd /path/to/busibox-app"
-echo "  # Add the above variables to .env"
-echo "  npm test"
+echo -e "${BLUE}To use in service tests, services can access via environment variables:${NC}"
+echo -e "  AUTHZ_TEST_CLIENT_ID (from vault: {{ secrets.test_credentials.authz_test_client_id }})"
+echo -e "  AUTHZ_TEST_CLIENT_SECRET (from vault: {{ secrets.test_credentials.authz_test_client_secret }})"
 echo ""
 echo -e "${GREEN}Done!${NC}"
-
