@@ -172,10 +172,7 @@ verify-smoke:
 	@echo ""
 
 # Test targets - run tests on remote containers
-test: test-menu
-
-test-menu:
-	@./test-menu.sh
+# Note: Interactive test menu is now in scripts/test.sh (run via 'make test' from repo root)
 
 test-all-targets: test-ingest test-search test-agent-unit test-apps
 	@echo "================================"

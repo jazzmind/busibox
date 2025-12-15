@@ -26,7 +26,7 @@ Committed all changes for the bootstrap test credentials feature and busibox-app
 
 **Files Modified**:
 - `provision/ansible/Makefile` (added `bootstrap-test-creds` target)
-- `provision/ansible/test-menu.sh` (added option 7 for bootstrap credentials)
+- `scripts/test.sh` (added LLM tests and bootstrap credentials option)
 
 **Changes**:
 - ✅ Script generates OAuth client credentials automatically
