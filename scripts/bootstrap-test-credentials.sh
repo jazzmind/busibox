@@ -103,7 +103,7 @@ fi
 BOOTSTRAP_CLIENT_ID=$(pct exec ${AUTHZ_CTID} -- grep AUTHZ_BOOTSTRAP_CLIENT_ID /srv/authz/.env 2>/dev/null | cut -d= -f2 || echo "ai-portal")
 BOOTSTRAP_CLIENT_SECRET=$(pct exec ${AUTHZ_CTID} -- grep AUTHZ_BOOTSTRAP_CLIENT_SECRET /srv/authz/.env 2>/dev/null | cut -d= -f2 || echo "")
 
-# Check for existing credentials in vault
+# Check for existing credentials in vault (unless --force is set)
 # Note: The vault file is shared between test and production environments
 VAULT_FILE="roles/secrets/vars/vault.yml"
 EXISTING_CREDS_FOUND=false
@@ -113,7 +113,10 @@ TEST_CLIENT_ID=""
 TEST_CLIENT_SECRET=""
 ADMIN_TOKEN=""
 
-if [ -f "$VAULT_FILE" ]; then
+if [ "$FORCE" = true ]; then
+    echo -e "${YELLOW}Force mode: Skipping existing credentials check${NC}"
+    EXISTING_CREDS_FOUND=false
+elif [ -f "$VAULT_FILE" ]; then
     echo -e "${BLUE}Checking for existing credentials in vault...${NC}"
     
     # Try to read existing credentials from vault
