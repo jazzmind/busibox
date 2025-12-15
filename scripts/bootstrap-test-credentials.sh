@@ -12,7 +12,10 @@ set -euo pipefail
 #   ansible vault for use by all services.
 #
 # USAGE:
-#   bash scripts/bootstrap-test-credentials.sh [test|production]
+#   bash scripts/bootstrap-test-credentials.sh [test|production] [--force|-f]
+#
+# OPTIONS:
+#   --force, -f    Force creation of new credentials even if they exist
 #
 # DEPENDENCIES:
 #   - jq (for JSON parsing)
@@ -40,11 +43,24 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Default to test environment
+# Parse arguments
 ENV="${1:-test}"
+FORCE=false
+
+# Check for --force or -f flag
+for arg in "$@"; do
+    case "$arg" in
+        --force|-f)
+            FORCE=true
+            ;;
+    esac
+done
 
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}Bootstrap Test Credentials for Authz${NC}"
+if [ "$FORCE" = true ]; then
+    echo -e "${YELLOW}  (FORCE MODE: Creating new credentials)${NC}"
+fi
 echo -e "${BLUE}========================================${NC}"
 echo ""
 
