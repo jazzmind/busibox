@@ -189,6 +189,15 @@ async def token(request: Request):
         if not token_req.requested_subject:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="requested_subject_required")
 
+        # Validate requested_subject is a valid UUID format
+        try:
+            uuid.UUID(token_req.requested_subject)
+        except (ValueError, AttributeError, TypeError):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, 
+                detail="invalid_subject_format"
+            )
+
         _enforce_audience(client, token_req.audience)
         scope = _enforce_scopes(client, token_req.scope)
 

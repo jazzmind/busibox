@@ -11,6 +11,26 @@ from middleware.rls import set_rls_session_vars
 logger = structlog.get_logger()
 
 
+def validate_uuid(value: str, field_name: str = "id") -> uuid.UUID:
+    """
+    Validate and convert a string to UUID.
+    
+    Args:
+        value: String to convert to UUID
+        field_name: Name of the field for error messages
+        
+    Returns:
+        UUID object
+        
+    Raises:
+        ValueError: If the string is not a valid UUID
+    """
+    try:
+        return uuid.UUID(value)
+    except (ValueError, AttributeError, TypeError) as e:
+        raise ValueError(f"Invalid UUID format for {field_name}: {value}") from e
+
+
 class PostgresService:
     def __init__(self, config: dict):
         self.host = config.get("postgres_host", "10.96.200.203")
@@ -388,7 +408,12 @@ class PostgresService:
 
     async def user_exists(self, user_id: str) -> bool:
         """Check if a user exists in authz_users."""
-        uid = uuid.UUID(user_id)
+        try:
+            uid = uuid.UUID(user_id)
+        except (ValueError, AttributeError, TypeError):
+            # Invalid UUID format
+            return False
+        
         async with self.acquire(None, None) as conn:
             row = await conn.fetchrow(
                 "SELECT 1 FROM authz_users WHERE user_id = $1",
@@ -397,7 +422,12 @@ class PostgresService:
             return row is not None
 
     async def get_user_roles(self, user_id: str) -> List[dict]:
-        uid = uuid.UUID(user_id)
+        try:
+            uid = uuid.UUID(user_id)
+        except (ValueError, AttributeError, TypeError):
+            # Invalid UUID format - return empty list
+            return []
+        
         async with self.acquire(user_id, None) as conn:
             rows = await conn.fetch(
                 """
@@ -509,6 +539,10 @@ class PostgresService:
             return result != "DELETE 0"
 
     async def add_user_role(self, *, user_id: str, role_id: str) -> dict:
+        # Validate UUIDs before database operation
+        uid = validate_uuid(user_id, "user_id")
+        rid = validate_uuid(role_id, "role_id")
+        
         async with self.acquire(None, None) as conn:
             row = await conn.fetchrow(
                 """
@@ -518,17 +552,21 @@ class PostgresService:
                   SET created_at = authz_user_roles.created_at
                 RETURNING user_id::text, role_id::text, created_at
                 """,
-                uuid.UUID(user_id),
-                uuid.UUID(role_id),
+                uid,
+                rid,
             )
             return dict(row)
 
     async def remove_user_role(self, *, user_id: str, role_id: str) -> bool:
+        # Validate UUIDs before database operation
+        uid = validate_uuid(user_id, "user_id")
+        rid = validate_uuid(role_id, "role_id")
+        
         async with self.acquire(None, None) as conn:
             result = await conn.execute(
                 "DELETE FROM authz_user_roles WHERE user_id = $1 AND role_id = $2",
-                uuid.UUID(user_id),
-                uuid.UUID(role_id),
+                uid,
+                rid,
             )
             return result != "DELETE 0"
 
