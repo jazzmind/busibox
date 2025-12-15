@@ -16,7 +16,7 @@ def set_env(monkeypatch):
     monkeypatch.setenv("AUTHZ_BOOTSTRAP_CLIENT_ID", "test-client")
     monkeypatch.setenv("AUTHZ_BOOTSTRAP_CLIENT_SECRET", "test-client-secret")
     monkeypatch.setenv("AUTHZ_BOOTSTRAP_ALLOWED_AUDIENCES", "test-audience,ingest-api,search-api,agent-api")
-    monkeypatch.setenv("AUTHZ_BOOTSTRAP_ALLOWED_SCOPES", "search.read,ingest.write")
+    monkeypatch.setenv("AUTHZ_BOOTSTRAP_ALLOWED_SCOPES", "search.read,ingest.write,ingest.read,agent.execute")
     monkeypatch.setenv("POSTGRES_HOST", "localhost")
     monkeypatch.setenv("POSTGRES_USER", "test_user")
     monkeypatch.setenv("POSTGRES_PASSWORD", "test_pass")
