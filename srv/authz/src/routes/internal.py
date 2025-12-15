@@ -67,9 +67,11 @@ async def sync_user(request: Request):
     resolved_role_ids = []
     print(f"DEBUG internal.py: user_role_ids to resolve={su.user_role_ids}")
     for role_id_or_name in su.user_role_ids:
+        print(f"DEBUG internal.py: processing role_id_or_name={role_id_or_name}, type={type(role_id_or_name)}")
         # Check if it's a UUID (role ID)
         try:
-            uuid.UUID(role_id_or_name)
+            parsed_uuid = uuid.UUID(role_id_or_name)
+            print(f"DEBUG internal.py: successfully parsed as UUID: {parsed_uuid}")
             # It's a UUID, check if it exists
             role = await pg.get_role_by_id(role_id_or_name)
             print(f"DEBUG internal.py: get_role_by_id({role_id_or_name}) returned {role}")
