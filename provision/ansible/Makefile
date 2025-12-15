@@ -1,4 +1,4 @@
-.PHONY: ping all files pg milvus nginx search search-api agent ingest ingest-api ingest-worker ingest-update-tests apps openwebui deploy-apps deploy-ai-portal deploy-agent-client deploy-doc-intel deploy-foundation deploy-project-analysis deploy-innovation verify verify-health verify-smoke test test-menu test-ingest test-ingest-all test-ingest-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-apps test-all configure generate-token-keys bootstrap-test-creds
+.PHONY: ping all files pg milvus nginx search search-api agent ingest ingest-api ingest-worker ingest-update-tests apps openwebui deploy-apps deploy-ai-portal deploy-agent-client deploy-doc-intel deploy-foundation deploy-project-analysis deploy-innovation verify verify-health verify-smoke test test-menu test-ingest test-ingest-all test-ingest-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-authz test-apps test-all configure generate-token-keys bootstrap-test-creds
 # Default to production inventory (can override with: make all INV=inventory/test)
 INV=inventory/production
 
@@ -19,12 +19,14 @@ ifeq ($(INV),inventory/test)
   AGENT_IP = 10.96.201.202
   APPS_IP = 10.96.201.201
   MILVUS_IP = 10.96.201.204
+  AUTHZ_IP = 10.96.201.210
 else
   # Production IPs (10.96.200.0/21 network)
   INGEST_IP = 10.96.200.206
   AGENT_IP = 10.96.200.202
   APPS_IP = 10.96.200.201
   MILVUS_IP = 10.96.200.204
+  AUTHZ_IP = 10.96.200.210
 endif
 
 ping:
@@ -354,6 +356,20 @@ test-agent-coverage:
 	@echo "Coverage report: ssh root@$(AGENT_IP) and view /srv/agent/htmlcov/index.html"
 	@echo ""
 
+test-authz:
+	@echo "Running authz service tests..."
+	@echo "Container: authz-lxc ($(AUTHZ_IP))"
+	@echo ""
+	@if [ -z "$(AUTHZ_IP)" ] || [ "$(AUTHZ_IP)" = " " ]; then \
+		echo "ERROR: Could not resolve authz-lxc IP address"; \
+		echo "Check inventory: $(INV)/hosts.yml"; \
+		exit 1; \
+	fi
+	@echo "=== Authz Service Tests (pytest) ==="
+	@ssh root@$(AUTHZ_IP) 'cd /srv/authz/app && source ../venv/bin/activate && pip install -q -r requirements.test.txt 2>/dev/null; pytest -v --tb=short' || (echo "Authz tests FAILED" && exit 1)
+	@echo "✓ Authz tests passed"
+	@echo ""
+
 test-apps:
 	@echo "Running app tests..."
 	@echo "Container: apps-lxc ($(APPS_IP))"
@@ -405,7 +421,7 @@ test-search-coverage:
 	@echo "Coverage report: ssh root@$(MILVUS_IP) and view /opt/search/htmlcov/index.html"
 	@echo ""
 
-test-all: test-ingest test-search test-agent test-apps
+test-all: test-ingest test-search test-agent test-authz test-apps
 	@echo "================================"
 	@echo "All service tests passed!"
 	@echo "================================"
