@@ -280,11 +280,12 @@ async def test_remove_user_role(admin_app, monkeypatch):
             json={"user_id": user_id, "role_id": role_id},
         )
 
-        # Remove user-role binding
+        # Remove user-role binding (use content instead of json for DELETE)
+        import json as json_lib
         resp = await client.delete(
             "/admin/user-roles",
-            headers={"Authorization": "Bearer test-admin-token"},
-            json={"user_id": user_id, "role_id": role_id},
+            headers={"Authorization": "Bearer test-admin-token", "Content-Type": "application/json"},
+            content=json_lib.dumps({"user_id": user_id, "role_id": role_id}),
         )
 
     assert resp.status_code == 200

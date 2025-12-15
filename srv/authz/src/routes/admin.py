@@ -358,8 +358,8 @@ async def get_user_roles(request: Request, user_id: str):
             id=r["id"],
             name=r["name"],
             description=r.get("description"),
-            created_at=r.get("created_at", ""),
-            updated_at=r.get("updated_at", ""),
+            created_at=r.get("created_at").isoformat() if r.get("created_at") else "",
+            updated_at=r.get("updated_at").isoformat() if r.get("updated_at") else "",
         )
         for r in roles
     ]
