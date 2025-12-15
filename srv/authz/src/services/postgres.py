@@ -440,6 +440,22 @@ class PostgresService:
             )
             return dict(row) if row else None
 
+    async def get_role_by_id(self, role_id: str) -> dict | None:
+        """Alias for get_role for consistency."""
+        return await self.get_role(role_id)
+
+    async def get_role_by_name(self, name: str) -> dict | None:
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id::text, name, description, created_at, updated_at
+                FROM authz_roles
+                WHERE name = $1
+                """,
+                name,
+            )
+            return dict(row) if row else None
+
     async def update_role(self, *, role_id: str, name: str | None, description: str | None) -> dict | None:
         async with self.acquire(None, None) as conn:
             # Build dynamic update query
