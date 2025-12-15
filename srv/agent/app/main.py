@@ -4,7 +4,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import agents, auth, conversations, dispatcher, evals, health, runs, scores, streams, tools, workflows
+from app.api import agents, auth, chat, conversations, dispatcher, evals, health, runs, scores, streams, tools, workflows
 from app.config.settings import get_settings
 from app.db.session import engine
 from app.models.base import Base
@@ -45,6 +45,7 @@ async def startup_event() -> None:
 
 app.include_router(health.router)
 app.include_router(auth.router)
+app.include_router(chat.router)
 app.include_router(agents.router)
 app.include_router(tools.router)
 app.include_router(workflows.router)
