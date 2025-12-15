@@ -155,54 +155,108 @@ echo -e "${GREEN}Test Credentials Generated!${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo ""
 
-# Save credentials to group_vars for ansible
+# Save credentials to ansible vault
 INVENTORY_DIR="provision/ansible/inventory/${ENV}"
-GROUP_VARS_FILE="${INVENTORY_DIR}/group_vars/all/test_credentials.yml"
+VAULT_FILE="${INVENTORY_DIR}/group_vars/all/vault.yml"
+VAULT_PASS_FILE="${HOME}/.vault_pass"
 
-echo -e "${BLUE}Saving credentials to ${GROUP_VARS_FILE}...${NC}"
+echo -e "${BLUE}Merging credentials into ansible vault...${NC}"
 
-mkdir -p "$(dirname "$GROUP_VARS_FILE")"
-
-cat > "$GROUP_VARS_FILE" << EOF
----
-# Test credentials for integration testing
-# Generated: $(date)
-# DO NOT COMMIT - Add to .gitignore if not already there
-
-# Test OAuth Client (for service-to-service authentication)
-authz_test_client_id: "${TEST_CLIENT_ID}"
-authz_test_client_secret: "${TEST_CLIENT_SECRET}"
-
-# Test User
-test_user_id: "${TEST_USER_ID}"
-test_user_email: "${TEST_USER_EMAIL}"
-
-# Admin Token (for RBAC operations)
-authz_admin_token: "${ADMIN_TOKEN}"
-EOF
-
-echo -e "${GREEN}✓ Credentials saved to ${GROUP_VARS_FILE}${NC}"
-echo ""
-
-# Update .gitignore to exclude test credentials
-GITIGNORE_FILE="provision/ansible/inventory/${ENV}/group_vars/all/.gitignore"
-if [ ! -f "$GITIGNORE_FILE" ] || ! grep -q "test_credentials.yml" "$GITIGNORE_FILE" 2>/dev/null; then
-    mkdir -p "$(dirname "$GITIGNORE_FILE")"
-    echo "test_credentials.yml" >> "$GITIGNORE_FILE"
-    echo -e "${GREEN}✓ Added test_credentials.yml to .gitignore${NC}"
+# Check if vault password file exists
+if [ ! -f "$VAULT_PASS_FILE" ]; then
+    echo -e "${RED}Error: Vault password file not found at ${VAULT_PASS_FILE}${NC}"
+    echo -e "${YELLOW}Please create it with: echo 'your-vault-password' > ~/.vault_pass && chmod 600 ~/.vault_pass${NC}"
+    exit 1
 fi
 
+# Decrypt vault to temp file
+TEMP_VAULT=$(mktemp)
+TEMP_SCRIPT=$(mktemp)
+trap "rm -f $TEMP_VAULT $TEMP_SCRIPT" EXIT
+
+if ! ansible-vault decrypt "$VAULT_FILE" --vault-password-file="$VAULT_PASS_FILE" --output="$TEMP_VAULT" 2>/dev/null; then
+    echo -e "${RED}Error: Failed to decrypt vault${NC}"
+    echo -e "${YELLOW}Make sure your vault password is correct in ${VAULT_PASS_FILE}${NC}"
+    exit 1
+fi
+
+# Create Python script to merge credentials
+cat > "$TEMP_SCRIPT" <<'PYTHON_EOF'
+import sys
+import yaml
+
+def merge_test_credentials(vault_file, client_id, client_secret, admin_token, user_id, user_email):
+    """Merge test credentials into existing vault YAML"""
+    
+    # Load existing vault
+    with open(vault_file, 'r') as f:
+        vault_data = yaml.safe_load(f) or {}
+    
+    # Ensure secrets key exists
+    if 'secrets' not in vault_data:
+        vault_data['secrets'] = {}
+    
+    # Create or update test_credentials section
+    vault_data['secrets']['test_credentials'] = {
+        'authz_test_client_id': client_id,
+        'authz_test_client_secret': client_secret,
+        'authz_admin_token': admin_token,
+        'test_user_id': user_id,
+        'test_user_email': user_email
+    }
+    
+    # Write back to file
+    with open(vault_file, 'w') as f:
+        f.write('---\n')
+        f.write('# Ansible Vault - Encrypted Deployment Configuration\n')
+        f.write('# This file is encrypted with ansible-vault\n')
+        f.write('#\n')
+        f.write('# Test credentials updated by bootstrap-test-credentials.sh\n')
+        f.write('\n')
+        yaml.dump(vault_data, f, default_flow_style=False, sort_keys=False, width=120, allow_unicode=True)
+    
+    return True
+
+if __name__ == '__main__':
+    vault_file = sys.argv[1]
+    client_id = sys.argv[2]
+    client_secret = sys.argv[3]
+    admin_token = sys.argv[4]
+    user_id = sys.argv[5]
+    user_email = sys.argv[6]
+    
+    try:
+        merge_test_credentials(vault_file, client_id, client_secret, admin_token, user_id, user_email)
+        print("SUCCESS")
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
+PYTHON_EOF
+
+# Run Python script to merge
+if ! python3 "$TEMP_SCRIPT" "$TEMP_VAULT" "$TEST_CLIENT_ID" "$TEST_CLIENT_SECRET" "$ADMIN_TOKEN" "$TEST_USER_ID" "$TEST_USER_EMAIL" 2>/dev/null; then
+    echo -e "${RED}Error: Failed to merge credentials into vault${NC}"
+    exit 1
+fi
+
+# Re-encrypt vault
+if ! ansible-vault encrypt "$TEMP_VAULT" --vault-password-file="$VAULT_PASS_FILE" --output="$VAULT_FILE" 2>/dev/null; then
+    echo -e "${RED}Error: Failed to re-encrypt vault${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}✓ Credentials saved to encrypted vault${NC}"
 echo ""
 echo -e "${YELLOW}These credentials are now available to all ansible playbooks and services:${NC}"
-echo -e "${YELLOW}  - Agent API tests: Can use {{ authz_test_client_id }}${NC}"
-echo -e "${YELLOW}  - Search API tests: Can use {{ authz_test_client_id }}${NC}"
-echo -e "${YELLOW}  - Ingest API tests: Can use {{ authz_test_client_id }}${NC}"
-echo -e "${YELLOW}  - AI Portal tests: Can use {{ authz_test_client_id }}${NC}"
-echo -e "${YELLOW}  - Agent Client tests: Can use {{ authz_test_client_id }}${NC}"
+echo -e "${YELLOW}  - Agent API tests: Can use {{ secrets.test_credentials.authz_test_client_id }}${NC}"
+echo -e "${YELLOW}  - Search API tests: Can use {{ secrets.test_credentials.authz_test_client_id }}${NC}"
+echo -e "${YELLOW}  - Ingest API tests: Can use {{ secrets.test_credentials.authz_test_client_id }}${NC}"
+echo -e "${YELLOW}  - AI Portal tests: Can use {{ secrets.test_credentials.authz_test_client_id }}${NC}"
+echo -e "${YELLOW}  - Agent Client tests: Can use {{ secrets.test_credentials.authz_test_client_id }}${NC}"
 echo ""
 echo -e "${BLUE}To use in service templates, add to .env.j2 files:${NC}"
-echo -e "  AUTHZ_TEST_CLIENT_ID={{ authz_test_client_id }}"
-echo -e "  AUTHZ_TEST_CLIENT_SECRET={{ authz_test_client_secret }}"
+echo -e "  AUTHZ_TEST_CLIENT_ID={{ secrets.test_credentials.authz_test_client_id }}"
+echo -e "  AUTHZ_TEST_CLIENT_SECRET={{ secrets.test_credentials.authz_test_client_secret }}"
 echo ""
 echo -e "${BLUE}Copy these variables to your busibox-app/.env file:${NC}"
 echo ""
