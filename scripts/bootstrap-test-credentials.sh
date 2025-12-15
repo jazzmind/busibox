@@ -154,6 +154,56 @@ echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}Test Credentials Generated!${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo ""
+
+# Save credentials to group_vars for ansible
+INVENTORY_DIR="provision/ansible/inventory/${ENV}"
+GROUP_VARS_FILE="${INVENTORY_DIR}/group_vars/all/test_credentials.yml"
+
+echo -e "${BLUE}Saving credentials to ${GROUP_VARS_FILE}...${NC}"
+
+mkdir -p "$(dirname "$GROUP_VARS_FILE")"
+
+cat > "$GROUP_VARS_FILE" << EOF
+---
+# Test credentials for integration testing
+# Generated: $(date)
+# DO NOT COMMIT - Add to .gitignore if not already there
+
+# Test OAuth Client (for service-to-service authentication)
+authz_test_client_id: "${TEST_CLIENT_ID}"
+authz_test_client_secret: "${TEST_CLIENT_SECRET}"
+
+# Test User
+test_user_id: "${TEST_USER_ID}"
+test_user_email: "${TEST_USER_EMAIL}"
+
+# Admin Token (for RBAC operations)
+authz_admin_token: "${ADMIN_TOKEN}"
+EOF
+
+echo -e "${GREEN}✓ Credentials saved to ${GROUP_VARS_FILE}${NC}"
+echo ""
+
+# Update .gitignore to exclude test credentials
+GITIGNORE_FILE="provision/ansible/inventory/${ENV}/group_vars/all/.gitignore"
+if [ ! -f "$GITIGNORE_FILE" ] || ! grep -q "test_credentials.yml" "$GITIGNORE_FILE" 2>/dev/null; then
+    mkdir -p "$(dirname "$GITIGNORE_FILE")"
+    echo "test_credentials.yml" >> "$GITIGNORE_FILE"
+    echo -e "${GREEN}✓ Added test_credentials.yml to .gitignore${NC}"
+fi
+
+echo ""
+echo -e "${YELLOW}These credentials are now available to all ansible playbooks and services:${NC}"
+echo -e "${YELLOW}  - Agent API tests: Can use {{ authz_test_client_id }}${NC}"
+echo -e "${YELLOW}  - Search API tests: Can use {{ authz_test_client_id }}${NC}"
+echo -e "${YELLOW}  - Ingest API tests: Can use {{ authz_test_client_id }}${NC}"
+echo -e "${YELLOW}  - AI Portal tests: Can use {{ authz_test_client_id }}${NC}"
+echo -e "${YELLOW}  - Agent Client tests: Can use {{ authz_test_client_id }}${NC}"
+echo ""
+echo -e "${BLUE}To use in service templates, add to .env.j2 files:${NC}"
+echo -e "  AUTHZ_TEST_CLIENT_ID={{ authz_test_client_id }}"
+echo -e "  AUTHZ_TEST_CLIENT_SECRET={{ authz_test_client_secret }}"
+echo ""
 echo -e "${BLUE}Copy these variables to your busibox-app/.env file:${NC}"
 echo ""
 echo "# ============================================"
