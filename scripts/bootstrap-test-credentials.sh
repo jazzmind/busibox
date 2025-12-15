@@ -281,13 +281,13 @@ echo "# Service URLs (${ENV} environment)"
 if [ "$ENV" = "test" ]; then
     echo "INGEST_API_HOST=10.96.201.206"
     echo "INGEST_API_PORT=8002"
-    echo "AGENT_API_URL=http://10.96.201.207:4111"
+    echo "AGENT_API_URL=http://10.96.201.202:8000"
     echo "MILVUS_HOST=10.96.201.204"
     echo "MILVUS_PORT=19530"
 else
     echo "INGEST_API_HOST=10.96.200.206"
     echo "INGEST_API_PORT=8002"
-    echo "AGENT_API_URL=http://10.96.200.207:4111"
+    echo "AGENT_API_URL=http://10.96.200.202:8000"
     echo "MILVUS_HOST=10.96.200.204"
     echo "MILVUS_PORT=19530"
 fi
