@@ -110,6 +110,10 @@ class FakePG:
     ):
         self.users[user_id] = {"email": email, "role_ids": list(user_role_ids)}
 
+    async def user_exists(self, user_id: str) -> bool:
+        """Check if a user exists."""
+        return user_id in self.users
+
     async def get_user_roles(self, user_id: str):
         u = self.users.get(user_id)
         if not u:
@@ -189,16 +193,19 @@ class FakePG:
         return False
 
     async def add_user_role(self, *, user_id: str, role_id: str) -> dict:
+        from datetime import datetime
         if user_id not in self.users:
             self.users[user_id] = {"email": "", "role_ids": []}
         if role_id not in self.users[user_id].get("role_ids", []):
             if "role_ids" not in self.users[user_id]:
                 self.users[user_id]["role_ids"] = []
             self.users[user_id]["role_ids"].append(role_id)
-        role = self.roles.get(role_id)
-        if role:
-            return {"id": role_id, "name": role.get("name")}
-        return {"id": role_id, "name": "Unknown"}
+        # Return format matching PostgresService: user_id, role_id, created_at
+        return {
+            "user_id": user_id,
+            "role_id": role_id,
+            "created_at": datetime.now(),
+        }
 
     async def remove_user_role(self, *, user_id: str, role_id: str) -> bool:
         if user_id in self.users:

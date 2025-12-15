@@ -385,6 +385,16 @@ class PostgresService:
                     uuid.UUID(rid),
                 )
 
+    async def user_exists(self, user_id: str) -> bool:
+        """Check if a user exists in authz_users."""
+        uid = uuid.UUID(user_id)
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                "SELECT 1 FROM authz_users WHERE user_id = $1",
+                uid,
+            )
+            return row is not None
+
     async def get_user_roles(self, user_id: str) -> List[dict]:
         uid = uuid.UUID(user_id)
         async with self.acquire(user_id, None) as conn:

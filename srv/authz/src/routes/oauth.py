@@ -193,9 +193,12 @@ async def token(request: Request):
         scope = _enforce_scopes(client, token_req.scope)
 
         # Pull RBAC from authz DB (synced from ai-portal initially).
-        roles = await _pg.get_user_roles(token_req.requested_subject)
-        if roles is None:
+        # First check if user exists (get_user_roles returns empty list for non-existent users)
+        await _pg.connect()
+        if not await _pg.user_exists(token_req.requested_subject):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unknown_subject")
+        
+        roles = await _pg.get_user_roles(token_req.requested_subject)
 
         # Current compatibility behavior: treat role membership as full CRUD for that role.
         role_claims = [
