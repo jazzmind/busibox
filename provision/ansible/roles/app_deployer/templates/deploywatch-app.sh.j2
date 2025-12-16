@@ -548,14 +548,6 @@ start_application() {
     systemctl daemon-reload
     systemctl start "${APP_NAME}.service"
     systemctl enable "${APP_NAME}.service"
-            ls -la "${DEPLOY_PATH}" >&2
-            return 1
-        fi
-{% endif %}
-    elif [[ "${PROCESS_MANAGER}" == "systemd" ]]; then
-        log_info "Starting application via systemd"
-        systemctl start "${APP_NAME}.service"
-    fi
 }
 
 # Main deployment flow
