@@ -64,12 +64,16 @@
     daemon_reload: yes
   when: ingest_api_service_file.changed
 
-- name: Enable and start ingest API service
+- name: Enable ingest API service
   systemd:
     name: ingest-api
     enabled: yes
-    state: started
     daemon_reload: yes
+
+- name: Restart ingest API service (always restart on deploy)
+  systemd:
+    name: ingest-api
+    state: restarted
 
 - name: Create ingest API health check script
   copy:

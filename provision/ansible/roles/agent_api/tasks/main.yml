@@ -184,12 +184,17 @@
     - Reload systemd
     - Restart agent-api
 
-- name: Enable and start agent service
+- name: Enable agent service
   systemd:
     name: agent-api
     enabled: yes
-    state: started
     daemon_reload: yes
+
+- name: Restart agent service (always restart on deploy)
+  systemd:
+    name: agent-api
+    state: restarted
+  register: restart_result
 
 - name: Wait for agent service to be ready
   uri:

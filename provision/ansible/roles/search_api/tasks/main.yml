@@ -153,12 +153,16 @@
     - Reload systemd
     - Restart search-api
 
-- name: Enable and start search service
+- name: Enable search service
   systemd:
     name: search-api
     enabled: yes
-    state: started
     daemon_reload: yes
+
+- name: Restart search service (always restart on deploy)
+  systemd:
+    name: search-api
+    state: restarted
 
 - name: Deploy search-test script
   copy:

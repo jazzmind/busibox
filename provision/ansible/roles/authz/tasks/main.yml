@@ -150,11 +150,16 @@
     daemon_reload: true
   tags: [authz]
 
-- name: Enable and start authz service
+- name: Enable authz service
   systemd:
     name: "{{ authz_service_name }}"
     enabled: true
-    state: started
+  tags: [authz]
+
+- name: Restart authz service (always restart on deploy)
+  systemd:
+    name: "{{ authz_service_name }}"
+    state: restarted
   tags: [authz]
 
 - name: Verify authz service is running

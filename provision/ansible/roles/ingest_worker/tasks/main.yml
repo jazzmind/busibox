@@ -269,8 +269,12 @@
     daemon_reload: yes
   when: ingest_service_file.changed
 
-- name: Enable and start ingest worker service
+- name: Enable ingest worker service
   systemd:
     name: ingest-worker
     enabled: yes
-    state: started
+
+- name: Restart ingest worker service (always restart on deploy)
+  systemd:
+    name: ingest-worker
+    state: restarted
