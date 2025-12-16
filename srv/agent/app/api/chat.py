@@ -318,8 +318,7 @@ async def send_chat_message(
             conversation_id=conversation.id,
             role="assistant",
             content=assistant_content,
-            model=selected_model,  # Store the actual selected model
-            routing_decision=decision.model_dump(),
+            routing_decision=decision.model_dump(),  # Model selection is in routing_decision
             tool_calls=tool_calls if tool_calls else None,
             run_id=primary_run_id
         )
