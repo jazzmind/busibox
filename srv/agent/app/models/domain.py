@@ -78,6 +78,8 @@ class WorkflowDefinition(Base):
     name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
     description: Mapped[Optional[str]] = mapped_column(Text)
     steps: Mapped[list] = mapped_column(JSON, default=list)
+    trigger: Mapped[dict] = mapped_column(JSON, default=dict)  # NEW: Trigger configuration
+    guardrails: Mapped[Optional[dict]] = mapped_column(JSON, default=None)  # NEW: Global guardrails
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_by: Mapped[Optional[str]] = mapped_column(String(255))
     version: Mapped[int] = mapped_column(Integer, default=1)
@@ -89,6 +91,109 @@ class WorkflowDefinition(Base):
     def __repr__(self) -> str:
         return f"<WorkflowDefinition(id={self.id}, name={self.name}, version={self.version})>"
 
+
+class WorkflowExecution(Base):
+    """Track workflow execution state and results"""
+    __tablename__ = "workflow_executions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    workflow_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workflow_definitions.id", ondelete="CASCADE"), index=True
+    )
+    status: Mapped[str] = mapped_column(String(50), default="pending", index=True)
+    # Status values: pending, running, completed, failed, timeout, awaiting_human, cancelled
+    
+    trigger_source: Mapped[str] = mapped_column(String(255))  # manual, cron, webhook, event
+    input_data: Mapped[dict] = mapped_column(JSON, default=dict)
+    
+    # Current execution state
+    current_step_id: Mapped[Optional[str]] = mapped_column(String(255))
+    step_outputs: Mapped[dict] = mapped_column(JSON, default=dict)  # Results from each step
+    
+    # Usage tracking (aggregated across all steps)
+    usage_requests: Mapped[int] = mapped_column(Integer, default=0)
+    usage_input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    usage_output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    usage_tool_calls: Mapped[int] = mapped_column(Integer, default=0)
+    estimated_cost_dollars: Mapped[float] = mapped_column(Float, default=0.0)
+    
+    # Timing
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    duration_seconds: Mapped[Optional[float]] = mapped_column(Float)
+    
+    # Error tracking
+    error: Mapped[Optional[str]] = mapped_column(Text)
+    failed_step_id: Mapped[Optional[str]] = mapped_column(String(255))
+    
+    # Human-in-loop state
+    awaiting_approval_data: Mapped[Optional[dict]] = mapped_column(JSON)
+    
+    created_by: Mapped[Optional[str]] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+    
+    # Relationships
+    workflow: Mapped["WorkflowDefinition"] = relationship("WorkflowDefinition", lazy="selectin")
+    steps: Mapped[list["StepExecution"]] = relationship(
+        "StepExecution", back_populates="execution", cascade="all, delete-orphan"
+    )
+    
+    __table_args__ = (
+        Index('idx_workflow_executions_workflow_id', 'workflow_id'),
+        Index('idx_workflow_executions_status', 'status'),
+        Index('idx_workflow_executions_created_at', 'created_at'),
+    )
+    
+    def __repr__(self) -> str:
+        return f"<WorkflowExecution(id={self.id}, workflow_id={self.workflow_id}, status={self.status})>"
+
+
+class StepExecution(Base):
+    """Track individual step execution within a workflow"""
+    __tablename__ = "step_executions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    execution_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workflow_executions.id", ondelete="CASCADE"), index=True
+    )
+    step_id: Mapped[str] = mapped_column(String(255), index=True)  # From workflow step definition
+    status: Mapped[str] = mapped_column(String(50), default="pending")
+    # Status values: pending, running, completed, failed, skipped
+    
+    # Step I/O
+    input_data: Mapped[Optional[dict]] = mapped_column(JSON)
+    output_data: Mapped[Optional[dict]] = mapped_column(JSON)
+    
+    # Usage tracking (for this step only)
+    usage_requests: Mapped[int] = mapped_column(Integer, default=0)
+    usage_input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    usage_output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    usage_tool_calls: Mapped[int] = mapped_column(Integer, default=0)
+    estimated_cost_dollars: Mapped[float] = mapped_column(Float, default=0.0)
+    
+    # Timing
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    duration_seconds: Mapped[Optional[float]] = mapped_column(Float)
+    
+    # Error tracking
+    error: Mapped[Optional[str]] = mapped_column(Text)
+    
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+    
+    # Relationships
+    execution: Mapped["WorkflowExecution"] = relationship("WorkflowExecution", back_populates="steps")
+    
+    __table_args__ = (
+        Index('idx_step_executions_execution_id', 'execution_id'),
+        Index('idx_step_executions_step_id', 'step_id'),
+        Index('idx_step_executions_status', 'status'),
+    )
+    
+    def __repr__(self) -> str:
+        return f"<StepExecution(id={self.id}, execution_id={self.execution_id}, step_id={self.step_id}, status={self.status})>"
 
 class EvalDefinition(Base):
     __tablename__ = "eval_definitions"

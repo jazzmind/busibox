@@ -3,11 +3,16 @@ Workflow execution engine for multi-step agent orchestration.
 
 Supports:
 - Sequential step execution
-- Simple conditional branching
+- Conditional branching with JSONPath evaluation
+- Parallel step execution
+- Loop/iteration steps
+- Human-in-loop approvals
 - State persistence between steps
+- Usage tracking and guardrails
 - Error handling and recovery
 """
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -18,7 +23,7 @@ from sqlalchemy.orm import attributes
 
 from app.agents.core import BusiboxDeps
 from app.clients.busibox import BusiboxClient
-from app.models.domain import RunRecord, WorkflowDefinition
+from app.models.domain import RunRecord, WorkflowDefinition, WorkflowExecution, StepExecution
 from app.schemas.auth import Principal
 from app.services.agent_registry import agent_registry
 from app.services.token_service import get_or_exchange_token
@@ -79,6 +84,70 @@ def _resolve_args(args: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, An
         else:
             resolved[key] = _resolve_value(value, context)
     return resolved
+
+
+def _evaluate_condition(condition: Dict[str, Any], context: Dict[str, Any]) -> bool:
+    """
+    Evaluate a condition against the execution context.
+    
+    Args:
+        condition: Condition definition with field, operator, value
+        context: Execution context with step outputs
+        
+    Returns:
+        True if condition passes, False otherwise
+        
+    Supported operators:
+        - eq: Equal
+        - ne: Not equal
+        - gt: Greater than
+        - lt: Less than
+        - gte: Greater than or equal
+        - lte: Less than or equal
+        - contains: String/array contains
+        - exists: Field exists (non-null)
+    """
+    field = condition.get("field")
+    operator = condition.get("operator")
+    expected_value = condition.get("value")
+    
+    # Resolve the field value from context
+    actual_value = _resolve_value(field, context)
+    
+    logger.debug(f"Evaluating condition: {field} {operator} {expected_value}, actual: {actual_value}")
+    
+    if operator == "exists":
+        return actual_value is not None
+    
+    if operator == "eq":
+        return actual_value == expected_value
+    
+    if operator == "ne":
+        return actual_value != expected_value
+    
+    if operator == "gt":
+        return actual_value > expected_value if actual_value is not None else False
+    
+    if operator == "lt":
+        return actual_value < expected_value if actual_value is not None else False
+    
+    if operator == "gte":
+        return actual_value >= expected_value if actual_value is not None else False
+    
+    if operator == "lte":
+        return actual_value <= expected_value if actual_value is not None else False
+    
+    if operator == "contains":
+        if actual_value is None:
+            return False
+        if isinstance(actual_value, str):
+            return expected_value in actual_value
+        if isinstance(actual_value, list):
+            return expected_value in actual_value
+        return False
+    
+    logger.warning(f"Unknown condition operator: {operator}")
+    return False
 
 
 def _add_workflow_event(
@@ -337,8 +406,9 @@ def validate_workflow_steps(steps: List[Dict[str, Any]]) -> None:
         step_ids.add(step_id)
         
         # Validate step type
-        if step_type not in ["tool", "agent"]:
-            raise ValueError(f"Step {step_id} has invalid type: {step_type}")
+        valid_types = ["tool", "agent", "condition", "human", "parallel", "loop"]
+        if step_type not in valid_types:
+            raise ValueError(f"Step {step_id} has invalid type: {step_type}. Must be one of: {valid_types}")
         
         # Validate tool steps
         if step_type == "tool":
@@ -346,9 +416,35 @@ def validate_workflow_steps(steps: List[Dict[str, Any]]) -> None:
                 raise ValueError(f"Tool step {step_id} missing required field: tool")
         
         # Validate agent steps
-        if step_type == "agent":
-            if "agent" not in step:
-                raise ValueError(f"Agent step {step_id} missing required field: agent")
+        elif step_type == "agent":
+            if "agent_id" not in step and "agent" not in step:
+                raise ValueError(f"Agent step {step_id} missing required field: agent_id or agent")
+        
+        # Validate condition steps
+        elif step_type == "condition":
+            if "condition" not in step:
+                raise ValueError(f"Condition step {step_id} missing required field: condition")
+            condition = step["condition"]
+            if "field" not in condition or "operator" not in condition:
+                raise ValueError(f"Condition step {step_id} missing field or operator")
+        
+        # Validate human steps
+        elif step_type == "human":
+            if "human_config" not in step:
+                raise ValueError(f"Human step {step_id} missing required field: human_config")
+        
+        # Validate parallel steps
+        elif step_type == "parallel":
+            if "parallel_steps" not in step or not step["parallel_steps"]:
+                raise ValueError(f"Parallel step {step_id} missing or empty parallel_steps")
+        
+        # Validate loop steps
+        elif step_type == "loop":
+            if "loop_config" not in step:
+                raise ValueError(f"Loop step {step_id} missing required field: loop_config")
+            loop_config = step["loop_config"]
+            if "items_path" not in loop_config or "steps" not in loop_config:
+                raise ValueError(f"Loop step {step_id} missing items_path or steps in loop_config")
 
 
 
