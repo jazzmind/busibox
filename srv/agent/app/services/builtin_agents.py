@@ -218,3 +218,4 @@ def get_builtin_agent_by_id(agent_id: uuid.UUID) -> Agent | None:
         if expected_uuid == agent_id:
             return get_builtin_agent_by_name(metadata["name"])
     return None
+
