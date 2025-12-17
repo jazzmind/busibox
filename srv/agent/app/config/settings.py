@@ -24,6 +24,10 @@ class Settings(BaseSettings):
         "http://10.96.200.207:4000/v1",
         description="Base URL for LiteLLM proxy (OpenAI-compatible endpoint)",
     )
+    litellm_api_key: Optional[str] = Field(
+        None,
+        description="API key for LiteLLM proxy (if authentication is enabled)",
+    )
 
     # Busibox service endpoints
     search_api_url: AnyHttpUrl = Field(
