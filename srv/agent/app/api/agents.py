@@ -47,11 +47,18 @@ async def list_agents(
     List agents with personal filtering.
     
     Returns:
-    - All built-in agents (is_builtin=True)
+    - All built-in agents (dynamically loaded from app/agents/)
+    - All built-in agents from database (is_builtin=True)
     - Personal agents created by the authenticated user (created_by=principal.sub)
     
     Other users' personal agents are not visible.
     """
+    from app.services.builtin_agents import get_builtin_agent_definitions
+    
+    # Get dynamically loaded built-in agents from Python files
+    builtin_agents = get_builtin_agent_definitions()
+    
+    # Get personal agents and database built-in agents
     stmt = select(AgentDefinition).where(
         AgentDefinition.is_active.is_(True),
         or_(
@@ -60,7 +67,15 @@ async def list_agents(
         )
     )
     result = await session.execute(stmt)
-    agents = [AgentDefinitionRead.model_validate(a) for a in result.scalars().all()]
+    db_agents = [AgentDefinitionRead.model_validate(a) for a in result.scalars().all()]
+    
+    # Combine built-in agents from code with database agents
+    # Use a dict to deduplicate by name (code-based agents take precedence)
+    agents_dict = {agent.name: agent for agent in db_agents}
+    for builtin in builtin_agents:
+        agents_dict[builtin.name] = builtin
+    
+    agents = list(agents_dict.values())
     
     logger.info(
         "agents_listed",
@@ -68,6 +83,7 @@ async def list_agents(
         total_count=len(agents),
         builtin_count=sum(1 for a in agents if a.is_builtin),
         personal_count=sum(1 for a in agents if not a.is_builtin),
+        code_builtin_count=len(builtin_agents),
     )
     
     return agents
