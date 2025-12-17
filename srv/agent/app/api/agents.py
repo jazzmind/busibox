@@ -122,6 +122,16 @@ async def list_available_models(
         }
 
 
+@router.get("/workflows", response_model=List[WorkflowDefinitionRead])
+async def list_workflows(
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+) -> List[WorkflowDefinitionRead]:
+    stmt = select(WorkflowDefinition).where(WorkflowDefinition.is_active.is_(True))
+    result = await session.execute(stmt)
+    return [WorkflowDefinitionRead.model_validate(w) for w in result.scalars().all()]
+
+
 @router.get("/{agent_id}", response_model=AgentDefinitionRead)
 async def get_agent(
     agent_id: uuid.UUID,
@@ -220,16 +230,6 @@ async def create_tool(
     await session.commit()
     await session.refresh(definition)
     return ToolDefinitionRead.model_validate(definition)
-
-
-@router.get("/workflows", response_model=List[WorkflowDefinitionRead])
-async def list_workflows(
-    principal: Principal = Depends(get_principal),
-    session: AsyncSession = Depends(get_session),
-) -> List[WorkflowDefinitionRead]:
-    stmt = select(WorkflowDefinition).where(WorkflowDefinition.is_active.is_(True))
-    result = await session.execute(stmt)
-    return [WorkflowDefinitionRead.model_validate(w) for w in result.scalars().all()]
 
 
 @router.post("/workflows", response_model=WorkflowDefinitionRead, status_code=status.HTTP_201_CREATED)
