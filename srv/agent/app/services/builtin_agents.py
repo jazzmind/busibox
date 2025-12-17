@@ -133,6 +133,8 @@ def get_builtin_agent_definitions() -> List[AgentDefinitionRead]:
     Returns:
         List of AgentDefinitionRead objects for built-in agents
     """
+    from datetime import datetime, timezone
+    
     definitions = []
     
     for module_name, metadata in BUILTIN_AGENT_METADATA.items():
@@ -146,10 +148,25 @@ def get_builtin_agent_definitions() -> List[AgentDefinitionRead]:
             agent_var_name = module_name
             if hasattr(module, agent_var_name):
                 agent_instance = getattr(module, agent_var_name)
-                if isinstance(agent_instance, Agent) and hasattr(agent_instance, 'system_prompt'):
-                    instructions = agent_instance.system_prompt or instructions
-        except:
-            pass
+                if isinstance(agent_instance, Agent):
+                    # Try to get system_prompt - it might be a property or attribute
+                    if hasattr(agent_instance, '_system_prompt'):
+                        instructions = str(agent_instance._system_prompt) or instructions
+                    elif hasattr(agent_instance, 'system_prompt'):
+                        prompt = agent_instance.system_prompt
+                        # If it's callable, call it; otherwise use it directly
+                        if callable(prompt):
+                            try:
+                                instructions = str(prompt()) or instructions
+                            except:
+                                pass
+                        else:
+                            instructions = str(prompt) or instructions
+        except Exception as e:
+            print(f"Warning: Failed to extract instructions from {module_name}: {e}")
+        
+        # Use current timestamp
+        now = datetime.now(timezone.utc)
         
         definition = AgentDefinitionRead(
             id=agent_uuid,
@@ -165,8 +182,8 @@ def get_builtin_agent_definitions() -> List[AgentDefinitionRead]:
             is_builtin=True,
             created_by=None,
             version=metadata["version"],
-            created_at="2025-01-01T00:00:00Z",  # Static timestamp for built-ins
-            updated_at="2025-01-01T00:00:00Z",
+            created_at=now,
+            updated_at=now,
         )
         definitions.append(definition)
     
