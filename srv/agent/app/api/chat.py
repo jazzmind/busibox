@@ -80,6 +80,7 @@ class ChatMessageRequest(BaseModel):
     attachments: Optional[List[Attachment]] = Field(default_factory=list, description="File attachments")
     enable_web_search: bool = Field(False, description="Enable web search tool")
     enable_doc_search: bool = Field(False, description="Enable document search tool")
+    selected_agents: Optional[List[str]] = Field(None, description="Specific agent IDs to use (bypasses dispatcher)")
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0, description="Temperature override")
     max_tokens: Optional[int] = Field(None, ge=1, le=32000, description="Max tokens override")
 
@@ -488,42 +489,57 @@ async def send_chat_message_stream(
                 # Send model selection event
                 yield f"event: model_selected\ndata: {json.dumps(model_selection.model_dump())}\n\n"
             
-            # Route through dispatcher
-            enabled_tools = []
-            if payload.enable_web_search:
-                enabled_tools.append("web_search")
-            if payload.enable_doc_search:
-                enabled_tools.append("doc_search")
-            
-            if user_settings and user_settings.enabled_tools:
-                enabled_tools = [t for t in enabled_tools if t in user_settings.enabled_tools]
-            
-            dispatcher_request = DispatcherRequest(
-                query=payload.message,
-                available_tools=["web_search", "doc_search"],
-                available_agents=[],
-                attachments=[
-                    FileAttachment(name=att.name, type=att.type, url=att.url)
-                    for att in (payload.attachments or [])
-                ],
-                user_settings=UserSettings(
-                    enabled_tools=enabled_tools,
-                    enabled_agents=user_settings.enabled_agents if user_settings else []
+            # If specific agents are selected, bypass dispatcher
+            if payload.selected_agents:
+                # Use selected agents directly
+                decision = RoutingDecision(
+                    selected_tools=[],
+                    selected_agents=payload.selected_agents,
+                    confidence=1.0,
+                    reasoning=f"Using pre-selected agent(s): {', '.join(payload.selected_agents)}",
+                    alternatives=[],
+                    requires_disambiguation=False
                 )
-            )
-            
-            request_id = str(uuid.uuid4())
-            routing_response = await route_query(
-                request=dispatcher_request,
-                user_id=principal.sub,
-                request_id=request_id,
-                session=session
-            )
-            
-            decision = routing_response.routing_decision
-            
-            # Send routing decision event
-            yield f"event: routing_decision\ndata: {json.dumps(decision.model_dump())}\n\n"
+                
+                # Send routing decision event
+                yield f"event: routing_decision\ndata: {json.dumps(decision.model_dump())}\n\n"
+            else:
+                # Route through dispatcher
+                enabled_tools = []
+                if payload.enable_web_search:
+                    enabled_tools.append("web_search")
+                if payload.enable_doc_search:
+                    enabled_tools.append("doc_search")
+                
+                if user_settings and user_settings.enabled_tools:
+                    enabled_tools = [t for t in enabled_tools if t in user_settings.enabled_tools]
+                
+                dispatcher_request = DispatcherRequest(
+                    query=payload.message,
+                    available_tools=["web_search", "doc_search"],
+                    available_agents=[],
+                    attachments=[
+                        FileAttachment(name=att.name, type=att.type, url=att.url)
+                        for att in (payload.attachments or [])
+                    ],
+                    user_settings=UserSettings(
+                        enabled_tools=enabled_tools,
+                        enabled_agents=user_settings.enabled_agents if user_settings else []
+                    )
+                )
+                
+                request_id = str(uuid.uuid4())
+                routing_response = await route_query(
+                    request=dispatcher_request,
+                    user_id=principal.sub,
+                    request_id=request_id,
+                    session=session
+                )
+                
+                decision = routing_response.routing_decision
+                
+                # Send routing decision event
+                yield f"event: routing_decision\ndata: {json.dumps(decision.model_dump())}\n\n"
             
             # Execute tools and agents with streaming
             full_content = []
