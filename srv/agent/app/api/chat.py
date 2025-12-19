@@ -27,7 +27,7 @@ from app.db.session import get_session
 from app.models.domain import Conversation, Message, ChatSettings
 from app.schemas.auth import Principal
 from app.schemas.conversation import Attachment, MessageRead
-from app.schemas.dispatcher import DispatcherRequest, FileAttachment, UserSettings
+from app.schemas.dispatcher import DispatcherRequest, FileAttachment, UserSettings, RoutingDecision
 from app.services.dispatcher_service import route_query
 from app.services.model_selector import select_model_and_tools, list_available_models, ModelCapabilities
 from app.services.chat_executor import execute_chat, execute_chat_stream
