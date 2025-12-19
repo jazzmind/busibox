@@ -101,8 +101,14 @@ async def route_query(
         routing_decision = cached_decision
     else:
         # Get enabled tools/agents from user settings
-        enabled_tools = request.user_settings.enabled_tools if request.user_settings else request.available_tools
-        enabled_agents = request.user_settings.enabled_agents if request.user_settings else request.available_agents
+        # If user has settings but lists are empty, use all available (opt-out, not opt-in)
+        if request.user_settings:
+            enabled_tools = request.user_settings.enabled_tools if request.user_settings.enabled_tools else request.available_tools
+            enabled_agents = request.user_settings.enabled_agents if request.user_settings.enabled_agents else request.available_agents
+        else:
+            # No settings yet - enable everything by default
+            enabled_tools = request.available_tools
+            enabled_agents = request.available_agents
         
         # Check if any tools/agents are available
         if not enabled_tools and not enabled_agents:
@@ -234,6 +240,7 @@ async def route_query(
         )
     
     return DispatcherResponse(routing_decision=routing_decision)
+
 
 
 
