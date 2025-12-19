@@ -297,6 +297,11 @@ async def execute_agent(
     Returns:
         AgentExecutionResult with agent output
     """
+    from app.services.agent_registry import agent_registry
+    from app.agents.core import BusiboxDeps
+    from app.clients.busibox import BusiboxClient
+    from app.schemas.auth import Principal
+    
     run_id = uuid.uuid4()
     
     try:
@@ -316,13 +321,40 @@ async def execute_agent(
         session.add(run_record)
         await session.flush()
         
-        # TODO: Execute agent based on agent_id
-        # For now, return placeholder
-        output = f"Agent {agent_id} executed successfully (placeholder)"
+        # Get agent from registry
+        try:
+            agent = agent_registry.get(uuid.UUID(agent_id) if isinstance(agent_id, str) else agent_id)
+        except KeyError:
+            raise ValueError(f"Agent {agent_id} not found in registry")
+        
+        # Create minimal principal and deps for agent execution
+        principal = Principal(sub=user_id, scopes=[], client_id="chat-service")
+        client = BusiboxClient(principal=principal)
+        deps = BusiboxDeps(principal=principal, busibox_client=client)
+        
+        # Execute agent with 30s timeout
+        result = await asyncio.wait_for(
+            agent.run(query, deps=deps),
+            timeout=30.0
+        )
+        
+        # Extract output
+        if hasattr(result, "data"):
+            output_data = result.data
+            if hasattr(output_data, "model_dump"):
+                output = output_data.model_dump()
+            elif hasattr(output_data, "dict"):
+                output = output_data.dict()
+            elif isinstance(output_data, str):
+                output = output_data
+            else:
+                output = str(output_data)
+        else:
+            output = str(result)
         
         # Update run record
-        run_record.status = "completed"
-        run_record.output = {"result": output}
+        run_record.status = "succeeded"
+        run_record.output = {"result": output} if isinstance(output, str) else output
         await session.commit()
         
         logger.info(
@@ -334,10 +366,31 @@ async def execute_agent(
             agent_id=agent_id,
             run_id=run_id,
             success=True,
-            output=output,
+            output=output if isinstance(output, str) else str(output),
             metadata={
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
+        )
+        
+    except asyncio.TimeoutError:
+        logger.error(
+            f"Agent execution timed out for user {user_id}",
+            extra={"user_id": user_id, "agent_id": agent_id}
+        )
+        
+        try:
+            run_record.status = "timeout"
+            run_record.output = {"error": "Agent execution timed out after 30s"}
+            await session.commit()
+        except:
+            pass
+        
+        return AgentExecutionResult(
+            agent_id=agent_id,
+            run_id=run_id,
+            success=False,
+            output="",
+            error="Agent execution timed out after 30s"
         )
         
     except Exception as e:
