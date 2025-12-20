@@ -219,16 +219,16 @@ async def create_run(
             
             add_run_event(run_record, "token_exchange_completed")
             
-            # Get agent from registry
+            # Get agent from registry (with on-demand loading)
             try:
-                agent: Agent[BusiboxDeps, object] = agent_registry.get(agent_id)
+                agent: Agent[BusiboxDeps, object] = await agent_registry.get_or_load(agent_id, session)
                 add_run_event(run_record, "agent_loaded", data={"agent_id": str(agent_id)})
-            except KeyError as e:
-                logger.error(f"Agent {agent_id} not found in registry: {e}")
+            except (KeyError, ValueError) as e:
+                logger.error(f"Agent {agent_id} not found or inactive: {e}")
                 run_record.status = "failed"
-                run_record.output = {"error": f"Agent not found: {agent_id}"}
-                add_run_event(run_record, "error", error=f"Agent not found: {agent_id}")
-                span.set_status(trace.Status(trace.StatusCode.ERROR, "Agent not found"))
+                run_record.output = {"error": f"Agent error: {str(e)}"}
+                add_run_event(run_record, "error", error=str(e))
+                span.set_status(trace.Status(trace.StatusCode.ERROR, "Agent not found or inactive"))
                 await session.commit()
                 await session.refresh(run_record)
                 return run_record

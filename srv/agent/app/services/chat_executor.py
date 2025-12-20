@@ -287,7 +287,10 @@ async def execute_agent(
     context: Optional[Dict[str, Any]] = None
 ) -> AgentExecutionResult:
     """
-    Execute an agent and create run record.
+    Execute an agent via run_service and return result.
+    
+    This is a thin wrapper around run_service.create_run() that converts
+    the RunRecord to an AgentExecutionResult for chat execution.
     
     Args:
         agent_id: Agent ID to execute
@@ -300,160 +303,82 @@ async def execute_agent(
     Returns:
         AgentExecutionResult with agent output
     """
-    from app.services.agent_registry import agent_registry
-    from app.agents.core import BusiboxDeps
-    from app.clients.busibox import BusiboxClient
+    from app.services.run_service import create_run
     from app.schemas.auth import Principal
-    
-    run_id = uuid.uuid4()
     
     try:
         logger.info(
             f"Executing agent {agent_id} for user {user_id}",
-            extra={"user_id": user_id, "agent_id": agent_id, "run_id": str(run_id)}
-        )
-        
-        # Create run record
-        run_record = RunRecord(
-            id=run_id,
-            agent_id=uuid.UUID(agent_id) if isinstance(agent_id, str) else agent_id,
-            status="running",
-            input={"query": query, "context": context or {}},
-            created_by=user_id
-        )
-        session.add(run_record)
-        await session.flush()
-        
-        # Get agent - check built-in code agents first, then registry, then database
-        agent_uuid = uuid.UUID(agent_id) if isinstance(agent_id, str) else agent_id
-        agent = None
-        
-        # 1. Try built-in code agents (always use latest from code)
-        from app.services.builtin_agents import get_builtin_agent_by_id
-        agent = get_builtin_agent_by_id(agent_uuid)
-        
-        if not agent:
-            # 2. Try agent registry (database agents loaded at startup)
-            try:
-                agent = agent_registry.get(agent_uuid)
-            except KeyError:
-                # 3. Try to load from database on-demand
-                from app.models.domain import AgentDefinition
-                from sqlalchemy import select
-                from pydantic_ai.models.openai import OpenAIModel
-                import os
-                from app.config.settings import get_settings
-                from app.agents.dynamic_loader import TOOL_REGISTRY
-                
-                settings = get_settings()
-                
-                # Load agent definition from database
-                stmt = select(AgentDefinition).where(AgentDefinition.id == agent_uuid)
-                result = await session.execute(stmt)
-                definition = result.scalar_one_or_none()
-                
-                if not definition:
-                    raise ValueError(f"Agent {agent_id} not found")
-                
-                if not definition.is_active:
-                    raise ValueError(f"Agent {agent_id} is not active")
-                
-                # Configure OpenAI client to use LiteLLM
-                os.environ["OPENAI_BASE_URL"] = str(settings.litellm_base_url)
-                litellm_api_key = os.getenv("LITELLM_API_KEY", "sk-1234")
-                os.environ["OPENAI_API_KEY"] = litellm_api_key
-                
-                # Create agent instance
-                model = OpenAIModel(
-                    model_name=definition.model,
-                    provider="openai",
-                )
-                agent = Agent[BusiboxDeps, object](
-                    model=model,
-                    instructions=definition.instructions,
-                )
-                
-                # Register tools
-                for tool_name in definition.tools.get("names", []):
-                    tool_fn = TOOL_REGISTRY.get(tool_name)
-                    if tool_fn:
-                        agent.tool(tool_fn)
-        
-        # Create principal for agent execution if not provided
-        if not principal:
-            principal = Principal(sub=user_id, scopes=[], client_id="agent-api")
-        
-        # Get or exchange token for downstream services
-        from app.services.token_service import get_or_exchange_token
-        token = await get_or_exchange_token(
-            session, 
-            principal, 
-            scopes=["search:read", "ingest:write", "rag:read"],
-            purpose="chat-agent-execution"
-        )
-        
-        client = BusiboxClient(token.access_token)
-        deps = BusiboxDeps(principal=principal, busibox_client=client)
-        
-        # Execute agent with 30s timeout
-        result = await asyncio.wait_for(
-            agent.run(query, deps=deps),
-            timeout=30.0
-        )
-        
-        # Extract output
-        if hasattr(result, "data"):
-            output_data = result.data
-            if hasattr(output_data, "model_dump"):
-                output = output_data.model_dump()
-            elif hasattr(output_data, "dict"):
-                output = output_data.dict()
-            elif isinstance(output_data, str):
-                output = output_data
-            else:
-                output = str(output_data)
-        else:
-            output = str(result)
-        
-        # Update run record
-        run_record.status = "succeeded"
-        run_record.output = {"result": output} if isinstance(output, str) else output
-        await session.commit()
-        
-        logger.info(
-            f"Agent execution completed for user {user_id}",
-            extra={"user_id": user_id, "agent_id": agent_id, "run_id": str(run_id)}
-        )
-        
-        return AgentExecutionResult(
-            agent_id=agent_id,
-            run_id=run_id,
-            success=True,
-            output=output if isinstance(output, str) else str(output),
-            metadata={
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            }
-        )
-        
-    except asyncio.TimeoutError:
-        logger.error(
-            f"Agent execution timed out for user {user_id}",
             extra={"user_id": user_id, "agent_id": agent_id}
         )
         
-        try:
-            run_record.status = "timeout"
-            run_record.output = {"error": "Agent execution timed out after 30s"}
-            await session.commit()
-        except:
-            pass
+        # Create principal if not provided
+        if not principal:
+            principal = Principal(sub=user_id, scopes=[], client_id="agent-api")
+        
+        # Convert agent_id to UUID
+        agent_uuid = uuid.UUID(agent_id) if isinstance(agent_id, str) else agent_id
+        
+        # Use run_service for actual execution
+        run_record = await create_run(
+            session=session,
+            principal=principal,
+            agent_id=agent_uuid,
+            payload={"prompt": query, "context": context or {}},
+            scopes=["search:read", "ingest:write", "rag:read"],
+            purpose="chat-agent-execution",
+            agent_tier="simple"  # Chat agents use simple tier (30s timeout)
+        )
+        
+        # Convert RunRecord to AgentExecutionResult
+        success = run_record.status == "succeeded"
+        
+        # Extract output string
+        if success:
+            output_obj = run_record.output or {}
+            if isinstance(output_obj, dict):
+                # Try to get a clean output string
+                if "result" in output_obj:
+                    output = str(output_obj["result"])
+                elif "data" in output_obj:
+                    output = str(output_obj["data"])
+                else:
+                    output = str(output_obj)
+            else:
+                output = str(output_obj)
+        else:
+            output = ""
+        
+        # Extract error if failed
+        error = None
+        if not success:
+            error_obj = run_record.output or {}
+            if isinstance(error_obj, dict) and "error" in error_obj:
+                error = error_obj["error"]
+            else:
+                error = f"Agent execution {run_record.status}"
+        
+        logger.info(
+            f"Agent execution completed for user {user_id}",
+            extra={
+                "user_id": user_id,
+                "agent_id": agent_id,
+                "run_id": str(run_record.id),
+                "status": run_record.status
+            }
+        )
         
         return AgentExecutionResult(
             agent_id=agent_id,
-            run_id=run_id,
-            success=False,
-            output="",
-            error="Agent execution timed out after 30s"
+            run_id=run_record.id,
+            success=success,
+            output=output,
+            metadata={
+                "status": run_record.status,
+                "events": run_record.events or [],
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            },
+            error=error
         )
         
     except Exception as e:
@@ -463,17 +388,10 @@ async def execute_agent(
             exc_info=True
         )
         
-        # Update run record to failed
-        try:
-            run_record.status = "failed"
-            run_record.output = {"error": str(e)}
-            await session.commit()
-        except:
-            pass
-        
+        # Return error result with a generated run_id
         return AgentExecutionResult(
             agent_id=agent_id,
-            run_id=run_id,
+            run_id=uuid.uuid4(),
             success=False,
             output="",
             error=f"Agent execution failed: {str(e)}"
