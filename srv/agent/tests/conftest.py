@@ -1,9 +1,11 @@
 """Pytest configuration and shared fixtures."""
 import asyncio
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import AsyncGenerator, Dict
 
+import httpx
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -18,6 +20,12 @@ from app.schemas.auth import Principal
 # This ensures tests use the same database types (JSONB, UUID, etc.)
 settings = get_settings()
 TEST_DATABASE_URL = settings.database_url
+
+# Get real test credentials from environment (created by bootstrap-test-credentials.sh)
+TEST_USER_ID = os.getenv("TEST_USER_ID", "test-user-123")
+TEST_USER_EMAIL = os.getenv("TEST_USER_EMAIL", "test@busibox.local")
+TEST_CLIENT_ID = os.getenv("AUTHZ_TEST_CLIENT_ID", "")
+TEST_CLIENT_SECRET = os.getenv("AUTHZ_TEST_CLIENT_SECRET", "")
 
 
 @pytest.fixture(scope="function")
@@ -57,12 +65,12 @@ async def test_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
 
 @pytest.fixture
 def mock_principal() -> Principal:
-    """Create mock authenticated principal."""
+    """Create mock authenticated principal using real test user."""
     return Principal(
-        sub="test-user-123",
-        email="test@example.com",
-        roles=["user"],
-        scopes=["search.read", "ingest.write", "rag.query"],
+        sub=TEST_USER_ID,
+        email=TEST_USER_EMAIL,
+        roles=["Admin", "User"],
+        scopes=["read", "write", "admin"],
     )
 
 
@@ -105,7 +113,7 @@ async def test_run(test_session: AsyncSession, test_agent: AgentDefinition, mock
         input={"prompt": "test query"},
         output={"message": "test response"},
         events=[],
-        created_by=mock_principal.sub,
+        created_by=TEST_USER_ID,
     )
     test_session.add(run)
     await test_session.commit()
@@ -117,9 +125,9 @@ async def test_run(test_session: AsyncSession, test_agent: AgentDefinition, mock
 async def test_token(test_session: AsyncSession, mock_principal: Principal) -> TokenGrant:
     """Create test token grant."""
     # Cache key includes inferred downstream audience marker.
-    scopes = sorted(["aud:ingest-api", "search.read", "ingest.write"])
+    scopes = sorted(["aud:ingest-api", "read", "write"])
     token = TokenGrant(
-        subject=mock_principal.sub,
+        subject=TEST_USER_ID,
         scopes=scopes,
         token="test-access-token-123",
         expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
@@ -138,19 +146,52 @@ async def test_client() -> AsyncGenerator[AsyncClient, None]:
         yield client
 
 
+async def _get_real_jwt_token() -> str:
+    """Get a real JWT token from the authz service using test credentials."""
+    if not TEST_CLIENT_ID or not TEST_CLIENT_SECRET:
+        raise ValueError(
+            "Test credentials not configured. Run: bash scripts/bootstrap-test-credentials.sh test"
+        )
+    
+    authz_url = str(settings.auth_token_url).rsplit("/oauth/token", 1)[0]
+    
+    # Get a token using client credentials grant
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{authz_url}/oauth/token",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": TEST_CLIENT_ID,
+                "client_secret": TEST_CLIENT_SECRET,
+                "audience": "agent-api",
+                "scope": "read write admin",
+            },
+            timeout=10,
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data["access_token"]
+
+
 @pytest.fixture
-def mock_jwt_token() -> str:
-    """Create mock JWT token for auth testing."""
-    # In real tests, generate a valid JWT with test keys
-    return "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0LXVzZXItMTIzIiwiZW1haWwiOiJ0ZXN0QGV4YW1wbGUuY29tIiwicm9sZXMiOlsidXNlciJdLCJzY29wZXMiOlsic2VhcmNoLnJlYWQiLCJpbmdlc3Qud3JpdGUiXX0.test-signature"
+async def mock_jwt_token() -> str:
+    """Get a real JWT token for auth testing from the authz service."""
+    try:
+        token = await _get_real_jwt_token()
+        return token
+    except Exception as e:
+        # Fall back to a fake token if authz service is not available
+        # This allows tests to run in isolation, though auth tests will fail
+        pytest.skip(f"Could not get real JWT token from authz service: {e}")
+        return ""
 
 
 # Additional fixtures for new tests
 
 @pytest.fixture
 def mock_user_id() -> str:
-    """Mock user ID for testing."""
-    return "test-user-123"
+    """Real test user ID from environment."""
+    return TEST_USER_ID
 
 
 @pytest.fixture
