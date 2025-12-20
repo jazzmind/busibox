@@ -142,10 +142,24 @@ async def get_agent(
     Get individual agent by ID with ownership check.
     
     Returns:
-    - Agent if it's built-in (visible to all)
+    - Agent if it's built-in code agent (visible to all)
+    - Agent if it's built-in database agent (visible to all)
     - Agent if it's personal and owned by authenticated user
     - 404 if agent doesn't exist or user doesn't have access
     """
+    # Check built-in code agents first
+    builtin_agents = get_builtin_agent_definitions()
+    for builtin_def in builtin_agents:
+        if builtin_def.id == agent_id:
+            logger.info(
+                "builtin_agent_accessed",
+                agent_id=str(agent_id),
+                agent_name=builtin_def.name,
+                user_id=principal.sub,
+            )
+            return builtin_def
+    
+    # Check database for personal or database-based built-in agents
     agent = await session.get(AgentDefinition, agent_id)
     
     # Return 404 if agent doesn't exist or is inactive
