@@ -280,14 +280,20 @@ async def create_run(
                 run_record.status = "succeeded"
                 
                 # Extract output based on result type
+                # PydanticAI returns RunResult with .data or .output attribute
                 if hasattr(result, "data"):
                     output_data = result.data
                     if hasattr(output_data, "model_dump"):
                         run_record.output = output_data.model_dump()
                     elif hasattr(output_data, "dict"):
                         run_record.output = output_data.dict()
+                    elif isinstance(output_data, str):
+                        run_record.output = {"result": output_data}
                     else:
                         run_record.output = {"data": output_data}
+                elif hasattr(result, "output"):
+                    # PydanticAI RunResult has .output attribute with the actual response
+                    run_record.output = {"result": result.output}
                 else:
                     run_record.output = {"result": str(result)}
                 
