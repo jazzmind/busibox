@@ -210,15 +210,24 @@ async def create_run(
         },
     ) as span:
         try:
-            # Exchange token for downstream services (only if scopes provided)
+            # Get token for downstream services
             if scopes:
-                logger.info(f"Exchanging token for run {run_record.id}")
-                add_run_event(run_record, "token_exchange_started")
-                
-                token = await get_or_exchange_token(session, principal, scopes=scopes, purpose=purpose)
-                client = BusiboxClient(token.access_token)
-                
-                add_run_event(run_record, "token_exchange_completed")
+                # Check if principal already has a token (from API auth)
+                if principal.token:
+                    # Use the token that was provided in the API request
+                    # (already has necessary scopes from frontend token exchange)
+                    logger.info(f"Using provided token for run {run_record.id}")
+                    client = BusiboxClient(principal.token)
+                    add_run_event(run_record, "token_provided")
+                else:
+                    # No token provided - perform token exchange
+                    logger.info(f"Exchanging token for run {run_record.id}")
+                    add_run_event(run_record, "token_exchange_started")
+                    
+                    token = await get_or_exchange_token(session, principal, scopes=scopes, purpose=purpose)
+                    client = BusiboxClient(token.access_token)
+                    
+                    add_run_event(run_record, "token_exchange_completed")
             else:
                 # No scopes needed - agent doesn't use downstream services
                 # Create a dummy client that won't be used
