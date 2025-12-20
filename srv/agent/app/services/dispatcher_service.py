@@ -144,8 +144,19 @@ Analyze this query and select the appropriate tools and/or agents."""
 
                 result = await dispatcher_agent.run(prompt)
                 
-                # PydanticAI returns structured data in .data attribute
-                routing_decision = result.data
+                # PydanticAI returns structured data in .data attribute for typed agents
+                # For Agent[None, T], check .data first, then .output as fallback
+                if hasattr(result, 'data') and isinstance(result.data, RoutingDecision):
+                    routing_decision = result.data
+                elif hasattr(result, 'output'):
+                    # Try parsing output if it's a string
+                    if isinstance(result.output, str):
+                        import json
+                        routing_decision = RoutingDecision.model_validate_json(result.output)
+                    else:
+                        routing_decision = result.output
+                else:
+                    raise ValueError(f"Unexpected result type from dispatcher: {type(result)}")
                 
                 logger.info(
                     "dispatcher_routing_success",
