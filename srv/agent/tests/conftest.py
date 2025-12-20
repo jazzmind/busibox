@@ -148,9 +148,16 @@ async def test_client() -> AsyncGenerator[AsyncClient, None]:
 
 async def _get_real_jwt_token() -> str:
     """Get a real JWT token from the authz service using test credentials."""
-    if not TEST_CLIENT_ID or not TEST_CLIENT_SECRET:
+    # Load from .env file since pytest may not have environment variables loaded
+    from dotenv import load_dotenv
+    load_dotenv()
+    
+    test_client_id = os.getenv("AUTHZ_TEST_CLIENT_ID")
+    test_client_secret = os.getenv("AUTHZ_TEST_CLIENT_SECRET")
+    
+    if not test_client_id or not test_client_secret:
         raise ValueError(
-            "Test credentials not configured. Run: bash scripts/bootstrap-test-credentials.sh test"
+            "Test credentials not configured in .env. Run: bash scripts/bootstrap-test-credentials.sh test"
         )
     
     authz_url = str(settings.auth_token_url).rsplit("/oauth/token", 1)[0]
@@ -161,8 +168,8 @@ async def _get_real_jwt_token() -> str:
             f"{authz_url}/oauth/token",
             data={
                 "grant_type": "client_credentials",
-                "client_id": TEST_CLIENT_ID,
-                "client_secret": TEST_CLIENT_SECRET,
+                "client_id": test_client_id,
+                "client_secret": test_client_secret,
                 "audience": "agent-api",
                 "scope": "read write admin",
             },
