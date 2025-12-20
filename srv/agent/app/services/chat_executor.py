@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agents.web_search_agent import web_search_agent
 from app.agents.document_agent import document_agent
 from app.models.domain import RunRecord
+from app.schemas.auth import Principal
 from app.schemas.dispatcher import RoutingDecision
 
 logger = logging.getLogger(__name__)
@@ -304,7 +305,6 @@ async def execute_agent(
         AgentExecutionResult with agent output
     """
     from app.services.run_service import create_run
-    from app.schemas.auth import Principal
     
     try:
         logger.info(
