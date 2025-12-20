@@ -182,15 +182,12 @@ async def _get_real_jwt_token() -> str:
 
 @pytest.fixture
 async def mock_jwt_token() -> str:
-    """Get a real JWT token for auth testing from the authz service."""
-    try:
-        token = await _get_real_jwt_token()
-        return token
-    except Exception as e:
-        # Fall back to a fake token if authz service is not available
-        # This allows tests to run in isolation, though auth tests will fail
-        pytest.skip(f"Could not get real JWT token from authz service: {e}")
-        return ""
+    """Get a real JWT token for auth testing from the authz service.
+    
+    This fixture always fetches a real token - it will fail if authz is unavailable.
+    """
+    token = await _get_real_jwt_token()
+    return token
 
 
 # Additional fixtures for new tests
