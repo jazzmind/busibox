@@ -40,8 +40,8 @@ class TestWeatherAgent:
         result = await weather_agent.run("What's the weather in San Francisco?")
         
         # Verify we got a response
-        assert result.data is not None
-        response_text = str(result.data).lower()
+        assert result.output is not None
+        response_text = str(result.output).lower()
         
         # Check that the response mentions San Francisco
         assert "san francisco" in response_text or "francisco" in response_text
@@ -73,7 +73,7 @@ class TestWeatherAgent:
         """Test that agent asks for location when not provided."""
         result = await weather_agent.run("What's the weather like?")
         
-        response_text = str(result.data).lower()
+        response_text = str(result.output).lower()
         
         # Agent should ask for a location
         assert any(
@@ -87,8 +87,8 @@ class TestWeatherAgent:
         result1 = await weather_agent.run("What's the weather in Paris?")
         result2 = await weather_agent.run("And what about Berlin?")
         
-        response1 = str(result1.data).lower()
-        response2 = str(result2.data).lower()
+        response1 = str(result1.output).lower()
+        response2 = str(result2.output).lower()
         
         # Both should contain weather information
         assert "paris" in response1 or "temperature" in response1
@@ -104,8 +104,8 @@ class TestWeatherAgentLiteLLMIntegration:
         # Simple query without tool calling
         result = await weather_agent.run("Say hello")
         
-        assert result.data is not None
-        response_text = str(result.data).lower()
+        assert result.output is not None
+        response_text = str(result.output).lower()
         assert len(response_text) > 0
     
     @pytest.mark.asyncio
@@ -115,7 +115,7 @@ class TestWeatherAgentLiteLLMIntegration:
         result = await weather_agent.run("What's the current temperature in Miami?")
         
         # If we get here, tool calling worked
-        assert result.data is not None
+        assert result.output is not None
         
         # Verify the agent actually called the tool
         messages = result.all_messages()
@@ -140,7 +140,7 @@ class TestWeatherAgentEndToEnd:
             "I'm planning to visit Seattle tomorrow. What's the weather like there?"
         )
         
-        response_text = str(result.data).lower()
+        response_text = str(result.output).lower()
         
         # Verify all components worked:
         # - LLM understood the query (mentions Seattle)
@@ -161,7 +161,7 @@ class TestWeatherAgentEndToEnd:
         # Try with an invalid location
         result = await weather_agent.run("What's the weather in XYZ123InvalidCity?")
         
-        response_text = str(result.data).lower()
+        response_text = str(result.output).lower()
         
         # Agent should handle the error and provide a helpful message
         assert any(
