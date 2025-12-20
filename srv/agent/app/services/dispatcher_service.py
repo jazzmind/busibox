@@ -131,14 +131,18 @@ async def route_query(
         else:
             # Call dispatcher agent with LiteLLM
             try:
-                result = await dispatcher_agent.run(
-                    request.query,
-                    available_tools=request.available_tools,
-                    available_agents=request.available_agents,
-                    enabled_tools=enabled_tools,
-                    enabled_agents=enabled_agents,
-                    attachments=[att.model_dump() for att in request.attachments],
-                )
+                # Format prompt with context
+                prompt = f"""Query: {request.query}
+
+Available tools: {', '.join(request.available_tools) if request.available_tools else 'none'}
+Available agents: {', '.join(request.available_agents) if request.available_agents else 'none'}
+Enabled tools: {', '.join(enabled_tools) if enabled_tools else 'none'}
+Enabled agents: {', '.join(enabled_agents) if enabled_agents else 'none'}
+Attachments: {len(request.attachments)} file(s) attached
+
+Analyze this query and select the appropriate tools and/or agents."""
+
+                result = await dispatcher_agent.run(prompt)
                 
                 routing_decision = result.output
                 

@@ -28,16 +28,16 @@ install-dev:
 	pip install -r requirements.test.txt
 
 test:
-	pytest tests/ -v
+	PYTHONPATH=. pytest tests/ -v
 
 test-unit:
-	pytest tests/unit/ -v
+	PYTHONPATH=. pytest tests/unit/ -v
 
 test-integration:
-	pytest tests/integration/ -v
+	PYTHONPATH=. pytest tests/integration/ -v
 
 test-cov:
-	pytest tests/ -v --cov=app --cov-report=html --cov-report=term
+	PYTHONPATH=. pytest tests/ -v --cov=app --cov-report=html --cov-report=term
 
 lint:
 	ruff check app/ tests/
