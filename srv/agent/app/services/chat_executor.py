@@ -319,13 +319,44 @@ async def execute_agent(
         # Convert agent_id to UUID
         agent_uuid = uuid.UUID(agent_id) if isinstance(agent_id, str) else agent_id
         
+        # Check if agent uses tools to determine if we need token exchange
+        # Get agent definition to check for tools
+        from app.models.domain import AgentDefinition
+        from sqlalchemy import select
+        from app.services.builtin_agents import get_builtin_agent_definitions
+        
+        needs_token_exchange = True  # Default to needing it
+        
+        # Check built-in agents first
+        builtin_defs = get_builtin_agent_definitions()
+        for builtin_def in builtin_defs:
+            if builtin_def.id == agent_uuid:
+                # Check if this built-in has tools
+                tool_names = builtin_def.tools.get("names", []) if builtin_def.tools else []
+                needs_token_exchange = len(tool_names) > 0
+                break
+        else:
+            # Not a built-in, check database
+            stmt = select(AgentDefinition).where(AgentDefinition.id == agent_uuid)
+            result = await session.execute(stmt)
+            db_def = result.scalar_one_or_none()
+            if db_def:
+                tool_names = db_def.tools.get("names", []) if db_def.tools else []
+                needs_token_exchange = len(tool_names) > 0
+        
+        # Set scopes based on whether agent uses tools
+        if needs_token_exchange:
+            scopes = ["search:read", "ingest:write", "rag:read"]
+        else:
+            scopes = []  # No tools = no downstream services = no token exchange needed
+        
         # Use run_service for actual execution
         run_record = await create_run(
             session=session,
             principal=principal,
             agent_id=agent_uuid,
             payload={"prompt": query, "context": context or {}},
-            scopes=["search:read", "ingest:write", "rag:read"],
+            scopes=scopes,
             purpose="chat-agent-execution",
             agent_tier="simple"  # Chat agents use simple tier (30s timeout)
         )
