@@ -10,7 +10,7 @@ settings = get_settings()
 
 # Configure OpenAI client to use LiteLLM
 os.environ["OPENAI_BASE_URL"] = str(settings.litellm_base_url)
-litellm_api_key = os.getenv("LITELLM_API_KEY", "sk-1234")
+litellm_api_key = settings.litellm_api_key or "sk-1234"
 os.environ["OPENAI_API_KEY"] = litellm_api_key
 
 # Create OpenAI-compatible model (use fast model for efficiency)

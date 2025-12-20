@@ -13,7 +13,7 @@ settings = get_settings()
 os.environ["OPENAI_BASE_URL"] = str(settings.litellm_base_url)
 
 # Get LiteLLM API key from environment (set by Ansible deployment)
-litellm_api_key = os.getenv("LITELLM_API_KEY", "sk-1234")  # Default for local dev
+litellm_api_key = settings.litellm_api_key or "sk-1234"  # Default for local dev
 os.environ["OPENAI_API_KEY"] = litellm_api_key
 
 # Create OpenAI-compatible model using standard provider

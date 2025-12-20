@@ -17,8 +17,8 @@ from app.schemas.dispatcher import RoutingDecision
 settings = get_settings()
 os.environ["OPENAI_BASE_URL"] = str(settings.litellm_base_url)
 
-# Get LiteLLM API key from environment (set by Ansible deployment)
-litellm_api_key = os.getenv("LITELLM_API_KEY", "sk-1234")  # Default for local dev
+# Get LiteLLM API key from settings (loaded from .env)
+litellm_api_key = settings.litellm_api_key or "sk-1234"  # Fallback for local dev
 os.environ["OPENAI_API_KEY"] = litellm_api_key
 
 # System prompt for dispatcher agent
