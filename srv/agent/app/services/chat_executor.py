@@ -322,52 +322,60 @@ async def execute_agent(
         session.add(run_record)
         await session.flush()
         
-        # Get agent from registry, or load from database if not found
+        # Get agent - check built-in code agents first, then registry, then database
         agent_uuid = uuid.UUID(agent_id) if isinstance(agent_id, str) else agent_id
-        try:
-            agent = agent_registry.get(agent_uuid)
-        except KeyError:
-            # Agent not in registry - try to load from database
-            from app.models.domain import AgentDefinition
-            from sqlalchemy import select
-            from pydantic_ai.models.openai import OpenAIModel
-            import os
-            from app.config.settings import get_settings
-            from app.agents.dynamic_loader import TOOL_REGISTRY
-            
-            settings = get_settings()
-            
-            # Load agent definition from database
-            stmt = select(AgentDefinition).where(AgentDefinition.id == agent_uuid)
-            result = await session.execute(stmt)
-            definition = result.scalar_one_or_none()
-            
-            if not definition:
-                raise ValueError(f"Agent {agent_id} not found in database")
-            
-            if not definition.is_active:
-                raise ValueError(f"Agent {agent_id} is not active")
-            
-            # Configure OpenAI client to use LiteLLM
-            os.environ["OPENAI_BASE_URL"] = str(settings.litellm_base_url)
-            litellm_api_key = os.getenv("LITELLM_API_KEY", "sk-1234")
-            os.environ["OPENAI_API_KEY"] = litellm_api_key
-            
-            # Create agent instance
-            model = OpenAIModel(
-                model_name=definition.model,
-                provider="openai",
-            )
-            agent = Agent[BusiboxDeps, object](
-                model=model,
-                instructions=definition.instructions,
-            )
-            
-            # Register tools
-            for tool_name in definition.tools.get("names", []):
-                tool_fn = TOOL_REGISTRY.get(tool_name)
-                if tool_fn:
-                    agent.tool(tool_fn)
+        agent = None
+        
+        # 1. Try built-in code agents (always use latest from code)
+        from app.services.builtin_agents import get_builtin_agent_by_id
+        agent = get_builtin_agent_by_id(agent_uuid)
+        
+        if not agent:
+            # 2. Try agent registry (database agents loaded at startup)
+            try:
+                agent = agent_registry.get(agent_uuid)
+            except KeyError:
+                # 3. Try to load from database on-demand
+                from app.models.domain import AgentDefinition
+                from sqlalchemy import select
+                from pydantic_ai.models.openai import OpenAIModel
+                import os
+                from app.config.settings import get_settings
+                from app.agents.dynamic_loader import TOOL_REGISTRY
+                
+                settings = get_settings()
+                
+                # Load agent definition from database
+                stmt = select(AgentDefinition).where(AgentDefinition.id == agent_uuid)
+                result = await session.execute(stmt)
+                definition = result.scalar_one_or_none()
+                
+                if not definition:
+                    raise ValueError(f"Agent {agent_id} not found")
+                
+                if not definition.is_active:
+                    raise ValueError(f"Agent {agent_id} is not active")
+                
+                # Configure OpenAI client to use LiteLLM
+                os.environ["OPENAI_BASE_URL"] = str(settings.litellm_base_url)
+                litellm_api_key = os.getenv("LITELLM_API_KEY", "sk-1234")
+                os.environ["OPENAI_API_KEY"] = litellm_api_key
+                
+                # Create agent instance
+                model = OpenAIModel(
+                    model_name=definition.model,
+                    provider="openai",
+                )
+                agent = Agent[BusiboxDeps, object](
+                    model=model,
+                    instructions=definition.instructions,
+                )
+                
+                # Register tools
+                for tool_name in definition.tools.get("names", []):
+                    tool_fn = TOOL_REGISTRY.get(tool_name)
+                    if tool_fn:
+                        agent.tool(tool_fn)
         
         # Create minimal principal and deps for agent execution
         principal = Principal(sub=user_id, scopes=[], client_id="chat-service")
