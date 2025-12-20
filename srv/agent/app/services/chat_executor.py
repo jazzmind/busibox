@@ -283,6 +283,7 @@ async def execute_agent(
     query: str,
     user_id: str,
     session: AsyncSession,
+    principal: Optional[Principal] = None,
     context: Optional[Dict[str, Any]] = None
 ) -> AgentExecutionResult:
     """
@@ -293,6 +294,7 @@ async def execute_agent(
         query: User query
         user_id: User ID for logging
         session: Database session
+        principal: Optional authenticated principal for token exchange
         context: Optional context for agent
         
     Returns:
@@ -377,8 +379,9 @@ async def execute_agent(
                     if tool_fn:
                         agent.tool(tool_fn)
         
-        # Create minimal principal and deps for agent execution
-        principal = Principal(sub=user_id, scopes=[], client_id="chat-service")
+        # Create principal for agent execution if not provided
+        if not principal:
+            principal = Principal(sub=user_id, scopes=[], client_id="agent-api")
         
         # Get or exchange token for downstream services
         from app.services.token_service import get_or_exchange_token
@@ -482,6 +485,7 @@ async def execute_agents(
     query: str,
     user_id: str,
     session: AsyncSession,
+    principal: Optional[Principal] = None,
     context: Optional[Dict[str, Any]] = None
 ) -> List[AgentExecutionResult]:
     """
@@ -492,6 +496,7 @@ async def execute_agents(
         query: User query
         user_id: User ID for logging
         session: Database session
+        principal: Optional authenticated principal for token exchange
         context: Optional context for agents
         
     Returns:
@@ -508,7 +513,7 @@ async def execute_agents(
     # Execute agents sequentially (could be parallel in future)
     results = []
     for agent_id in selected_agents:
-        result = await execute_agent(agent_id, query, user_id, session, context)
+        result = await execute_agent(agent_id, query, user_id, session, principal, context)
         results.append(result)
     
     return results
@@ -635,6 +640,7 @@ async def execute_chat_stream(
     model: str,
     user_id: str,
     session: AsyncSession,
+    principal: Optional[Principal] = None,
     conversation_history: Optional[List[Dict[str, str]]] = None
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
@@ -676,7 +682,8 @@ async def execute_chat_stream(
             routing_decision.selected_agents,
             query,
             user_id,
-            session
+            session,
+            principal
         )
         
         for result in agent_results:

@@ -552,6 +552,7 @@ async def send_chat_message_stream(
                 model=selected_model,
                 user_id=principal.sub,
                 session=session,
+                principal=principal,
                 conversation_history=history_dicts
             ):
                 event_type = event["type"]
