@@ -675,6 +675,15 @@ async def execute_chat_stream(
         conversation_history
     )
     
+    logger.info(
+        f"Synthesized content for streaming",
+        extra={
+            "user_id": user_id,
+            "content_length": len(content),
+            "content_preview": content[:200]
+        }
+    )
+    
     # Stream content in chunks
     words = content.split()
     for i, word in enumerate(words):
