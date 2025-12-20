@@ -141,8 +141,9 @@ def get_builtin_agent_definitions() -> List[AgentDefinitionRead]:
         # Generate a deterministic UUID based on the agent name
         agent_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, f"busibox.builtin.{metadata['name']}")
         
-        # Extract instructions from the agent if possible
+        # Extract instructions and tools from the agent if possible
         instructions = f"Built-in {metadata['display_name']} agent"
+        tool_names = []
         try:
             module = importlib.import_module(f"app.agents.{module_name}")
             agent_var_name = module_name
@@ -160,8 +161,14 @@ def get_builtin_agent_definitions() -> List[AgentDefinitionRead]:
                                 instructions = str(first_prompt()) or instructions
                             except:
                                 pass
+                    
+                    # Extract tool names from the agent
+                    # PydanticAI stores tools in _function_tools dict
+                    if hasattr(agent_instance, '_function_tools') and agent_instance._function_tools:
+                        for tool_name in agent_instance._function_tools.keys():
+                            tool_names.append(tool_name)
         except Exception as e:
-            print(f"Warning: Failed to extract instructions from {module_name}: {e}")
+            print(f"Warning: Failed to extract metadata from {module_name}: {e}")
         
         # Use current timestamp
         now = datetime.now(timezone.utc)
@@ -173,7 +180,7 @@ def get_builtin_agent_definitions() -> List[AgentDefinitionRead]:
             description=metadata["description"],
             model=metadata["model"],
             instructions=instructions,
-            tools={"names": []},  # Will be inferred from agent instance
+            tools={"names": tool_names},  # Extract from agent instance
             workflow=None,
             scopes=[],
             is_active=True,
