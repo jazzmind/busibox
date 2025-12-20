@@ -121,8 +121,9 @@ model = OpenAIModel(
 )
 
 # Create dispatcher agent with LiteLLM-backed model
-dispatcher_agent = Agent[None, RoutingDecision](
+dispatcher_agent = Agent(
     model=model,
+    result_type=RoutingDecision,
     system_prompt=DISPATCHER_SYSTEM_PROMPT,
     model_settings={
         "temperature": 0.3,  # Low temperature for consistent routing

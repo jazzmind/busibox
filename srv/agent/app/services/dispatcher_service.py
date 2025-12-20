@@ -144,7 +144,8 @@ Analyze this query and select the appropriate tools and/or agents."""
 
                 result = await dispatcher_agent.run(prompt)
                 
-                routing_decision = result.output
+                # PydanticAI returns structured data in .data attribute
+                routing_decision = result.data
                 
                 logger.info(
                     "dispatcher_routing_success",
