@@ -127,7 +127,14 @@ dispatcher_agent = Agent[None, RoutingDecision](
     model_settings={
         "temperature": 0.3,  # Low temperature for consistent routing
         "max_tokens": 1000,
-        "response_format": {"type": "json_object"},  # Client-side enforcement
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "routing_decision",
+                "strict": True,
+                "schema": RoutingDecision.model_json_schema()
+            }
+        }
     }
 )
 
