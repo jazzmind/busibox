@@ -42,6 +42,10 @@ litellm_settings:
 {% if litellm_detailed_debug %}
   set_verbose: true
 {% endif %}
+  # Force JSON mode for structured outputs - prevents markdown wrapping
+  json_mode: true
+  # Enable automatic response_format handling for compatible models
+  default_response_format: json_object
 
 general_settings:
   master_key: "{{ litellm_master_key }}"

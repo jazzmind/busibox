@@ -67,7 +67,6 @@ Your job is to:
 - 0.0-0.5: Low confidence or no available tools/agents
 
 **Response Format**:
-You MUST respond with VALID JSON ONLY. Do not use YAML format, markdown lists, or any other format.
 Return a RoutingDecision JSON object with these exact fields:
 - selected_tools: List of tool names to use (from enabled_tools only)
 - selected_agents: List of agent IDs to use (from enabled_agents only)
@@ -75,16 +74,6 @@ Return a RoutingDecision JSON object with these exact fields:
 - reasoning: Clear explanation of your decision (1-2 sentences)
 - alternatives: Other viable options (if any)
 - requires_disambiguation: Automatically set based on confidence < 0.7
-
-Example JSON response:
-{
-  "selected_tools": ["web_search"],
-  "selected_agents": [],
-  "confidence": 0.9,
-  "reasoning": "Query requires web search for current information",
-  "alternatives": [],
-  "requires_disambiguation": false
-}
 
 **Examples**:
 
@@ -138,7 +127,6 @@ dispatcher_agent = Agent[None, RoutingDecision](
     model_settings={
         "temperature": 0.3,  # Low temperature for consistent routing
         "max_tokens": 1000,
-        "response_format": {"type": "json_object"},  # Force JSON output
     }
 )
 

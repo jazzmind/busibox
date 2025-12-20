@@ -56,6 +56,7 @@ ExecStart={{ vllm_venv_dir }}/bin/python -m vllm.entrypoints.openai.api_server \
   --chat-template {{ vllm_tool_chat_template }} \
 {% endif %}
 {% endif %}
+  --guided-decoding-backend {{ vllm_guided_decoding_backend | default('outlines') }} \
 {% if vllm_multimodal is defined and vllm_multimodal %}
 {% if vllm_limit_mm_per_prompt is defined and vllm_limit_mm_per_prompt | length > 0 %}
   --limit-mm-per-prompt '{{ vllm_limit_mm_per_prompt }}' \
