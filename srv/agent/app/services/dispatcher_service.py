@@ -152,7 +152,15 @@ Analyze this query and select the appropriate tools and/or agents."""
                     # Try parsing output if it's a string
                     if isinstance(result.output, str):
                         import json
-                        routing_decision = RoutingDecision.model_validate_json(result.output)
+                        import re
+                        # Strip markdown code fences if present (```json...``` or ```...```)
+                        output_str = result.output.strip()
+                        if output_str.startswith('```'):
+                            # Remove opening fence (```json or ```)
+                            output_str = re.sub(r'^```(?:json)?\s*\n?', '', output_str)
+                            # Remove closing fence
+                            output_str = re.sub(r'\n?```\s*$', '', output_str)
+                        routing_decision = RoutingDecision.model_validate_json(output_str.strip())
                     else:
                         routing_decision = result.output
                 else:
