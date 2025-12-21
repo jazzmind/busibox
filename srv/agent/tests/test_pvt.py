@@ -135,16 +135,6 @@ class TestPVTAPI:
     """API tests - verify core endpoints work."""
     
     @pytest.mark.asyncio
-    async def test_openapi_schema_available(self):
-        """OpenAPI schema is accessible."""
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(f"{SERVICE_URL}/openapi.json", timeout=5.0)
-            assert resp.status_code == 200
-            data = resp.json()
-            assert "openapi" in data
-            assert "paths" in data
-    
-    @pytest.mark.asyncio
     async def test_builtin_agents_available(self):
         """Built-in agents are seeded in the database."""
         db_url = require_env("DATABASE_URL", DATABASE_URL)

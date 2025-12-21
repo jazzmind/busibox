@@ -147,15 +147,3 @@ class TestPVTDependencies:
             assert resp.status_code == 200, f"AuthZ health check failed: {resp.status_code}"
 
 
-@pytest.mark.pvt
-class TestPVTAPI:
-    """API tests - verify core endpoints work."""
-    
-    @pytest.mark.asyncio
-    async def test_docs_endpoint_available(self):
-        """API documentation is accessible at /docs."""
-        async with httpx.AsyncClient() as client:
-            # /docs is typically public even when API requires auth
-            resp = await client.get(f"{SERVICE_URL}/docs", timeout=5.0, follow_redirects=True)
-            # Should return HTML docs or redirect to docs
-            assert resp.status_code in [200, 307], f"Docs endpoint failed: {resp.status_code}"

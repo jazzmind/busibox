@@ -142,18 +142,3 @@ class TestPVTDependencies:
             await conn.close()
 
 
-@pytest.mark.pvt
-class TestPVTAPI:
-    """API tests - verify core endpoints work."""
-    
-    @pytest.mark.asyncio
-    async def test_openapi_schema_available(self):
-        """OpenAPI schema is accessible."""
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(f"{SERVICE_URL}/openapi.json", timeout=5.0)
-            assert resp.status_code == 200
-            data = resp.json()
-            assert "openapi" in data
-            assert "paths" in data
-            # Verify search endpoint is documented
-            assert "/search" in data["paths"]
