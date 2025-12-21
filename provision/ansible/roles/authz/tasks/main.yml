@@ -35,6 +35,11 @@
     - "{{ authz_app_dir }}"
   tags: [authz]
 
+- name: Clean Python cache before source sync
+  shell: find {{ authz_app_dir }}/src -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+  changed_when: false
+  tags: [authz]
+
 - name: Sync authz source (removes stale files)
   synchronize:
     src: "{{ authz_src_dir }}/src/"
@@ -53,11 +58,6 @@
     owner: "{{ authz_user }}"
     group: "{{ authz_group }}"
     recurse: yes
-  tags: [authz]
-
-- name: Clean Python cache in source directory
-  shell: find {{ authz_app_dir }}/src -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
-  changed_when: false
   tags: [authz]
 
 - name: Restart authz service after code deployment
@@ -94,6 +94,11 @@
     mode: "0644"
   tags: [authz]
 
+- name: Clean Python cache before tests sync
+  shell: find {{ authz_app_dir }}/tests -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+  changed_when: false
+  tags: [authz]
+
 - name: Sync authz tests (removes stale files)
   synchronize:
     src: "{{ authz_src_dir }}/tests/"
@@ -110,11 +115,6 @@
     owner: "{{ authz_user }}"
     group: "{{ authz_group }}"
     recurse: yes
-  tags: [authz]
-
-- name: Clean Python cache in tests directory
-  shell: find {{ authz_app_dir }}/tests -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
-  changed_when: false
   tags: [authz]
 
 - name: Ensure Python venv deps are installed
