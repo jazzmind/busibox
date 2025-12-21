@@ -49,18 +49,26 @@ help:
 	@echo "  setup         - Initial setup (Proxmox host + LXC containers)"
 	@echo "  configure     - Configure models, GPUs, and containers"
 	@echo "  deploy        - Deploy services with Ansible"
-	@echo "  test          - Run tests (interactive menu)"
+	@echo "  test          - Run tests (interactive or direct)"
 	@echo "  test-local    - Run tests locally against containers"
 	@echo "  test-security - Run API security tests (fuzzing, OWASP)"
 	@echo "  mcp           - Build MCP server for Cursor AI"
 	@echo "  help          - Show this help message"
 	@echo ""
+	@echo "Testing (on containers):"
+	@echo "  make test                                 # Interactive menu"
+	@echo "  make test SERVICE=authz INV=test          # Run authz tests on test containers"
+	@echo "  make test SERVICE=ingest INV=test         # Run ingest tests on test containers"
+	@echo "  make test SERVICE=search INV=test         # Run search tests on test containers"
+	@echo "  make test SERVICE=agent INV=test          # Run agent tests on test containers"
+	@echo ""
 	@echo "Local Testing (run tests on your machine against container backends):"
-	@echo "  make test-local SERVICE=authz INV=test   # Run authz tests locally"
-	@echo "  make test-local SERVICE=ingest INV=test  # Run ingest tests locally"
-	@echo "  make test-local SERVICE=search INV=test  # Run search tests locally"
-	@echo "  make test-local SERVICE=agent INV=test   # Run agent tests locally"
-	@echo "  make test-local SERVICE=all INV=test     # Run all tests locally"
+	@echo "  make test SERVICE=authz INV=test MODE=local  # Run authz tests locally"
+	@echo "  make test-local SERVICE=authz INV=test       # Same as above (shorthand)"
+	@echo "  make test-local SERVICE=ingest INV=test      # Run ingest tests locally"
+	@echo "  make test-local SERVICE=search INV=test      # Run search tests locally"
+	@echo "  make test-local SERVICE=agent INV=test       # Run agent tests locally"
+	@echo "  make test-local SERVICE=all INV=test         # Run all tests locally"
 	@echo ""
 	@echo "Quick Start:"
 	@echo "  1. make setup      # On Proxmox host"
@@ -80,8 +88,16 @@ configure:
 deploy:
 	@bash scripts/make/deploy.sh
 
+# Run tests - interactive menu or direct command
+# Interactive: make test
+# Direct:      make test SERVICE=authz INV=test
+#              make test SERVICE=authz INV=test MODE=local
 test:
+ifdef SERVICE
+	@bash scripts/make/test.sh $(SERVICE) $(INV) $(MODE)
+else
 	@bash scripts/make/test.sh
+endif
 
 # Run tests locally against remote container backends
 # Usage: make test-local SERVICE=authz INV=test

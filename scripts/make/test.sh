@@ -20,13 +20,6 @@ ANSIBLE_DIR="${REPO_ROOT}/provision/ansible"
 # Source UI library
 source "${REPO_ROOT}/scripts/lib/ui.sh"
 
-# Display welcome
-clear
-box "Busibox Test Runner" 70
-echo ""
-info "Run infrastructure and service tests"
-echo ""
-
 # Detect vault password method (shared with deploy script)
 get_vault_flags() {
     local vault_pass_file="$HOME/.vault_pass"
@@ -1155,6 +1148,118 @@ main_menu() {
     done
 }
 
+# Run tests on container (non-interactive)
+run_container_tests() {
+    local service="$1"
+    local env="$2"
+    
+    local vault_flags
+    vault_flags="$(get_vault_flags)"
+    
+    # Extract credentials from vault
+    info "Extracting test credentials from vault..."
+    local creds
+    creds=$(extract_vault_credentials 2>/dev/null) || {
+        error "Could not extract credentials from vault"
+        exit 1
+    }
+    eval "$creds"
+    
+    # Get container IPs
+    local postgres_ip authz_ip ingest_ip search_ip agent_ip minio_ip milvus_ip
+    postgres_ip=$(get_container_ip postgres "$env")
+    authz_ip=$(get_container_ip authz "$env")
+    ingest_ip=$(get_container_ip ingest "$env")
+    search_ip=$(get_container_ip search "$env")
+    agent_ip=$(get_container_ip agent "$env")
+    minio_ip=$(get_container_ip minio "$env")
+    milvus_ip=$(get_container_ip milvus "$env")
+    
+    case "$service" in
+        authz)
+            header "Authz Service Tests" 70
+            info "Running authz tests on ${authz_ip}..."
+            
+            # Build environment variables
+            local test_env="TEST_DB_USER=busibox_test_user"
+            test_env="${test_env} TEST_DB_PASSWORD=${TEST_DB_PASSWORD}"
+            test_env="${test_env} TEST_DB_NAME=busibox_test"
+            test_env="${test_env} TEST_DB_HOST=${postgres_ip}"
+            test_env="${test_env} AUTHZ_ADMIN_TOKEN=${AUTHZ_ADMIN_TOKEN}"
+            test_env="${test_env} AUTHZ_MASTER_KEY=${AUTHZ_MASTER_KEY}"
+            test_env="${test_env} AUTHZ_SERVICE_URL=http://${authz_ip}:8010"
+            
+            # Run tests via SSH
+            ssh "root@${authz_ip}" "cd /srv/authz/app && source ../venv/bin/activate && export PYTHONPATH=/srv/authz/app/src && source /srv/authz/.env && export ${test_env} && python -m pytest tests/ -v --tb=short" || {
+                error "Authz tests failed"
+                exit 1
+            }
+            success "Authz tests passed!"
+            ;;
+        ingest)
+            header "Ingest Service Tests" 70
+            info "Running ingest tests on ${ingest_ip}..."
+            
+            local test_env="POSTGRES_HOST=${postgres_ip}"
+            test_env="${test_env} POSTGRES_PASSWORD=${POSTGRES_PASSWORD}"
+            test_env="${test_env} MINIO_HOST=${minio_ip}"
+            test_env="${test_env} MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}"
+            test_env="${test_env} MINIO_SECRET_KEY=${MINIO_SECRET_KEY}"
+            test_env="${test_env} AUTHZ_URL=http://${authz_ip}:8010"
+            test_env="${test_env} AUTHZ_JWKS_URL=http://${authz_ip}:8010/.well-known/jwks.json"
+            
+            ssh "root@${ingest_ip}" "cd /srv/ingest && source venv/bin/activate && export PYTHONPATH=/srv/ingest/src && source .env && export ${test_env} && python -m pytest tests/ -v --tb=short" || {
+                error "Ingest tests failed"
+                exit 1
+            }
+            success "Ingest tests passed!"
+            ;;
+        search)
+            header "Search Service Tests" 70
+            info "Running search tests on ${search_ip}..."
+            
+            local test_env="POSTGRES_HOST=${postgres_ip}"
+            test_env="${test_env} POSTGRES_PASSWORD=${POSTGRES_PASSWORD}"
+            test_env="${test_env} MILVUS_HOST=${milvus_ip}"
+            test_env="${test_env} AUTHZ_URL=http://${authz_ip}:8010"
+            test_env="${test_env} AUTHZ_JWKS_URL=http://${authz_ip}:8010/.well-known/jwks.json"
+            
+            ssh "root@${search_ip}" "cd /srv/search && source venv/bin/activate && export PYTHONPATH=/srv/search/src && source .env && export ${test_env} && python -m pytest tests/ -v --tb=short" || {
+                error "Search tests failed"
+                exit 1
+            }
+            success "Search tests passed!"
+            ;;
+        agent)
+            header "Agent Service Tests" 70
+            info "Running agent tests on ${agent_ip}..."
+            
+            local test_env="POSTGRES_HOST=${postgres_ip}"
+            test_env="${test_env} POSTGRES_PASSWORD=${POSTGRES_PASSWORD}"
+            test_env="${test_env} AUTHZ_URL=http://${authz_ip}:8010"
+            test_env="${test_env} AUTHZ_JWKS_URL=http://${authz_ip}:8010/.well-known/jwks.json"
+            test_env="${test_env} INGEST_URL=http://${ingest_ip}:8000"
+            test_env="${test_env} SEARCH_URL=http://${search_ip}:8001"
+            
+            ssh "root@${agent_ip}" "cd /srv/agent && source venv/bin/activate && source .env && export ${test_env} && python -m pytest tests/ -v --tb=short" || {
+                error "Agent tests failed"
+                exit 1
+            }
+            success "Agent tests passed!"
+            ;;
+        all)
+            for svc in authz ingest search agent; do
+                run_container_tests "$svc" "$env"
+            done
+            ;;
+        *)
+            error "Unknown service: $service"
+            echo "Available services: authz, ingest, search, agent, all"
+            exit 1
+            ;;
+    esac
+}
+
 # Main function
 main() {
     # Check for command-line arguments for non-interactive mode
@@ -1164,12 +1269,31 @@ main() {
         local env="${2:-test}"
         local mode="${3:-container}"
         
+        # Don't clear screen in non-interactive mode
+        echo ""
+        box "Busibox Test Runner - Non-Interactive" 70
+        echo ""
+        info "Service: $service | Environment: $env | Mode: $mode"
+        echo ""
+        
         if [[ "$mode" == "local" ]]; then
             info "Running local tests for $service on $env..."
             bash "${REPO_ROOT}/scripts/test/run-local-tests.sh" "$service" "$env"
             exit $?
+        else
+            # Run tests on container
+            run_container_tests "$service" "$env"
+            exit $?
         fi
     fi
+    
+    # Interactive mode
+    # Display welcome
+    clear
+    box "Busibox Test Runner" 70
+    echo ""
+    info "Run infrastructure and service tests"
+    echo ""
     
     # Select environment
     ENV=$(select_environment)
@@ -1184,8 +1308,8 @@ main() {
     echo ""
 }
 
-# Run main function
-main
+# Run main function with all arguments
+main "$@"
 
 exit 0
 
