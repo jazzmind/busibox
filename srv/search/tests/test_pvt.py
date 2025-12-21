@@ -12,6 +12,7 @@ Run with: pytest tests/test_pvt.py -v
 Or: pytest -m pvt -v
 
 IMPORTANT: These tests require REAL services - no mocks allowed.
+IMPORTANT: All tests MUST pass - skipped tests indicate deployment issues.
 """
 
 import os
@@ -20,14 +21,21 @@ import httpx
 
 # Read from environment (set by .env file)
 SERVICE_PORT = os.getenv("SERVICE_PORT", "8003")
-SERVICE_URL = os.getenv("SEARCH_API_URL", f"http://localhost:{SERVICE_PORT}")
+SERVICE_URL = f"http://localhost:{SERVICE_PORT}"
 
-# Dependencies
+# Dependencies - REQUIRED
 AUTHZ_JWKS_URL = os.getenv("AUTHZ_JWKS_URL", "")
 MILVUS_HOST = os.getenv("MILVUS_HOST", "")
 MILVUS_PORT = os.getenv("MILVUS_PORT", "19530")
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "")
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
+
+
+def require_env(var_name: str, value: str) -> str:
+    """Fail if environment variable is not set."""
+    if not value:
+        pytest.fail(f"Required environment variable {var_name} is not set. Check .env file.")
+    return value
 
 
 @pytest.mark.pvt
@@ -68,11 +76,10 @@ class TestPVTAuth:
     @pytest.mark.asyncio
     async def test_authz_jwks_reachable(self):
         """AuthZ JWKS endpoint is reachable from this service."""
-        if not AUTHZ_JWKS_URL:
-            pytest.skip("AUTHZ_JWKS_URL not set")
+        jwks_url = require_env("AUTHZ_JWKS_URL", AUTHZ_JWKS_URL)
         
         async with httpx.AsyncClient() as client:
-            resp = await client.get(AUTHZ_JWKS_URL, timeout=5.0)
+            resp = await client.get(jwks_url, timeout=5.0)
             assert resp.status_code == 200, f"JWKS returned {resp.status_code}"
             data = resp.json()
             assert "keys" in data
@@ -86,15 +93,14 @@ class TestPVTDependencies:
     @pytest.mark.asyncio
     async def test_milvus_reachable(self):
         """Milvus is reachable."""
-        if not MILVUS_HOST:
-            pytest.skip("MILVUS_HOST not set")
+        host = require_env("MILVUS_HOST", MILVUS_HOST)
         
         from pymilvus import connections
         
         try:
             connections.connect(
                 alias="pvt_test",
-                host=MILVUS_HOST,
+                host=host,
                 port=int(MILVUS_PORT),
                 timeout=5.0,
             )
@@ -106,8 +112,8 @@ class TestPVTDependencies:
     @pytest.mark.asyncio
     async def test_postgres_reachable(self):
         """PostgreSQL is reachable (for metadata queries)."""
-        if not POSTGRES_HOST or not POSTGRES_PASSWORD:
-            pytest.skip("PostgreSQL credentials not set")
+        host = require_env("POSTGRES_HOST", POSTGRES_HOST)
+        password = require_env("POSTGRES_PASSWORD", POSTGRES_PASSWORD)
         
         import asyncpg
         
@@ -116,11 +122,11 @@ class TestPVTDependencies:
         postgres_user = os.getenv("POSTGRES_USER", "busibox_user")
         
         conn = await asyncpg.connect(
-            host=POSTGRES_HOST,
+            host=host,
             port=postgres_port,
             database=postgres_db,
             user=postgres_user,
-            password=POSTGRES_PASSWORD,
+            password=password,
             timeout=5.0,
         )
         try:

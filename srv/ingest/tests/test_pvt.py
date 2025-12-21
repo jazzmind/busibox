@@ -14,6 +14,7 @@ Run with: pytest tests/test_pvt.py -v
 Or: pytest -m pvt -v
 
 IMPORTANT: These tests require REAL services - no mocks allowed.
+IMPORTANT: All tests MUST pass - skipped tests indicate deployment issues.
 """
 
 import os
@@ -22,14 +23,21 @@ import httpx
 
 # Read from environment (set by .env file)
 API_PORT = os.getenv("API_PORT", "8002")
-SERVICE_URL = os.getenv("INGEST_API_URL", f"http://localhost:{API_PORT}")
+SERVICE_URL = f"http://localhost:{API_PORT}"
 
-# Dependencies
+# Dependencies - REQUIRED
 AUTHZ_JWKS_URL = os.getenv("AUTHZ_JWKS_URL", "")
-AUTHZ_SERVICE_URL = os.getenv("AUTHZ_SERVICE_URL", "")
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "")
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
 MINIO_HOST = os.getenv("MINIO_HOST", "")
 MINIO_PORT = os.getenv("MINIO_PORT", "9000")
+
+
+def require_env(var_name: str, value: str) -> str:
+    """Fail if environment variable is not set."""
+    if not value:
+        pytest.fail(f"Required environment variable {var_name} is not set. Check .env file.")
+    return value
 
 
 @pytest.mark.pvt
@@ -71,11 +79,10 @@ class TestPVTAuth:
     @pytest.mark.asyncio
     async def test_authz_jwks_reachable(self):
         """AuthZ JWKS endpoint is reachable from this service."""
-        if not AUTHZ_JWKS_URL:
-            pytest.skip("AUTHZ_JWKS_URL not set")
+        jwks_url = require_env("AUTHZ_JWKS_URL", AUTHZ_JWKS_URL)
         
         async with httpx.AsyncClient() as client:
-            resp = await client.get(AUTHZ_JWKS_URL, timeout=5.0)
+            resp = await client.get(jwks_url, timeout=5.0)
             assert resp.status_code == 200, f"JWKS endpoint returned {resp.status_code}"
             data = resp.json()
             assert "keys" in data, "JWKS response missing 'keys'"
@@ -89,24 +96,20 @@ class TestPVTDependencies:
     @pytest.mark.asyncio
     async def test_postgres_reachable(self):
         """PostgreSQL is reachable."""
-        if not POSTGRES_HOST:
-            pytest.skip("POSTGRES_HOST not set")
+        host = require_env("POSTGRES_HOST", POSTGRES_HOST)
+        password = require_env("POSTGRES_PASSWORD", POSTGRES_PASSWORD)
         
         import asyncpg
         postgres_port = int(os.getenv("POSTGRES_PORT", "5432"))
         postgres_db = os.getenv("POSTGRES_DB", "busibox")
         postgres_user = os.getenv("POSTGRES_USER", "busibox_user")
-        postgres_password = os.getenv("POSTGRES_PASSWORD", "")
-        
-        if not postgres_password:
-            pytest.skip("POSTGRES_PASSWORD not set")
         
         conn = await asyncpg.connect(
-            host=POSTGRES_HOST,
+            host=host,
             port=postgres_port,
             database=postgres_db,
             user=postgres_user,
-            password=postgres_password,
+            password=password,
             timeout=5.0,
         )
         try:
@@ -118,29 +121,21 @@ class TestPVTDependencies:
     @pytest.mark.asyncio
     async def test_minio_reachable(self):
         """MinIO is reachable."""
-        if not MINIO_HOST:
-            pytest.skip("MINIO_HOST not set")
+        host = require_env("MINIO_HOST", MINIO_HOST)
         
         # Just check the MinIO health endpoint
         async with httpx.AsyncClient() as client:
             resp = await client.get(
-                f"http://{MINIO_HOST}:{MINIO_PORT}/minio/health/live",
+                f"http://{host}:{MINIO_PORT}/minio/health/live",
                 timeout=5.0,
             )
             assert resp.status_code == 200, f"MinIO health check failed: {resp.status_code}"
     
     @pytest.mark.asyncio
-    async def test_authz_keystore_reachable(self):
-        """AuthZ keystore endpoint is reachable (for encryption)."""
-        if not AUTHZ_SERVICE_URL:
-            # Try to construct from JWKS URL
-            if AUTHZ_JWKS_URL:
-                base_url = AUTHZ_JWKS_URL.replace("/.well-known/jwks.json", "")
-            else:
-                pytest.skip("AUTHZ_SERVICE_URL not set")
-                return
-        else:
-            base_url = AUTHZ_SERVICE_URL
+    async def test_authz_service_reachable(self):
+        """AuthZ service is reachable (for encryption keystore)."""
+        jwks_url = require_env("AUTHZ_JWKS_URL", AUTHZ_JWKS_URL)
+        base_url = jwks_url.replace("/.well-known/jwks.json", "")
         
         async with httpx.AsyncClient() as client:
             resp = await client.get(f"{base_url}/health/live", timeout=5.0)

@@ -13,6 +13,7 @@ Run with: pytest tests/test_pvt.py -v
 Or: pytest -m pvt -v
 
 IMPORTANT: These tests require REAL services - no mocks allowed.
+IMPORTANT: All tests MUST pass - skipped tests indicate deployment issues.
 """
 
 import os
@@ -21,15 +22,22 @@ import httpx
 
 # Read from environment (set by .env file)
 SERVICE_PORT = os.getenv("SERVICE_PORT", "8010")
-SERVICE_URL = os.getenv("TEST_AUTHZ_URL", f"http://localhost:{SERVICE_PORT}")
+SERVICE_URL = f"http://localhost:{SERVICE_PORT}"
 ADMIN_TOKEN = os.getenv("AUTHZ_ADMIN_TOKEN", "")
 
-# Database config
+# Database config - REQUIRED
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "")
 POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
 POSTGRES_DB = os.getenv("POSTGRES_DB", "busibox")
 POSTGRES_USER = os.getenv("POSTGRES_USER", "")
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
+
+
+def require_env(var_name: str, value: str) -> str:
+    """Fail if environment variable is not set."""
+    if not value:
+        pytest.fail(f"Required environment variable {var_name} is not set. Check .env file.")
+    return value
 
 
 @pytest.mark.pvt
@@ -62,17 +70,18 @@ class TestPVTDatabase:
     @pytest.mark.asyncio
     async def test_postgres_direct_connection(self):
         """Can connect directly to PostgreSQL."""
-        if not POSTGRES_HOST or not POSTGRES_PASSWORD:
-            pytest.skip("PostgreSQL credentials not set")
+        host = require_env("POSTGRES_HOST", POSTGRES_HOST)
+        password = require_env("POSTGRES_PASSWORD", POSTGRES_PASSWORD)
+        user = require_env("POSTGRES_USER", POSTGRES_USER)
         
         import asyncpg
         
         conn = await asyncpg.connect(
-            host=POSTGRES_HOST,
+            host=host,
             port=int(POSTGRES_PORT),
             database=POSTGRES_DB,
-            user=POSTGRES_USER,
-            password=POSTGRES_PASSWORD,
+            user=user,
+            password=password,
             timeout=5.0,
         )
         try:
@@ -84,17 +93,18 @@ class TestPVTDatabase:
     @pytest.mark.asyncio
     async def test_authz_tables_exist(self):
         """AuthZ tables exist in database."""
-        if not POSTGRES_HOST or not POSTGRES_PASSWORD:
-            pytest.skip("PostgreSQL credentials not set")
+        host = require_env("POSTGRES_HOST", POSTGRES_HOST)
+        password = require_env("POSTGRES_PASSWORD", POSTGRES_PASSWORD)
+        user = require_env("POSTGRES_USER", POSTGRES_USER)
         
         import asyncpg
         
         conn = await asyncpg.connect(
-            host=POSTGRES_HOST,
+            host=host,
             port=int(POSTGRES_PORT),
             database=POSTGRES_DB,
-            user=POSTGRES_USER,
-            password=POSTGRES_PASSWORD,
+            user=user,
+            password=password,
             timeout=5.0,
         )
         try:
@@ -142,15 +152,11 @@ class TestPVTAuth:
 class TestPVTKeystore:
     """Keystore tests - verify encryption infrastructure works."""
     
-    @pytest.fixture
-    def admin_token(self):
-        if not ADMIN_TOKEN:
-            pytest.skip("AUTHZ_ADMIN_TOKEN not set")
-        return ADMIN_TOKEN
-    
     @pytest.mark.asyncio
-    async def test_keystore_kek_creation(self, admin_token):
+    async def test_keystore_kek_creation(self):
         """Can create a KEK for a role (tests AUTHZ_MASTER_KEY is configured)."""
+        admin_token = require_env("AUTHZ_ADMIN_TOKEN", ADMIN_TOKEN)
+        
         import uuid
         test_role_id = str(uuid.uuid4())
         
@@ -185,13 +191,12 @@ class TestPVTTokenExchange:
     @pytest.mark.asyncio
     async def test_bootstrap_client_exists(self):
         """Bootstrap OAuth client (ai-portal) exists."""
-        if not ADMIN_TOKEN:
-            pytest.skip("AUTHZ_ADMIN_TOKEN not set")
+        admin_token = require_env("AUTHZ_ADMIN_TOKEN", ADMIN_TOKEN)
         
         async with httpx.AsyncClient() as client:
             resp = await client.get(
                 f"{SERVICE_URL}/admin/oauth-clients",
-                headers={"Authorization": f"Bearer {ADMIN_TOKEN}"},
+                headers={"Authorization": f"Bearer {admin_token}"},
                 timeout=5.0,
             )
             assert resp.status_code == 200, f"Failed to list clients: {resp.text}"
