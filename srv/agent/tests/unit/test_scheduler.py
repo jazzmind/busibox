@@ -1,7 +1,11 @@
 """
 Unit tests for scheduler service.
+
+Note: These tests use async fixtures because APScheduler's AsyncIOScheduler
+requires a running event loop.
 """
 
+import asyncio
 import uuid
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -83,7 +87,8 @@ def test_scheduler_initialization():
     assert scheduler._scheduler is not None
 
 
-def test_ensure_started():
+@pytest.mark.asyncio
+async def test_ensure_started():
     """Test _ensure_started starts scheduler once."""
     scheduler = RunScheduler()
     
@@ -95,9 +100,13 @@ def test_ensure_started():
     # Calling again should not restart
     scheduler._ensure_started()
     assert scheduler._started is True
+    
+    # Cleanup
+    scheduler.shutdown(wait=False)
 
 
-def test_schedule_agent_run_starts_scheduler():
+@pytest.mark.asyncio
+async def test_schedule_agent_run_starts_scheduler():
     """Test schedule_agent_run starts scheduler on first use."""
     scheduler = RunScheduler()
     principal = Principal(
@@ -130,7 +139,8 @@ def test_schedule_agent_run_starts_scheduler():
     scheduler.shutdown(wait=False)
 
 
-def test_schedule_agent_run_stores_metadata():
+@pytest.mark.asyncio
+async def test_schedule_agent_run_stores_metadata():
     """Test schedule_agent_run stores job metadata."""
     scheduler = RunScheduler()
     principal = Principal(
@@ -167,7 +177,8 @@ def test_schedule_agent_run_stores_metadata():
     scheduler.shutdown(wait=False)
 
 
-def test_get_job():
+@pytest.mark.asyncio
+async def test_get_job():
     """Test get_job retrieves job metadata."""
     scheduler = RunScheduler()
     principal = Principal(sub="test-user", roles=[], scopes=[])
@@ -197,7 +208,8 @@ def test_get_job():
     scheduler.shutdown(wait=False)
 
 
-def test_list_jobs():
+@pytest.mark.asyncio
+async def test_list_jobs():
     """Test list_jobs returns all scheduled jobs."""
     scheduler = RunScheduler()
     principal = Principal(sub="test-user", roles=[], scopes=[])
@@ -239,7 +251,8 @@ def test_list_jobs():
     scheduler.shutdown(wait=False)
 
 
-def test_cancel_job():
+@pytest.mark.asyncio
+async def test_cancel_job():
     """Test cancel_job removes scheduled job."""
     scheduler = RunScheduler()
     principal = Principal(sub="test-user", roles=[], scopes=[])
@@ -276,7 +289,8 @@ def test_cancel_job():
     scheduler.shutdown(wait=False)
 
 
-def test_shutdown():
+@pytest.mark.asyncio
+async def test_shutdown():
     """Test shutdown stops scheduler."""
     scheduler = RunScheduler()
     principal = Principal(sub="test-user", roles=[], scopes=[])
@@ -349,11 +363,4 @@ async def test_scheduled_job_execution_with_token_refresh():
     
     # Cleanup
     scheduler.shutdown(wait=False)
-
-
-
-
-
-
-
 

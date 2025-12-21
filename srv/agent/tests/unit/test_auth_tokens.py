@@ -34,27 +34,36 @@ def build_jwks(secret: str, *, kid: str = "test-key") -> dict:
 @pytest.mark.asyncio
 async def test_validate_bearer_success(monkeypatch):
     secret = "super-secret"
-    token = build_token(secret)
-    jwks = build_jwks(secret)
-
-    async def fake_get():
-        return jwks
-
-    # Reset any cached JWKS to ensure deterministic test
-    jwks_cache._jwks = None  # type: ignore[attr-defined]
-    monkeypatch.setattr(jwks_cache, "get", fake_get)
-
+    
+    # Set up settings BEFORE building the token so claims match
+    original_issuer = settings.auth_issuer
+    original_audience = settings.auth_audience
     settings.auth_issuer = "https://issuer.test"
     settings.auth_audience = "https://aud.test"
+    
+    try:
+        token = build_token(secret)
+        jwks = build_jwks(secret)
 
-    principal = await validate_bearer(token)
+        async def fake_get():
+            return jwks
 
-    assert principal.sub == "user-123"
-    assert principal.email == "user@example.com"
-    assert "search.read" in principal.scopes
-    assert "ingest.write" in principal.scopes
-    assert principal.roles == ["user"]
-    assert principal.token == token
+        # Reset any cached JWKS to ensure deterministic test
+        jwks_cache._jwks = None  # type: ignore[attr-defined]
+        monkeypatch.setattr(jwks_cache, "get", fake_get)
+
+        principal = await validate_bearer(token)
+
+        assert principal.sub == "user-123"
+        assert principal.email == "user@example.com"
+        assert "search.read" in principal.scopes
+        assert "ingest.write" in principal.scopes
+        assert principal.roles == ["user"]
+        assert principal.token == token
+    finally:
+        # Restore original settings
+        settings.auth_issuer = original_issuer
+        settings.auth_audience = original_audience
 
 
 @pytest.mark.asyncio
@@ -103,6 +112,7 @@ async def test_validate_bearer_signature_failure(monkeypatch):
 
     with pytest.raises(jwt.JWTError):
         await validate_bearer(token)
+
 
 
 
