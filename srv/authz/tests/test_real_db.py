@@ -441,3 +441,109 @@ class TestAuthzServiceEndpoints:
             assert 'use' in jwk
             assert jwk['kty'] == 'RSA'
 
+
+class TestKeystoreEndpoints:
+    """
+    Integration tests for keystore (envelope encryption) endpoints.
+    
+    These tests call the actual running authz service to verify:
+    - KEK creation and management
+    - Content encryption/decryption
+    - Role-based access control for encryption
+    
+    Requires:
+    - AUTHZ_ADMIN_TOKEN to be set
+    - AUTHZ_MASTER_KEY to be configured on the authz service
+    """
+    
+    @pytest.fixture
+    def admin_token(self):
+        """Get admin token from environment."""
+        token = os.getenv("AUTHZ_ADMIN_TOKEN")
+        if not token:
+            pytest.skip("AUTHZ_ADMIN_TOKEN not set")
+        return token
+    
+    @pytest.fixture
+    def test_role_id(self):
+        """Generate unique role ID for testing."""
+        import uuid
+        return str(uuid.uuid4())
+    
+    @pytest.mark.asyncio
+    async def test_keystore_ensure_kek_for_role(self, admin_token, test_role_id):
+        """Test creating/ensuring a KEK exists for a role."""
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{TEST_AUTHZ_URL}/keystore/kek/ensure-for-role/{test_role_id}",
+                headers={"Authorization": f"Bearer {admin_token}"},
+                timeout=30.0,
+            )
+            
+            # Should succeed if AUTHZ_MASTER_KEY is configured
+            assert resp.status_code == 200, f"KEK creation failed: {resp.text}"
+            data = resp.json()
+            assert "kek_id" in data
+            assert data["kek_id"] is not None
+    
+    @pytest.mark.asyncio
+    async def test_keystore_encrypt_decrypt_roundtrip(self, admin_token, test_role_id):
+        """Test full encrypt/decrypt cycle through keystore."""
+        import base64
+        import uuid
+        
+        async with httpx.AsyncClient() as client:
+            # First ensure KEK exists for the role
+            kek_resp = await client.post(
+                f"{TEST_AUTHZ_URL}/keystore/kek/ensure-for-role/{test_role_id}",
+                headers={"Authorization": f"Bearer {admin_token}"},
+                timeout=30.0,
+            )
+            assert kek_resp.status_code == 200, f"KEK creation failed: {kek_resp.text}"
+            
+            # Encrypt some content
+            file_id = str(uuid.uuid4())
+            original_content = b"This is test content for encryption roundtrip."
+            content_b64 = base64.b64encode(original_content).decode()
+            
+            encrypt_resp = await client.post(
+                f"{TEST_AUTHZ_URL}/keystore/encrypt",
+                headers={"Authorization": f"Bearer {admin_token}"},
+                json={
+                    "file_id": file_id,
+                    "content_base64": content_b64,
+                    "role_ids": [test_role_id],
+                },
+                timeout=30.0,
+            )
+            
+            assert encrypt_resp.status_code == 200, f"Encryption failed: {encrypt_resp.text}"
+            encrypted_data = encrypt_resp.json()
+            assert "encrypted_content_base64" in encrypted_data
+            assert "dek_id" in encrypted_data
+            
+            # Encrypted content should be different from original
+            encrypted_bytes = base64.b64decode(encrypted_data["encrypted_content_base64"])
+            assert encrypted_bytes != original_content
+            
+            # Now decrypt with authorized role
+            decrypt_resp = await client.post(
+                f"{TEST_AUTHZ_URL}/keystore/decrypt",
+                headers={
+                    "Authorization": f"Bearer {admin_token}",
+                    "X-User-Role-Ids": test_role_id,
+                },
+                json={
+                    "file_id": file_id,
+                    "encrypted_content_base64": encrypted_data["encrypted_content_base64"],
+                },
+                timeout=30.0,
+            )
+            
+            assert decrypt_resp.status_code == 200, f"Decryption failed: {decrypt_resp.text}"
+            decrypted_data = decrypt_resp.json()
+            decrypted_bytes = base64.b64decode(decrypted_data["content_base64"])
+            
+            # Decrypted content should match original
+            assert decrypted_bytes == original_content
+
