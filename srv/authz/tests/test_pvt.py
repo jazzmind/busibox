@@ -4,22 +4,32 @@ Post-Deployment Validation Tests (PVT) for AuthZ Service.
 These tests run after deployment to verify the service is functioning correctly.
 They are designed to be fast (<30 seconds total) and catch critical issues:
 - Service health
-- Database connectivity
-- JWT signing/validation
-- Token exchange
-- Keystore (encryption)
+- Database connectivity (PostgreSQL)
+- JWT signing/validation infrastructure
+- Token exchange flow
+- Keystore (encryption with master key)
 
 Run with: pytest tests/test_pvt.py -v
 Or: pytest -m pvt -v
+
+IMPORTANT: These tests require REAL services - no mocks allowed.
 """
 
 import os
 import pytest
 import httpx
 
-# Test against the local service (deployed on this container)
-SERVICE_URL = os.getenv("TEST_AUTHZ_URL", "http://localhost:8010")
+# Read from environment (set by .env file)
+SERVICE_PORT = os.getenv("SERVICE_PORT", "8010")
+SERVICE_URL = os.getenv("TEST_AUTHZ_URL", f"http://localhost:{SERVICE_PORT}")
 ADMIN_TOKEN = os.getenv("AUTHZ_ADMIN_TOKEN", "")
+
+# Database config
+POSTGRES_HOST = os.getenv("POSTGRES_HOST", "")
+POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
+POSTGRES_DB = os.getenv("POSTGRES_DB", "busibox")
+POSTGRES_USER = os.getenv("POSTGRES_USER", "")
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
 
 
 @pytest.mark.pvt
@@ -46,8 +56,64 @@ class TestPVTHealth:
 
 
 @pytest.mark.pvt
+class TestPVTDatabase:
+    """Database connectivity tests - verify PostgreSQL is accessible."""
+    
+    @pytest.mark.asyncio
+    async def test_postgres_direct_connection(self):
+        """Can connect directly to PostgreSQL."""
+        if not POSTGRES_HOST or not POSTGRES_PASSWORD:
+            pytest.skip("PostgreSQL credentials not set")
+        
+        import asyncpg
+        
+        conn = await asyncpg.connect(
+            host=POSTGRES_HOST,
+            port=int(POSTGRES_PORT),
+            database=POSTGRES_DB,
+            user=POSTGRES_USER,
+            password=POSTGRES_PASSWORD,
+            timeout=5.0,
+        )
+        try:
+            result = await conn.fetchval("SELECT 1")
+            assert result == 1
+        finally:
+            await conn.close()
+    
+    @pytest.mark.asyncio
+    async def test_authz_tables_exist(self):
+        """AuthZ tables exist in database."""
+        if not POSTGRES_HOST or not POSTGRES_PASSWORD:
+            pytest.skip("PostgreSQL credentials not set")
+        
+        import asyncpg
+        
+        conn = await asyncpg.connect(
+            host=POSTGRES_HOST,
+            port=int(POSTGRES_PORT),
+            database=POSTGRES_DB,
+            user=POSTGRES_USER,
+            password=POSTGRES_PASSWORD,
+            timeout=5.0,
+        )
+        try:
+            # Check for essential tables
+            tables = await conn.fetch("""
+                SELECT table_name FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name LIKE 'authz_%'
+            """)
+            table_names = [t["table_name"] for t in tables]
+            assert "authz_roles" in table_names, "authz_roles table missing"
+            assert "authz_oauth_clients" in table_names, "authz_oauth_clients table missing"
+        finally:
+            await conn.close()
+
+
+@pytest.mark.pvt
 class TestPVTAuth:
-    """Authentication tests - verify JWT infrastructure works."""
+    """Authentication infrastructure tests - verify JWT works."""
     
     @pytest.mark.asyncio
     async def test_jwks_endpoint_available(self):
@@ -62,14 +128,14 @@ class TestPVTAuth:
             jwk = data["keys"][0]
             assert "kty" in jwk
             assert "kid" in jwk
-            assert jwk["kty"] == "RSA"
+            assert jwk["kty"] == "RSA", f"Expected RSA key, got {jwk['kty']}"
     
     @pytest.mark.asyncio
     async def test_admin_endpoint_requires_auth(self):
         """Admin endpoints reject unauthenticated requests."""
         async with httpx.AsyncClient() as client:
             resp = await client.get(f"{SERVICE_URL}/admin/roles", timeout=5.0)
-            assert resp.status_code == 401
+            assert resp.status_code == 401, f"Expected 401, got {resp.status_code}"
 
 
 @pytest.mark.pvt
@@ -84,7 +150,7 @@ class TestPVTKeystore:
     
     @pytest.mark.asyncio
     async def test_keystore_kek_creation(self, admin_token):
-        """Can create a KEK for a role (tests master key is configured)."""
+        """Can create a KEK for a role (tests AUTHZ_MASTER_KEY is configured)."""
         import uuid
         test_role_id = str(uuid.uuid4())
         
@@ -114,5 +180,21 @@ class TestPVTTokenExchange:
                 timeout=5.0,
             )
             # Should get 400 (bad request) not 404 or 500
-            assert resp.status_code in [400, 401, 403]
-
+            assert resp.status_code in [400, 401, 403], f"Expected 400/401/403, got {resp.status_code}"
+    
+    @pytest.mark.asyncio
+    async def test_bootstrap_client_exists(self):
+        """Bootstrap OAuth client (ai-portal) exists."""
+        if not ADMIN_TOKEN:
+            pytest.skip("AUTHZ_ADMIN_TOKEN not set")
+        
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{SERVICE_URL}/admin/oauth-clients",
+                headers={"Authorization": f"Bearer {ADMIN_TOKEN}"},
+                timeout=5.0,
+            )
+            assert resp.status_code == 200, f"Failed to list clients: {resp.text}"
+            data = resp.json()
+            client_ids = [c.get("client_id") for c in data]
+            assert "ai-portal" in client_ids, "Bootstrap client 'ai-portal' not found"

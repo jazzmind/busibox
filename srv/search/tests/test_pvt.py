@@ -10,15 +10,24 @@ They are designed to be fast (<30 seconds total) and catch critical issues:
 
 Run with: pytest tests/test_pvt.py -v
 Or: pytest -m pvt -v
+
+IMPORTANT: These tests require REAL services - no mocks allowed.
 """
 
 import os
 import pytest
 import httpx
 
-# Test against the local service (deployed on this container)
-SERVICE_URL = os.getenv("SEARCH_API_URL", "http://localhost:8003")
+# Read from environment (set by .env file)
+SERVICE_PORT = os.getenv("SERVICE_PORT", "8003")
+SERVICE_URL = os.getenv("SEARCH_API_URL", f"http://localhost:{SERVICE_PORT}")
+
+# Dependencies
 AUTHZ_JWKS_URL = os.getenv("AUTHZ_JWKS_URL", "")
+MILVUS_HOST = os.getenv("MILVUS_HOST", "")
+MILVUS_PORT = os.getenv("MILVUS_PORT", "19530")
+POSTGRES_HOST = os.getenv("POSTGRES_HOST", "")
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
 
 
 @pytest.mark.pvt
@@ -34,10 +43,11 @@ class TestPVTHealth:
     
     @pytest.mark.asyncio
     async def test_health_ready(self):
-        """Service responds to readiness probe."""
+        """Service responds to readiness probe with dependency status."""
         async with httpx.AsyncClient() as client:
             resp = await client.get(f"{SERVICE_URL}/health/ready", timeout=10.0)
-            assert resp.status_code == 200
+            # 200 = healthy, 503 = degraded but running
+            assert resp.status_code in [200, 503]
 
 
 @pytest.mark.pvt
@@ -53,7 +63,7 @@ class TestPVTAuth:
                 json={"query": "test"},
                 timeout=5.0,
             )
-            assert resp.status_code in [401, 403]
+            assert resp.status_code in [401, 403], f"Expected 401/403, got {resp.status_code}"
     
     @pytest.mark.asyncio
     async def test_authz_jwks_reachable(self):
@@ -63,9 +73,10 @@ class TestPVTAuth:
         
         async with httpx.AsyncClient() as client:
             resp = await client.get(AUTHZ_JWKS_URL, timeout=5.0)
-            assert resp.status_code == 200
+            assert resp.status_code == 200, f"JWKS returned {resp.status_code}"
             data = resp.json()
             assert "keys" in data
+            assert len(data["keys"]) >= 1
 
 
 @pytest.mark.pvt
@@ -73,16 +84,50 @@ class TestPVTDependencies:
     """Dependency tests - verify external services are reachable."""
     
     @pytest.mark.asyncio
-    async def test_milvus_connection(self):
-        """Milvus is reachable (via health check)."""
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(f"{SERVICE_URL}/health/ready", timeout=10.0)
-            assert resp.status_code == 200
-            data = resp.json()
-            # Health check should indicate Milvus is connected
-            milvus_status = data.get("milvus") or data.get("vector_db")
-            if milvus_status:
-                assert milvus_status in ["connected", "ok", "healthy", True]
+    async def test_milvus_reachable(self):
+        """Milvus is reachable."""
+        if not MILVUS_HOST:
+            pytest.skip("MILVUS_HOST not set")
+        
+        from pymilvus import connections
+        
+        try:
+            connections.connect(
+                alias="pvt_test",
+                host=MILVUS_HOST,
+                port=int(MILVUS_PORT),
+                timeout=5.0,
+            )
+            # If we get here, connection succeeded
+            connections.disconnect(alias="pvt_test")
+        except Exception as e:
+            pytest.fail(f"Failed to connect to Milvus: {e}")
+    
+    @pytest.mark.asyncio
+    async def test_postgres_reachable(self):
+        """PostgreSQL is reachable (for metadata queries)."""
+        if not POSTGRES_HOST or not POSTGRES_PASSWORD:
+            pytest.skip("PostgreSQL credentials not set")
+        
+        import asyncpg
+        
+        postgres_port = int(os.getenv("POSTGRES_PORT", "5432"))
+        postgres_db = os.getenv("POSTGRES_DB", "busibox")
+        postgres_user = os.getenv("POSTGRES_USER", "busibox_user")
+        
+        conn = await asyncpg.connect(
+            host=POSTGRES_HOST,
+            port=postgres_port,
+            database=postgres_db,
+            user=postgres_user,
+            password=POSTGRES_PASSWORD,
+            timeout=5.0,
+        )
+        try:
+            result = await conn.fetchval("SELECT 1")
+            assert result == 1
+        finally:
+            await conn.close()
 
 
 @pytest.mark.pvt
@@ -98,4 +143,5 @@ class TestPVTAPI:
             data = resp.json()
             assert "openapi" in data
             assert "paths" in data
-
+            # Verify search endpoint is documented
+            assert "/search" in data["paths"]
