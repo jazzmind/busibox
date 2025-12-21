@@ -1241,9 +1241,10 @@ run_container_tests() {
             test_env="${test_env} AUTHZ_URL=http://${authz_ip}:8010"
             test_env="${test_env} AUTHZ_JWKS_URL=http://${authz_ip}:8010/.well-known/jwks.json"
             test_env="${test_env} INGEST_URL=http://${ingest_ip}:8000"
-            test_env="${test_env} SEARCH_URL=http://${search_ip}:8001"
+            test_env="${test_env} SEARCH_URL=http://${search_ip}:8003"  # Search is on port 8003
             
-            ssh "root@${agent_ip}" "cd /srv/agent && source venv/bin/activate && source .env && export ${test_env} && python -m pytest tests/ -v --tb=short" || {
+            # Agent uses .venv not venv
+            ssh "root@${agent_ip}" "cd /srv/agent && source .venv/bin/activate && source .env && export ${test_env} && python -m pytest tests/ -v --tb=short" || {
                 error "Agent tests failed"
                 exit 1
             }
