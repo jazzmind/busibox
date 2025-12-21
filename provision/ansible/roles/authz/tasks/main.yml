@@ -55,6 +55,11 @@
     recurse: yes
   tags: [authz]
 
+- name: Clean Python cache in source directory
+  shell: find {{ authz_app_dir }}/src -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+  changed_when: false
+  tags: [authz]
+
 - name: Restart authz service after code deployment
   systemd:
     name: "{{ authz_service_name }}"
@@ -105,6 +110,11 @@
     owner: "{{ authz_user }}"
     group: "{{ authz_group }}"
     recurse: yes
+  tags: [authz]
+
+- name: Clean Python cache in tests directory
+  shell: find {{ authz_app_dir }}/tests -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+  changed_when: false
   tags: [authz]
 
 - name: Ensure Python venv deps are installed

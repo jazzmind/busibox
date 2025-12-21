@@ -66,6 +66,11 @@
     - Restart ingest worker
   tags: [ingest, ingest_deploy]
 
+- name: Clean Python cache in source directory
+  shell: find /srv/ingest/src -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+  changed_when: false
+  tags: [ingest, ingest_deploy]
+
 - name: Copy requirements.txt
   copy:
     src: "{{ playbook_dir }}/../../srv/ingest/requirements.txt"
@@ -82,6 +87,11 @@
       - "--exclude=__pycache__"
       - "--exclude=*.pyc"
   tags: [ingest, ingest_deploy, ingest_tests, ingest_update_tests]
+
+- name: Clean Python cache in tests directory
+  shell: find /srv/ingest/tests -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+  changed_when: false
+  tags: [ingest, ingest_deploy, ingest_tests]
 
 - name: Ensure test document repository is present on controller
   git:
