@@ -126,11 +126,13 @@ async def test_token(test_session: AsyncSession, mock_principal: Principal) -> T
     """Create test token grant."""
     # Cache key includes inferred downstream audience marker.
     scopes = sorted(["aud:ingest-api", "read", "write"])
+    # Use timezone-naive datetime to match PostgreSQL TIMESTAMP WITHOUT TIME ZONE
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     token = TokenGrant(
         subject=TEST_USER_ID,
         scopes=scopes,
         token="test-access-token-123",
-        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        expires_at=now + timedelta(hours=1),
     )
     test_session.add(token)
     await test_session.commit()

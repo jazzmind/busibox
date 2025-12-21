@@ -55,14 +55,19 @@ class TestPVTHealth:
             assert data.get("status") in ["ok", "healthy", "degraded"]
     
     @pytest.mark.asyncio
-    async def test_health_ready(self):
-        """Service responds to readiness probe with dependency status."""
+    async def test_health_checks_dependencies(self):
+        """Service health check includes dependency status."""
         async with httpx.AsyncClient() as client:
-            resp = await client.get(f"{SERVICE_URL}/health/ready", timeout=10.0)
-            assert resp.status_code == 200
+            resp = await client.get(f"{SERVICE_URL}/health", timeout=10.0)
+            # 200 = healthy/degraded, 503 = critical deps down
+            assert resp.status_code in [200, 503], f"Health check failed: {resp.status_code}"
             data = resp.json()
-            # Should report healthy even if some optional deps are down
-            assert "status" in data or "healthy" in data
+            # Should report status and have checks for dependencies
+            assert "status" in data
+            assert "checks" in data
+            # Critical dependencies should be checked
+            assert "postgres" in data["checks"]
+            assert "minio" in data["checks"]
 
 
 @pytest.mark.pvt

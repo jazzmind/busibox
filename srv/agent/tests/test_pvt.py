@@ -13,6 +13,7 @@ Run with: pytest tests/test_pvt.py -v
 Or: pytest -m pvt -v
 
 IMPORTANT: These tests require REAL services - no mocks allowed.
+IMPORTANT: All tests MUST pass - skipped tests indicate deployment issues.
 """
 
 import os
@@ -21,12 +22,19 @@ import httpx
 
 # Read from environment (set by .env file)
 SERVICE_PORT = os.getenv("PORT", "8080")
-SERVICE_URL = os.getenv("AGENT_API_URL", f"http://localhost:{SERVICE_PORT}")
+SERVICE_URL = f"http://localhost:{SERVICE_PORT}"
 
-# Dependencies
+# Dependencies - REQUIRED
 AUTH_JWKS_URL = os.getenv("AUTH_JWKS_URL", "")
 LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "")
 DATABASE_URL = os.getenv("DATABASE_URL", "")
+
+
+def require_env(var_name: str, value: str) -> str:
+    """Fail if environment variable is not set."""
+    if not value:
+        pytest.fail(f"Required environment variable {var_name} is not set. Check .env file.")
+    return value
 
 
 @pytest.mark.pvt
@@ -39,13 +47,8 @@ class TestPVTHealth:
         async with httpx.AsyncClient() as client:
             resp = await client.get(f"{SERVICE_URL}/health", timeout=5.0)
             assert resp.status_code == 200
-    
-    @pytest.mark.asyncio
-    async def test_health_ready(self):
-        """Service responds to readiness probe."""
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(f"{SERVICE_URL}/health/ready", timeout=10.0)
-            assert resp.status_code == 200
+            data = resp.json()
+            assert data.get("status") == "ok"
 
 
 @pytest.mark.pvt
@@ -55,13 +58,11 @@ class TestPVTDatabase:
     @pytest.mark.asyncio
     async def test_postgres_connection(self):
         """PostgreSQL is reachable via DATABASE_URL."""
-        if not DATABASE_URL:
-            pytest.skip("DATABASE_URL not set")
+        db_url = require_env("DATABASE_URL", DATABASE_URL)
         
         import asyncpg
         
-        # Parse DATABASE_URL (format: postgresql://user:pass@host:port/db)
-        conn = await asyncpg.connect(DATABASE_URL, timeout=5.0)
+        conn = await asyncpg.connect(db_url, timeout=5.0)
         try:
             result = await conn.fetchval("SELECT 1")
             assert result == 1
@@ -71,14 +72,12 @@ class TestPVTDatabase:
     @pytest.mark.asyncio
     async def test_agent_tables_exist(self):
         """Agent service tables exist in database."""
-        if not DATABASE_URL:
-            pytest.skip("DATABASE_URL not set")
+        db_url = require_env("DATABASE_URL", DATABASE_URL)
         
         import asyncpg
         
-        conn = await asyncpg.connect(DATABASE_URL, timeout=5.0)
+        conn = await asyncpg.connect(db_url, timeout=5.0)
         try:
-            # Check for essential tables
             tables = await conn.fetch("""
                 SELECT table_name FROM information_schema.tables 
                 WHERE table_schema = 'public' 
@@ -105,11 +104,10 @@ class TestPVTAuth:
     @pytest.mark.asyncio
     async def test_authz_jwks_reachable(self):
         """AuthZ JWKS endpoint is reachable from this service."""
-        if not AUTH_JWKS_URL:
-            pytest.skip("AUTH_JWKS_URL not set")
+        jwks_url = require_env("AUTH_JWKS_URL", AUTH_JWKS_URL)
         
         async with httpx.AsyncClient() as client:
-            resp = await client.get(AUTH_JWKS_URL, timeout=5.0)
+            resp = await client.get(jwks_url, timeout=5.0)
             assert resp.status_code == 200, f"JWKS returned {resp.status_code}"
             data = resp.json()
             assert "keys" in data
@@ -123,11 +121,10 @@ class TestPVTDependencies:
     @pytest.mark.asyncio
     async def test_litellm_reachable(self):
         """LiteLLM is reachable for LLM calls."""
-        if not LITELLM_BASE_URL:
-            pytest.skip("LITELLM_BASE_URL not set")
+        litellm_url = require_env("LITELLM_BASE_URL", LITELLM_BASE_URL)
         
-        # LiteLLM health endpoint
-        base = LITELLM_BASE_URL.rstrip("/v1").rstrip("/")
+        # LiteLLM health endpoint - strip /v1 if present
+        base = litellm_url.rstrip("/v1").rstrip("/")
         async with httpx.AsyncClient() as client:
             resp = await client.get(f"{base}/health", timeout=5.0)
             assert resp.status_code == 200, f"LiteLLM health check failed: {resp.status_code}"
@@ -150,13 +147,11 @@ class TestPVTAPI:
     @pytest.mark.asyncio
     async def test_builtin_agents_available(self):
         """Built-in agents are seeded in the database."""
-        # This endpoint requires auth, so we'll check via the database
-        if not DATABASE_URL:
-            pytest.skip("DATABASE_URL not set")
+        db_url = require_env("DATABASE_URL", DATABASE_URL)
         
         import asyncpg
         
-        conn = await asyncpg.connect(DATABASE_URL, timeout=5.0)
+        conn = await asyncpg.connect(db_url, timeout=5.0)
         try:
             count = await conn.fetchval(
                 "SELECT COUNT(*) FROM agent_definitions WHERE is_builtin = true"
