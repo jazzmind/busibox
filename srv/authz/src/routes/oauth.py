@@ -209,11 +209,18 @@ async def token(request: Request):
         
         roles = await _pg.get_user_roles(token_req.requested_subject)
 
-        # Current compatibility behavior: treat role membership as full CRUD for that role.
+        # Build role claims (id + name only, for data access filtering)
         role_claims = [
-            {"id": r["id"], "name": r["name"], "permissions": ["read", "create", "update", "delete"]}
+            {"id": r["id"], "name": r["name"]}
             for r in roles
         ]
+
+        # Aggregate scopes from all roles (union of all role scopes)
+        all_scopes: set[str] = set()
+        for r in roles:
+            role_scopes = r.get("scopes") or []
+            all_scopes.update(role_scopes)
+        aggregated_scope = " ".join(sorted(all_scopes))
 
         now = int(time.time())
         exp = now + config.access_token_ttl
@@ -225,7 +232,7 @@ async def token(request: Request):
             nbf=now,
             exp=exp,
             jti=str(uuid.uuid4()),
-            scope=scope,
+            scope=aggregated_scope,
             roles=role_claims,
         ).model_dump()
 

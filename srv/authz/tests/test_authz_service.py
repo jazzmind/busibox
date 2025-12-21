@@ -14,7 +14,7 @@ class FakePG:
         self.clients = {}
         self.keys = {}  # kid -> {kid, alg, private_key_pem, public_jwk}
         self.users = {}  # user_id -> {email, role_ids}
-        self.roles = {}  # role_id -> {id,name}
+        self.roles = {}  # role_id -> {id, name, scopes}
 
     async def connect(self):
         return None
@@ -66,6 +66,7 @@ class FakePG:
         for r in roles:
             role_id = r["id"]
             role_name = r["name"]
+            role_scopes = r.get("scopes", [])
             # Check if role with this name already exists
             existing = None
             for rid, role_data in self.roles.items():
@@ -77,6 +78,8 @@ class FakePG:
                 self.roles[existing].update(r)
                 # Ensure id field is set
                 self.roles[existing]["id"] = existing
+                if role_scopes:
+                    self.roles[existing]["scopes"] = role_scopes
                 if "created_at" not in self.roles[existing]:
                     self.roles[existing]["created_at"] = datetime.now()
                 if "updated_at" not in self.roles[existing]:
@@ -88,6 +91,7 @@ class FakePG:
                     "id": role_id,
                     "name": role_name,
                     "description": r.get("description"),
+                    "scopes": role_scopes,
                     "created_at": datetime.now(),
                     "updated_at": datetime.now(),
                 }
@@ -104,6 +108,7 @@ class FakePG:
                 "id": role_id,
                 "name": role.get("name"),
                 "description": role.get("description"),
+                "scopes": role.get("scopes", []),
                 "created_at": role.get("created_at", datetime.now()),
                 "updated_at": role.get("updated_at", datetime.now()),
             }
@@ -113,7 +118,7 @@ class FakePG:
         """Get role by name."""
         for role_id, role_data in self.roles.items():
             if role_data.get("name") == name:
-                return {"id": role_id, "name": name, "description": role_data.get("description")}
+                return {"id": role_id, "name": name, "description": role_data.get("description"), "scopes": role_data.get("scopes", [])}
         return None
 
     async def upsert_user_and_roles(
@@ -150,13 +155,14 @@ class FakePG:
                     "id": role_id,
                     "name": r.get("name", "Unknown"),
                     "description": r.get("description"),
+                    "scopes": r.get("scopes", []),
                     "created_at": r.get("created_at", datetime.now()),
                     "updated_at": r.get("updated_at", datetime.now()),
                 })
         return out
 
     # Admin RBAC methods
-    async def create_role(self, *, name: str, description: str | None) -> dict:
+    async def create_role(self, *, name: str, description: str | None, scopes: list | None = None) -> dict:
         import uuid
         from datetime import datetime
         role_id = str(uuid.uuid4())
@@ -165,6 +171,7 @@ class FakePG:
             "id": role_id,
             "name": name,
             "description": description,
+            "scopes": scopes or [],
             "created_at": now,
             "updated_at": now,
         }
@@ -178,6 +185,7 @@ class FakePG:
                 "id": role_id,
                 "name": role_data.get("name"),
                 "description": role_data.get("description"),
+                "scopes": role_data.get("scopes", []),
                 "created_at": role_data.get("created_at", datetime.now()),
                 "updated_at": role_data.get("updated_at", datetime.now()),
             }
@@ -192,12 +200,13 @@ class FakePG:
                 "id": role_id,
                 "name": role.get("name"),
                 "description": role.get("description"),
+                "scopes": role.get("scopes", []),
                 "created_at": role.get("created_at", datetime.now()),
                 "updated_at": role.get("updated_at", datetime.now()),
             }
         return None
 
-    async def update_role(self, *, role_id: str, name: str | None, description: str | None) -> dict | None:
+    async def update_role(self, *, role_id: str, name: str | None, description: str | None, scopes: list | None = None) -> dict | None:
         role = self.roles.get(role_id)
         if not role:
             return None
@@ -205,6 +214,8 @@ class FakePG:
             role["name"] = name
         if description is not None:
             role["description"] = description
+        if scopes is not None:
+            role["scopes"] = scopes
         from datetime import datetime
         role["updated_at"] = datetime.now()
         return await self.get_role(role_id)
@@ -324,6 +335,7 @@ async def test_jwks_endpoint_bootstraps_key_and_client(authz_app):
 
 @pytest.mark.asyncio
 async def test_token_exchange_issues_service_scoped_token(authz_app):
+    """Test that token exchange aggregates scopes from user roles."""
     app, oauth, internal, authz, fake = authz_app
 
     # Sync a user + roles first (mimics ai-portal server-to-server sync)
@@ -341,7 +353,7 @@ async def test_token_exchange_issues_service_scoped_token(authz_app):
                 "client_secret": "test-client-secret",
                 "user_id": user_id,
                 "email": "user@example.com",
-                "roles": [{"id": role_id, "name": "Editors"}],
+                "roles": [{"id": role_id, "name": "Editors", "scopes": ["search.read", "ingest.read"]}],
                 "user_role_ids": [role_id],
             },
         )
@@ -354,7 +366,6 @@ async def test_token_exchange_issues_service_scoped_token(authz_app):
                 "client_id": "test-client",
                 "client_secret": "test-client-secret",
                 "audience": "test-audience",
-                "scope": "search.read",
                 "requested_subject": user_id,
                 "requested_purpose": "unit-test",
             },
@@ -369,9 +380,13 @@ async def test_token_exchange_issues_service_scoped_token(authz_app):
     assert decoded["sub"] == user_id
     assert decoded["aud"] == "test-audience"
     assert decoded["iss"] == "authz-test"
-    assert decoded["scope"] == "search.read"
+    # Scopes are aggregated from roles
+    assert "search.read" in decoded["scope"]
+    assert "ingest.read" in decoded["scope"]
     assert decoded["typ"] == "access"
+    # Roles contain only id and name
     assert decoded["roles"][0]["id"] == role_id
+    assert "permissions" not in decoded["roles"][0]
 
     # audit log should include issuance entry
     assert len(fake.audit_log) == 1

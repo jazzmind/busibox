@@ -1,7 +1,7 @@
 # Agent Service
 
 **Created**: 2025-12-09  
-**Last Updated**: 2025-12-09  
+**Last Updated**: 2025-12-20  
 **Status**: Active  
 **Category**: Architecture  
 **Related Docs**:  
@@ -30,9 +30,11 @@
 - Web search tool is currently a placeholder (returns “not configured”) until a provider is added.
 
 ## Auth
-- End-user JWT: HS256 (`SSO_JWT_SECRET`, `iss=ai-portal`, `aud=agent-server`).
-- Tools: `document-search` forwards Authorization to Search API; if missing, can mint scoped token via AuthZ (`AUTHZ_API_URL`) using user roles/userId; falls back to `SEARCH_API_SERVICE_KEY` if set.
-- Admin APIs (`/admin/*`) still use EdDSA public keys (`TOKEN_SERVICE_PUBLIC_KEY`) for client credential tokens.
+- End-user JWT: RS256 tokens from AuthZ service (`iss=busibox-authz`, `aud=agent-api`).
+- Token validation via JWKS from AuthZ service (`AUTHZ_JWKS_URL`).
+- Token exchange: Agent service exchanges user tokens for service-specific tokens (e.g., `search-api`, `ingest-api`) via AuthZ token-exchange grant to call downstream services on behalf of the user.
+- Scopes from JWT are stored in token grants for downstream calls.
+- **Note**: OAuth2 scope-based operation authorization (e.g., `agent.execute`) is designed but not yet enforced. See `architecture/03-authentication.md` for current status.
 
 ## Built-in Agents (hardcoded, listed via `/admin/agents`)
 - `rag-search-agent`: uses `document-search` tool; grounded answers with citations.

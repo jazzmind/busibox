@@ -9,16 +9,20 @@ import json
 from typing import AsyncIterator
 
 import structlog
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, Depends, Request, status
 from fastapi.responses import StreamingResponse
 from sse_starlette.sse import EventSourceResponse
 
+from api.middleware.jwt_auth import ScopeChecker
 from api.services.status import StatusService
 from shared.config import Config
 
 logger = structlog.get_logger()
 
 router = APIRouter()
+
+# Scope dependencies
+require_ingest_read = ScopeChecker("ingest.read")
 
 
 async def generate_status_stream(
@@ -60,7 +64,7 @@ async def generate_status_stream(
         yield f"data: {error_data}\n\n"
 
 
-@router.get("/{fileId}")
+@router.get("/{fileId}", dependencies=[Depends(require_ingest_read)])
 async def get_status_stream(fileId: str, request: Request):
     """
     Stream processing status updates via Server-Sent Events.

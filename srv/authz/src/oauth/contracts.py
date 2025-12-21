@@ -72,6 +72,7 @@ class SyncRole(BaseModel):
     id: str
     name: str
     description: Optional[str] = None
+    scopes: List[str] = Field(default_factory=list)  # OAuth2 scopes for this role
 
 
 class SyncUser(BaseModel):

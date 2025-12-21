@@ -1,7 +1,7 @@
 #!/bin/bash
 # Check Document Processing Status
 # Run from: Admin workstation
-# Usage: bash scripts/check-document-status.sh [file_id]
+# Usage: bash scripts/check/check-document-status.sh [file_id]
 
 set -e
 

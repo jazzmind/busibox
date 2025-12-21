@@ -4,8 +4,8 @@
 # Execution context: Admin workstation
 # Purpose: Test direct Bedrock API access to determine auth method
 # Usage: 
-#   bash scripts/diagnose-bedrock-auth.sh [API_KEY]
-#   BEDROCK_API_KEY=xxx bash scripts/diagnose-bedrock-auth.sh
+#   bash scripts/diagnose/diagnose-bedrock-auth.sh [API_KEY]
+#   BEDROCK_API_KEY=xxx bash scripts/diagnose/diagnose-bedrock-auth.sh
 
 set -euo pipefail
 

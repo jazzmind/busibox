@@ -3,7 +3,7 @@
 # 
 # Execution context: Admin workstation
 # Purpose: Safely update Bedrock API credentials in vault
-# Usage: bash scripts/update-bedrock-credentials.sh [test|production]
+# Usage: bash scripts/generate/update-bedrock-credentials.sh [test|production]
 
 set -euo pipefail
 
@@ -213,7 +213,7 @@ if [[ $? -eq 0 ]]; then
     echo "2. Test Bedrock models:"
     echo "   cd $BUSIBOX_ROOT"
     echo "   export LITELLM_MASTER_KEY='your-master-key'"
-    echo "   bash scripts/test-bedrock-setup.sh $ENV"
+    echo "   bash scripts/test/test-bedrock-setup.sh $ENV"
     echo ""
 else
     echo -e "${RED}✗ Failed to update vault${NC}"

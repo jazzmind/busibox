@@ -14,11 +14,11 @@ set -euo pipefail
 
 # Get script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 ANSIBLE_DIR="${REPO_ROOT}/provision/ansible"
 
 # Source UI library
-source "${SCRIPT_DIR}/lib/ui.sh"
+source "${REPO_ROOT}/scripts/lib/ui.sh"
 
 # Display welcome
 clear
@@ -445,7 +445,7 @@ run_infrastructure_tests() {
     info "Running $test_type infrastructure tests..."
     echo ""
     
-    bash "${REPO_ROOT}/scripts/test-infrastructure.sh" "$test_type" || {
+    bash "${REPO_ROOT}/scripts/test/test-infrastructure.sh" "$test_type" || {
         error "Infrastructure tests failed"
         return 1
     }
@@ -856,6 +856,93 @@ service_tests_menu() {
     done
 }
 
+# Local tests menu (run tests locally against container backends)
+local_tests_menu() {
+    local env="$1"
+    
+    while true; do
+        echo ""
+        menu "Local Tests - $env Environment (Run locally against containers)" \
+            "Authz - Run authz tests locally" \
+            "Ingest - Run ingest tests locally" \
+            "Search - Run search tests locally" \
+            "Agent - Run agent tests locally" \
+            "All Services - Run all tests locally" \
+            "Generate .env.local (for manual testing)" \
+            "Back to Main Menu"
+        
+        read -p "$(echo -e "${BOLD}Select option [1-7]:${NC} ")" choice
+        
+        case $choice in
+            1)
+                header "Local Authz Tests" 70
+                echo ""
+                info "Running authz tests locally against $env containers..."
+                info "This uses your local srv/authz code with remote databases/services."
+                echo ""
+                bash "${REPO_ROOT}/scripts/test/run-local-tests.sh" authz "$env" || true
+                pause
+                ;;
+            2)
+                header "Local Ingest Tests" 70
+                echo ""
+                info "Running ingest tests locally against $env containers..."
+                bash "${REPO_ROOT}/scripts/test/run-local-tests.sh" ingest "$env" || true
+                pause
+                ;;
+            3)
+                header "Local Search Tests" 70
+                echo ""
+                info "Running search tests locally against $env containers..."
+                bash "${REPO_ROOT}/scripts/test/run-local-tests.sh" search "$env" || true
+                pause
+                ;;
+            4)
+                header "Local Agent Tests" 70
+                echo ""
+                info "Running agent tests locally against $env containers..."
+                bash "${REPO_ROOT}/scripts/test/run-local-tests.sh" agent "$env" || true
+                pause
+                ;;
+            5)
+                header "All Local Tests" 70
+                echo ""
+                warn "This will run all service tests locally. May take a while."
+                if confirm "Continue?"; then
+                    bash "${REPO_ROOT}/scripts/test/run-local-tests.sh" all "$env" || true
+                fi
+                pause
+                ;;
+            6)
+                header "Generate .env.local Files" 70
+                echo ""
+                info "Generating environment files for manual local testing..."
+                echo ""
+                for svc in authz ingest search agent; do
+                    bash "${REPO_ROOT}/scripts/test/generate-local-test-env.sh" "$svc" "$env" 2>/dev/null || true
+                done
+                echo ""
+                success "Environment files generated!"
+                echo ""
+                info "Files created:"
+                echo "  - srv/authz/.env.local"
+                echo "  - srv/ingest/.env.local"
+                echo "  - srv/search/.env.local"
+                echo "  - srv/agent/.env.local"
+                echo ""
+                info "To use: source srv/<service>/.env.local && pytest tests/ -v"
+                pause
+                ;;
+            7)
+                return 0
+                ;;
+            *)
+                error "Invalid selection. Please enter 1-7."
+                ;;
+        esac
+    done
+}
+
 # Main test menu
 main_menu() {
     local env="$1"
@@ -867,11 +954,12 @@ main_menu() {
             "Infrastructure Tests (Full Suite)" \
             "Infrastructure Tests (Provision Only)" \
             "Infrastructure Tests (Verify Only)" \
-            "Service Tests" \
+            "Service Tests (run on containers)" \
+            "Local Tests (run locally against containers)" \
             "All Tests (Infrastructure + Services)" \
             "Exit"
         
-        read -p "$(echo -e "${BOLD}Select option [1-7]:${NC} ")" choice
+        read -p "$(echo -e "${BOLD}Select option [1-8]:${NC} ")" choice
         
         case $choice in
             1)
@@ -914,6 +1002,9 @@ main_menu() {
                 service_tests_menu "$env"
                 ;;
             6)
+                local_tests_menu "$env"
+                ;;
+            7)
                 header "All Tests" 70
                 echo ""
                 warn "This will run infrastructure tests followed by all service tests"
@@ -935,13 +1026,13 @@ main_menu() {
                 fi
                 pause
                 ;;
-            7)
+            8)
                 echo ""
                 info "Exiting..."
                 return 0
                 ;;
             *)
-                error "Invalid selection. Please enter 1-7."
+                error "Invalid selection. Please enter 1-8."
                 ;;
         esac
     done
@@ -949,6 +1040,20 @@ main_menu() {
 
 # Main function
 main() {
+    # Check for command-line arguments for non-interactive mode
+    if [[ $# -ge 1 ]]; then
+        # Non-interactive mode: scripts/test.sh <service> [environment] [mode]
+        local service="$1"
+        local env="${2:-test}"
+        local mode="${3:-container}"
+        
+        if [[ "$mode" == "local" ]]; then
+            info "Running local tests for $service on $env..."
+            bash "${REPO_ROOT}/scripts/test/run-local-tests.sh" "$service" "$env"
+            exit $?
+        fi
+    fi
+    
     # Select environment
     ENV=$(select_environment)
     

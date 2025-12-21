@@ -1,9 +1,10 @@
 """
 JWT Authentication Middleware for Search API
 
-Validates JWT tokens from AI Portal and extracts:
+Validates JWT tokens from authz and extracts:
 - User identity (sub, email)
-- Document role memberships with CRUD permissions
+- OAuth2 scopes for operation authorization
+- Role memberships for Milvus partition filtering
 
 Provides role information for:
 - Milvus partition filtering (only search accessible partitions)
@@ -12,7 +13,7 @@ Provides role information for:
 
 import os
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Set
 
 import jwt
 import structlog
@@ -44,27 +45,10 @@ jwks_client = jwt.PyJWKClient(AUTHZ_JWKS_URL)
 # ============================================================================
 
 @dataclass
-class DocumentRole:
-    """Document role with CRUD permissions."""
+class Role:
+    """Role for data access filtering."""
     id: str
     name: str
-    permissions: List[str] = field(default_factory=list)
-    
-    @property
-    def can_create(self) -> bool:
-        return "create" in self.permissions
-    
-    @property
-    def can_read(self) -> bool:
-        return "read" in self.permissions
-    
-    @property
-    def can_update(self) -> bool:
-        return "update" in self.permissions
-    
-    @property
-    def can_delete(self) -> bool:
-        return "delete" in self.permissions
 
 
 @dataclass
@@ -72,21 +56,27 @@ class UserContext:
     """User context extracted from JWT."""
     user_id: str
     email: Optional[str] = None
-    roles: List[DocumentRole] = field(default_factory=list)
-    is_legacy: bool = False  # True if authenticated via X-User-Id header
+    scopes: Set[str] = field(default_factory=set)  # OAuth2 scopes for operation authorization
+    roles: List[Role] = field(default_factory=list)  # Role memberships for data access
     authorization_header: Optional[str] = None  # For passthrough to downstream services
     
-    def get_role_ids_by_permission(self, permission: str) -> List[str]:
-        """Get role IDs where user has specific permission."""
-        return [r.id for r in self.roles if permission in r.permissions]
+    @property
+    def role_ids(self) -> List[str]:
+        """Get all role IDs user has membership in."""
+        return [r.id for r in self.roles]
     
     @property
-    def read_role_ids(self) -> List[str]:
-        return self.get_role_ids_by_permission("read")
+    def role_names(self) -> List[str]:
+        """Get all role names user has membership in."""
+        return [r.name for r in self.roles]
     
-    @property
-    def read_role_names(self) -> List[str]:
-        return [r.name for r in self.roles if "read" in r.permissions]
+    def has_scope(self, scope: str) -> bool:
+        """Check if user has a specific scope."""
+        return scope in self.scopes
+    
+    def has_any_scope(self, scopes: List[str]) -> bool:
+        """Check if user has any of the specified scopes."""
+        return bool(self.scopes.intersection(scopes))
 
 
 # ============================================================================
@@ -129,20 +119,24 @@ def extract_user_context(payload: dict, auth_header: str) -> UserContext:
     user_id = payload.get("sub", "")
     email = payload.get("email")
     
+    # Extract scopes (space-delimited string)
+    scope_str = payload.get("scope", "")
+    scopes = set(s for s in scope_str.split() if s)
+    
+    # Extract roles (for data access filtering)
     roles = []
     for role_data in payload.get("roles", []):
-        role = DocumentRole(
+        role = Role(
             id=role_data.get("id", ""),
             name=role_data.get("name", ""),
-            permissions=role_data.get("permissions", [])
         )
         roles.append(role)
     
     return UserContext(
         user_id=user_id,
         email=email,
+        scopes=scopes,
         roles=roles,
-        is_legacy=False,
         authorization_header=auth_header
     )
 
@@ -155,10 +149,10 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
     """
     Middleware to validate JWT tokens and extract user context.
     
-    Supports both:
-    1. JWT via Authorization: Bearer <token> (required)
+    Requires JWT via Authorization: Bearer <token>
     
-    Extracts role permissions for:
+    Extracts scopes and roles for:
+    - Operation authorization
     - Milvus partition filtering
     - Authorization passthrough to downstream services
     """
@@ -170,7 +164,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
         if request.url.path == "/health":
             return await call_next(request)
         
-        # Try JWT authentication first
+        # JWT authentication required
         auth_header = request.headers.get("authorization")
         user_context = None
         
@@ -183,8 +177,8 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
                 logger.debug(
                     "JWT authenticated",
                     user_id=user_context.user_id,
+                    scopes=len(user_context.scopes),
                     roles=len(user_context.roles),
-                    readable_roles=len(user_context.read_role_ids),
                     path=request.url.path
                 )
             else:
@@ -193,7 +187,6 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     content={"error": "Invalid or expired JWT token"}
                 )
-        
         
         # No authentication provided
         if not user_context:
@@ -210,13 +203,11 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
         # Attach user context to request state
         request.state.user_id = user_context.user_id
         request.state.user_email = user_context.email
-        request.state.user_roles = user_context.roles
-        request.state.is_legacy_auth = user_context.is_legacy
+        request.state.user_context = user_context
+        request.state.scopes = user_context.scopes
+        request.state.role_ids = user_context.role_ids
+        request.state.role_names = user_context.role_names
         request.state.authorization = user_context.authorization_header
-        
-        # Store readable role IDs for Milvus partition filtering
-        request.state.readable_role_ids = user_context.read_role_ids
-        request.state.readable_role_names = user_context.read_role_names
         
         # Process request
         response = await call_next(request)
@@ -236,7 +227,7 @@ def get_accessible_partitions(request: Request) -> List[str]:
     - role_{role_id}: Shared documents by role
     """
     user_id = getattr(request.state, "user_id", None)
-    readable_role_ids = getattr(request.state, "readable_role_ids", [])
+    role_ids = getattr(request.state, "role_ids", [])
     
     partitions = []
     
@@ -245,7 +236,7 @@ def get_accessible_partitions(request: Request) -> List[str]:
         partitions.append(f"personal_{user_id}")
     
     # Role-based partitions
-    for role_id in readable_role_ids:
+    for role_id in role_ids:
         partitions.append(f"role_{role_id}")
     
     return partitions
@@ -263,17 +254,39 @@ def get_partition_names_for_search(request: Request, include_personal: bool = Tr
         List of partition names to search
     """
     user_id = getattr(request.state, "user_id", None)
-    readable_role_ids = getattr(request.state, "readable_role_ids", [])
+    role_ids = getattr(request.state, "role_ids", [])
     
     partitions = []
     
     if include_personal and user_id:
         partitions.append(f"personal_{user_id}")
     
-    for role_id in readable_role_ids:
+    for role_id in role_ids:
         partitions.append(f"role_{role_id}")
     
     # If no partitions available, return empty list
     # This will result in no search results (correct behavior)
     return partitions
 
+
+# ============================================================================
+# Scope Checking Utilities
+# ============================================================================
+
+def require_scope(request: Request, scope: str) -> None:
+    """
+    Require a specific scope. Raises HTTPException if missing.
+    """
+    from fastapi import HTTPException
+    user_context: UserContext = getattr(request.state, "user_context", None)
+    if not user_context or not user_context.has_scope(scope):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Insufficient scope: {scope} required"
+        )
+
+
+def has_scope(request: Request, scope: str) -> bool:
+    """Check if user has a specific scope."""
+    user_context: UserContext = getattr(request.state, "user_context", None)
+    return user_context is not None and user_context.has_scope(scope)

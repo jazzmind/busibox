@@ -7,12 +7,12 @@
 # Dependencies: psql
 #
 # Usage:
-#   From host:    bash scripts/check-database.sh [database] [environment]
+#   From host:    bash scripts/check/check-database.sh [database] [environment]
 #   In container: psql -U busibox_user -d <database> -c "\dt"
 #
 # Examples:
-#   bash scripts/check-database.sh ai_portal production
-#   bash scripts/check-database.sh busibox test
+#   bash scripts/check/check-database.sh ai_portal production
+#   bash scripts/check/check-database.sh busibox test
 
 set -euo pipefail
 

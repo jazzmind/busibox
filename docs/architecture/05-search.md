@@ -1,7 +1,7 @@
 # Search Service
 
 **Created**: 2025-12-09  
-**Last Updated**: 2025-12-09  
+**Last Updated**: 2025-12-20  
 **Status**: Active  
 **Category**: Architecture  
 **Related Docs**:  
@@ -23,10 +23,11 @@
 - Highlighting and semantic alignment helpers.
 
 ## Auth & Partitions
-- JWT middleware expects HS256 tokens (audience `search-api` by default).
-- Builds accessible partitions per request:
+- JWT middleware validates RS256 tokens from AuthZ service (audience `search-api`, issuer `busibox-authz`).
+- Builds accessible partitions per request based on JWT `roles` claim:
   - Personal: `personal_{userId}`
   - Shared: `role_{roleId}` for each readable role
+- **Note**: OAuth2 scope-based operation authorization (e.g., `search.read`) is designed but not yet enforced. See `architecture/03-authentication.md` for current status.
 - Legacy `x-user-id` supported only for migration.
 
 ## Key Endpoint

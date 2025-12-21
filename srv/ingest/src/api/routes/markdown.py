@@ -4,11 +4,12 @@ API routes for markdown and HTML rendering.
 Provides endpoints to retrieve markdown content and rendered HTML.
 """
 
-from fastapi import APIRouter, Request, HTTPException, status
+from fastapi import APIRouter, Depends, Request, HTTPException, status
 from fastapi.responses import JSONResponse, Response
 import uuid
 import structlog
 
+from api.middleware.jwt_auth import ScopeChecker
 from shared.config import Config
 from api.services.minio_service import MinIOService
 from processors.html_renderer import HTMLRenderer
@@ -16,6 +17,9 @@ from processors.html_renderer import HTMLRenderer
 logger = structlog.get_logger()
 
 router = APIRouter()
+
+# Scope dependencies
+require_ingest_read = ScopeChecker("ingest.read")
 
 
 async def _get_file_metadata(postgres_service, file_uuid, user_uuid, fields, request=None):
@@ -50,7 +54,7 @@ async def _get_file_metadata(postgres_service, file_uuid, user_uuid, fields, req
         return dict(row)
 
 
-@router.get("/{fileId}/markdown")
+@router.get("/{fileId}/markdown", dependencies=[Depends(require_ingest_read)])
 async def get_markdown(fileId: str, request: Request):
     """
     Get markdown content for a file.
@@ -132,7 +136,7 @@ async def get_markdown(fileId: str, request: Request):
         pass
 
 
-@router.get("/{fileId}/html")
+@router.get("/{fileId}/html", dependencies=[Depends(require_ingest_read)])
 async def get_html(fileId: str, request: Request):
     """
     Get rendered HTML content for a file with table of contents.
@@ -218,7 +222,7 @@ async def get_html(fileId: str, request: Request):
         # Don't close - pg_service is a singleton shared across requests
         pass
 
-@router.get("/{fileId}/images/{imageIndex}")
+@router.get("/{fileId}/images/{imageIndex}", dependencies=[Depends(require_ingest_read)])
 async def get_image(fileId: str, imageIndex: int, request: Request):
     """
     Get an extracted image by index.

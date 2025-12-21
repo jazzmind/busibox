@@ -102,6 +102,10 @@ async def test_token_exchange_with_form_encoding(oauth_app_with_form):
     """Test token exchange with form-encoded request."""
     app, fake = oauth_app_with_form
 
+    # Use valid UUIDs
+    user_id = "11111111-1111-1111-1111-111111111111"
+    role_id = "22222222-2222-2222-2222-222222222222"
+
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         # Bootstrap
@@ -113,10 +117,10 @@ async def test_token_exchange_with_form_encoding(oauth_app_with_form):
             json={
                 "client_id": "test-client",
                 "client_secret": "test-client-secret",
-                "user_id": "user-123",
+                "user_id": user_id,
                 "email": "test@example.com",
-                "roles": [{"id": "role-123", "name": "Admin"}],
-                "user_role_ids": ["role-123"],
+                "roles": [{"id": role_id, "name": "Admin"}],
+                "user_role_ids": [role_id],
             },
         )
 
@@ -127,7 +131,7 @@ async def test_token_exchange_with_form_encoding(oauth_app_with_form):
             "client_secret": "test-client-secret",
             "audience": "agent-api",  # Use allowed audience from conftest
             "scope": "agent.execute",  # Use allowed scope from conftest
-            "requested_subject": "user-123",
+            "requested_subject": user_id,
         }
 
         resp = await client.post(

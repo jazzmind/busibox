@@ -6,7 +6,7 @@ import pytest
 import asyncio
 from pathlib import Path
 from unittest.mock import Mock, AsyncMock
-from httpx import AsyncClient
+from httpx import AsyncClient, ASGITransport
 from fastapi.testclient import TestClient
 from dotenv import load_dotenv
 
@@ -153,9 +153,9 @@ async def async_client():
             "exp": now + 3600,
             "jti": str(uuid.uuid4()),
             "typ": "access",
-            "scope": "ingest.write search.read",
+            "scope": "ingest.read ingest.write ingest.delete search.read",
             "roles": [
-                {"id": str(uuid.uuid4()), "name": "TestRole", "permissions": ["read", "create", "update", "delete"]}
+                {"id": str(uuid.uuid4()), "name": "TestRole"}
             ],
         },
         private_key,
@@ -163,7 +163,8 @@ async def async_client():
         headers={"kid": "test-kid"},
     )
     
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
         client.headers.update({
             "Authorization": f"Bearer {token}"
         })
@@ -208,9 +209,9 @@ async def async_client_different_user():
             "exp": now + 3600,
             "jti": str(uuid.uuid4()),
             "typ": "access",
-            "scope": "ingest.write search.read",
+            "scope": "ingest.read ingest.write ingest.delete search.read",
             "roles": [
-                {"id": str(uuid.uuid4()), "name": "TestRole", "permissions": ["read", "create", "update", "delete"]}
+                {"id": str(uuid.uuid4()), "name": "TestRole"}
             ],
         },
         private_key,
@@ -218,7 +219,64 @@ async def async_client_different_user():
         headers={"kid": "test-kid"},
     )
     
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        client.headers.update({
+            "Authorization": f"Bearer {token}"
+        })
+        yield client
+
+
+@pytest.fixture
+async def async_client_read_only():
+    """
+    Async HTTP client with only read scopes (for testing scope enforcement).
+    """
+    from api.main import app
+    import uuid
+    import time
+    import jwt as pyjwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    
+    test_user_id = str(uuid.uuid4())
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_key = private_key.public_key()
+
+    class _SigningKey:
+        def __init__(self, key):
+            self.key = key
+
+    class _FakeJwksClient:
+        def get_signing_key_from_jwt(self, _token: str):
+            return _SigningKey(public_key)
+
+    from api.middleware import jwt_auth as jwt_auth_mod
+    jwt_auth_mod.jwks_client = _FakeJwksClient()
+
+    now = int(time.time())
+    token = pyjwt.encode(
+        {
+            "iss": "busibox-authz",
+            "sub": test_user_id,
+            "aud": "ingest-api",
+            "iat": now,
+            "nbf": now,
+            "exp": now + 3600,
+            "jti": str(uuid.uuid4()),
+            "typ": "access",
+            "scope": "ingest.read search.read",  # Only read scopes - no write/delete
+            "roles": [
+                {"id": str(uuid.uuid4()), "name": "TestRole"}
+            ],
+        },
+        private_key,
+        algorithm="RS256",
+        headers={"kid": "test-kid"},
+    )
+    
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
         client.headers.update({
             "Authorization": f"Bearer {token}"
         })

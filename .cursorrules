@@ -134,8 +134,8 @@ make production # Deploy to production
 
 **Testing**:
 ```bash
-bash scripts/test-infrastructure.sh
-bash scripts/test-llm-containers.sh
+bash scripts/tests/test-infrastructure.sh
+bash scripts/tests/test-llm-containers.sh
 ```
 
 ## When Unsure

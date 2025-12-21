@@ -1,0 +1,394 @@
+#!/usr/bin/env bash
+#
+# Generate Local Test Environment Configuration
+#
+# EXECUTION CONTEXT: Admin workstation
+# PURPOSE: Extract secrets and IPs from vault/inventory to create a local .env file
+#          for running service tests locally against remote test containers
+#
+# USAGE:
+#   bash scripts/test/generate-local-test-env.sh [service] [environment]
+#   bash scripts/test/generate-local-test-env.sh authz test
+#   bash scripts/test/generate-local-test-env.sh ingest test
+#   bash scripts/test/generate-local-test-env.sh search test
+#   bash scripts/test/generate-local-test-env.sh agent test
+#
+# This script:
+# 1. Decrypts the ansible vault to get secrets
+# 2. Reads the test inventory for container IPs
+# 3. Generates a .env file for the specified service
+# 4. Outputs the path to the generated .env file
+#
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+ANSIBLE_DIR="${REPO_ROOT}/provision/ansible"
+
+# Source UI library if available
+if [[ -f "${REPO_ROOT}/scripts/lib/ui.sh" ]]; then
+    source "${REPO_ROOT}/scripts/lib/ui.sh"
+else
+    # Minimal fallback
+    info() { echo "[INFO] $1"; }
+    success() { echo "[SUCCESS] $1"; }
+    warn() { echo "[WARNING] $1"; }
+    error() { echo "[ERROR] $1"; }
+fi
+
+# Parse arguments
+SERVICE="${1:-}"
+ENV="${2:-test}"
+
+if [[ -z "$SERVICE" ]]; then
+    echo "Usage: $0 <service> [environment]"
+    echo ""
+    echo "Services: authz, ingest, search, agent, all"
+    echo "Environments: test, production (default: test)"
+    exit 1
+fi
+
+# Validate environment
+if [[ "$ENV" != "test" && "$ENV" != "production" ]]; then
+    error "Invalid environment: $ENV. Use 'test' or 'production'"
+    exit 1
+fi
+
+# Network configuration based on environment
+if [[ "$ENV" == "test" ]]; then
+    NETWORK_BASE="10.96.201"
+else
+    NETWORK_BASE="10.96.200"
+fi
+
+# Container IPs
+PROXY_IP="${NETWORK_BASE}.200"
+APPS_IP="${NETWORK_BASE}.201"
+AGENT_IP="${NETWORK_BASE}.202"
+POSTGRES_IP="${NETWORK_BASE}.203"
+MILVUS_IP="${NETWORK_BASE}.204"
+MINIO_IP="${NETWORK_BASE}.205"
+INGEST_IP="${NETWORK_BASE}.206"
+LITELLM_IP="${NETWORK_BASE}.207"
+VLLM_IP="${NETWORK_BASE}.208"
+OLLAMA_IP="${NETWORK_BASE}.209"
+AUTHZ_IP="${NETWORK_BASE}.210"
+
+# Get vault password flags
+get_vault_flags() {
+    local vault_pass_file="$HOME/.vault_pass"
+    
+    if [[ -f "$vault_pass_file" ]]; then
+        echo "--vault-password-file $vault_pass_file"
+    else
+        echo "--ask-vault-pass"
+    fi
+}
+
+VAULT_FLAGS=$(get_vault_flags)
+VAULT_FILE="${ANSIBLE_DIR}/roles/secrets/vars/vault.yml"
+
+# Check vault exists
+if [[ ! -f "$VAULT_FILE" ]]; then
+    error "Vault file not found: $VAULT_FILE"
+    exit 1
+fi
+
+info "Extracting secrets from vault..."
+
+# Create a temp file for decrypted vault
+TEMP_VAULT=$(mktemp)
+trap "rm -f $TEMP_VAULT" EXIT
+
+# Decrypt vault to temp file
+if ! ansible-vault view "$VAULT_FILE" $VAULT_FLAGS > "$TEMP_VAULT" 2>/dev/null; then
+    error "Failed to decrypt vault"
+    exit 1
+fi
+
+# Extract secrets using Python
+extract_secrets() {
+    python3 <<PYTHON_EOF
+import yaml
+import sys
+import re
+
+def resolve_jinja_ref(value, secrets):
+    """Resolve Jinja2 template references like {{ secrets.minio.minio_access_key }}"""
+    if not isinstance(value, str):
+        return value
+    
+    # Check if it's a Jinja2 template reference
+    match = re.match(r'\{\{\s*secrets\.([a-z_]+)\.([a-z_]+)\s*\}\}', value)
+    if match:
+        section, key = match.groups()
+        section_data = secrets.get(section, {})
+        if isinstance(section_data, dict):
+            resolved = section_data.get(key, '')
+            # Don't return another Jinja2 reference
+            if isinstance(resolved, str) and '{{' in resolved:
+                return ''
+            return resolved
+    
+    # Check for simple Jinja2 reference like {{ secrets.jwt_secret }}
+    match = re.match(r'\{\{\s*secrets\.([a-z_]+)\s*\}\}', value)
+    if match:
+        key = match.group(1)
+        resolved = secrets.get(key, '')
+        if isinstance(resolved, str) and '{{' in resolved:
+            return ''
+        return resolved
+    
+    # Return as-is if no Jinja2 reference
+    if '{{' in value:
+        return ''  # Skip unresolved Jinja2 templates
+    return value
+
+try:
+    with open('$TEMP_VAULT', 'r') as f:
+        vault = yaml.safe_load(f) or {}
+    
+    secrets = vault.get('secrets', {})
+    
+    # PostgreSQL
+    pg = secrets.get('postgresql', {})
+    print(f"POSTGRES_PASSWORD={pg.get('password', '')}")
+    
+    # Test database (separate user)
+    print(f"TEST_DB_USER=busibox_test_user")
+    print(f"TEST_DB_PASSWORD={pg.get('password', '')}")
+    print(f"TEST_DB_NAME=busibox_test")
+    
+    # MinIO - use minio_access_key and minio_secret_key directly
+    minio = secrets.get('minio', {})
+    access_key = minio.get('minio_access_key', '') or minio.get('access_key', '')
+    secret_key = minio.get('minio_secret_key', '') or minio.get('secret_key', '')
+    # Resolve if it's a Jinja2 reference
+    access_key = resolve_jinja_ref(access_key, secrets) if isinstance(access_key, str) and '{{' in access_key else access_key
+    secret_key = resolve_jinja_ref(secret_key, secrets) if isinstance(secret_key, str) and '{{' in secret_key else secret_key
+    print(f"MINIO_ROOT_USER={access_key}")
+    print(f"MINIO_ROOT_PASSWORD={secret_key}")
+    print(f"MINIO_ACCESS_KEY={access_key}")
+    print(f"MINIO_SECRET_KEY={secret_key}")
+    
+    # LiteLLM
+    litellm = secrets.get('litellm', {})
+    master_key = litellm.get('master_key', '') or secrets.get('litellm_api_key', '')
+    print(f"LITELLM_API_KEY={secrets.get('litellm_api_key', '')}")
+    print(f"LITELLM_MASTER_KEY={master_key}")
+    
+    # Authz - check multiple possible locations
+    authz = secrets.get('authz', {})
+    test_creds = secrets.get('test_credentials', {})
+    ai_portal = secrets.get('ai-portal', {})
+    
+    # Admin token: check authz.admin_token, then test_credentials.authz_admin_token
+    admin_token = authz.get('admin_token', '')
+    if not admin_token:
+        admin_token = test_creds.get('authz_admin_token', '')
+    if not admin_token:
+        admin_token = ai_portal.get('authz_admin_token', '')
+    print(f"AUTHZ_ADMIN_TOKEN={admin_token}")
+    
+    # Master key for envelope encryption
+    master_key = authz.get('master_key', '')
+    print(f"AUTHZ_MASTER_KEY={master_key}")
+    
+    # Bootstrap client
+    print(f"AUTHZ_BOOTSTRAP_CLIENT_ID={authz.get('bootstrap_client_id', 'ai-portal')}")
+    print(f"AUTHZ_BOOTSTRAP_CLIENT_SECRET={authz.get('bootstrap_client_secret', '')}")
+    
+    # Test credentials
+    test_creds = secrets.get('test_credentials', {})
+    print(f"AUTHZ_TEST_CLIENT_ID={test_creds.get('authz_test_client_id', '')}")
+    print(f"AUTHZ_TEST_CLIENT_SECRET={test_creds.get('authz_test_client_secret', '')}")
+    print(f"TEST_USER_ID={test_creds.get('test_user_id', '')}")
+    print(f"TEST_USER_EMAIL={test_creds.get('test_user_email', 'test@busibox.local')}")
+    
+    # OpenAI (if configured)
+    openai = secrets.get('openai', {})
+    if openai.get('api_key'):
+        print(f"OPENAI_API_KEY={openai.get('api_key', '')}")
+    
+    # Bedrock (if configured)
+    bedrock = secrets.get('bedrock', {})
+    if bedrock.get('api_key'):
+        print(f"BEDROCK_API_KEY={bedrock.get('api_key', '')}")
+    
+    # HuggingFace (if configured)
+    hf = secrets.get('huggingface', {})
+    if hf.get('token'):
+        print(f"HUGGINGFACE_TOKEN={hf.get('token', '')}")
+    
+except Exception as e:
+    print(f"# Error extracting secrets: {e}", file=sys.stderr)
+    sys.exit(1)
+PYTHON_EOF
+}
+
+# Generate service-specific environment file
+generate_env_file() {
+    local service="$1"
+    local env_file=""
+    
+    case "$service" in
+        authz)
+            env_file="${REPO_ROOT}/srv/authz/.env.local"
+            ;;
+        ingest)
+            env_file="${REPO_ROOT}/srv/ingest/.env.local"
+            ;;
+        search)
+            env_file="${REPO_ROOT}/srv/search/.env.local"
+            ;;
+        agent)
+            env_file="${REPO_ROOT}/srv/agent/.env.local"
+            ;;
+        all)
+            env_file="${REPO_ROOT}/.env.local"
+            ;;
+        *)
+            error "Unknown service: $service"
+            return 1
+            ;;
+    esac
+    
+    info "Generating $env_file for $service..."
+    
+    cat > "$env_file" <<ENV_HEADER
+# ============================================
+# Local Test Environment Configuration
+# Generated: $(date)
+# Environment: ${ENV}
+# Service: ${service}
+# ============================================
+# 
+# This file was auto-generated by scripts/test/generate-local-test-env.sh
+# It contains secrets extracted from the ansible vault and IPs from the test inventory.
+#
+# Usage: source this file or use pytest with --env-file
+#   source ${env_file}
+#   pytest tests/
+#
+# ============================================
+
+# Environment
+BUSIBOX_ENV=${ENV}
+NODE_ENV=development
+
+# ============================================
+# Network Configuration (${ENV} containers)
+# ============================================
+PROXY_IP=${PROXY_IP}
+APPS_IP=${APPS_IP}
+AGENT_IP=${AGENT_IP}
+POSTGRES_IP=${POSTGRES_IP}
+MILVUS_IP=${MILVUS_IP}
+MINIO_IP=${MINIO_IP}
+INGEST_IP=${INGEST_IP}
+LITELLM_IP=${LITELLM_IP}
+VLLM_IP=${VLLM_IP}
+OLLAMA_IP=${OLLAMA_IP}
+AUTHZ_IP=${AUTHZ_IP}
+
+# ============================================
+# PostgreSQL
+# ============================================
+POSTGRES_HOST=${POSTGRES_IP}
+POSTGRES_PORT=5432
+POSTGRES_DB=busibox_${ENV}
+POSTGRES_USER=busibox_${ENV}_user
+
+# Test database connection (for integration tests)
+TEST_DB_HOST=${POSTGRES_IP}
+TEST_DB_PORT=5432
+
+# ============================================
+# Milvus Vector Database
+# ============================================
+MILVUS_HOST=${MILVUS_IP}
+MILVUS_PORT=19530
+
+# ============================================
+# MinIO S3 Storage
+# ============================================
+MINIO_HOST=${MINIO_IP}
+MINIO_PORT=9000
+MINIO_CONSOLE_PORT=9001
+MINIO_ENDPOINT=http://${MINIO_IP}:9000
+MINIO_BUCKET=documents
+
+# ============================================
+# Redis
+# ============================================
+REDIS_HOST=${INGEST_IP}
+REDIS_PORT=6379
+REDIS_URL=redis://${INGEST_IP}:6379
+
+# ============================================
+# LLM Services
+# ============================================
+LITELLM_HOST=${LITELLM_IP}
+LITELLM_PORT=4000
+LITELLM_BASE_URL=http://${LITELLM_IP}:4000
+
+VLLM_HOST=${VLLM_IP}
+VLLM_PORT=8000
+
+OLLAMA_HOST=${OLLAMA_IP}
+OLLAMA_PORT=11434
+
+# ============================================
+# Authz Service
+# ============================================
+AUTHZ_HOST=${AUTHZ_IP}
+AUTHZ_PORT=8010
+AUTHZ_URL=http://${AUTHZ_IP}:8010
+AUTHZ_BASE_URL=http://${AUTHZ_IP}:8010
+TEST_AUTHZ_URL=http://${AUTHZ_IP}:8010
+
+# Issuer for JWT validation
+JWT_ISSUER=busibox-authz
+AUTHZ_ISSUER=busibox-authz
+
+# ============================================
+# Service URLs
+# ============================================
+INGEST_API_HOST=${INGEST_IP}
+INGEST_API_PORT=8002
+INGEST_API_URL=http://${INGEST_IP}:8002
+
+SEARCH_API_HOST=${MILVUS_IP}
+SEARCH_API_PORT=8003
+SEARCH_API_URL=http://${MILVUS_IP}:8003
+
+AGENT_API_HOST=${AGENT_IP}
+AGENT_API_PORT=8000
+AGENT_API_URL=http://${AGENT_IP}:8000
+
+# ============================================
+# Secrets (from vault)
+# ============================================
+ENV_HEADER
+    
+    # Append extracted secrets
+    extract_secrets >> "$env_file"
+    
+    success "Generated: $env_file"
+    echo "$env_file"
+}
+
+# Generate the environment file
+ENV_FILE=$(generate_env_file "$SERVICE")
+
+echo ""
+success "Local test environment generated!"
+echo ""
+info "To use:"
+echo "  source $ENV_FILE"
+echo ""
+info "Or for pytest:"
+echo "  cd srv/${SERVICE}"
+echo "  source .env.local && pytest tests/ -v"
+echo ""
+

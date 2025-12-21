@@ -3,37 +3,25 @@ Internal access-token claim contract.
 
 Downstream services validate these tokens (via JWKS) and use:
 - `sub` for user identity
-- `roles[]` for RBAC + document/library partition/RLS decisions (current compatibility shape)
-- `scope` for coarse OAuth2-style permissioning
+- `roles[]` for data access filtering (RLS/Milvus partitions)
+- `scope` for operation authorization (OAuth2 scopes aggregated from all roles)
 """
 
 from __future__ import annotations
 
 from typing import List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 
 class RoleClaim(BaseModel):
+    """
+    Role claim for data access filtering.
+    
+    Contains only id and name - scopes are aggregated at the token level.
+    """
     id: str
     name: str
-    permissions: List[str] = Field(default_factory=list)
-
-    @field_validator("permissions")
-    @classmethod
-    def _normalize_permissions(cls, v: List[str]) -> List[str]:
-        # stable ordering for deterministic tests/caches
-        allowed = {"read", "create", "update", "delete"}
-        out = [p for p in v if p in allowed]
-        # de-dupe while preserving input order
-        seen = set()
-        deduped: List[str] = []
-        for p in out:
-            if p in seen:
-                continue
-            seen.add(p)
-            deduped.append(p)
-        return deduped
 
 
 class AccessTokenClaims(BaseModel):
@@ -49,9 +37,8 @@ class AccessTokenClaims(BaseModel):
     # Token typing
     typ: str = "access"
 
-    # OAuth2-style scopes
+    # OAuth2-style scopes (aggregated from all user roles)
     scope: str = ""
 
-    # Compatibility RBAC shape used by ingest/search today
+    # Role memberships for data access filtering (RLS/partitions)
     roles: List[RoleClaim] = Field(default_factory=list)
-

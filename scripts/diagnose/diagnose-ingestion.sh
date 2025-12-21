@@ -6,7 +6,7 @@
 # where the failure is occurring.
 #
 # Usage:
-#   bash scripts/diagnose-ingestion.sh [test|production]
+#   bash scripts/diagnose/diagnose-ingestion.sh [test|production]
 #
 
 set -euo pipefail

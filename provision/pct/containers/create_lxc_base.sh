@@ -185,7 +185,7 @@ fi
 echo ""
 echo "Next Steps:"
 echo "  1. Configure containers: cd provision/ansible && make ${MODE}"
-echo "  2. Test infrastructure: bash scripts/test-infrastructure.sh"
+echo "  2. Test infrastructure: bash scripts/test/test-infrastructure.sh"
 if $CREATE_OLLAMA; then
   echo "  3. Setup LLM models: bash provision/pct/setup-llm-models.sh"
 fi

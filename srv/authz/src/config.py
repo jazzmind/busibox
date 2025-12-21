@@ -49,6 +49,12 @@ class Config:
 
         # Optional: shared bootstrap admin token for internal management endpoints.
         self.admin_token: Optional[str] = os.getenv("AUTHZ_ADMIN_TOKEN")
+        
+        # Master key for envelope encryption keystore.
+        # This key is used to encrypt/decrypt KEKs (Key Encryption Keys) stored in PostgreSQL.
+        # REQUIRED for envelope encryption - must be a high-entropy passphrase.
+        # If not set, keystore operations will fail.
+        self.master_key: Optional[str] = os.getenv("AUTHZ_MASTER_KEY")
 
     def to_dict(self) -> Dict:
         return {
@@ -67,6 +73,7 @@ class Config:
             "bootstrap_client_allowed_audiences": self.bootstrap_client_allowed_audiences,
             "bootstrap_client_allowed_scopes": self.bootstrap_client_allowed_scopes,
             "admin_token": self.admin_token,
+            "master_key": self.master_key,
         }
 
 

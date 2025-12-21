@@ -12,14 +12,11 @@ import uuid
 from typing import List, Optional
 
 import structlog
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, Depends, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from api.middleware.jwt_auth import (
-    has_update_permission,
-    has_create_permission,
-)
+from api.middleware.jwt_auth import ScopeChecker
 from api.services.postgres import PostgresService
 from services.milvus_service import MilvusService
 from shared.config import Config
@@ -27,6 +24,10 @@ from shared.config import Config
 logger = structlog.get_logger()
 
 router = APIRouter()
+
+# Scope dependencies
+require_ingest_read = ScopeChecker("ingest.read")
+require_ingest_write = ScopeChecker("ingest.write")
 
 
 # ============================================================================
@@ -65,7 +66,7 @@ class ShareDocumentRequest(BaseModel):
 # Endpoints
 # ============================================================================
 
-@router.get("/{file_id}/roles", response_model=DocumentRolesResponse)
+@router.get("/{file_id}/roles", response_model=DocumentRolesResponse, dependencies=[Depends(require_ingest_read)])
 async def get_document_roles(file_id: str, request: Request):
     """
     Get roles assigned to a document.
@@ -127,7 +128,7 @@ async def get_document_roles(file_id: str, request: Request):
         # Don't disconnect - pg_service is a singleton shared across requests
         pass
 
-@router.put("/{file_id}/roles")
+@router.put("/{file_id}/roles", dependencies=[Depends(require_ingest_write)])
 async def update_document_roles(
     file_id: str,
     update_request: UpdateRolesRequest,
@@ -337,7 +338,7 @@ async def update_document_roles(
         milvus_service.close()
 
 
-@router.post("/{file_id}/share")
+@router.post("/{file_id}/share", dependencies=[Depends(require_ingest_write)])
 async def share_document(
     file_id: str,
     share_request: ShareDocumentRequest,

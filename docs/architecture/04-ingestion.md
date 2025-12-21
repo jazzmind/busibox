@@ -1,7 +1,7 @@
 # Ingestion Service
 
 **Created**: 2025-12-09  
-**Last Updated**: 2025-12-09  
+**Last Updated**: 2025-12-20  
 **Status**: Active  
 **Category**: Architecture  
 **Related Docs**:  
@@ -28,9 +28,11 @@
 - `GET /health` — health checks.
 
 ## Auth & RLS
-- JWT middleware (`Authorization: Bearer`) required; legacy `X-User-Id` supported when enabled.
+- JWT middleware (`Authorization: Bearer`) validates RS256 tokens from AuthZ service.
+- Validates audience claim is `ingest-api` and issuer is `busibox-authz`.
 - Sets PostgreSQL session vars per request: `app.user_id`, `app.user_role_ids_*`.
-- Upload to shared roles requires `create` permission on each role (`role_ids_create`).
+- Role membership (from JWT `roles` claim) determines data access via RLS.
+- **Note**: OAuth2 scope-based operation authorization (e.g., `ingest.write`) is designed but not yet enforced. See `architecture/03-authentication.md` for current status.
 
 ## Pipeline
 1. **Upload**: MinIO store at `userId/fileId/filename`; dedupe via content hash.
@@ -59,7 +61,7 @@
 - Visual: `COLPALI_BASE_URL`, `COLPALI_ENABLED`
 - Extraction: `MARKER_ENABLED`, `MARKER_SERVICE_URL`, `MARKER_USE_GPU`
 - Chunking: `CHUNK_SIZE_MIN`, `CHUNK_SIZE_MAX`, `CHUNK_OVERLAP_PCT`
-- Auth: `JWT_SECRET`, `JWT_ISSUER`, `JWT_AUDIENCE`, `ALLOW_LEGACY_AUTH`
+- Auth: `AUTHZ_JWKS_URL`, `JWT_ISSUER`, `JWT_AUDIENCE`, `ALLOW_LEGACY_AUTH`
 
 ## Notes vs Prior Docs
 - Upload, webhook, and status logic previously described for agent-lxc now lives here.

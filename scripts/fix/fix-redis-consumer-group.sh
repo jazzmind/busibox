@@ -6,7 +6,7 @@
 # This is a workaround for when the worker fails to create it on startup.
 #
 # Usage:
-#   bash scripts/fix-redis-consumer-group.sh [test|production]
+#   bash scripts/fix/fix-redis-consumer-group.sh [test|production]
 #
 
 set -euo pipefail

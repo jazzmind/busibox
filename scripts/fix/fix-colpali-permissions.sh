@@ -4,7 +4,7 @@
 # Execution context: Run from admin workstation
 # Purpose: Fix permissions on model cache for ColPali service
 # 
-# Usage: bash scripts/fix-colpali-permissions.sh
+# Usage: bash scripts/fix/fix-colpali-permissions.sh
 
 set -euo pipefail
 

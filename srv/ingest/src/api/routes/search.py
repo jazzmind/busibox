@@ -5,9 +5,10 @@ Provides hybrid search (dense + sparse BM25) across user's documents.
 """
 
 import structlog
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from api.middleware.jwt_auth import ScopeChecker
 from api.services.minio_service import MinIOService
 from processors.embedder import Embedder
 from services.milvus_service import MilvusService
@@ -16,6 +17,9 @@ from shared.config import Config
 logger = structlog.get_logger()
 
 router = APIRouter()
+
+# Scope dependencies - search uses ingest.read since it's searching ingested documents
+require_search_read = ScopeChecker("ingest.read")
 
 # Initialize services
 config = Config()
@@ -61,6 +65,7 @@ class SearchResponse(BaseModel):
     "",
     response_model=SearchResponse,
     summary="Search documents",
+    dependencies=[Depends(require_search_read)],
     description=    """
     Perform semantic search across user's documents using hybrid search.
     

@@ -26,6 +26,8 @@ tags:
     description: OAuth2 token endpoints
   - name: Admin
     description: RBAC management endpoints
+  - name: Keystore
+    description: Envelope encryption key management
   - name: Internal
     description: Internal sync endpoints for first-party services
   - name: Audit
@@ -461,6 +463,323 @@ paths:
         '400':
           $ref: '#/components/responses/BadRequest'
 
+  # ============================================================================
+  # Keystore Endpoints (Envelope Encryption)
+  # ============================================================================
+  
+  /keystore/kek:
+    post:
+      tags: [Keystore]
+      summary: Create Key Encryption Key
+      description: |
+        Creates a new KEK for a role, user, or system.
+        The KEK is generated, encrypted with the master key, and stored.
+      operationId: createKek
+      security:
+        - AdminToken: []
+        - OAuthClient: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateKekRequest'
+      responses:
+        '200':
+          description: KEK created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KekResponse'
+        '409':
+          description: KEK already exists for this owner
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /keystore/kek/{owner_type}/{owner_id}:
+    get:
+      tags: [Keystore]
+      summary: Get KEK metadata
+      description: Returns KEK metadata for an owner (does not return the key itself).
+      operationId: getKek
+      security:
+        - AdminToken: []
+        - OAuthClient: []
+      parameters:
+        - name: owner_type
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [role, user, system]
+        - name: owner_id
+          in: path
+          required: true
+          schema:
+            type: string
+            description: UUID of owner or 'system' for system keys
+      responses:
+        '200':
+          description: KEK metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KekResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /keystore/kek/ensure-for-role/{role_id}:
+    post:
+      tags: [Keystore]
+      summary: Ensure KEK exists for role
+      description: |
+        Idempotent operation that ensures a KEK exists for a role.
+        Returns existing KEK if present, creates new one if not.
+      operationId: ensureKekForRole
+      security:
+        - AdminToken: []
+        - OAuthClient: []
+      parameters:
+        - name: role_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: KEK metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KekResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /keystore/kek/rotate:
+    post:
+      tags: [Keystore]
+      summary: Rotate KEK
+      description: |
+        Rotates a KEK by creating a new version and marking old ones inactive.
+        Existing wrapped DEKs using the old version will need re-wrapping.
+      operationId: rotateKek
+      security:
+        - AdminToken: []
+        - OAuthClient: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RotateKekRequest'
+      responses:
+        '200':
+          description: New KEK version created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KekResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /keystore/encrypt:
+    post:
+      tags: [Keystore]
+      summary: Encrypt content
+      description: |
+        Encrypts file content using envelope encryption.
+        1. Generates a new DEK for the file
+        2. Encrypts content with the DEK
+        3. Wraps the DEK with KEKs for specified roles/user
+        4. Stores wrapped DEKs in the keystore
+      operationId: encryptContent
+      security:
+        - AdminToken: []
+        - OAuthClient: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EncryptContentRequest'
+      responses:
+        '200':
+          description: Content encrypted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EncryptContentResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /keystore/decrypt:
+    post:
+      tags: [Keystore]
+      summary: Decrypt content
+      description: |
+        Decrypts file content. Requires the caller to have access to at least
+        one KEK that can unwrap the file's DEK.
+      operationId: decryptContent
+      security:
+        - AdminToken: []
+        - OAuthClient: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DecryptContentRequest'
+      responses:
+        '200':
+          description: Content decrypted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecryptContentResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          description: No access to decrypt this file
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /keystore/file/{file_id}/add-role/{role_id}:
+    post:
+      tags: [Keystore]
+      summary: Grant role access to file
+      description: |
+        Adds a role's access to a file by wrapping the DEK with the role's KEK.
+        Requires an existing wrapped DEK to re-wrap for the new role.
+      operationId: addRoleAccess
+      security:
+        - AdminToken: []
+        - OAuthClient: []
+      parameters:
+        - name: file_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: role_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Role access added
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  file_id:
+                    type: string
+                  role_id:
+                    type: string
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /keystore/file/{file_id}/remove-role/{role_id}:
+    delete:
+      tags: [Keystore]
+      summary: Revoke role access to file
+      description: Removes a role's access to a file by deleting their wrapped DEK.
+      operationId: removeRoleAccess
+      security:
+        - AdminToken: []
+        - OAuthClient: []
+      parameters:
+        - name: file_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: role_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Role access removed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  file_id:
+                    type: string
+                  role_id:
+                    type: string
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /keystore/file/{file_id}:
+    delete:
+      tags: [Keystore]
+      summary: Delete file keys
+      description: Deletes all wrapped DEKs for a file (called when file is deleted).
+      operationId: deleteFileKeys
+      security:
+        - AdminToken: []
+        - OAuthClient: []
+      parameters:
+        - name: file_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: File keys deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  file_id:
+                    type: string
+                  deleted_count:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ============================================================================
+  # Health Endpoints
+  # ============================================================================
+
   /health/live:
     get:
       tags: [Health]
@@ -606,7 +925,11 @@ components:
 
     AccessTokenClaims:
       type: object
-      description: JWT access token claims
+      description: |
+        JWT access token claims. 
+        
+        **Important**: Scopes are aggregated from all user roles and stored at the token level.
+        Roles in the token contain only `id` and `name` (for data access filtering via RLS/partitions).
       required:
         - iss
         - sub
@@ -615,6 +938,7 @@ components:
         - iat
         - nbf
         - jti
+        - typ
       properties:
         iss:
           type: string
@@ -622,7 +946,7 @@ components:
           example: busibox-authz
         sub:
           type: string
-          description: Subject (user ID or client ID)
+          description: Subject (user ID or client ID for client_credentials grant)
           example: user-123
         aud:
           type: string
@@ -641,38 +965,33 @@ components:
           type: string
           format: uuid
           description: JWT ID (unique token identifier)
+        typ:
+          type: string
+          description: Token type
+          example: access
         scope:
           type: string
-          description: Granted scopes (space-delimited)
-          example: ingest.write
+          description: |
+            Aggregated OAuth2 scopes (space-delimited). 
+            For token-exchange, this is the union of scopes from all user roles.
+            For client_credentials, this is the requested scope (validated against client's allowed_scopes).
+          example: ingest.read ingest.write search.read
         roles:
           type: array
-          description: User roles with permissions
+          description: |
+            User roles (for data access filtering). Contains only id and name.
+            Empty array for client_credentials tokens.
           items:
             type: object
             properties:
               id:
                 type: string
                 format: uuid
+                description: Role UUID (used for RLS filtering and Milvus partition selection)
               name:
                 type: string
-                example: Editor
-              permissions:
-                type: array
-                items:
-                  type: string
-                  enum: [read, create, update, delete]
-        idp:
-          type: object
-          description: Optional IdP metadata
-          properties:
-            provider:
-              type: string
-              example: azure
-            tenantId:
-              type: string
-            objectId:
-              type: string
+                example: Finance Admin
+                description: Human-readable role name
 
     RoleCreate:
       type: object
@@ -687,6 +1006,12 @@ components:
         description:
           type: string
           example: Can edit documents
+        scopes:
+          type: array
+          description: OAuth2 scopes granted by this role
+          items:
+            type: string
+          example: [ingest.read, ingest.write, search.read]
 
     RoleUpdate:
       type: object
@@ -697,6 +1022,12 @@ components:
           maxLength: 255
         description:
           type: string
+        scopes:
+          type: array
+          description: OAuth2 scopes granted by this role
+          items:
+            type: string
+          example: [ingest.read, ingest.write, search.read]
 
     RoleResponse:
       type: object
@@ -710,6 +1041,12 @@ components:
         description:
           type: string
           example: Can edit documents
+        scopes:
+          type: array
+          description: OAuth2 scopes granted by this role
+          items:
+            type: string
+          example: [ingest.read, ingest.write, search.read]
         created_at:
           type: string
           format: date-time
@@ -889,6 +1226,123 @@ components:
         detail:
           type: string
           description: Error details
+
+    # ========================================================================
+    # Keystore Schemas (Envelope Encryption)
+    # ========================================================================
+    
+    CreateKekRequest:
+      type: object
+      required:
+        - owner_type
+      properties:
+        owner_type:
+          type: string
+          enum: [role, user, system]
+          description: Type of owner for the KEK
+        owner_id:
+          type: string
+          format: uuid
+          description: UUID of the role or user (null for system keys)
+
+    KekResponse:
+      type: object
+      properties:
+        kek_id:
+          type: string
+          format: uuid
+          description: Unique identifier for the KEK
+        owner_type:
+          type: string
+          enum: [role, user, system]
+        owner_id:
+          type: string
+          format: uuid
+          nullable: true
+        key_algorithm:
+          type: string
+          example: AES-256-GCM
+        key_version:
+          type: integer
+          description: Version number (incremented on rotation)
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    RotateKekRequest:
+      type: object
+      required:
+        - owner_type
+      properties:
+        owner_type:
+          type: string
+          enum: [role, user, system]
+        owner_id:
+          type: string
+          format: uuid
+          nullable: true
+
+    EncryptContentRequest:
+      type: object
+      required:
+        - file_id
+        - content
+      properties:
+        file_id:
+          type: string
+          format: uuid
+          description: UUID of the file
+        content:
+          type: string
+          description: Base64 encoded content to encrypt
+        role_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: Role IDs that should have access
+        user_id:
+          type: string
+          format: uuid
+          description: User ID for personal files
+
+    EncryptContentResponse:
+      type: object
+      properties:
+        file_id:
+          type: string
+          format: uuid
+        encrypted_content:
+          type: string
+          description: Base64 encoded encrypted content
+        wrapped_dek_count:
+          type: integer
+          description: Number of KEKs the DEK was wrapped with
+
+    DecryptContentRequest:
+      type: object
+      required:
+        - file_id
+        - encrypted_content
+      properties:
+        file_id:
+          type: string
+          format: uuid
+        encrypted_content:
+          type: string
+          description: Base64 encoded encrypted content
+
+    DecryptContentResponse:
+      type: object
+      properties:
+        file_id:
+          type: string
+          format: uuid
+        content:
+          type: string
+          description: Base64 encoded decrypted content
 
   responses:
     BadRequest:

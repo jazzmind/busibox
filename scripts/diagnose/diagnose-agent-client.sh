@@ -1,7 +1,7 @@
 #!/bin/bash
 # Agent Client Diagnostic Script
 # Execution Context: Proxmox host
-# Usage: bash scripts/diagnose-agent-client.sh
+# Usage: bash scripts/diagnose/diagnose-agent-client.sh
 # Created: 2025-11-06
 # Status: Active
 # Category: Diagnostics

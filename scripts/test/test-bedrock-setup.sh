@@ -6,7 +6,7 @@
 # Prerequisites: 
 #   - Bedrock API credentials configured in vault
 #   - LiteLLM deployed and running
-# Usage: bash scripts/test-bedrock-setup.sh [test|production]
+# Usage: bash scripts/tests/test-bedrock-setup.sh [test|production]
 
 set -euo pipefail
 

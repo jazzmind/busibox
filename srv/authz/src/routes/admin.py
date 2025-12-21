@@ -42,17 +42,20 @@ def set_pg_service(pg_service):
 class RoleCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
+    scopes: List[str] = Field(default_factory=list)  # OAuth2 scopes for this role
 
 
 class RoleUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     description: Optional[str] = None
+    scopes: Optional[List[str]] = None  # OAuth2 scopes for this role
 
 
 class RoleResponse(BaseModel):
     id: str
     name: str
     description: Optional[str] = None
+    scopes: List[str] = Field(default_factory=list)
     created_at: str
     updated_at: str
 
@@ -121,6 +124,7 @@ async def create_role(request: Request):
     - Authorization: Bearer <admin_token>
     - name: string (required)
     - description: string (optional)
+    - scopes: array of OAuth2 scopes (optional)
     """
     await _require_admin_auth(request)
 
@@ -131,12 +135,13 @@ async def create_role(request: Request):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
 
     await pg.connect()
-    role = await pg.create_role(name=role_data.name, description=role_data.description)
+    role = await pg.create_role(name=role_data.name, description=role_data.description, scopes=role_data.scopes)
 
     return RoleResponse(
         id=role["id"],
         name=role["name"],
         description=role.get("description"),
+        scopes=role.get("scopes") or [],
         created_at=role["created_at"].isoformat(),
         updated_at=role["updated_at"].isoformat(),
     )
@@ -159,6 +164,7 @@ async def list_roles(request: Request):
             id=r["id"],
             name=r["name"],
             description=r.get("description"),
+            scopes=r.get("scopes") or [],
             created_at=r["created_at"].isoformat(),
             updated_at=r["updated_at"].isoformat(),
         )
@@ -190,6 +196,7 @@ async def get_role(request: Request, role_id: str):
         id=role["id"],
         name=role["name"],
         description=role.get("description"),
+        scopes=role.get("scopes") or [],
         created_at=role["created_at"].isoformat(),
         updated_at=role["updated_at"].isoformat(),
     )
@@ -205,6 +212,7 @@ async def update_role(request: Request, role_id: str):
     - Authorization: Bearer <admin_token>
     - name: string (optional)
     - description: string (optional)
+    - scopes: array of OAuth2 scopes (optional)
     """
     await _require_admin_auth(request)
 
@@ -219,11 +227,11 @@ async def update_role(request: Request, role_id: str):
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
 
-    if not role_data.name and not role_data.description:
+    if role_data.name is None and role_data.description is None and role_data.scopes is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="At least one field must be provided")
 
     await pg.connect()
-    role = await pg.update_role(role_id=role_id, name=role_data.name, description=role_data.description)
+    role = await pg.update_role(role_id=role_id, name=role_data.name, description=role_data.description, scopes=role_data.scopes)
 
     if not role:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
@@ -232,6 +240,7 @@ async def update_role(request: Request, role_id: str):
         id=role["id"],
         name=role["name"],
         description=role.get("description"),
+        scopes=role.get("scopes") or [],
         created_at=role["created_at"].isoformat(),
         updated_at=role["updated_at"].isoformat(),
     )
@@ -358,6 +367,7 @@ async def get_user_roles(request: Request, user_id: str):
             id=r["id"],
             name=r["name"],
             description=r.get("description"),
+            scopes=r.get("scopes") or [],
             created_at=r.get("created_at").isoformat() if r.get("created_at") else "",
             updated_at=r.get("updated_at").isoformat() if r.get("updated_at") else "",
         )

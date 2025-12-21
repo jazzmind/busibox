@@ -18,12 +18,14 @@ from typing import Optional, List
 
 import redis.asyncio as redis_async
 import structlog
-from fastapi import APIRouter, Request, Query, status
+from fastapi import APIRouter, Depends, Request, Query, status
 from fastapi.responses import JSONResponse, StreamingResponse, Response
 from pydantic import BaseModel, Field
 
+from api.middleware.jwt_auth import ScopeChecker
 from api.services.minio_service import MinIOService
 from api.services.postgres import PostgresService
+from api.services.encryption_client import EncryptionClient
 from services.milvus_service import MilvusService
 from services.processing_history_service import ProcessingHistoryService
 from shared.config import Config
@@ -31,6 +33,11 @@ from shared.config import Config
 logger = structlog.get_logger()
 
 router = APIRouter()
+
+# Scope dependencies
+require_ingest_read = ScopeChecker("ingest.read")
+require_ingest_write = ScopeChecker("ingest.write")
+require_ingest_delete = ScopeChecker("ingest.delete")
 
 
 async def check_file_access(
@@ -122,7 +129,7 @@ async def check_file_access(
     return False, file_dict, f"Unknown visibility: {visibility}"
 
 
-@router.get("/{fileId}")
+@router.get("/{fileId}", dependencies=[Depends(require_ingest_read)])
 async def get_file_metadata(fileId: str, request: Request):
     """
     Get file metadata and current status.
@@ -356,7 +363,7 @@ async def get_file_metadata(fileId: str, request: Request):
         pass
 
 
-@router.get("/{fileId}/history")
+@router.get("/{fileId}/history", dependencies=[Depends(require_ingest_read)])
 async def get_processing_history(fileId: str, request: Request):
     """
     Get detailed processing history for a file.
@@ -404,10 +411,12 @@ async def get_processing_history(fileId: str, request: Request):
         pass
 
 
-@router.get("/{fileId}/download")
+@router.get("/{fileId}/download", dependencies=[Depends(require_ingest_read)])
 async def download_file(fileId: str, request: Request):
     """
     Download original file from MinIO storage.
+    
+    Content is automatically decrypted if envelope encryption was used.
     
     Returns:
         StreamingResponse with file content
@@ -417,6 +426,7 @@ async def download_file(fileId: str, request: Request):
     config = Config().to_dict()
     postgres_service = PostgresService(config, request)
     minio_service = MinIOService(config)
+    encryption_client = EncryptionClient(config)
     
     await postgres_service.connect()
     
@@ -437,7 +447,7 @@ async def download_file(fileId: str, request: Request):
             # Get file from MinIO using storage_path from file_data
             # Note: storage_path not in check_file_access, need to fetch it
             file_row = await conn.fetchrow("""
-                SELECT storage_path, original_filename, mime_type
+                SELECT storage_path, original_filename, mime_type, visibility
                 FROM ingestion_files
                 WHERE file_id = $1
             """, uuid.UUID(fileId))
@@ -445,6 +455,10 @@ async def download_file(fileId: str, request: Request):
             storage_path = file_row["storage_path"]
             original_filename = file_row["original_filename"]
             mime_type = file_row["mime_type"]
+            visibility = file_row["visibility"]
+            
+            # Get file role IDs for decryption
+            role_ids = getattr(request.state, "role_ids_read", [])
             
             # Get file from MinIO
             try:
@@ -452,7 +466,7 @@ async def download_file(fileId: str, request: Request):
                 loop = asyncio.get_event_loop()
                 
                 # Get file object from MinIO
-                file_data = await loop.run_in_executor(
+                minio_response = await loop.run_in_executor(
                     None,
                     lambda: minio_service.client.get_object(
                         minio_service.bucket,
@@ -461,7 +475,34 @@ async def download_file(fileId: str, request: Request):
                 )
                 
                 # Read file content
-                content = await loop.run_in_executor(None, file_data.read)
+                content = await loop.run_in_executor(None, minio_response.read)
+                
+                # Decrypt content if it appears to be encrypted
+                if encryption_client.enabled and encryption_client.is_encrypted(content):
+                    try:
+                        content = await encryption_client.decrypt_for_download(
+                            file_id=fileId,
+                            encrypted_content=content,
+                            role_ids=role_ids,
+                            user_id=user_id if visibility == "personal" else None,
+                        )
+                        logger.info(
+                            "File content decrypted for download",
+                            file_id=fileId,
+                            user_id=user_id,
+                            decrypted_size=len(content),
+                        )
+                    except PermissionError as e:
+                        logger.warning(
+                            "Decryption access denied",
+                            file_id=fileId,
+                            user_id=user_id,
+                            error=str(e),
+                        )
+                        return JSONResponse(
+                            status_code=status.HTTP_403_FORBIDDEN,
+                            content={"error": "Access denied to decrypt file"}
+                        )
                 
                 logger.info(
                     "File downloaded",
@@ -511,7 +552,7 @@ async def download_file(fileId: str, request: Request):
         pass
 
 
-@router.get("/{fileId}/presigned-url")
+@router.get("/{fileId}/presigned-url", dependencies=[Depends(require_ingest_read)])
 async def get_presigned_url(fileId: str, request: Request, expiry: int = 3600):
     """
     Generate a presigned URL for direct file access from MinIO.
@@ -625,7 +666,7 @@ async def get_presigned_url(fileId: str, request: Request, expiry: int = 3600):
         pass
 
 
-@router.get("/{fileId}/chunks")
+@router.get("/{fileId}/chunks", dependencies=[Depends(require_ingest_read)])
 async def get_file_chunks(
     fileId: str,
     request: Request,
@@ -725,7 +766,7 @@ async def get_file_chunks(
         pass
 
 
-@router.get("/{fileId}/vectors")
+@router.get("/{fileId}/vectors", dependencies=[Depends(require_ingest_read)])
 async def get_file_vectors(
     fileId: str,
     request: Request,
@@ -831,7 +872,7 @@ async def get_file_vectors(
         pass
 
 
-@router.get("/{fileId}/markdown")
+@router.get("/{fileId}/markdown", dependencies=[Depends(require_ingest_read)])
 async def get_file_markdown(
     fileId: str,
     request: Request
@@ -930,7 +971,7 @@ class DocumentSearchRequest(BaseModel):
     limit: int = Field(default=10, ge=1, le=100, description="Max results to return")
 
 
-@router.post("/{fileId}/search")
+@router.post("/{fileId}/search", dependencies=[Depends(require_ingest_read)])
 async def search_within_document(
     fileId: str,
     request: Request,
@@ -1066,7 +1107,7 @@ async def search_within_document(
         pass
 
 
-@router.delete("/{fileId}")
+@router.delete("/{fileId}", dependencies=[Depends(require_ingest_delete)])
 async def delete_file(fileId: str, request: Request):
     """
     Delete file and all associated data.
@@ -1074,6 +1115,7 @@ async def delete_file(fileId: str, request: Request):
     Deletes:
         - File from MinIO storage
         - Vectors from Milvus
+        - Encryption keys from AuthZ keystore
         - Metadata from PostgreSQL (cascades to chunks and status)
     """
     user_id = request.state.user_id
@@ -1082,6 +1124,7 @@ async def delete_file(fileId: str, request: Request):
     postgres_service = PostgresService(config, request)
     minio_service = MinIOService(config)
     milvus_service = MilvusService(config)
+    encryption_client = EncryptionClient(config)
     
     await postgres_service.connect()
     
@@ -1132,6 +1175,17 @@ async def delete_file(fileId: str, request: Request):
                     error=str(e),
                 )
             
+            # Delete encryption keys from AuthZ keystore
+            try:
+                await encryption_client.delete_file_keys(fileId)
+                logger.info("Deleted encryption keys", file_id=fileId)
+            except Exception as e:
+                logger.warning(
+                    "Failed to delete encryption keys",
+                    file_id=fileId,
+                    error=str(e),
+                )
+            
             # Delete from PostgreSQL (cascades to status and chunks)
             await conn.execute("""
                 DELETE FROM ingestion_files WHERE file_id = $1
@@ -1170,7 +1224,7 @@ async def delete_file(fileId: str, request: Request):
         pass
 
 
-@router.post("/{fileId}/move")
+@router.post("/{fileId}/move", dependencies=[Depends(require_ingest_write)])
 async def move_file(fileId: str, request: Request):
     """
     Move a document between visibility modes and update role bindings.
@@ -1252,7 +1306,7 @@ async def move_file(fileId: str, request: Request):
 
     return {"status": "ok", "visibility": target_visibility, "roleIds": role_ids}
 
-@router.post("/{fileId}/reprocess")
+@router.post("/{fileId}/reprocess", dependencies=[Depends(require_ingest_write)])
 async def reprocess_file(fileId: str, request: Request):
     """
     Reprocess a document - optionally from a specific stage.
@@ -1469,7 +1523,7 @@ async def reprocess_file(fileId: str, request: Request):
         pass
 
 
-@router.get("/{fileId}/export")
+@router.get("/{fileId}/export", dependencies=[Depends(require_ingest_read)])
 async def export_file(
     fileId: str,
     request: Request,

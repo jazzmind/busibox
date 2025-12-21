@@ -125,15 +125,15 @@ deploy-innovation:
 
 # Configuration targets
 configure:
-	@bash ../../scripts/configure.sh
+	@bash ../../scripts/make/configure.sh
 
 generate-token-keys:
-	@bash ../../scripts/generate-token-service-keys.sh
+	@bash ../../scripts/generate/generate-token-service-keys.sh
 
 # Bootstrap test credentials for local integration testing
 bootstrap-test-creds:
 	@echo "Bootstrapping test credentials for $(INV)..."
-	@bash ../../scripts/bootstrap-test-credentials.sh $(shell echo $(INV) | grep -q test && echo test || echo production)
+	@bash ../../scripts/test/bootstrap-test-credentials.sh $(shell echo $(INV) | grep -q test && echo test || echo production)
 
 # Verification targets
 verify: verify-health verify-smoke

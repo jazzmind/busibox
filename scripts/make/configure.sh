@@ -558,7 +558,7 @@ secrets_configuration() {
         
         case $choice in
             1)
-                bash "${REPO_ROOT}/scripts/generate-token-service-keys.sh" || {
+                bash "${REPO_ROOT}/scripts/generate/generate-token-service-keys.sh" || {
                     error "TOKEN_SERVICE key generation failed"
                 }
                 pause

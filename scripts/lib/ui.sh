@@ -160,6 +160,73 @@ select_environment() {
     done
 }
 
+# Test mode selection
+# Usage: MODE=$(select_test_mode)
+# Returns: "container" (run on container) or "local" (run locally against containers)
+select_test_mode() {
+    # Send display output to stderr so it shows on terminal (not captured by command substitution)
+    {
+        echo ""
+        box "Test Execution Mode"
+        echo ""
+        echo -e "  ${CYAN}1)${NC} Container Mode  - Run tests on deployed containers (standard)"
+        echo -e "  ${CYAN}2)${NC} Local Mode      - Run tests locally against container backends"
+        echo ""
+        echo -e "  ${DIM}Local mode runs your local code but uses container databases/services.${NC}"
+        echo -e "  ${DIM}Useful for rapid debugging without redeploying.${NC}"
+        echo ""
+    } >&2
+    
+    while true; do
+        # Read from terminal and show prompt on stderr
+        echo -ne "${BOLD}Select mode [1-2]:${NC} " >&2
+        read choice < /dev/tty
+        case $choice in
+            1)
+                echo "container"
+                return 0
+                ;;
+            2)
+                echo "local"
+                return 0
+                ;;
+            *)
+                error "Invalid selection. Please enter 1 or 2." >&2
+                ;;
+        esac
+    done
+}
+
+# Service selection for testing
+# Usage: SERVICE=$(select_test_service)
+# Returns: service name (authz, ingest, search, agent, etc.)
+select_test_service() {
+    {
+        echo ""
+        box "Select Service to Test"
+        echo ""
+        echo -e "  ${CYAN}1)${NC} Authz   - Authorization & OAuth service"
+        echo -e "  ${CYAN}2)${NC} Ingest  - Document ingestion service"
+        echo -e "  ${CYAN}3)${NC} Search  - Vector search service"
+        echo -e "  ${CYAN}4)${NC} Agent   - AI agent service"
+        echo -e "  ${CYAN}5)${NC} All     - Run all service tests"
+        echo ""
+    } >&2
+    
+    while true; do
+        echo -ne "${BOLD}Select service [1-5]:${NC} " >&2
+        read choice < /dev/tty
+        case $choice in
+            1) echo "authz"; return 0 ;;
+            2) echo "ingest"; return 0 ;;
+            3) echo "search"; return 0 ;;
+            4) echo "agent"; return 0 ;;
+            5) echo "all"; return 0 ;;
+            *) error "Invalid selection. Please enter 1-5." >&2 ;;
+        esac
+    done
+}
+
 # Wait for keypress
 pause() {
     local message="${1:-Press any key to continue...}"

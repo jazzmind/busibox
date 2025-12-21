@@ -63,9 +63,9 @@ async def test_complete_token_exchange_flow(full_authz_app):
     """
     Test complete flow:
     1. Bootstrap authz (JWKS + client)
-    2. Sync user + roles
+    2. Sync user + roles with scopes
     3. Exchange for access token
-    4. Decode and validate token
+    4. Decode and validate token - scopes aggregated from roles
     """
     app, fake = full_authz_app
 
@@ -81,7 +81,7 @@ async def test_complete_token_exchange_flow(full_authz_app):
         assert len(jwks_data["keys"]) == 1
         jwk = jwks_data["keys"][0]
 
-        # Step 2: Sync user + roles (simulates ai-portal sync)
+        # Step 2: Sync user + roles with scopes (simulates ai-portal sync)
         sync_resp = await client.post(
             "/internal/sync/user",
             json={
@@ -90,7 +90,7 @@ async def test_complete_token_exchange_flow(full_authz_app):
                 "user_id": user_id,
                 "email": "alice@example.com",
                 "status": "active",
-                "roles": [{"id": role_id, "name": "Engineering", "description": "Engineering team"}],
+                "roles": [{"id": role_id, "name": "Engineering", "description": "Engineering team", "scopes": ["ingest.read", "ingest.write", "search.read"]}],
                 "user_role_ids": [role_id],
             },
         )
@@ -104,7 +104,6 @@ async def test_complete_token_exchange_flow(full_authz_app):
                 "client_id": "test-client",
                 "client_secret": "test-client-secret",
                 "audience": "ingest-api",
-                "scope": "ingest.write ingest.read",
                 "requested_subject": user_id,
                 "requested_purpose": "integration-test",
             },
@@ -132,18 +131,21 @@ async def test_complete_token_exchange_flow(full_authz_app):
         assert decoded["aud"] == "ingest-api"
         assert decoded["iss"] == "authz-test"
         assert decoded["typ"] == "access"
-        assert "ingest.write" in decoded["scope"]
+        # Scopes are aggregated from all user roles
         assert "ingest.read" in decoded["scope"]
+        assert "ingest.write" in decoded["scope"]
+        assert "search.read" in decoded["scope"]
+        # Roles contain only id and name (for data access filtering)
         assert len(decoded["roles"]) == 1
         assert decoded["roles"][0]["id"] == role_id
         assert decoded["roles"][0]["name"] == "Engineering"
-        assert "read" in decoded["roles"][0]["permissions"]
-        assert "create" in decoded["roles"][0]["permissions"]
+        # No permissions field - scopes are at token level, not role level
+        assert "permissions" not in decoded["roles"][0]
 
 
 @pytest.mark.asyncio
 async def test_token_exchange_with_multiple_roles(full_authz_app):
-    """Test token exchange for user with multiple roles."""
+    """Test token exchange for user with multiple roles - scopes are aggregated."""
     app, fake = full_authz_app
 
     user_id = "bbbbbbbb-bbbb-cccc-dddd-222222222222"
@@ -155,7 +157,7 @@ async def test_token_exchange_with_multiple_roles(full_authz_app):
         # Bootstrap
         await client.get("/.well-known/jwks.json")
 
-        # Sync user with multiple roles
+        # Sync user with multiple roles - each with different scopes
         await client.post(
             "/internal/sync/user",
             json={
@@ -164,8 +166,8 @@ async def test_token_exchange_with_multiple_roles(full_authz_app):
                 "user_id": user_id,
                 "email": "bob@example.com",
                 "roles": [
-                    {"id": role1_id, "name": "Engineering"},
-                    {"id": role2_id, "name": "Finance"},
+                    {"id": role1_id, "name": "Engineering", "scopes": ["ingest.read", "search.read"]},
+                    {"id": role2_id, "name": "Finance", "scopes": ["search.read", "search.write"]},
                 ],
                 "user_role_ids": [role1_id, role2_id],
             },
@@ -179,7 +181,6 @@ async def test_token_exchange_with_multiple_roles(full_authz_app):
                 "client_id": "test-client",
                 "client_secret": "test-client-secret",
                 "audience": "search-api",
-                "scope": "search.read",
                 "requested_subject": user_id,
             },
         )
@@ -205,6 +206,11 @@ async def test_token_exchange_with_multiple_roles(full_authz_app):
         role_ids = [r["id"] for r in decoded["roles"]]
         assert role1_id in role_ids
         assert role2_id in role_ids
+
+        # Verify scopes are aggregated from both roles (union)
+        assert "ingest.read" in decoded["scope"]
+        assert "search.read" in decoded["scope"]
+        assert "search.write" in decoded["scope"]
 
 
 @pytest.mark.asyncio

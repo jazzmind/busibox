@@ -130,9 +130,25 @@ class PostgresService:
                   id uuid PRIMARY KEY,
                   name text NOT NULL UNIQUE,
                   description text NULL,
+                  scopes text[] NOT NULL DEFAULT '{}'::text[],
                   created_at timestamptz NOT NULL DEFAULT now(),
                   updated_at timestamptz NOT NULL DEFAULT now()
                 );
+                """
+            )
+            
+            # Migration: Add scopes column if missing (for existing deployments)
+            await conn.execute(
+                """
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name = 'authz_roles' AND column_name = 'scopes'
+                    ) THEN
+                        ALTER TABLE authz_roles ADD COLUMN scopes text[] NOT NULL DEFAULT '{}'::text[];
+                    END IF;
+                END $$;
                 """
             )
 
@@ -161,6 +177,53 @@ class PostgresService:
                   created_at timestamptz NOT NULL DEFAULT now(),
                   PRIMARY KEY (user_id, role_id)
                 );
+                """
+            )
+            
+            # ----------------------------------------------------------------
+            # Envelope Encryption Keystore Tables
+            # ----------------------------------------------------------------
+            
+            # Master Key Encryption Keys (KEKs) - one per role or user
+            # The KEK itself is encrypted with the system master key (from env)
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS authz_key_encryption_keys (
+                  kek_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                  owner_type text NOT NULL CHECK (owner_type IN ('role', 'user', 'system')),
+                  owner_id uuid NULL,  -- NULL for system-level keys
+                  encrypted_key bytea NOT NULL,  -- KEK encrypted with master key
+                  key_algorithm text NOT NULL DEFAULT 'AES-256-GCM',
+                  key_version integer NOT NULL DEFAULT 1,
+                  is_active boolean NOT NULL DEFAULT true,
+                  created_at timestamptz NOT NULL DEFAULT now(),
+                  rotated_at timestamptz NULL,
+                  UNIQUE (owner_type, owner_id, key_version)
+                );
+                """
+            )
+            
+            # Data Encryption Key registry - tracks DEKs wrapped with KEKs
+            # Each file's DEK can be wrapped with multiple KEKs (one per authorized role)
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS authz_wrapped_data_keys (
+                  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                  file_id uuid NOT NULL,  -- Reference to the encrypted file
+                  kek_id uuid NOT NULL REFERENCES authz_key_encryption_keys(kek_id) ON DELETE CASCADE,
+                  wrapped_dek bytea NOT NULL,  -- DEK encrypted with the KEK
+                  dek_algorithm text NOT NULL DEFAULT 'AES-256-GCM',
+                  created_at timestamptz NOT NULL DEFAULT now(),
+                  UNIQUE (file_id, kek_id)
+                );
+                """
+            )
+            
+            # Index for fast lookups by file_id
+            await conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_wrapped_data_keys_file_id 
+                ON authz_wrapped_data_keys(file_id);
                 """
             )
 
@@ -320,22 +383,25 @@ class PostgresService:
         name_to_id: dict[str, str] = {}
         async with self.acquire(None, None) as conn:
             for r in roles:
+                scopes = r.get("scopes", [])
                 # First, check if a role with this name already exists
                 existing = await conn.fetchrow(
                     "SELECT id FROM authz_roles WHERE name = $1",
                     r["name"]
                 )
                 if existing:
-                    # Role with this name exists, use its ID and update description if provided
+                    # Role with this name exists, use its ID and update description/scopes if provided
                     role_id = existing["id"]
                     await conn.execute(
                         """
                         UPDATE authz_roles
                         SET description = COALESCE($1, description),
+                            scopes = CASE WHEN $2::text[] = '{}'::text[] THEN scopes ELSE $2 END,
                             updated_at = now()
-                        WHERE id = $2
+                        WHERE id = $3
                         """,
                         r.get("description"),
+                        scopes,
                         role_id,
                     )
                     name_to_id[r["name"]] = str(role_id)
@@ -344,16 +410,18 @@ class PostgresService:
                     role_id = uuid.UUID(r["id"])
                     await conn.execute(
                         """
-                        INSERT INTO authz_roles (id, name, description)
-                        VALUES ($1, $2, $3)
+                        INSERT INTO authz_roles (id, name, description, scopes)
+                        VALUES ($1, $2, $3, $4)
                         ON CONFLICT (id) DO UPDATE
                           SET name = EXCLUDED.name,
                               description = EXCLUDED.description,
+                              scopes = EXCLUDED.scopes,
                               updated_at = now()
                         """,
                         role_id,
                         r["name"],
                         r.get("description"),
+                        scopes,
                     )
                     name_to_id[r["name"]] = str(role_id)
         return name_to_id
@@ -431,7 +499,7 @@ class PostgresService:
         async with self.acquire(user_id, None) as conn:
             rows = await conn.fetch(
                 """
-                SELECT r.id::text AS id, r.name AS name, r.description, r.created_at, r.updated_at
+                SELECT r.id::text AS id, r.name AS name, r.description, r.scopes, r.created_at, r.updated_at
                 FROM authz_user_roles ur
                 JOIN authz_roles r ON r.id = ur.role_id
                 WHERE ur.user_id = $1
@@ -445,16 +513,17 @@ class PostgresService:
     # RBAC admin operations
     # ---------------------------------------------------------------------
 
-    async def create_role(self, *, name: str, description: str | None) -> dict:
+    async def create_role(self, *, name: str, description: str | None, scopes: List[str] | None = None) -> dict:
         async with self.acquire(None, None) as conn:
             row = await conn.fetchrow(
                 """
-                INSERT INTO authz_roles (id, name, description)
-                VALUES (gen_random_uuid(), $1, $2)
-                RETURNING id::text, name, description, created_at, updated_at
+                INSERT INTO authz_roles (id, name, description, scopes)
+                VALUES (gen_random_uuid(), $1, $2, $3)
+                RETURNING id::text, name, description, scopes, created_at, updated_at
                 """,
                 name,
                 description,
+                scopes or [],
             )
             return dict(row)
 
@@ -462,7 +531,7 @@ class PostgresService:
         async with self.acquire(None, None) as conn:
             rows = await conn.fetch(
                 """
-                SELECT id::text, name, description, created_at, updated_at
+                SELECT id::text, name, description, scopes, created_at, updated_at
                 FROM authz_roles
                 ORDER BY name
                 """
@@ -473,7 +542,7 @@ class PostgresService:
         async with self.acquire(None, None) as conn:
             row = await conn.fetchrow(
                 """
-                SELECT id::text, name, description, created_at, updated_at
+                SELECT id::text, name, description, scopes, created_at, updated_at
                 FROM authz_roles
                 WHERE id = $1
                 """,
@@ -497,7 +566,7 @@ class PostgresService:
             )
             return dict(row) if row else None
 
-    async def update_role(self, *, role_id: str, name: str | None, description: str | None) -> dict | None:
+    async def update_role(self, *, role_id: str, name: str | None, description: str | None, scopes: List[str] | None = None) -> dict | None:
         async with self.acquire(None, None) as conn:
             # Build dynamic update query
             updates = []
@@ -514,6 +583,11 @@ class PostgresService:
                 params.append(description)
                 param_idx += 1
 
+            if scopes is not None:
+                updates.append(f"scopes = ${param_idx}")
+                params.append(scopes)
+                param_idx += 1
+
             if not updates:
                 return await self.get_role(role_id)
 
@@ -524,7 +598,7 @@ class PostgresService:
                 UPDATE authz_roles
                 SET {', '.join(updates)}
                 WHERE id = ${param_idx}
-                RETURNING id::text, name, description, created_at, updated_at
+                RETURNING id::text, name, description, scopes, created_at, updated_at
             """
 
             row = await conn.fetchrow(query, *params)
@@ -570,7 +644,382 @@ class PostgresService:
             )
             return result != "DELETE 0"
 
+    # ---------------------------------------------------------------------
+    # Envelope Encryption - Key Encryption Keys (KEKs)
+    # ---------------------------------------------------------------------
 
+    async def create_kek(
+        self,
+        *,
+        owner_type: str,
+        owner_id: str | None,
+        encrypted_key: bytes,
+        key_algorithm: str = "AES-256-GCM",
+    ) -> dict:
+        """
+        Create a new Key Encryption Key for a role, user, or system.
+        
+        Args:
+            owner_type: 'role', 'user', or 'system'
+            owner_id: UUID of the role/user, or None for system keys
+            encrypted_key: The KEK encrypted with the system master key
+            key_algorithm: Algorithm used for encryption (default AES-256-GCM)
+            
+        Returns:
+            Dict with kek_id and metadata
+        """
+        oid = uuid.UUID(owner_id) if owner_id else None
+        
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO authz_key_encryption_keys 
+                    (owner_type, owner_id, encrypted_key, key_algorithm)
+                VALUES ($1, $2, $3, $4)
+                RETURNING kek_id::text, owner_type, owner_id::text, key_algorithm, 
+                          key_version, is_active, created_at
+                """,
+                owner_type,
+                oid,
+                encrypted_key,
+                key_algorithm,
+            )
+            return dict(row)
 
+    async def get_kek(self, kek_id: str) -> Optional[dict]:
+        """Get a KEK by ID."""
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT kek_id::text, owner_type, owner_id::text, encrypted_key, 
+                       key_algorithm, key_version, is_active, created_at, rotated_at
+                FROM authz_key_encryption_keys
+                WHERE kek_id = $1 AND is_active = true
+                """,
+                uuid.UUID(kek_id),
+            )
+            return dict(row) if row else None
 
+    async def get_kek_for_owner(
+        self, owner_type: str, owner_id: str | None
+    ) -> Optional[dict]:
+        """
+        Get the active KEK for a specific owner (role, user, or system).
+        Returns the most recent active key version.
+        """
+        oid = uuid.UUID(owner_id) if owner_id else None
+        
+        async with self.acquire(None, None) as conn:
+            if oid:
+                row = await conn.fetchrow(
+                    """
+                    SELECT kek_id::text, owner_type, owner_id::text, encrypted_key, 
+                           key_algorithm, key_version, is_active, created_at, rotated_at
+                    FROM authz_key_encryption_keys
+                    WHERE owner_type = $1 AND owner_id = $2 AND is_active = true
+                    ORDER BY key_version DESC
+                    LIMIT 1
+                    """,
+                    owner_type,
+                    oid,
+                )
+            else:
+                row = await conn.fetchrow(
+                    """
+                    SELECT kek_id::text, owner_type, owner_id::text, encrypted_key, 
+                           key_algorithm, key_version, is_active, created_at, rotated_at
+                    FROM authz_key_encryption_keys
+                    WHERE owner_type = $1 AND owner_id IS NULL AND is_active = true
+                    ORDER BY key_version DESC
+                    LIMIT 1
+                    """,
+                    owner_type,
+                )
+            return dict(row) if row else None
+
+    async def get_keks_for_roles(self, role_ids: List[str]) -> List[dict]:
+        """Get active KEKs for multiple roles."""
+        if not role_ids:
+            return []
+        
+        rids = [uuid.UUID(rid) for rid in role_ids]
+        
+        async with self.acquire(None, None) as conn:
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT ON (owner_id) 
+                    kek_id::text, owner_type, owner_id::text, encrypted_key, 
+                    key_algorithm, key_version, is_active, created_at, rotated_at
+                FROM authz_key_encryption_keys
+                WHERE owner_type = 'role' AND owner_id = ANY($1) AND is_active = true
+                ORDER BY owner_id, key_version DESC
+                """,
+                rids,
+            )
+            return [dict(row) for row in rows]
+
+    async def rotate_kek(
+        self,
+        *,
+        owner_type: str,
+        owner_id: str | None,
+        new_encrypted_key: bytes,
+    ) -> dict:
+        """
+        Rotate a KEK by creating a new version and marking old ones inactive.
+        
+        Returns the new KEK record.
+        """
+        oid = uuid.UUID(owner_id) if owner_id else None
+        
+        async with self.acquire(None, None) as conn:
+            async with conn.transaction():
+                # Get current max version
+                if oid:
+                    current = await conn.fetchval(
+                        """
+                        SELECT COALESCE(MAX(key_version), 0)
+                        FROM authz_key_encryption_keys
+                        WHERE owner_type = $1 AND owner_id = $2
+                        """,
+                        owner_type,
+                        oid,
+                    )
+                else:
+                    current = await conn.fetchval(
+                        """
+                        SELECT COALESCE(MAX(key_version), 0)
+                        FROM authz_key_encryption_keys
+                        WHERE owner_type = $1 AND owner_id IS NULL
+                        """,
+                        owner_type,
+                    )
+                
+                new_version = current + 1
+                
+                # Mark old keys as inactive
+                if oid:
+                    await conn.execute(
+                        """
+                        UPDATE authz_key_encryption_keys
+                        SET is_active = false, rotated_at = now()
+                        WHERE owner_type = $1 AND owner_id = $2 AND is_active = true
+                        """,
+                        owner_type,
+                        oid,
+                    )
+                else:
+                    await conn.execute(
+                        """
+                        UPDATE authz_key_encryption_keys
+                        SET is_active = false, rotated_at = now()
+                        WHERE owner_type = $1 AND owner_id IS NULL AND is_active = true
+                        """,
+                        owner_type,
+                    )
+                
+                # Insert new key
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO authz_key_encryption_keys 
+                        (owner_type, owner_id, encrypted_key, key_version)
+                    VALUES ($1, $2, $3, $4)
+                    RETURNING kek_id::text, owner_type, owner_id::text, key_algorithm, 
+                              key_version, is_active, created_at
+                    """,
+                    owner_type,
+                    oid,
+                    new_encrypted_key,
+                    new_version,
+                )
+                return dict(row)
+
+    # ---------------------------------------------------------------------
+    # Envelope Encryption - Wrapped Data Keys (DEKs)
+    # ---------------------------------------------------------------------
+
+    async def store_wrapped_dek(
+        self,
+        *,
+        file_id: str,
+        kek_id: str,
+        wrapped_dek: bytes,
+        dek_algorithm: str = "AES-256-GCM",
+    ) -> dict:
+        """
+        Store a wrapped (encrypted) Data Encryption Key for a file.
+        
+        A file can have multiple wrapped DEKs - one per authorized KEK (role/user).
+        """
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO authz_wrapped_data_keys (file_id, kek_id, wrapped_dek, dek_algorithm)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (file_id, kek_id) DO UPDATE
+                    SET wrapped_dek = EXCLUDED.wrapped_dek,
+                        dek_algorithm = EXCLUDED.dek_algorithm
+                RETURNING id::text, file_id::text, kek_id::text, dek_algorithm, created_at
+                """,
+                uuid.UUID(file_id),
+                uuid.UUID(kek_id),
+                wrapped_dek,
+                dek_algorithm,
+            )
+            return dict(row)
+
+    async def get_wrapped_deks_for_file(self, file_id: str) -> List[dict]:
+        """
+        Get all wrapped DEKs for a file.
+        Returns wrapped DEKs with their associated KEK info.
+        """
+        async with self.acquire(None, None) as conn:
+            rows = await conn.fetch(
+                """
+                SELECT 
+                    wdk.id::text,
+                    wdk.file_id::text,
+                    wdk.kek_id::text,
+                    wdk.wrapped_dek,
+                    wdk.dek_algorithm,
+                    wdk.created_at,
+                    kek.owner_type,
+                    kek.owner_id::text as kek_owner_id,
+                    kek.encrypted_key as kek_encrypted_key,
+                    kek.key_algorithm as kek_algorithm
+                FROM authz_wrapped_data_keys wdk
+                JOIN authz_key_encryption_keys kek ON wdk.kek_id = kek.kek_id
+                WHERE wdk.file_id = $1 AND kek.is_active = true
+                """,
+                uuid.UUID(file_id),
+            )
+            return [dict(row) for row in rows]
+
+    async def get_wrapped_dek_for_roles(
+        self, file_id: str, role_ids: List[str]
+    ) -> Optional[dict]:
+        """
+        Get a wrapped DEK that the user can unwrap based on their roles.
+        Returns the first matching wrapped DEK.
+        """
+        if not role_ids:
+            return None
+        
+        rids = [uuid.UUID(rid) for rid in role_ids]
+        
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT 
+                    wdk.id::text,
+                    wdk.file_id::text,
+                    wdk.kek_id::text,
+                    wdk.wrapped_dek,
+                    wdk.dek_algorithm,
+                    wdk.created_at,
+                    kek.owner_type,
+                    kek.owner_id::text as kek_owner_id,
+                    kek.encrypted_key as kek_encrypted_key,
+                    kek.key_algorithm as kek_algorithm
+                FROM authz_wrapped_data_keys wdk
+                JOIN authz_key_encryption_keys kek ON wdk.kek_id = kek.kek_id
+                WHERE wdk.file_id = $1 
+                    AND kek.owner_type = 'role'
+                    AND kek.owner_id = ANY($2)
+                    AND kek.is_active = true
+                LIMIT 1
+                """,
+                uuid.UUID(file_id),
+                rids,
+            )
+            return dict(row) if row else None
+
+    async def get_wrapped_dek_for_user(
+        self, file_id: str, user_id: str
+    ) -> Optional[dict]:
+        """
+        Get a wrapped DEK for a specific user (for personal files).
+        """
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT 
+                    wdk.id::text,
+                    wdk.file_id::text,
+                    wdk.kek_id::text,
+                    wdk.wrapped_dek,
+                    wdk.dek_algorithm,
+                    wdk.created_at,
+                    kek.owner_type,
+                    kek.owner_id::text as kek_owner_id,
+                    kek.encrypted_key as kek_encrypted_key,
+                    kek.key_algorithm as kek_algorithm
+                FROM authz_wrapped_data_keys wdk
+                JOIN authz_key_encryption_keys kek ON wdk.kek_id = kek.kek_id
+                WHERE wdk.file_id = $1 
+                    AND kek.owner_type = 'user'
+                    AND kek.owner_id = $2
+                    AND kek.is_active = true
+                LIMIT 1
+                """,
+                uuid.UUID(file_id),
+                uuid.UUID(user_id),
+            )
+            return dict(row) if row else None
+
+    async def delete_wrapped_deks_for_file(self, file_id: str) -> int:
+        """Delete all wrapped DEKs for a file (used when deleting a file)."""
+        async with self.acquire(None, None) as conn:
+            result = await conn.execute(
+                "DELETE FROM authz_wrapped_data_keys WHERE file_id = $1",
+                uuid.UUID(file_id),
+            )
+            # Extract count from "DELETE N"
+            return int(result.split()[-1]) if result else 0
+
+    async def add_wrapped_dek_for_role(
+        self,
+        *,
+        file_id: str,
+        role_id: str,
+        wrapped_dek: bytes,
+        dek_algorithm: str = "AES-256-GCM",
+    ) -> Optional[dict]:
+        """
+        Add a wrapped DEK for a role (used when sharing a file with a new role).
+        Gets the role's KEK and stores the wrapped DEK.
+        """
+        # Get the role's KEK
+        kek = await self.get_kek_for_owner("role", role_id)
+        if not kek:
+            logger.warning(
+                "No KEK found for role, cannot add wrapped DEK",
+                role_id=role_id,
+                file_id=file_id,
+            )
+            return None
+        
+        return await self.store_wrapped_dek(
+            file_id=file_id,
+            kek_id=kek["kek_id"],
+            wrapped_dek=wrapped_dek,
+            dek_algorithm=dek_algorithm,
+        )
+
+    async def remove_wrapped_dek_for_role(self, *, file_id: str, role_id: str) -> bool:
+        """Remove the wrapped DEK for a specific role (used when unsharing)."""
+        async with self.acquire(None, None) as conn:
+            result = await conn.execute(
+                """
+                DELETE FROM authz_wrapped_data_keys wdk
+                USING authz_key_encryption_keys kek
+                WHERE wdk.kek_id = kek.kek_id
+                    AND wdk.file_id = $1
+                    AND kek.owner_type = 'role'
+                    AND kek.owner_id = $2
+                """,
+                uuid.UUID(file_id),
+                uuid.UUID(role_id),
+            )
+            return result != "DELETE 0"
 

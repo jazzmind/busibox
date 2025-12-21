@@ -1,7 +1,13 @@
-.PHONY: menu help setup configure deploy test test-security mcp
+.PHONY: menu help setup configure deploy test test-local test-security mcp
 
 # Default target - interactive menu
 .DEFAULT_GOAL := menu
+
+# Variables for direct test commands
+# Usage: make test-local SERVICE=authz INV=test
+SERVICE ?=
+INV ?= test
+MODE ?= local
 
 # Interactive menu (default when running just 'make')
 menu:
@@ -43,10 +49,18 @@ help:
 	@echo "  setup         - Initial setup (Proxmox host + LXC containers)"
 	@echo "  configure     - Configure models, GPUs, and containers"
 	@echo "  deploy        - Deploy services with Ansible"
-	@echo "  test          - Run tests (infrastructure and services)"
+	@echo "  test          - Run tests (interactive menu)"
+	@echo "  test-local    - Run tests locally against containers"
 	@echo "  test-security - Run API security tests (fuzzing, OWASP)"
 	@echo "  mcp           - Build MCP server for Cursor AI"
 	@echo "  help          - Show this help message"
+	@echo ""
+	@echo "Local Testing (run tests on your machine against container backends):"
+	@echo "  make test-local SERVICE=authz INV=test   # Run authz tests locally"
+	@echo "  make test-local SERVICE=ingest INV=test  # Run ingest tests locally"
+	@echo "  make test-local SERVICE=search INV=test  # Run search tests locally"
+	@echo "  make test-local SERVICE=agent INV=test   # Run agent tests locally"
+	@echo "  make test-local SERVICE=all INV=test     # Run all tests locally"
 	@echo ""
 	@echo "Quick Start:"
 	@echo "  1. make setup      # On Proxmox host"
@@ -58,19 +72,31 @@ help:
 	@echo ""
 
 setup:
-	@bash scripts/setup.sh
+	@bash scripts/make/setup.sh
 
 configure:
-	@bash scripts/configure.sh
+	@bash scripts/make/configure.sh
 
 deploy:
-	@bash scripts/deploy.sh
+	@bash scripts/make/deploy.sh
 
 test:
-	@bash scripts/test.sh
+	@bash scripts/make/test.sh
+
+# Run tests locally against remote container backends
+# Usage: make test-local SERVICE=authz INV=test
+test-local:
+ifndef SERVICE
+	@echo "Error: SERVICE is required"
+	@echo "Usage: make test-local SERVICE=authz INV=test"
+	@echo ""
+	@echo "Available services: authz, ingest, search, agent, all"
+	@exit 1
+endif
+	@bash scripts/test/run-local-tests.sh $(SERVICE) $(INV)
 
 test-security:
 	@bash tests/security/run_tests.sh
 
 mcp:
-	@bash scripts/mcp.sh
+	@bash scripts/make/mcp.sh

@@ -15,18 +15,22 @@ import uuid
 from typing import List, Optional
 
 import structlog
-from fastapi import APIRouter, File, Form, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile, status
 from fastapi.responses import JSONResponse
 
-from api.middleware.jwt_auth import has_create_permission
+from api.middleware.jwt_auth import ScopeChecker
 from api.services.minio_service import MinIOService
 from api.services.postgres import PostgresService
 from api.services.redis_service import RedisService
+from api.services.encryption_client import EncryptionClient
 from shared.config import Config
 
 logger = structlog.get_logger()
 
 router = APIRouter()
+
+# Scope dependencies
+require_ingest_write = ScopeChecker("ingest.write")
 
 # Supported MIME types
 SUPPORTED_MIME_TYPES = {
@@ -49,7 +53,7 @@ def validate_mime_type(mime_type: str) -> bool:
     return mime_type in SUPPORTED_MIME_TYPES
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(require_ingest_write)])
 async def upload_file(
     request: Request,
     file: UploadFile = File(...),
@@ -150,12 +154,20 @@ async def upload_file(
     from api.main import pg_service  # Use shared PostgresService instance
     minio_service = MinIOService(config)
     redis_service = RedisService(config)
+    encryption_client = EncryptionClient(config)
     
     await redis_service.connect()
     
     try:
-        # Calculate content hash and upload to MinIO
-        storage_path = f"{user_id}/{file_id}/{file.filename}"
+        # Determine storage path based on visibility
+        # Personal files: personal/{user_id}/{file_id}/{filename}
+        # Shared files: role/{primary_role_id}/{file_id}/{filename}
+        if visibility == "shared" and parsed_role_ids:
+            # Use first role as the "owner" role for storage organization
+            primary_role_id = parsed_role_ids[0]
+            storage_path = f"role/{primary_role_id}/{file_id}/{file.filename}"
+        else:
+            storage_path = f"personal/{user_id}/{file_id}/{file.filename}"
         
         logger.info(
             "Starting file upload",
@@ -163,18 +175,52 @@ async def upload_file(
             user_id=user_id,
             filename=file.filename,
             mime_type=file.content_type,
+            visibility=visibility,
+            storage_path=storage_path,
         )
         
         # Read file content to calculate size and hash
         file_content = await file.read()
         file_size = len(file_content)
         
+        # Calculate hash BEFORE encryption (for deduplication)
+        import hashlib
+        content_hash = hashlib.sha256(file_content).hexdigest()
+        
+        # Encrypt content if envelope encryption is enabled
+        content_to_store = file_content
+        is_encrypted = False
+        
+        if encryption_client.enabled:
+            # Determine which keys to wrap the DEK with
+            encrypt_role_ids = parsed_role_ids if visibility == "shared" else None
+            encrypt_user_id = user_id if visibility == "personal" else None
+            
+            content_to_store = await encryption_client.encrypt_for_upload(
+                file_id=file_id,
+                content=file_content,
+                role_ids=encrypt_role_ids,
+                user_id=encrypt_user_id,
+            )
+            
+            # Check if encryption actually happened (content changed)
+            is_encrypted = content_to_store != file_content
+            
+            if is_encrypted:
+                logger.info(
+                    "File content encrypted for storage",
+                    file_id=file_id,
+                    original_size=len(file_content),
+                    encrypted_size=len(content_to_store),
+                )
+        
         # Reset file pointer for upload
         import io
-        file_stream = io.BytesIO(file_content)
+        file_stream = io.BytesIO(content_to_store)
         
-        # Upload file and calculate hash
-        content_hash = await minio_service.upload_file_stream(
+        # Upload encrypted (or original) content to MinIO
+        # Note: content_hash was calculated before encryption for consistency
+        await minio_service.upload_file_stream(
             file_stream,
             storage_path,
         )

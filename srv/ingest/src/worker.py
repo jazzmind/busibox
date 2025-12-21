@@ -1114,7 +1114,16 @@ class IngestWorker:
                             file_id, "markdown_generation", "upload_markdown",
                             "Uploading markdown to MinIO"
                         )
-                        markdown_path = f"{user_id}/{file_id}/content.md"
+                        # Use same path prefix as original file storage
+                        # storage_path format: {prefix}/{file_id}/{filename}
+                        # Extract prefix by removing file_id and filename parts
+                        path_parts = storage_path.rsplit("/", 2)
+                        if len(path_parts) >= 2:
+                            base_path = path_parts[0] + "/" + file_id
+                        else:
+                            # Fallback to legacy format
+                            base_path = f"{user_id}/{file_id}"
+                        markdown_path = f"{base_path}/content.md"
                         
                         # Upload markdown to MinIO
                         import io
@@ -1148,7 +1157,13 @@ class IngestWorker:
                             file_id, "markdown_generation", "upload_images",
                             f"Uploading {len(images_data)} images to MinIO"
                         )
-                        images_path = f"{user_id}/{file_id}/images"
+                        # Use same path prefix as original file storage
+                        path_parts = storage_path.rsplit("/", 2)
+                        if len(path_parts) >= 2:
+                            base_path = path_parts[0] + "/" + file_id
+                        else:
+                            base_path = f"{user_id}/{file_id}"
+                        images_path = f"{base_path}/images"
                         
                         import io
                         for i, (img_data, img_meta) in enumerate(zip(images_data, images_metadata)):

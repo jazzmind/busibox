@@ -1,7 +1,7 @@
 #!/bin/bash
 # Check Ingestion Service Status
 # Run from: Admin workstation
-# Usage: bash scripts/check-ingest-status.sh
+# Usage: bash scripts/check/check-ingest-status.sh
 
 set -e
 

@@ -1084,7 +1084,7 @@ main() {
   echo "Your Busibox infrastructure is ready!"
   echo ""
   echo "Next steps:"
-  echo "  - Verify services: bash scripts/test-infrastructure.sh"
+  echo "  - Verify services: bash scripts/test/test-infrastructure.sh"
   echo "  - Check container status: pct list"
   echo "  - Check GPU usage: bash provision/pct/diagnostic/check-gpu-usage.sh"
   echo "  - View logs: ssh <container-ip> && journalctl -u <service>"

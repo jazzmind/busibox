@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+#
+# Run Local Tests Against Remote Containers
+#
+# EXECUTION CONTEXT: Admin workstation
+# PURPOSE: Run service tests locally using container backends for rapid debugging
+#
+# USAGE:
+#   Interactive:
+#     bash scripts/tests/run-local-tests.sh
+#
+#   Direct:
+#     bash scripts/tests/run-local-tests.sh authz test
+#     bash scripts/tests/run-local-tests.sh ingest test --verbose
+#     bash scripts/tests/run-local-tests.sh search production -k test_hybrid
+#
+# This script:
+# 1. Generates a .env.local file with all secrets/IPs from vault
+# 2. Activates the service's virtual environment
+# 3. Runs pytest with the environment loaded
+#
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+
+# Source UI library
+source "${REPO_ROOT}/scripts/lib/ui.sh"
+
+# Parse arguments
+SERVICE="${1:-}"
+ENV="${2:-test}"
+shift 2 2>/dev/null || true
+PYTEST_ARGS="$*"
+
+# Interactive mode if no service provided
+if [[ -z "$SERVICE" ]]; then
+    clear
+    box "Local Test Runner" 70
+    echo ""
+    info "Run tests locally against remote container backends"
+    echo ""
+    
+    SERVICE=$(select_test_service)
+    ENV=$(select_environment)
+    
+    echo ""
+    info "Selected: $SERVICE service on $ENV environment"
+    echo ""
+fi
+
+# Validate service
+case "$SERVICE" in
+    authz|ingest|search|agent|all)
+        ;;
+    *)
+        error "Unknown service: $SERVICE"
+        echo "Valid services: authz, ingest, search, agent, all"
+        exit 1
+        ;;
+esac
+
+# Step 1: Generate environment file
+header "Step 1: Generate Environment" 70
+
+info "Extracting secrets and generating .env.local..."
+if ! bash "${SCRIPT_DIR}/generate-local-test-env.sh" "$SERVICE" "$ENV" > /dev/null; then
+    error "Failed to generate environment file"
+    exit 1
+fi
+
+if [[ "$SERVICE" == "all" ]]; then
+    ENV_FILE="${REPO_ROOT}/.env.local"
+else
+    ENV_FILE="${REPO_ROOT}/srv/${SERVICE}/.env.local"
+fi
+
+if [[ ! -f "$ENV_FILE" ]]; then
+    error "Environment file not generated: $ENV_FILE"
+    exit 1
+fi
+
+success "Environment file ready: $ENV_FILE"
+echo ""
+
+# Step 2: Set up and run tests
+header "Step 2: Run Tests" 70
+
+run_service_tests() {
+    local service="$1"
+    local service_dir="${REPO_ROOT}/srv/${service}"
+    local venv_dir=""
+    
+    if [[ ! -d "$service_dir" ]]; then
+        error "Service directory not found: $service_dir"
+        return 1
+    fi
+    
+    info "Testing: $service"
+    echo ""
+    
+    # Find virtual environment (check common names)
+    if [[ -d "${service_dir}/venv" ]]; then
+        venv_dir="${service_dir}/venv"
+    elif [[ -d "${service_dir}/.venv" ]]; then
+        venv_dir="${service_dir}/.venv"
+    elif [[ -d "${service_dir}/test_venv" ]]; then
+        venv_dir="${service_dir}/test_venv"
+    fi
+    
+    # Change to service directory
+    cd "$service_dir"
+    
+    # Load environment
+    set -a
+    source "$ENV_FILE"
+    set +a
+    
+    # Activate virtual environment if available
+    if [[ -n "$venv_dir" ]]; then
+        info "Activating virtual environment..."
+        source "${venv_dir}/bin/activate"
+        
+        # Install test dependencies if present (assumes main requirements already installed)
+        if [[ -f "requirements.test.txt" ]]; then
+            info "Installing test dependencies..."
+            pip install -q -r requirements.test.txt 2>/dev/null || true
+        fi
+    else
+        warn "No virtual environment found. Create one with: python -m venv venv && pip install -r requirements.txt"
+    fi
+    
+    # Determine test directory
+    local test_dir="tests"
+    if [[ ! -d "$test_dir" ]]; then
+        warn "No tests directory found in $service_dir"
+        return 0
+    fi
+    
+    # Use pytest from venv if activated, otherwise system pytest
+    local pytest_cmd="pytest"
+    if [[ -n "$venv_dir" ]] && [[ -f "${venv_dir}/bin/pytest" ]]; then
+        pytest_cmd="${venv_dir}/bin/pytest"
+    fi
+    
+    info "Running: $pytest_cmd $test_dir -v $PYTEST_ARGS"
+    echo ""
+    
+    # Add src to PYTHONPATH for the service
+    export PYTHONPATH="${service_dir}/src:${PYTHONPATH:-}"
+    
+    if $pytest_cmd "$test_dir" -v $PYTEST_ARGS; then
+        success "$service tests passed!"
+        return 0
+    else
+        error "$service tests failed!"
+        return 1
+    fi
+}
+
+# Run tests for selected service(s)
+FAILED_SERVICES=""
+
+if [[ "$SERVICE" == "all" ]]; then
+    for svc in authz ingest search agent; do
+        echo ""
+        separator 70
+        if ! run_service_tests "$svc"; then
+            FAILED_SERVICES="$FAILED_SERVICES $svc"
+        fi
+    done
+else
+    if ! run_service_tests "$SERVICE"; then
+        FAILED_SERVICES="$SERVICE"
+    fi
+fi
+
+# Summary
+echo ""
+header "Test Summary" 70
+
+if [[ -z "$FAILED_SERVICES" ]]; then
+    success "All tests passed!"
+else
+    error "Failed services:$FAILED_SERVICES"
+    exit 1
+fi
+
