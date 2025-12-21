@@ -189,7 +189,7 @@
     source venv/bin/activate
     export PYTHONPATH=/opt/search/src
     source /opt/search/.env
-    python -m pytest tests/test_pvt.py -v --tb=short -x 2>&1
+    python3 -m pytest tests/test_pvt.py -v --tb=short -x 2>&1
   register: search_pvt_result
   failed_when: false
   changed_when: false

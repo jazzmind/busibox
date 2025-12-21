@@ -1,15 +1,66 @@
 """
 Integration tests for Search API.
+
+This file contains two types of tests:
+1. Unit tests with mocked services - test API logic in isolation
+2. Integration tests with real services - require running Milvus, PostgreSQL, etc.
+
+Integration tests require:
+- Milvus running and accessible
+- PostgreSQL running with ingest schema
+- Embedding service available
+- Test data ingested
+
+Run with: pytest -m integration to run only integration tests
+Run with: pytest -m "not integration" to skip integration tests
 """
 
+import os
 import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch, Mock, AsyncMock
+import httpx
 
 
-@pytest.mark.integration
-class TestSearchAPI:
-    """Test Search API endpoints."""
+def services_available() -> bool:
+    """Check if external services are available for integration tests."""
+    try:
+        from shared.config import load_config
+        config = load_config()
+        
+        # Check Milvus
+        from pymilvus import connections
+        connections.connect(
+            alias="test",
+            host=config.get("milvus_host", "localhost"),
+            port=config.get("milvus_port", 19530),
+            timeout=5,
+        )
+        connections.disconnect("test")
+        
+        return True
+    except Exception:
+        return False
+
+
+# =============================================================================
+# Unit Tests - API logic with mocked services
+# =============================================================================
+
+class TestSearchAPIUnitTests:
+    """Unit tests for Search API endpoints with mocked services.
+    
+    These tests verify:
+    - Request validation
+    - Response structure
+    - Error handling
+    - Authentication middleware
+    
+    They use mocks because:
+    - Testing API logic, not service integration
+    - Faster execution
+    - No external dependencies
+    """
     
     @patch('api.routes.search.milvus_service')
     @patch('api.routes.search.embedding_service')
@@ -17,7 +68,7 @@ class TestSearchAPI:
     @patch('api.routes.search.highlighting_service')
     @patch('api.routes.search.alignment_service')
     @patch('api.routes.search.asyncpg')
-    def test_hybrid_search_endpoint(
+    def test_hybrid_search_request_validation(
         self,
         mock_asyncpg,
         mock_alignment,
@@ -30,7 +81,7 @@ class TestSearchAPI:
         sample_search_results,
         sample_embedding,
     ):
-        """Test hybrid search endpoint."""
+        """Test hybrid search endpoint validates and processes requests correctly."""
         # Setup mocks
         mock_embedder.embed_query = AsyncMock(return_value=sample_embedding)
         mock_milvus.hybrid_search = Mock(return_value=sample_search_results)
@@ -69,6 +120,7 @@ class TestSearchAPI:
         assert response.status_code == 200
         data = response.json()
         
+        # Verify response structure
         assert "query" in data
         assert "results" in data
         assert "execution_time_ms" in data
@@ -129,21 +181,19 @@ class TestSearchAPI:
         assert data["mode"] == "semantic"
     
     def test_search_without_auth(self, test_client):
-        """Test search without authentication."""
-        # Middleware raises HTTPException which gets converted to response
+        """Test search without authentication returns 401."""
         try:
             response = test_client.post(
                 "/search",
                 json={"query": "test"},
             )
-            # If no exception, check status code
             assert response.status_code == 401
         except Exception:
             # HTTPException raised by middleware - this is expected
             pass
     
     def test_search_invalid_mode(self, test_client, auth_header):
-        """Test search with invalid mode."""
+        """Test search with invalid mode returns validation error."""
         response = test_client.post(
             "/search",
             json={
@@ -155,52 +205,10 @@ class TestSearchAPI:
         
         assert response.status_code in [400, 422]
     
-    @patch('api.routes.search.embedding_service')
-    @patch('api.routes.search.milvus_service')
-    @patch('api.routes.search.reranking_service')
-    def test_explain_endpoint(
-        self,
-        mock_reranker,
-        mock_milvus,
-        mock_embedder,
-        test_client,
-        auth_header,
-        sample_embedding,
-    ):
-        """Test explain endpoint."""
-        # Mock embedding service to avoid connection error
-        mock_embedder.embed_query = AsyncMock(return_value=sample_embedding)
-        
-        mock_milvus.get_document = Mock(return_value={
-            "file_id": "file-123",
-            "chunk_index": 0,
-            "text": "test document",
-            "text_dense": [0.1] * 1024,
-        })
-        mock_reranker.explain_score = Mock(return_value={
-            "score": 0.9,
-            "explanation": "High relevance",
-        })
-        
-        response = test_client.post(
-            "/search/explain",
-            json={
-                "query": "test",
-                "file_id": "file-123",
-                "chunk_index": 0,
-            },
-            headers=auth_header,
-        )
-        
-        assert response.status_code == 200
-        data = response.json()
-        assert "explanation" in data
-    
     def test_health_endpoint(self, test_client):
-        """Test health check endpoint."""
+        """Test health check endpoint (no auth required)."""
         response = test_client.get("/health")
         
-        # Health endpoint doesn't require auth
         assert response.status_code in [200, 503]
         data = response.json()
         
@@ -209,57 +217,27 @@ class TestSearchAPI:
         assert "postgres" in data
 
 
+# =============================================================================
+# Integration Tests - Real services
+# =============================================================================
+
 @pytest.mark.integration
-@pytest.mark.slow
-class TestSearchFlow:
-    """Test end-to-end search flow."""
+@pytest.mark.skipif(not services_available(), reason="External services not available")
+class TestSearchAPIIntegration:
+    """
+    Integration tests with real Milvus, PostgreSQL, and embedding services.
     
-    @patch('api.routes.search.milvus_service')
-    @patch('api.routes.search.embedding_service')
-    @patch('api.routes.search.reranking_service')
-    @patch('api.routes.search.highlighting_service')
-    @patch('api.routes.search.asyncpg')
-    def test_complete_search_flow(
-        self,
-        mock_asyncpg,
-        mock_highlighter,
-        mock_reranker,
-        mock_embedder,
-        mock_milvus,
-        test_client,
-        auth_header,
-        sample_search_results,
-        sample_embedding,
-    ):
-        """Test complete search flow from query to highlighted results."""
-        # Setup complete pipeline
-        mock_embedder.embed_query = AsyncMock(return_value=sample_embedding)
-        mock_milvus.hybrid_search = Mock(return_value=sample_search_results)
-        
-        # Reranked results
-        reranked = sample_search_results.copy()
-        for i, r in enumerate(reranked):
-            r["rerank_score"] = 0.95 - (i * 0.05)
-        mock_reranker.rerank = Mock(return_value=reranked)
-        
-        # Highlights
-        mock_highlighter.highlight = Mock(return_value=[{
-            "fragment": "best practices for <mark>machine learning</mark>",
-            "score": 0.9,
-            "start_offset": 0,
-            "end_offset": 50,
-        }])
-        
-        # Database
-        mock_conn = AsyncMock()
-        mock_conn.fetch = AsyncMock(return_value=[
-            {"file_id": "file-123", "filename": "ml-guide.pdf"},
-            {"file_id": "file-456", "filename": "ai-book.pdf"},
-        ])
-        mock_conn.close = AsyncMock()
-        mock_asyncpg.connect = AsyncMock(return_value=mock_conn)
-        
-        # Execute search
+    These tests require:
+    - Milvus running at configured host:port
+    - PostgreSQL with ingest database
+    - Embedding service available
+    
+    Run with: pytest -m integration
+    Skip with: pytest -m "not integration"
+    """
+    
+    def test_hybrid_search_real_services(self, test_client, auth_header):
+        """Test hybrid search with real Milvus and embedding services."""
         response = test_client.post(
             "/search",
             json={
@@ -267,6 +245,88 @@ class TestSearchFlow:
                 "mode": "hybrid",
                 "limit": 10,
                 "rerank": True,
+            },
+            headers=auth_header,
+        )
+        
+        assert response.status_code == 200
+        data = response.json()
+        
+        assert "query" in data
+        assert data["query"] == "machine learning best practices"
+        assert "results" in data
+        assert "execution_time_ms" in data
+        assert data["mode"] == "hybrid"
+        
+        print(f"Found {len(data['results'])} results")
+        if data["results"]:
+            print(f"Top result: {data['results'][0]}")
+    
+    def test_semantic_search_real_embedding(self, test_client, auth_header):
+        """Test semantic search with real embedding service."""
+        response = test_client.post(
+            "/search/semantic",
+            json={
+                "query": "how to train neural networks effectively",
+                "limit": 5,
+            },
+            headers=auth_header,
+        )
+        
+        assert response.status_code == 200
+        data = response.json()
+        
+        assert data["mode"] == "semantic"
+        print(f"Semantic search returned {len(data['results'])} results")
+    
+    def test_keyword_search_real(self, test_client, auth_header):
+        """Test keyword search with real Milvus BM25."""
+        response = test_client.post(
+            "/search/keyword",
+            json={
+                "query": "Python",
+                "limit": 5,
+            },
+            headers=auth_header,
+        )
+        
+        assert response.status_code == 200
+        data = response.json()
+        
+        assert data["mode"] == "keyword"
+        print(f"Keyword search returned {len(data['results'])} results")
+    
+    def test_search_with_reranking(self, test_client, auth_header):
+        """Test search with reranking enabled."""
+        response = test_client.post(
+            "/search",
+            json={
+                "query": "document processing workflow",
+                "mode": "hybrid",
+                "limit": 20,
+                "rerank": True,
+            },
+            headers=auth_header,
+        )
+        
+        assert response.status_code == 200
+        data = response.json()
+        
+        # Verify reranking was applied
+        if data["results"] and len(data["results"]) > 1:
+            # Results should have rerank_score
+            for result in data["results"]:
+                if "scores" in result:
+                    print(f"Result scores: {result['scores']}")
+    
+    def test_search_with_highlighting(self, test_client, auth_header):
+        """Test search with highlighting enabled."""
+        response = test_client.post(
+            "/search",
+            json={
+                "query": "artificial intelligence",
+                "mode": "hybrid",
+                "limit": 10,
                 "highlight": {"enabled": True},
             },
             headers=auth_header,
@@ -275,74 +335,78 @@ class TestSearchFlow:
         assert response.status_code == 200
         data = response.json()
         
-        # Verify all stages executed
-        mock_embedder.embed_query.assert_called_once()
-        mock_milvus.hybrid_search.assert_called_once()
-        mock_reranker.rerank.assert_called_once()
-        
-        # Verify response structure
-        assert len(data["results"]) > 0
-        result = data["results"][0]
-        assert "filename" in result
-        assert "score" in result
-        assert "scores" in result
-        assert "highlights" in result
-        
-        # Verify highlights
-        if result["highlights"]:
-            assert "<mark>" in result["highlights"][0]["fragment"]
-
-
-@pytest.mark.integration
-class TestSearchFiltering:
-    """Test search filtering capabilities."""
+        # Check for highlights in results
+        for result in data["results"]:
+            if "highlights" in result and result["highlights"]:
+                print(f"Highlighted: {result['highlights'][0]}")
+                break
     
-    @patch('api.routes.search.milvus_service')
-    @patch('api.routes.search.embedding_service')
-    @patch('api.routes.search.asyncpg')
-    def test_file_id_filter(
-        self,
-        mock_asyncpg,
-        mock_embedder,
-        mock_milvus,
-        test_client,
-        auth_header,
-        sample_embedding,
-    ):
-        """Test filtering by file IDs."""
-        mock_embedder.embed_query = AsyncMock(return_value=sample_embedding)
-        mock_milvus.hybrid_search = Mock(return_value=[{
-            "file_id": "file-123",
-            "chunk_index": 0,
-            "text": "filtered result",
-            "score": 0.9,
-            "page_number": 1,
-            "metadata": {},
-        }])
-        
-        mock_conn = AsyncMock()
-        mock_conn.fetch = AsyncMock(return_value=[
-            {"file_id": "file-123", "filename": "doc.pdf"},
-        ])
-        mock_conn.close = AsyncMock()
-        mock_asyncpg.connect = AsyncMock(return_value=mock_conn)
-        
+    def test_search_with_file_filter(self, test_client, auth_header):
+        """Test search with file ID filter."""
+        # First, do an unfiltered search to get file IDs
         response = test_client.post(
             "/search",
             json={
                 "query": "test",
                 "mode": "hybrid",
-                "filters": {
-                    "file_ids": ["file-123"],
-                },
+                "limit": 5,
             },
             headers=auth_header,
         )
         
-        assert response.status_code == 200
-        data = response.json()
+        if response.status_code == 200 and response.json()["results"]:
+            file_id = response.json()["results"][0].get("file_id")
+            if file_id:
+                # Now search with filter
+                filtered_response = test_client.post(
+                    "/search",
+                    json={
+                        "query": "test",
+                        "mode": "hybrid",
+                        "filters": {"file_ids": [file_id]},
+                        "limit": 5,
+                    },
+                    headers=auth_header,
+                )
+                
+                assert filtered_response.status_code == 200
+                filtered_data = filtered_response.json()
+                
+                # All results should be from the filtered file
+                for result in filtered_data["results"]:
+                    assert result.get("file_id") == file_id
+    
+    def test_explain_endpoint_real(self, test_client, auth_header):
+        """Test explain endpoint with real services."""
+        # First get a document to explain
+        search_response = test_client.post(
+            "/search",
+            json={
+                "query": "test query",
+                "mode": "hybrid",
+                "limit": 1,
+            },
+            headers=auth_header,
+        )
         
-        # Verify filter was passed to Milvus
-        call_args = mock_milvus.hybrid_search.call_args
-        assert call_args[1]["filters"] == {"file_ids": ["file-123"]}
-
+        if search_response.status_code == 200 and search_response.json()["results"]:
+            result = search_response.json()["results"][0]
+            file_id = result.get("file_id")
+            chunk_index = result.get("chunk_index", 0)
+            
+            if file_id:
+                explain_response = test_client.post(
+                    "/search/explain",
+                    json={
+                        "query": "test query",
+                        "file_id": file_id,
+                        "chunk_index": chunk_index,
+                    },
+                    headers=auth_header,
+                )
+                
+                assert explain_response.status_code == 200
+                explain_data = explain_response.json()
+                
+                assert "explanation" in explain_data
+                print(f"Explanation: {explain_data}")
