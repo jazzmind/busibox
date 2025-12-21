@@ -3,6 +3,17 @@ Simple PDF Extraction Test - No Database Dependencies
 
 Tests basic PDF extraction on all 10 test documents without requiring
 database connections or full worker setup.
+
+The TextExtractor class only depends on:
+- pdfplumber (for PDF extraction)
+- python-docx (for DOCX extraction)
+- structlog (for logging)
+
+It does NOT use asyncpg, redis, minio, or pymilvus, so no mocking is needed.
+
+WARNING: Never use sys.modules manipulation at module level in test files!
+This corrupts the import system for ALL subsequent test collection.
+See: docs/development/session-notes/2025-12-21-ingest-test-redis-import-error.md
 """
 
 import json
@@ -10,16 +21,8 @@ import os
 import sys
 from pathlib import Path
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+import pytest
 
-# Mock dependencies that require database/network
-sys.modules['asyncpg'] = type(sys)('asyncpg')
-sys.modules['pymilvus'] = type(sys)('pymilvus')
-sys.modules['redis'] = type(sys)('redis')
-sys.modules['minio'] = type(sys)('minio')
-
-# Now import after mocks
 from processors.text_extractor import TextExtractor
 from shared.config import Config
 
