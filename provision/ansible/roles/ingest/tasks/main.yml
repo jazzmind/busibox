@@ -372,3 +372,29 @@
     mode: "0644"
   tags: [ingest, ingest_configure, ingest_tests, ingest_deploy, ingest_update_tests]
 
+# Post-Deployment Validation Tests (PVT)
+- name: Run PVT tests
+  shell: |
+    cd /srv/ingest
+    source venv/bin/activate
+    export PYTHONPATH=/srv/ingest/src
+    source /srv/ingest/.env
+    python -m pytest tests/test_pvt.py -v --tb=short -x 2>&1
+  register: ingest_pvt_result
+  failed_when: false
+  changed_when: false
+  when: run_pvt_tests | default(true)
+  tags: [ingest, pvt]
+
+- name: Display PVT test results
+  debug:
+    msg: "{{ ingest_pvt_result.stdout_lines | default([]) }}"
+  when: run_pvt_tests | default(true) and ingest_pvt_result.stdout is defined
+  tags: [ingest, pvt]
+
+- name: Fail if PVT tests failed
+  fail:
+    msg: "Post-deployment validation tests failed! Check logs above."
+  when: run_pvt_tests | default(true) and ingest_pvt_result.rc != 0
+  tags: [ingest, pvt]
+

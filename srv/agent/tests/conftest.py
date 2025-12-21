@@ -227,6 +227,30 @@ async def client(test_engine, mock_principal: Principal) -> AsyncClient:
     app.dependency_overrides.clear()
 
 
+@pytest.fixture
+async def auth_headers(mock_jwt_token: str) -> dict:
+    """Get authentication headers with a real JWT token.
+    
+    This fixture uses a real token from the authz service.
+    Will fail if authz service is unavailable.
+    """
+    return {"Authorization": f"Bearer {mock_jwt_token}"}
+
+
+@pytest.fixture
+async def async_client(test_engine) -> AsyncGenerator[AsyncClient, None]:
+    """
+    Create an async HTTP client for integration tests.
+    
+    This client talks to the actual app but requires auth_headers
+    to be passed for authenticated requests.
+    """
+    from httpx import ASGITransport
+    
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        yield client
+
+
 
 
 

@@ -212,6 +212,32 @@
   when: authz_health_check.status != 200
   tags: [authz]
 
+# Post-Deployment Validation Tests (PVT)
+- name: Run PVT tests
+  shell: |
+    cd {{ authz_app_dir }}
+    source {{ authz_venv_dir }}/bin/activate
+    export PYTHONPATH={{ authz_app_dir }}/src
+    source {{ authz_base_dir }}/.env
+    python -m pytest tests/test_pvt.py -v --tb=short -x 2>&1
+  register: authz_pvt_result
+  failed_when: false
+  changed_when: false
+  when: run_pvt_tests | default(true)
+  tags: [authz, pvt]
+
+- name: Display PVT test results
+  debug:
+    msg: "{{ authz_pvt_result.stdout_lines | default([]) }}"
+  when: run_pvt_tests | default(true) and authz_pvt_result.stdout is defined
+  tags: [authz, pvt]
+
+- name: Fail if PVT tests failed
+  fail:
+    msg: "Post-deployment validation tests failed! Check logs above."
+  when: run_pvt_tests | default(true) and authz_pvt_result.rc != 0
+  tags: [authz, pvt]
+
 
 
 

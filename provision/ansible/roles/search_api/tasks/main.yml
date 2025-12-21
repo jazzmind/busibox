@@ -182,3 +182,29 @@
   register: health_check
   until: health_check is success
 
+# Post-Deployment Validation Tests (PVT)
+- name: Run PVT tests
+  shell: |
+    cd /opt/search
+    source venv/bin/activate
+    export PYTHONPATH=/opt/search/src
+    source /opt/search/.env
+    python -m pytest tests/test_pvt.py -v --tb=short -x 2>&1
+  register: search_pvt_result
+  failed_when: false
+  changed_when: false
+  when: run_pvt_tests | default(true)
+  tags: [search, pvt]
+
+- name: Display PVT test results
+  debug:
+    msg: "{{ search_pvt_result.stdout_lines | default([]) }}"
+  when: run_pvt_tests | default(true) and search_pvt_result.stdout is defined
+  tags: [search, pvt]
+
+- name: Fail if PVT tests failed
+  fail:
+    msg: "Post-deployment validation tests failed! Check logs above."
+  when: run_pvt_tests | default(true) and search_pvt_result.rc != 0
+  tags: [search, pvt]
+
