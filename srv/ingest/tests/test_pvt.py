@@ -29,8 +29,8 @@ SERVICE_URL = f"http://localhost:{API_PORT}"
 AUTHZ_JWKS_URL = os.getenv("AUTHZ_JWKS_URL", "")
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "")
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
-MINIO_HOST = os.getenv("MINIO_HOST", "")
-MINIO_PORT = os.getenv("MINIO_PORT", "9000")
+# MINIO_ENDPOINT format: host:port
+MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "")
 
 
 def require_env(var_name: str, value: str) -> str:
@@ -126,12 +126,12 @@ class TestPVTDependencies:
     @pytest.mark.asyncio
     async def test_minio_reachable(self):
         """MinIO is reachable."""
-        host = require_env("MINIO_HOST", MINIO_HOST)
+        endpoint = require_env("MINIO_ENDPOINT", MINIO_ENDPOINT)
         
         # Just check the MinIO health endpoint
         async with httpx.AsyncClient() as client:
             resp = await client.get(
-                f"http://{host}:{MINIO_PORT}/minio/health/live",
+                f"http://{endpoint}/minio/health/live",
                 timeout=5.0,
             )
             assert resp.status_code == 200, f"MinIO health check failed: {resp.status_code}"
