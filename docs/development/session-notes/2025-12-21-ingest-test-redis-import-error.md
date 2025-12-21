@@ -120,6 +120,18 @@ Used binary search to isolate:
 4. **Binary search is effective** - combine test files systematically to isolate the culprit
 5. **Mock carefully** - replacing `sys.modules['redis']` with a bare module breaks submodule imports like `redis.asyncio`
 
+## Resolution
+
+**Fixed by commit 4cde8cd**:
+- Removed all `sys.modules` manipulation from `test_pdf_extraction_simple.py`
+- The TextExtractor doesn't use redis/asyncpg/minio/pymilvus, so no mocking was needed
+- Tests now collect and run successfully
+
+**Before fix**: 10 errors during collection, 0 tests run
+**After fix**: 153 passed, 96 failed, 19 skipped
+
+The 96 failed tests are real test failures (fixture/configuration issues), not import errors. That's progress!
+
 ## Related Issues
 
 This is similar to the previous stale file issue where `/srv/ingest/src/api/services/redis.py` was shadowing the redis package. Both involve import system corruption, but:
