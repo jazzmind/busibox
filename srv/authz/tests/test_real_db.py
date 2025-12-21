@@ -519,11 +519,11 @@ class TestKeystoreEndpoints:
             
             assert encrypt_resp.status_code == 200, f"Encryption failed: {encrypt_resp.text}"
             encrypted_data = encrypt_resp.json()
-            assert "encrypted_content_base64" in encrypted_data
-            assert "dek_id" in encrypted_data
+            assert "encrypted_content" in encrypted_data  # API uses "encrypted_content"
+            assert "wrapped_dek_count" in encrypted_data
             
             # Encrypted content should be different from original
-            encrypted_bytes = base64.b64decode(encrypted_data["encrypted_content_base64"])
+            encrypted_bytes = base64.b64decode(encrypted_data["encrypted_content"])
             assert encrypted_bytes != original_content
             
             # Now decrypt with authorized role
@@ -535,14 +535,14 @@ class TestKeystoreEndpoints:
                 },
                 json={
                     "file_id": file_id,
-                    "encrypted_content_base64": encrypted_data["encrypted_content_base64"],
+                    "encrypted_content": encrypted_data["encrypted_content"],  # Match API field name
                 },
                 timeout=30.0,
             )
             
             assert decrypt_resp.status_code == 200, f"Decryption failed: {decrypt_resp.text}"
             decrypted_data = decrypt_resp.json()
-            decrypted_bytes = base64.b64decode(decrypted_data["content_base64"])
+            decrypted_bytes = base64.b64decode(decrypted_data["content"])  # API uses "content"
             
             # Decrypted content should match original
             assert decrypted_bytes == original_content
