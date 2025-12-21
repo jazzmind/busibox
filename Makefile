@@ -86,8 +86,15 @@ setup:
 configure:
 	@bash scripts/make/configure.sh
 
+# Deploy services - interactive menu or direct command
+# Interactive: make deploy
+# Direct:      make deploy SERVICE=authz INV=test
 deploy:
+ifdef SERVICE
+	@bash scripts/make/deploy.sh $(SERVICE) $(INV)
+else
 	@bash scripts/make/deploy.sh
+endif
 
 # Run tests - interactive menu or direct command
 # Interactive: make test

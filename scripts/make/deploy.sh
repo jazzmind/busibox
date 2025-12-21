@@ -26,12 +26,8 @@ VLLM_MODE="alias"
 # Track if IP aliasing has been configured
 ALIAS_CONFIGURED=false
 
-# Display welcome
-clear
-box "Busibox Deployment" 70
-echo ""
-info "Deploy services using Ansible"
-echo ""
+# Non-interactive mode flag
+NON_INTERACTIVE=false
 
 # Check if Ansible is available
 check_ansible() {
@@ -892,6 +888,38 @@ deployment_menu() {
 
 # Main menu
 main() {
+    # Check for command-line arguments for non-interactive mode
+    if [[ $# -ge 1 ]]; then
+        # Non-interactive mode: scripts/make/deploy.sh <service> [environment]
+        NON_INTERACTIVE=true
+        local service="$1"
+        local env="${2:-test}"
+        
+        echo ""
+        echo "=============================================="
+        echo "  Busibox Deployment - Non-Interactive"
+        echo "=============================================="
+        echo ""
+        echo "Service: $service | Environment: $env"
+        echo ""
+        
+        # Check Ansible
+        if ! check_ansible; then
+            exit 1
+        fi
+        
+        # Deploy the service
+        deploy_service "$service" "$env"
+        exit $?
+    fi
+    
+    # Interactive mode (default if no arguments)
+    clear
+    box "Busibox Deployment" 70
+    echo ""
+    info "Deploy services using Ansible"
+    echo ""
+    
     # Check Ansible
     if ! check_ansible; then
         exit 1
@@ -927,8 +955,8 @@ main() {
     echo ""
 }
 
-# Run main function
-main
+# Run main function with command-line arguments
+main "$@"
 
 exit 0
 
