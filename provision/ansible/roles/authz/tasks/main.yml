@@ -28,22 +28,24 @@
     - "{{ authz_app_dir }}"
   tags: [authz]
 
-- name: Sync authz source
-  copy:
+- name: Sync authz source (removes stale files)
+  synchronize:
     src: "{{ authz_src_dir }}/src/"
     dest: "{{ authz_app_dir }}/src/"
-    owner: "{{ authz_user }}"
-    group: "{{ authz_group }}"
-    mode: "0644"
+    delete: yes
+    rsync_opts:
+      - "--exclude=__pycache__"
+      - "--exclude=*.pyc"
   register: authz_source_sync
   notify: Restart authz service
   tags: [authz]
 
-- name: Clear Python cache after code sync
+- name: Set ownership on synced source
   file:
-    path: "{{ authz_app_dir }}/src/__pycache__"
-    state: absent
-  failed_when: false
+    path: "{{ authz_app_dir }}/src"
+    owner: "{{ authz_user }}"
+    group: "{{ authz_group }}"
+    recurse: yes
   tags: [authz]
 
 - name: Restart authz service after code deployment
@@ -80,13 +82,22 @@
     mode: "0644"
   tags: [authz]
 
-- name: Copy authz tests
-  copy:
+- name: Sync authz tests (removes stale files)
+  synchronize:
     src: "{{ authz_src_dir }}/tests/"
     dest: "{{ authz_app_dir }}/tests/"
+    delete: yes
+    rsync_opts:
+      - "--exclude=__pycache__"
+      - "--exclude=*.pyc"
+  tags: [authz]
+
+- name: Set ownership on synced tests
+  file:
+    path: "{{ authz_app_dir }}/tests"
     owner: "{{ authz_user }}"
     group: "{{ authz_group }}"
-    mode: "0644"
+    recurse: yes
   tags: [authz]
 
 - name: Ensure Python venv deps are installed

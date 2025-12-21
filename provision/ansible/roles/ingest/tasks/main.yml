@@ -52,11 +52,14 @@
 # ============================================================================
 # Deploy Source Code
 # ============================================================================
-- name: Copy ingest service source code
-  copy:
+- name: Sync ingest service source code (removes stale files)
+  synchronize:
     src: "{{ playbook_dir }}/../../srv/ingest/src/"
     dest: /srv/ingest/src/
-    mode: "0644"
+    delete: yes
+    rsync_opts:
+      - "--exclude=__pycache__"
+      - "--exclude=*.pyc"
   notify:
     - Restart ingest API
     - Restart ingest worker
@@ -69,11 +72,14 @@
     mode: "0644"
   tags: [ingest, ingest_deploy]
 
-- name: Copy test suite
-  copy:
+- name: Sync test suite (removes stale files)
+  synchronize:
     src: "{{ playbook_dir }}/../../srv/ingest/tests/"
     dest: /srv/ingest/tests/
-    mode: "0644"
+    delete: yes
+    rsync_opts:
+      - "--exclude=__pycache__"
+      - "--exclude=*.pyc"
   tags: [ingest, ingest_deploy, ingest_tests, ingest_update_tests]
 
 - name: Ensure test document repository is present on controller
