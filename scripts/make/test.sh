@@ -1225,7 +1225,8 @@ run_container_tests() {
             test_env="${test_env} AUTHZ_URL=http://${authz_ip}:8010"
             test_env="${test_env} AUTHZ_JWKS_URL=http://${authz_ip}:8010/.well-known/jwks.json"
             
-            ssh "root@${search_ip}" "cd /srv/search && source venv/bin/activate && export PYTHONPATH=/srv/search/src && source .env && export ${test_env} && python -m pytest tests/ -v --tb=short" || {
+            # Search service is deployed to /opt/search on milvus container
+            ssh "root@${search_ip}" "cd /opt/search && source venv/bin/activate && export PYTHONPATH=/opt/search/src && source .env && export ${test_env} && python -m pytest tests/ -v --tb=short" || {
                 error "Search tests failed"
                 exit 1
             }
