@@ -135,14 +135,12 @@ class TestPVTAPI:
     """API tests - verify core endpoints work."""
     
     @pytest.mark.asyncio
-    async def test_openapi_schema_available(self):
-        """OpenAPI schema is accessible."""
+    async def test_agents_endpoint_requires_auth(self):
+        """Agents endpoint exists and requires authentication."""
         async with httpx.AsyncClient() as client:
-            resp = await client.get(f"{SERVICE_URL}/openapi.json", timeout=5.0)
-            assert resp.status_code == 200
-            data = resp.json()
-            assert "openapi" in data
-            assert "paths" in data
+            resp = await client.get(f"{SERVICE_URL}/agents", timeout=5.0)
+            # 401/403 = auth required (good)
+            assert resp.status_code in [401, 403], f"Agents should require auth, got {resp.status_code}"
     
     @pytest.mark.asyncio
     async def test_builtin_agents_available(self):

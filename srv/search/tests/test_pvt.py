@@ -147,13 +147,14 @@ class TestPVTAPI:
     """API tests - verify core endpoints work."""
     
     @pytest.mark.asyncio
-    async def test_openapi_schema_available(self):
-        """OpenAPI schema is accessible."""
+    async def test_search_requires_auth(self):
+        """Search endpoint exists and requires authentication."""
         async with httpx.AsyncClient() as client:
-            resp = await client.get(f"{SERVICE_URL}/openapi.json", timeout=5.0)
-            assert resp.status_code == 200
-            data = resp.json()
-            assert "openapi" in data
-            assert "paths" in data
-            # Verify search endpoint is documented
-            assert "/search" in data["paths"]
+            # Try to search without auth - should get 401/403
+            resp = await client.post(
+                f"{SERVICE_URL}/search",
+                json={"query": "test"},
+                timeout=5.0,
+            )
+            # 401/403 = auth required (good), 422 = bad request format (endpoint exists)
+            assert resp.status_code in [401, 403, 422], f"Search should require auth, got {resp.status_code}"

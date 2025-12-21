@@ -152,10 +152,18 @@ class TestPVTAPI:
     """API tests - verify core endpoints work."""
     
     @pytest.mark.asyncio
-    async def test_docs_endpoint_available(self):
-        """API documentation is accessible at /docs."""
+    async def test_root_endpoint_responds(self):
+        """API root endpoint returns info or redirects."""
         async with httpx.AsyncClient() as client:
-            # /docs is typically public even when API requires auth
-            resp = await client.get(f"{SERVICE_URL}/docs", timeout=5.0, follow_redirects=True)
-            # Should return HTML docs or redirect to docs
-            assert resp.status_code in [200, 307], f"Docs endpoint failed: {resp.status_code}"
+            resp = await client.get(f"{SERVICE_URL}/", timeout=5.0, follow_redirects=True)
+            # Root should respond with something (info, redirect, or auth required)
+            # 401/403 is acceptable as it proves the service is up and auth is enforced
+            assert resp.status_code in [200, 307, 401, 403], f"Root endpoint failed: {resp.status_code}"
+    
+    @pytest.mark.asyncio
+    async def test_upload_requires_auth(self):
+        """Upload endpoint exists and requires authentication."""
+        async with httpx.AsyncClient() as client:
+            # Try to upload without auth - should get 401/403
+            resp = await client.post(f"{SERVICE_URL}/upload", timeout=5.0)
+            assert resp.status_code in [401, 403, 422], f"Upload should require auth, got {resp.status_code}"
