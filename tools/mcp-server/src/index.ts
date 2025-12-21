@@ -8,6 +8,9 @@
  * - Script information and usage
  * - Project structure and organization rules
  * - Common maintenance tasks
+ * - SSH command execution on Proxmox host and containers
+ * - Git operations and Make targets
+ * - Container and service information
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -40,6 +43,7 @@ const PROXMOX_HOST_IP = process.env.PROXMOX_HOST_IP || '10.96.200.1';
 const PROXMOX_HOST_USER = process.env.PROXMOX_HOST_USER || 'root';
 const PROXMOX_SSH_KEY_PATH = process.env.PROXMOX_SSH_KEY_PATH || join(homedir(), '.ssh', 'id_rsa');
 const CONTAINER_SSH_KEY_PATH = process.env.CONTAINER_SSH_KEY_PATH || join(homedir(), '.ssh', 'id_rsa');
+const BUSIBOX_PATH_ON_PROXMOX = process.env.BUSIBOX_PATH_ON_PROXMOX || '/root/busibox';
 
 /**
  * Documentation categories as defined in .cursor/rules/001-documentation-organization.md
@@ -52,6 +56,7 @@ const DOC_CATEGORIES = [
   'reference',
   'guides',
   'session-notes',
+  'development',
 ] as const;
 
 /**
@@ -63,6 +68,229 @@ const SCRIPT_LOCATIONS = {
   'ansible-files': 'provision/ansible/roles/*/files',
   'ansible-templates': 'provision/ansible/roles/*/templates',
 } as const;
+
+/**
+ * Complete container configuration with all details
+ */
+interface ContainerConfig {
+  id: number;
+  testId: number;
+  name: string;
+  ip: string;
+  testIp: string;
+  purpose: string;
+  ports: { port: number; service: string }[];
+  services: string[];
+  notes?: string;
+}
+
+const CONTAINERS: ContainerConfig[] = [
+  {
+    id: 200,
+    testId: 300,
+    name: 'proxy-lxc',
+    ip: '10.96.200.200',
+    testIp: '10.96.201.200',
+    purpose: 'nginx reverse proxy',
+    ports: [
+      { port: 80, service: 'HTTP' },
+      { port: 443, service: 'HTTPS' },
+    ],
+    services: ['nginx'],
+    notes: 'Fronts apps; terminates TLS in production',
+  },
+  {
+    id: 201,
+    testId: 301,
+    name: 'apps-lxc',
+    ip: '10.96.200.201',
+    testIp: '10.96.201.201',
+    purpose: 'Next.js apps (AI Portal, Agent Client, etc.)',
+    ports: [{ port: 3000, service: 'Next.js apps (proxied via proxy-lxc)' }],
+    services: ['nginx', 'ai-portal', 'agent-client', 'doc-intel', 'foundation', 'project-analysis', 'innovation'],
+    notes: 'No direct access to ingest/search; proxies internal calls',
+  },
+  {
+    id: 202,
+    testId: 302,
+    name: 'agent-lxc',
+    ip: '10.96.200.202',
+    testIp: '10.96.201.202',
+    purpose: 'Agent API (FastAPI)',
+    ports: [{ port: 8000, service: 'Agent API' }],
+    services: ['agent-api'],
+    notes: 'Calls search + liteLLM for AI operations',
+  },
+  {
+    id: 203,
+    testId: 303,
+    name: 'pg-lxc',
+    ip: '10.96.200.203',
+    testIp: '10.96.201.203',
+    purpose: 'PostgreSQL database',
+    ports: [{ port: 5432, service: 'PostgreSQL' }],
+    services: ['postgresql'],
+    notes: 'RLS policies enforced; ingest/search/authz write here',
+  },
+  {
+    id: 204,
+    testId: 304,
+    name: 'milvus-lxc',
+    ip: '10.96.200.204',
+    testIp: '10.96.201.204',
+    purpose: 'Milvus vector DB + Search API',
+    ports: [
+      { port: 19530, service: 'Milvus' },
+      { port: 9091, service: 'Milvus health' },
+      { port: 8003, service: 'Search API' },
+    ],
+    services: ['milvus', 'search-api'],
+    notes: 'Stores document embeddings; partitioned by user/role',
+  },
+  {
+    id: 205,
+    testId: 305,
+    name: 'files-lxc',
+    ip: '10.96.200.205',
+    testIp: '10.96.201.205',
+    purpose: 'MinIO object storage (S3-compatible)',
+    ports: [
+      { port: 9000, service: 'MinIO S3 API' },
+      { port: 9001, service: 'MinIO Console' },
+    ],
+    services: ['minio'],
+    notes: 'Holds originals and derived artifacts',
+  },
+  {
+    id: 206,
+    testId: 306,
+    name: 'ingest-lxc',
+    ip: '10.96.200.206',
+    testIp: '10.96.201.206',
+    purpose: 'Ingestion API + worker + Redis',
+    ports: [
+      { port: 8000, service: 'Ingest API' },
+      { port: 6379, service: 'Redis' },
+    ],
+    services: ['ingest-api', 'ingest-worker', 'redis'],
+    notes: 'Internal-only API for upload/status/search/embeddings',
+  },
+  {
+    id: 207,
+    testId: 307,
+    name: 'litellm-lxc',
+    ip: '10.96.200.207',
+    testIp: '10.96.201.207',
+    purpose: 'LiteLLM gateway',
+    ports: [{ port: 4000, service: 'LiteLLM' }],
+    services: ['litellm'],
+    notes: 'Fronts vLLM/Ollama/remote providers; used by ingest + search',
+  },
+  {
+    id: 208,
+    testId: 308,
+    name: 'vllm-lxc',
+    ip: '10.96.200.208',
+    testIp: '10.96.201.208',
+    purpose: 'vLLM inference server (GPU)',
+    ports: [
+      { port: 8000, service: 'vLLM (chat/completions)' },
+      { port: 8001, service: 'vLLM embedding' },
+      { port: 8002, service: 'ColPali visual' },
+    ],
+    services: ['vllm', 'vllm-embedding', 'colpali'],
+    notes: 'GPU-capable local model serving; test env uses production vLLM by default',
+  },
+  {
+    id: 209,
+    testId: 309,
+    name: 'ollama-lxc',
+    ip: '10.96.200.209',
+    testIp: '10.96.201.209',
+    purpose: 'Ollama inference server',
+    ports: [{ port: 11434, service: 'Ollama' }],
+    services: ['ollama'],
+    notes: 'Local model serving option',
+  },
+  {
+    id: 210,
+    testId: 310,
+    name: 'authz-lxc',
+    ip: '10.96.200.210',
+    testIp: '10.96.201.210',
+    purpose: 'AuthZ service (OAuth2/JWT)',
+    ports: [{ port: 8010, service: 'AuthZ API' }],
+    services: ['authz'],
+    notes: 'Issues HS256 JWTs and records audit events',
+  },
+];
+
+/**
+ * Available Make targets and their descriptions
+ */
+const MAKE_TARGETS: Record<string, { description: string; category: string; requiresEnv?: boolean }> = {
+  // Basic deployment
+  'all': { description: 'Deploy all services', category: 'deployment', requiresEnv: true },
+  'ping': { description: 'Ping all hosts to verify connectivity', category: 'verification', requiresEnv: true },
+  
+  // Service deployment
+  'files': { description: 'Deploy MinIO file storage', category: 'deployment', requiresEnv: true },
+  'pg': { description: 'Deploy PostgreSQL database', category: 'deployment', requiresEnv: true },
+  'authz': { description: 'Deploy AuthZ service', category: 'deployment', requiresEnv: true },
+  'litellm': { description: 'Deploy LiteLLM gateway', category: 'deployment', requiresEnv: true },
+  'vllm': { description: 'Deploy vLLM inference server', category: 'deployment', requiresEnv: true },
+  'vllm-embedding': { description: 'Deploy vLLM embedding model', category: 'deployment', requiresEnv: true },
+  'colpali': { description: 'Deploy ColPali visual model', category: 'deployment', requiresEnv: true },
+  'milvus': { description: 'Deploy Milvus vector database', category: 'deployment', requiresEnv: true },
+  'nginx': { description: 'Deploy nginx reverse proxy', category: 'deployment', requiresEnv: true },
+  'search': { description: 'Deploy Milvus + Search API', category: 'deployment', requiresEnv: true },
+  'search-api': { description: 'Deploy Search API only', category: 'deployment', requiresEnv: true },
+  'agent': { description: 'Deploy Agent API', category: 'deployment', requiresEnv: true },
+  'ingest': { description: 'Deploy Ingest service', category: 'deployment', requiresEnv: true },
+  'ingest-api': { description: 'Deploy Ingest API only', category: 'deployment', requiresEnv: true },
+  'ingest-worker': { description: 'Deploy Ingest worker only', category: 'deployment', requiresEnv: true },
+  'apps': { description: 'Deploy all Next.js apps', category: 'deployment', requiresEnv: true },
+  
+  // App deployment
+  'deploy-apps': { description: 'Deploy all applications', category: 'app-deployment', requiresEnv: true },
+  'deploy-ai-portal': { description: 'Deploy AI Portal app', category: 'app-deployment', requiresEnv: true },
+  'deploy-agent-client': { description: 'Deploy Agent Client app', category: 'app-deployment', requiresEnv: true },
+  'deploy-doc-intel': { description: 'Deploy Doc Intel app', category: 'app-deployment', requiresEnv: true },
+  'deploy-foundation': { description: 'Deploy Foundation app', category: 'app-deployment', requiresEnv: true },
+  'deploy-project-analysis': { description: 'Deploy Project Analysis app', category: 'app-deployment', requiresEnv: true },
+  'deploy-innovation': { description: 'Deploy Innovation app', category: 'app-deployment', requiresEnv: true },
+  
+  // Verification
+  'verify': { description: 'Run all verification checks', category: 'verification', requiresEnv: true },
+  'verify-health': { description: 'Service health checks', category: 'verification', requiresEnv: true },
+  'verify-smoke': { description: 'Database smoke tests', category: 'verification', requiresEnv: true },
+  
+  // Testing
+  'test-all': { description: 'Run all service tests', category: 'testing', requiresEnv: true },
+  'test-ingest': { description: 'Run ingest service tests', category: 'testing', requiresEnv: true },
+  'test-ingest-all': { description: 'Run all ingest tests including integration', category: 'testing', requiresEnv: true },
+  'test-ingest-coverage': { description: 'Run ingest tests with coverage', category: 'testing', requiresEnv: true },
+  'test-search': { description: 'Run search service tests', category: 'testing', requiresEnv: true },
+  'test-search-unit': { description: 'Run search unit tests only', category: 'testing', requiresEnv: true },
+  'test-search-integration': { description: 'Run search integration tests', category: 'testing', requiresEnv: true },
+  'test-search-coverage': { description: 'Run search tests with coverage', category: 'testing', requiresEnv: true },
+  'test-agent': { description: 'Run agent service tests', category: 'testing', requiresEnv: true },
+  'test-agent-unit': { description: 'Run agent unit tests only', category: 'testing', requiresEnv: true },
+  'test-agent-integration': { description: 'Run agent integration tests', category: 'testing', requiresEnv: true },
+  'test-agent-coverage': { description: 'Run agent tests with coverage', category: 'testing', requiresEnv: true },
+  'test-authz': { description: 'Run authz service tests', category: 'testing', requiresEnv: true },
+  'test-apps': { description: 'Run app tests', category: 'testing', requiresEnv: true },
+  'test-security': { description: 'Run security tests', category: 'testing', requiresEnv: true },
+  'test-extraction-simple': { description: 'Test simple PDF extraction', category: 'testing', requiresEnv: true },
+  'test-extraction-llm': { description: 'Test LLM-enhanced extraction', category: 'testing', requiresEnv: true },
+  'test-extraction-marker': { description: 'Test Marker extraction (GPU)', category: 'testing', requiresEnv: true },
+  'test-extraction-colpali': { description: 'Test ColPali visual extraction', category: 'testing', requiresEnv: true },
+  
+  // Configuration
+  'configure': { description: 'Run configuration wizard', category: 'configuration' },
+  'generate-token-keys': { description: 'Generate token service keys', category: 'configuration' },
+  'bootstrap-test-creds': { description: 'Bootstrap test credentials', category: 'configuration', requiresEnv: true },
+};
 
 /**
  * Helper: Read file with error handling
@@ -198,7 +426,7 @@ async function executeSSHCommand(
   user: string,
   command: string,
   keyPath: string,
-  timeout: number = 30000
+  timeout: number = 300000
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolve, reject) => {
     const conn = new SSHClient();
@@ -267,27 +495,35 @@ async function executeSSHCommand(
 }
 
 /**
- * Get container IP address by name
+ * Get container by name or ID
  */
-function getContainerIP(containerName: string): string | null {
-  // Hardcoded container IPs from architecture
-  const containerIPs: Record<string, string> = {
-    'proxy-lxc': '10.96.200.200',
-    'apps-lxc': '10.96.200.201',
-    'agent-lxc': '10.96.200.202',
-    'pg-lxc': '10.96.200.203',
-    'milvus-lxc': '10.96.200.204',
-    'files-lxc': '10.96.200.205',
-    'ingest-lxc': '10.96.200.206',
-    'litellm-lxc': '10.96.200.207',
-    'vllm-lxc': '10.96.200.208',
-    'ollama-lxc': '10.96.200.209',
-    'authz-lxc': '10.96.200.210',
-  };
+function getContainer(nameOrId: string): ContainerConfig | null {
+  const normalized = nameOrId.toLowerCase().replace(/-lxc$/, '');
+  
+  // Try by name
+  const byName = CONTAINERS.find(c => 
+    c.name.toLowerCase() === nameOrId.toLowerCase() ||
+    c.name.toLowerCase() === `${normalized}-lxc`
+  );
+  if (byName) return byName;
+  
+  // Try by ID
+  const id = parseInt(nameOrId, 10);
+  if (!isNaN(id)) {
+    return CONTAINERS.find(c => c.id === id || c.testId === id) || null;
+  }
+  
+  // Try by partial name match
+  return CONTAINERS.find(c => c.name.toLowerCase().includes(normalized)) || null;
+}
 
-  // Handle variations like "milvus" -> "milvus-lxc"
-  const normalizedName = containerName.endsWith('-lxc') ? containerName : `${containerName}-lxc`;
-  return containerIPs[normalizedName] || containerIPs[containerName] || null;
+/**
+ * Get container IP address by name (supports both prod and test)
+ */
+function getContainerIP(containerName: string, environment: 'production' | 'test' = 'production'): string | null {
+  const container = getContainer(containerName);
+  if (!container) return null;
+  return environment === 'test' ? container.testIp : container.ip;
 }
 
 /**
@@ -296,7 +532,7 @@ function getContainerIP(containerName: string): string | null {
 const server = new Server(
   {
     name: 'busibox-mcp-server',
-    version: '1.0.0',
+    version: '2.0.0',
   },
   {
     capabilities: {
@@ -347,13 +583,25 @@ server.setRequestHandler(ListResourcesRequestSchema, async () => {
       uri: 'busibox://architecture',
       mimeType: 'text/markdown',
       name: 'System Architecture',
-      description: 'Main architecture document',
+      description: 'Main architecture documents',
     },
     {
       uri: 'busibox://quickstart',
       mimeType: 'text/markdown',
       name: 'Quick Start Guide',
       description: 'Quick reference for common tasks',
+    },
+    {
+      uri: 'busibox://containers',
+      mimeType: 'application/json',
+      name: 'Container Map',
+      description: 'Complete container IP and service mapping',
+    },
+    {
+      uri: 'busibox://make-targets',
+      mimeType: 'application/json',
+      name: 'Make Targets',
+      description: 'Available make targets and their descriptions',
     }
   );
 
@@ -477,17 +725,32 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     };
   }
 
-  // Handle architecture document
+  // Handle architecture document - now returns all architecture docs
   if (uri === 'busibox://architecture') {
-    const archPath = join(PROJECT_ROOT, 'docs', 'architecture', 'architecture.md');
-    const content = safeReadFile(archPath);
+    let content = '# Busibox Architecture\n\n';
+    const archDocs = getDocsByCategory('architecture');
+    
+    // Sort to get numbered docs first
+    archDocs.sort((a, b) => a.name.localeCompare(b.name));
+    
+    for (const doc of archDocs) {
+      // Skip archive folder
+      if (doc.path.includes('/archive/')) continue;
+      
+      const docContent = safeReadFile(join(PROJECT_ROOT, doc.path));
+      if (docContent) {
+        content += `---\n\n## ${doc.name}\n\n`;
+        content += docContent;
+        content += '\n\n';
+      }
+    }
     
     return {
       contents: [
         {
           uri,
           mimeType: 'text/markdown',
-          text: content || 'Architecture document not found',
+          text: content,
         },
       ],
     };
@@ -504,6 +767,78 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
           uri,
           mimeType: 'text/markdown',
           text: content || 'CLAUDE.md not found',
+        },
+      ],
+    };
+  }
+
+  // Handle containers map
+  if (uri === 'busibox://containers') {
+    return {
+      contents: [
+        {
+          uri,
+          mimeType: 'application/json',
+          text: JSON.stringify({
+            production: CONTAINERS.map(c => ({
+              id: c.id,
+              name: c.name,
+              ip: c.ip,
+              purpose: c.purpose,
+              ports: c.ports,
+              services: c.services,
+              notes: c.notes,
+            })),
+            test: CONTAINERS.map(c => ({
+              id: c.testId,
+              name: `TEST-${c.name}`,
+              ip: c.testIp,
+              purpose: c.purpose,
+              ports: c.ports,
+              services: c.services,
+              notes: c.notes,
+            })),
+            network: {
+              production: {
+                cidr: '10.96.200.0/21',
+                gateway: '10.96.200.1',
+                baseOctet: '10.96.200',
+              },
+              test: {
+                cidr: '10.96.201.0/21',
+                gateway: '10.96.201.1',
+                baseOctet: '10.96.201',
+              },
+            },
+          }, null, 2),
+        },
+      ],
+    };
+  }
+
+  // Handle make targets
+  if (uri === 'busibox://make-targets') {
+    const byCategory: Record<string, typeof MAKE_TARGETS> = {};
+    for (const [target, info] of Object.entries(MAKE_TARGETS)) {
+      if (!byCategory[info.category]) {
+        byCategory[info.category] = {};
+      }
+      byCategory[info.category][target] = info;
+    }
+    
+    return {
+      contents: [
+        {
+          uri,
+          mimeType: 'application/json',
+          text: JSON.stringify({
+            targets: MAKE_TARGETS,
+            byCategory,
+            usage: {
+              production: 'make <target>',
+              test: 'make <target> INV=inventory/test',
+            },
+          }, null, 2),
         },
       ],
     };
@@ -669,6 +1004,116 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ['container', 'service'],
         },
       },
+      // NEW: Git operations
+      {
+        name: 'git_pull_busibox',
+        description: 'Pull latest busibox code on Proxmox host (runs git pull in /root/busibox)',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            branch: {
+              type: 'string',
+              description: 'Branch to pull (default: current branch)',
+            },
+            reset_hard: {
+              type: 'boolean',
+              description: 'If true, runs git reset --hard origin/<branch> first (discards local changes)',
+            },
+          },
+        },
+      },
+      // NEW: Make target execution
+      {
+        name: 'run_make_target',
+        description: 'Run a make target in the Ansible directory on Proxmox host',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            target: {
+              type: 'string',
+              description: 'Make target to run (e.g., "all", "ingest", "test-ingest", "deploy-ai-portal")',
+              enum: Object.keys(MAKE_TARGETS),
+            },
+            environment: {
+              type: 'string',
+              enum: ['production', 'test'],
+              description: 'Target environment (production or test). Test uses INV=inventory/test',
+            },
+            extra_args: {
+              type: 'string',
+              description: 'Extra arguments to pass (e.g., "-e skip_model_check=true")',
+            },
+            timeout: {
+              type: 'number',
+              description: 'Command timeout in milliseconds (default: 600000 = 10 minutes)',
+            },
+          },
+          required: ['target', 'environment'],
+        },
+      },
+      // NEW: List make targets
+      {
+        name: 'list_make_targets',
+        description: 'List available make targets with descriptions, optionally filtered by category',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            category: {
+              type: 'string',
+              enum: ['deployment', 'app-deployment', 'verification', 'testing', 'configuration', 'all'],
+              description: 'Filter targets by category (default: all)',
+            },
+          },
+        },
+      },
+      // NEW: Get container info
+      {
+        name: 'get_container_info',
+        description: 'Get detailed information about a specific container by name or ID',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            container: {
+              type: 'string',
+              description: 'Container name (e.g., "milvus", "agent-lxc") or ID (e.g., "204", "304")',
+            },
+            environment: {
+              type: 'string',
+              enum: ['production', 'test'],
+              description: 'Environment to get info for (default: production)',
+            },
+          },
+          required: ['container'],
+        },
+      },
+      // NEW: Get service endpoints
+      {
+        name: 'get_service_endpoints',
+        description: 'Get IP addresses and ports for services (useful for connecting to services)',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            service: {
+              type: 'string',
+              description: 'Service name (e.g., "postgresql", "milvus", "search-api", "ingest", "litellm")',
+            },
+            environment: {
+              type: 'string',
+              enum: ['production', 'test'],
+              description: 'Environment (default: production)',
+            },
+          },
+        },
+      },
+      // NEW: Git status
+      {
+        name: 'git_status',
+        description: 'Get git status of busibox repo on Proxmox host',
+        inputSchema: {
+          type: 'object',
+          properties: {},
+        },
+      },
     ],
   };
 });
@@ -817,29 +1262,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'list_containers': {
-      const archPath = join(PROJECT_ROOT, 'docs', 'architecture', 'architecture.md');
-      const content = safeReadFile(archPath);
-      
-      // Container information matching vars.env
-      const containers = [
-        { id: 200, name: 'proxy-lxc', ip: '10.96.200.200', purpose: 'Main reverse proxy' },
-        { id: 201, name: 'apps-lxc', ip: '10.96.200.201', purpose: 'nginx and Next.js apps' },
-        { id: 202, name: 'agent-lxc', ip: '10.96.200.202', purpose: 'Agent API and liteLLM' },
-        { id: 203, name: 'pg-lxc', ip: '10.96.200.203', purpose: 'PostgreSQL database' },
-        { id: 204, name: 'milvus-lxc', ip: '10.96.200.204', purpose: 'Milvus vector database' },
-        { id: 205, name: 'files-lxc', ip: '10.96.200.205', purpose: 'MinIO for S3 storage' },
-        { id: 206, name: 'ingest-lxc', ip: '10.96.200.206', purpose: 'Worker and Redis' },
-        { id: 207, name: 'litellm-lxc', ip: '10.96.200.207', purpose: 'LiteLLM gateway' },
-        { id: 208, name: 'vllm-lxc', ip: '10.96.200.208', purpose: 'vLLM inference server' },
-        { id: 209, name: 'ollama-lxc', ip: '10.96.200.209', purpose: 'Ollama LLM server' },
-        { id: 210, name: 'authz-lxc', ip: '10.96.200.210', purpose: 'Authz server' },
-      ];
-
       return {
         content: [
           {
             type: 'text',
-            text: JSON.stringify(containers, null, 2),
+            text: JSON.stringify({
+              production: CONTAINERS.map(c => ({
+                id: c.id,
+                name: c.name,
+                ip: c.ip,
+                purpose: c.purpose,
+                ports: c.ports,
+                services: c.services,
+              })),
+              test: CONTAINERS.map(c => ({
+                id: c.testId,
+                name: `TEST-${c.name}`,
+                ip: c.testIp,
+                purpose: c.purpose,
+                ports: c.ports,
+                services: c.services,
+              })),
+            }, null, 2),
           },
         ],
       };
@@ -871,7 +1315,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'execute_proxmox_command': {
-      const { command, working_directory = '/root/busibox', timeout = 300000 } = args as {
+      const { command, working_directory = BUSIBOX_PATH_ON_PROXMOX, timeout = 300000 } = args as {
         command: string;
         working_directory?: string;
         timeout?: number;
@@ -1044,6 +1488,365 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
     }
 
+    // NEW: Git pull busibox
+    case 'git_pull_busibox': {
+      const { branch, reset_hard = false } = args as { branch?: string; reset_hard?: boolean };
+
+      try {
+        let commands = [];
+        
+        // Get current branch if not specified
+        if (reset_hard && branch) {
+          commands.push(`git fetch origin`);
+          commands.push(`git reset --hard origin/${branch}`);
+        } else if (reset_hard) {
+          commands.push(`git fetch origin`);
+          commands.push(`BRANCH=$(git rev-parse --abbrev-ref HEAD) && git reset --hard origin/$BRANCH`);
+        } else if (branch) {
+          commands.push(`git checkout ${branch}`);
+          commands.push(`git pull origin ${branch}`);
+        } else {
+          commands.push(`git pull`);
+        }
+        
+        const fullCommand = commands.join(' && ');
+        
+        const result = await executeSSHCommand(
+          PROXMOX_HOST_IP,
+          PROXMOX_HOST_USER,
+          `cd ${BUSIBOX_PATH_ON_PROXMOX} && ${fullCommand}`,
+          PROXMOX_SSH_KEY_PATH,
+          60000
+        );
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  action: reset_hard ? 'git reset --hard' : 'git pull',
+                  branch: branch || '(current)',
+                  exitCode: result.exitCode,
+                  stdout: result.stdout,
+                  stderr: result.stderr,
+                  success: result.exitCode === 0,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (error: any) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  error: error.message || 'Unknown error',
+                  action: 'git_pull_busibox',
+                },
+                null,
+                2
+              ),
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    // NEW: Run make target
+    case 'run_make_target': {
+      const { target, environment, extra_args = '', timeout = 600000 } = args as {
+        target: string;
+        environment: 'production' | 'test';
+        extra_args?: string;
+        timeout?: number;
+      };
+
+      if (!MAKE_TARGETS[target]) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  error: `Unknown make target: ${target}`,
+                  available_targets: Object.keys(MAKE_TARGETS),
+                },
+                null,
+                2
+              ),
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      try {
+        const invFlag = environment === 'test' ? 'INV=inventory/test' : '';
+        const extraFlag = extra_args ? `EXTRA_ARGS="${extra_args}"` : '';
+        const makeCommand = `make ${target} ${invFlag} ${extraFlag}`.trim();
+        
+        const result = await executeSSHCommand(
+          PROXMOX_HOST_IP,
+          PROXMOX_HOST_USER,
+          `cd ${BUSIBOX_PATH_ON_PROXMOX}/provision/ansible && ${makeCommand}`,
+          PROXMOX_SSH_KEY_PATH,
+          timeout
+        );
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  target,
+                  environment,
+                  command: makeCommand,
+                  description: MAKE_TARGETS[target].description,
+                  exitCode: result.exitCode,
+                  stdout: result.stdout,
+                  stderr: result.stderr,
+                  success: result.exitCode === 0,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (error: any) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  error: error.message || 'Unknown error',
+                  target,
+                  environment,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    // NEW: List make targets
+    case 'list_make_targets': {
+      const { category = 'all' } = args as { category?: string };
+      
+      let targets = Object.entries(MAKE_TARGETS);
+      
+      if (category !== 'all') {
+        targets = targets.filter(([_, info]) => info.category === category);
+      }
+      
+      const byCategory: Record<string, Array<{ target: string; description: string }>> = {};
+      for (const [target, info] of targets) {
+        if (!byCategory[info.category]) {
+          byCategory[info.category] = [];
+        }
+        byCategory[info.category].push({ target, description: info.description });
+      }
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              {
+                filter: category,
+                targets: byCategory,
+                usage: {
+                  production: 'make <target>',
+                  test: 'make <target> INV=inventory/test',
+                },
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+
+    // NEW: Get container info
+    case 'get_container_info': {
+      const { container, environment = 'production' } = args as {
+        container: string;
+        environment?: 'production' | 'test';
+      };
+
+      const containerConfig = getContainer(container);
+      
+      if (!containerConfig) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  error: `Container not found: ${container}`,
+                  available_containers: CONTAINERS.map(c => c.name),
+                },
+                null,
+                2
+              ),
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const isTest = environment === 'test';
+      
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              {
+                name: isTest ? `TEST-${containerConfig.name}` : containerConfig.name,
+                id: isTest ? containerConfig.testId : containerConfig.id,
+                ip: isTest ? containerConfig.testIp : containerConfig.ip,
+                purpose: containerConfig.purpose,
+                ports: containerConfig.ports,
+                services: containerConfig.services,
+                notes: containerConfig.notes,
+                ssh_command: `ssh root@${isTest ? containerConfig.testIp : containerConfig.ip}`,
+                environment,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+
+    // NEW: Get service endpoints
+    case 'get_service_endpoints': {
+      const { service, environment = 'production' } = args as {
+        service?: string;
+        environment?: 'production' | 'test';
+      };
+
+      const isTest = environment === 'test';
+      
+      // Find all containers that provide the requested service
+      let endpoints: Array<{
+        service: string;
+        container: string;
+        ip: string;
+        port: number;
+        url: string;
+      }> = [];
+
+      for (const container of CONTAINERS) {
+        const ip = isTest ? container.testIp : container.ip;
+        const containerName = isTest ? `TEST-${container.name}` : container.name;
+        
+        for (const portInfo of container.ports) {
+          if (!service || 
+              portInfo.service.toLowerCase().includes(service.toLowerCase()) ||
+              container.services.some(s => s.toLowerCase().includes(service?.toLowerCase() || ''))) {
+            endpoints.push({
+              service: portInfo.service,
+              container: containerName,
+              ip,
+              port: portInfo.port,
+              url: `http://${ip}:${portInfo.port}`,
+            });
+          }
+        }
+      }
+
+      // If looking for a specific service, try exact matches first
+      if (service) {
+        const exact = endpoints.filter(e => 
+          e.service.toLowerCase() === service.toLowerCase()
+        );
+        if (exact.length > 0) {
+          endpoints = exact;
+        }
+      }
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              {
+                environment,
+                filter: service || 'all',
+                endpoints,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+
+    // NEW: Git status
+    case 'git_status': {
+      try {
+        const result = await executeSSHCommand(
+          PROXMOX_HOST_IP,
+          PROXMOX_HOST_USER,
+          `cd ${BUSIBOX_PATH_ON_PROXMOX} && git status && echo "---" && git log -1 --oneline`,
+          PROXMOX_SSH_KEY_PATH,
+          30000
+        );
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  path: BUSIBOX_PATH_ON_PROXMOX,
+                  exitCode: result.exitCode,
+                  output: result.stdout,
+                  success: result.exitCode === 0,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (error: any) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  error: error.message || 'Unknown error',
+                  action: 'git_status',
+                },
+                null,
+                2
+              ),
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
@@ -1136,6 +1939,22 @@ server.setRequestHandler(ListPromptsRequestSchema, async () => {
           },
         ],
       },
+      {
+        name: 'update_and_deploy',
+        description: 'Guide for pulling latest code and deploying',
+        arguments: [
+          {
+            name: 'environment',
+            description: 'Target environment (test or production)',
+            required: true,
+          },
+          {
+            name: 'service',
+            description: 'Optional: specific service to deploy (default: all)',
+            required: false,
+          },
+        ],
+      },
     ],
   };
 });
@@ -1165,46 +1984,30 @@ server.setRequestHandler(GetPromptRequestSchema, async (request) => {
               type: 'text',
               text: `Here's how to deploy ${service} to ${environment}:
 
-1. **Check Prerequisites**:
-   - Ensure you're on the admin workstation
-   - Verify VPN connection to environment
-   - Have Ansible vault password ready
+1. **Pull latest code on Proxmox** (if needed):
+   Use the \`git_pull_busibox\` tool to update the code.
 
-2. **Navigate to Ansible directory**:
+2. **Run the deployment**:
+   Use the \`run_make_target\` tool with:
+   - target: "${service}"
+   - environment: "${environment}"
+
+   Or manually via \`execute_proxmox_command\`:
    \`\`\`bash
-   cd provision/ansible
+   cd /root/busibox/provision/ansible
+   make ${service} ${environment === 'test' ? 'INV=inventory/test' : ''}
    \`\`\`
 
-3. **Deploy the service**:
-   \`\`\`bash
-   # For specific service:
-   ansible-playbook -i inventory/${environment}/hosts.yml site.yml \\
-       --tags ${service} \\
-       --ask-vault-pass
+3. **Validate deployment**:
+   Use \`get_container_service_status\` to check service health.
+   Use \`get_container_logs\` to view logs if needed.
 
-   # Or use the Makefile:
-   make ${environment}
-   \`\`\`
-
-4. **Validate deployment**:
-   \`\`\`bash
-   # Run infrastructure tests:
-   bash scripts/test-infrastructure.sh
-
-   # Check specific service:
-   ssh root@<container-ip>
-   systemctl status ${service}
-   journalctl -u ${service} -n 50
-   \`\`\`
-
-5. **Verify in browser** (if applicable):
+4. **Verify in browser** (if applicable):
    - Test: https://${service}.test.busibox.internal
    - Production: https://${service}.busibox.com
 
-**Reference Documentation**:
-- Deployment guide: docs/deployment/${service}.md
-- Configuration: docs/configuration/${service}-configuration.md
-- Troubleshooting: docs/troubleshooting/deployment-fixes.md`,
+**Quick Container Reference**:
+${CONTAINERS.map(c => `- ${c.name}: ${environment === 'test' ? c.testIp : c.ip}`).join('\n')}`,
             },
           },
         ],
@@ -1229,62 +2032,32 @@ server.setRequestHandler(GetPromptRequestSchema, async (request) => {
               type: 'text',
               text: `Here's how to troubleshoot ${issue_type} issues:
 
-**Initial Steps**:
-1. Check documentation in \`docs/troubleshooting/\`
-2. Review relevant logs
-3. Verify configuration matches environment
+**Available MCP Tools**:
+- \`get_container_logs\`: Get journalctl logs from any container
+- \`get_container_service_status\`: Check systemctl status
+- \`execute_proxmox_command\`: Run any command on Proxmox
+- \`git_status\`: Check if code is up to date
 
 **For Deployment Issues**:
-\`\`\`bash
-# Check Ansible connection:
-ansible -i inventory/test/hosts.yml all -m ping
-
-# Run with verbose output:
-ansible-playbook -i inventory/test/hosts.yml site.yml -vvv
-
-# Check vault secrets:
-ansible-vault view provision/ansible/roles/secrets/vars/vault.yml
-\`\`\`
+1. Check git status: \`git_status\` tool
+2. Pull latest code: \`git_pull_busibox\` tool
+3. Run deployment: \`run_make_target\` tool
+4. Check logs: \`get_container_logs\` tool
 
 **For Container Issues**:
+Use \`execute_proxmox_command\` with:
 \`\`\`bash
-# Check container status (on Proxmox host):
 pct status <CTID>
 pct enter <CTID>
-
-# Inside container:
-systemctl status <service>
-journalctl -xe
 \`\`\`
 
 **For Service Issues**:
-\`\`\`bash
-# SSH into container:
-ssh root@<container-ip>
+1. Check status: \`get_container_service_status\` with container and service name
+2. Get logs: \`get_container_logs\` with container and service name
+3. Restart if needed: \`execute_proxmox_command\` with "ssh root@<ip> systemctl restart <service>"
 
-# Check service:
-systemctl status <service>
-journalctl -u <service> -n 100 --no-pager
-
-# Check service-specific logs:
-tail -f /var/log/<service>/<service>.log
-\`\`\`
-
-**For Network Issues**:
-\`\`\`bash
-# Check connectivity:
-ping <container-ip>
-curl -v http://<container-ip>:<port>/health
-
-# Check nginx config (on proxy-lxc or apps-lxc):
-nginx -t
-systemctl status nginx
-\`\`\`
-
-**Next Steps**:
-- Document the issue and solution in docs/troubleshooting/
-- Update relevant configuration if needed
-- Test on test environment before production`,
+**Container Reference**:
+${CONTAINERS.map(c => `- ${c.name} (${c.id}): ${c.ip} - ${c.services.join(', ')}`).join('\n')}`,
             },
           },
         ],
@@ -1331,112 +2104,16 @@ Edit \`provision/pct/create_lxc_base.sh\` to add container creation logic.
 \`\`\`bash
 cd provision/ansible
 mkdir -p roles/${service_name}/{tasks,templates,files,handlers,vars}
-
-# Create main tasks file:
-cat > roles/${service_name}/tasks/main.yml << 'EOF'
----
-- name: Install ${service_name} dependencies
-  apt:
-    name:
-      - <list dependencies>
-    state: present
-    update_cache: yes
-
-- name: Create ${service_name} user
-  user:
-    name: ${service_name}
-    system: yes
-    shell: /bin/bash
-    home: /opt/${service_name}
-
-- name: Deploy ${service_name} configuration
-  template:
-    src: config.yml.j2
-    dest: /etc/${service_name}/config.yml
-    owner: ${service_name}
-    group: ${service_name}
-    mode: '0644'
-  notify: restart ${service_name}
-
-- name: Deploy ${service_name} systemd service
-  template:
-    src: ${service_name}.service.j2
-    dest: /etc/systemd/system/${service_name}.service
-    mode: '0644'
-  notify:
-    - reload systemd
-    - restart ${service_name}
-
-- name: Enable and start ${service_name}
-  systemd:
-    name: ${service_name}
-    enabled: yes
-    state: started
-EOF
 \`\`\`
 
-**5. Update Inventory**:
+**5. Update Inventory** in both test and production.
 
-Edit \`provision/ansible/inventory/<env>/hosts.yml\`:
-\`\`\`yaml
-${service_name}:
-  hosts:
-    ${service_name}-lxc:
-      ansible_host: {{ ip_${service_name} }}
-\`\`\`
-
-Edit \`provision/ansible/inventory/<env>/group_vars/all/00-main.yml\`:
-\`\`\`yaml
-# Add IP and configuration variables
-ip_${service_name}: "10.96.200.<IP>"
-\`\`\`
-
-**6. Update Site Playbook**:
-
-Edit \`provision/ansible/site.yml\`:
-\`\`\`yaml
-- name: Configure ${service_name}
-  hosts: ${service_name}
-  become: yes
-  tags: ['${service_name}']
-  roles:
-    - role: ${service_name}
-\`\`\`
-
-**7. Create Documentation**:
-
-\`\`\`bash
-# Architecture documentation:
-docs/architecture/${service_name}-design.md
-
-# Deployment guide:
-docs/deployment/${service_name}.md
-
-# Configuration guide:
-docs/configuration/${service_name}-configuration.md
-\`\`\`
-
-**8. Deploy and Test**:
-
-\`\`\`bash
-# Create container (on Proxmox host):
-cd /root/busibox/provision/pct
-bash create_lxc_base.sh test
-
-# Deploy service (from admin workstation):
-cd provision/ansible
-ansible-playbook -i inventory/test/hosts.yml site.yml \\
-    --tags ${service_name} \\
-    --ask-vault-pass
-
-# Validate:
-bash scripts/test-infrastructure.sh
-\`\`\`
+**6. Deploy and Test**:
+Use \`run_make_target\` with environment: "test" first.
 
 **Reference Documentation**:
-- Architecture: docs/architecture/architecture.md
-- Organization rules: .cursor/rules/
-- Example services: provision/ansible/roles/`,
+- Use \`get_doc\` tool with path "architecture/01-containers.md"
+- Use \`search_docs\` to find related documentation`,
             },
           },
         ],
@@ -1472,67 +2149,17 @@ Ask yourself: "What is the primary purpose of this documentation?"
 - **API/reference** → \`docs/reference/\`
 - **How-to guides** → \`docs/guides/\`
 - **Session notes** → \`docs/session-notes/\`
+- **Development tasks** → \`docs/development/\`
 
 **2. Choose Appropriate Filename**:
 
-Use \`kebab-case\` for all documentation files:
-- Architecture: \`${topic}-design.md\` or \`${topic}-architecture.md\`
-- Deployment: \`${topic}-deployment.md\`
-- Configuration: \`${topic}-configuration.md\`
-- Troubleshooting: \`${topic}-fixes.md\` or \`troubleshooting-${topic}.md\`
-- Reference: \`${topic}-reference.md\` or \`${topic}-api.md\`
-- Session notes: \`session-YYYY-MM-DD-${topic}.md\`
+Use \`kebab-case\` for all documentation files.
 
-**3. Create Document with Proper Structure**:
+**3. Create Document with Proper Structure** including metadata header.
 
-\`\`\`markdown
-# ${topic.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}
-
-**Created**: $(date +%Y-%m-%d)
-**Last Updated**: $(date +%Y-%m-%d)
-**Status**: Draft
-**Category**: <category>
-**Related Docs**: [list related documentation paths]
-
-## Overview
-
-[Brief description of what this document covers]
-
-## [Main Content Sections]
-
-...
-
-## Related Documentation
-
-- [Link to related docs with relative paths]
-
-## References
-
-- External links or additional resources
-\`\`\`
-
-**4. Follow Content Guidelines**:
-
-- Use clear, descriptive section headings
-- Include code examples with proper syntax highlighting
-- Add diagrams or ASCII art for complex concepts
-- Cross-reference related documentation
-- Include troubleshooting tips where relevant
-
-**5. Validate and Commit**:
-
-\`\`\`bash
-# Verify the file is in the correct location
-# Check for broken links
-# Commit with descriptive message:
-git add docs/<category>/${topic}.md
-git commit -m "docs: add ${topic} documentation to <category>"
-\`\`\`
-
-**Organization Rules Reference**:
-- See \`.cursor/rules/001-documentation-organization.md\` for complete rules
-- See \`docs/ORGANIZATION_RULES_SUMMARY.md\` for quick reference
-- Examples: Look at existing docs in the target category`,
+**Available MCP Tools**:
+- \`search_docs\`: Search existing documentation
+- \`get_doc\`: Read specific documentation files`,
             },
           },
         ],
@@ -1557,74 +2184,32 @@ git commit -m "docs: add ${topic} documentation to <category>"
               type: 'text',
               text: `Here's how to run ${test_type} tests for ${service}:
 
-1. **Navigate to Ansible directory**:
-   \`\`\`bash
-   cd provision/ansible
-   \`\`\`
+**Use the \`run_make_target\` tool** with appropriate target:
 
-2. **Interactive Test Menu** (Recommended):
-   \`\`\`bash
-   make test-menu
-   \`\`\`
-   
-   This shows an interactive menu with all test options.
+**Available Test Targets**:
+- \`test-all\`: All service tests
+- \`test-ingest\`: Ingest unit tests
+- \`test-ingest-all\`: Ingest including integration
+- \`test-ingest-coverage\`: Ingest with coverage
+- \`test-search\`: Search tests
+- \`test-search-unit\`: Search unit tests
+- \`test-search-integration\`: Search integration tests
+- \`test-agent\`: Agent tests
+- \`test-agent-unit\`: Agent unit tests
+- \`test-authz\`: AuthZ tests
+- \`test-apps\`: App tests
 
-3. **Direct Test Commands**:
+**Extraction Tests**:
+- \`test-extraction-simple\`: Basic PDF extraction
+- \`test-extraction-llm\`: LLM-enhanced extraction
+- \`test-extraction-marker\`: Marker extraction (GPU)
+- \`test-extraction-colpali\`: ColPali visual extraction
 
-   ${service === 'ingest' || service === 'all' ? `
-   **Ingest Service**:
-   \`\`\`bash
-   make test-ingest              # Unit tests
-   make test-ingest-all          # All tests including integration
-   make test-ingest-coverage     # With coverage report
-   
-   # Extraction strategy tests:
-   make test-extraction-simple   # Basic PDF extraction
-   make test-extraction-llm      # LLM-enhanced extraction
-   make test-extraction-marker   # Marker extraction (GPU)
-   make test-extraction-colpali  # ColPali visual extraction
-   \`\`\`
-   ` : ''}
+**Example**: Run \`run_make_target\` with:
+- target: "test-${service}"
+- environment: "test"
 
-   ${service === 'search' || service === 'all' ? `
-   **Search Service**:
-   \`\`\`bash
-   make test-search              # All tests
-   make test-search-unit         # Unit tests only
-   make test-search-integration  # Integration tests only
-   make test-search-coverage     # With coverage report
-   \`\`\`
-   ` : ''}
-
-   ${service === 'agent' || service === 'all' ? `
-   **Agent Service**:
-   \`\`\`bash
-   make test-agent
-   \`\`\`
-   ` : ''}
-
-   ${service === 'apps' || service === 'all' ? `
-   **Applications**:
-   \`\`\`bash
-   make test-apps
-   \`\`\`
-   ` : ''}
-
-   ${service === 'all' ? `
-   **All Services**:
-   \`\`\`bash
-   make test-all
-   \`\`\`
-   ` : ''}
-
-4. **Verification**:
-   \`\`\`bash
-   make verify              # All health checks
-   make verify-health       # Service health checks
-   make verify-smoke        # Database smoke tests
-   \`\`\`
-
-For more details, see: docs/guides/testing-guide.md`,
+Or use \`list_make_targets\` with category: "testing" to see all options.`,
             },
           },
         ],
@@ -1650,60 +2235,79 @@ For more details, see: docs/guides/testing-guide.md`,
               type: 'text',
               text: `Here's how to deploy ${app_name} to ${environment}:
 
-1. **Check Prerequisites**:
-   - Ensure you're on the admin workstation
-   - Verify network connectivity to ${environment} environment
-   - Have Ansible vault password ready (if using secrets)
+**Use the \`run_make_target\` tool** with:
+- target: "deploy-${app_name}"
+- environment: "${environment}"
 
-2. **Navigate to Ansible directory**:
-   \`\`\`bash
-   cd provision/ansible
-   \`\`\`
+**Available App Deployment Targets**:
+- \`deploy-apps\`: All applications
+- \`deploy-ai-portal\`: AI Portal
+- \`deploy-agent-client\`: Agent Client
+- \`deploy-doc-intel\`: Doc Intel
+- \`deploy-foundation\`: Foundation
+- \`deploy-project-analysis\`: Project Analysis
+- \`deploy-innovation\`: Innovation
 
-3. **Deploy the application**:
-   \`\`\`bash
-   # Using new make target (recommended):
-   make deploy-${app_name} ${inv}
-   
-   # Or using ansible directly:
-   ansible-playbook -i inventory/${environment}/hosts.yml site.yml \\
-       --tags app_deployer,secrets \\
-       --extra-vars "deploy_app=${app_name}" \\
-       --ask-vault-pass
-   \`\`\`
+**Verify Deployment**:
+Use \`get_container_service_status\` with:
+- container: "apps-lxc"
+- service: "${app_name}"
 
-4. **Verify deployment**:
-   \`\`\`bash
-   # Check service status
-   ssh root@<apps-ip>
-   systemctl status ${app_name}.service
-   journalctl -u ${app_name}.service -n 50 --no-pager
-   
-   # Or use AI Portal log viewer (if deployed)
-   \`\`\`
+**Container Info**:
+- Apps container IP: ${environment === 'test' ? '10.96.201.201' : '10.96.200.201'}`,
+            },
+          },
+        ],
+      };
+    }
 
-5. **Test the application**:
-   - Visit the application URL
-   - Check health endpoint
-   - Verify functionality
+    case 'update_and_deploy': {
+      const { environment, service = 'all' } = args as { environment: string; service?: string };
+      
+      return {
+        messages: [
+          {
+            role: 'user',
+            content: {
+              type: 'text',
+              text: `How do I update and deploy ${service} to ${environment}?`,
+            },
+          },
+          {
+            role: 'assistant',
+            content: {
+              type: 'text',
+              text: `Here's the complete workflow to update and deploy to ${environment}:
 
-**Available Applications**:
-- \`ai-portal\` - AI Portal dashboard
-- \`agent-client\` - Agent management UI
-- \`doc-intel\` - Document intelligence
-- \`foundation\` - Foundation app
-- \`project-analysis\` - Project analysis
-- \`innovation\` - Innovation app
+**Step 1: Check Current Status**
+Use \`git_status\` to see current state of code on Proxmox.
 
-**Deploy All Apps**:
+**Step 2: Pull Latest Code**
+Use \`git_pull_busibox\` tool:
+- For clean pull: just call with no args
+- To discard local changes: set reset_hard: true
+
+**Step 3: Deploy**
+Use \`run_make_target\` tool:
+- target: "${service === 'all' ? 'all' : service}"
+- environment: "${environment}"
+
+**Step 4: Verify**
+Use \`run_make_target\` with:
+- target: "verify"
+- environment: "${environment}"
+
+**Quick Commands** (via \`execute_proxmox_command\`):
 \`\`\`bash
-make deploy-apps ${inv}
+# One-liner update and deploy:
+cd /root/busibox && git pull && cd provision/ansible && make ${service} ${environment === 'test' ? 'INV=inventory/test' : ''}
 \`\`\`
 
-For more details, see:
-- docs/deployment/ai-portal.md
-- docs/guides/testing-guide.md
-- ai-portal/docs/DEPLOYMENT_SYSTEM.md`,
+**Environment IPs**:
+${environment === 'test' 
+  ? CONTAINERS.map(c => `- ${c.name}: ${c.testIp}`).join('\n')
+  : CONTAINERS.map(c => `- ${c.name}: ${c.ip}`).join('\n')
+}`,
             },
           },
         ],
@@ -1721,18 +2325,10 @@ For more details, see:
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error('Busibox MCP Server running on stdio');
+  console.error('Busibox MCP Server v2.0.0 running on stdio');
 }
 
 main().catch((error) => {
   console.error('Fatal error in main():', error);
   process.exit(1);
 });
-
-
-
-
-
-
-
-

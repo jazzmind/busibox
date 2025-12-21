@@ -1,86 +1,81 @@
 # Busibox MCP Server
 
-**Created**: 2025-11-06
-**Status**: Active
+**Created**: 2025-11-06  
+**Updated**: 2025-12-21  
+**Version**: 2.0.0  
+**Status**: Active  
 **Category**: Tools
 
-A Model Context Protocol (MCP) server that provides AI coding agents and maintainers with easy access to Busibox documentation, scripts, and project structure.
+A Model Context Protocol (MCP) server that provides AI coding agents and maintainers with easy access to Busibox documentation, scripts, infrastructure operations, and project structure.
 
 ## Overview
 
-This MCP server exposes Busibox's organizational structure through a standardized protocol that AI coding assistants (like Claude, Cursor, etc.) can use to:
+This MCP server exposes Busibox's organizational structure and operations through a standardized protocol that AI coding assistants (like Claude, Cursor, etc.) can use to:
 
+- **Pull latest code** on Proxmox host
+- **Run make targets** for deployment and testing
 - **Browse documentation** by category
 - **Search documentation** by keyword
+- **Get container/service info** including IPs and ports
+- **Execute SSH commands** on Proxmox and containers
+- **View container logs** via journalctl
 - **Get script information** including purpose, usage, and execution context
-- **Find scripts** by execution context or purpose
-- **Access organization rules** and best practices
 - **Get guided assistance** for common tasks
 
 ## Features
 
-### Resources
+### Resources (10+)
 
 The server exposes the following resources:
 
 - `busibox://docs/{category}` - Browse documentation by category
-  - architecture
-  - deployment
-  - configuration
-  - troubleshooting
-  - reference
-  - guides
-  - session-notes
+  - architecture, deployment, configuration, troubleshooting, reference, guides, session-notes, development
 - `busibox://docs/all` - Complete documentation index
 - `busibox://scripts/index` - Index of all scripts by execution context
 - `busibox://rules` - Project organization rules
-- `busibox://architecture` - Main architecture document
+- `busibox://architecture` - All architecture documents combined
 - `busibox://quickstart` - Quick start guide (CLAUDE.md)
+- `busibox://containers` - Complete container map with IPs for test/production
+- `busibox://make-targets` - Available make targets with descriptions
 
-### Tools
+### Tools (15)
 
-The server provides the following tools:
+#### Git & Deployment Tools
 
-1. **search_docs** - Search documentation by keyword
-   - Parameters: `query` (required), `category` (optional)
-   - Returns: Matching files with context
+| Tool | Description |
+|------|-------------|
+| `git_pull_busibox` | Pull latest code on Proxmox host (supports branch, reset --hard) |
+| `git_status` | Check git status of busibox repo on Proxmox |
+| `run_make_target` | Run a make target with environment (test/production) |
+| `list_make_targets` | List available make targets by category |
 
-2. **get_script_info** - Get detailed script information
-   - Parameters: `script_path` (required)
-   - Returns: Purpose, context, privileges, dependencies, usage
+#### Container & Service Tools
 
-3. **find_scripts** - Find scripts by context or purpose
-   - Parameters: `context` (required), `purpose` (optional)
-   - Returns: List of matching scripts
+| Tool | Description |
+|------|-------------|
+| `list_containers` | List all containers with IPs and services |
+| `get_container_info` | Get detailed info for a specific container |
+| `get_service_endpoints` | Get IP/port for specific services |
+| `get_deployment_info` | Get environment configuration (group_vars) |
 
-4. **get_doc** - Get full content of a documentation file
-   - Parameters: `path` (required)
-   - Returns: Complete file content
+#### SSH & Log Tools
 
-5. **list_containers** - Get LXC container information
-   - Parameters: none
-   - Returns: Container IDs, IPs, and purposes
+| Tool | Description |
+|------|-------------|
+| `execute_proxmox_command` | Run any command on Proxmox host |
+| `get_container_logs` | Get journalctl logs from a container |
+| `get_container_service_status` | Get systemctl status for a service |
 
-6. **get_deployment_info** - Get deployment configuration
-   - Parameters: `environment` (required: test|production)
-   - Returns: Environment-specific configuration
+#### Documentation Tools
 
-7. **execute_proxmox_command** - Execute commands on Proxmox host
-   - Parameters: `command` (required), `working_directory` (optional), `timeout` (optional)
-   - Returns: Command output, exit code, stdout, stderr
-   - Examples: `make test`, `pct status 200`, `ansible-playbook -i inventory/test/hosts.yml site.yml --tags milvus`
+| Tool | Description |
+|------|-------------|
+| `search_docs` | Search documentation by keyword |
+| `get_doc` | Get full content of a documentation file |
+| `get_script_info` | Get info about a script (purpose, usage, context) |
+| `find_scripts` | Find scripts by execution context or purpose |
 
-8. **get_container_logs** - Get logs from containers via SSH
-   - Parameters: `container` (required), `service` (optional), `lines` (optional, default: 50)
-   - Returns: Journalctl logs from the container
-   - Examples: Get logs for `search-api` service on `milvus-lxc` container
-
-9. **get_container_service_status** - Get systemctl status for services
-   - Parameters: `container` (required), `service` (required)
-   - Returns: Systemctl status output
-   - Examples: Check status of `search-api` on `milvus-lxc`
-
-### Prompts
+### Prompts (7)
 
 Guided assistance for common tasks:
 
@@ -88,6 +83,9 @@ Guided assistance for common tasks:
 2. **troubleshoot_issue** - Guide for troubleshooting issues
 3. **add_service** - Guide for adding a new service
 4. **create_documentation** - Guide for creating documentation
+5. **run_tests** - Guide for running tests
+6. **deploy_app** - Guide for deploying applications
+7. **update_and_deploy** - Guide for pulling code and deploying
 
 ## Installation
 
@@ -95,9 +93,17 @@ Guided assistance for common tasks:
 
 - Node.js 18 or higher
 - npm or yarn
+- SSH key configured for Proxmox host access
 - Access to the Busibox project directory
 
-### Build the Server
+### Quick Setup
+
+```bash
+cd tools/mcp-server
+bash setup.sh
+```
+
+### Manual Build
 
 ```bash
 cd tools/mcp-server
@@ -109,25 +115,19 @@ npm run build
 
 #### Environment Variables
 
-The MCP server supports the following environment variables for SSH configuration:
+The MCP server supports the following environment variables:
 
-- `PROXMOX_HOST_IP` - IP address of the Proxmox host (default: `10.96.200.1`)
-- `PROXMOX_HOST_USER` - SSH user for Proxmox host (default: `root`)
-- `PROXMOX_SSH_KEY_PATH` - Path to SSH private key for Proxmox host (default: `~/.ssh/id_rsa`)
-- `CONTAINER_SSH_KEY_PATH` - Path to SSH private key for containers (default: `~/.ssh/id_rsa`)
-
-Example configuration:
-
-```bash
-export PROXMOX_HOST_IP="10.96.200.1"
-export PROXMOX_HOST_USER="root"
-export PROXMOX_SSH_KEY_PATH="/path/to/proxmox/key"
-export CONTAINER_SSH_KEY_PATH="/path/to/container/key"
-```
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PROXMOX_HOST_IP` | `10.96.200.1` | Proxmox host IP |
+| `PROXMOX_HOST_USER` | `root` | SSH user for Proxmox |
+| `PROXMOX_SSH_KEY_PATH` | `~/.ssh/id_rsa` | SSH key for Proxmox |
+| `CONTAINER_SSH_KEY_PATH` | `~/.ssh/id_rsa` | SSH key for containers |
+| `BUSIBOX_PATH_ON_PROXMOX` | `/root/busibox` | Path to busibox on Proxmox |
 
 #### For Claude Desktop
 
-Add to your Claude Desktop configuration (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
@@ -149,7 +149,7 @@ Add to your Claude Desktop configuration (`~/Library/Application Support/Claude/
 
 #### For Cursor AI
 
-Add to your Cursor MCP settings (Settings > MCP Servers):
+Add to Cursor MCP settings (Settings > MCP Servers):
 
 ```json
 {
@@ -167,76 +167,85 @@ Add to your Cursor MCP settings (Settings > MCP Servers):
 }
 ```
 
-#### For Other MCP Clients
-
-Use the stdio transport with the built server:
-
-```bash
-node /path/to/busibox/tools/mcp-server/dist/index.js
-```
-
 ## Usage Examples
 
-### In Claude or Cursor
+### Git Operations
 
-Once configured, you can interact with the server naturally:
-
-**Browse documentation:**
 ```
-Show me the architecture documentation
-```
-
-**Search for information:**
-```
-Search documentation for "GPU passthrough"
+"Pull the latest busibox code on Proxmox"
+"Check git status on Proxmox"
+"Reset busibox to origin/main on Proxmox"
 ```
 
-**Get script information:**
+### Deployments
+
 ```
-Tell me about the deploy-ai-portal.sh script
+"Deploy ingest to test"
+"Deploy ai-portal to production"
+"Run make all on test environment"
+"What make targets are available for testing?"
 ```
 
-**Find deployment scripts:**
+### Container Information
+
 ```
-Show me all admin workstation scripts for deployment
+"What's the IP for milvus in test?"
+"List all containers"
+"Get info about the agent container"
+"What services run on ingest-lxc?"
 ```
 
-**Get deployment guidance:**
+### Logs & Troubleshooting
+
 ```
-How do I deploy the agent-lxc service to test?
+"Get the last 100 lines of logs for search-api on milvus-lxc"
+"Check the status of ingest-worker on ingest-lxc"
+"Run 'systemctl restart search-api' on milvus container"
 ```
 
-**Troubleshoot issues:**
+### Documentation
+
 ```
-Help me troubleshoot a container issue
+"Show me the architecture documentation"
+"Search documentation for 'GPU passthrough'"
+"Get the ingestion architecture doc"
 ```
 
-**Execute commands on Proxmox host:**
-```
-Run "make test" on the Proxmox host
-```
+## Container Reference
 
-**Get container logs:**
-```
-Get the last 100 lines of logs for search-api service on milvus-lxc
-```
+### Production (10.96.200.x)
 
-**Check service status:**
-```
-Check the status of search-api service on milvus-lxc container
-```
+| Container | ID | IP | Key Services |
+|-----------|----|----|--------------|
+| proxy-lxc | 200 | 10.96.200.200 | nginx |
+| apps-lxc | 201 | 10.96.200.201 | ai-portal, agent-client |
+| agent-lxc | 202 | 10.96.200.202 | agent-api |
+| pg-lxc | 203 | 10.96.200.203 | postgresql |
+| milvus-lxc | 204 | 10.96.200.204 | milvus, search-api |
+| files-lxc | 205 | 10.96.200.205 | minio |
+| ingest-lxc | 206 | 10.96.200.206 | ingest-api, ingest-worker, redis |
+| litellm-lxc | 207 | 10.96.200.207 | litellm |
+| vllm-lxc | 208 | 10.96.200.208 | vllm, vllm-embedding, colpali |
+| ollama-lxc | 209 | 10.96.200.209 | ollama |
+| authz-lxc | 210 | 10.96.200.210 | authz |
 
-### Direct MCP Usage
+### Test (10.96.201.x)
 
-You can also use the MCP inspector or other MCP tools to interact with the server:
+Same containers with ID + 100 and IP in 201 subnet.
 
-```bash
-# Install MCP inspector (if not already installed)
-npm install -g @modelcontextprotocol/inspector
+## Make Targets
 
-# Run inspector
-mcp-inspector node /path/to/busibox/tools/mcp-server/dist/index.js
-```
+### Deployment
+`all`, `files`, `pg`, `milvus`, `search`, `search-api`, `agent`, `ingest`, `apps`, `nginx`, `authz`, `litellm`, `vllm`, `colpali`
+
+### App Deployment
+`deploy-apps`, `deploy-ai-portal`, `deploy-agent-client`, `deploy-doc-intel`, `deploy-foundation`, `deploy-project-analysis`, `deploy-innovation`
+
+### Testing
+`test-all`, `test-ingest`, `test-search`, `test-agent`, `test-authz`, `test-apps`, `test-extraction-simple`, `test-extraction-llm`, `test-extraction-marker`, `test-extraction-colpali`
+
+### Verification
+`verify`, `verify-health`, `verify-smoke`
 
 ## Development
 
@@ -249,7 +258,8 @@ mcp-server/
 ├── dist/                 # Compiled output (generated)
 ├── package.json
 ├── tsconfig.json
-└── README.md
+├── README.md
+└── OVERVIEW.md
 ```
 
 ### Development Workflow
@@ -268,122 +278,33 @@ npm run build
 node dist/index.js
 ```
 
-### Adding New Features
-
-1. **Add a new resource:**
-   - Update `ListResourcesRequestSchema` handler
-   - Update `ReadResourceRequestSchema` handler
-   - Document in this README
-
-2. **Add a new tool:**
-   - Update `ListToolsRequestSchema` handler
-   - Update `CallToolRequestSchema` handler
-   - Add input schema validation
-   - Document in this README
-
-3. **Add a new prompt:**
-   - Update `ListPromptsRequestSchema` handler
-   - Update `GetPromptRequestSchema` handler
-   - Document in this README
-
-## Architecture
-
-### How It Works
-
-1. **Server Initialization**: Creates an MCP server with stdio transport
-2. **Request Handlers**: Registers handlers for resource, tool, and prompt requests
-3. **File System Access**: Reads documentation and scripts from the Busibox project
-4. **Response Formatting**: Returns data in MCP-compatible format
-
-### Design Decisions
-
-- **Zero Configuration**: Server auto-discovers project root from its own location
-- **Read-Only**: Server only reads files, never writes (safe for production)
-- **Category-Based**: Follows Busibox organization rules for consistency
-- **Context-Aware**: Understands script execution contexts (workstation, host, container)
-- **Rich Metadata**: Extracts script headers and documentation metadata
-
 ## Troubleshooting
 
-### Server Won't Start
+### SSH Connection Failed
+- Verify SSH key is configured for Proxmox host
+- Check Proxmox host IP is correct (default: 10.96.200.1)
+- Ensure network connectivity to Proxmox
 
-Check that Node.js 18+ is installed:
-```bash
-node --version
-```
+### Make Target Not Found
+- Use `list_make_targets` to see available targets
+- Check spelling of target name
 
-Check that the server is built:
-```bash
-cd tools/mcp-server
-npm run build
-ls -la dist/index.js
-```
+### Container Not Found
+- Container names can be partial (e.g., "milvus" matches "milvus-lxc")
+- Use `list_containers` to see all available containers
 
-### Cannot Find Documentation
+## Version History
 
-Verify the project structure:
-```bash
-# From busibox root:
-ls -la docs/
-ls -la scripts/
-ls -la provision/pct/
-```
-
-The server expects the standard Busibox directory structure.
-
-### Resource Not Found
-
-Make sure you're using the correct resource URI format:
-- `busibox://docs/{category}` (not `busibox://docs-{category}`)
-- `busibox://scripts/index` (not `busibox://scripts`)
-
-### Tool Returns Empty Results
-
-Check the search parameters:
-- For `search_docs`: Ensure query is not empty
-- For `find_scripts`: Verify context is valid (admin-workstation, proxmox-host, container, all)
-- For `get_script_info`: Use path relative to project root
-
-## Integration with Cursor Rules
-
-This MCP server implements and enforces the Busibox organization rules:
-
-- **Documentation Organization** (`.cursor/rules/001-documentation-organization.md`)
-  - Exposes docs by category
-  - Validates paths follow kebab-case
-  - Extracts metadata from documents
-
-- **Script Organization** (`.cursor/rules/002-script-organization.md`)
-  - Categorizes scripts by execution context
-  - Extracts script header information
-  - Helps locate scripts by purpose
-
-## Contributing
-
-When making changes to the MCP server:
-
-1. Follow TypeScript best practices
-2. Add error handling for all file operations
-3. Update this README with new features
-4. Test with at least one MCP client (Claude, Cursor, or inspector)
-5. Ensure backward compatibility with existing resources/tools
+- **v2.0.0** (2025-12-21): Added git operations, make target execution, enhanced container info, service endpoints
+- **v1.0.0** (2025-11-06): Initial release with documentation and SSH commands
 
 ## Related Documentation
 
+- [OVERVIEW.md](./OVERVIEW.md) - Non-technical overview
 - [MCP Specification](https://modelcontextprotocol.io/)
-- [MCP SDK Documentation](https://github.com/modelcontextprotocol/sdk)
 - [Busibox Organization Rules](../../.cursor/rules/)
-- [Busibox Architecture](../../docs/architecture/architecture.md)
 - [CLAUDE.md](../../CLAUDE.md) - Busibox quick start guide
 
 ## License
 
 Part of the Busibox project. See project root for license information.
-
-
-
-
-
-
-
-

@@ -74,6 +74,9 @@ applications:
       BASE_URL: "https://{{ full_domain }}/portal"
       SSO_TOKEN_EXPIRY: "900"
       PORT: "3000"
+      # AuthZ Service (for downstream token exchange)
+      AUTHZ_BASE_URL: "http://{{ authz_ip }}:8010"
+      AUTHZ_CLIENT_ID: "ai-portal"
       # Log viewing - hosts for remote journalctl access
       INGEST_API_HOST: "{{ ingest_ip }}"
       MILVUS_HOST: "{{ milvus_ip }}"
