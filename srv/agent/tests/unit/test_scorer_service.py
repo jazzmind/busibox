@@ -19,11 +19,6 @@ from app.services.scorer_service import (
 )
 
 
-def _now_naive() -> datetime:
-    """Return timezone-naive UTC datetime for PostgreSQL TIMESTAMP WITHOUT TIME ZONE."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
-
-
 def test_scorer_result_structure():
     """Test ScorerResult structure."""
     run_id = uuid.uuid4()
@@ -242,8 +237,8 @@ async def test_execute_scorer_latency(test_session: AsyncSession):
     )
     test_session.add(scorer)
     
-    # Create run with timezone-naive datetimes for database compatibility
-    now = _now_naive()
+    # Create run
+    now = datetime.now(timezone.utc)
     run_record = RunRecord(
         agent_id=uuid.uuid4(),
         status="succeeded",
@@ -391,7 +386,6 @@ async def test_get_score_aggregates_with_runs(test_session: AsyncSession):
     assert aggregates["successful_runs"] == 2
     assert aggregates["success_rate"] == pytest.approx(0.667, abs=0.01)
     assert aggregates["agent_id"] == str(agent_id)
-
 
 
 
