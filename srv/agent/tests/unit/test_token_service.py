@@ -11,12 +11,19 @@ from app.schemas.auth import Principal, TokenExchangeResponse
 from app.services.token_service import EXPIRY_REFRESH_BUFFER, get_or_exchange_token
 
 
+def _now_naive() -> datetime:
+    """Return timezone-naive UTC datetime for PostgreSQL TIMESTAMP WITHOUT TIME ZONE."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 def _future(minutes: int = 5) -> datetime:
-    return datetime.now(timezone.utc) + timedelta(minutes=minutes)
+    """Return a future datetime (timezone-naive for database compatibility)."""
+    return _now_naive() + timedelta(minutes=minutes)
 
 
 def _past(minutes: int = 5) -> datetime:
-    return datetime.now(timezone.utc) - timedelta(minutes=minutes)
+    """Return a past datetime (timezone-naive for database compatibility)."""
+    return _now_naive() - timedelta(minutes=minutes)
 
 
 def _principal() -> Principal:
@@ -30,6 +37,7 @@ def _principal() -> Principal:
 
 @pytest.mark.asyncio
 async def test_returns_cached_token_when_valid(monkeypatch, test_session: AsyncSession, test_token: TokenGrant, mock_principal: Principal):
+    """Test that a valid cached token is returned without calling exchange."""
     # Mock exchange_token to ensure it's not called (should use cached token)
     async def should_not_be_called(*args, **kwargs):
         raise AssertionError("Should not exchange token when valid cached token exists")
@@ -49,6 +57,7 @@ async def test_returns_cached_token_when_valid(monkeypatch, test_session: AsyncS
 
 @pytest.mark.asyncio
 async def test_exchanges_when_expired(monkeypatch, test_session: AsyncSession):
+    """Test that an expired token triggers a new exchange."""
     principal = _principal()
     expired = TokenGrant(
         subject=principal.sub,
@@ -85,12 +94,15 @@ async def test_exchanges_when_expired(monkeypatch, test_session: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_refreshes_token_near_expiry(monkeypatch, test_session: AsyncSession):
+    """Test that a token near expiry triggers a refresh."""
     principal = _principal()
+    # Near expiry: buffer is typically 60 seconds, so divide by 2 to be within buffer
+    near_expiry_time = _now_naive() + EXPIRY_REFRESH_BUFFER / 2
     near_expiry = TokenGrant(
         subject=principal.sub,
         scopes=["aud:ingest-api", "ingest.write", "search.read"],
         token="almost-expired",
-        expires_at=datetime.now(timezone.utc) + EXPIRY_REFRESH_BUFFER / 2,
+        expires_at=near_expiry_time,
     )
     test_session.add(near_expiry)
     await test_session.commit()
@@ -117,6 +129,3 @@ async def test_refreshes_token_near_expiry(monkeypatch, test_session: AsyncSessi
         select(TokenGrant).where(TokenGrant.token == "refreshed-token")
     )
     assert result.scalars().first() is not None
-
-
-
