@@ -215,11 +215,14 @@
 # Post-Deployment Validation Tests (PVT)
 - name: Run PVT tests
   shell: |
-    cd {{ authz_app_dir }}
-    source {{ authz_venv_dir }}/bin/activate
+    set -a
+    . {{ authz_base_dir }}/.env
+    set +a
     export PYTHONPATH={{ authz_app_dir }}/src
-    source {{ authz_base_dir }}/.env
-    python3 -m pytest tests/test_pvt.py -v --tb=short -x 2>&1
+    cd {{ authz_app_dir }}
+    {{ authz_venv_dir }}/bin/python -m pytest tests/test_pvt.py -v --tb=short -x 2>&1
+  args:
+    executable: /bin/bash
   register: authz_pvt_result
   failed_when: false
   changed_when: false

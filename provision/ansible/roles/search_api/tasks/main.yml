@@ -185,11 +185,14 @@
 # Post-Deployment Validation Tests (PVT)
 - name: Run PVT tests
   shell: |
-    cd /opt/search
-    source venv/bin/activate
+    set -a
+    . /opt/search/.env
+    set +a
     export PYTHONPATH=/opt/search/src
-    source /opt/search/.env
-    python3 -m pytest tests/test_pvt.py -v --tb=short -x 2>&1
+    cd /opt/search
+    venv/bin/python -m pytest tests/test_pvt.py -v --tb=short -x 2>&1
+  args:
+    executable: /bin/bash
   register: search_pvt_result
   failed_when: false
   changed_when: false

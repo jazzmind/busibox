@@ -209,10 +209,13 @@
 # Post-Deployment Validation Tests (PVT)
 - name: Run PVT tests
   shell: |
+    set -a
+    . /srv/agent/.env
+    set +a
     cd /srv/agent
-    source .venv/bin/activate
-    source /srv/agent/.env
-    python3 -m pytest tests/test_pvt.py -v --tb=short -x 2>&1
+    .venv/bin/python -m pytest tests/test_pvt.py -v --tb=short -x 2>&1
+  args:
+    executable: /bin/bash
   register: agent_pvt_result
   failed_when: false
   changed_when: false
