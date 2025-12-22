@@ -19,6 +19,11 @@ from app.services.scorer_service import (
 )
 
 
+def _now_naive() -> datetime:
+    """Return timezone-naive UTC datetime for PostgreSQL TIMESTAMP WITHOUT TIME ZONE."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 def test_scorer_result_structure():
     """Test ScorerResult structure."""
     run_id = uuid.uuid4()
