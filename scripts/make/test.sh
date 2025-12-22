@@ -1245,13 +1245,15 @@ run_container_tests() {
             header "Search Service Tests" 70
             info "Running search tests on ${search_ip}..."
             
+            # Search uses "files" database (always), not busibox_test
             local test_env="POSTGRES_HOST=${postgres_ip}"
             test_env="${test_env} POSTGRES_USER=${db_user}"
             test_env="${test_env} POSTGRES_PASSWORD=${db_password}"
-            test_env="${test_env} POSTGRES_DB=${db_name}"
+            test_env="${test_env} POSTGRES_DB=files"
             test_env="${test_env} MILVUS_HOST=${milvus_ip}"
             test_env="${test_env} AUTHZ_URL=http://${authz_ip}:8010"
             test_env="${test_env} AUTHZ_JWKS_URL=http://${authz_ip}:8010/.well-known/jwks.json"
+            test_env="${test_env} AUTHZ_ADMIN_TOKEN=${AUTHZ_ADMIN_TOKEN}"
             test_env="${test_env} AUTHZ_BOOTSTRAP_CLIENT_ID=ai-portal"
             test_env="${test_env} AUTHZ_BOOTSTRAP_CLIENT_SECRET=${JWT_SECRET}"
             test_env="${test_env} TEST_USER_ID=93e9baa1-5a96-4c9e-ae72-a3b077abac92"
