@@ -21,7 +21,8 @@ import pytest
 import httpx
 
 # Read from environment (set by .env file)
-SERVICE_PORT = os.getenv("PORT", "8080")
+# Agent API runs on port 8000 by default
+SERVICE_PORT = os.getenv("PORT", "8000")
 SERVICE_URL = f"http://localhost:{SERVICE_PORT}"
 
 # AuthZ configuration - REQUIRED for token exchange
