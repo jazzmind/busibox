@@ -236,10 +236,11 @@ class AuthTestClient:
             role_id = self.create_role(role_name)
         
         with httpx.Client() as client:
+            # Use POST /admin/user-roles with user_id and role_id in body
             resp = client.post(
-                f"{self.authz_url}/admin/users/{self.test_user_id}/roles",
+                f"{self.authz_url}/admin/user-roles",
                 headers=self._admin_headers(),
-                json={"role_id": role_id},
+                json={"user_id": self.test_user_id, "role_id": role_id},
                 timeout=10.0,
             )
             
@@ -264,9 +265,12 @@ class AuthTestClient:
             return  # Role doesn't exist, nothing to remove
         
         with httpx.Client() as client:
-            resp = client.delete(
-                f"{self.authz_url}/admin/users/{self.test_user_id}/roles/{role_id}",
+            # Use DELETE /admin/user-roles with user_id and role_id in body
+            resp = client.request(
+                "DELETE",
+                f"{self.authz_url}/admin/user-roles",
                 headers=self._admin_headers(),
+                json={"user_id": self.test_user_id, "role_id": role_id},
                 timeout=10.0,
             )
             
