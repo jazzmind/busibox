@@ -346,13 +346,27 @@ def get_rls_session_vars(request) -> dict:
     Returns dict suitable for SET statements:
     {
         "app.user_id": "user-uuid",
-        "app.user_role_ids": '["role-uuid-1", "role-uuid-2"]'
+        "app.user_role_ids_read": "role-uuid-1,role-uuid-2",  # CSV for SELECT
+        "app.user_role_ids_create": "role-uuid-1,role-uuid-2",  # CSV for INSERT
+        "app.user_role_ids_update": "role-uuid-1,role-uuid-2",  # CSV for UPDATE
+        "app.user_role_ids_delete": "role-uuid-1,role-uuid-2",  # CSV for DELETE
     }
+    
+    Note: Role IDs are formatted as CSV (not JSON) to work with PostgreSQL's
+    string_to_array function in RLS policies.
     """
     role_ids = getattr(request.state, "role_ids", [])
+    # Convert role_ids list to CSV string (RLS policies use string_to_array)
+    role_ids_csv = ",".join(role_ids) if role_ids else ""
+    
     return {
         "app.user_id": getattr(request.state, "user_id", ""),
-        "app.user_role_ids": json.dumps(role_ids),
+        # For now, all CRUD operations get the same roles
+        # In the future, this could be refined based on role-specific permissions
+        "app.user_role_ids_read": role_ids_csv,
+        "app.user_role_ids_create": role_ids_csv,
+        "app.user_role_ids_update": role_ids_csv,
+        "app.user_role_ids_delete": role_ids_csv,
     }
 
 
