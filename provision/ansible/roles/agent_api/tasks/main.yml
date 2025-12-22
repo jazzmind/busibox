@@ -59,6 +59,15 @@
       - "--exclude=.coverage"
   notify: Restart agent-api
 
+- name: Copy shared testing library
+  synchronize:
+    src: "{{ playbook_dir }}/../../srv/shared/"
+    dest: "{{ agent_api_src_path }}/shared/"
+    delete: yes
+    rsync_opts:
+      - "--exclude=__pycache__"
+      - "--exclude=*.pyc"
+
 - name: Fix ownership of agent directory
   file:
     path: /srv/agent

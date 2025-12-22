@@ -20,7 +20,15 @@ from typing import Dict, List
 from unittest.mock import Mock, AsyncMock
 
 # Add shared testing library to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "shared"))
+# When deployed: /opt/search/shared/testing/
+# When local: ../../shared/testing/
+_shared_paths = [
+    os.path.join(os.path.dirname(__file__), "..", "shared"),  # Deployed: /opt/search/shared
+    os.path.join(os.path.dirname(__file__), "..", "..", "shared"),  # Local: srv/shared
+]
+for _path in _shared_paths:
+    if os.path.exists(_path) and _path not in sys.path:
+        sys.path.insert(0, _path)
 
 from testing.auth import AuthTestClient, auth_client, clean_test_user
 from testing.fixtures import require_env, get_authz_base_url

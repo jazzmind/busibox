@@ -93,6 +93,16 @@
       - "--exclude=*.pyc"
   tags: [ingest, ingest_deploy, ingest_tests, ingest_update_tests]
 
+- name: Copy shared testing library
+  synchronize:
+    src: "{{ playbook_dir }}/../../srv/shared/"
+    dest: /srv/ingest/shared/
+    delete: yes
+    rsync_opts:
+      - "--exclude=__pycache__"
+      - "--exclude=*.pyc"
+  tags: [ingest, ingest_deploy, ingest_tests]
+
 - name: Ensure test document repository is present on controller
   git:
     repo: "{{ test_docs_repo_url }}"

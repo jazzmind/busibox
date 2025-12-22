@@ -19,9 +19,7 @@ import os
 import pytest
 from fastapi.testclient import TestClient
 
-# Import shared testing utilities
-import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "shared"))
+# Import shared testing utilities (path setup done in conftest.py)
 from testing.auth import AuthTestClient
 
 

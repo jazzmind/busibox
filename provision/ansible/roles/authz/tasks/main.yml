@@ -109,6 +109,16 @@
       - "--exclude=*.pyc"
   tags: [authz]
 
+- name: Copy shared testing library
+  synchronize:
+    src: "{{ playbook_dir }}/../../srv/shared/"
+    dest: "{{ authz_app_dir }}/shared/"
+    delete: yes
+    rsync_opts:
+      - "--exclude=__pycache__"
+      - "--exclude=*.pyc"
+  tags: [authz]
+
 - name: Set ownership on synced tests
   file:
     path: "{{ authz_app_dir }}/tests"
