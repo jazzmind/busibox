@@ -2,51 +2,40 @@
 Pytest configuration and fixtures for search API tests.
 
 ALL tests use real tokens from authz service - NO MOCKS.
-This ensures tests validate actual authentication behavior.
+This ensures tests validate actual authentication and authorization behavior.
 
 Required environment variables:
 - AUTHZ_JWKS_URL: URL to authz JWKS endpoint
+- AUTHZ_ADMIN_TOKEN: Admin token for role/scope management
 - AUTHZ_BOOTSTRAP_CLIENT_ID: OAuth client ID (default: ai-portal)
 - AUTHZ_BOOTSTRAP_CLIENT_SECRET: OAuth client secret
-- TEST_USER_ID: UUID of test user with roles assigned
+- TEST_USER_ID: UUID of test user (should have NO roles by default)
 """
 
 import os
+import sys
 import pytest
 import asyncio
 from typing import Dict, List
 from unittest.mock import Mock, AsyncMock
 
-import httpx
+# Add shared testing library to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "shared"))
+
+from testing.auth import AuthTestClient, auth_client, clean_test_user
+from testing.fixtures import require_env, get_authz_base_url
 
 
 # =============================================================================
-# Environment variables for auth
+# Re-export shared fixtures
 # =============================================================================
 
-AUTHZ_JWKS_URL = os.getenv("AUTHZ_JWKS_URL", "")
-AUTHZ_BOOTSTRAP_CLIENT_ID = os.getenv("AUTHZ_BOOTSTRAP_CLIENT_ID", "ai-portal")
-AUTHZ_BOOTSTRAP_CLIENT_SECRET = os.getenv("AUTHZ_BOOTSTRAP_CLIENT_SECRET", "")
-TEST_USER_ID = os.getenv("TEST_USER_ID", "")
-
-
-def require_env(name: str) -> str:
-    """Require an environment variable, fail if not set."""
-    value = os.getenv(name, "")
-    if not value:
-        pytest.fail(f"Required environment variable {name} is not set. Check .env file.")
-    return value
-
-
-def get_authz_base_url() -> str:
-    """Extract AuthZ base URL from JWKS URL."""
-    if not AUTHZ_JWKS_URL:
-        return ""
-    return AUTHZ_JWKS_URL.replace("/.well-known/jwks.json", "")
+# These are imported from shared.testing.auth and made available to tests
+__all__ = ["auth_client", "clean_test_user"]
 
 
 # =============================================================================
-# Auth fixtures - ALL use real tokens from authz
+# Environment setup
 # =============================================================================
 
 @pytest.fixture(autouse=True)
@@ -55,10 +44,15 @@ def set_auth_env(monkeypatch):
     monkeypatch.setenv("AUTHZ_ISSUER", "busibox-authz")
     monkeypatch.setenv("AUTHZ_AUDIENCE", "search-api")
     monkeypatch.setenv("JWT_ALGORITHMS", "RS256")
-    if AUTHZ_JWKS_URL:
-        monkeypatch.setenv("AUTHZ_JWKS_URL", AUTHZ_JWKS_URL)
+    jwks_url = os.getenv("AUTHZ_JWKS_URL", "")
+    if jwks_url:
+        monkeypatch.setenv("AUTHZ_JWKS_URL", jwks_url)
     yield
 
+
+# =============================================================================
+# Auth fixtures using shared library
+# =============================================================================
 
 @pytest.fixture
 def sample_user_id():
@@ -66,84 +60,28 @@ def sample_user_id():
     return require_env("TEST_USER_ID")
 
 
-def get_real_token(user_id: str, audience: str = "search-api") -> str:
-    """
-    Get a real access token from authz via token exchange.
-    
-    Args:
-        user_id: The user ID to get a token for
-        audience: The audience for the token (default: search-api)
-    
-    Returns:
-        Access token string
-    """
-    authz_url = get_authz_base_url()
-    if not authz_url:
-        pytest.fail("AUTHZ_JWKS_URL not configured")
-    
-    client_secret = require_env("AUTHZ_BOOTSTRAP_CLIENT_SECRET")
-    
-    with httpx.Client() as client:
-        resp = client.post(
-            f"{authz_url}/oauth/token",
-            data={
-                "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-                "client_id": AUTHZ_BOOTSTRAP_CLIENT_ID,
-                "client_secret": client_secret,
-                "requested_subject": user_id,
-                "audience": audience,
-            },
-            timeout=10.0,
-        )
-        
-        if resp.status_code != 200:
-            pytest.fail(f"Failed to get access token: {resp.status_code} - {resp.text}")
-        
-        data = resp.json()
-        if "access_token" not in data:
-            pytest.fail(f"No access_token in response: {data}")
-        
-        return data["access_token"]
-
-
 @pytest.fixture
-def auth_header(sample_user_id: str):
+def auth_header(auth_client: AuthTestClient):
     """
-    Returns an Authorization header with a REAL token from authz.
+    Get an Authorization header with a valid token.
     
-    The token will have:
-    - sub = TEST_USER_ID
-    - aud = search-api
-    - roles = user's actual roles from authz database
-    - scope = user's actual scopes
-    
-    NO MOCKS - this validates real authentication behavior.
+    The test user should have NO roles by default.
+    Use auth_client.add_role_to_user() to add roles for specific tests.
     """
-    token = get_real_token(sample_user_id, "search-api")
+    token = auth_client.get_token(audience="search-api")
     return {"Authorization": f"Bearer {token}"}
 
 
-# =============================================================================
-# Integration test fixtures (real auth) - same as unit tests, no mocks
-# =============================================================================
-
 @pytest.fixture(scope="module")
 def real_access_token():
-    """
-    Get a REAL access token from authz.
-    
-    Uses token exchange (RFC 8693) to get a token with:
-    - sub = TEST_USER_ID (real user for RLS)
-    - aud = search-api (correct audience)
-    - roles = user's roles from authz database
-    """
-    user_id = require_env("TEST_USER_ID")
-    return get_real_token(user_id, "search-api")
+    """Get a real access token for module-scoped tests."""
+    client = AuthTestClient()
+    return client.get_token(audience="search-api")
 
 
 @pytest.fixture(scope="module")
 def real_auth_header(real_access_token):
-    """Returns an Authorization header with a REAL token."""
+    """Returns an Authorization header with a real token."""
     return {"Authorization": f"Bearer {real_access_token}"}
 
 

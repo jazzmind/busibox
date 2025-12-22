@@ -1,34 +1,47 @@
 """
 Pytest configuration and shared fixtures.
 
-Uses real JWT tokens from authz via token exchange - no mocks.
+Uses real JWT tokens from authz - no mocks.
+Test user starts with NO roles/scopes. Tests must explicitly grant permissions
+using the admin API and clean up when done.
 """
 import os
+import sys
+from pathlib import Path
+from dotenv import load_dotenv
+
+# CRITICAL: Load environment variables BEFORE any other imports
+# This must happen at the very top of conftest.py before pytest imports test files
+# which may import api.main and trigger Config() initialization
+_env_local = Path(__file__).parent.parent / ".env.local"
+_env_file = Path(__file__).parent.parent / ".env"
+if _env_local.exists():
+    load_dotenv(_env_local, override=True)
+elif _env_file.exists():
+    load_dotenv(_env_file, override=True)
+
+# Verify critical env vars are set
+_pg_host = os.getenv("POSTGRES_HOST")
+if _pg_host:
+    print(f"[conftest] Using POSTGRES_HOST={_pg_host}")
+
 import pytest
 import asyncio
 import httpx
-from pathlib import Path
+import uuid
 from unittest.mock import Mock
 from httpx import AsyncClient, ASGITransport
-from dotenv import load_dotenv
+from contextlib import asynccontextmanager
 
+# Now import app modules (they will use the loaded env vars)
 from api.services.minio_service import MinIOService
 from api.services.postgres import PostgresService
 from shared.config import Config
-
-# Load environment variables from .env.local (for make test-local) or .env
-env_local = Path(__file__).parent.parent / ".env.local"
-env_file = Path(__file__).parent.parent / ".env"
-if env_local.exists():
-    load_dotenv(env_local)
-elif env_file.exists():
-    load_dotenv(env_file)
 
 
 # Sample files paths - supports both new (testdocs repo) and old (samples/) structure
 SAMPLES_DIR = Path(__file__).parent.parent.parent.parent / "samples"
 
-# New testdocs structure has files organized by type
 SAMPLE_PDF_DIAGRAM = SAMPLES_DIR / "pdf" / "plans" / "doc2_washington" / "683 Washington Street As-Built (06-26-25) Sheet 1 (Rev 1) (09-14-25).pdf"
 if not SAMPLE_PDF_DIAGRAM.exists():
     SAMPLE_PDF_DIAGRAM = SAMPLES_DIR / "diagram.pdf"
@@ -54,128 +67,266 @@ def event_loop_policy():
     return asyncio.get_event_loop_policy()
 
 
-def _ensure_test_user_has_roles():
-    """
-    Ensure the test user has roles with required scopes.
-    
-    This syncs the test user with authz to ensure they have the necessary
-    permissions for testing. This is idempotent - safe to call multiple times.
-    """
-    import uuid as uuid_mod
-    
-    client_id = os.getenv("AUTHZ_BOOTSTRAP_CLIENT_ID", "ai-portal")
-    client_secret = os.getenv("AUTHZ_BOOTSTRAP_CLIENT_SECRET", "")
-    test_user_id = os.getenv("TEST_USER_ID", "")
-    authz_url = os.getenv("AUTHZ_URL") or os.getenv("AUTHZ_BASE_URL", "")
-    
-    if not all([client_id, client_secret, test_user_id, authz_url]):
-        return  # Skip if not configured
-    
-    # Use a deterministic role ID based on test user ID so it's consistent
-    role_id = str(uuid_mod.uuid5(uuid_mod.NAMESPACE_DNS, f"test-admin-{test_user_id}"))
-    
-    with httpx.Client(timeout=10.0) as client:
-        resp = client.post(
-            f"{authz_url}/internal/sync/user",
-            json={
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "user_id": test_user_id,
-                "email": os.getenv("TEST_USER_EMAIL", "test@busibox.local"),
-                "status": "active",
-                "roles": [{
-                    "id": role_id,
-                    "name": "TestAdmin",
-                    "description": "Test admin role with all scopes",
-                    "scopes": [
-                        "ingest.read", "ingest.write", "ingest.delete",
-                        "search.read", "search.write",
-                        "agent.read", "agent.write",
-                    ]
-                }],
-                "user_role_ids": [role_id],
-            },
-        )
-        if resp.status_code != 200:
-            print(f"Warning: Failed to sync test user roles: {resp.status_code} - {resp.text}")
+# ============================================================================
+# AuthZ Admin Helpers
+# ============================================================================
 
-
-# Ensure test user has roles before any tests run
-_ensure_test_user_has_roles()
-
-
-def _get_real_token(audience: str = "ingest-api") -> str:
-    """
-    Get a real access token from authz via token exchange.
+class AuthzAdmin:
+    """Helper class for managing roles/scopes via authz admin API."""
     
-    Uses the bootstrap client credentials and TEST_USER_ID to get
-    a token with real user identity for RLS.
-    """
-    client_id = os.getenv("AUTHZ_BOOTSTRAP_CLIENT_ID", "ai-portal")
-    client_secret = os.getenv("AUTHZ_BOOTSTRAP_CLIENT_SECRET", "")
-    test_user_id = os.getenv("TEST_USER_ID", "")
-    authz_url = os.getenv("AUTHZ_URL") or os.getenv("AUTHZ_BASE_URL", "")
-    
-    if not all([client_id, client_secret, test_user_id, authz_url]):
-        pytest.skip(
-            f"AuthZ credentials not configured. "
-            f"client_id={bool(client_id)}, secret={bool(client_secret)}, "
-            f"user_id={bool(test_user_id)}, authz_url={bool(authz_url)}"
-        )
-    
-    with httpx.Client(timeout=10.0) as client:
-        resp = client.post(
-            f"{authz_url}/oauth/token",
-            data={
-                "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "requested_subject": test_user_id,
-                "audience": audience,
-            },
-        )
+    def __init__(self):
+        self.authz_url = os.getenv("AUTHZ_URL") or os.getenv("AUTHZ_BASE_URL", "")
+        self.admin_token = os.getenv("AUTHZ_ADMIN_TOKEN", "")
+        self.test_user_id = os.getenv("TEST_USER_ID", "")
+        self.client_id = os.getenv("AUTHZ_BOOTSTRAP_CLIENT_ID", "")
+        self.client_secret = os.getenv("AUTHZ_BOOTSTRAP_CLIENT_SECRET", "")
         
-        if resp.status_code != 200:
-            pytest.fail(f"Failed to get access token: {resp.status_code} - {resp.text}")
+        if not all([self.authz_url, self.admin_token, self.test_user_id]):
+            raise ValueError(
+                f"AuthZ not configured. authz_url={bool(self.authz_url)}, "
+                f"admin_token={bool(self.admin_token)}, test_user_id={bool(self.test_user_id)}"
+            )
+    
+    def _headers(self):
+        return {"Authorization": f"Bearer {self.admin_token}"}
+    
+    def create_role(self, name: str, scopes: list[str]) -> str:
+        """Create a role with the given scopes. Returns role_id."""
+        with httpx.Client(timeout=10.0) as client:
+            resp = client.post(
+                f"{self.authz_url}/admin/roles",
+                headers=self._headers(),
+                json={"name": name, "scopes": scopes},
+            )
+            if resp.status_code != 200:
+                raise RuntimeError(f"Failed to create role: {resp.status_code} - {resp.text}")
+            return resp.json()["id"]
+    
+    def delete_role(self, role_id: str):
+        """Delete a role."""
+        with httpx.Client(timeout=10.0) as client:
+            resp = client.delete(
+                f"{self.authz_url}/admin/roles/{role_id}",
+                headers=self._headers(),
+            )
+            # 404 is ok - role may already be deleted
+            if resp.status_code not in [200, 404]:
+                raise RuntimeError(f"Failed to delete role: {resp.status_code} - {resp.text}")
+    
+    def assign_role(self, user_id: str, role_id: str):
+        """Assign a role to a user."""
+        with httpx.Client(timeout=10.0) as client:
+            resp = client.post(
+                f"{self.authz_url}/admin/user-roles",
+                headers=self._headers(),
+                json={"user_id": user_id, "role_id": role_id},
+            )
+            if resp.status_code != 200:
+                raise RuntimeError(f"Failed to assign role: {resp.status_code} - {resp.text}")
+    
+    def remove_role(self, user_id: str, role_id: str):
+        """Remove a role from a user."""
+        with httpx.Client(timeout=10.0) as client:
+            # DELETE with body - use request() instead of delete()
+            resp = client.request(
+                "DELETE",
+                f"{self.authz_url}/admin/user-roles",
+                headers=self._headers(),
+                json={"user_id": user_id, "role_id": role_id},
+            )
+            # 404 is ok - binding may already be removed
+            if resp.status_code not in [200, 404]:
+                raise RuntimeError(f"Failed to remove role: {resp.status_code} - {resp.text}")
+    
+    def get_token(self, audience: str = None) -> str:
+        """Get a token for the test user with their current roles/scopes.
         
-        data = resp.json()
-        if "access_token" not in data:
-            pytest.fail(f"No access_token in response: {data}")
+        If audience is not specified, uses AUTHZ_AUDIENCE from environment
+        (which should match what the service expects).
+        """
+        if audience is None:
+            audience = os.getenv("AUTHZ_AUDIENCE", "ingest-api")
         
-        return data["access_token"]
+        with httpx.Client(timeout=10.0) as client:
+            resp = client.post(
+                f"{self.authz_url}/oauth/token",
+                data={
+                    "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                    "client_id": self.client_id,
+                    "client_secret": self.client_secret,
+                    "requested_subject": self.test_user_id,
+                    "audience": audience,
+                },
+            )
+            if resp.status_code != 200:
+                raise RuntimeError(f"Failed to get token: {resp.status_code} - {resp.text}")
+            return resp.json()["access_token"]
 
 
 @pytest.fixture(scope="session")
-def real_auth_header():
-    """
-    Get a real access token for the ingest API.
-    Uses token exchange to get a token with:
-    - sub = TEST_USER_ID (real user for RLS)
-    - aud = ingest-api (correct audience)
-    """
-    token = _get_real_token("ingest-api")
-    return {"Authorization": f"Bearer {token}"}
+def authz_admin():
+    """AuthZ admin helper for managing roles/scopes."""
+    try:
+        return AuthzAdmin()
+    except ValueError as e:
+        pytest.skip(str(e))
 
+
+@pytest.fixture
+def test_user_id():
+    """The test user ID."""
+    return os.getenv("TEST_USER_ID", "")
+
+
+# ============================================================================
+# Role/Scope Fixtures - Tests use these to grant permissions
+# ============================================================================
+
+@pytest.fixture
+def ingest_read_role(authz_admin, test_user_id):
+    """
+    Grant the test user ingest.read scope for the duration of the test.
+    Cleans up after the test completes.
+    """
+    role_name = f"test-ingest-read-{uuid.uuid4().hex[:8]}"
+    role_id = authz_admin.create_role(role_name, ["ingest.read"])
+    authz_admin.assign_role(test_user_id, role_id)
+    
+    yield {"role_id": role_id, "scopes": ["ingest.read"]}
+    
+    # Cleanup
+    authz_admin.remove_role(test_user_id, role_id)
+    authz_admin.delete_role(role_id)
+
+
+@pytest.fixture
+def ingest_write_role(authz_admin, test_user_id):
+    """Grant the test user ingest.write scope."""
+    role_name = f"test-ingest-write-{uuid.uuid4().hex[:8]}"
+    role_id = authz_admin.create_role(role_name, ["ingest.write"])
+    authz_admin.assign_role(test_user_id, role_id)
+    
+    yield {"role_id": role_id, "scopes": ["ingest.write"]}
+    
+    authz_admin.remove_role(test_user_id, role_id)
+    authz_admin.delete_role(role_id)
+
+
+@pytest.fixture
+def ingest_delete_role(authz_admin, test_user_id):
+    """Grant the test user ingest.delete scope."""
+    role_name = f"test-ingest-delete-{uuid.uuid4().hex[:8]}"
+    role_id = authz_admin.create_role(role_name, ["ingest.delete"])
+    authz_admin.assign_role(test_user_id, role_id)
+    
+    yield {"role_id": role_id, "scopes": ["ingest.delete"]}
+    
+    authz_admin.remove_role(test_user_id, role_id)
+    authz_admin.delete_role(role_id)
+
+
+@pytest.fixture
+def ingest_full_access_role(authz_admin, test_user_id):
+    """Grant the test user full ingest access (read, write, delete)."""
+    role_name = f"test-ingest-full-{uuid.uuid4().hex[:8]}"
+    scopes = ["ingest.read", "ingest.write", "ingest.delete", "search.read"]
+    role_id = authz_admin.create_role(role_name, scopes)
+    authz_admin.assign_role(test_user_id, role_id)
+    
+    yield {"role_id": role_id, "scopes": scopes}
+    
+    authz_admin.remove_role(test_user_id, role_id)
+    authz_admin.delete_role(role_id)
+
+
+# ============================================================================
+# App and Client Fixtures
+# ============================================================================
 
 @pytest.fixture(scope="session")
 async def initialized_app():
     """
     Session-scoped fixture that initializes the FastAPI app and its services.
-    This ensures the PostgreSQL pool is created in the session's event loop
-    and reused across all tests.
     """
     from api import main as main_module
     app = main_module.app
     pg_service = main_module.pg_service
     
-    # Connect the postgres service in this event loop
     await pg_service.connect()
     
     yield app, pg_service
     
-    # Cleanup at end of session
     await pg_service.disconnect()
 
+
+@pytest.fixture
+async def async_client(initialized_app, authz_admin, ingest_full_access_role):
+    """
+    Async HTTP client for API testing with full ingest access.
+    
+    This fixture automatically grants the test user full ingest permissions
+    and cleans them up after the test.
+    """
+    app, _ = initialized_app
+    
+    # Get a fresh token with the newly assigned role
+    token = authz_admin.get_token("ingest-api")
+    
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        client.headers.update({"Authorization": f"Bearer {token}"})
+        yield client
+
+
+@pytest.fixture
+async def async_client_no_auth(initialized_app):
+    """
+    Async HTTP client with NO authentication.
+    Use this to test that endpoints require auth.
+    """
+    app, _ = initialized_app
+    
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client
+
+
+@pytest.fixture
+async def async_client_read_only(initialized_app, authz_admin, ingest_read_role):
+    """
+    Async HTTP client with only read scope.
+    Use this to test scope enforcement.
+    """
+    app, _ = initialized_app
+    
+    token = authz_admin.get_token("ingest-api")
+    
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        client.headers.update({"Authorization": f"Bearer {token}"})
+        yield client
+
+
+@pytest.fixture
+async def async_client_no_scopes(initialized_app, authz_admin):
+    """
+    Async HTTP client with valid auth but NO scopes.
+    Use this to test that scope enforcement is working.
+    """
+    app, _ = initialized_app
+    
+    # Get token without any roles assigned (test user has no roles by default)
+    token = authz_admin.get_token("ingest-api")
+    
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        client.headers.update({"Authorization": f"Bearer {token}"})
+        yield client
+
+
+# ============================================================================
+# Service Fixtures
+# ============================================================================
 
 @pytest.fixture
 def sample_pdf_simple():
@@ -221,97 +372,20 @@ def minio_service(config):
 
 @pytest.fixture
 async def postgres_service(initialized_app):
-    """
-    Real PostgreSQL service instance.
-    Reuses the session-scoped connection from initialized_app.
-    """
+    """Real PostgreSQL service instance."""
     _, pg_service = initialized_app
     yield pg_service
 
 
-@pytest.fixture
-async def async_client(initialized_app, real_auth_header):
-    """
-    Async HTTP client for API testing with real auth.
-    Uses the session-scoped app to ensure connection pool consistency.
-    """
-    app, _ = initialized_app
-    
-    transport = ASGITransport(app=app, raise_app_exceptions=False)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        client.headers.update(real_auth_header)
-        yield client
-
+# ============================================================================
+# Test Data Fixtures
+# ============================================================================
 
 @pytest.fixture
-async def async_client_different_user(initialized_app):
-    """
-    Async HTTP client for testing unauthorized access with a different user.
-    Gets a token for a different user ID to test RLS.
-    """
-    app, _ = initialized_app
-    
-    # Get a token for a different (non-existent) user
-    # This will fail RLS checks for resources owned by TEST_USER_ID
-    import uuid
-    different_user_id = str(uuid.uuid4())
-    
-    client_id = os.getenv("AUTHZ_BOOTSTRAP_CLIENT_ID", "ai-portal")
-    client_secret = os.getenv("AUTHZ_BOOTSTRAP_CLIENT_SECRET", "")
-    authz_url = os.getenv("AUTHZ_URL") or os.getenv("AUTHZ_BASE_URL", "")
-    
-    if not all([client_id, client_secret, authz_url]):
-        pytest.skip("AuthZ credentials not configured for different_user fixture")
-    
-    with httpx.Client(timeout=10.0) as http_client:
-        resp = http_client.post(
-            f"{authz_url}/oauth/token",
-            data={
-                "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "requested_subject": different_user_id,
-                "audience": "ingest-api",
-            },
-        )
-        
-        if resp.status_code != 200:
-            pytest.skip(f"Could not get token for different user: {resp.status_code}")
-        
-        token = resp.json().get("access_token")
-    
-    transport = ASGITransport(app=app, raise_app_exceptions=False)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        client.headers.update({"Authorization": f"Bearer {token}"})
-        yield client
-
-
-@pytest.fixture
-async def async_client_read_only(initialized_app):
-    """
-    Async HTTP client with only read scopes (for testing scope enforcement).
-    Note: With real tokens, scopes are determined by the authz service.
-    This fixture gets a token with reduced scopes if possible.
-    """
-    app, _ = initialized_app
-    
-    # For now, use the same token - scope enforcement is server-side
-    # The authz service determines scopes based on user roles
-    token = _get_real_token("ingest-api")
-    
-    transport = ASGITransport(app=app, raise_app_exceptions=False)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        client.headers.update({"Authorization": f"Bearer {token}"})
-        yield client
-
-
-@pytest.fixture
-async def test_file_with_markdown(postgres_service, minio_service):
+async def test_file_with_markdown(postgres_service, minio_service, test_user_id):
     """Create a test file with markdown generated."""
-    import uuid
     from datetime import datetime
     
-    test_user_id = os.getenv("TEST_USER_ID", str(uuid.uuid4()))
     file_id = str(uuid.uuid4())
     
     markdown_content = "# Test Document\n\nThis is a test."
@@ -338,12 +412,10 @@ async def test_file_with_markdown(postgres_service, minio_service):
 
 
 @pytest.fixture
-async def test_file_without_markdown(postgres_service):
+async def test_file_without_markdown(postgres_service, test_user_id):
     """Create a test file without markdown."""
-    import uuid
     from datetime import datetime
     
-    test_user_id = os.getenv("TEST_USER_ID", str(uuid.uuid4()))
     file_id = str(uuid.uuid4())
     
     async with postgres_service.pool.acquire() as conn:
@@ -356,175 +428,14 @@ async def test_file_without_markdown(postgres_service):
     
     yield {"file_id": file_id, "user_id": test_user_id, "has_markdown": False}
     
-    # Cleanup
     async with postgres_service.pool.acquire() as conn:
         await conn.execute("DELETE FROM ingestion_files WHERE id = $1", uuid.UUID(file_id))
 
 
-@pytest.fixture
-async def test_file_with_images(postgres_service, minio_service):
-    """Create a test file with extracted images."""
-    import uuid
-    from datetime import datetime
-    
-    test_user_id = os.getenv("TEST_USER_ID", str(uuid.uuid4()))
-    file_id = str(uuid.uuid4())
-    
-    test_image_data = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde'
-    image_count = 3
-    
-    for i in range(image_count):
-        image_path = f"{test_user_id}/{file_id}/images/image_{i}.png"
-        await minio_service.upload_bytes(test_image_data, image_path, content_type='image/png')
-    
-    markdown_content = f"# Test Document\n\n"
-    for i in range(image_count):
-        markdown_content += f"![Image {i}](image_{i}.png)\n\n"
-    
-    markdown_path = f"{test_user_id}/{file_id}/content.md"
-    await minio_service.upload_text(markdown_content, markdown_path)
-    
-    async with postgres_service.pool.acquire() as conn:
-        await conn.execute("""
-            INSERT INTO ingestion_files 
-            (id, user_id, owner_id, filename, status, markdown_storage_path, has_markdown, 
-             extracted_images_storage_path, has_extracted_images, created_at, visibility)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-        """, uuid.UUID(file_id), uuid.UUID(test_user_id), uuid.UUID(test_user_id),
-            "test.pdf", "completed", markdown_path, True, 
-            f"{test_user_id}/{file_id}/images", True, datetime.utcnow(), "personal")
-    
-    yield {"file_id": file_id, "user_id": test_user_id, "image_count": image_count}
-    
-    # Cleanup
-    try:
-        await minio_service.delete_file(markdown_path)
-        for i in range(image_count):
-            await minio_service.delete_file(f"{test_user_id}/{file_id}/images/image_{i}.png")
-    except Exception:
-        pass
-    async with postgres_service.pool.acquire() as conn:
-        await conn.execute("DELETE FROM ingestion_files WHERE id = $1", uuid.UUID(file_id))
+# ============================================================================
+# Legacy Mock Fixtures (for tests that don't need real services)
+# ============================================================================
 
-
-@pytest.fixture
-async def test_file_with_headings(postgres_service, minio_service):
-    """Create a test file with headings for TOC testing."""
-    import uuid
-    from datetime import datetime
-    
-    test_user_id = os.getenv("TEST_USER_ID", str(uuid.uuid4()))
-    file_id = str(uuid.uuid4())
-    
-    markdown_content = """# Main Title
-
-## Section 1
-
-Content for section 1.
-
-### Subsection 1.1
-
-More content.
-
-## Section 2
-
-Content for section 2.
-"""
-    
-    markdown_path = f"{test_user_id}/{file_id}/content.md"
-    await minio_service.upload_text(markdown_content, markdown_path)
-    
-    async with postgres_service.pool.acquire() as conn:
-        await conn.execute("""
-            INSERT INTO ingestion_files 
-            (id, user_id, owner_id, filename, status, markdown_storage_path, has_markdown, created_at, visibility)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-        """, uuid.UUID(file_id), uuid.UUID(test_user_id), uuid.UUID(test_user_id),
-            "test.pdf", "completed", markdown_path, True, datetime.utcnow(), "personal")
-    
-    yield {"file_id": file_id, "user_id": test_user_id, "has_headings": True}
-    
-    # Cleanup
-    try:
-        await minio_service.delete_file(markdown_path)
-    except Exception:
-        pass
-    async with postgres_service.pool.acquire() as conn:
-        await conn.execute("DELETE FROM ingestion_files WHERE id = $1", uuid.UUID(file_id))
-
-
-@pytest.fixture
-async def test_file_with_dangerous_content(postgres_service, minio_service):
-    """Create a test file with potentially dangerous content for sanitization testing."""
-    import uuid
-    from datetime import datetime
-    
-    test_user_id = os.getenv("TEST_USER_ID", str(uuid.uuid4()))
-    file_id = str(uuid.uuid4())
-    
-    markdown_content = """# Test Document
-
-<script>alert('XSS')</script>
-
-Regular content here.
-"""
-    
-    markdown_path = f"{test_user_id}/{file_id}/content.md"
-    await minio_service.upload_text(markdown_content, markdown_path)
-    
-    async with postgres_service.pool.acquire() as conn:
-        await conn.execute("""
-            INSERT INTO ingestion_files 
-            (id, user_id, owner_id, filename, status, markdown_storage_path, has_markdown, created_at, visibility)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-        """, uuid.UUID(file_id), uuid.UUID(test_user_id), uuid.UUID(test_user_id),
-            "test.pdf", "completed", markdown_path, True, datetime.utcnow(), "personal")
-    
-    yield {"file_id": file_id, "user_id": test_user_id, "has_scripts": True}
-    
-    # Cleanup
-    try:
-        await minio_service.delete_file(markdown_path)
-    except Exception:
-        pass
-    async with postgres_service.pool.acquire() as conn:
-        await conn.execute("DELETE FROM ingestion_files WHERE id = $1", uuid.UUID(file_id))
-
-
-@pytest.fixture
-async def test_file_without_images(postgres_service, minio_service):
-    """Create a test file without images."""
-    import uuid
-    from datetime import datetime
-    
-    test_user_id = os.getenv("TEST_USER_ID", str(uuid.uuid4()))
-    file_id = str(uuid.uuid4())
-    
-    markdown_content = "# Test Document\n\nText only, no images."
-    markdown_path = f"{test_user_id}/{file_id}/content.md"
-    await minio_service.upload_text(markdown_content, markdown_path)
-    
-    async with postgres_service.pool.acquire() as conn:
-        await conn.execute("""
-            INSERT INTO ingestion_files 
-            (id, user_id, owner_id, filename, status, markdown_storage_path, has_markdown, 
-             has_extracted_images, created_at, visibility)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-        """, uuid.UUID(file_id), uuid.UUID(test_user_id), uuid.UUID(test_user_id),
-            "test.pdf", "completed", markdown_path, True, False, datetime.utcnow(), "personal")
-    
-    yield {"file_id": file_id, "user_id": test_user_id, "image_count": 0}
-    
-    # Cleanup
-    try:
-        await minio_service.delete_file(markdown_path)
-    except Exception:
-        pass
-    async with postgres_service.pool.acquire() as conn:
-        await conn.execute("DELETE FROM ingestion_files WHERE id = $1", uuid.UUID(file_id))
-
-
-# Legacy mock fixtures (for tests that don't need real services)
 @pytest.fixture
 def mock_postgres_service():
     """Mock PostgreSQL service."""
@@ -551,25 +462,6 @@ def mock_minio_service():
 
 
 @pytest.fixture
-def mock_redis_service():
-    """Mock Redis service."""
-    service = Mock()
-    service.add_job = Mock()
-    service.get_job = Mock(return_value=None)
-    return service
-
-
-@pytest.fixture
-def mock_milvus_service():
-    """Mock Milvus service."""
-    service = Mock()
-    service.insert_text_chunks = Mock()
-    service.insert_page_images = Mock()
-    service.check_duplicate = Mock(return_value=None)
-    return service
-
-
-@pytest.fixture
 def mock_config():
     """Mock configuration."""
     config = Mock()
@@ -581,10 +473,4 @@ def mock_config():
     config.minio_endpoint = "localhost:9000"
     config.minio_access_key = "minioadmin"
     config.minio_secret_key = "minioadmin"
-    config.redis_host = "localhost"
-    config.redis_port = 6379
-    config.milvus_host = "localhost"
-    config.milvus_port = 19530
-    config.litellm_base_url = "http://localhost:4000"
-    config.litellm_api_key = "test-key"
     return config
