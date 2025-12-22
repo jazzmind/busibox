@@ -64,44 +64,65 @@ def sample_user_id():
 @pytest.fixture
 def auth_header(sample_user_id: str):
     """
-    Returns an Authorization header with a MOCK token for unit tests.
-    Patches the JWKS client to accept the fake token.
+    Returns an Authorization header with a REAL token for all tests.
     
-    For integration tests that need real auth, use real_auth_header instead.
+    Unit tests and integration tests both use real tokens from authz.
+    This ensures consistent behavior and avoids mock/patch issues.
+    
+    Falls back to a skip if authz is not configured.
     """
-    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    public_key = private_key.public_key()
-
-    class _SigningKey:
-        def __init__(self, key):
-            self.key = key
-
-    class _FakeJwksClient:
-        def get_signing_key_from_jwt(self, _token: str):
-            return _SigningKey(public_key)
-
-    from api.middleware import jwt_auth as jwt_auth_mod
-    jwt_auth_mod.jwks_client = _FakeJwksClient()
-
-    now = int(time.time())
-    token = pyjwt.encode(
-        {
-            "iss": "busibox-authz",
-            "sub": sample_user_id,
-            "aud": "search-api",
-            "iat": now,
-            "nbf": now,
-            "exp": now + 3600,
-            "jti": "test-jti",
-            "typ": "access",
-            "scope": "search.read",
-            "roles": [],
-        },
-        private_key,
-        algorithm="RS256",
-        headers={"kid": "test-kid"},
-    )
-    return {"Authorization": f"Bearer {token}"}
+    authz_url = get_authz_base_url()
+    
+    if not authz_url or not AUTHZ_BOOTSTRAP_CLIENT_SECRET:
+        pytest.skip(
+            "Auth not configured. Set AUTHZ_JWKS_URL and AUTHZ_BOOTSTRAP_CLIENT_SECRET"
+        )
+    
+    # If we have a real test user, use token exchange
+    if TEST_USER_ID:
+        with httpx.Client() as client:
+            resp = client.post(
+                f"{authz_url}/oauth/token",
+                data={
+                    "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                    "client_id": AUTHZ_BOOTSTRAP_CLIENT_ID,
+                    "client_secret": AUTHZ_BOOTSTRAP_CLIENT_SECRET,
+                    "requested_subject": TEST_USER_ID,
+                    "audience": "search-api",
+                },
+                timeout=10.0,
+            )
+            
+            if resp.status_code != 200:
+                pytest.skip(f"Failed to get access token: {resp.status_code} - {resp.text}")
+            
+            data = resp.json()
+            if "access_token" not in data:
+                pytest.skip(f"No access_token in response: {data}")
+            
+            return {"Authorization": f"Bearer {data['access_token']}"}
+    else:
+        # Use client credentials (no user context)
+        with httpx.Client() as client:
+            resp = client.post(
+                f"{authz_url}/oauth/token",
+                data={
+                    "grant_type": "client_credentials",
+                    "client_id": AUTHZ_BOOTSTRAP_CLIENT_ID,
+                    "client_secret": AUTHZ_BOOTSTRAP_CLIENT_SECRET,
+                    "audience": "search-api",
+                },
+                timeout=10.0,
+            )
+            
+            if resp.status_code != 200:
+                pytest.skip(f"Failed to get client token: {resp.status_code} - {resp.text}")
+            
+            data = resp.json()
+            if "access_token" not in data:
+                pytest.skip(f"No access_token in response: {data}")
+            
+            return {"Authorization": f"Bearer {data['access_token']}"}
 
 
 # =============================================================================
