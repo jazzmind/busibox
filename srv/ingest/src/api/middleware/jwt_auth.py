@@ -13,17 +13,18 @@ import os
 
 # Add shared_auth to path
 # Path resolution for different environments:
-# - Deployed: /opt/ingest/shared_auth (shared_auth is copied alongside src/)
+# - Deployed: /srv/ingest/shared_auth (shared_auth is copied to /srv/ingest/)
 # - Local: srv/shared_auth (shared_auth is a sibling of ingest/)
 _this_file = os.path.abspath(__file__)
 _middleware_dir = os.path.dirname(_this_file)  # api/middleware/
 _api_dir = os.path.dirname(_middleware_dir)     # api/
 _src_dir = os.path.dirname(_api_dir)            # src/
-_ingest_dir = os.path.dirname(_src_dir)         # ingest/
-_srv_dir = os.path.dirname(_ingest_dir)         # srv/
+_ingest_dir = os.path.dirname(_src_dir)         # ingest/ (or /srv/ingest on deployed)
+_srv_dir = os.path.dirname(_ingest_dir)         # srv/ (or /srv on deployed)
 
 _shared_auth_paths = [
-    os.path.join(_ingest_dir, "shared_auth"),   # Deployed: /opt/ingest/shared_auth
+    "/srv/ingest/shared_auth",                  # Deployed: absolute path
+    os.path.join(_ingest_dir, "shared_auth"),   # Deployed: relative to service dir
     os.path.join(_srv_dir, "shared_auth"),      # Local: srv/shared_auth
 ]
 
