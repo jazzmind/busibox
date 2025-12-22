@@ -230,13 +230,14 @@ class TestSearchAPIIntegration:
     These tests require:
     - Milvus running at configured host:port
     - PostgreSQL with ingest database
-    - Embedding service available
+    - Embedding service available (for hybrid/semantic tests)
+    - Real authz credentials (TEST_USER_ID, AUTHZ_BOOTSTRAP_CLIENT_SECRET)
     
     Run with: pytest -m integration
     Skip with: pytest -m "not integration"
     """
     
-    def test_hybrid_search_real_services(self, test_client, auth_header):
+    def test_hybrid_search_real_services(self, test_client, real_auth_header):
         """Test hybrid search with real Milvus and embedding services."""
         response = test_client.post(
             "/search",
@@ -246,10 +247,10 @@ class TestSearchAPIIntegration:
                 "limit": 10,
                 "rerank": True,
             },
-            headers=auth_header,
+            headers=real_auth_header,
         )
         
-        assert response.status_code == 200
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
         data = response.json()
         
         assert "query" in data
@@ -262,7 +263,7 @@ class TestSearchAPIIntegration:
         if data["results"]:
             print(f"Top result: {data['results'][0]}")
     
-    def test_semantic_search_real_embedding(self, test_client, auth_header):
+    def test_semantic_search_real_embedding(self, test_client, real_auth_header):
         """Test semantic search with real embedding service."""
         response = test_client.post(
             "/search/semantic",
@@ -270,16 +271,16 @@ class TestSearchAPIIntegration:
                 "query": "how to train neural networks effectively",
                 "limit": 5,
             },
-            headers=auth_header,
+            headers=real_auth_header,
         )
         
-        assert response.status_code == 200
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
         data = response.json()
         
         assert data["mode"] == "semantic"
         print(f"Semantic search returned {len(data['results'])} results")
     
-    def test_keyword_search_real(self, test_client, auth_header):
+    def test_keyword_search_real(self, test_client, real_auth_header):
         """Test keyword search with real Milvus BM25."""
         response = test_client.post(
             "/search/keyword",
@@ -287,7 +288,7 @@ class TestSearchAPIIntegration:
                 "query": "Python",
                 "limit": 5,
             },
-            headers=auth_header,
+            headers=real_auth_header,
         )
         
         assert response.status_code == 200
@@ -296,7 +297,7 @@ class TestSearchAPIIntegration:
         assert data["mode"] == "keyword"
         print(f"Keyword search returned {len(data['results'])} results")
     
-    def test_search_with_reranking(self, test_client, auth_header):
+    def test_search_with_reranking(self, test_client, real_auth_header):
         """Test search with reranking enabled."""
         response = test_client.post(
             "/search",
@@ -306,7 +307,7 @@ class TestSearchAPIIntegration:
                 "limit": 20,
                 "rerank": True,
             },
-            headers=auth_header,
+            headers=real_auth_header,
         )
         
         assert response.status_code == 200
@@ -319,7 +320,7 @@ class TestSearchAPIIntegration:
                 if "scores" in result:
                     print(f"Result scores: {result['scores']}")
     
-    def test_search_with_highlighting(self, test_client, auth_header):
+    def test_search_with_highlighting(self, test_client, real_auth_header):
         """Test search with highlighting enabled."""
         response = test_client.post(
             "/search",
@@ -329,7 +330,7 @@ class TestSearchAPIIntegration:
                 "limit": 10,
                 "highlight": {"enabled": True},
             },
-            headers=auth_header,
+            headers=real_auth_header,
         )
         
         assert response.status_code == 200
@@ -341,7 +342,7 @@ class TestSearchAPIIntegration:
                 print(f"Highlighted: {result['highlights'][0]}")
                 break
     
-    def test_search_with_file_filter(self, test_client, auth_header):
+    def test_search_with_file_filter(self, test_client, real_auth_header):
         """Test search with file ID filter."""
         # First, do an unfiltered search to get file IDs
         response = test_client.post(
@@ -351,7 +352,7 @@ class TestSearchAPIIntegration:
                 "mode": "hybrid",
                 "limit": 5,
             },
-            headers=auth_header,
+            headers=real_auth_header,
         )
         
         if response.status_code == 200 and response.json()["results"]:
@@ -366,7 +367,7 @@ class TestSearchAPIIntegration:
                         "filters": {"file_ids": [file_id]},
                         "limit": 5,
                     },
-                    headers=auth_header,
+                    headers=real_auth_header,
                 )
                 
                 assert filtered_response.status_code == 200
@@ -376,7 +377,7 @@ class TestSearchAPIIntegration:
                 for result in filtered_data["results"]:
                     assert result.get("file_id") == file_id
     
-    def test_explain_endpoint_real(self, test_client, auth_header):
+    def test_explain_endpoint_real(self, test_client, real_auth_header):
         """Test explain endpoint with real services."""
         # First get a document to explain
         search_response = test_client.post(
@@ -386,7 +387,7 @@ class TestSearchAPIIntegration:
                 "mode": "hybrid",
                 "limit": 1,
             },
-            headers=auth_header,
+            headers=real_auth_header,
         )
         
         if search_response.status_code == 200 and search_response.json()["results"]:
@@ -402,7 +403,7 @@ class TestSearchAPIIntegration:
                         "file_id": file_id,
                         "chunk_index": chunk_index,
                     },
-                    headers=auth_header,
+                    headers=real_auth_header,
                 )
                 
                 assert explain_response.status_code == 200
