@@ -242,6 +242,7 @@ async def upload_file(
                 file_id,
                 existing["file_id"],
                 user_id,
+                request=request,
             )
             
             return JSONResponse(

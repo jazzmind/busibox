@@ -465,14 +465,21 @@ class PostgresService:
         new_file_id: str,
         existing_file_id: str,
         user_id: str,
+        request=None,
     ):
         """
         Link new file to existing vectors (duplicate content).
         
         Creates a new file record linked to existing vectors via content_hash.
+        
+        Args:
+            new_file_id: ID for the new file record
+            existing_file_id: ID of the existing file to copy from
+            user_id: User ID for the new file
+            request: FastAPI Request for RLS context (required)
         """
         import json
-        async with self.acquire() as conn:
+        async with self.acquire(request) as conn:
             # Copy file record from existing file
             existing = await conn.fetchrow("""
                 SELECT 
