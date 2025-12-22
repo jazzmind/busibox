@@ -29,12 +29,10 @@ async def test_status_stream_invalid_uuid(async_client):
     """Test status endpoint with invalid UUID."""
     response = await async_client.get("/status/not-a-valid-uuid")
     
-    # Should return 400 or 422 for invalid UUID format
-    # 500 may occur due to connection pool issues in test env
+    # Should return 400 or 422 for invalid UUID format, or 200 if SSE starts
     assert response.status_code in [
         http_status.HTTP_200_OK,  # SSE may start even with invalid UUID
         http_status.HTTP_400_BAD_REQUEST, 
         http_status.HTTP_422_UNPROCESSABLE_ENTITY,
         http_status.HTTP_404_NOT_FOUND,
-        http_status.HTTP_500_INTERNAL_SERVER_ERROR
     ]

@@ -1,5 +1,8 @@
 """
 Pytest configuration and shared fixtures.
+
+Key fix: Uses a session-scoped event loop and properly manages the FastAPI app
+lifecycle to ensure the PostgreSQL connection pool works correctly across all tests.
 """
 import os
 import pytest
@@ -9,6 +12,11 @@ from unittest.mock import Mock, AsyncMock
 from httpx import AsyncClient, ASGITransport
 from fastapi.testclient import TestClient
 from dotenv import load_dotenv
+from contextlib import asynccontextmanager
+import uuid
+import time
+import jwt as pyjwt
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 from api.services.minio_service import MinIOService
 from api.services.postgres import PostgresService
@@ -16,6 +24,7 @@ from shared.config import Config
 
 # Load environment variables from .env file before running tests
 load_dotenv()
+
 
 @pytest.fixture(autouse=True)
 def set_auth_env(monkeypatch):
@@ -33,16 +42,14 @@ def set_auth_env(monkeypatch):
 SAMPLES_DIR = Path(__file__).parent.parent.parent.parent / "samples"
 
 # New testdocs structure has files organized by type
-# pdf/text/ for simple text PDFs, pdf/general/ for doc01-doc10, image/ for images
 SAMPLE_PDF_DIAGRAM = SAMPLES_DIR / "pdf" / "plans" / "doc2_washington" / "683 Washington Street As-Built (06-26-25) Sheet 1 (Rev 1) (09-14-25).pdf"
 if not SAMPLE_PDF_DIAGRAM.exists():
-    SAMPLE_PDF_DIAGRAM = SAMPLES_DIR / "diagram.pdf"  # Old location fallback
+    SAMPLE_PDF_DIAGRAM = SAMPLES_DIR / "diagram.pdf"
 
 SAMPLE_PDF_BEGINNING = SAMPLES_DIR / "pdf" / "text" / "inthebeginning.pdf"
 if not SAMPLE_PDF_BEGINNING.exists():
-    SAMPLE_PDF_BEGINNING = SAMPLES_DIR / "inthebeginning.pdf"  # Old location fallback
+    SAMPLE_PDF_BEGINNING = SAMPLES_DIR / "inthebeginning.pdf"
 
-# New location: pdf/general/, old location: docs/
 _pdf_general_dir = SAMPLES_DIR / "pdf" / "general"
 if _pdf_general_dir.exists():
     SAMPLE_PDF_DOCS = list(_pdf_general_dir.glob("*/source.pdf"))
@@ -51,15 +58,100 @@ else:
 
 SAMPLE_IMAGE = SAMPLES_DIR / "image" / "cat.jpg"
 if not SAMPLE_IMAGE.exists():
-    SAMPLE_IMAGE = SAMPLES_DIR / "cat.jpg"  # Old location fallback
+    SAMPLE_IMAGE = SAMPLES_DIR / "cat.jpg"
 
 
 @pytest.fixture(scope="session")
 def event_loop():
-    """Create an instance of the default event loop for the test session."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
+    """Create a single event loop for the entire test session."""
+    policy = asyncio.get_event_loop_policy()
+    loop = policy.new_event_loop()
     yield loop
     loop.close()
+
+
+# Session-scoped RSA keys for JWT signing - reuse across all tests
+_private_key = None
+_public_key = None
+_fake_jwks_client = None
+
+
+def _get_keys():
+    """Get or create RSA keys for JWT signing."""
+    global _private_key, _public_key
+    if _private_key is None:
+        _private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        _public_key = _private_key.public_key()
+    return _private_key, _public_key
+
+
+def _get_fake_jwks_client():
+    """Get or create fake JWKS client."""
+    global _fake_jwks_client
+    if _fake_jwks_client is None:
+        _, public_key = _get_keys()
+        
+        class _SigningKey:
+            def __init__(self, key):
+                self.key = key
+
+        class _FakeJwksClient:
+            def get_signing_key_from_jwt(self, _token: str):
+                return _SigningKey(public_key)
+        
+        _fake_jwks_client = _FakeJwksClient()
+    return _fake_jwks_client
+
+
+def _create_test_token(user_id: str, scopes: str = "ingest.read ingest.write ingest.delete search.read"):
+    """Create a test JWT token with the given user_id and scopes."""
+    private_key, _ = _get_keys()
+    
+    # Patch the JWKS client (idempotent)
+    from api.middleware import jwt_auth as jwt_auth_mod
+    jwt_auth_mod.jwks_client = _get_fake_jwks_client()
+
+    now = int(time.time())
+    token = pyjwt.encode(
+        {
+            "iss": "busibox-authz",
+            "sub": user_id,
+            "aud": "ingest-api",
+            "iat": now,
+            "nbf": now,
+            "exp": now + 3600,
+            "jti": str(uuid.uuid4()),
+            "typ": "access",
+            "scope": scopes,
+            "roles": [
+                {"id": str(uuid.uuid4()), "name": "TestRole"}
+            ],
+        },
+        private_key,
+        algorithm="RS256",
+        headers={"kid": "test-kid"},
+    )
+    return token
+
+
+@pytest.fixture(scope="session")
+async def initialized_app(event_loop):
+    """
+    Session-scoped fixture that initializes the FastAPI app and its services.
+    This ensures the PostgreSQL pool is created in the session's event loop
+    and reused across all tests.
+    """
+    from api import main as main_module
+    app = main_module.app
+    pg_service = main_module.pg_service
+    
+    # Connect the postgres service in this event loop
+    await pg_service.connect()
+    
+    yield app, pg_service
+    
+    # Cleanup at end of session
+    await pg_service.disconnect()
 
 
 @pytest.fixture
@@ -105,65 +197,27 @@ def minio_service(config):
 
 
 @pytest.fixture
-async def postgres_service(config):
-    """Real PostgreSQL service instance."""
-    service = PostgresService(config)
-    await service.connect()
-    yield service
-    await service.disconnect()
+async def postgres_service(initialized_app):
+    """
+    Real PostgreSQL service instance.
+    Reuses the session-scoped connection from initialized_app.
+    """
+    _, pg_service = initialized_app
+    yield pg_service
 
 
 @pytest.fixture
-async def async_client():
+async def async_client(initialized_app):
     """
     Async HTTP client for API testing.
-    Uses TestClient with FastAPI app directly.
+    Uses the session-scoped app to ensure connection pool consistency.
     """
-    from api.main import app
-    import uuid
-    import time
-    import jwt as pyjwt
-    from cryptography.hazmat.primitives.asymmetric import rsa
+    app, _ = initialized_app
     
     test_user_id = str(uuid.uuid4())
-
-    # Create an in-memory RSA key and patch the JWKS client used by middleware.
-    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    public_key = private_key.public_key()
-
-    class _SigningKey:
-        def __init__(self, key):
-            self.key = key
-
-    class _FakeJwksClient:
-        def get_signing_key_from_jwt(self, _token: str):
-            return _SigningKey(public_key)
-
-    from api.middleware import jwt_auth as jwt_auth_mod
-    jwt_auth_mod.jwks_client = _FakeJwksClient()
-
-    now = int(time.time())
-    token = pyjwt.encode(
-        {
-            "iss": "busibox-authz",
-            "sub": test_user_id,
-            "aud": "ingest-api",
-            "iat": now,
-            "nbf": now,
-            "exp": now + 3600,
-            "jti": str(uuid.uuid4()),
-            "typ": "access",
-            "scope": "ingest.read ingest.write ingest.delete search.read",
-            "roles": [
-                {"id": str(uuid.uuid4()), "name": "TestRole"}
-            ],
-        },
-        private_key,
-        algorithm="RS256",
-        headers={"kid": "test-kid"},
-    )
+    token = _create_test_token(test_user_id)
     
-    transport = ASGITransport(app=app)
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         client.headers.update({
             "Authorization": f"Bearer {token}"
@@ -172,54 +226,16 @@ async def async_client():
 
 
 @pytest.fixture
-async def async_client_different_user():
+async def async_client_different_user(initialized_app):
     """
     Async HTTP client for testing unauthorized access.
     """
-    from api.main import app
-    import uuid
-    import time
-    import jwt as pyjwt
-    from cryptography.hazmat.primitives.asymmetric import rsa
+    app, _ = initialized_app
     
     different_user_id = str(uuid.uuid4())
-
-    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    public_key = private_key.public_key()
-
-    class _SigningKey:
-        def __init__(self, key):
-            self.key = key
-
-    class _FakeJwksClient:
-        def get_signing_key_from_jwt(self, _token: str):
-            return _SigningKey(public_key)
-
-    from api.middleware import jwt_auth as jwt_auth_mod
-    jwt_auth_mod.jwks_client = _FakeJwksClient()
-
-    now = int(time.time())
-    token = pyjwt.encode(
-        {
-            "iss": "busibox-authz",
-            "sub": different_user_id,
-            "aud": "ingest-api",
-            "iat": now,
-            "nbf": now,
-            "exp": now + 3600,
-            "jti": str(uuid.uuid4()),
-            "typ": "access",
-            "scope": "ingest.read ingest.write ingest.delete search.read",
-            "roles": [
-                {"id": str(uuid.uuid4()), "name": "TestRole"}
-            ],
-        },
-        private_key,
-        algorithm="RS256",
-        headers={"kid": "test-kid"},
-    )
+    token = _create_test_token(different_user_id)
     
-    transport = ASGITransport(app=app)
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         client.headers.update({
             "Authorization": f"Bearer {token}"
@@ -228,54 +244,17 @@ async def async_client_different_user():
 
 
 @pytest.fixture
-async def async_client_read_only():
+async def async_client_read_only(initialized_app):
     """
     Async HTTP client with only read scopes (for testing scope enforcement).
     """
-    from api.main import app
-    import uuid
-    import time
-    import jwt as pyjwt
-    from cryptography.hazmat.primitives.asymmetric import rsa
+    app, _ = initialized_app
     
     test_user_id = str(uuid.uuid4())
-
-    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    public_key = private_key.public_key()
-
-    class _SigningKey:
-        def __init__(self, key):
-            self.key = key
-
-    class _FakeJwksClient:
-        def get_signing_key_from_jwt(self, _token: str):
-            return _SigningKey(public_key)
-
-    from api.middleware import jwt_auth as jwt_auth_mod
-    jwt_auth_mod.jwks_client = _FakeJwksClient()
-
-    now = int(time.time())
-    token = pyjwt.encode(
-        {
-            "iss": "busibox-authz",
-            "sub": test_user_id,
-            "aud": "ingest-api",
-            "iat": now,
-            "nbf": now,
-            "exp": now + 3600,
-            "jti": str(uuid.uuid4()),
-            "typ": "access",
-            "scope": "ingest.read search.read",  # Only read scopes - no write/delete
-            "roles": [
-                {"id": str(uuid.uuid4()), "name": "TestRole"}
-            ],
-        },
-        private_key,
-        algorithm="RS256",
-        headers={"kid": "test-kid"},
-    )
+    # Only read scopes - no write/delete
+    token = _create_test_token(test_user_id, scopes="ingest.read search.read")
     
-    transport = ASGITransport(app=app)
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         client.headers.update({
             "Authorization": f"Bearer {token}"
@@ -285,21 +264,16 @@ async def async_client_read_only():
 
 @pytest.fixture
 async def test_file_with_markdown(postgres_service, minio_service):
-    """
-    Create a test file with markdown generated.
-    """
-    import uuid
+    """Create a test file with markdown generated."""
     from datetime import datetime
     
     file_id = str(uuid.uuid4())
     user_id = "test-user-123"
     
-    # Upload test markdown to MinIO
     markdown_content = "# Test Document\n\nThis is a test."
     markdown_path = f"{user_id}/{file_id}/content.md"
     await minio_service.upload_text(markdown_content, markdown_path)
     
-    # Create database record
     async with postgres_service.pool.acquire() as conn:
         await conn.execute("""
             INSERT INTO ingestion_files 
@@ -309,7 +283,6 @@ async def test_file_with_markdown(postgres_service, minio_service):
     
     yield {"file_id": file_id, "has_markdown": True}
     
-    # Cleanup
     await minio_service.delete_file(markdown_path)
     async with postgres_service.pool.acquire() as conn:
         await conn.execute("DELETE FROM ingestion_files WHERE id = $1", file_id)
@@ -317,10 +290,7 @@ async def test_file_with_markdown(postgres_service, minio_service):
 
 @pytest.fixture
 async def test_file_without_markdown(postgres_service):
-    """
-    Create a test file without markdown.
-    """
-    import uuid
+    """Create a test file without markdown."""
     from datetime import datetime
     
     file_id = str(uuid.uuid4())
@@ -335,23 +305,18 @@ async def test_file_without_markdown(postgres_service):
     
     yield {"file_id": file_id, "has_markdown": False}
     
-    # Cleanup
     async with postgres_service.pool.acquire() as conn:
         await conn.execute("DELETE FROM ingestion_files WHERE id = $1", file_id)
 
 
 @pytest.fixture
 async def test_file_with_images(postgres_service, minio_service):
-    """
-    Create a test file with extracted images.
-    """
-    import uuid
+    """Create a test file with extracted images."""
     from datetime import datetime
     
     file_id = str(uuid.uuid4())
     user_id = "test-user-123"
     
-    # Upload test images to MinIO
     test_image_data = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde'
     image_count = 3
     
@@ -359,7 +324,6 @@ async def test_file_with_images(postgres_service, minio_service):
         image_path = f"{user_id}/{file_id}/images/image_{i}.png"
         await minio_service.upload_bytes(test_image_data, image_path, content_type='image/png')
     
-    # Upload markdown with image references
     markdown_content = f"# Test Document\n\n"
     for i in range(image_count):
         markdown_content += f"![Image {i}](image_{i}.png)\n\n"
@@ -367,7 +331,6 @@ async def test_file_with_images(postgres_service, minio_service):
     markdown_path = f"{user_id}/{file_id}/content.md"
     await minio_service.upload_text(markdown_content, markdown_path)
     
-    # Create database record
     async with postgres_service.pool.acquire() as conn:
         await conn.execute("""
             INSERT INTO ingestion_files 
@@ -379,7 +342,6 @@ async def test_file_with_images(postgres_service, minio_service):
     
     yield {"file_id": file_id, "image_count": image_count}
     
-    # Cleanup
     await minio_service.delete_file(markdown_path)
     for i in range(image_count):
         await minio_service.delete_file(f"{user_id}/{file_id}/images/image_{i}.png")
@@ -389,16 +351,12 @@ async def test_file_with_images(postgres_service, minio_service):
 
 @pytest.fixture
 async def test_file_with_headings(postgres_service, minio_service):
-    """
-    Create a test file with headings for TOC testing.
-    """
-    import uuid
+    """Create a test file with headings for TOC testing."""
     from datetime import datetime
     
     file_id = str(uuid.uuid4())
     user_id = "test-user-123"
     
-    # Upload markdown with headings
     markdown_content = """# Main Title
 
 ## Section 1
@@ -417,7 +375,6 @@ Content for section 2.
     markdown_path = f"{user_id}/{file_id}/content.md"
     await minio_service.upload_text(markdown_content, markdown_path)
     
-    # Create database record
     async with postgres_service.pool.acquire() as conn:
         await conn.execute("""
             INSERT INTO ingestion_files 
@@ -427,7 +384,6 @@ Content for section 2.
     
     yield {"file_id": file_id, "has_headings": True}
     
-    # Cleanup
     await minio_service.delete_file(markdown_path)
     async with postgres_service.pool.acquire() as conn:
         await conn.execute("DELETE FROM ingestion_files WHERE id = $1", file_id)
@@ -435,16 +391,12 @@ Content for section 2.
 
 @pytest.fixture
 async def test_file_with_dangerous_content(postgres_service, minio_service):
-    """
-    Create a test file with potentially dangerous content for sanitization testing.
-    """
-    import uuid
+    """Create a test file with potentially dangerous content for sanitization testing."""
     from datetime import datetime
     
     file_id = str(uuid.uuid4())
     user_id = "test-user-123"
     
-    # Upload markdown with script tags
     markdown_content = """# Test Document
 
 <script>alert('XSS')</script>
@@ -455,7 +407,6 @@ Regular content here.
     markdown_path = f"{user_id}/{file_id}/content.md"
     await minio_service.upload_text(markdown_content, markdown_path)
     
-    # Create database record
     async with postgres_service.pool.acquire() as conn:
         await conn.execute("""
             INSERT INTO ingestion_files 
@@ -465,7 +416,6 @@ Regular content here.
     
     yield {"file_id": file_id, "has_scripts": True}
     
-    # Cleanup
     await minio_service.delete_file(markdown_path)
     async with postgres_service.pool.acquire() as conn:
         await conn.execute("DELETE FROM ingestion_files WHERE id = $1", file_id)
@@ -473,10 +423,7 @@ Regular content here.
 
 @pytest.fixture
 async def test_file_without_images(postgres_service, minio_service):
-    """
-    Create a test file without images.
-    """
-    import uuid
+    """Create a test file without images."""
     from datetime import datetime
     
     file_id = str(uuid.uuid4())
@@ -496,7 +443,6 @@ async def test_file_without_images(postgres_service, minio_service):
     
     yield {"file_id": file_id, "image_count": 0}
     
-    # Cleanup
     await minio_service.delete_file(markdown_path)
     async with postgres_service.pool.acquire() as conn:
         await conn.execute("DELETE FROM ingestion_files WHERE id = $1", file_id)

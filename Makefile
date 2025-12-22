@@ -6,9 +6,13 @@
 # Variables for direct test commands
 # Usage: make test SERVICE=authz INV=test
 #        make test SERVICE=authz INV=test MODE=local
+#        make test-local SERVICE=authz INV=test ARGS="-m pvt"
+#        make test-local SERVICE=search INV=test FAST=1
 SERVICE ?=
 INV ?= test
 MODE ?= container
+ARGS ?=
+FAST ?=
 
 # Interactive menu (default when running just 'make')
 menu:
@@ -71,6 +75,12 @@ help:
 	@echo "  make test-local SERVICE=agent INV=test       # Run agent tests locally"
 	@echo "  make test-local SERVICE=all INV=test         # Run all tests locally"
 	@echo ""
+	@echo "Test Filtering:"
+	@echo "  make test-local ... ARGS=\"-m pvt\"            # Run only PVT tests"
+	@echo "  make test-local ... ARGS=\"-k test_health\"    # Run tests matching pattern"
+	@echo "  make test-local ... FAST=1                   # Skip slow/GPU tests"
+	@echo "  make test-local ... ARGS=\"--tb=short\"        # Short tracebacks"
+	@echo ""
 	@echo "Quick Start:"
 	@echo "  1. make setup      # On Proxmox host"
 	@echo "  2. make configure  # Configure models/GPUs"
@@ -109,15 +119,21 @@ endif
 
 # Run tests locally against remote container backends
 # Usage: make test-local SERVICE=authz INV=test
+#        make test-local SERVICE=authz INV=test ARGS="-m pvt"
+#        make test-local SERVICE=search INV=test FAST=1
 test-local:
 ifndef SERVICE
 	@echo "Error: SERVICE is required"
 	@echo "Usage: make test-local SERVICE=authz INV=test"
+	@echo "       make test-local SERVICE=authz INV=test ARGS=\"-m pvt\""
+	@echo "       make test-local SERVICE=search INV=test FAST=1"
 	@echo ""
 	@echo "Available services: authz, ingest, search, agent, all"
+	@echo "ARGS: Pass additional pytest arguments (e.g., -m pvt, -k pattern, --tb=short)"
+	@echo "FAST=1: Skip tests marked as @pytest.mark.slow or @pytest.mark.gpu"
 	@exit 1
 endif
-	@bash scripts/test/run-local-tests.sh $(SERVICE) $(INV)
+	@FAST=$(FAST) bash scripts/test/run-local-tests.sh $(SERVICE) $(INV) $(ARGS)
 
 test-security:
 	@bash tests/security/run_tests.sh

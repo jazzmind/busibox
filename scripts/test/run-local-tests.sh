@@ -33,6 +33,13 @@ ENV="${2:-test}"
 shift 2 2>/dev/null || true
 PYTEST_ARGS="$*"
 
+# FAST mode: skip slow and GPU tests
+# Set via environment variable FAST=1
+if [[ "${FAST:-}" == "1" ]]; then
+    PYTEST_ARGS="-m 'not slow and not gpu' $PYTEST_ARGS"
+    info "FAST mode: skipping @pytest.mark.slow and @pytest.mark.gpu tests"
+fi
+
 # Interactive mode if no service provided
 if [[ -z "$SERVICE" ]]; then
     clear
