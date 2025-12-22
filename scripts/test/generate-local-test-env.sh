@@ -349,10 +349,12 @@ AUTHZ_PORT=8010
 AUTHZ_URL=http://${AUTHZ_IP}:8010
 AUTHZ_BASE_URL=http://${AUTHZ_IP}:8010
 TEST_AUTHZ_URL=http://${AUTHZ_IP}:8010
+AUTHZ_JWKS_URL=http://${AUTHZ_IP}:8010/.well-known/jwks.json
 
 # Issuer for JWT validation
 JWT_ISSUER=busibox-authz
 AUTHZ_ISSUER=busibox-authz
+AUTHZ_AUDIENCE=search-api
 
 # ============================================
 # Service URLs

@@ -62,12 +62,9 @@ if not SAMPLE_IMAGE.exists():
 
 
 @pytest.fixture(scope="session")
-def event_loop():
-    """Create a single event loop for the entire test session."""
-    policy = asyncio.get_event_loop_policy()
-    loop = policy.new_event_loop()
-    yield loop
-    loop.close()
+def event_loop_policy():
+    """Return the event loop policy for the session."""
+    return asyncio.get_event_loop_policy()
 
 
 # Session-scoped RSA keys for JWT signing - reuse across all tests
@@ -135,7 +132,7 @@ def _create_test_token(user_id: str, scopes: str = "ingest.read ingest.write ing
 
 
 @pytest.fixture(scope="session")
-async def initialized_app(event_loop):
+async def initialized_app():
     """
     Session-scoped fixture that initializes the FastAPI app and its services.
     This ensures the PostgreSQL pool is created in the session's event loop

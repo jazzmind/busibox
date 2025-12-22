@@ -20,8 +20,10 @@ import pytest
 import httpx
 
 # Read from environment (set by .env file)
+# For container testing: SERVICE_URL defaults to localhost:8003
+# For local testing: Set SEARCH_API_URL to the remote container's URL
 SERVICE_PORT = os.getenv("SERVICE_PORT", "8003")
-SERVICE_URL = f"http://localhost:{SERVICE_PORT}"
+SERVICE_URL = os.getenv("SEARCH_API_URL", f"http://localhost:{SERVICE_PORT}")
 
 # AuthZ configuration - REQUIRED for token exchange
 # Use bootstrap client (ai-portal) - the standard OAuth client for all services

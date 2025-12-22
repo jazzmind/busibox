@@ -22,8 +22,10 @@ import httpx
 
 # Read from environment (set by .env file)
 # Agent API runs on port 8000 by default
+# For container testing: SERVICE_URL defaults to localhost:8000
+# For local testing: Set AGENT_API_URL to the remote container's URL
 SERVICE_PORT = os.getenv("PORT", "8000")
-SERVICE_URL = f"http://localhost:{SERVICE_PORT}"
+SERVICE_URL = os.getenv("AGENT_API_URL", f"http://localhost:{SERVICE_PORT}")
 
 # AuthZ configuration - REQUIRED for token exchange
 # Use bootstrap client (ai-portal) - the standard OAuth client for all services

@@ -4,6 +4,7 @@ PostgreSQL service for API layer.
 Handles database operations for file metadata, status tracking, and role management.
 """
 
+import asyncio
 import uuid
 from typing import Dict, List, Optional
 from contextlib import asynccontextmanager
@@ -30,10 +31,25 @@ class PostgresService:
         self.request = request
         
         self.pool: Optional[asyncpg.Pool] = None
+        self._pool_loop: Optional[asyncio.AbstractEventLoop] = None
         self._document_roles_ready: bool = False
+        self._connect_lock: Optional[asyncio.Lock] = None
     
     async def connect(self):
         """Create connection pool."""
+        current_loop = asyncio.get_running_loop()
+        
+        # Check if we need to reconnect due to event loop change
+        if self.pool and self._pool_loop and self._pool_loop != current_loop:
+            logger.warning("Event loop changed, closing old pool and reconnecting")
+            try:
+                # Try to close the old pool, but don't wait too long
+                await asyncio.wait_for(self.pool.close(), timeout=1.0)
+            except Exception as e:
+                logger.warning("Failed to close old pool", error=str(e))
+            self.pool = None
+            self._pool_loop = None
+        
         if not self.pool:
             self.pool = await asyncpg.create_pool(
                 host=self.host,
@@ -44,6 +60,7 @@ class PostgresService:
                 min_size=2,
                 max_size=10,
             )
+            self._pool_loop = current_loop
             logger.info("PostgreSQL connection pool created")
 
     async def _ensure_document_roles(self, conn):
@@ -95,11 +112,18 @@ class PostgresService:
         NOTE: The previous implementation mistakenly recursed into itself and
         exhausted the call stack. This version correctly pulls from the pool.
         
+        Handles event loop changes (common in testing) by reconnecting if needed.
+        
         Args:
             request: FastAPI Request object for RLS context (optional)
         """
-        if not self.pool:
-            await self.connect()
+        # Ensure we're connected in the current event loop
+        current_loop = asyncio.get_running_loop()
+        if not self.pool or self._pool_loop != current_loop:
+            async with self._connect_lock:
+                # Double-check after acquiring lock
+                if not self.pool or self._pool_loop != current_loop:
+                    await self.connect()
 
         async with self.pool.acquire() as conn:
             # Use provided request or fall back to instance request (for backward compatibility)
