@@ -160,10 +160,10 @@ try:
     pg = secrets.get('postgresql', {})
     print(f"POSTGRES_PASSWORD={pg.get('password', '')}")
     
-    # Test database (separate user)
+    # Test database credentials (database name is set per-service in bash)
+    # The actual database name (authz, files, agent_server) is determined by the service
     print(f"TEST_DB_USER=busibox_test_user")
     print(f"TEST_DB_PASSWORD={pg.get('password', '')}")
-    print(f"TEST_DB_NAME=busibox_test")
     
     # MinIO - use minio_access_key and minio_secret_key directly
     minio = secrets.get('minio', {})
@@ -269,13 +269,24 @@ generate_env_file() {
     esac
     
     # Determine the correct database for this service
-    # This ensures tests use the same database as deployed services
+    # Each service uses its own dedicated database:
+    #   - authz: "authz" database (RBAC, OAuth, encryption keys)
+    #   - ingest: "files" database (documents, chunks)
+    #   - search: "files" database (reads from same as ingest)
+    #   - agent: "agent_server" database
     case "$service" in
         ingest|search)
             POSTGRES_DB_FOR_SERVICE="files"
             ;;
-        agent|authz|all|*)
-            POSTGRES_DB_FOR_SERVICE="busibox_${ENV}"
+        authz)
+            POSTGRES_DB_FOR_SERVICE="authz"
+            ;;
+        agent)
+            POSTGRES_DB_FOR_SERVICE="agent_server"
+            ;;
+        all|*)
+            # Default to authz for "all" since it's the most commonly needed
+            POSTGRES_DB_FOR_SERVICE="authz"
             ;;
     esac
     

@@ -888,10 +888,15 @@ service_tests_menu() {
                     }
                     
                     # Build environment variables for test run
-                    local test_env="TEST_DB_USER=busibox_test_user"
+                    # Authz uses dedicated "authz" database (not busibox_test)
+                    local test_env="TEST_DB_USER=${db_user}"
                     test_env="${test_env} TEST_DB_PASSWORD=${TEST_DB_PASSWORD}"
-                    test_env="${test_env} TEST_DB_NAME=busibox_test"
+                    test_env="${test_env} TEST_DB_NAME=authz"
                     test_env="${test_env} TEST_DB_HOST=${postgres_ip}"
+                    test_env="${test_env} POSTGRES_HOST=${postgres_ip}"
+                    test_env="${test_env} POSTGRES_USER=${db_user}"
+                    test_env="${test_env} POSTGRES_DB=authz"
+                    test_env="${test_env} POSTGRES_PASSWORD=${TEST_DB_PASSWORD}"
                     test_env="${test_env} AUTHZ_ADMIN_TOKEN=${AUTHZ_ADMIN_TOKEN}"
                     test_env="${test_env} AUTHZ_MASTER_KEY=${AUTHZ_MASTER_KEY}"
                     test_env="${test_env} AUTHZ_SERVICE_URL=http://${authz_ip}:8010"
@@ -1179,15 +1184,18 @@ run_container_tests() {
     minio_ip=$(get_container_ip minio "$env")
     milvus_ip=$(get_container_ip milvus "$env")
     
-    # Set database user/name based on environment
-    local db_user db_name db_password
+    # Set database user based on environment
+    # NOTE: Each service uses its own database:
+    #   - authz: "authz" database
+    #   - ingest: "files" database  
+    #   - search: "files" database
+    #   - agent: "agent_server" database
+    local db_user db_password
     if [[ "$env" == "test" ]]; then
         db_user="busibox_test_user"
-        db_name="busibox_test"
         db_password="${TEST_DB_PASSWORD}"
     else
         db_user="busibox"
-        db_name="busibox"
         db_password="${POSTGRES_PASSWORD}"
     fi
     
@@ -1197,14 +1205,15 @@ run_container_tests() {
             info "Running authz tests on ${authz_ip}..."
             
             # Build environment variables
+            # Authz uses dedicated "authz" database
             local test_env="TEST_DB_USER=${db_user}"
             test_env="${test_env} TEST_DB_PASSWORD=${db_password}"
-            test_env="${test_env} TEST_DB_NAME=${db_name}"
+            test_env="${test_env} TEST_DB_NAME=authz"
             test_env="${test_env} TEST_DB_HOST=${postgres_ip}"
             test_env="${test_env} POSTGRES_HOST=${postgres_ip}"
             test_env="${test_env} POSTGRES_USER=${db_user}"
             test_env="${test_env} POSTGRES_PASSWORD=${db_password}"
-            test_env="${test_env} POSTGRES_DB=${db_name}"
+            test_env="${test_env} POSTGRES_DB=authz"
             test_env="${test_env} AUTHZ_ADMIN_TOKEN=${AUTHZ_ADMIN_TOKEN}"
             test_env="${test_env} AUTHZ_MASTER_KEY=${AUTHZ_MASTER_KEY}"
             test_env="${test_env} AUTHZ_SERVICE_URL=http://${authz_ip}:8010"
@@ -1223,10 +1232,11 @@ run_container_tests() {
             header "Ingest Service Tests" 70
             info "Running ingest tests on ${ingest_ip}..."
             
+            # Ingest uses "files" database
             local test_env="POSTGRES_HOST=${postgres_ip}"
             test_env="${test_env} POSTGRES_USER=${db_user}"
             test_env="${test_env} POSTGRES_PASSWORD=${db_password}"
-            test_env="${test_env} POSTGRES_DB=${db_name}"
+            test_env="${test_env} POSTGRES_DB=files"
             test_env="${test_env} MINIO_HOST=${minio_ip}"
             test_env="${test_env} MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}"
             test_env="${test_env} MINIO_SECRET_KEY=${MINIO_SECRET_KEY}"

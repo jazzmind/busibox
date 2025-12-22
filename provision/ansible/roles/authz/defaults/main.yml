@@ -9,10 +9,11 @@ authz_service_port: 8010
 authz_venv_dir: "{{ authz_base_dir }}/venv"
 authz_app_dir: "{{ authz_base_dir }}/app"
 
-# Postgres connection (uses busibox DB)
+# Postgres connection (dedicated authz database)
+# The authz service has its own database to keep RBAC/OAuth data separate
 authz_postgres_host: "{{ postgres_host }}"
 authz_postgres_port: "{{ postgres_port | default(5432) }}"
-authz_postgres_db: "{{ postgres_db | default('busibox') }}"
+authz_postgres_db: "authz"
 authz_postgres_user: "{{ postgres_user }}"
 authz_postgres_password: "{{ secrets.postgresql.password }}"
 
