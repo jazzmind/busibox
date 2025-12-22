@@ -16,6 +16,7 @@ import os
 import sys
 import pytest
 import asyncio
+from pathlib import Path
 from typing import Dict, List
 from unittest.mock import Mock, AsyncMock
 
@@ -30,8 +31,13 @@ for _path in _test_utils_paths:
     if os.path.exists(_path) and _path not in sys.path:
         sys.path.insert(0, _path)
 
+# Import shared utilities
 from testing.auth import AuthTestClient, auth_client, clean_test_user
 from testing.fixtures import require_env, get_authz_base_url
+from testing.environment import create_service_auth_fixture, load_env_files
+
+# Load environment files before other imports
+load_env_files(Path(__file__).parent.parent)
 
 
 # =============================================================================
@@ -43,19 +49,11 @@ __all__ = ["auth_client", "clean_test_user"]
 
 
 # =============================================================================
-# Environment setup
+# Environment setup - using shared service auth fixture factory
 # =============================================================================
 
-@pytest.fixture(autouse=True)
-def set_auth_env(monkeypatch):
-    """Set auth environment variables for tests."""
-    monkeypatch.setenv("AUTHZ_ISSUER", "busibox-authz")
-    monkeypatch.setenv("AUTHZ_AUDIENCE", "search-api")
-    monkeypatch.setenv("JWT_ALGORITHMS", "RS256")
-    jwks_url = os.getenv("AUTHZ_JWKS_URL", "")
-    if jwks_url:
-        monkeypatch.setenv("AUTHZ_JWKS_URL", jwks_url)
-    yield
+# Creates an autouse fixture that sets AUTHZ_AUDIENCE=search-api
+set_auth_env = create_service_auth_fixture("search")
 
 
 # =============================================================================
@@ -97,12 +95,8 @@ def real_auth_header(real_access_token):
 # Common fixtures
 # =============================================================================
 
-@pytest.fixture(scope="session")
-def event_loop():
-    """Create an event loop for async tests."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
+# Event loop fixture is provided by testing.database module
+from testing.database import event_loop  # noqa: F401
 
 
 @pytest.fixture

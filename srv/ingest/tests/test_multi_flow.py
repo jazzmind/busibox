@@ -295,10 +295,10 @@ class TestStrategySelector:
         selector = StrategySelector(test_config)
         strategies = selector.get_applicable_strategies("image/png")
         
-        # Images should support SIMPLE and COLPALI (not MARKER)
-        assert ProcessingStrategy.SIMPLE in strategies
+        # Images only support COLPALI (SIMPLE is for text extraction, not images)
         assert ProcessingStrategy.COLPALI in strategies
-        assert ProcessingStrategy.MARKER not in strategies
+        assert ProcessingStrategy.MARKER not in strategies  # Marker is PDF only
+        assert ProcessingStrategy.SIMPLE not in strategies  # SIMPLE doesn't handle images
         
         print(f"\n✓ Image strategies: {[s.value for s in strategies]}")
     

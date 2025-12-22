@@ -91,6 +91,8 @@ class ErrorHandler:
             "404",  # File not found is permanent
             "valueerror",
             "typeerror",
+            "not found in database",  # Orphaned job - file never existed in DB
+            "not present in table",   # Foreign key violation - orphaned job
         ]
         
         if any(indicator in error_str for indicator in permanent_indicators):
@@ -141,21 +143,26 @@ class ErrorHandler:
             )
             return 0
     
-    def should_retry(self, file_id: str, error: Exception) -> bool:
+    def should_retry(self, file_id: str, error: Exception, job_retry_count: int = 0) -> bool:
         """
         Determine if job should be retried.
         
         Args:
             file_id: File identifier
             error: Exception that occurred
+            job_retry_count: Retry count from job data (fallback if DB unavailable)
             
         Returns:
             True if should retry, False otherwise
         """
         if not self.is_transient_error(error):
             return False
-            
-        retry_count = self.get_retry_count(file_id)
+        
+        # Get retry count from DB, but use job_retry_count as fallback
+        # This prevents infinite retry loops when the file doesn't exist in DB
+        db_retry_count = self.get_retry_count(file_id)
+        retry_count = max(db_retry_count, job_retry_count)
+        
         return retry_count < self.max_retries
     
     def requeue_job(
@@ -178,7 +185,11 @@ class ErrorHandler:
             True if requeued successfully
         """
         try:
-            retry_count = self.get_retry_count(file_id)
+            # Get retry count from job data (more reliable for orphaned jobs)
+            # Fall back to DB if job data doesn't have it
+            job_retry_count = int(job_data.get("retry_count", 0))
+            db_retry_count = self.get_retry_count(file_id)
+            retry_count = max(job_retry_count, db_retry_count)
             new_retry_count = retry_count + 1
             
             # Update status to queued with retry info
@@ -190,8 +201,7 @@ class ErrorHandler:
                 retry_count=new_retry_count,
             )
             
-            # Re-add to Redis stream
-            import json
+            # Re-add to Redis stream with maxlen to prevent unbounded growth
             self.redis_client.xadd(
                 self.stream_name,
                 {
@@ -201,8 +211,11 @@ class ErrorHandler:
                     "mime_type": job_data.get("mime_type"),
                     "original_filename": job_data.get("original_filename", ""),
                     "processing_config": job_data.get("processing_config", ""),
+                    "visibility": job_data.get("visibility", "personal"),
+                    "role_ids": job_data.get("role_ids", ""),
                     "retry_count": str(new_retry_count),
-                }
+                },
+                maxlen=10000,  # Limit stream to 10k messages
             )
             
             logger.info(

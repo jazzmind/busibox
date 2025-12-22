@@ -47,6 +47,8 @@ EMBEDDING_TIMEOUT = 60.0
 
 # Expected embedding dimensions (pooled vectors)
 EXPECTED_POOLED_DIM = 128  # ColPali returns pooled 128-d vectors per page
+EXPECTED_PATCH_DIM = 128   # Each patch has 128 dimensions
+MIN_PATCHES = 1            # Minimum patches expected per page (pooled = 1)
 # Note: ColPali now returns mean-pooled vectors instead of multi-patch format
 
 
@@ -506,9 +508,17 @@ class TestErrorHandling:
                     headers={"Authorization": f"Bearer {TEST_COLPALI_API_KEY}"},
                 )
                 
-                # Should get an error response
-                assert response.status_code in [400, 422, 500]
-                print(f"\n✓ Corrupted image rejected with status {response.status_code}")
+                # Service should handle corrupted data gracefully with proper error codes
+                # 200 is acceptable if service returns empty embeddings
+                # 400/422 is acceptable for client error (bad data)
+                # 500 is NOT acceptable - means unhandled exception
+                assert response.status_code in [200, 400, 422], \
+                    f"Corrupted image caused server error: {response.status_code} - {response.text}"
+                
+                if response.status_code == 200:
+                    print(f"\n✓ Corrupted image handled gracefully (status 200)")
+                else:
+                    print(f"\n✓ Corrupted image rejected with status {response.status_code}")
                 
             except httpx.ConnectError:
                 pytest.skip("ColPali service not available")

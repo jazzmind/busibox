@@ -4,6 +4,9 @@ Integration test for full ingestion pipeline.
 Tests: upload → parse → chunk → embed → index → search
 
 Uses JWT auth fixtures from conftest.py.
+
+NOTE: This test uses small inline text content and is designed to be FAST.
+For full PDF processing tests, see test_full_pipeline.py (marked @slow).
 """
 import asyncio
 import uuid
@@ -17,7 +20,8 @@ logger = structlog.get_logger()
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_full_pipeline(async_client, postgres_service, config):
+@pytest.mark.pipeline
+async def test_basic_text_pipeline(async_client, postgres_service, config):
     """Test full pipeline: upload → parse → chunk → embed → index."""
     # Create test file content
     test_content = b"""
@@ -45,7 +49,7 @@ async def test_full_pipeline(async_client, postgres_service, config):
     )
     
     if response.status_code != 200:
-        pytest.skip(f"Upload failed with status {response.status_code} - services may not be available")
+        pytest.fail(f"Upload failed with status {response.status_code}: {response.text}")
     
     upload_data = response.json()
     file_id = upload_data["fileId"]

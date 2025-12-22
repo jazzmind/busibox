@@ -56,49 +56,62 @@ async def test_minio_service(minio_service, test_file_id):
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_postgres_service(postgres_service, test_file_id):
-    """Test PostgreSQL service operations."""
-    test_user_id = str(uuid.uuid4())
+async def test_postgres_service(test_file_id, test_user_id, rls_pool):
+    """Test PostgreSQL service operations with RLS context using shared test_utils."""
+    import json
+    
+    # Use the shared RLSEnabledPool which handles connection lifecycle properly
+    # Set RLS context for the test user
+    rls_pool.set_rls_context(user_id=test_user_id)
     
     try:
-        # Test health check (implicit in connect)
-        logger.info("PostgreSQL connected successfully")
+        # Test health check (implicit in acquire)
+        logger.info("Testing PostgreSQL connection with RLS context")
         
-        # Test file record creation
-        logger.info("Testing file record creation", file_id=test_file_id)
-        import json
-        await postgres_service.create_file_record(
-            file_id=test_file_id,
-            user_id=test_user_id,
-            filename="test.txt",
-            original_filename="test.txt",
-            mime_type="text/plain",
-            size_bytes=100,
-            storage_path=f"{test_user_id}/{test_file_id}/test.txt",
-            content_hash="test-hash-123",
-            metadata=json.dumps({}),
-        )
-        logger.info("File record created successfully")
-        
-        # Test status update
-        logger.info("Testing status update")
-        await postgres_service.update_status(
-            file_id=test_file_id,
-            stage="parsing",
-            progress=10,
-        )
-        logger.info("Status updated successfully")
-        
-        # Cleanup
-        logger.info("Cleaning up test data")
-        await postgres_service.delete_file(file_id=test_file_id)
-        logger.info("Test data cleaned up")
+        async with rls_pool.acquire() as conn:
+            # RLS context is automatically set by RLSEnabledPool
+            # Test file record creation
+            logger.info("Testing file record creation", file_id=test_file_id, user_id=test_user_id)
+            await conn.execute("""
+                INSERT INTO ingestion_files 
+                (file_id, user_id, owner_id, filename, original_filename, mime_type, size_bytes, 
+                 storage_path, content_hash, metadata, visibility, created_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+            """, 
+                uuid.UUID(test_file_id), uuid.UUID(test_user_id), uuid.UUID(test_user_id),
+                "test.txt", "test.txt", "text/plain", 100,
+                f"{test_user_id}/{test_file_id}/test.txt", "test-hash-123",
+                json.dumps({}), "personal"
+            )
+            logger.info("File record created successfully")
+            
+            # Test reading back the record
+            logger.info("Testing file record retrieval")
+            row = await conn.fetchrow(
+                "SELECT * FROM ingestion_files WHERE file_id = $1",
+                uuid.UUID(test_file_id)
+            )
+            assert row is not None, "Should be able to read own record with RLS"
+            assert str(row["owner_id"]) == test_user_id
+            logger.info("File record retrieved successfully")
+            
+            # Cleanup
+            logger.info("Cleaning up test data")
+            await conn.execute(
+                "DELETE FROM ingestion_files WHERE file_id = $1",
+                uuid.UUID(test_file_id)
+            )
+            logger.info("Test data cleaned up")
         
     except Exception as e:
         logger.error("PostgreSQL test failed", error=str(e))
         # Cleanup on error
         try:
-            await postgres_service.delete_file(file_id=test_file_id)
+            async with rls_pool.acquire() as conn:
+                await conn.execute(
+                    "DELETE FROM ingestion_files WHERE file_id = $1",
+                    uuid.UUID(test_file_id)
+                )
         except:
             pass
         raise
@@ -106,12 +119,17 @@ async def test_postgres_service(postgres_service, test_file_id):
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_service_integration(minio_service, postgres_service):
-    """Test services working together in a mini-pipeline."""
+async def test_service_integration(minio_service, rls_pool):
+    """Test services working together in a mini-pipeline using RLS-enabled pool."""
+    import json
+    
     test_file_id = str(uuid.uuid4())
     test_user_id = str(uuid.uuid4())
     
-    logger.info("Testing service integration", file_id=test_file_id)
+    # Set RLS context for this test user
+    rls_pool.set_rls_context(user_id=test_user_id)
+    
+    logger.info("Testing service integration", file_id=test_file_id, user_id=test_user_id)
     
     try:
         # Step 1: Upload to MinIO
@@ -122,24 +140,24 @@ async def test_service_integration(minio_service, postgres_service):
         content_hash = await minio_service.upload_file_stream(file_obj, storage_path)
         logger.info("MinIO upload complete", content_hash=content_hash)
         
-        # Step 2: Create PostgreSQL record
+        # Step 2: Create PostgreSQL record with RLS context
         logger.info("Step 2: Create PostgreSQL record")
-        await postgres_service.create_file_record(
-            file_id=test_file_id,
-            user_id=test_user_id,
-            filename="integration_test.txt",
-            original_filename="integration_test.txt",
-            mime_type="text/plain",
-            size_bytes=len(test_content),
-            storage_path=storage_path,
-            content_hash=content_hash,
-            metadata={},
-        )
+        async with rls_pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO ingestion_files 
+                (file_id, user_id, owner_id, filename, original_filename, mime_type, size_bytes, 
+                 storage_path, content_hash, metadata, visibility, created_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+            """, 
+                uuid.UUID(test_file_id), uuid.UUID(test_user_id), uuid.UUID(test_user_id),
+                "integration_test.txt", "integration_test.txt", "text/plain", len(test_content),
+                storage_path, content_hash, json.dumps({}), "personal"
+            )
         logger.info("PostgreSQL record created")
         
         # Step 3: Verify PostgreSQL data
         logger.info("Step 3: Verify data in PostgreSQL")
-        async with postgres_service.pool.acquire() as conn:
+        async with rls_pool.acquire() as conn:
             file_row = await conn.fetchrow(
                 "SELECT file_id, filename, content_hash FROM ingestion_files WHERE file_id = $1",
                 uuid.UUID(test_file_id)
@@ -152,7 +170,7 @@ async def test_service_integration(minio_service, postgres_service):
         # Cleanup
         logger.info("Cleaning up integration test data")
         await minio_service.delete_file(storage_path)
-        async with postgres_service.pool.acquire() as conn:
+        async with rls_pool.acquire() as conn:
             await conn.execute("DELETE FROM ingestion_files WHERE file_id = $1", uuid.UUID(test_file_id))
         logger.info("Integration test cleanup complete")
         
@@ -164,7 +182,7 @@ async def test_service_integration(minio_service, postgres_service):
         except:
             pass
         try:
-            async with postgres_service.pool.acquire() as conn:
+            async with rls_pool.acquire() as conn:
                 await conn.execute("DELETE FROM ingestion_files WHERE file_id = $1", uuid.UUID(test_file_id))
         except:
             pass

@@ -28,6 +28,23 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, List, Dict
 
+# Add test_utils to path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "test_utils"))
+
+try:
+    from testing.environment import get_test_doc_repo_path
+except ImportError:
+    # Fallback for when test_utils isn't available
+    def get_test_doc_repo_path():
+        samples_dir_env = os.environ.get("SAMPLES_DIR") or os.environ.get("TEST_DOC_REPO_PATH")
+        if samples_dir_env:
+            return Path(samples_dir_env)
+        repo_root = Path(__file__).parent.parent.parent.parent
+        for path in [repo_root / "samples" / "pdf" / "general", repo_root / "samples" / "docs"]:
+            if path.exists():
+                return path
+        return repo_root / "samples" / "docs"
+
 # Test document definitions
 TEST_DOCUMENTS = [
     ("doc01_rfp_project_management", "RFP", "low"),
@@ -156,23 +173,13 @@ def test_pdf_extraction_marker():
     print(f"Test started: {test_start_time}")
     print()
     
-    # Get samples directory
-    samples_dir_env = os.environ.get("SAMPLES_DIR")
-    if samples_dir_env:
-        samples_dir = Path(samples_dir_env)
-    else:
-        # Default locations (new testdocs structure, then old structure)
-        base_samples = Path(__file__).parent.parent.parent.parent / "samples"
-        for path in [
-            Path("/tmp/test_samples"),
-            base_samples / "pdf" / "general",  # New testdocs structure
-            base_samples / "docs",  # Old structure fallback
-        ]:
-            if path.exists():
-                samples_dir = path
-                break
-        else:
-            raise FileNotFoundError("Could not find samples directory. Set SAMPLES_DIR env var.")
+    # Get samples directory using shared utility
+    samples_dir = get_test_doc_repo_path() / "pdf" / "general"
+    if not samples_dir.exists():
+        # Try without pdf/general suffix (might be the docs dir itself)
+        samples_dir = get_test_doc_repo_path()
+    if not samples_dir.exists():
+        raise FileNotFoundError(f"Could not find samples directory. Set TEST_DOC_REPO_PATH or SAMPLES_DIR env var. Tried: {samples_dir}")
     
     print(f"Samples directory: {samples_dir}")
     assert samples_dir.exists(), f"Samples directory not found: {samples_dir}"

@@ -178,12 +178,13 @@ class AuthTestClient:
             
             return None
     
-    def create_role(self, role_name: str, description: str = "") -> str:
+    def create_role(self, role_name: str, scopes: Optional[List[str]] = None, description: str = "") -> str:
         """
         Create a new role for testing.
         
         Args:
             role_name: Name of the role
+            scopes: Optional list of OAuth2 scopes to associate with the role
             description: Optional description
             
         Returns:
@@ -196,14 +197,18 @@ class AuthTestClient:
         if existing_id:
             return existing_id
         
+        body = {
+            "name": role_name,
+            "description": description or f"Test role: {role_name}",
+        }
+        if scopes:
+            body["scopes"] = scopes
+        
         with httpx.Client() as client:
             resp = client.post(
                 f"{self.authz_url}/admin/roles",
                 headers=self._admin_headers(),
-                json={
-                    "name": role_name,
-                    "description": description or f"Test role: {role_name}",
-                },
+                json=body,
                 timeout=10.0,
             )
             
@@ -217,6 +222,31 @@ class AuthTestClient:
             self._created_roles.add(role_id)
             
             return role_id
+    
+    def delete_role(self, role_id: str) -> None:
+        """
+        Delete a role by ID.
+        
+        Args:
+            role_id: ID of the role to delete
+        """
+        self._require_config()
+        
+        with httpx.Client() as client:
+            resp = client.delete(
+                f"{self.authz_url}/admin/roles/{role_id}",
+                headers=self._admin_headers(),
+                timeout=10.0,
+            )
+            
+            # 200/204 = success, 404 = already deleted (also ok)
+            if resp.status_code not in [200, 204, 404]:
+                pytest.fail(f"Failed to delete role: {resp.status_code} - {resp.text}")
+            
+            # Remove from tracking
+            self._created_roles.discard(role_id)
+            # Remove from cache
+            self._role_cache = {k: v for k, v in self._role_cache.items() if v != role_id}
     
     def add_role_to_user(self, role_name: str) -> str:
         """
@@ -446,23 +476,61 @@ class AuthTestClient:
 # Pytest Fixtures
 # =============================================================================
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def auth_client():
     """
-    Pytest fixture for AuthTestClient.
+    Pytest fixture for AuthTestClient (session-scoped).
     
-    Automatically cleans up after each test.
+    At session start, cleans up any stale test roles from previous runs.
+    At session end, cleans up any roles created during this session.
     
     Usage:
         def test_something(auth_client):
             auth_client.add_role_to_user("analyst")
             token = auth_client.get_token()
             # ... test ...
-            # Cleanup happens automatically
+            # Cleanup happens automatically at session end
     """
     client = AuthTestClient()
+    
+    # Clean up stale test roles from previous interrupted runs
+    _cleanup_stale_test_roles(client)
+    
     yield client
     client.cleanup()
+
+
+def _cleanup_stale_test_roles(client: AuthTestClient) -> None:
+    """
+    Remove any test-* roles left over from previous test runs.
+    
+    This handles the case where tests were interrupted and cleanup didn't happen.
+    Only removes roles that start with "test-" to avoid affecting real roles.
+    """
+    try:
+        # Get all current roles for test user
+        roles = client.get_user_roles()
+        stale_roles = [r for r in roles if r.get("name", "").startswith("test-")]
+        
+        if stale_roles:
+            print(f"[test_utils] Cleaning up {len(stale_roles)} stale test roles...")
+            
+            for role in stale_roles:
+                try:
+                    # Remove role from user
+                    client.remove_role_from_user(role["name"])
+                except Exception:
+                    pass  # Best effort
+                
+                try:
+                    # Delete the role itself
+                    client.delete_role(role["id"])
+                except Exception:
+                    pass  # Best effort
+            
+            print("[test_utils] Stale role cleanup complete")
+    except Exception as e:
+        print(f"[test_utils] Warning: Could not clean up stale roles: {e}")
 
 
 @pytest.fixture

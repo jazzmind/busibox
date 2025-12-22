@@ -16,6 +16,9 @@ ARGS ?=
 # - test-local defaults to FAST=1 (skip slow tests for faster local iteration)
 # - test defaults to FAST=0 (run all tests on containers)
 FAST ?=
+# WORKER mode: start local ingest worker for integration tests
+# - Set WORKER=1 to start a local worker for full pipeline tests
+WORKER ?=
 
 # Interactive menu (default when running just 'make')
 menu:
@@ -84,8 +87,13 @@ help:
 	@echo "  make test-local ... FAST=0                   # Run ALL tests (default skips slow/GPU)"
 	@echo "  make test-local ... ARGS=\"--tb=short\"        # Short tracebacks"
 	@echo ""
+	@echo "Worker Tests (full pipeline with local worker):"
+	@echo "  make test-local SERVICE=ingest WORKER=1      # Start local worker for integration tests"
+	@echo "  make test-local SERVICE=ingest WORKER=1 FAST=0  # Full pipeline with all tests"
+	@echo ""
 	@echo "Note: test-local defaults to FAST=1 (skips slow tests for faster iteration)"
 	@echo "      test (on containers) runs ALL tests by default"
+	@echo "      WORKER=1 starts a local ingest worker for full pipeline tests"
 	@echo ""
 	@echo "Quick Start:"
 	@echo "  1. make setup      # On Proxmox host"
@@ -140,7 +148,7 @@ ifndef SERVICE
 	@echo "FAST=0: Run ALL tests including slow/gpu (default is FAST=1 for local)"
 	@exit 1
 endif
-	@FAST=$${FAST:-1} bash scripts/test/run-local-tests.sh $(SERVICE) $(INV) $(ARGS)
+	@FAST=$${FAST:-1} WORKER=$${WORKER:-0} bash scripts/test/run-local-tests.sh $(SERVICE) $(INV) $(ARGS)
 
 test-security:
 	@bash tests/security/run_tests.sh

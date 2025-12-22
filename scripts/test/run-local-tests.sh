@@ -40,6 +40,11 @@ if [[ "${FAST:-}" == "1" ]]; then
     info "FAST mode: skipping @pytest.mark.slow and @pytest.mark.gpu tests"
 fi
 
+# WORKER mode: start a local worker for tests that require it
+# Set via environment variable WORKER=1
+WORKER_PID=""
+START_LOCAL_WORKER="${WORKER:-0}"
+
 # Interactive mode if no service provided
 if [[ -z "$SERVICE" ]]; then
     clear
@@ -93,6 +98,75 @@ echo ""
 # Step 2: Set up and run tests
 header "Step 2: Run Tests" 70
 
+# Function to start local worker
+start_local_worker() {
+    local service_dir="${REPO_ROOT}/srv/ingest"
+    local venv_dir="${service_dir}/test_venv"
+    
+    if [[ ! -d "$venv_dir" ]]; then
+        venv_dir="${service_dir}/venv"
+    fi
+    
+    if [[ ! -d "$venv_dir" ]]; then
+        warn "No virtual environment found for ingest worker"
+        return 1
+    fi
+    
+    info "Starting local ingest worker..."
+    
+    # Load environment
+    set -a
+    source "$ENV_FILE"
+    set +a
+    
+    # Set PYTHONPATH for the worker
+    export PYTHONPATH="${service_dir}/src:${PYTHONPATH:-}"
+    
+    # Set LOCAL_WORKER so tests know a worker was started
+    export LOCAL_WORKER=1
+    
+    # Start worker in background
+    (
+        cd "$service_dir"
+        source "${venv_dir}/bin/activate"
+        python src/worker.py 2>&1 | while read line; do
+            echo "[WORKER] $line"
+        done
+    ) &
+    WORKER_PID=$!
+    
+    # Wait for worker to initialize (longer wait for GPU model loading)
+    info "Waiting for worker to initialize (loading models)..."
+    sleep 10
+    
+    if kill -0 $WORKER_PID 2>/dev/null; then
+        success "Local worker started (PID: $WORKER_PID)"
+        return 0
+    else
+        error "Failed to start local worker"
+        return 1
+    fi
+}
+
+# Function to stop local worker
+stop_local_worker() {
+    if [[ -n "$WORKER_PID" ]] && kill -0 $WORKER_PID 2>/dev/null; then
+        info "Stopping local worker (PID: $WORKER_PID)..."
+        kill -TERM $WORKER_PID 2>/dev/null || true
+        sleep 2
+        kill -9 $WORKER_PID 2>/dev/null || true
+        success "Local worker stopped"
+    fi
+}
+
+# Cleanup function
+cleanup() {
+    stop_local_worker
+}
+
+# Set trap for cleanup on exit
+trap cleanup EXIT
+
 run_service_tests() {
     local service="$1"
     local service_dir="${REPO_ROOT}/srv/${service}"
@@ -105,6 +179,13 @@ run_service_tests() {
     
     info "Testing: $service"
     echo ""
+    
+    # Start local worker if requested and testing ingest
+    if [[ "$START_LOCAL_WORKER" == "1" ]] && [[ "$service" == "ingest" ]]; then
+        if [[ -z "$WORKER_PID" ]]; then
+            start_local_worker
+        fi
+    fi
     
     # Find virtual environment (check common names)
     if [[ -d "${service_dir}/venv" ]]; then

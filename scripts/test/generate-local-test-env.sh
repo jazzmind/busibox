@@ -341,6 +341,8 @@ POSTGRES_USER=busibox_${ENV}_user
 # Test database connection (for integration tests)
 TEST_DB_HOST=${POSTGRES_IP}
 TEST_DB_PORT=5432
+TEST_DB_NAME=${POSTGRES_DB_FOR_SERVICE}
+TEST_DB_USER=busibox_${ENV}_user
 
 # ============================================
 # Milvus Vector Database
@@ -408,6 +410,39 @@ SEARCH_API_URL=http://${MILVUS_IP}:8003
 AGENT_API_HOST=${AGENT_IP}
 AGENT_API_PORT=8000
 AGENT_API_URL=http://${AGENT_IP}:8000
+
+# ============================================
+# GPU Services (use PRODUCTION container for GPU)
+# ============================================
+# ColPali runs on production vLLM container (10.96.200.208:9006)
+# This allows local tests to use GPU-accelerated visual embeddings
+COLPALI_BASE_URL=http://10.96.200.208:9006/v1
+COLPALI_API_KEY=EMPTY
+COLPALI_ENABLED=true
+
+# Marker PDF extraction configuration
+# When running locally, we can use GPU via ingest worker on production
+# For API tests, Marker runs in the service; for worker tests, it uses local/remote
+MARKER_ENABLED=true
+MARKER_USE_GPU=true
+MARKER_GPU_DEVICE=cuda
+# Remote Marker service URL (if using remote Marker API)
+MARKER_SERVICE_URL=
+
+# ============================================
+# Embedding Configuration
+# ============================================
+# Embedding model served via LiteLLM
+EMBEDDING_MODEL=qwen3-embedding
+EMBEDDING_DIMENSION=4096
+
+# ============================================
+# Test Documents
+# ============================================
+# Path to test document repository (busibox-testdocs)
+# Local: sibling directory to busibox repo
+# Container: /srv/test-docs (set by Ansible)
+TEST_DOC_REPO_PATH=${REPO_ROOT}/../busibox-testdocs
 
 # ============================================
 # Secrets (from vault)

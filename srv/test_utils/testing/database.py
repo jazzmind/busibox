@@ -181,20 +181,52 @@ class RLSEnabledPool(DatabasePool):
         """
         Acquire a connection with RLS variables set.
         
-        Sets app.user_id and app.user_role_ids_read before yielding.
+        Sets app.user_id using SET (not SET LOCAL) so it persists
+        for the entire connection without requiring a transaction.
+        
+        The connection is reset when returned to the pool, clearing
+        the session variables.
         """
         if not self._initialized:
             await self.initialize()
         
         async with self._pool.acquire() as conn:
-            # Set RLS session variables
+            # Set RLS session variables using SET (persists for connection)
             if self.rls_user_id:
-                await conn.execute(f"SET LOCAL app.user_id = '{self.rls_user_id}'")
+                await conn.execute(f"SET app.user_id = '{self.rls_user_id}'")
             if self.rls_role_ids:
-                role_ids_str = ",".join(self.rls_role_ids)
-                await conn.execute(f"SET LOCAL app.user_role_ids_read = '{role_ids_str}'")
+                import json
+                role_ids_json = json.dumps(self.rls_role_ids)
+                await conn.execute(f"SET app.user_role_ids = '{role_ids_json}'")
             
             yield conn
+    
+    @asynccontextmanager
+    async def transaction(self):
+        """
+        Acquire a connection with RLS variables set, wrapped in a transaction.
+        
+        Use this when you need transactional semantics (commit/rollback).
+        
+        Usage:
+            async with rls_pool.transaction() as conn:
+                await conn.execute("INSERT INTO ...")
+                # Transaction commits on exit, rolls back on exception
+        """
+        if not self._initialized:
+            await self.initialize()
+        
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                # Set RLS session variables
+                if self.rls_user_id:
+                    await conn.execute(f"SET LOCAL app.user_id = '{self.rls_user_id}'")
+                if self.rls_role_ids:
+                    import json
+                    role_ids_json = json.dumps(self.rls_role_ids)
+                    await conn.execute(f"SET LOCAL app.user_role_ids = '{role_ids_json}'")
+                
+                yield conn
 
 
 # =============================================================================

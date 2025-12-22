@@ -132,68 +132,6 @@ async def list_workflows(
     return [WorkflowDefinitionRead.model_validate(w) for w in result.scalars().all()]
 
 
-@router.get("/{agent_id}", response_model=AgentDefinitionRead)
-async def get_agent(
-    agent_id: uuid.UUID,
-    principal: Principal = Depends(get_principal),
-    session: AsyncSession = Depends(get_session),
-) -> AgentDefinitionRead:
-    """
-    Get individual agent by ID with ownership check.
-    
-    Returns:
-    - Agent if it's built-in code agent (visible to all)
-    - Agent if it's built-in database agent (visible to all)
-    - Agent if it's personal and owned by authenticated user
-    - 404 if agent doesn't exist or user doesn't have access
-    """
-    # Check built-in code agents first
-    builtin_agents = get_builtin_agent_definitions()
-    for builtin_def in builtin_agents:
-        if builtin_def.id == agent_id:
-            logger.info(
-                "builtin_agent_accessed",
-                agent_id=str(agent_id),
-                agent_name=builtin_def.name,
-                user_id=principal.sub,
-            )
-            return builtin_def
-    
-    # Check database for personal or database-based built-in agents
-    agent = await session.get(AgentDefinition, agent_id)
-    
-    # Return 404 if agent doesn't exist or is inactive
-    if not agent or not agent.is_active:
-        logger.warning(
-            "agent_access_denied",
-            agent_id=str(agent_id),
-            user_id=principal.sub,
-            reason="not_found_or_inactive"
-        )
-        raise HTTPException(status_code=404, detail="Agent not found")
-    
-    # Check authorization: built-in agents visible to all, personal agents only to creator
-    if not agent.is_builtin and agent.created_by != principal.sub:
-        logger.warning(
-            "agent_access_denied",
-            agent_id=str(agent_id),
-            user_id=principal.sub,
-            owner=agent.created_by,
-            reason="unauthorized_personal_agent"
-        )
-        raise HTTPException(status_code=404, detail="Agent not found")
-    
-    logger.info(
-        "agent_accessed",
-        agent_id=str(agent_id),
-        agent_name=agent.name,
-        user_id=principal.sub,
-        is_builtin=agent.is_builtin
-    )
-    
-    return AgentDefinitionRead.model_validate(agent)
-
-
 @router.post("/definitions", response_model=AgentDefinitionRead, status_code=status.HTTP_201_CREATED)
 async def create_agent_definition(
     payload: AgentDefinitionCreate,
@@ -206,7 +144,10 @@ async def create_agent_definition(
     Personal agents (is_builtin=False) are created with created_by set to authenticated user.
     Only system can create built-in agents (is_builtin=True).
     """
-    agent_id = await agent_registry.add(session, payload, created_by=principal.sub, is_builtin=False)
+    try:
+        agent_id = await agent_registry.add(session, payload, created_by=principal.sub, is_builtin=False)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     definition = await session.get(AgentDefinition, agent_id)
     if not definition:
         raise HTTPException(status_code=500, detail="failed to fetch saved definition")
@@ -327,3 +268,68 @@ async def query_weather_agent(
     # Pydantic AI result has .output attribute, not .data
     response_text = str(result.output) if hasattr(result, 'output') else str(result)
     return WeatherResponse(response=response_text)
+
+
+# NOTE: This route MUST be at the end to avoid matching before static routes like /tools, /workflows, etc.
+@router.get("/{agent_id}", response_model=AgentDefinitionRead)
+async def get_agent(
+    agent_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+) -> AgentDefinitionRead:
+    """
+    Get individual agent by ID with ownership check.
+    
+    Returns:
+    - Agent if it's built-in code agent (visible to all)
+    - Agent if it's built-in database agent (visible to all)
+    - Agent if it's personal and owned by authenticated user
+    - 404 if agent doesn't exist or user doesn't have access
+    """
+    from app.services.builtin_agents import get_builtin_agent_definitions
+    
+    # Check built-in code agents first
+    builtin_agents = get_builtin_agent_definitions()
+    for builtin_def in builtin_agents:
+        if builtin_def.id == agent_id:
+            logger.info(
+                "builtin_agent_accessed",
+                agent_id=str(agent_id),
+                agent_name=builtin_def.name,
+                user_id=principal.sub,
+            )
+            return builtin_def
+    
+    # Check database for personal or database-based built-in agents
+    agent = await session.get(AgentDefinition, agent_id)
+    
+    # Return 404 if agent doesn't exist or is inactive
+    if not agent or not agent.is_active:
+        logger.warning(
+            "agent_access_denied",
+            agent_id=str(agent_id),
+            user_id=principal.sub,
+            reason="not_found_or_inactive"
+        )
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    # Check authorization: built-in agents visible to all, personal agents only to creator
+    if not agent.is_builtin and agent.created_by != principal.sub:
+        logger.warning(
+            "agent_access_denied",
+            agent_id=str(agent_id),
+            user_id=principal.sub,
+            owner=agent.created_by,
+            reason="unauthorized_personal_agent"
+        )
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    logger.info(
+        "agent_accessed",
+        agent_id=str(agent_id),
+        agent_name=agent.name,
+        user_id=principal.sub,
+        is_builtin=agent.is_builtin
+    )
+    
+    return AgentDefinitionRead.model_validate(agent)

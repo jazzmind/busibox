@@ -129,7 +129,7 @@ async def test_execute_workflow_success(test_client: AsyncClient, test_session, 
 
 @pytest.mark.asyncio
 async def test_execute_workflow_not_found(test_client: AsyncClient, mock_jwt_token: str):
-    """Test POST /runs/workflow returns 500 for non-existent workflow."""
+    """Test POST /runs/workflow returns 404 for non-existent workflow."""
     non_existent_id = uuid.uuid4()
     
     response = await test_client.post(
@@ -138,7 +138,9 @@ async def test_execute_workflow_not_found(test_client: AsyncClient, mock_jwt_tok
         headers={"Authorization": f"Bearer {mock_jwt_token}"},
     )
     
-    assert response.status_code == 500
+    # Non-existent resource should return 404, never 500
+    assert response.status_code == 404, \
+        f"Expected 404 for non-existent workflow, got {response.status_code}: {response.text}"
     assert "not found" in response.json()["detail"].lower()
 
 
@@ -200,6 +202,7 @@ def test_validate_workflow_steps_all_error_cases():
             {"id": "step1", "type": "tool", "tool": "search"},
             {"id": "step1", "type": "tool", "tool": "ingest"},
         ])
+
 
 
 

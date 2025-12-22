@@ -5,6 +5,9 @@ This test uploads a REAL document and verifies the ENTIRE pipeline:
 1. Upload → 2. Parse → 3. Chunk → 4. Embed → 5. Index → 6. Markdown/Images → 7. Retrieve
 
 If this test passes, the system actually works.
+
+NOTE: These tests are marked @slow as they process real PDF documents.
+Run with FAST=0 to include these tests.
 """
 
 import pytest
@@ -19,6 +22,8 @@ class TestFullDocumentPipeline:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
+    @pytest.mark.slow
+    @pytest.mark.pipeline
     async def test_upload_and_process_real_pdf(self, async_client: AsyncClient):
         """
         Upload a real PDF and verify complete processing pipeline.
@@ -135,6 +140,8 @@ class TestFullDocumentPipeline:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
+    @pytest.mark.slow
+    @pytest.mark.pipeline
     async def test_reprocess_document(self, async_client: AsyncClient):
         """
         Test that reprocessing a document works correctly.
@@ -195,7 +202,9 @@ class TestFullDocumentPipeline:
 
 
     @pytest.mark.asyncio
-    @pytest.mark.integration  
+    @pytest.mark.integration
+    @pytest.mark.slow
+    @pytest.mark.pipeline
     async def test_multiple_documents_concurrent(self, async_client: AsyncClient):
         """
         Test processing multiple documents concurrently.

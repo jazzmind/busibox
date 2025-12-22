@@ -40,7 +40,7 @@ This launches an interactive menu that lets you:
 
 **When to use:** Exploring the test suite, running ad-hoc tests, first-time users.
 
-### 2. Command Line (Recommended for CI/CD)
+### 2. Command Line (Recommended for CI/CD and AI agents)
 
 ```bash
 # Run tests on container
@@ -78,6 +78,7 @@ This runs:
 | `SERVICE` | Required | authz, ingest, search, agent, all |
 | `INV` | test | Environment: test or production |
 | `FAST` | 1 | Skip `@pytest.mark.slow` and `@pytest.mark.gpu` tests |
+| `WORKER` | 0 | Start local ingest worker for full pipeline tests |
 | `ARGS` | "" | Additional pytest arguments |
 
 #### Examples
@@ -100,7 +101,38 @@ make test-local SERVICE=search INV=test ARGS="--tb=short"
 
 # Combine options
 make test-local SERVICE=ingest INV=test FAST=0 ARGS="-k encryption --tb=long"
+
+# Run full pipeline tests with local worker (for PDF processing tests)
+make test-local SERVICE=ingest INV=test WORKER=1 FAST=0
 ```
+
+NOTE: Do not tail the output of the tests. It will slow down the tests and make it difficult to debug.
+
+#### WORKER Mode for Full Pipeline Tests
+
+Some integration tests require the ingest worker to be running. By default, these tests will skip if no worker is available.
+
+To run full pipeline tests locally:
+
+```bash
+# Start local worker + run all ingest tests
+make test-local SERVICE=ingest WORKER=1 FAST=0
+
+# Run specific pipeline tests with worker
+make test-local SERVICE=ingest WORKER=1 ARGS="tests/integration/test_full_pipeline.py"
+```
+
+**How WORKER mode works:**
+1. Starts a local ingest worker as a subprocess
+2. Worker connects to container services (Redis, PostgreSQL, Milvus, MinIO)
+3. Worker uses GPU services on production container (ColPali, Marker via LiteLLM)
+4. Tests upload files and wait for worker processing
+5. Worker is stopped when tests complete
+
+**GPU Access in WORKER mode:**
+- ColPali visual embeddings: Uses production GPU at `10.96.200.208:9006`
+- Marker PDF extraction: Uses local GPU if available, or remote service
+- Embeddings: Generated via LiteLLM on container
 
 #### FAST Mode vs Full Tests
 
@@ -172,7 +204,7 @@ make test SERVICE=authz INV=test
 # Locally
 make test-local SERVICE=authz INV=test
 
-# Direct
+# Direct - DO NOT USE UNLESS ABSOLUTELY NECESSARY
 ssh root@10.96.201.210 "cd /srv/authz/app && source ../venv/bin/activate && pytest tests/ -v"
 ```
 
@@ -192,7 +224,7 @@ make test SERVICE=ingest INV=test
 # Locally
 make test-local SERVICE=ingest INV=test
 
-# Direct
+# Direct - DO NOT USE UNLESS ABSOLUTELY NECESSARY
 ssh root@10.96.201.206 "cd /srv/ingest && source venv/bin/activate && pytest tests/ -v"
 ```
 

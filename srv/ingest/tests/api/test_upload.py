@@ -5,6 +5,10 @@ Uses JWT auth fixtures from conftest.py for proper authentication.
 
 For full end-to-end testing with real MinIO, PostgreSQL, and Redis:
 See: tests/integration/test_full_pipeline.py
+
+IMPORTANT: 500 errors are NEVER acceptable responses. They indicate
+the API is not properly catching and handling errors. All expected
+error conditions should return 4xx status codes.
 """
 from io import BytesIO
 import pytest
@@ -33,8 +37,9 @@ class TestUploadValidation:
             files={"file": ("test.exe", sample_file, "application/x-msdownload")},
         )
         
-        # Should reject unsupported file types
-        assert response.status_code in [status.HTTP_400_BAD_REQUEST, status.HTTP_422_UNPROCESSABLE_ENTITY]
+        # Should reject unsupported file types with 4xx, never 500
+        assert response.status_code in [status.HTTP_400_BAD_REQUEST, status.HTTP_422_UNPROCESSABLE_ENTITY], \
+            f"Expected 400 or 422, got {response.status_code}: {response.text}"
         if response.status_code == status.HTTP_400_BAD_REQUEST:
             data = response.json()
             assert "error" in data
@@ -48,7 +53,9 @@ class TestUploadValidation:
         )
         
         # FastAPI returns 422 for validation errors, but our code may check filename and return 400
-        assert response.status_code in [status.HTTP_400_BAD_REQUEST, status.HTTP_422_UNPROCESSABLE_ENTITY]
+        # Never 500 - missing filename is a client error
+        assert response.status_code in [status.HTTP_400_BAD_REQUEST, status.HTTP_422_UNPROCESSABLE_ENTITY], \
+            f"Expected 400 or 422, got {response.status_code}: {response.text}"
 
 
 class TestUploadControlFlow:
@@ -56,28 +63,19 @@ class TestUploadControlFlow:
     
     @pytest.mark.asyncio
     async def test_upload_success(self, async_client, sample_file):
-        """Test successful file upload.
-        
-        Note: This test may fail if real services are not available.
-        In that case, it validates the endpoint accepts the request format.
-        """
+        """Test successful file upload."""
         response = await async_client.post(
             "/upload",
             files={"file": ("test.txt", sample_file, "text/plain")},
         )
         
-        # Upload should either succeed (200) or fail due to service issues (500)
-        # or validation issues (400/422)
-        assert response.status_code in [
-            status.HTTP_200_OK, 
-            status.HTTP_400_BAD_REQUEST,
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            status.HTTP_500_INTERNAL_SERVER_ERROR
-        ]
+        # Upload should succeed. If it fails, that's a real failure.
+        # 500 is never acceptable - indicates uncaught exception
+        assert response.status_code == status.HTTP_200_OK, \
+            f"Upload failed with {response.status_code}: {response.text}"
         
-        if response.status_code == status.HTTP_200_OK:
-            data = response.json()
-            assert "fileId" in data
+        data = response.json()
+        assert "fileId" in data, f"Response missing fileId: {data}"
 
     @pytest.mark.asyncio
     async def test_upload_pdf(self, async_client, sample_pdf_simple):
@@ -91,11 +89,9 @@ class TestUploadControlFlow:
                 files={"file": ("document.pdf", f, "application/pdf")},
             )
         
-        # Upload should be accepted (200) or fail gracefully (500)
-        assert response.status_code in [
-            status.HTTP_200_OK,
-            status.HTTP_500_INTERNAL_SERVER_ERROR
-        ]
+        # PDF upload should succeed
+        assert response.status_code == status.HTTP_200_OK, \
+            f"PDF upload failed with {response.status_code}: {response.text}"
 
 
 class TestUploadMetadata:
@@ -112,12 +108,9 @@ class TestUploadMetadata:
             data={"metadata": json.dumps({"source": "test", "tags": ["unit-test"]})},
         )
         
-        # Should accept the request regardless of service availability
-        assert response.status_code in [
-            status.HTTP_200_OK,
-            status.HTTP_400_BAD_REQUEST,
-            status.HTTP_500_INTERNAL_SERVER_ERROR
-        ]
+        # Should succeed with valid metadata
+        assert response.status_code == status.HTTP_200_OK, \
+            f"Upload with metadata failed with {response.status_code}: {response.text}"
 
     @pytest.mark.asyncio
     async def test_upload_invalid_metadata(self, async_client, sample_file):
@@ -128,10 +121,7 @@ class TestUploadMetadata:
             data={"metadata": "not-valid-json{"},
         )
         
-        # Should handle gracefully
-        assert response.status_code in [
-            status.HTTP_200_OK,  # May ignore invalid metadata
-            status.HTTP_400_BAD_REQUEST,
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            status.HTTP_500_INTERNAL_SERVER_ERROR
-        ]
+        # Invalid JSON should return 400 (bad request), not 500
+        # OR the API may gracefully ignore invalid metadata and return 200
+        assert response.status_code in [status.HTTP_200_OK, status.HTTP_400_BAD_REQUEST], \
+            f"Expected 200 or 400 for invalid metadata, got {response.status_code}: {response.text}"

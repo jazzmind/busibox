@@ -95,15 +95,15 @@ async def validate_bearer(token: str) -> Principal:
     _validate_claims(claims)
 
     if settings.auth_issuer and claims.get("iss") != settings.auth_issuer:
-        raise jwt.JWTError("issuer mismatch")
+        raise jwt.JWTError(f"issuer mismatch: expected {settings.auth_issuer}, got {claims.get('iss')}")
 
     audience_claim = claims.get("aud")
     if settings.auth_audience:
         if isinstance(audience_claim, list):
             if settings.auth_audience not in audience_claim:
-                raise jwt.JWTError("audience mismatch")
+                raise jwt.JWTError(f"audience mismatch: expected {settings.auth_audience} in {audience_claim}")
         elif audience_claim and audience_claim != settings.auth_audience:
-            raise jwt.JWTError("audience mismatch")
+            raise jwt.JWTError(f"audience mismatch: expected {settings.auth_audience}, got {audience_claim}")
 
     try:
         sub = claims["sub"]

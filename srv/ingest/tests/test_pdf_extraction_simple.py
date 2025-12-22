@@ -23,8 +23,25 @@ from pathlib import Path
 
 import pytest
 
+# Add test_utils to path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "test_utils"))
+
 from processors.text_extractor import TextExtractor
 from shared.config import Config
+
+try:
+    from testing.environment import get_test_doc_repo_path
+except ImportError:
+    # Fallback for when test_utils isn't available
+    def get_test_doc_repo_path():
+        samples_dir_env = os.environ.get("SAMPLES_DIR") or os.environ.get("TEST_DOC_REPO_PATH")
+        if samples_dir_env:
+            return Path(samples_dir_env)
+        repo_root = Path(__file__).parent.parent.parent.parent
+        for path in [repo_root / "samples" / "pdf" / "general", repo_root / "samples" / "docs"]:
+            if path.exists():
+                return path
+        return repo_root / "samples" / "docs"
 
 # Test document definitions
 TEST_DOCUMENTS = [
@@ -44,23 +61,11 @@ TEST_DOCUMENTS = [
 def test_pdf_extraction():
     """Test basic PDF extraction on all documents."""
     
-    # Get samples directory - use env var if set (from Makefile), otherwise find repo root
-    samples_dir_env = os.environ.get("SAMPLES_DIR")
-    if samples_dir_env:
-        samples_dir = Path(samples_dir_env)
-        print(f"Using SAMPLES_DIR from environment: {samples_dir}")
-    else:
-        # Try to find repo root (go up from tests -> src -> srv -> busibox)
-        repo_root = Path(__file__).parent.parent.parent.parent
-        # Check new testdocs structure first, then old structure
-        new_path = repo_root / "samples" / "pdf" / "general"
-        old_path = repo_root / "samples" / "docs"
-        if new_path.exists():
-            samples_dir = new_path
-            print(f"Using new testdocs structure: {samples_dir}")
-        else:
-            samples_dir = old_path
-            print(f"Using old structure path: {samples_dir}")
+    # Get samples directory using shared utility
+    samples_dir = get_test_doc_repo_path() / "pdf" / "general"
+    if not samples_dir.exists():
+        # Try without pdf/general suffix (might be the docs dir itself)
+        samples_dir = get_test_doc_repo_path()
     
     print("\n" + "="*80)
     print("PDF EXTRACTION TEST - SIMPLE STRATEGY")

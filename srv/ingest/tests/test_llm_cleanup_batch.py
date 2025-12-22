@@ -58,14 +58,14 @@ class BatchTestResult:
     errors: List[str]
 
 
-async def test_single_chunk(
+async def _process_single_chunk(
     client: httpx.AsyncClient,
     text: str,
     litellm_url: str,
     model: str,
     api_key: str = None,
 ) -> Tuple[bool, float, str]:
-    """Test cleanup of a single chunk, return (success, latency, error_msg)."""
+    """Process cleanup of a single chunk, return (success, latency, error_msg)."""
     start = time.time()
     
     headers = {"Content-Type": "application/json"}
@@ -104,14 +104,14 @@ and improve readability while preserving the original meaning. Return only the c
         return False, time.time() - start, str(e)
 
 
-async def test_batch_size(
+async def _run_batch_test(
     batch_size: int,
     num_chunks: int,
     litellm_url: str,
     model: str,
     api_key: str = None,
 ) -> BatchTestResult:
-    """Test a specific batch size with concurrent requests."""
+    """Run a specific batch size test with concurrent requests."""
     
     # Create test chunks by cycling through samples
     test_chunks = [SAMPLE_CHUNKS[i % len(SAMPLE_CHUNKS)] for i in range(num_chunks)]
@@ -123,7 +123,7 @@ async def test_batch_size(
     async def process_chunk(chunk: str, index: int):
         async with semaphore:
             async with httpx.AsyncClient() as client:
-                success, latency, error = await test_single_chunk(
+                success, latency, error = await _process_single_chunk(
                     client, chunk, litellm_url, model, api_key
                 )
                 return success, latency, error, index
@@ -187,7 +187,7 @@ async def run_batch_size_tests():
     # First, verify connectivity
     print("Verifying LLM connectivity...")
     async with httpx.AsyncClient() as client:
-        success, latency, error = await test_single_chunk(
+        success, latency, error = await _process_single_chunk(
             client, "Test connection", litellm_url, model, api_key
         )
         if not success:
@@ -201,7 +201,7 @@ async def run_batch_size_tests():
     results = []
     for batch_size in batch_sizes:
         print(f"Testing batch_size={batch_size}...", end=" ", flush=True)
-        result = await test_batch_size(batch_size, num_chunks, litellm_url, model, api_key)
+        result = await _run_batch_test(batch_size, num_chunks, litellm_url, model, api_key)
         results.append(result)
         print(f"done ({result.total_time_seconds:.1f}s, {result.successful}/{result.total_chunks} ok)")
         

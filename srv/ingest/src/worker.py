@@ -87,6 +87,9 @@ from processors.markdown_generator import MarkdownGenerator
 from processors.image_extractor import ImageExtractor
 from worker import ErrorHandler, HistoryLogger
 
+# Import WorkerRLSContext for setting RLS context on database operations
+from api.middleware.jwt_auth import WorkerRLSContext
+
 logger_early.info("All imports successful")
 logger_early.info("=" * 80)
 
@@ -124,6 +127,10 @@ class IngestWorker:
         self.consumer_group = config.get("consumer_group", "workers")
         self.consumer_name = f"{self.worker_id}-{os.getpid()}"
         self.running = False
+        
+        # Current RLS context for database operations
+        # Set at start of process_job(), cleared at end
+        self._current_rls_context: Optional[WorkerRLSContext] = None
         
         # Services (initialized in connect())
         self.redis_client: Optional[redis_sync.Redis] = None
@@ -254,7 +261,7 @@ class IngestWorker:
     def _check_duplicate(self, file_id: str, content_hash: str) -> bool:
         """Check if file with same content_hash already processed."""
         try:
-            conn = self.postgres_service._get_connection()
+            conn = self.postgres_service._get_connection(self._current_rls_context)
             try:
                 with conn.cursor() as cur:
                     cur.execute("""
@@ -310,7 +317,7 @@ class IngestWorker:
     def _load_chunks_from_db(self, file_id: str) -> Optional[List]:
         """Load existing chunks from database for partial reprocessing."""
         try:
-            conn = self.postgres_service._get_connection()
+            conn = self.postgres_service._get_connection(self._current_rls_context)
             try:
                 with conn.cursor() as cur:
                     cur.execute("""
@@ -515,7 +522,7 @@ class IngestWorker:
     def _save_chunk_embeddings(self, file_id: str, chunks: List):
         """Save chunk embeddings back to database."""
         try:
-            conn = self.postgres_service._get_connection()
+            conn = self.postgres_service._get_connection(self._current_rls_context)
             try:
                 with conn.cursor() as cur:
                     for chunk in chunks:
@@ -545,6 +552,9 @@ class IngestWorker:
         storage_path = job_data.get("storage_path")
         mime_type = job_data.get("mime_type")
         original_filename = job_data.get("original_filename", "unknown")
+        
+        # Get retry count from job data (used when DB record doesn't exist)
+        job_retry_count = int(job_data.get("retry_count", 0))
         
         # Extract visibility and role_ids for partition routing
         visibility = job_data.get("visibility", "personal")
@@ -598,6 +608,11 @@ class IngestWorker:
         start_time = time.time()
         temp_file_path = None
         
+        # Create RLS context for database operations
+        # This ensures the worker can access the user's data via RLS
+        # Store on instance so helper methods can access it
+        self._current_rls_context = WorkerRLSContext(user_id=user_id, role_ids=role_ids)
+        
         try:
             logger.info(
                 "Processing job",
@@ -609,8 +624,8 @@ class IngestWorker:
                 role_count=len(role_ids) if role_ids else 0,
             )
             
-            # Get content_hash from database
-            conn = self.postgres_service._get_connection()
+            # Get content_hash from database (with RLS context)
+            conn = self.postgres_service._get_connection(self._current_rls_context)
             try:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -694,7 +709,13 @@ class IngestWorker:
             
             logger.debug("Downloading file from storage", file_id=file_id, storage_path=storage_path)
             download_start = time.time()
-            temp_file_path = self.file_service.download(storage_path)
+            # Pass file_id, user_id, and role_ids for decryption
+            temp_file_path = self.file_service.download(
+                storage_path,
+                file_id=file_id,
+                role_ids=role_ids,
+                user_id=user_id,
+            )
             self.history.log_substep(
                 file_id, "parsing", "download_from_minio",
                 f"Downloaded file from {storage_path}",
@@ -810,7 +831,7 @@ class IngestWorker:
             
             # Update metadata JSON with page_count and word_count
             try:
-                conn = self.postgres_service._get_connection()
+                conn = self.postgres_service._get_connection(self._current_rls_context)
                 with conn.cursor() as cur:
                     # Calculate word count from extracted text
                     word_count = len(extraction_result.text.split())
@@ -1532,7 +1553,7 @@ class IngestWorker:
                     
                     # Record strategy results in database
                     try:
-                        conn = self.postgres_service._get_connection()
+                        conn = self.postgres_service._get_connection(self._current_rls_context)
                         try:
                             with conn.cursor() as cur:
                                 for strategy_name, result in results.items():
@@ -1660,7 +1681,7 @@ class IngestWorker:
             )
             
             # Build job_data dict for error handler
-            job_data = {
+            job_data_for_retry = {
                 "job_id": job_id,
                 "file_id": file_id,
                 "user_id": user_id,
@@ -1671,9 +1692,10 @@ class IngestWorker:
             }
             
             # Use ErrorHandler to manage retry logic
-            if self.error_handler.should_retry(file_id, e):
+            # Pass job_retry_count to prevent infinite loops when file doesn't exist in DB
+            if self.error_handler.should_retry(file_id, e, job_retry_count):
                 # Transient error - requeue for retry
-                self.error_handler.requeue_job(job_id, file_id, job_data, e)
+                self.error_handler.requeue_job(job_id, file_id, job_data_for_retry, e)
                 logger.warning(
                     "Job processing failed (transient, will retry)",
                     job_id=job_id,
@@ -1698,6 +1720,9 @@ class IngestWorker:
             # Cleanup temporary file
             if temp_file_path:
                 self.file_service.cleanup_temp_file(temp_file_path)
+            
+            # Clear RLS context after processing
+            self._current_rls_context = None
     
     def run(self):
         """Main worker loop - consume and process jobs."""

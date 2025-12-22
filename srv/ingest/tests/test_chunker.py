@@ -100,26 +100,16 @@ class TestHeadingDetection:
     """Test heading detection and markdown conversion."""
     
     def test_all_caps_heading(self, chunker):
-        """Test detection of ALL CAPS headings.
-        
-        Note: spaCy sentence segmentation may merge headings with content
-        if there are no sentence-ending punctuation marks. This test verifies
-        the text is processed without errors and contains the expected content.
-        """
+        """Test detection of ALL CAPS headings."""
         # Use proper newlines that will be preserved
         text = "INTRODUCTION\n\nThis is the introduction paragraph. It explains the topic.\n\nMETHODOLOGY\n\nThis paragraph describes the methodology used in the study."
         
         chunks = chunker.chunk(text)
         
-        # Verify we get chunks and they contain the expected content
-        assert len(chunks) > 0
+        # Check that headings are converted to markdown
         combined_text = "\n\n".join(c.text for c in chunks)
-        
-        # Check that content is preserved (headings may or may not be markdown formatted
-        # depending on how spaCy segments the text)
-        assert "INTRODUCTION" in combined_text
-        assert "METHODOLOGY" in combined_text
-        assert "introduction paragraph" in combined_text
+        assert "# INTRODUCTION" in combined_text or "## INTRODUCTION" in combined_text
+        assert "# METHODOLOGY" in combined_text or "## METHODOLOGY" in combined_text
     
     def test_chapter_heading(self, chunker):
         """Test detection of chapter/section headings."""

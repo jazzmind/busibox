@@ -2,6 +2,10 @@
 Integration test for error scenarios.
 
 Uses JWT auth fixtures from conftest.py.
+
+IMPORTANT: 500 errors are NEVER acceptable responses. They indicate
+the API is not properly catching and handling errors. All expected
+error conditions should return 4xx status codes.
 """
 import uuid
 from io import BytesIO
@@ -24,7 +28,8 @@ async def test_invalid_file_type(async_client):
         files={"file": ("test.exe", file_content, "application/x-msdownload")},
     )
     
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.status_code == status.HTTP_400_BAD_REQUEST, \
+        f"Expected 400 for invalid file type, got {response.status_code}: {response.text}"
     data = response.json()
     assert "error" in data
 
@@ -37,15 +42,11 @@ async def test_file_not_found(async_client):
     
     response = await async_client.get(f"/files/{fake_file_id}")
     
-    # Could be 404 (file not found) or 500 (database connection error)
-    assert response.status_code in [
-        status.HTTP_404_NOT_FOUND,
-        status.HTTP_500_INTERNAL_SERVER_ERROR
-    ]
-    
-    if response.status_code == status.HTTP_404_NOT_FOUND:
-        data = response.json()
-        assert "error" in data
+    # Non-existent file should return 404, never 500
+    assert response.status_code == status.HTTP_404_NOT_FOUND, \
+        f"Expected 404 for non-existent file, got {response.status_code}: {response.text}"
+    data = response.json()
+    assert "error" in data
 
 
 @pytest.mark.asyncio
@@ -56,7 +57,6 @@ async def test_delete_non_existent_file(async_client):
     
     response = await async_client.delete(f"/files/{fake_file_id}")
     
-    assert response.status_code in [
-        status.HTTP_404_NOT_FOUND,
-        status.HTTP_500_INTERNAL_SERVER_ERROR
-    ]
+    # Deleting non-existent file should return 404, never 500
+    assert response.status_code == status.HTTP_404_NOT_FOUND, \
+        f"Expected 404 for deleting non-existent file, got {response.status_code}: {response.text}"

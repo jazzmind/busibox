@@ -186,9 +186,10 @@ async def test_search_insights(authenticated_client):
         }
     )
     
-    # Note: This may fail if embedding service is not available
-    # That's okay for unit tests - we're testing the API contract
-    assert response.status_code in [200, 500]  # 500 if embedding service unavailable
+    # API should handle embedding service unavailability gracefully with 503 (service unavailable)
+    # Never 500 - that indicates uncaught exception
+    assert response.status_code in [200, 503], \
+        f"Expected 200 or 503, got {response.status_code}: {response.text}"
 
 
 @pytest.mark.asyncio

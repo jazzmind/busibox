@@ -94,7 +94,7 @@ class TestLLMCleanupInit:
     def test_init_enabled(self, cleanup_processor):
         """Test initialization with cleanup enabled."""
         assert cleanup_processor.enabled is True
-        assert cleanup_processor.model == "phi-4"  # From model registry (cleanup purpose)
+        assert cleanup_processor.model == "cleanup"  # Model name from registry
         assert cleanup_processor.litellm_base_url == "http://localhost:4000"
     
     def test_init_disabled(self, cleanup_processor_disabled):
@@ -102,29 +102,47 @@ class TestLLMCleanupInit:
         assert cleanup_processor_disabled.enabled is False
     
     def test_init_with_fallback_model(self, mock_config):
-        """Test initialization falls back to parsing model, then phi-4 if registry fails."""
+        """Test initialization falls back to parsing model, then cleanup if registry fails."""
         # Mock registry to fail on "cleanup" but succeed on "parsing"
         registry = Mock()
-        registry.get_model.side_effect = lambda purpose: {
-            "cleanup": ValueError("cleanup not found"),
-            "parsing": "phi-4"
-        }.get(purpose, ValueError(f"Unknown purpose: {purpose}"))
-        registry.get_config.return_value = {
-            "model": "phi-4",
-            "temperature": 0.1,
-            "max_tokens": 8192,
-        }
+        
+        # get_config raises ValueError for "cleanup", succeeds for "parsing"
+        def get_config_side_effect(purpose):
+            if purpose == "cleanup":
+                raise ValueError("cleanup not found")
+            return {"model": "phi-4", "temperature": 0.1, "max_tokens": 8192}
+        
+        registry.get_config.side_effect = get_config_side_effect
         
         with patch('processors.llm_cleanup.get_registry', return_value=registry):
             processor = LLMCleanup(mock_config)
-            # Should fallback to parsing model (phi-4)
-            assert processor.model == "phi-4"
+            # Should fallback to parsing model name
+            assert processor.model == "parsing"
+    
+    def test_init_with_complete_registry_failure(self, mock_config):
+        """Test initialization with complete registry failure falls back to hardcoded model."""
+        # Test complete registry failure - should use hardcoded cleanup fallback
+        # First call (cleanup) raises ValueError to trigger fallback
+        # Second call (parsing) raises Exception to trigger final fallback
+        registry = Mock()
+        call_count = [0]
+        def get_config_side_effect(purpose):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                # First call fails with ValueError (triggers fallback to parsing)
+                raise ValueError("cleanup not found")
+            else:
+                # Second call fails with Exception (triggers final fallback)
+                raise Exception("parsing also not found")
         
-        # Test complete registry failure - should use hardcoded phi-4 fallback
-        with patch('processors.llm_cleanup.get_registry', side_effect=Exception("Registry error")):
+        registry.get_config.side_effect = get_config_side_effect
+        
+        with patch('processors.llm_cleanup.get_registry', return_value=registry):
             processor = LLMCleanup(mock_config)
-            # Final fallback is hardcoded phi-4
-            assert processor.model == "phi-4"
+            # Final fallback uses "cleanup" as model name
+            assert processor.model == "cleanup"
+            # Should also have fallback config
+            assert processor.model_config == {"temperature": 0.1, "max_tokens": 32768}
 
 
 class TestNeedsCleanup:

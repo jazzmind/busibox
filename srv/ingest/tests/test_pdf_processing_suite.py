@@ -204,20 +204,25 @@ TEST_DOCUMENTS = [
 
 @pytest.fixture
 def config():
-    """Load test configuration."""
+    """Load test configuration as Config object (some fixtures need both dict and object)."""
     return Config()
 
 
 @pytest.fixture
 def samples_dir():
-    """Get path to testdocs/pdf/general directory (via samples symlink for backwards compat)."""
-    repo_root = Path(__file__).parent.parent.parent.parent
-    # New structure: testdocs repo is cloned and symlinked as 'samples'
+    """Get path to testdocs/pdf/general directory."""
+    from testing.environment import get_test_doc_repo_path
+    
+    # Get the test docs path from environment or sibling repo
+    test_doc_path = get_test_doc_repo_path()
+    
     # Test docs are in pdf/general/ subdirectory
-    samples_path = repo_root / "samples" / "pdf" / "general"
+    samples_path = test_doc_path / "pdf" / "general"
     if samples_path.exists():
         return samples_path
+    
     # Fallback to old location for local development
+    repo_root = Path(__file__).parent.parent.parent.parent
     return repo_root / "samples" / "docs"
 
 

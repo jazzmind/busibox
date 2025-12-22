@@ -174,9 +174,11 @@ class TestPVTAuth:
                 headers=auth_headers,
                 timeout=10.0,
             )
-            # PVT: We only care that auth passed - downstream errors (500 for embedding model, etc.) are OK
-            # Auth failures would return 401 or 403
-            assert resp.status_code not in [401, 403], f"Auth rejected: {resp.status_code} - {resp.text}"
+            # PVT: Auth must pass, and API must return a valid response
+            # 500 is never acceptable - it means uncaught exception
+            # 503 is acceptable if downstream service is unavailable
+            assert resp.status_code not in [401, 403, 500], \
+                f"Request failed: {resp.status_code} - {resp.text}"
 
 
 @pytest.mark.pvt

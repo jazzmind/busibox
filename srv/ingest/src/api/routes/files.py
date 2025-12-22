@@ -40,6 +40,22 @@ require_ingest_write = ScopeChecker("ingest.write")
 require_ingest_delete = ScopeChecker("ingest.delete")
 
 
+def validate_uuid(file_id_str: str) -> tuple[Optional[uuid.UUID], Optional[JSONResponse]]:
+    """
+    Validate a string as a UUID.
+    
+    Returns:
+        tuple: (uuid.UUID, None) if valid, or (None, JSONResponse) with 400 error if invalid
+    """
+    try:
+        return uuid.UUID(file_id_str), None
+    except ValueError:
+        return None, JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"error": "Invalid file ID format", "details": "File ID must be a valid UUID"}
+        )
+
+
 async def check_file_access(
     conn,
     file_id: uuid.UUID,
@@ -137,6 +153,11 @@ async def get_file_metadata(fileId: str, request: Request):
     Returns:
         File metadata including status, processing metrics, extracted metadata
     """
+    # Validate UUID format
+    file_uuid, error_response = validate_uuid(fileId)
+    if error_response:
+        return error_response
+    
     user_id = request.state.user_id
     
     from api.main import pg_service as postgres_service  # Use shared PostgresService instance
@@ -146,7 +167,7 @@ async def get_file_metadata(fileId: str, request: Request):
         async with postgres_service.acquire(request) as conn:
             # Check file access based on visibility and roles
             has_access, file_data, error_msg = await check_file_access(
-                conn, uuid.UUID(fileId), user_id, request
+                conn, file_uuid, user_id, request
             )
             
             if not has_access:
@@ -421,6 +442,11 @@ async def download_file(fileId: str, request: Request):
     Returns:
         StreamingResponse with file content
     """
+    # Validate UUID format
+    file_uuid, error_response = validate_uuid(fileId)
+    if error_response:
+        return error_response
+    
     user_id = request.state.user_id
     
     config = Config().to_dict()
@@ -434,7 +460,7 @@ async def download_file(fileId: str, request: Request):
         async with postgres_service.acquire(request) as conn:
             # Check file access based on visibility and roles
             has_access, file_data, error_msg = await check_file_access(
-                conn, uuid.UUID(fileId), user_id, request
+                conn, file_uuid, user_id, request
             )
             
             if not has_access:
@@ -450,7 +476,7 @@ async def download_file(fileId: str, request: Request):
                 SELECT storage_path, original_filename, mime_type, visibility
                 FROM ingestion_files
                 WHERE file_id = $1
-            """, uuid.UUID(fileId))
+            """, file_uuid)
             
             storage_path = file_row["storage_path"]
             original_filename = file_row["original_filename"]
@@ -886,6 +912,15 @@ async def get_file_markdown(
     Returns:
         Markdown content with metadata
     """
+    # Validate UUID format before any database operations
+    try:
+        file_uuid = uuid.UUID(fileId)
+    except ValueError:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"error": "Invalid file ID format", "details": "File ID must be a valid UUID"}
+        )
+    
     user_id = request.state.user_id
     
     config = Config().to_dict()
@@ -897,7 +932,7 @@ async def get_file_markdown(
         async with postgres_service.acquire(request) as conn:
             # Check file access based on visibility and roles
             has_access, file_data, error_msg = await check_file_access(
-                conn, uuid.UUID(fileId), user_id, request
+                conn, file_uuid, user_id, request
             )
             
             if not has_access:
@@ -917,7 +952,7 @@ async def get_file_markdown(
                     created_at
                 FROM ingestion_files
                 WHERE file_id = $1
-            """, uuid.UUID(fileId))
+            """, file_uuid)
             
             if not markdown_row or not markdown_row["has_markdown"] or not markdown_row["markdown_path"]:
                 return JSONResponse(

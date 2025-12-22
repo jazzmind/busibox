@@ -2,6 +2,10 @@
 Tests for Markdown API Endpoints
 
 Uses JWT auth fixtures from conftest.py.
+
+IMPORTANT: 500 errors are NEVER acceptable responses. They indicate
+the API is not properly catching and handling errors. All expected
+error conditions should return 4xx status codes.
 """
 
 import pytest
@@ -19,7 +23,8 @@ class TestMarkdownEndpoint:
         
         response = await async_client.get(f"/files/{fake_id}/markdown")
         
-        assert response.status_code == status.HTTP_404_NOT_FOUND
+        assert response.status_code == status.HTTP_404_NOT_FOUND, \
+            f"Expected 404, got {response.status_code}: {response.text}"
         assert "error" in response.json()
 
     @pytest.mark.asyncio
@@ -27,13 +32,12 @@ class TestMarkdownEndpoint:
         """Test markdown retrieval with invalid UUID format."""
         response = await async_client.get("/files/not-a-uuid/markdown")
         
-        # Should return 400, 422, or 500 for invalid UUID
-        # (500 is acceptable as the endpoint catches ValueError and returns 500)
+        # Invalid UUID is a client error (4xx), never a server error (500)
+        # 422 from FastAPI validation or 400 from explicit check
         assert response.status_code in [
             status.HTTP_400_BAD_REQUEST, 
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            status.HTTP_500_INTERNAL_SERVER_ERROR
-        ]
+        ], f"Expected 400 or 422 for invalid UUID, got {response.status_code}: {response.text}"
 
 
 class TestHtmlEndpoint:
@@ -46,7 +50,8 @@ class TestHtmlEndpoint:
         
         response = await async_client.get(f"/files/{fake_id}/html")
         
-        assert response.status_code == status.HTTP_404_NOT_FOUND
+        assert response.status_code == status.HTTP_404_NOT_FOUND, \
+            f"Expected 404, got {response.status_code}: {response.text}"
 
 
 class TestImageEndpoint:
@@ -59,7 +64,8 @@ class TestImageEndpoint:
         
         response = await async_client.get(f"/files/{fake_id}/images/0")
         
-        assert response.status_code == status.HTTP_404_NOT_FOUND
+        assert response.status_code == status.HTTP_404_NOT_FOUND, \
+            f"Expected 404, got {response.status_code}: {response.text}"
 
     @pytest.mark.asyncio
     async def test_get_image_invalid_index(self, async_client):
@@ -68,9 +74,11 @@ class TestImageEndpoint:
         
         response = await async_client.get(f"/files/{fake_id}/images/invalid")
         
-        # Should return 404, 422, or 500 for invalid index
+        # Invalid index is a client error (4xx), never a server error (500)
+        # Should be 422 from FastAPI or 400 from explicit check
+        # 404 is also acceptable if file not found is checked first
         assert response.status_code in [
+            status.HTTP_400_BAD_REQUEST,
             status.HTTP_404_NOT_FOUND, 
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            status.HTTP_500_INTERNAL_SERVER_ERROR
-        ]
+        ], f"Expected 400, 404, or 422 for invalid index, got {response.status_code}: {response.text}"
