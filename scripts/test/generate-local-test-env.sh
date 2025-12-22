@@ -204,7 +204,14 @@ try:
     test_creds = secrets.get('test_credentials', {})
     print(f"AUTHZ_TEST_CLIENT_ID={test_creds.get('authz_test_client_id', '')}")
     print(f"AUTHZ_TEST_CLIENT_SECRET={test_creds.get('authz_test_client_secret', '')}")
-    print(f"TEST_USER_ID={test_creds.get('test_user_id', '')}")
+    # TEST_USER_ID must be a valid UUID for token exchange
+    test_user_id = test_creds.get('test_user_id', '')
+    # Check if it's a valid UUID format (8-4-4-4-12 hex chars)
+    import re
+    uuid_pattern = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
+    if not test_user_id or not uuid_pattern.match(test_user_id):
+        test_user_id = '93e9baa1-5a96-4c9e-ae72-a3b077abac92'  # Default test user
+    print(f"TEST_USER_ID={test_user_id}")
     print(f"TEST_USER_EMAIL={test_creds.get('test_user_email', 'test@busibox.local')}")
     
     # OpenAI (if configured)

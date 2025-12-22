@@ -93,8 +93,16 @@ class PostgresService:
     async def disconnect(self):
         """Close connection pool."""
         if self.pool:
-            await self.pool.close()
+            try:
+                await self.pool.close()
+            except RuntimeError as e:
+                # Handle "Event loop is closed" during test teardown
+                if "Event loop is closed" in str(e):
+                    logger.warning("Could not close pool - event loop already closed")
+                else:
+                    raise
             self.pool = None
+            self._pool_loop = None
             logger.info("PostgreSQL connection pool closed")
 
     async def _apply_rls(self, conn, request=None):
@@ -103,6 +111,13 @@ class PostgresService:
         if not req:
             return
         await set_rls_session_vars(conn, req)
+
+    def _get_lock(self) -> asyncio.Lock:
+        """Get or create a lock for the current event loop."""
+        current_loop = asyncio.get_running_loop()
+        if self._connect_lock is None or self._pool_loop != current_loop:
+            self._connect_lock = asyncio.Lock()
+        return self._connect_lock
 
     @asynccontextmanager
     async def acquire(self, request=None):
@@ -120,7 +135,7 @@ class PostgresService:
         # Ensure we're connected in the current event loop
         current_loop = asyncio.get_running_loop()
         if not self.pool or self._pool_loop != current_loop:
-            async with self._connect_lock:
+            async with self._get_lock():
                 # Double-check after acquiring lock
                 if not self.pool or self._pool_loop != current_loop:
                     await self.connect()
