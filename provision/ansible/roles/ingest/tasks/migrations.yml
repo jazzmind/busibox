@@ -5,7 +5,7 @@
   become_user: postgres
   delegate_to: "{{ postgres_host }}"
   postgresql_db:
-    name: "{{ files_db }}"
+    name: "{{ files_db | default('files') }}"
     owner: "{{ postgres_user }}"
     encoding: UTF8
     lc_collate: en_US.UTF-8

@@ -100,10 +100,16 @@ info "Extracting secrets from vault..."
 TEMP_VAULT=$(mktemp)
 trap "rm -f $TEMP_VAULT" EXIT
 
-# Decrypt vault to temp file
-if ! ansible-vault view "$VAULT_FILE" $VAULT_FLAGS > "$TEMP_VAULT" 2>/dev/null; then
-    error "Failed to decrypt vault"
-    exit 1
+# Try to decrypt vault, or use directly if not encrypted
+if head -1 "$VAULT_FILE" | grep -q '^\$ANSIBLE_VAULT'; then
+    # File is encrypted, decrypt it
+    if ! ansible-vault view "$VAULT_FILE" $VAULT_FLAGS > "$TEMP_VAULT" 2>/dev/null; then
+        error "Failed to decrypt vault"
+        exit 1
+    fi
+else
+    # File is not encrypted (development mode), use directly
+    cp "$VAULT_FILE" "$TEMP_VAULT"
 fi
 
 # Extract secrets using Python
@@ -262,6 +268,17 @@ generate_env_file() {
             ;;
     esac
     
+    # Determine the correct database for this service
+    # This ensures tests use the same database as deployed services
+    case "$service" in
+        ingest|search)
+            POSTGRES_DB_FOR_SERVICE="files"
+            ;;
+        agent|authz|all|*)
+            POSTGRES_DB_FOR_SERVICE="busibox_${ENV}"
+            ;;
+    esac
+    
     info "Generating $env_file for $service..."
     
     cat > "$env_file" <<ENV_HEADER
@@ -301,11 +318,13 @@ OLLAMA_IP=${OLLAMA_IP}
 AUTHZ_IP=${AUTHZ_IP}
 
 # ============================================
-# PostgreSQL
+# PostgreSQL (service-specific database)
 # ============================================
-POSTGRES_HOST=${POSTGRES_IP}
+POSTGRES_HOST=\${POSTGRES_IP}
 POSTGRES_PORT=5432
-POSTGRES_DB=busibox_${ENV}
+# Database name depends on the service being tested
+# This ensures tests use the same database as deployed services
+POSTGRES_DB=${POSTGRES_DB_FOR_SERVICE}
 POSTGRES_USER=busibox_${ENV}_user
 
 # Test database connection (for integration tests)
