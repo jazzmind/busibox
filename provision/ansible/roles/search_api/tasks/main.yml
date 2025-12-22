@@ -87,6 +87,17 @@
   become: yes
   become_user: "{{ search_api_user }}"
 
+- name: Copy shared auth library
+  synchronize:
+    src: "{{ playbook_dir }}/../../srv/shared_auth/"
+    dest: /opt/search/shared_auth/
+    delete: yes
+    rsync_opts:
+      - "--exclude=__pycache__"
+      - "--exclude=*.pyc"
+  become: yes
+  become_user: "{{ search_api_user }}"
+
 - name: Copy pytest configuration
   copy:
     src: "{{ playbook_dir }}/../../srv/search/pytest.ini"

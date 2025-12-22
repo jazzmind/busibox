@@ -19,11 +19,12 @@ _this_file = os.path.abspath(__file__)
 _middleware_dir = os.path.dirname(_this_file)  # api/middleware/
 _api_dir = os.path.dirname(_middleware_dir)     # api/
 _src_dir = os.path.dirname(_api_dir)            # src/
-_search_dir = os.path.dirname(_src_dir)         # search/
-_srv_dir = os.path.dirname(_search_dir)         # srv/
+_search_dir = os.path.dirname(_src_dir)         # search/ (or /opt/search on deployed)
+_srv_dir = os.path.dirname(_search_dir)         # srv/ (or /opt on deployed)
 
 _shared_auth_paths = [
-    os.path.join(_search_dir, "shared_auth"),   # Deployed: /opt/search/shared_auth
+    "/opt/search/shared_auth",                  # Deployed: absolute path
+    os.path.join(_search_dir, "shared_auth"),   # Deployed: relative to service dir
     os.path.join(_srv_dir, "shared_auth"),      # Local: srv/shared_auth
 ]
 
