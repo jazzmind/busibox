@@ -182,7 +182,7 @@ test-all-targets: test-ingest test-search test-agent-unit test-apps
 	@echo "================================"
 
 test-ingest:
-	@echo "Running ingest service tests..."
+	@echo "Running ingest service tests (unit + integration)..."
 	@echo "Container: ingest-lxc ($(INGEST_IP))"
 	@echo ""
 	@if [ -z "$(INGEST_IP)" ] || [ "$(INGEST_IP)" = " " ]; then \
@@ -190,8 +190,8 @@ test-ingest:
 		echo "Check inventory: $(INV)/hosts.yml"; \
 		exit 1; \
 	fi
-	@echo "=== Ingest Chunker Tests ==="
-	@ssh root@$(INGEST_IP) 'ingest-test' || (echo "Ingest tests FAILED" && exit 1)
+	@echo "=== Ingest Tests (unit + integration) ==="
+	@ssh root@$(INGEST_IP) 'ingest-test all' || (echo "Ingest tests FAILED" && exit 1)
 	@echo "✓ Ingest tests passed"
 	@echo ""
 
@@ -391,7 +391,7 @@ test-apps:
 	@echo ""
 
 test-search:
-	@echo "Running search service tests..."
+	@echo "Running search service tests (unit + integration)..."
 	@echo "Container: milvus-lxc ($(MILVUS_IP))"
 	@echo ""
 	@if [ -z "$(MILVUS_IP)" ] || [ "$(MILVUS_IP)" = " " ]; then \
@@ -399,8 +399,8 @@ test-search:
 		echo "Check inventory: $(INV)/hosts.yml"; \
 		exit 1; \
 	fi
-	@echo "=== Search API Unit Tests ==="
-	@ssh root@$(MILVUS_IP) 'search-test' || (echo "Search tests FAILED" && exit 1)
+	@echo "=== Search API Tests (unit + integration) ==="
+	@ssh root@$(MILVUS_IP) 'search-test all' || (echo "Search tests FAILED" && exit 1)
 	@echo "✓ Search tests passed"
 	@echo ""
 
