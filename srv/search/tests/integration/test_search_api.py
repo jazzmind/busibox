@@ -25,21 +25,21 @@ import httpx
 def services_available() -> bool:
     """Check if external services are available for integration tests."""
     try:
-        from shared.config import load_config
-        config = load_config()
+        import os
         
         # Check Milvus
         from pymilvus import connections
         connections.connect(
             alias="test",
-            host=config.get("milvus_host", "localhost"),
-            port=config.get("milvus_port", 19530),
+            host=os.getenv("MILVUS_HOST", "localhost"),
+            port=int(os.getenv("MILVUS_PORT", "19530")),
             timeout=5,
         )
         connections.disconnect("test")
         
         return True
-    except Exception:
+    except Exception as e:
+        print(f"Services not available: {e}")
         return False
 
 
