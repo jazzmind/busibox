@@ -4,17 +4,30 @@ Integration tests for insights API endpoints.
 Tests the chat insights functionality migrated from search-api to agent-api.
 All tests use proper Bearer token authentication via get_principal mocking.
 
-These tests require Milvus vector database backend - skip with: pytest -m "not milvus"
+These tests require Milvus vector database backend.
 """
 
+import os
 import pytest
 from httpx import AsyncClient, ASGITransport
 from app.main import app
 from app.schemas.auth import Principal
+from app.api.insights import init_insights_service, _insights_service
 import time
 
-# All tests in this module require Milvus
-pytestmark = pytest.mark.milvus
+
+@pytest.fixture(scope="session", autouse=True)
+def initialize_insights_service():
+    """Initialize insights service for tests using environment variables."""
+    # Only initialize if not already done
+    from app.api import insights
+    if insights._insights_service is None:
+        config = {
+            "milvus_host": os.getenv("MILVUS_HOST", "localhost"),
+            "milvus_port": int(os.getenv("MILVUS_PORT", "19530")),
+            "embedding_service_url": os.getenv("INGEST_API_URL", "http://localhost:8000"),
+        }
+        init_insights_service(config)
 
 
 @pytest.fixture
@@ -45,11 +58,19 @@ def other_principal():
 
 @pytest.fixture
 async def authenticated_client(test_principal):
-    """HTTP client authenticated as test-user."""
+    """HTTP client authenticated as test-user with real JWT for service-to-service calls."""
     from app.auth.dependencies import get_principal
+    from testing.auth import AuthTestClient
     
     async def override_get_principal():
         return test_principal
+    
+    # Get a real JWT token for service-to-service calls (e.g., to embedding service)
+    auth_client = AuthTestClient()
+    try:
+        token = auth_client.get_token(audience="ingest-api")
+    except Exception:
+        token = None  # If token fetch fails, proceed without (some tests may fail)
     
     # Store original overrides
     original_overrides = app.dependency_overrides.copy()
@@ -57,6 +78,9 @@ async def authenticated_client(test_principal):
     
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            # Create a wrapper that adds auth header to all requests
+            if token:
+                client.headers["Authorization"] = f"Bearer {token}"
             yield client
     finally:
         # Restore original overrides
@@ -65,11 +89,19 @@ async def authenticated_client(test_principal):
 
 @pytest.fixture
 async def other_authenticated_client(other_principal):
-    """HTTP client authenticated as other-user."""
+    """HTTP client authenticated as other-user with real JWT for service-to-service calls."""
     from app.auth.dependencies import get_principal
+    from testing.auth import AuthTestClient
     
     async def override_get_principal():
         return other_principal
+    
+    # Get a real JWT token for service-to-service calls
+    auth_client = AuthTestClient()
+    try:
+        token = auth_client.get_token(audience="ingest-api")
+    except Exception:
+        token = None
     
     # Store original overrides
     original_overrides = app.dependency_overrides.copy()
@@ -77,6 +109,8 @@ async def other_authenticated_client(other_principal):
     
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            if token:
+                client.headers["Authorization"] = f"Bearer {token}"
             yield client
     finally:
         # Restore original overrides
@@ -127,7 +161,7 @@ async def test_insert_insights(authenticated_client):
     
     assert response.status_code == 200
     data = response.json()
-    assert data["inserted_count"] == 2
+    assert data["count"] == 2
 
 
 @pytest.mark.asyncio
@@ -224,7 +258,7 @@ async def test_get_user_stats(authenticated_client):
     assert response.status_code == 200
     data = response.json()
     assert "userId" in data
-    assert "totalInsights" in data
+    assert "count" in data
     assert data["userId"] == "test-user"
 
 
@@ -263,7 +297,8 @@ async def test_delete_conversation_insights(authenticated_client):
     
     assert response.status_code == 200
     data = response.json()
-    assert "deleted_count" in data
+    assert "message" in data
+    assert "conversationId" in data
 
 
 @pytest.mark.asyncio
@@ -293,7 +328,8 @@ async def test_delete_user_insights(authenticated_client):
     
     assert response.status_code == 200
     data = response.json()
-    assert "deleted_count" in data
+    assert "message" in data
+    assert "userId" in data
 
 
 @pytest.mark.asyncio

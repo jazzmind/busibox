@@ -16,9 +16,10 @@ from app.models.domain import AgentDefinition, RunRecord
 
 @pytest.fixture
 async def test_agent(test_session):
-    """Create a test agent definition."""
+    """Create a test agent definition with unique name."""
+    unique_name = f"test-agent-{uuid.uuid4().hex[:8]}"
     agent = AgentDefinition(
-        name="test-agent",
+        name=unique_name,
         display_name="Test Agent",
         model="agent",
         instructions="Test instructions",
@@ -307,6 +308,7 @@ async def test_stream_run_terminates_on_timeout(test_session, test_run, mock_pri
     complete_events = [e for e in events_received if e["event"] == "complete"]
     assert len(complete_events) == 1
     assert complete_events[0]["data"]["status"] == "timeout"
+
 
 
 

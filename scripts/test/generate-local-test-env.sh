@@ -366,6 +366,8 @@ MINIO_BUCKET=documents
 REDIS_HOST=${INGEST_IP}
 REDIS_PORT=6379
 REDIS_URL=redis://${INGEST_IP}:6379
+# Use a separate stream for local testing to avoid conflicts with container worker
+REDIS_STREAM=jobs:ingestion:local
 
 # ============================================
 # LLM Services

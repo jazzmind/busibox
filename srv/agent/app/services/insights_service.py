@@ -250,18 +250,18 @@ class InsightsService:
             
             response = await client.post(
                 f"{self.embedding_service_url}/api/embeddings",
-                json={"texts": [text]},
+                json={"input": text},  # OpenAI-compatible format
                 headers=headers,
             )
             response.raise_for_status()
             data = response.json()
             
-            # Return first embedding
-            embeddings = data.get("embeddings", [])
-            if not embeddings:
+            # Parse OpenAI-compatible response format: {"data": [{"embedding": [...]}]}
+            embedding_data = data.get("data", [])
+            if not embedding_data:
                 raise ValueError("No embeddings returned from service")
             
-            return embeddings[0]
+            return embedding_data[0].get("embedding", [])
     
     async def search_insights(
         self,

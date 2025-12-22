@@ -33,11 +33,11 @@ ENV="${2:-test}"
 shift 2 2>/dev/null || true
 PYTEST_ARGS="$*"
 
-# FAST mode: skip slow, GPU, and Milvus tests
+# FAST mode: skip slow and GPU tests
 # Set via environment variable FAST=1
 if [[ "${FAST:-}" == "1" ]]; then
-    PYTEST_ARGS="-m 'not slow and not gpu and not milvus' $PYTEST_ARGS"
-    info "FAST mode: skipping @pytest.mark.slow, @pytest.mark.gpu, and @pytest.mark.milvus tests"
+    PYTEST_ARGS="-m 'not slow and not gpu' $PYTEST_ARGS"
+    info "FAST mode: skipping @pytest.mark.slow and @pytest.mark.gpu tests"
 fi
 
 # WORKER mode: start a local worker for tests that require it
@@ -125,10 +125,16 @@ start_local_worker() {
     # Set LOCAL_WORKER so tests know a worker was started
     export LOCAL_WORKER=1
     
-    # Start worker in background
+    # Start worker in background with explicitly exported environment
+    # Export REDIS_STREAM to ensure worker uses the local stream
+    export REDIS_STREAM="${REDIS_STREAM:-jobs:ingestion:local}"
+    
     (
         cd "$service_dir"
         source "${venv_dir}/bin/activate"
+        # Re-export to ensure it persists after venv activation
+        export REDIS_STREAM="${REDIS_STREAM}"
+        export PYTHONPATH="${service_dir}/src:${PYTHONPATH:-}"
         python src/worker.py 2>&1 | while read line; do
             echo "[WORKER] $line"
         done

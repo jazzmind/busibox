@@ -260,10 +260,11 @@ Analyze this query and select the appropriate tools and/or agents."""
             request_id=request_id,
             response_time_seconds=response_time,
             target_seconds=2.0,
-            query_length=len(payload.query)
+            query_length=len(request.query)
         )
     
     return DispatcherResponse(routing_decision=routing_decision)
+
 
 
 
