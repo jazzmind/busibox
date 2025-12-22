@@ -6,6 +6,8 @@ These tests demonstrate the full power of the system:
 2. Multi-agent orchestration
 3. Tool execution with real APIs
 4. End-to-end conversation flow
+
+These tests require Milvus vector database backend - skip with: pytest -m "not milvus"
 """
 
 import json
@@ -18,6 +20,9 @@ from app.services.insights_service import ChatInsight
 from app.config.settings import get_settings
 
 settings = get_settings()
+
+# All tests in this module require Milvus
+pytestmark = [pytest.mark.milvus, pytest.mark.integration]
 
 
 @pytest.mark.asyncio

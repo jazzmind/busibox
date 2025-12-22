@@ -126,7 +126,7 @@ endif
 #              make test SERVICE=authz INV=test MODE=local
 test:
 ifdef SERVICE
-	@bash scripts/make/test.sh $(SERVICE) $(INV) $(MODE)
+	@PYTEST_ARGS="$(ARGS)" bash scripts/make/test.sh $(SERVICE) $(INV) $(MODE)
 else
 	@bash scripts/make/test.sh
 endif

@@ -1232,6 +1232,30 @@ run_container_tests() {
             header "Ingest Service Tests" 70
             info "Running ingest tests on ${ingest_ip}..."
             
+            # Validate required credentials
+            if [[ -z "${AUTHZ_ADMIN_TOKEN:-}" ]]; then
+                error "AUTHZ_ADMIN_TOKEN not found in vault. Run bootstrap-test-credentials.sh"
+                exit 1
+            fi
+            if [[ -z "${TEST_USER_ID:-}" ]]; then
+                warn "TEST_USER_ID not found in vault. Running bootstrap to create test user..."
+                # Bootstrap test credentials if missing and capture TEST_USER_ID
+                local bootstrap_output
+                bootstrap_output=$(bash "${REPO_ROOT}/scripts/test/bootstrap-test-credentials.sh" "$env" 2>&1) || {
+                    error "Failed to bootstrap test credentials"
+                    echo "$bootstrap_output"
+                    exit 1
+                }
+                # Extract TEST_USER_ID from bootstrap output
+                TEST_USER_ID=$(echo "$bootstrap_output" | grep "^TEST_USER_ID=" | cut -d'=' -f2)
+                if [[ -z "${TEST_USER_ID:-}" ]]; then
+                    error "Could not extract TEST_USER_ID from bootstrap output"
+                    echo "$bootstrap_output"
+                    exit 1
+                fi
+                info "Created test user: ${TEST_USER_ID}"
+            fi
+            
             # Ingest uses "files" database
             local test_env="POSTGRES_HOST=${postgres_ip}"
             test_env="${test_env} POSTGRES_USER=${db_user}"
@@ -1244,8 +1268,13 @@ run_container_tests() {
             test_env="${test_env} AUTHZ_JWKS_URL=http://${authz_ip}:8010/.well-known/jwks.json"
             test_env="${test_env} AUTHZ_BOOTSTRAP_CLIENT_ID=ai-portal"
             test_env="${test_env} AUTHZ_BOOTSTRAP_CLIENT_SECRET=${JWT_SECRET}"
+            test_env="${test_env} AUTHZ_ADMIN_TOKEN=${AUTHZ_ADMIN_TOKEN}"
+            test_env="${test_env} TEST_USER_ID=${TEST_USER_ID}"
             
-            ssh "root@${ingest_ip}" "cd /srv/ingest && source venv/bin/activate && export PYTHONPATH=/srv/ingest/src && source .env && export ${test_env} && python -m pytest tests/ -v --tb=short" || {
+            # Parse additional pytest args
+            local pytest_args="${PYTEST_ARGS:-}"
+            
+            ssh "root@${ingest_ip}" "cd /srv/ingest && source venv/bin/activate && export PYTHONPATH=/srv/ingest/src && source .env && export ${test_env} && python -m pytest tests/ -v --tb=short ${pytest_args}" || {
                 error "Ingest tests failed"
                 exit 1
             }
@@ -1254,6 +1283,21 @@ run_container_tests() {
         search)
             header "Search Service Tests" 70
             info "Running search tests on ${search_ip}..."
+            
+            # Validate required credentials (use same TEST_USER_ID as ingest)
+            if [[ -z "${TEST_USER_ID:-}" ]]; then
+                warn "TEST_USER_ID not found. Running bootstrap to create test user..."
+                local bootstrap_output
+                bootstrap_output=$(bash "${REPO_ROOT}/scripts/test/bootstrap-test-credentials.sh" "$env" 2>&1) || {
+                    error "Failed to bootstrap test credentials"
+                    exit 1
+                }
+                TEST_USER_ID=$(echo "$bootstrap_output" | grep "^TEST_USER_ID=" | cut -d'=' -f2)
+                if [[ -z "${TEST_USER_ID:-}" ]]; then
+                    error "Could not extract TEST_USER_ID from bootstrap output"
+                    exit 1
+                fi
+            fi
             
             # Search uses "files" database (always), not busibox_test
             local test_env="POSTGRES_HOST=${postgres_ip}"
@@ -1266,10 +1310,13 @@ run_container_tests() {
             test_env="${test_env} AUTHZ_ADMIN_TOKEN=${AUTHZ_ADMIN_TOKEN}"
             test_env="${test_env} AUTHZ_BOOTSTRAP_CLIENT_ID=ai-portal"
             test_env="${test_env} AUTHZ_BOOTSTRAP_CLIENT_SECRET=${JWT_SECRET}"
-            test_env="${test_env} TEST_USER_ID=93e9baa1-5a96-4c9e-ae72-a3b077abac92"
+            test_env="${test_env} TEST_USER_ID=${TEST_USER_ID}"
+            
+            # Parse additional pytest args
+            local pytest_args="${PYTEST_ARGS:-}"
             
             # Search service is deployed to /opt/search on milvus container
-            ssh "root@${search_ip}" "cd /opt/search && source venv/bin/activate && export PYTHONPATH=/opt/search/src && source .env && export ${test_env} && python -m pytest tests/ -v --tb=short" || {
+            ssh "root@${search_ip}" "cd /opt/search && source venv/bin/activate && export PYTHONPATH=/opt/search/src && source .env && export ${test_env} && python -m pytest tests/ -v --tb=short ${pytest_args}" || {
                 error "Search tests failed"
                 exit 1
             }
@@ -1279,19 +1326,39 @@ run_container_tests() {
             header "Agent Service Tests" 70
             info "Running agent tests on ${agent_ip}..."
             
+            # Validate required credentials
+            if [[ -z "${TEST_USER_ID:-}" ]]; then
+                warn "TEST_USER_ID not found. Running bootstrap to create test user..."
+                local bootstrap_output
+                bootstrap_output=$(bash "${REPO_ROOT}/scripts/test/bootstrap-test-credentials.sh" "$env" 2>&1) || {
+                    error "Failed to bootstrap test credentials"
+                    exit 1
+                }
+                TEST_USER_ID=$(echo "$bootstrap_output" | grep "^TEST_USER_ID=" | cut -d'=' -f2)
+                if [[ -z "${TEST_USER_ID:-}" ]]; then
+                    error "Could not extract TEST_USER_ID from bootstrap output"
+                    exit 1
+                fi
+            fi
+            
             local test_env="POSTGRES_HOST=${postgres_ip}"
             test_env="${test_env} POSTGRES_USER=${db_user}"
             test_env="${test_env} POSTGRES_PASSWORD=${db_password}"
             test_env="${test_env} POSTGRES_DB=${db_name}"
             test_env="${test_env} AUTHZ_URL=http://${authz_ip}:8010"
             test_env="${test_env} AUTHZ_JWKS_URL=http://${authz_ip}:8010/.well-known/jwks.json"
+            test_env="${test_env} AUTHZ_ADMIN_TOKEN=${AUTHZ_ADMIN_TOKEN}"
             test_env="${test_env} AUTHZ_BOOTSTRAP_CLIENT_ID=ai-portal"
             test_env="${test_env} AUTHZ_BOOTSTRAP_CLIENT_SECRET=${JWT_SECRET}"
+            test_env="${test_env} TEST_USER_ID=${TEST_USER_ID}"
             test_env="${test_env} INGEST_URL=http://${ingest_ip}:8000"
             test_env="${test_env} SEARCH_URL=http://${search_ip}:8003"  # Search is on port 8003
             
+            # Parse additional pytest args
+            local pytest_args="${PYTEST_ARGS:-}"
+            
             # Agent uses .venv not venv
-            ssh "root@${agent_ip}" "cd /srv/agent && source .venv/bin/activate && source .env && export ${test_env} && python -m pytest tests/ -v --tb=short" || {
+            ssh "root@${agent_ip}" "cd /srv/agent && source .venv/bin/activate && source .env && export ${test_env} && python -m pytest tests/ -v --tb=short ${pytest_args}" || {
                 error "Agent tests failed"
                 exit 1
             }

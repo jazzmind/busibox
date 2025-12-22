@@ -33,11 +33,11 @@ ENV="${2:-test}"
 shift 2 2>/dev/null || true
 PYTEST_ARGS="$*"
 
-# FAST mode: skip slow and GPU tests
+# FAST mode: skip slow, GPU, and Milvus tests
 # Set via environment variable FAST=1
 if [[ "${FAST:-}" == "1" ]]; then
-    PYTEST_ARGS="-m 'not slow and not gpu' $PYTEST_ARGS"
-    info "FAST mode: skipping @pytest.mark.slow and @pytest.mark.gpu tests"
+    PYTEST_ARGS="-m 'not slow and not gpu and not milvus' $PYTEST_ARGS"
+    info "FAST mode: skipping @pytest.mark.slow, @pytest.mark.gpu, and @pytest.mark.milvus tests"
 fi
 
 # WORKER mode: start a local worker for tests that require it

@@ -3,6 +3,8 @@ Integration tests for insights API endpoints.
 
 Tests the chat insights functionality migrated from search-api to agent-api.
 All tests use proper Bearer token authentication via get_principal mocking.
+
+These tests require Milvus vector database backend - skip with: pytest -m "not milvus"
 """
 
 import pytest
@@ -10,6 +12,9 @@ from httpx import AsyncClient, ASGITransport
 from app.main import app
 from app.schemas.auth import Principal
 import time
+
+# All tests in this module require Milvus
+pytestmark = pytest.mark.milvus
 
 
 @pytest.fixture
