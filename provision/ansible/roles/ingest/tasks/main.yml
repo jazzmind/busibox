@@ -95,8 +95,8 @@
 
 - name: Copy shared testing library
   synchronize:
-    src: "{{ playbook_dir }}/../../srv/shared/"
-    dest: /srv/ingest/shared/
+    src: "{{ playbook_dir }}/../../srv/test_utils/"
+    dest: /srv/ingest/test_utils/
     delete: yes
     rsync_opts:
       - "--exclude=__pycache__"

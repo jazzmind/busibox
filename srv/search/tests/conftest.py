@@ -20,13 +20,13 @@ from typing import Dict, List
 from unittest.mock import Mock, AsyncMock
 
 # Add shared testing library to path
-# When deployed: /opt/search/shared/testing/
-# When local: ../../shared/testing/
-_shared_paths = [
-    os.path.join(os.path.dirname(__file__), "..", "shared"),  # Deployed: /opt/search/shared
-    os.path.join(os.path.dirname(__file__), "..", "..", "shared"),  # Local: srv/shared
+# When deployed: /opt/search/test_utils/testing/
+# When local: ../../test_utils/testing/
+_test_utils_paths = [
+    os.path.join(os.path.dirname(__file__), "..", "test_utils"),  # Deployed: /opt/search/test_utils
+    os.path.join(os.path.dirname(__file__), "..", "..", "test_utils"),  # Local: srv/test_utils
 ]
-for _path in _shared_paths:
+for _path in _test_utils_paths:
     if os.path.exists(_path) and _path not in sys.path:
         sys.path.insert(0, _path)
 
