@@ -41,6 +41,8 @@ class TestMilvusSearchService:
         
         # Mock collection
         mock_collection = Mock()
+        # Mock partitions as empty list (needed by get_accessible_partitions)
+        mock_collection.partitions = []
         mock_hits = Mock()
         # Fix: get() method takes 2 arguments (key, default)
         mock_hits.entity.get = Mock(side_effect=lambda key, default=None: {
@@ -73,6 +75,8 @@ class TestMilvusSearchService:
         
         # Mock collection
         mock_collection = Mock()
+        # Mock partitions as empty list (needed by get_accessible_partitions)
+        mock_collection.partitions = []
         mock_hits = Mock()
         # Fix: get() method takes 2 arguments (key, default)
         mock_hits.entity.get = Mock(side_effect=lambda key, default=None: {
@@ -97,7 +101,8 @@ class TestMilvusSearchService:
         assert results[0]["file_id"] == "file-456"
         assert results[0]["score"] == 0.89
     
-    def test_hybrid_search(self, mock_config, sample_embedding):
+    @pytest.mark.asyncio
+    async def test_hybrid_search(self, mock_config, sample_embedding):
         """Test hybrid search with RRF fusion."""
         service = MilvusSearchService(mock_config)
         service.connected = True
@@ -116,7 +121,7 @@ class TestMilvusSearchService:
         service.semantic_search = Mock(return_value=dense_results)
         service.keyword_search = Mock(return_value=sparse_results)
         
-        results = service.hybrid_search(
+        results = await service.hybrid_search(
             query_embedding=sample_embedding,
             query_text="test query",
             user_id="user-123",
@@ -165,6 +170,8 @@ class TestMilvusSearchService:
         service.connected = True
         
         mock_collection = Mock()
+        # Mock partitions as empty list (needed by get_accessible_partitions)
+        mock_collection.partitions = []
         mock_collection.query = Mock(return_value=[{
             "file_id": "file-123",
             "chunk_index": 5,
