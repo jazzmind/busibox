@@ -1,10 +1,15 @@
 """
 Embedding service for generating query embeddings.
+
+Uses OAuth2 Token Exchange to get a token with the correct audience (ingest-api)
+while preserving user identity and roles for RLS enforcement.
 """
 
 import structlog
 import httpx
 from typing import List, Optional, Dict
+
+from services.token_exchange import TokenExchangeService
 
 logger = structlog.get_logger()
 
@@ -19,6 +24,9 @@ class EmbeddingService:
         self.model = config.get("embedding_model", "bge-large-en-v1.5")
         self.embedding_dim = config.get("embedding_dim", 1024)
         self.timeout = 30.0
+        
+        # Token exchange for service-to-service auth
+        self.token_exchange = TokenExchangeService(config)
     
     async def embed_query(
         self, 
@@ -29,10 +37,13 @@ class EmbeddingService:
         """
         Generate embedding for a search query.
         
+        Uses token exchange to get a token with audience=ingest-api while
+        preserving the user's identity and roles for RLS enforcement.
+        
         Args:
             query: Search query text
-            user_id: User ID (unused, kept for backward compatibility)
-            authorization: Authorization header value for JWT passthrough (required)
+            user_id: User ID for token exchange (required for RLS)
+            authorization: Original authorization header (unused, kept for compatibility)
         
         Returns:
             Embedding vector or None on failure
@@ -44,10 +55,21 @@ class EmbeddingService:
                 model=self.model,
             )
             
-            # Prepare headers - pass through JWT authorization
+            # Get token for calling ingest service
             headers = {}
-            if authorization:
-                headers["Authorization"] = authorization
+            if user_id:
+                # Use token exchange to get a token with ingest-api audience
+                ingest_token = await self.token_exchange.get_token_for_service(
+                    user_id=user_id,
+                    target_audience="ingest-api",
+                )
+                if ingest_token:
+                    headers["Authorization"] = f"Bearer {ingest_token}"
+                else:
+                    logger.warning(
+                        "Token exchange failed, attempting without auth",
+                        user_id=user_id,
+                    )
             
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.post(
@@ -94,10 +116,13 @@ class EmbeddingService:
         """
         Generate embeddings for multiple texts.
         
+        Uses token exchange to get a token with audience=ingest-api while
+        preserving the user's identity and roles for RLS enforcement.
+        
         Args:
             texts: List of texts to embed
-            user_id: User ID (unused, kept for backward compatibility)
-            authorization: Authorization header value for JWT passthrough (required)
+            user_id: User ID for token exchange (required for RLS)
+            authorization: Original authorization header (unused, kept for compatibility)
         
         Returns:
             List of embedding vectors or None on failure
@@ -109,10 +134,21 @@ class EmbeddingService:
                 model=self.model,
             )
             
-            # Prepare headers - pass through JWT authorization
+            # Get token for calling ingest service
             headers = {}
-            if authorization:
-                headers["Authorization"] = authorization
+            if user_id:
+                # Use token exchange to get a token with ingest-api audience
+                ingest_token = await self.token_exchange.get_token_for_service(
+                    user_id=user_id,
+                    target_audience="ingest-api",
+                )
+                if ingest_token:
+                    headers["Authorization"] = f"Bearer {ingest_token}"
+                else:
+                    logger.warning(
+                        "Token exchange failed, attempting without auth",
+                        user_id=user_id,
+                    )
             
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.post(

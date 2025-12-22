@@ -58,9 +58,19 @@ class Config(BaseSettings):
     authz_audience: str = os.getenv("AUTHZ_AUDIENCE", "search-api")
     jwt_algorithms: str = os.getenv("JWT_ALGORITHMS", "RS256")
     
-    # Test credentials (used by integration tests)
-    authz_test_client_id: Optional[str] = os.getenv("AUTHZ_TEST_CLIENT_ID", None)
-    authz_test_client_secret: Optional[str] = os.getenv("AUTHZ_TEST_CLIENT_SECRET", None)
+    # AuthZ Token URL (for token exchange)
+    authz_token_url: str = os.getenv("AUTHZ_TOKEN_URL", "http://10.96.200.210:8010/oauth/token")
+    
+    # Service-to-service OAuth client (api-service)
+    # Used for token exchange when calling other services (ingest, agent, etc.)
+    api_service_client_id: str = os.getenv("API_SERVICE_CLIENT_ID", "api-service")
+    api_service_client_secret: str = os.getenv("API_SERVICE_CLIENT_SECRET", "")
+    
+    # Bootstrap client credentials (for PVT tests)
+    authz_bootstrap_client_id: str = os.getenv("AUTHZ_BOOTSTRAP_CLIENT_ID", "ai-portal")
+    authz_bootstrap_client_secret: str = os.getenv("AUTHZ_BOOTSTRAP_CLIENT_SECRET", "")
+    
+    # Test user (for integration tests)
     test_user_id: Optional[str] = os.getenv("TEST_USER_ID", None)
     
     # Search defaults
