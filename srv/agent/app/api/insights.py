@@ -83,8 +83,18 @@ async def insert_insights(
     Insert insights into Milvus.
     
     Requires authentication via Bearer token.
+    Users can only insert insights for themselves.
     """
     user_id = principal.sub
+    
+    # Verify all insights belong to the authenticated user
+    for insight in insert_request.insights:
+        if insight.user_id != user_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Cannot insert insights for other users",
+            )
+    
     try:
         # Convert Pydantic models to service models
         service_insights = [

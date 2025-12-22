@@ -211,11 +211,18 @@ async def async_client(session_engine) -> AsyncGenerator[AsyncClient, None]:
     Async HTTP client for integration tests.
     
     Requires auth_headers for authenticated requests.
+    Ensures dependency overrides are cleared for clean JWT auth.
     """
     from httpx import ASGITransport
     
+    # Clear any leftover dependency overrides from previous tests
+    app.dependency_overrides.clear()
+    
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         yield client
+    
+    # Clean up after
+    app.dependency_overrides.clear()
 
 
 # =============================================================================

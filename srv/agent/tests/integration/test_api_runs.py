@@ -21,9 +21,10 @@ from app.models.domain import AgentDefinition, RunRecord
 
 @pytest.fixture
 async def test_agent(test_session):
-    """Create a test agent definition."""
+    """Create a test agent definition with unique name."""
+    unique_name = f"test-agent-{uuid.uuid4().hex[:8]}"
     agent = AgentDefinition(
-        name="test-agent",
+        name=unique_name,
         display_name="Test Agent",
         model="chat",  # Use 'chat' model which LiteLLM routes to the chat model
         instructions="You are a test assistant. Always respond with 'Test response: ' followed by the user's input.",
@@ -40,8 +41,9 @@ async def test_agent(test_session):
 @pytest.fixture
 async def test_agent_with_tools(test_session):
     """Create a test agent with tools for integration tests."""
+    unique_name = f"test-agent-with-tools-{uuid.uuid4().hex[:8]}"
     agent = AgentDefinition(
-        name="test-agent-with-tools",
+        name=unique_name,
         display_name="Test Agent with Tools",
         model="chat",
         instructions="You are a test assistant that can search for information.",
