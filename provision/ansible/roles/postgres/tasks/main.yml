@@ -120,54 +120,40 @@
     group: postgres
   tags: [postgres]
 
-# ============================================================================
-# Service-Specific Databases
-# ============================================================================
-# Each service gets its own database with environment suffix (e.g., files_test, files_production)
-# This ensures test and production data are completely isolated.
-
-- name: Create files/ingestion database
-  become_user: postgres
-  postgresql_db:
-    name: "{{ files_db }}"
-    owner: "{{ postgres_user }}"
-    encoding: UTF8
-    lc_collate: en_US.UTF-8
-    lc_ctype: en_US.UTF-8
-    template: template0
-    state: present
-  tags: [postgres, postgres_databases]
-
 - name: Create migrations table in files database
   become_user: postgres
   postgresql_query:
-    db: "{{ files_db }}"
+    db: files
     query: |
       CREATE TABLE IF NOT EXISTS ansible_migrations (
         version INTEGER PRIMARY KEY,
         name VARCHAR(255) NOT NULL,
         applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
+  when: "'files' in (app_databases | default([]))"
   tags: [postgres]
 
 - name: Check if ingestion schema migration has been applied
   become_user: postgres
   postgresql_query:
-    db: "{{ files_db }}"
+    db: files
     query: "SELECT COUNT(*) as count FROM ansible_migrations WHERE version = 10"
   register: migration_check
   failed_when: false
+  when: "'files' in (app_databases | default([]))"
   tags: [postgres]
 
 - name: Debug migration check result
   debug:
-    msg: "Migration check for {{ files_db }}: {{ migration_check }}"
+    msg: "Migration check: {{ migration_check }}"
+  when: "'files' in (app_databases | default([]))"
   tags: [postgres]
 
 - name: Apply ingestion schema to files database
   become_user: postgres
-  command: psql -U postgres -d {{ files_db }} -f /var/lib/postgresql/migrations/010_ingestion_schema.sql
+  command: psql -U postgres -d files -f /var/lib/postgresql/migrations/010_ingestion_schema.sql
   when: >
+    'files' in (app_databases | default([])) and
     (migration_check.query_result is not defined or 
     (migration_check.query_result | length == 0) or
     (migration_check.query_result[0].count | int == 0))
@@ -176,13 +162,14 @@
 
 - name: Display migration result
   debug:
-    msg: "Ingestion schema migration for {{ files_db }}: {{ 'applied' if files_migration_result.changed else 'already exists' }}"
+    msg: "Ingestion schema migration: {{ 'applied' if files_migration_result.changed else 'already exists' }}"
+  when: "'files' in (app_databases | default([]))"
   tags: [postgres]
 
 - name: Grant ownership of all tables to postgres user (files database)
   become_user: postgres
   postgresql_query:
-    db: "{{ files_db }}"
+    db: files
     query: |
       -- Grant ownership of all tables in public schema
       DO $$
@@ -287,7 +274,7 @@
 - name: Grant ownership of all tables to postgres user (files database)
   become_user: postgres
   postgresql_query:
-    db: "{{ files_db }}"
+    db: "{{ files_db | default('files') }}"
     query: |
       -- Grant ownership of all tables in public schema
       DO $$

@@ -69,7 +69,7 @@ postgres_db: busibox_test
 postgres_user: busibox_test_user
 
 # Files/Ingestion database
-files_db: "files_{{ busibox_env }}"
+files_db: files
 files_user: "{{ postgres_user }}"
 files_password: "{{ secrets.postgresql.password }}"
 
