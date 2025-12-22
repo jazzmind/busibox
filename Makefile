@@ -7,11 +7,14 @@
 # Usage: make test SERVICE=authz INV=test
 #        make test SERVICE=authz INV=test MODE=local
 #        make test-local SERVICE=authz INV=test ARGS="-m pvt"
-#        make test-local SERVICE=search INV=test FAST=1
+#        make test-local SERVICE=search INV=test FAST=0  (run all tests)
 SERVICE ?=
 INV ?= test
 MODE ?= container
 ARGS ?=
+# FAST mode: skip slow/gpu tests
+# - test-local defaults to FAST=1 (skip slow tests for faster local iteration)
+# - test defaults to FAST=0 (run all tests on containers)
 FAST ?=
 
 # Interactive menu (default when running just 'make')
@@ -78,8 +81,11 @@ help:
 	@echo "Test Filtering:"
 	@echo "  make test-local ... ARGS=\"-m pvt\"            # Run only PVT tests"
 	@echo "  make test-local ... ARGS=\"-k test_health\"    # Run tests matching pattern"
-	@echo "  make test-local ... FAST=1                   # Skip slow/GPU tests"
+	@echo "  make test-local ... FAST=0                   # Run ALL tests (default skips slow/GPU)"
 	@echo "  make test-local ... ARGS=\"--tb=short\"        # Short tracebacks"
+	@echo ""
+	@echo "Note: test-local defaults to FAST=1 (skips slow tests for faster iteration)"
+	@echo "      test (on containers) runs ALL tests by default"
 	@echo ""
 	@echo "Quick Start:"
 	@echo "  1. make setup      # On Proxmox host"
@@ -120,20 +126,21 @@ endif
 # Run tests locally against remote container backends
 # Usage: make test-local SERVICE=authz INV=test
 #        make test-local SERVICE=authz INV=test ARGS="-m pvt"
-#        make test-local SERVICE=search INV=test FAST=1
+#        make test-local SERVICE=search INV=test FAST=0  (run ALL tests including slow)
+# Note: FAST=1 is the default for test-local (skips slow/gpu tests for faster iteration)
 test-local:
 ifndef SERVICE
 	@echo "Error: SERVICE is required"
 	@echo "Usage: make test-local SERVICE=authz INV=test"
 	@echo "       make test-local SERVICE=authz INV=test ARGS=\"-m pvt\""
-	@echo "       make test-local SERVICE=search INV=test FAST=1"
+	@echo "       make test-local SERVICE=search INV=test FAST=0  # run ALL tests"
 	@echo ""
 	@echo "Available services: authz, ingest, search, agent, all"
 	@echo "ARGS: Pass additional pytest arguments (e.g., -m pvt, -k pattern, --tb=short)"
-	@echo "FAST=1: Skip tests marked as @pytest.mark.slow or @pytest.mark.gpu"
+	@echo "FAST=0: Run ALL tests including slow/gpu (default is FAST=1 for local)"
 	@exit 1
 endif
-	@FAST=$(FAST) bash scripts/test/run-local-tests.sh $(SERVICE) $(INV) $(ARGS)
+	@FAST=$${FAST:-1} bash scripts/test/run-local-tests.sh $(SERVICE) $(INV) $(ARGS)
 
 test-security:
 	@bash tests/security/run_tests.sh
