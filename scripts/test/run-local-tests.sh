@@ -179,7 +179,8 @@ run_service_tests() {
     # Add src to PYTHONPATH for the service
     export PYTHONPATH="${service_dir}/src:${PYTHONPATH:-}"
     
-    if $pytest_cmd "$test_dir" -v $PYTEST_ARGS; then
+    # Use eval to properly handle quoted arguments in PYTEST_ARGS
+    if eval "$pytest_cmd $test_dir -v $PYTEST_ARGS"; then
         success "$service tests passed!"
         return 0
     else

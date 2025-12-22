@@ -121,6 +121,10 @@ try:
     print(f"AUTHZ_TEST_CLIENT_SECRET='{test_creds.get('authz_test_client_secret', '')}'")
     print(f"TEST_USER_ID='{test_creds.get('test_user_id', '')}'")
     
+    # JWT secret (used as bootstrap client secret)
+    jwt_secret = secrets.get('jwt_secret', '')
+    print(f"JWT_SECRET='{jwt_secret}'")
+    
 except Exception as e:
     print(f"# Error: {e}", file=sys.stderr)
     sys.exit(1)
@@ -1185,10 +1189,14 @@ run_container_tests() {
             test_env="${test_env} TEST_DB_PASSWORD=${TEST_DB_PASSWORD}"
             test_env="${test_env} TEST_DB_NAME=busibox_test"
             test_env="${test_env} TEST_DB_HOST=${postgres_ip}"
+            test_env="${test_env} POSTGRES_HOST=${postgres_ip}"
+            test_env="${test_env} POSTGRES_PASSWORD=${POSTGRES_PASSWORD}"
             test_env="${test_env} AUTHZ_ADMIN_TOKEN=${AUTHZ_ADMIN_TOKEN}"
             test_env="${test_env} AUTHZ_MASTER_KEY=${AUTHZ_MASTER_KEY}"
             test_env="${test_env} AUTHZ_SERVICE_URL=http://${authz_ip}:8010"
             test_env="${test_env} TEST_AUTHZ_URL=http://${authz_ip}:8010"
+            test_env="${test_env} AUTHZ_BOOTSTRAP_CLIENT_ID=ai-portal"
+            test_env="${test_env} AUTHZ_BOOTSTRAP_CLIENT_SECRET=${JWT_SECRET}"
             
             # Run tests via SSH
             ssh "root@${authz_ip}" "cd /srv/authz/app && source ../venv/bin/activate && export PYTHONPATH=/srv/authz/app/src && source /srv/authz/.env && export ${test_env} && python -m pytest tests/ -v --tb=short" || {
