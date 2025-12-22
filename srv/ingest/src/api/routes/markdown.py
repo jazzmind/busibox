@@ -28,23 +28,28 @@ async def _get_file_metadata(postgres_service, file_uuid, user_uuid, fields, req
     
     Args:
         postgres_service: PostgresService instance (async)
-        file_uuid: File UUID
-        user_uuid: User UUID
+        file_uuid: File UUID (string or UUID object)
+        user_uuid: User UUID (string or UUID object)
         fields: List of field names to select
         request: Optional FastAPI Request for RLS context
         
     Returns:
         Dict with file data or None if not found
     """
-    import uuid
+    import uuid as uuid_mod
     field_list = ", ".join(fields)
+    
+    # Handle both string and UUID inputs
+    file_id = file_uuid if isinstance(file_uuid, uuid_mod.UUID) else uuid_mod.UUID(file_uuid)
+    user_id = user_uuid if isinstance(user_uuid, uuid_mod.UUID) else uuid_mod.UUID(user_uuid)
+    
     async with postgres_service.acquire(request) as conn:
         row = await conn.fetchrow(
             f"""SELECT {field_list}
                FROM ingestion_files 
                WHERE file_id = $1 AND user_id = $2""",
-            uuid.UUID(file_uuid),
-            uuid.UUID(user_uuid)
+            file_id,
+            user_id
         )
         
         if not row:

@@ -57,18 +57,64 @@ make test SERVICE=authz INV=test MODE=local
 
 **When to use:** CI/CD pipelines, scripts, repeatable test runs.
 
-### 3. Local Testing Against Remote Containers
+### 3. Local Testing Against Remote Containers (Recommended for Development)
 
 ```bash
 make test-local SERVICE=authz INV=test
 ```
 
 This runs:
-1. Generates `.env.local` with container IPs and vault secrets
-2. Runs pytest on your local machine
-3. Tests connect to real services on test containers
+1. Auto-creates a Python virtual environment if needed
+2. Generates `.env.local` with container IPs and vault secrets
+3. Runs pytest on your local machine (FAST mode by default)
+4. Tests connect to real services on test containers
 
 **When to use:** Rapid development iteration, debugging test failures, IDE integration.
+
+#### Options and Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `SERVICE` | Required | authz, ingest, search, agent, all |
+| `INV` | test | Environment: test or production |
+| `FAST` | 1 | Skip `@pytest.mark.slow` and `@pytest.mark.gpu` tests |
+| `ARGS` | "" | Additional pytest arguments |
+
+#### Examples
+
+```bash
+# Basic local testing (FAST=1 by default, skips slow tests)
+make test-local SERVICE=authz INV=test
+
+# Run ALL tests including slow/GPU (override FAST default)
+make test-local SERVICE=search INV=test FAST=0
+
+# Run only PVT (Post-deployment Validation) tests
+make test-local SERVICE=ingest INV=test ARGS="-m pvt"
+
+# Run tests matching a pattern
+make test-local SERVICE=authz INV=test ARGS="-k test_health"
+
+# Run with short tracebacks
+make test-local SERVICE=search INV=test ARGS="--tb=short"
+
+# Combine options
+make test-local SERVICE=ingest INV=test FAST=0 ARGS="-k encryption --tb=long"
+```
+
+#### FAST Mode vs Full Tests
+
+| Mode | Command | Behavior |
+|------|---------|----------|
+| **FAST** (default for local) | `make test-local SERVICE=x INV=test` | Skips `@pytest.mark.slow` and `@pytest.mark.gpu` |
+| **Full** (default for container) | `make test SERVICE=x INV=test` | Runs ALL tests |
+| **Full locally** | `make test-local SERVICE=x INV=test FAST=0` | Runs ALL tests locally |
+
+**Why FAST is default for local?**
+- Local machines may not have GPUs
+- Model loading tests can take minutes
+- Faster iteration during development
+- PVT tests catch most deployment issues quickly
 
 **How it works:**
 ```
@@ -85,6 +131,20 @@ This runs:
 │ - vault secrets │     │                                     │
 └─────────────────┘     └─────────────────────────────────────┘
 ```
+
+#### Auto-Setup Virtual Environment
+
+If no virtual environment exists, `make test-local` automatically:
+1. Creates `test_venv` in the service directory
+2. Installs `requirements.txt`
+3. Installs `requirements.test.txt` if present
+4. Ensures pytest, pytest-asyncio, and httpx are available
+
+**Important:** Always use `make test-local` instead of running pytest directly. Running pytest directly will miss:
+- Environment variable setup from vault
+- Container IP configuration
+- FAST mode filtering
+- Proper PYTHONPATH configuration
 
 ### 4. Direct Execution on Container
 
@@ -349,6 +409,36 @@ The `make test` and `make test-local` commands extract these automatically.
 3. **Async tests use fixtures** - Don't create your own event loops
 4. **Clean up after yourself** - Delete test data
 5. **Tests must be idempotent** - Running twice gives same result
+6. **Mark slow tests** - Use `@pytest.mark.slow` for tests that load models or process large data
+7. **Mark GPU tests** - Use `@pytest.mark.gpu` for tests requiring CUDA/ROCm
+
+### Test Markers
+
+All services support these markers in `pytest.ini`:
+
+| Marker | Description | Skipped by FAST mode |
+|--------|-------------|---------------------|
+| `@pytest.mark.pvt` | Post-deployment validation tests (fast smoke tests) | No |
+| `@pytest.mark.unit` | Unit tests | No |
+| `@pytest.mark.integration` | Integration tests requiring real services | No |
+| `@pytest.mark.slow` | Slow tests (model loading, large data) | **Yes** |
+| `@pytest.mark.gpu` | Tests requiring GPU (CUDA/ROCm) | **Yes** |
+
+**Example usage:**
+```python
+@pytest.mark.slow
+def test_load_embedding_model():
+    """This test loads a large model - takes 30+ seconds."""
+    model = SentenceTransformer("BAAI/bge-large-en-v1.5")
+    assert model is not None
+
+@pytest.mark.gpu
+def test_cuda_inference():
+    """This test requires a GPU."""
+    import torch
+    assert torch.cuda.is_available()
+    # ... GPU-specific test
+```
 
 ### Template
 
