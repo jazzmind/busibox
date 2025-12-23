@@ -191,35 +191,69 @@ CREATE POLICY shared_docs_delete ON ingestion_files
 -- ============================================================================
 -- CHUNKS POLICIES
 -- ============================================================================
+-- Note: We can't use "file_id IN (SELECT file_id FROM ingestion_files)" because
+-- that creates infinite recursion when ingestion_files has RLS. Instead, we
+-- check the file's owner_id directly against the current user.
 
--- SELECT: Inherit from ingestion_files (can see chunks for docs they can access)
+-- SELECT: Check file owner/roles directly (avoids recursion)
 CREATE POLICY chunks_select ON ingestion_chunks
     FOR SELECT
-    USING (file_id IN (SELECT file_id FROM ingestion_files));
+    USING (
+        EXISTS (
+            SELECT 1 FROM ingestion_files f
+            WHERE f.file_id = ingestion_chunks.file_id
+            AND (
+                -- Personal docs: owner only
+                (f.visibility = 'personal' AND f.owner_id = COALESCE(NULLIF(current_setting('app.user_id', true), '')::uuid, '00000000-0000-0000-0000-000000000000'::uuid))
+                OR
+                -- Shared docs: has a matching role
+                (f.visibility = 'shared' AND EXISTS (
+                    SELECT 1 FROM document_roles dr
+                    WHERE dr.file_id = f.file_id
+                    AND dr.role_id = ANY(COALESCE(string_to_array(current_setting('app.user_role_ids_read', true), ',')::uuid[], ARRAY[]::uuid[]))
+                ))
+            )
+        )
+    );
 
 -- INSERT: System/worker can insert (for chunking)
 CREATE POLICY chunks_insert ON ingestion_chunks
     FOR INSERT
     WITH CHECK (true);
 
--- UPDATE: Inherit from ingestion_files (can update chunks for docs they can update)
+-- UPDATE: System/worker can update (for reprocessing)
 CREATE POLICY chunks_update ON ingestion_chunks
     FOR UPDATE
-    USING (file_id IN (SELECT file_id FROM ingestion_files));
+    USING (true);
 
--- DELETE: Inherit from ingestion_files (for reprocessing - delete chunks and re-add)
+-- DELETE: System/worker can delete (for reprocessing)
 CREATE POLICY chunks_delete ON ingestion_chunks
     FOR DELETE
-    USING (file_id IN (SELECT file_id FROM ingestion_files));
+    USING (true);
 
 -- ============================================================================
 -- PROCESSING_HISTORY POLICIES
 -- ============================================================================
+-- Note: Check file owner/roles directly to avoid recursion
 
--- SELECT: Inherit from ingestion_files
+-- SELECT: Check file owner/roles directly
 CREATE POLICY processing_history_select ON processing_history
     FOR SELECT
-    USING (file_id IN (SELECT file_id FROM ingestion_files));
+    USING (
+        EXISTS (
+            SELECT 1 FROM ingestion_files f
+            WHERE f.file_id = processing_history.file_id
+            AND (
+                (f.visibility = 'personal' AND f.owner_id = COALESCE(NULLIF(current_setting('app.user_id', true), '')::uuid, '00000000-0000-0000-0000-000000000000'::uuid))
+                OR
+                (f.visibility = 'shared' AND EXISTS (
+                    SELECT 1 FROM document_roles dr
+                    WHERE dr.file_id = f.file_id
+                    AND dr.role_id = ANY(COALESCE(string_to_array(current_setting('app.user_role_ids_read', true), ',')::uuid[], ARRAY[]::uuid[]))
+                ))
+            )
+        )
+    );
 
 -- INSERT: System/worker can insert (for processing logs)
 CREATE POLICY processing_history_insert ON processing_history
@@ -229,11 +263,26 @@ CREATE POLICY processing_history_insert ON processing_history
 -- ============================================================================
 -- INGESTION_STATUS POLICIES
 -- ============================================================================
+-- Note: Check file owner/roles directly to avoid recursion
 
--- SELECT: Inherit from ingestion_files (can see status for docs they can access)
+-- SELECT: Check file owner/roles directly
 CREATE POLICY ingestion_status_select ON ingestion_status
     FOR SELECT
-    USING (file_id IN (SELECT file_id FROM ingestion_files));
+    USING (
+        EXISTS (
+            SELECT 1 FROM ingestion_files f
+            WHERE f.file_id = ingestion_status.file_id
+            AND (
+                (f.visibility = 'personal' AND f.owner_id = COALESCE(NULLIF(current_setting('app.user_id', true), '')::uuid, '00000000-0000-0000-0000-000000000000'::uuid))
+                OR
+                (f.visibility = 'shared' AND EXISTS (
+                    SELECT 1 FROM document_roles dr
+                    WHERE dr.file_id = f.file_id
+                    AND dr.role_id = ANY(COALESCE(string_to_array(current_setting('app.user_role_ids_read', true), ',')::uuid[], ARRAY[]::uuid[]))
+                ))
+            )
+        )
+    );
 
 -- INSERT: System/worker can insert (status is created with file)
 CREATE POLICY ingestion_status_insert ON ingestion_status
@@ -248,11 +297,26 @@ CREATE POLICY ingestion_status_update ON ingestion_status
 -- ============================================================================
 -- DOCUMENT_ROLES POLICIES
 -- ============================================================================
+-- Note: Check file owner/roles directly to avoid recursion
 
--- SELECT: Same as document access (inherit from ingestion_files)
+-- SELECT: Check file owner/roles directly
 CREATE POLICY document_roles_select ON document_roles
     FOR SELECT
-    USING (file_id IN (SELECT file_id FROM ingestion_files));
+    USING (
+        EXISTS (
+            SELECT 1 FROM ingestion_files f
+            WHERE f.file_id = document_roles.file_id
+            AND (
+                (f.visibility = 'personal' AND f.owner_id = COALESCE(NULLIF(current_setting('app.user_id', true), '')::uuid, '00000000-0000-0000-0000-000000000000'::uuid))
+                OR
+                (f.visibility = 'shared' AND EXISTS (
+                    SELECT 1 FROM document_roles dr2
+                    WHERE dr2.file_id = f.file_id
+                    AND dr2.role_id = ANY(COALESCE(string_to_array(current_setting('app.user_role_ids_read', true), ',')::uuid[], ARRAY[]::uuid[]))
+                ))
+            )
+        )
+    );
 
 -- INSERT: User must have create permission on the role being assigned
 CREATE POLICY document_roles_insert ON document_roles
@@ -264,7 +328,20 @@ CREATE POLICY document_roles_insert ON document_roles
                 ARRAY[]::uuid[]
             )
         )
-        AND file_id IN (SELECT file_id FROM ingestion_files)
+        -- User must be able to access the file (owner or has role)
+        AND EXISTS (
+            SELECT 1 FROM ingestion_files f
+            WHERE f.file_id = document_roles.file_id
+            AND (
+                (f.visibility = 'personal' AND f.owner_id = COALESCE(NULLIF(current_setting('app.user_id', true), '')::uuid, '00000000-0000-0000-0000-000000000000'::uuid))
+                OR
+                (f.visibility = 'shared' AND EXISTS (
+                    SELECT 1 FROM document_roles dr2
+                    WHERE dr2.file_id = f.file_id
+                    AND dr2.role_id = ANY(COALESCE(string_to_array(current_setting('app.user_role_ids_read', true), ',')::uuid[], ARRAY[]::uuid[]))
+                ))
+            )
+        )
     );
 
 -- UPDATE: User must have update permission on roles
