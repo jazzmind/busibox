@@ -227,6 +227,238 @@ class PostgresService:
                 """
             )
 
+            # ----------------------------------------------------------------
+            # Phase 1: Extended User/Role/Audit Columns (Migration)
+            # ----------------------------------------------------------------
+            
+            # Add new columns to authz_users
+            await conn.execute(
+                """
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name = 'authz_users' AND column_name = 'email_verified_at'
+                    ) THEN
+                        ALTER TABLE authz_users ADD COLUMN email_verified_at timestamptz NULL;
+                    END IF;
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name = 'authz_users' AND column_name = 'last_login_at'
+                    ) THEN
+                        ALTER TABLE authz_users ADD COLUMN last_login_at timestamptz NULL;
+                    END IF;
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name = 'authz_users' AND column_name = 'pending_expires_at'
+                    ) THEN
+                        ALTER TABLE authz_users ADD COLUMN pending_expires_at timestamptz NULL;
+                    END IF;
+                END $$;
+                """
+            )
+            
+            # Add is_system column to authz_roles
+            await conn.execute(
+                """
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name = 'authz_roles' AND column_name = 'is_system'
+                    ) THEN
+                        ALTER TABLE authz_roles ADD COLUMN is_system boolean NOT NULL DEFAULT false;
+                    END IF;
+                END $$;
+                """
+            )
+            
+            # Add assigned_by column to authz_user_roles
+            await conn.execute(
+                """
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name = 'authz_user_roles' AND column_name = 'assigned_by'
+                    ) THEN
+                        ALTER TABLE authz_user_roles ADD COLUMN assigned_by uuid NULL;
+                    END IF;
+                END $$;
+                """
+            )
+            
+            # Extend audit_logs with new columns
+            await conn.execute(
+                """
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name = 'audit_logs' AND column_name = 'event_type'
+                    ) THEN
+                        ALTER TABLE audit_logs ADD COLUMN event_type text NULL;
+                    END IF;
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name = 'audit_logs' AND column_name = 'target_user_id'
+                    ) THEN
+                        ALTER TABLE audit_logs ADD COLUMN target_user_id uuid NULL;
+                    END IF;
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name = 'audit_logs' AND column_name = 'target_role_id'
+                    ) THEN
+                        ALTER TABLE audit_logs ADD COLUMN target_role_id uuid NULL;
+                    END IF;
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name = 'audit_logs' AND column_name = 'target_app_id'
+                    ) THEN
+                        ALTER TABLE audit_logs ADD COLUMN target_app_id uuid NULL;
+                    END IF;
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name = 'audit_logs' AND column_name = 'ip_address'
+                    ) THEN
+                        ALTER TABLE audit_logs ADD COLUMN ip_address text NULL;
+                    END IF;
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name = 'audit_logs' AND column_name = 'user_agent'
+                    ) THEN
+                        ALTER TABLE audit_logs ADD COLUMN user_agent text NULL;
+                    END IF;
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name = 'audit_logs' AND column_name = 'success'
+                    ) THEN
+                        ALTER TABLE audit_logs ADD COLUMN success boolean NOT NULL DEFAULT true;
+                    END IF;
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name = 'audit_logs' AND column_name = 'error_message'
+                    ) THEN
+                        ALTER TABLE audit_logs ADD COLUMN error_message text NULL;
+                    END IF;
+                END $$;
+                """
+            )
+
+            # ----------------------------------------------------------------
+            # Phase 1: Authentication Tables
+            # ----------------------------------------------------------------
+            
+            # Sessions table (synced from better-auth)
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS authz_sessions (
+                  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                  user_id uuid NOT NULL REFERENCES authz_users(user_id) ON DELETE CASCADE,
+                  token text NOT NULL UNIQUE,
+                  expires_at timestamptz NOT NULL,
+                  ip_address text NULL,
+                  user_agent text NULL,
+                  created_at timestamptz NOT NULL DEFAULT now()
+                );
+                """
+            )
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_sessions_token ON authz_sessions(token);")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_sessions_user_id ON authz_sessions(user_id);")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_sessions_expires_at ON authz_sessions(expires_at);")
+            
+            # Magic links table
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS authz_magic_links (
+                  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                  user_id uuid NOT NULL REFERENCES authz_users(user_id) ON DELETE CASCADE,
+                  token text NOT NULL UNIQUE,
+                  email text NOT NULL,
+                  expires_at timestamptz NOT NULL,
+                  used_at timestamptz NULL,
+                  created_at timestamptz NOT NULL DEFAULT now()
+                );
+                """
+            )
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_magic_links_token ON authz_magic_links(token);")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_magic_links_user_id ON authz_magic_links(user_id);")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_magic_links_expires_at ON authz_magic_links(expires_at);")
+            
+            # TOTP codes table
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS authz_totp_codes (
+                  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                  user_id uuid NOT NULL REFERENCES authz_users(user_id) ON DELETE CASCADE,
+                  code_hash text NOT NULL,
+                  email text NOT NULL,
+                  expires_at timestamptz NOT NULL,
+                  used_at timestamptz NULL,
+                  created_at timestamptz NOT NULL DEFAULT now()
+                );
+                """
+            )
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_totp_codes_user_id ON authz_totp_codes(user_id);")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_totp_codes_email_code ON authz_totp_codes(email, code_hash);")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_totp_codes_expires_at ON authz_totp_codes(expires_at);")
+            
+            # Passkeys table (WebAuthn credentials)
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS authz_passkeys (
+                  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                  user_id uuid NOT NULL REFERENCES authz_users(user_id) ON DELETE CASCADE,
+                  credential_id text NOT NULL UNIQUE,
+                  credential_public_key text NOT NULL,
+                  counter bigint NOT NULL DEFAULT 0,
+                  device_type text NOT NULL,
+                  backed_up boolean NOT NULL DEFAULT false,
+                  transports text[] NOT NULL DEFAULT '{}'::text[],
+                  aaguid text NULL,
+                  name text NOT NULL,
+                  last_used_at timestamptz NULL,
+                  created_at timestamptz NOT NULL DEFAULT now(),
+                  updated_at timestamptz NOT NULL DEFAULT now()
+                );
+                """
+            )
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_passkeys_user_id ON authz_passkeys(user_id);")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_passkeys_credential_id ON authz_passkeys(credential_id);")
+            
+            # Passkey challenges table
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS authz_passkey_challenges (
+                  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                  challenge text NOT NULL UNIQUE,
+                  user_id uuid NULL,
+                  type text NOT NULL,
+                  expires_at timestamptz NOT NULL,
+                  created_at timestamptz NOT NULL DEFAULT now()
+                );
+                """
+            )
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_passkey_challenges_challenge ON authz_passkey_challenges(challenge);")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_passkey_challenges_expires_at ON authz_passkey_challenges(expires_at);")
+            
+            # ----------------------------------------------------------------
+            # Phase 1: Email Domain Configuration
+            # ----------------------------------------------------------------
+            
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS authz_email_domain_config (
+                  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                  domain text NOT NULL UNIQUE,
+                  is_allowed boolean NOT NULL DEFAULT true,
+                  created_at timestamptz NOT NULL DEFAULT now(),
+                  updated_at timestamptz NOT NULL DEFAULT now()
+                );
+                """
+            )
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_email_domain_config_domain ON authz_email_domain_config(domain);")
+
     # ---------------------------------------------------------------------
     # Audit
     # ---------------------------------------------------------------------
@@ -1041,4 +1273,1008 @@ class PostgresService:
                 uuid.UUID(role_id),
             )
             return result != "DELETE 0"
+
+    # ---------------------------------------------------------------------
+    # User Management (Full CRUD)
+    # ---------------------------------------------------------------------
+
+    async def create_user(
+        self,
+        *,
+        email: str,
+        status: str = "PENDING",
+        role_ids: List[str] | None = None,
+        assigned_by: str | None = None,
+    ) -> dict:
+        """Create a new user with optional role assignments."""
+        user_id = uuid.uuid4()
+        pending_expires_at = None
+        if status == "PENDING":
+            from datetime import datetime, timedelta
+            pending_expires_at = datetime.now() + timedelta(days=7)
+        
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO authz_users (user_id, email, status, pending_expires_at)
+                VALUES ($1, $2, $3, $4)
+                RETURNING user_id::text, email, status, email_verified_at, last_login_at, 
+                          pending_expires_at, created_at, updated_at
+                """,
+                user_id,
+                email.lower(),
+                status,
+                pending_expires_at,
+            )
+            
+            # Assign roles if provided
+            if role_ids:
+                assigned_by_uuid = uuid.UUID(assigned_by) if assigned_by else None
+                for rid in role_ids:
+                    await conn.execute(
+                        """
+                        INSERT INTO authz_user_roles (user_id, role_id, assigned_by)
+                        VALUES ($1, $2, $3)
+                        ON CONFLICT (user_id, role_id) DO NOTHING
+                        """,
+                        user_id,
+                        uuid.UUID(rid),
+                        assigned_by_uuid,
+                    )
+            
+            user = dict(row)
+            user["roles"] = await self.get_user_roles(str(user_id))
+            return user
+
+    async def list_users(
+        self,
+        *,
+        page: int = 1,
+        limit: int = 20,
+        status: str | None = None,
+        search: str | None = None,
+    ) -> dict:
+        """List users with pagination and filtering."""
+        offset = (page - 1) * limit
+        
+        async with self.acquire(None, None) as conn:
+            # Build WHERE clause
+            conditions = []
+            params = []
+            param_idx = 1
+            
+            if status:
+                conditions.append(f"status = ${param_idx}")
+                params.append(status)
+                param_idx += 1
+            
+            if search:
+                conditions.append(f"email ILIKE ${param_idx}")
+                params.append(f"%{search}%")
+                param_idx += 1
+            
+            where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+            
+            # Get total count
+            count_query = f"SELECT COUNT(*) FROM authz_users {where_clause}"
+            total_count = await conn.fetchval(count_query, *params)
+            
+            # Get users
+            params.extend([limit, offset])
+            query = f"""
+                SELECT user_id::text, email, status, email_verified_at, last_login_at,
+                       pending_expires_at, created_at, updated_at
+                FROM authz_users
+                {where_clause}
+                ORDER BY created_at DESC
+                LIMIT ${param_idx} OFFSET ${param_idx + 1}
+            """
+            rows = await conn.fetch(query, *params)
+            
+            users = []
+            for row in rows:
+                user = dict(row)
+                user["roles"] = await self.get_user_roles(user["user_id"])
+                users.append(user)
+            
+            return {
+                "users": users,
+                "pagination": {
+                    "page": page,
+                    "limit": limit,
+                    "total_count": total_count,
+                    "total_pages": (total_count + limit - 1) // limit,
+                },
+            }
+
+    async def get_user_with_roles(self, user_id: str) -> dict | None:
+        """Get a user by ID with their roles."""
+        user = await self.get_user(user_id)
+        if not user:
+            return None
+        user["roles"] = await self.get_user_roles(user_id)
+        return user
+
+    async def update_user(
+        self,
+        user_id: str,
+        *,
+        email: str | None = None,
+        status: str | None = None,
+        email_verified_at: str | None = None,
+        last_login_at: str | None = None,
+        pending_expires_at: str | None = None,
+    ) -> dict | None:
+        """Update user fields."""
+        uid = validate_uuid(user_id, "user_id")
+        
+        async with self.acquire(None, None) as conn:
+            updates = []
+            params = []
+            param_idx = 1
+            
+            if email is not None:
+                updates.append(f"email = ${param_idx}")
+                params.append(email.lower())
+                param_idx += 1
+            
+            if status is not None:
+                updates.append(f"status = ${param_idx}")
+                params.append(status)
+                param_idx += 1
+            
+            if email_verified_at is not None:
+                updates.append(f"email_verified_at = ${param_idx}")
+                from datetime import datetime
+                params.append(datetime.fromisoformat(email_verified_at.replace("Z", "+00:00")))
+                param_idx += 1
+            
+            if last_login_at is not None:
+                updates.append(f"last_login_at = ${param_idx}")
+                from datetime import datetime
+                params.append(datetime.fromisoformat(last_login_at.replace("Z", "+00:00")))
+                param_idx += 1
+            
+            if pending_expires_at is not None:
+                updates.append(f"pending_expires_at = ${param_idx}")
+                from datetime import datetime
+                params.append(datetime.fromisoformat(pending_expires_at.replace("Z", "+00:00")) if pending_expires_at else None)
+                param_idx += 1
+            
+            if not updates:
+                return await self.get_user_with_roles(user_id)
+            
+            updates.append("updated_at = now()")
+            params.append(uid)
+            
+            query = f"""
+                UPDATE authz_users
+                SET {', '.join(updates)}
+                WHERE user_id = ${param_idx}
+                RETURNING user_id::text, email, status, email_verified_at, last_login_at,
+                          pending_expires_at, created_at, updated_at
+            """
+            
+            row = await conn.fetchrow(query, *params)
+            if not row:
+                return None
+            
+            user = dict(row)
+            user["roles"] = await self.get_user_roles(user_id)
+            return user
+
+    async def delete_user(self, user_id: str) -> bool:
+        """Delete a user (cascades to sessions, roles, etc.)."""
+        uid = validate_uuid(user_id, "user_id")
+        
+        async with self.acquire(None, None) as conn:
+            result = await conn.execute(
+                "DELETE FROM authz_users WHERE user_id = $1",
+                uid,
+            )
+            return result != "DELETE 0"
+
+    async def activate_user(self, user_id: str) -> dict | None:
+        """Activate a pending user."""
+        return await self.update_user(
+            user_id,
+            status="ACTIVE",
+            pending_expires_at=None,
+        )
+
+    async def deactivate_user(self, user_id: str) -> dict | None:
+        """Deactivate an active user."""
+        return await self.update_user(user_id, status="DEACTIVATED")
+
+    async def reactivate_user(self, user_id: str) -> dict | None:
+        """Reactivate a deactivated user."""
+        return await self.update_user(user_id, status="ACTIVE")
+
+    async def get_user_by_email(self, email: str) -> dict | None:
+        """Get a user by email address."""
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT user_id::text, email, status, email_verified_at, last_login_at,
+                       pending_expires_at, created_at, updated_at
+                FROM authz_users
+                WHERE email = $1
+                """,
+                email.lower(),
+            )
+            if not row:
+                return None
+            user = dict(row)
+            user["roles"] = await self.get_user_roles(user["user_id"])
+            return user
+
+    # ---------------------------------------------------------------------
+    # Session Management
+    # ---------------------------------------------------------------------
+
+    async def create_session(
+        self,
+        *,
+        user_id: str,
+        token: str,
+        expires_at: str,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+    ) -> dict:
+        """Create or sync a session."""
+        uid = validate_uuid(user_id, "user_id")
+        from datetime import datetime
+        exp = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO authz_sessions (user_id, token, expires_at, ip_address, user_agent)
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT (token) DO UPDATE
+                  SET expires_at = EXCLUDED.expires_at,
+                      ip_address = EXCLUDED.ip_address,
+                      user_agent = EXCLUDED.user_agent
+                RETURNING id::text as session_id, user_id::text, token, expires_at, 
+                          ip_address, user_agent, created_at
+                """,
+                uid,
+                token,
+                exp,
+                ip_address,
+                user_agent,
+            )
+            return dict(row)
+
+    async def get_session(self, token: str) -> dict | None:
+        """Get a session by token."""
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT s.id::text as session_id, s.user_id::text, s.token, s.expires_at,
+                       s.ip_address, s.user_agent, s.created_at,
+                       u.email, u.status
+                FROM authz_sessions s
+                JOIN authz_users u ON s.user_id = u.user_id
+                WHERE s.token = $1 AND s.expires_at > now()
+                """,
+                token,
+            )
+            if not row:
+                return None
+            session = dict(row)
+            session["user"] = {
+                "user_id": session["user_id"],
+                "email": session.pop("email"),
+                "status": session.pop("status"),
+            }
+            return session
+
+    async def delete_session(self, token: str) -> bool:
+        """Delete a session by token."""
+        async with self.acquire(None, None) as conn:
+            result = await conn.execute(
+                "DELETE FROM authz_sessions WHERE token = $1",
+                token,
+            )
+            return result != "DELETE 0"
+
+    async def delete_user_sessions(self, user_id: str) -> int:
+        """Delete all sessions for a user."""
+        uid = validate_uuid(user_id, "user_id")
+        
+        async with self.acquire(None, None) as conn:
+            result = await conn.execute(
+                "DELETE FROM authz_sessions WHERE user_id = $1",
+                uid,
+            )
+            return int(result.split()[-1]) if result else 0
+
+    async def cleanup_expired_sessions(self) -> int:
+        """Delete all expired sessions."""
+        async with self.acquire(None, None) as conn:
+            result = await conn.execute(
+                "DELETE FROM authz_sessions WHERE expires_at < now()"
+            )
+            return int(result.split()[-1]) if result else 0
+
+    # ---------------------------------------------------------------------
+    # Magic Links
+    # ---------------------------------------------------------------------
+
+    async def create_magic_link(
+        self,
+        *,
+        user_id: str,
+        email: str,
+        expires_in_seconds: int = 900,  # 15 minutes
+    ) -> dict:
+        """Create a magic link for passwordless login."""
+        import secrets
+        uid = validate_uuid(user_id, "user_id")
+        token = secrets.token_urlsafe(32)
+        from datetime import datetime, timedelta
+        expires_at = datetime.now() + timedelta(seconds=expires_in_seconds)
+        
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO authz_magic_links (user_id, token, email, expires_at)
+                VALUES ($1, $2, $3, $4)
+                RETURNING id::text as magic_link_id, user_id::text, token, email, 
+                          expires_at, created_at
+                """,
+                uid,
+                token,
+                email.lower(),
+                expires_at,
+            )
+            return dict(row)
+
+    async def get_magic_link(self, token: str) -> dict | None:
+        """Get a magic link by token (without consuming it)."""
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id::text as magic_link_id, user_id::text, token, email,
+                       expires_at, used_at, created_at
+                FROM authz_magic_links
+                WHERE token = $1
+                """,
+                token,
+            )
+            return dict(row) if row else None
+
+    async def use_magic_link(self, token: str) -> dict | None:
+        """
+        Use (consume) a magic link and create a session.
+        Returns the user and new session, or None if invalid/expired/used.
+        """
+        async with self.acquire(None, None) as conn:
+            # Check if link is valid
+            row = await conn.fetchrow(
+                """
+                SELECT id, user_id, email
+                FROM authz_magic_links
+                WHERE token = $1 AND expires_at > now() AND used_at IS NULL
+                """,
+                token,
+            )
+            
+            if not row:
+                return None
+            
+            link_id = row["id"]
+            user_id = row["user_id"]
+            
+            # Mark as used
+            await conn.execute(
+                "UPDATE authz_magic_links SET used_at = now() WHERE id = $1",
+                link_id,
+            )
+            
+            # Update user: activate if pending, set email verified, update last login
+            await conn.execute(
+                """
+                UPDATE authz_users
+                SET status = CASE WHEN status = 'PENDING' THEN 'ACTIVE' ELSE status END,
+                    email_verified_at = COALESCE(email_verified_at, now()),
+                    last_login_at = now(),
+                    pending_expires_at = NULL,
+                    updated_at = now()
+                WHERE user_id = $1
+                """,
+                user_id,
+            )
+            
+            # Get updated user
+            user = await self.get_user_with_roles(str(user_id))
+            
+            # Create session
+            import secrets
+            from datetime import datetime, timedelta
+            session_token = secrets.token_urlsafe(32)
+            expires_at = datetime.now() + timedelta(hours=24)
+            
+            session = await self.create_session(
+                user_id=str(user_id),
+                token=session_token,
+                expires_at=expires_at.isoformat(),
+            )
+            
+            return {
+                "user": user,
+                "session": session,
+            }
+
+    async def cleanup_expired_magic_links(self) -> int:
+        """Delete all expired magic links."""
+        async with self.acquire(None, None) as conn:
+            result = await conn.execute(
+                "DELETE FROM authz_magic_links WHERE expires_at < now()"
+            )
+            return int(result.split()[-1]) if result else 0
+
+    # ---------------------------------------------------------------------
+    # TOTP Codes
+    # ---------------------------------------------------------------------
+
+    async def create_totp_code(
+        self,
+        *,
+        user_id: str,
+        email: str,
+        expires_in_seconds: int = 300,  # 5 minutes
+    ) -> dict:
+        """Create a TOTP code for multi-device login. Returns plaintext code."""
+        import secrets
+        import hashlib
+        
+        uid = validate_uuid(user_id, "user_id")
+        
+        # Generate 6-digit code
+        code = str(secrets.randbelow(1000000)).zfill(6)
+        code_hash = hashlib.sha256(code.encode()).hexdigest()
+        
+        from datetime import datetime, timedelta
+        expires_at = datetime.now() + timedelta(seconds=expires_in_seconds)
+        
+        async with self.acquire(None, None) as conn:
+            await conn.execute(
+                """
+                INSERT INTO authz_totp_codes (user_id, code_hash, email, expires_at)
+                VALUES ($1, $2, $3, $4)
+                """,
+                uid,
+                code_hash,
+                email.lower(),
+                expires_at,
+            )
+            
+            return {
+                "code": code,  # Plaintext - send via email
+                "expires_at": expires_at.isoformat(),
+            }
+
+    async def verify_totp_code(self, email: str, code: str) -> dict | None:
+        """
+        Verify a TOTP code and create a session if valid.
+        Returns user and session, or None if invalid.
+        """
+        import hashlib
+        code_hash = hashlib.sha256(code.encode()).hexdigest()
+        
+        async with self.acquire(None, None) as conn:
+            # Find valid code
+            row = await conn.fetchrow(
+                """
+                SELECT id, user_id
+                FROM authz_totp_codes
+                WHERE email = $1 AND code_hash = $2 AND expires_at > now() AND used_at IS NULL
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                email.lower(),
+                code_hash,
+            )
+            
+            if not row:
+                return None
+            
+            code_id = row["id"]
+            user_id = row["user_id"]
+            
+            # Mark as used
+            await conn.execute(
+                "UPDATE authz_totp_codes SET used_at = now() WHERE id = $1",
+                code_id,
+            )
+            
+            # Update user last login
+            await conn.execute(
+                """
+                UPDATE authz_users
+                SET last_login_at = now(), updated_at = now()
+                WHERE user_id = $1
+                """,
+                user_id,
+            )
+            
+            # Get user
+            user = await self.get_user_with_roles(str(user_id))
+            
+            # Create session
+            import secrets
+            from datetime import datetime, timedelta
+            session_token = secrets.token_urlsafe(32)
+            expires_at = datetime.now() + timedelta(hours=24)
+            
+            session = await self.create_session(
+                user_id=str(user_id),
+                token=session_token,
+                expires_at=expires_at.isoformat(),
+            )
+            
+            return {
+                "user": user,
+                "session": session,
+            }
+
+    async def cleanup_expired_totp_codes(self) -> int:
+        """Delete all expired TOTP codes."""
+        async with self.acquire(None, None) as conn:
+            result = await conn.execute(
+                "DELETE FROM authz_totp_codes WHERE expires_at < now()"
+            )
+            return int(result.split()[-1]) if result else 0
+
+    # ---------------------------------------------------------------------
+    # Passkeys (WebAuthn)
+    # ---------------------------------------------------------------------
+
+    async def create_passkey_challenge(
+        self,
+        *,
+        challenge_type: str,  # 'registration' or 'authentication'
+        user_id: str | None = None,
+        expires_in_seconds: int = 300,  # 5 minutes
+    ) -> dict:
+        """Create a passkey challenge for WebAuthn."""
+        import secrets
+        import base64
+        
+        # Generate random challenge
+        challenge_bytes = secrets.token_bytes(32)
+        challenge = base64.urlsafe_b64encode(challenge_bytes).rstrip(b"=").decode()
+        
+        uid = uuid.UUID(user_id) if user_id else None
+        from datetime import datetime, timedelta
+        expires_at = datetime.now() + timedelta(seconds=expires_in_seconds)
+        
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO authz_passkey_challenges (challenge, user_id, type, expires_at)
+                VALUES ($1, $2, $3, $4)
+                RETURNING id::text, challenge, user_id::text, type, expires_at, created_at
+                """,
+                challenge,
+                uid,
+                challenge_type,
+                expires_at,
+            )
+            return dict(row)
+
+    async def get_passkey_challenge(self, challenge: str) -> dict | None:
+        """Get a passkey challenge."""
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id::text, challenge, user_id::text, type, expires_at, created_at
+                FROM authz_passkey_challenges
+                WHERE challenge = $1 AND expires_at > now()
+                """,
+                challenge,
+            )
+            return dict(row) if row else None
+
+    async def delete_passkey_challenge(self, challenge: str) -> bool:
+        """Delete a passkey challenge (after use)."""
+        async with self.acquire(None, None) as conn:
+            result = await conn.execute(
+                "DELETE FROM authz_passkey_challenges WHERE challenge = $1",
+                challenge,
+            )
+            return result != "DELETE 0"
+
+    async def register_passkey(
+        self,
+        *,
+        user_id: str,
+        credential_id: str,
+        credential_public_key: str,
+        counter: int = 0,
+        device_type: str,
+        backed_up: bool = False,
+        transports: List[str] | None = None,
+        aaguid: str | None = None,
+        name: str,
+    ) -> dict:
+        """Register a new passkey for a user."""
+        uid = validate_uuid(user_id, "user_id")
+        
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO authz_passkeys 
+                    (user_id, credential_id, credential_public_key, counter, device_type,
+                     backed_up, transports, aaguid, name)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                RETURNING id::text as passkey_id, user_id::text, credential_id, name,
+                          device_type, backed_up, transports, created_at
+                """,
+                uid,
+                credential_id,
+                credential_public_key,
+                counter,
+                device_type,
+                backed_up,
+                transports or [],
+                aaguid,
+                name,
+            )
+            return dict(row)
+
+    async def get_passkey_by_credential_id(self, credential_id: str) -> dict | None:
+        """Get a passkey by credential ID."""
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id::text as passkey_id, user_id::text, credential_id, 
+                       credential_public_key, counter, device_type, backed_up,
+                       transports, aaguid, name, last_used_at, created_at, updated_at
+                FROM authz_passkeys
+                WHERE credential_id = $1
+                """,
+                credential_id,
+            )
+            return dict(row) if row else None
+
+    async def list_user_passkeys(self, user_id: str) -> List[dict]:
+        """List all passkeys for a user."""
+        uid = validate_uuid(user_id, "user_id")
+        
+        async with self.acquire(None, None) as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id::text as passkey_id, user_id::text, credential_id, name,
+                       device_type, backed_up, transports, last_used_at, created_at
+                FROM authz_passkeys
+                WHERE user_id = $1
+                ORDER BY created_at DESC
+                """,
+                uid,
+            )
+            return [dict(row) for row in rows]
+
+    async def update_passkey_counter(self, credential_id: str, new_counter: int) -> bool:
+        """Update the passkey counter after authentication."""
+        async with self.acquire(None, None) as conn:
+            result = await conn.execute(
+                """
+                UPDATE authz_passkeys
+                SET counter = $1, last_used_at = now(), updated_at = now()
+                WHERE credential_id = $2
+                """,
+                new_counter,
+                credential_id,
+            )
+            return result != "UPDATE 0"
+
+    async def delete_passkey(self, passkey_id: str) -> bool:
+        """Delete a passkey."""
+        pid = validate_uuid(passkey_id, "passkey_id")
+        
+        async with self.acquire(None, None) as conn:
+            result = await conn.execute(
+                "DELETE FROM authz_passkeys WHERE id = $1",
+                pid,
+            )
+            return result != "DELETE 0"
+
+    async def authenticate_with_passkey(
+        self,
+        *,
+        credential_id: str,
+        new_counter: int,
+    ) -> dict | None:
+        """
+        Authenticate with a passkey and create a session.
+        Caller is responsible for verifying the signature before calling this.
+        """
+        passkey = await self.get_passkey_by_credential_id(credential_id)
+        if not passkey:
+            return None
+        
+        # Verify counter to prevent replay attacks
+        if new_counter <= passkey["counter"]:
+            logger.warning(
+                "Passkey counter replay detected",
+                credential_id=credential_id,
+                expected_counter=passkey["counter"],
+                received_counter=new_counter,
+            )
+            return None
+        
+        # Update counter
+        await self.update_passkey_counter(credential_id, new_counter)
+        
+        user_id = passkey["user_id"]
+        
+        # Update user last login
+        async with self.acquire(None, None) as conn:
+            await conn.execute(
+                """
+                UPDATE authz_users
+                SET last_login_at = now(), updated_at = now()
+                WHERE user_id = $1
+                """,
+                uuid.UUID(user_id),
+            )
+        
+        # Get user
+        user = await self.get_user_with_roles(user_id)
+        
+        # Create session
+        import secrets
+        from datetime import datetime, timedelta
+        session_token = secrets.token_urlsafe(32)
+        expires_at = datetime.now() + timedelta(hours=24)
+        
+        session = await self.create_session(
+            user_id=user_id,
+            token=session_token,
+            expires_at=expires_at.isoformat(),
+        )
+        
+        return {
+            "user": user,
+            "session": session,
+        }
+
+    async def cleanup_expired_passkey_challenges(self) -> int:
+        """Delete all expired passkey challenges."""
+        async with self.acquire(None, None) as conn:
+            result = await conn.execute(
+                "DELETE FROM authz_passkey_challenges WHERE expires_at < now()"
+            )
+            return int(result.split()[-1]) if result else 0
+
+    # ---------------------------------------------------------------------
+    # Email Domain Configuration
+    # ---------------------------------------------------------------------
+
+    async def is_email_domain_allowed(self, email: str) -> bool:
+        """Check if an email domain is allowed."""
+        domain = email.lower().split("@")[-1] if "@" in email else ""
+        if not domain:
+            return False
+        
+        async with self.acquire(None, None) as conn:
+            # Check if there are any domain rules
+            count = await conn.fetchval("SELECT COUNT(*) FROM authz_email_domain_config")
+            
+            if count == 0:
+                # No rules = allow all
+                return True
+            
+            # Check if domain is explicitly allowed
+            row = await conn.fetchrow(
+                """
+                SELECT is_allowed
+                FROM authz_email_domain_config
+                WHERE domain = $1
+                """,
+                domain,
+            )
+            
+            if row:
+                return row["is_allowed"]
+            
+            # Domain not in list - check if we're in allowlist or blocklist mode
+            # If any domain is explicitly allowed, we're in allowlist mode (deny by default)
+            # If any domain is explicitly blocked, we're in blocklist mode (allow by default)
+            has_allowed = await conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM authz_email_domain_config WHERE is_allowed = true)"
+            )
+            
+            # If we have allowed domains, we're in allowlist mode - deny unlisted
+            # If we only have blocked domains, we're in blocklist mode - allow unlisted
+            return not has_allowed
+
+    async def add_email_domain_rule(self, domain: str, is_allowed: bool) -> dict:
+        """Add or update an email domain rule."""
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO authz_email_domain_config (domain, is_allowed)
+                VALUES ($1, $2)
+                ON CONFLICT (domain) DO UPDATE
+                  SET is_allowed = EXCLUDED.is_allowed, updated_at = now()
+                RETURNING id::text, domain, is_allowed, created_at, updated_at
+                """,
+                domain.lower(),
+                is_allowed,
+            )
+            return dict(row)
+
+    async def remove_email_domain_rule(self, domain: str) -> bool:
+        """Remove an email domain rule."""
+        async with self.acquire(None, None) as conn:
+            result = await conn.execute(
+                "DELETE FROM authz_email_domain_config WHERE domain = $1",
+                domain.lower(),
+            )
+            return result != "DELETE 0"
+
+    async def list_email_domain_rules(self) -> List[dict]:
+        """List all email domain rules."""
+        async with self.acquire(None, None) as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id::text, domain, is_allowed, created_at, updated_at
+                FROM authz_email_domain_config
+                ORDER BY domain
+                """
+            )
+            return [dict(row) for row in rows]
+
+    # ---------------------------------------------------------------------
+    # Extended Audit Logging
+    # ---------------------------------------------------------------------
+
+    async def insert_audit_extended(
+        self,
+        *,
+        actor_id: str,
+        action: str,
+        resource_type: str,
+        resource_id: str | None = None,
+        event_type: str | None = None,
+        target_user_id: str | None = None,
+        target_role_id: str | None = None,
+        target_app_id: str | None = None,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+        success: bool = True,
+        error_message: str | None = None,
+        details: dict | None = None,
+    ) -> dict:
+        """Insert an audit log entry with extended fields."""
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO audit_logs 
+                    (actor_id, action, resource_type, resource_id, event_type,
+                     target_user_id, target_role_id, target_app_id, ip_address,
+                     user_agent, success, error_message, details)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb)
+                RETURNING id::text as audit_log_id, created_at
+                """,
+                uuid.UUID(actor_id),
+                action,
+                resource_type,
+                uuid.UUID(resource_id) if resource_id else None,
+                event_type,
+                uuid.UUID(target_user_id) if target_user_id else None,
+                uuid.UUID(target_role_id) if target_role_id else None,
+                uuid.UUID(target_app_id) if target_app_id else None,
+                ip_address,
+                user_agent,
+                success,
+                error_message,
+                json.dumps(details or {}),
+            )
+            return dict(row)
+
+    async def list_audit_logs(
+        self,
+        *,
+        page: int = 1,
+        limit: int = 50,
+        actor_id: str | None = None,
+        event_type: str | None = None,
+        resource_type: str | None = None,
+        target_user_id: str | None = None,
+        from_date: str | None = None,
+        to_date: str | None = None,
+    ) -> dict:
+        """List audit logs with pagination and filtering."""
+        offset = (page - 1) * limit
+        
+        async with self.acquire(None, None) as conn:
+            conditions = []
+            params = []
+            param_idx = 1
+            
+            if actor_id:
+                conditions.append(f"actor_id = ${param_idx}")
+                params.append(uuid.UUID(actor_id))
+                param_idx += 1
+            
+            if event_type:
+                conditions.append(f"event_type = ${param_idx}")
+                params.append(event_type)
+                param_idx += 1
+            
+            if resource_type:
+                conditions.append(f"resource_type = ${param_idx}")
+                params.append(resource_type)
+                param_idx += 1
+            
+            if target_user_id:
+                conditions.append(f"target_user_id = ${param_idx}")
+                params.append(uuid.UUID(target_user_id))
+                param_idx += 1
+            
+            if from_date:
+                from datetime import datetime
+                conditions.append(f"created_at >= ${param_idx}")
+                params.append(datetime.fromisoformat(from_date.replace("Z", "+00:00")))
+                param_idx += 1
+            
+            if to_date:
+                from datetime import datetime
+                conditions.append(f"created_at <= ${param_idx}")
+                params.append(datetime.fromisoformat(to_date.replace("Z", "+00:00")))
+                param_idx += 1
+            
+            where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+            
+            # Get total count
+            count_query = f"SELECT COUNT(*) FROM audit_logs {where_clause}"
+            total_count = await conn.fetchval(count_query, *params)
+            
+            # Get logs
+            params.extend([limit, offset])
+            query = f"""
+                SELECT id::text, actor_id::text, action, resource_type, resource_id::text,
+                       event_type, target_user_id::text, target_role_id::text, target_app_id::text,
+                       ip_address, user_agent, success, error_message, details, created_at
+                FROM audit_logs
+                {where_clause}
+                ORDER BY created_at DESC
+                LIMIT ${param_idx} OFFSET ${param_idx + 1}
+            """
+            rows = await conn.fetch(query, *params)
+            
+            return {
+                "logs": [dict(row) for row in rows],
+                "pagination": {
+                    "page": page,
+                    "limit": limit,
+                    "total_count": total_count,
+                    "total_pages": (total_count + limit - 1) // limit,
+                },
+            }
+
+    async def get_user_audit_trail(self, user_id: str, limit: int = 100) -> List[dict]:
+        """Get audit trail for a specific user."""
+        uid = validate_uuid(user_id, "user_id")
+        
+        async with self.acquire(None, None) as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id::text, actor_id::text, action, resource_type, resource_id::text,
+                       event_type, target_user_id::text, target_role_id::text, target_app_id::text,
+                       ip_address, user_agent, success, error_message, details, created_at
+                FROM audit_logs
+                WHERE actor_id = $1 OR target_user_id = $1
+                ORDER BY created_at DESC
+                LIMIT $2
+                """,
+                uid,
+                limit,
+            )
+            return [dict(row) for row in rows]
 
