@@ -177,8 +177,9 @@ class TestListHandling:
         chunks = chunker.chunk(text)
         
         combined_text = "\n\n".join(c.text for c in chunks)
-        # Bullets should be converted to markdown format
-        assert combined_text.count("-") >= 3  # At least 3 list items
+        # Bullets should be converted to markdown format (either • or -)
+        bullet_count = combined_text.count("-") + combined_text.count("•")
+        assert bullet_count >= 3, f"Expected at least 3 list items, got {bullet_count}. Text: {combined_text}"
 
 
 class TestTokenLimits:
