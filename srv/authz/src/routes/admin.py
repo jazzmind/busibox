@@ -524,3 +524,42 @@ async def list_oauth_clients(request: Request) -> List[OAuthClientResponse]:
         for c in clients
     ]
 
+
+# ============================================================================
+# Passkey Management Endpoints
+# ============================================================================
+
+
+@router.get("/admin/passkeys/by-credential/{credential_id}")
+async def get_passkey_by_credential(request: Request, credential_id: str):
+    """
+    Get a passkey by credential ID.
+    
+    Used during passkey authentication to look up the passkey details.
+    
+    Requires admin authentication.
+    """
+    await _require_admin_auth(request)
+
+    await pg.connect()
+    passkey = await pg.get_passkey_by_credential_id(credential_id)
+
+    if not passkey:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Passkey not found")
+
+    return {
+        "passkey_id": passkey["passkey_id"],
+        "user_id": passkey["user_id"],
+        "credential_id": passkey["credential_id"],
+        "credential_public_key": passkey["credential_public_key"],
+        "counter": passkey["counter"],
+        "device_type": passkey["device_type"],
+        "backed_up": passkey["backed_up"],
+        "transports": passkey.get("transports") or [],
+        "aaguid": passkey.get("aaguid"),
+        "name": passkey["name"],
+        "last_used_at": passkey.get("last_used_at").isoformat() if passkey.get("last_used_at") else None,
+        "created_at": passkey["created_at"].isoformat() if passkey.get("created_at") else "",
+        "updated_at": passkey.get("updated_at").isoformat() if passkey.get("updated_at") else "",
+    }
+
