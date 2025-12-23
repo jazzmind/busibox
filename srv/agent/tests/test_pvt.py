@@ -229,21 +229,21 @@ class TestPVTAPI:
             assert isinstance(data, list)
     
     @pytest.mark.asyncio
-    async def test_builtin_agents_available(self):
-        """Built-in agents are seeded in the database."""
-        db_url = require_env("DATABASE_URL", DATABASE_URL)
-        
-        # asyncpg needs the standard postgresql:// URL, not postgresql+asyncpg://
-        if db_url.startswith("postgresql+asyncpg://"):
-            db_url = db_url.replace("postgresql+asyncpg://", "postgresql://")
-        
-        import asyncpg
-        
-        conn = await asyncpg.connect(db_url, timeout=5.0)
-        try:
-            count = await conn.fetchval(
-                "SELECT COUNT(*) FROM agent_definitions WHERE is_builtin = true"
+    async def test_builtin_agents_available(self, auth_headers):
+        """Built-in agents are available via the API (dynamically loaded from code)."""
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{SERVICE_URL}/agents",
+                headers=auth_headers,
+                timeout=5.0,
             )
-            assert count >= 1, "No built-in agents found"
-        finally:
-            await conn.close()
+            assert resp.status_code == 200, f"List agents failed: {resp.status_code}"
+            agents = resp.json()
+            
+            # Check that we have built-in agents (loaded from app/agents/)
+            builtin_agents = [a for a in agents if a.get("is_builtin", False)]
+            assert len(builtin_agents) >= 1, f"No built-in agents found. Got {len(agents)} total agents."
+            
+            # Verify expected built-in agents exist
+            agent_names = [a["name"] for a in builtin_agents]
+            assert "chat" in agent_names, f"Expected 'chat' agent not found. Available: {agent_names}"
