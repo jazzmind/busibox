@@ -459,6 +459,27 @@ class PostgresService:
             )
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_email_domain_config_domain ON authz_email_domain_config(domain);")
 
+            # ----------------------------------------------------------------
+            # Role-Resource Bindings (generic role-to-resource mapping)
+            # ----------------------------------------------------------------
+            
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS authz_role_bindings (
+                  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                  role_id uuid NOT NULL REFERENCES authz_roles(id) ON DELETE CASCADE,
+                  resource_type text NOT NULL,
+                  resource_id text NOT NULL,
+                  permissions jsonb DEFAULT '{}'::jsonb,
+                  created_at timestamptz DEFAULT now(),
+                  created_by uuid NULL,
+                  UNIQUE(role_id, resource_type, resource_id)
+                );
+                """
+            )
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_role_bindings_resource ON authz_role_bindings(resource_type, resource_id);")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_role_bindings_role ON authz_role_bindings(role_id);")
+
     # ---------------------------------------------------------------------
     # Audit
     # ---------------------------------------------------------------------
@@ -2278,3 +2299,267 @@ class PostgresService:
             )
             return [dict(row) for row in rows]
 
+    # ---------------------------------------------------------------------
+    # Role-Resource Bindings
+    # ---------------------------------------------------------------------
+
+    async def create_role_binding(
+        self,
+        *,
+        role_id: str,
+        resource_type: str,
+        resource_id: str,
+        permissions: dict | None = None,
+        created_by: str | None = None,
+    ) -> dict:
+        """Create a new role-resource binding."""
+        rid = validate_uuid(role_id, "role_id")
+        created_by_uuid = validate_uuid(created_by, "created_by") if created_by else None
+        
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO authz_role_bindings (role_id, resource_type, resource_id, permissions, created_by)
+                VALUES ($1, $2, $3, $4, $5)
+                RETURNING id::text, role_id::text, resource_type, resource_id, permissions, created_at, created_by::text
+                """,
+                rid,
+                resource_type,
+                resource_id,
+                json.dumps(permissions or {}),
+                created_by_uuid,
+            )
+            return dict(row)
+
+    async def get_role_binding(self, binding_id: str) -> dict | None:
+        """Get a role binding by ID."""
+        bid = validate_uuid(binding_id, "binding_id")
+        
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id::text, role_id::text, resource_type, resource_id, permissions, created_at, created_by::text
+                FROM authz_role_bindings
+                WHERE id = $1
+                """,
+                bid,
+            )
+            return dict(row) if row else None
+
+    async def get_role_binding_by_unique(
+        self,
+        *,
+        role_id: str,
+        resource_type: str,
+        resource_id: str,
+    ) -> dict | None:
+        """Get a role binding by its unique constraint (role_id, resource_type, resource_id)."""
+        rid = validate_uuid(role_id, "role_id")
+        
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id::text, role_id::text, resource_type, resource_id, permissions, created_at, created_by::text
+                FROM authz_role_bindings
+                WHERE role_id = $1 AND resource_type = $2 AND resource_id = $3
+                """,
+                rid,
+                resource_type,
+                resource_id,
+            )
+            return dict(row) if row else None
+
+    async def delete_role_binding(self, binding_id: str) -> bool:
+        """Delete a role binding by ID. Returns True if deleted, False if not found."""
+        bid = validate_uuid(binding_id, "binding_id")
+        
+        async with self.acquire(None, None) as conn:
+            result = await conn.execute(
+                "DELETE FROM authz_role_bindings WHERE id = $1",
+                bid,
+            )
+            return result == "DELETE 1"
+
+    async def delete_role_binding_by_unique(
+        self,
+        *,
+        role_id: str,
+        resource_type: str,
+        resource_id: str,
+    ) -> bool:
+        """Delete a role binding by its unique constraint. Returns True if deleted."""
+        rid = validate_uuid(role_id, "role_id")
+        
+        async with self.acquire(None, None) as conn:
+            result = await conn.execute(
+                """
+                DELETE FROM authz_role_bindings
+                WHERE role_id = $1 AND resource_type = $2 AND resource_id = $3
+                """,
+                rid,
+                resource_type,
+                resource_id,
+            )
+            return result == "DELETE 1"
+
+    async def list_role_bindings(
+        self,
+        *,
+        role_id: str | None = None,
+        resource_type: str | None = None,
+        resource_id: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> List[dict]:
+        """List role bindings with optional filters."""
+        async with self.acquire(None, None) as conn:
+            conditions = []
+            params: list = []
+            param_idx = 1
+            
+            if role_id:
+                rid = validate_uuid(role_id, "role_id")
+                conditions.append(f"role_id = ${param_idx}")
+                params.append(rid)
+                param_idx += 1
+            
+            if resource_type:
+                conditions.append(f"resource_type = ${param_idx}")
+                params.append(resource_type)
+                param_idx += 1
+            
+            if resource_id:
+                conditions.append(f"resource_id = ${param_idx}")
+                params.append(resource_id)
+                param_idx += 1
+            
+            where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+            
+            params.extend([limit, offset])
+            query = f"""
+                SELECT id::text, role_id::text, resource_type, resource_id, permissions, created_at, created_by::text
+                FROM authz_role_bindings
+                {where_clause}
+                ORDER BY created_at DESC
+                LIMIT ${param_idx} OFFSET ${param_idx + 1}
+            """
+            rows = await conn.fetch(query, *params)
+            return [dict(row) for row in rows]
+
+    async def get_roles_for_resource(
+        self,
+        resource_type: str,
+        resource_id: str,
+    ) -> List[dict]:
+        """Get all roles that have access to a specific resource."""
+        async with self.acquire(None, None) as conn:
+            rows = await conn.fetch(
+                """
+                SELECT r.id::text, r.name, r.description, r.scopes, r.created_at, r.updated_at,
+                       b.id::text as binding_id, b.permissions, b.created_at as binding_created_at
+                FROM authz_role_bindings b
+                JOIN authz_roles r ON r.id = b.role_id
+                WHERE b.resource_type = $1 AND b.resource_id = $2
+                ORDER BY r.name
+                """,
+                resource_type,
+                resource_id,
+            )
+            return [dict(row) for row in rows]
+
+    async def get_resources_for_role(
+        self,
+        role_id: str,
+        resource_type: str | None = None,
+    ) -> List[dict]:
+        """Get all resources that a role has access to, optionally filtered by type."""
+        rid = validate_uuid(role_id, "role_id")
+        
+        async with self.acquire(None, None) as conn:
+            if resource_type:
+                rows = await conn.fetch(
+                    """
+                    SELECT id::text, role_id::text, resource_type, resource_id, permissions, created_at, created_by::text
+                    FROM authz_role_bindings
+                    WHERE role_id = $1 AND resource_type = $2
+                    ORDER BY resource_type, resource_id
+                    """,
+                    rid,
+                    resource_type,
+                )
+            else:
+                rows = await conn.fetch(
+                    """
+                    SELECT id::text, role_id::text, resource_type, resource_id, permissions, created_at, created_by::text
+                    FROM authz_role_bindings
+                    WHERE role_id = $1
+                    ORDER BY resource_type, resource_id
+                    """,
+                    rid,
+                )
+            return [dict(row) for row in rows]
+
+    async def check_role_has_resource(
+        self,
+        role_id: str,
+        resource_type: str,
+        resource_id: str,
+    ) -> bool:
+        """Check if a role has access to a specific resource."""
+        rid = validate_uuid(role_id, "role_id")
+        
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT 1 FROM authz_role_bindings
+                WHERE role_id = $1 AND resource_type = $2 AND resource_id = $3
+                """,
+                rid,
+                resource_type,
+                resource_id,
+            )
+            return row is not None
+
+    async def user_can_access_resource(
+        self,
+        user_id: str,
+        resource_type: str,
+        resource_id: str,
+    ) -> bool:
+        """Check if a user can access a resource via any of their roles."""
+        uid = validate_uuid(user_id, "user_id")
+        
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT 1 FROM authz_role_bindings b
+                JOIN authz_user_roles ur ON ur.role_id = b.role_id
+                WHERE ur.user_id = $1 AND b.resource_type = $2 AND b.resource_id = $3
+                """,
+                uid,
+                resource_type,
+                resource_id,
+            )
+            return row is not None
+
+    async def get_user_accessible_resources(
+        self,
+        user_id: str,
+        resource_type: str,
+    ) -> List[str]:
+        """Get all resource IDs of a given type that a user can access via their roles."""
+        uid = validate_uuid(user_id, "user_id")
+        
+        async with self.acquire(None, None) as conn:
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT b.resource_id
+                FROM authz_role_bindings b
+                JOIN authz_user_roles ur ON ur.role_id = b.role_id
+                WHERE ur.user_id = $1 AND b.resource_type = $2
+                ORDER BY b.resource_id
+                """,
+                uid,
+                resource_type,
+            )
+            return [row["resource_id"] for row in rows]

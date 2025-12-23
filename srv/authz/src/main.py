@@ -2,7 +2,7 @@ import uvicorn
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 
-from routes import admin, internal, oauth, keystore, users, auth, audit
+from routes import admin, internal, oauth, keystore, users, auth, audit, bindings
 from services.postgres import PostgresService
 from config import Config
 
@@ -27,6 +27,7 @@ async def lifespan(app: FastAPI):
     users.set_pg_service(pg)
     auth.set_pg_service(pg)
     audit.set_pg_service(pg)
+    bindings.set_pg_service(pg)
     
     # Run bootstrap (creates signing keys and optional OAuth client)
     from routes.oauth import _ensure_bootstrap
@@ -60,6 +61,7 @@ app.include_router(keystore.router)
 app.include_router(users.router)
 app.include_router(auth.router)
 app.include_router(audit.router)
+app.include_router(bindings.router)
 
 
 if __name__ == "__main__":

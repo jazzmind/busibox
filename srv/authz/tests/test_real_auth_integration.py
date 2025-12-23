@@ -147,6 +147,13 @@ async def clean_test_data(db_pool):
     """Clean up test data before and after tests."""
     async def cleanup():
         async with db_pool.acquire() as conn:
+            # Clean up role bindings for test roles first (due to FK)
+            await conn.execute(
+                """
+                DELETE FROM authz_role_bindings 
+                WHERE role_id IN (SELECT id FROM authz_roles WHERE name LIKE 'TestRole_%')
+                """
+            )
             # Clean up test users (email pattern)
             await conn.execute(
                 "DELETE FROM authz_users WHERE email LIKE '%@test.example.com'"
@@ -2467,4 +2474,432 @@ class TestOAuthFormEncoding:
             assert "access_token" in token_data
 
 
+# ============================================================================
+# Role Bindings Tests
+# ============================================================================
+
+
+class TestRoleBindingsCRUD:
+    """Test role-resource binding create, read, update, delete operations."""
     
+    @pytest.mark.asyncio
+    async def test_create_binding(self, admin_headers, test_role, db_pool, clean_test_data):
+        """Test creating a role-resource binding."""
+        role_id = test_role["id"]
+        resource_type = "app"
+        resource_id = str(uuid.uuid4())
+        
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{TEST_AUTHZ_URL}/admin/bindings",
+                headers=admin_headers,
+                json={
+                    "role_id": role_id,
+                    "resource_type": resource_type,
+                    "resource_id": resource_id,
+                    "permissions": {"read": True, "write": False},
+                },
+                timeout=30.0,
+            )
+            
+            assert resp.status_code == 201, f"Failed to create binding: {resp.text}"
+            data = resp.json()
+            assert data["role_id"] == role_id
+            assert data["resource_type"] == resource_type
+            assert data["resource_id"] == resource_id
+            assert data["permissions"] == {"read": True, "write": False}
+            assert "id" in data
+            
+            # Clean up
+            binding_id = data["id"]
+            async with db_pool.acquire() as conn:
+                await conn.execute(
+                    "DELETE FROM authz_role_bindings WHERE id = $1",
+                    uuid.UUID(binding_id)
+                )
+    
+    @pytest.mark.asyncio
+    async def test_create_binding_duplicate(self, admin_headers, test_role, db_pool, clean_test_data):
+        """Test that creating a duplicate binding returns 409."""
+        role_id = test_role["id"]
+        resource_type = "app"
+        resource_id = str(uuid.uuid4())
+        
+        # Create first binding directly in DB
+        binding_id = uuid.uuid4()
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO authz_role_bindings (id, role_id, resource_type, resource_id)
+                VALUES ($1, $2, $3, $4)
+                """,
+                binding_id,
+                uuid.UUID(role_id),
+                resource_type,
+                resource_id,
+            )
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    f"{TEST_AUTHZ_URL}/admin/bindings",
+                    headers=admin_headers,
+                    json={
+                        "role_id": role_id,
+                        "resource_type": resource_type,
+                        "resource_id": resource_id,
+                    },
+                    timeout=30.0,
+                )
+                
+                assert resp.status_code == 409, f"Expected conflict: {resp.text}"
+        finally:
+            # Clean up
+            async with db_pool.acquire() as conn:
+                await conn.execute(
+                    "DELETE FROM authz_role_bindings WHERE id = $1",
+                    binding_id
+                )
+    
+    @pytest.mark.asyncio
+    async def test_list_bindings(self, admin_headers, test_role, db_pool, clean_test_data):
+        """Test listing bindings with filters."""
+        role_id = test_role["id"]
+        
+        # Create test bindings
+        binding_ids = []
+        async with db_pool.acquire() as conn:
+            for i, rtype in enumerate(["app", "library", "app"]):
+                binding_id = uuid.uuid4()
+                binding_ids.append(binding_id)
+                await conn.execute(
+                    """
+                    INSERT INTO authz_role_bindings (id, role_id, resource_type, resource_id)
+                    VALUES ($1, $2, $3, $4)
+                    """,
+                    binding_id,
+                    uuid.UUID(role_id),
+                    rtype,
+                    f"resource_{i}",
+                )
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                # List all bindings for the role
+                resp = await client.get(
+                    f"{TEST_AUTHZ_URL}/admin/bindings",
+                    headers=admin_headers,
+                    params={"role_id": role_id},
+                    timeout=30.0,
+                )
+                
+                assert resp.status_code == 200, f"Failed to list bindings: {resp.text}"
+                data = resp.json()
+                assert len(data) == 3
+                
+                # Filter by resource type
+                resp = await client.get(
+                    f"{TEST_AUTHZ_URL}/admin/bindings",
+                    headers=admin_headers,
+                    params={"role_id": role_id, "resource_type": "app"},
+                    timeout=30.0,
+                )
+                
+                assert resp.status_code == 200
+                data = resp.json()
+                assert len(data) == 2
+                assert all(b["resource_type"] == "app" for b in data)
+        finally:
+            # Clean up
+            async with db_pool.acquire() as conn:
+                for binding_id in binding_ids:
+                    await conn.execute(
+                        "DELETE FROM authz_role_bindings WHERE id = $1",
+                        binding_id
+                    )
+    
+    @pytest.mark.asyncio
+    async def test_get_binding(self, admin_headers, test_role, db_pool, clean_test_data):
+        """Test getting a specific binding by ID."""
+        role_id = test_role["id"]
+        binding_id = uuid.uuid4()
+        resource_id = str(uuid.uuid4())
+        
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO authz_role_bindings (id, role_id, resource_type, resource_id, permissions)
+                VALUES ($1, $2, $3, $4, $5)
+                """,
+                binding_id,
+                uuid.UUID(role_id),
+                "library",
+                resource_id,
+                '{"access": "full"}',
+            )
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    f"{TEST_AUTHZ_URL}/admin/bindings/{binding_id}",
+                    headers=admin_headers,
+                    timeout=30.0,
+                )
+                
+                assert resp.status_code == 200, f"Failed to get binding: {resp.text}"
+                data = resp.json()
+                assert data["id"] == str(binding_id)
+                assert data["role_id"] == role_id
+                assert data["resource_type"] == "library"
+                assert data["resource_id"] == resource_id
+        finally:
+            async with db_pool.acquire() as conn:
+                await conn.execute(
+                    "DELETE FROM authz_role_bindings WHERE id = $1",
+                    binding_id
+                )
+    
+    @pytest.mark.asyncio
+    async def test_delete_binding(self, admin_headers, test_role, db_pool, clean_test_data):
+        """Test deleting a binding."""
+        role_id = test_role["id"]
+        binding_id = uuid.uuid4()
+        
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO authz_role_bindings (id, role_id, resource_type, resource_id)
+                VALUES ($1, $2, $3, $4)
+                """,
+                binding_id,
+                uuid.UUID(role_id),
+                "app",
+                "app_to_delete",
+            )
+        
+        async with httpx.AsyncClient() as client:
+            resp = await client.delete(
+                f"{TEST_AUTHZ_URL}/admin/bindings/{binding_id}",
+                headers=admin_headers,
+                timeout=30.0,
+            )
+            
+            assert resp.status_code == 204, f"Failed to delete binding: {resp.text}"
+            
+            # Verify it's gone
+            resp = await client.get(
+                f"{TEST_AUTHZ_URL}/admin/bindings/{binding_id}",
+                headers=admin_headers,
+                timeout=30.0,
+            )
+            assert resp.status_code == 404
+
+
+class TestRoleBindingsQueries:
+    """Test role binding query endpoints."""
+    
+    @pytest.mark.asyncio
+    async def test_get_role_bindings(self, admin_headers, test_role, db_pool, clean_test_data):
+        """Test getting all bindings for a role."""
+        role_id = test_role["id"]
+        
+        # Create test bindings
+        binding_ids = []
+        async with db_pool.acquire() as conn:
+            for i in range(3):
+                binding_id = uuid.uuid4()
+                binding_ids.append(binding_id)
+                await conn.execute(
+                    """
+                    INSERT INTO authz_role_bindings (id, role_id, resource_type, resource_id)
+                    VALUES ($1, $2, $3, $4)
+                    """,
+                    binding_id,
+                    uuid.UUID(role_id),
+                    "app",
+                    f"app_{i}",
+                )
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    f"{TEST_AUTHZ_URL}/roles/{role_id}/bindings",
+                    headers=admin_headers,
+                    timeout=30.0,
+                )
+                
+                assert resp.status_code == 200, f"Failed to get role bindings: {resp.text}"
+                data = resp.json()
+                assert len(data) == 3
+        finally:
+            async with db_pool.acquire() as conn:
+                for binding_id in binding_ids:
+                    await conn.execute(
+                        "DELETE FROM authz_role_bindings WHERE id = $1",
+                        binding_id
+                    )
+    
+    @pytest.mark.asyncio
+    async def test_get_resource_roles(self, admin_headers, test_role, db_pool, clean_test_data):
+        """Test getting all roles for a resource."""
+        role_id = test_role["id"]
+        resource_id = str(uuid.uuid4())
+        
+        # Create test binding
+        binding_id = uuid.uuid4()
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO authz_role_bindings (id, role_id, resource_type, resource_id)
+                VALUES ($1, $2, $3, $4)
+                """,
+                binding_id,
+                uuid.UUID(role_id),
+                "library",
+                resource_id,
+            )
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    f"{TEST_AUTHZ_URL}/resources/library/{resource_id}/roles",
+                    headers=admin_headers,
+                    timeout=30.0,
+                )
+                
+                assert resp.status_code == 200, f"Failed to get resource roles: {resp.text}"
+                data = resp.json()
+                assert len(data) == 1
+                assert data[0]["id"] == role_id
+                assert data[0]["name"] == test_role["name"]
+                assert "binding_id" in data[0]
+        finally:
+            async with db_pool.acquire() as conn:
+                await conn.execute(
+                    "DELETE FROM authz_role_bindings WHERE id = $1",
+                    binding_id
+                )
+    
+    @pytest.mark.asyncio
+    async def test_user_can_access_resource(self, admin_headers, test_user, test_role, db_pool, clean_test_data):
+        """Test checking if a user can access a resource."""
+        user_id = test_user["id"]
+        role_id = test_role["id"]
+        resource_id = str(uuid.uuid4())
+        
+        # Assign role to user and create binding
+        binding_id = uuid.uuid4()
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO authz_user_roles (user_id, role_id)
+                VALUES ($1, $2)
+                """,
+                uuid.UUID(user_id),
+                uuid.UUID(role_id),
+            )
+            await conn.execute(
+                """
+                INSERT INTO authz_role_bindings (id, role_id, resource_type, resource_id)
+                VALUES ($1, $2, $3, $4)
+                """,
+                binding_id,
+                uuid.UUID(role_id),
+                "app",
+                resource_id,
+            )
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                # User should have access
+                resp = await client.get(
+                    f"{TEST_AUTHZ_URL}/users/{user_id}/can-access/app/{resource_id}",
+                    headers=admin_headers,
+                    timeout=30.0,
+                )
+                
+                assert resp.status_code == 200, f"Failed to check access: {resp.text}"
+                data = resp.json()
+                assert data["has_access"] is True
+                
+                # User should not have access to a different resource
+                resp = await client.get(
+                    f"{TEST_AUTHZ_URL}/users/{user_id}/can-access/app/{uuid.uuid4()}",
+                    headers=admin_headers,
+                    timeout=30.0,
+                )
+                
+                assert resp.status_code == 200
+                data = resp.json()
+                assert data["has_access"] is False
+        finally:
+            async with db_pool.acquire() as conn:
+                await conn.execute(
+                    "DELETE FROM authz_user_roles WHERE user_id = $1 AND role_id = $2",
+                    uuid.UUID(user_id),
+                    uuid.UUID(role_id),
+                )
+                await conn.execute(
+                    "DELETE FROM authz_role_bindings WHERE id = $1",
+                    binding_id
+                )
+    
+    @pytest.mark.asyncio
+    async def test_get_user_resources(self, admin_headers, test_user, test_role, db_pool, clean_test_data):
+        """Test getting all resources a user can access."""
+        user_id = test_user["id"]
+        role_id = test_role["id"]
+        
+        # Assign role to user and create bindings
+        binding_ids = []
+        resource_ids = [str(uuid.uuid4()) for _ in range(3)]
+        
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO authz_user_roles (user_id, role_id)
+                VALUES ($1, $2)
+                """,
+                uuid.UUID(user_id),
+                uuid.UUID(role_id),
+            )
+            for res_id in resource_ids:
+                binding_id = uuid.uuid4()
+                binding_ids.append(binding_id)
+                await conn.execute(
+                    """
+                    INSERT INTO authz_role_bindings (id, role_id, resource_type, resource_id)
+                    VALUES ($1, $2, $3, $4)
+                    """,
+                    binding_id,
+                    uuid.UUID(role_id),
+                    "library",
+                    res_id,
+                )
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    f"{TEST_AUTHZ_URL}/users/{user_id}/resources/library",
+                    headers=admin_headers,
+                    timeout=30.0,
+                )
+                
+                assert resp.status_code == 200, f"Failed to get user resources: {resp.text}"
+                data = resp.json()
+                assert "resource_ids" in data
+                assert len(data["resource_ids"]) == 3
+                for res_id in resource_ids:
+                    assert res_id in data["resource_ids"]
+        finally:
+            async with db_pool.acquire() as conn:
+                await conn.execute(
+                    "DELETE FROM authz_user_roles WHERE user_id = $1 AND role_id = $2",
+                    uuid.UUID(user_id),
+                    uuid.UUID(role_id),
+                )
+                for binding_id in binding_ids:
+                    await conn.execute(
+                        "DELETE FROM authz_role_bindings WHERE id = $1",
+                        binding_id
+                    )
