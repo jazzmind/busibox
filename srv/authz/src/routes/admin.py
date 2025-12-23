@@ -345,6 +345,57 @@ async def remove_user_role(request: Request):
     return {"status": "ok", "deleted": True}
 
 
+class UserResponse(BaseModel):
+    id: str
+    email: str
+    status: Optional[str] = None
+    roles: List[RoleResponse] = Field(default_factory=list)
+    created_at: str
+    updated_at: str
+
+
+@router.get("/admin/users/{user_id}", response_model=UserResponse)
+async def get_user(request: Request, user_id: str):
+    """
+    Get a specific user by ID, including their roles.
+
+    Requires admin authentication.
+    """
+    await _require_admin_auth(request)
+
+    try:
+        UUID(user_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user ID format") from e
+
+    await pg.connect()
+    user = await pg.get_user(user_id)
+
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    roles = await pg.get_user_roles(user_id)
+
+    return UserResponse(
+        id=str(user["user_id"]),
+        email=user["email"],
+        status=user.get("status"),
+        roles=[
+            RoleResponse(
+                id=r["id"],
+                name=r["name"],
+                description=r.get("description"),
+                scopes=r.get("scopes") or [],
+                created_at=r.get("created_at").isoformat() if r.get("created_at") else "",
+                updated_at=r.get("updated_at").isoformat() if r.get("updated_at") else "",
+            )
+            for r in roles
+        ],
+        created_at=user["created_at"].isoformat() if user.get("created_at") else "",
+        updated_at=user["updated_at"].isoformat() if user.get("updated_at") else "",
+    )
+
+
 @router.get("/admin/users/{user_id}/roles", response_model=List[RoleResponse])
 async def get_user_roles(request: Request, user_id: str):
     """
