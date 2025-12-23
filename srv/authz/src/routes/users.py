@@ -272,6 +272,25 @@ async def list_users(request: Request):
     }
 
 
+@router.get("/admin/users/by-email/{email:path}")
+async def get_user_by_email(request: Request, email: str):
+    """
+    Get a user by email address.
+
+    Requires admin authentication.
+    Returns 404 if user not found.
+    """
+    await _require_admin_auth(request)
+
+    await pg.connect()
+    user = await pg.get_user_by_email(email)
+
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    return _format_user(user)
+
+
 @router.get("/admin/users/{user_id}")
 async def get_user(request: Request, user_id: str):
     """
