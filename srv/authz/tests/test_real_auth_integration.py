@@ -1968,6 +1968,8 @@ class TestOAuthTokenExchange:
         import jwt
         import json
         
+        skip_if_no_oauth_credentials()
+        
         async with httpx.AsyncClient() as client:
             # Get JWKS
             jwks_resp = await client.get(
@@ -1977,16 +1979,15 @@ class TestOAuthTokenExchange:
             jwks = jwks_resp.json()
             jwk = jwks["keys"][0]
             
-            # Request token with client_credentials
+            # Request token with client_credentials (no scope - client_credentials
+            # only gets scopes from client's allowed_scopes which is empty by default)
             token_resp = await client.post(
                 f"{TEST_AUTHZ_URL}/oauth/token",
-                headers=admin_headers,
                 json={
                     "grant_type": "client_credentials",
                     "client_id": BOOTSTRAP_CLIENT_ID,
                     "client_secret": BOOTSTRAP_CLIENT_SECRET,
-                    "audience": "ingest-api",
-                    "scope": "ingest.write",
+                    "audience": "agent-api",
                 },
                 timeout=30.0,
             )
@@ -2007,7 +2008,6 @@ class TestOAuthTokenExchange:
             
             # For client_credentials, sub is the client_id
             assert decoded["sub"] == BOOTSTRAP_CLIENT_ID
-            assert decoded["scope"] == "ingest.write"
             assert decoded["roles"] == []  # No user roles for service tokens
 
 
@@ -2042,6 +2042,8 @@ class TestJWKSEndpoint:
         import jwt
         import json
         
+        skip_if_no_oauth_credentials()
+        
         async with httpx.AsyncClient() as client:
             # Get JWKS
             jwks_resp = await client.get(
@@ -2051,21 +2053,19 @@ class TestJWKSEndpoint:
             jwks = jwks_resp.json()
             jwk = jwks["keys"][0]
             
-            # Get a token
+            # Get a token (no scope - use allowed audience)
             token_resp = await client.post(
                 f"{TEST_AUTHZ_URL}/oauth/token",
-                headers=admin_headers,
                 json={
                     "grant_type": "client_credentials",
                     "client_id": BOOTSTRAP_CLIENT_ID,
                     "client_secret": BOOTSTRAP_CLIENT_SECRET,
-                    "audience": "test-audience",
-                    "scope": "test.read",
+                    "audience": "agent-api",
                 },
                 timeout=30.0,
             )
             
-            assert token_resp.status_code == 200
+            assert token_resp.status_code == 200, f"Token request failed: {token_resp.text}"
             access_token = token_resp.json()["access_token"]
             
             # Verify token using JWKS
@@ -2165,7 +2165,7 @@ class TestAdminRoleEndpoints:
                 VALUES ($1, $2, $3)
                 """,
                 uuid.UUID(role_id),
-                "original-name",
+                f"TestRole_original_{role_id[:8]}",
                 "Original description",
             )
         
@@ -2174,15 +2174,15 @@ class TestAdminRoleEndpoints:
                 f"{TEST_AUTHZ_URL}/admin/roles/{role_id}",
                 headers=admin_headers,
                 json={
-                    "name": "updated-name",
+                    "name": f"TestRole_updated_{role_id[:8]}",
                     "description": "Updated description",
                 },
                 timeout=30.0,
             )
             
-            assert resp.status_code == 200
+            assert resp.status_code == 200, f"Update role failed: {resp.text}"
             data = resp.json()
-            assert data["name"] == "updated-name"
+            assert data["name"] == f"TestRole_updated_{role_id[:8]}"
             assert data["description"] == "Updated description"
             
             # Verify in database
@@ -2191,7 +2191,7 @@ class TestAdminRoleEndpoints:
                     "SELECT name, description FROM authz_roles WHERE id = $1",
                     uuid.UUID(role_id),
                 )
-                assert row["name"] == "updated-name"
+                assert row["name"] == f"TestRole_updated_{role_id[:8]}"
                 assert row["description"] == "Updated description"
     
     @pytest.mark.asyncio
@@ -2358,14 +2358,16 @@ class TestOAuthFormEncoding:
     @pytest.mark.asyncio
     async def test_token_endpoint_with_form_encoding(self, admin_headers):
         """Test that token endpoint accepts application/x-www-form-urlencoded."""
+        skip_if_no_oauth_credentials()
+        
         async with httpx.AsyncClient() as client:
             # Test form-encoded request (standard OAuth2 format)
+            # Note: no scope - client_credentials only gets client's allowed_scopes
             form_data = {
                 "grant_type": "client_credentials",
                 "client_id": BOOTSTRAP_CLIENT_ID,
                 "client_secret": BOOTSTRAP_CLIENT_SECRET,
                 "audience": "ingest-api",
-                "scope": "ingest.write",
             }
             
             resp = await client.post(
@@ -2383,13 +2385,14 @@ class TestOAuthFormEncoding:
     @pytest.mark.asyncio
     async def test_token_endpoint_with_json_body(self, admin_headers):
         """Test that token endpoint accepts JSON (our extension)."""
+        skip_if_no_oauth_credentials()
+        
         async with httpx.AsyncClient() as client:
             json_data = {
                 "grant_type": "client_credentials",
                 "client_id": BOOTSTRAP_CLIENT_ID,
                 "client_secret": BOOTSTRAP_CLIENT_SECRET,
                 "audience": "search-api",
-                "scope": "search.read",
             }
             
             resp = await client.post(
@@ -2442,12 +2445,12 @@ class TestOAuthFormEncoding:
         
         async with httpx.AsyncClient() as client:
             # Test token exchange with form encoding
+            # Note: scope is taken from user's roles, not specified in request
             form_data = {
                 "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
                 "client_id": BOOTSTRAP_CLIENT_ID,
                 "client_secret": BOOTSTRAP_CLIENT_SECRET,
                 "audience": "agent-api",
-                "scope": "agent.execute",
                 "requested_subject": user_id,
             }
             
@@ -2513,7 +2516,7 @@ class TestAuditWithBearerContext:
                     "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
                     "client_id": BOOTSTRAP_CLIENT_ID,
                     "client_secret": BOOTSTRAP_CLIENT_SECRET,
-                    "audience": "test-audience",
+                    "audience": "agent-api",
                     "requested_subject": user_id,
                 },
                 timeout=30.0,
@@ -2566,7 +2569,7 @@ class TestAuditWithBearerContext:
                     "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
                     "client_id": BOOTSTRAP_CLIENT_ID,
                     "client_secret": BOOTSTRAP_CLIENT_SECRET,
-                    "audience": "test-audience",
+                    "audience": "agent-api",
                     "requested_subject": user_id,
                 },
                 timeout=30.0,
