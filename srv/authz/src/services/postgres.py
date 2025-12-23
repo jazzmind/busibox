@@ -489,6 +489,25 @@ class PostgresService:
             )
             return row is not None
 
+    async def get_user(self, user_id: str) -> dict | None:
+        """Get a user by ID from authz_users."""
+        try:
+            uid = uuid.UUID(user_id)
+        except (ValueError, AttributeError, TypeError):
+            return None
+        
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT user_id, email, status, idp_provider, idp_tenant_id, 
+                       idp_object_id, idp_roles, idp_groups, created_at, updated_at
+                FROM authz_users
+                WHERE user_id = $1
+                """,
+                uid,
+            )
+            return dict(row) if row else None
+
     async def get_user_roles(self, user_id: str) -> List[dict]:
         try:
             uid = uuid.UUID(user_id)
