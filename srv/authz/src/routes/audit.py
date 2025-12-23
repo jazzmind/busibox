@@ -1,0 +1,367 @@
+"""
+Audit Log endpoints.
+
+Provides centralized audit logging for all services:
+- Create audit entries
+- List/filter audit logs
+- Get user audit trail
+
+Also includes legacy /authz/audit endpoint for backwards compatibility.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Optional, List
+
+import jwt
+from fastapi import APIRouter, HTTPException, Request, status
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+
+from config import Config
+from oauth.client_auth import verify_client_secret
+
+router = APIRouter()
+config = Config()
+JWT_ISSUER = config.issuer
+
+# PostgresService instance - will be set by main.py
+pg = None
+
+
+def set_pg_service(pg_service):
+    """Set the shared PostgresService instance."""
+    global pg
+    pg = pg_service
+
+
+# ============================================================================
+# Request/Response Models
+# ============================================================================
+
+
+class AuditLogCreate(BaseModel):
+    actor_id: str
+    action: str
+    resource_type: str
+    resource_id: Optional[str] = None
+    event_type: Optional[str] = None
+    target_user_id: Optional[str] = None
+    target_role_id: Optional[str] = None
+    target_app_id: Optional[str] = None
+    ip_address: Optional[str] = None
+    user_agent: Optional[str] = None
+    success: bool = True
+    error_message: Optional[str] = None
+    details: Optional[dict] = Field(default_factory=dict)
+
+
+# ============================================================================
+# Authentication Helpers
+# ============================================================================
+
+
+async def _require_client_auth(request: Request) -> None:
+    """
+    Require OAuth client credentials or admin token.
+    """
+    # Try admin token first
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        token = auth_header[7:]
+        if config.admin_token and token == config.admin_token:
+            return
+
+    # Try OAuth client credentials in body
+    try:
+        body = await request.json()
+        client_id = body.get("client_id")
+        client_secret = body.get("client_secret")
+
+        if client_id and client_secret:
+            await pg.connect()
+            client = await pg.get_oauth_client(client_id)
+            if client and client.get("is_active"):
+                if verify_client_secret(client_secret, client["client_secret_hash"]):
+                    return
+    except Exception:
+        pass
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Unauthorized: valid admin token or OAuth client credentials required",
+    )
+
+
+async def _require_read_auth(request: Request) -> None:
+    """
+    Require authentication for read-only operations.
+    Accepts admin token in Authorization header.
+    """
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        token = auth_header[7:]
+        if config.admin_token and token == config.admin_token:
+            return
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Unauthorized: valid admin token required",
+    )
+
+
+def _format_datetime(dt) -> str:
+    """Format datetime for response."""
+    if dt is None:
+        return ""
+    return dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
+
+
+def _format_audit_log(log: dict) -> dict:
+    """Format audit log for response."""
+    return {
+        "id": log.get("id"),
+        "actor_id": log.get("actor_id"),
+        "action": log.get("action"),
+        "resource_type": log.get("resource_type"),
+        "resource_id": log.get("resource_id"),
+        "event_type": log.get("event_type"),
+        "target_user_id": log.get("target_user_id"),
+        "target_role_id": log.get("target_role_id"),
+        "target_app_id": log.get("target_app_id"),
+        "ip_address": log.get("ip_address"),
+        "user_agent": log.get("user_agent"),
+        "success": log.get("success", True),
+        "error_message": log.get("error_message"),
+        "details": log.get("details", {}),
+        "created_at": _format_datetime(log.get("created_at")),
+    }
+
+
+# ============================================================================
+# Audit Log Endpoints
+# ============================================================================
+
+
+@router.post("/audit/log")
+async def create_audit_log(request: Request):
+    """
+    Create an audit log entry.
+    
+    Body:
+    - client_id, client_secret (OAuth client auth)
+    - actor_id: string (required) - The user performing the action
+    - action: string (required) - The action performed (e.g., "USER_CREATED", "LOGIN")
+    - resource_type: string (required) - The type of resource (e.g., "user", "role", "session")
+    - resource_id: string (optional) - The specific resource ID
+    - event_type: string (optional) - Category of event (e.g., "auth", "admin", "system")
+    - target_user_id: string (optional) - If action affects another user
+    - target_role_id: string (optional) - If action affects a role
+    - target_app_id: string (optional) - If action affects an app
+    - ip_address: string (optional) - Client IP address
+    - user_agent: string (optional) - Client user agent
+    - success: boolean (default: true) - Whether the action succeeded
+    - error_message: string (optional) - Error message if failed
+    - details: object (optional) - Additional context
+    """
+    await _require_client_auth(request)
+
+    body = await request.json()
+    try:
+        log_data = AuditLogCreate.model_validate(body)
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+
+    await pg.connect()
+
+    result = await pg.insert_audit_extended(
+        actor_id=log_data.actor_id,
+        action=log_data.action,
+        resource_type=log_data.resource_type,
+        resource_id=log_data.resource_id,
+        event_type=log_data.event_type,
+        target_user_id=log_data.target_user_id,
+        target_role_id=log_data.target_role_id,
+        target_app_id=log_data.target_app_id,
+        ip_address=log_data.ip_address,
+        user_agent=log_data.user_agent,
+        success=log_data.success,
+        error_message=log_data.error_message,
+        details=log_data.details,
+    )
+
+    return {
+        "status": "ok",
+        "audit_log_id": result["audit_log_id"],
+        "created_at": _format_datetime(result["created_at"]),
+    }
+
+
+@router.get("/audit/logs")
+async def list_audit_logs(request: Request):
+    """
+    List audit logs with pagination and filtering.
+    
+    Query params:
+    - page: int (default: 1)
+    - limit: int (default: 50, max: 100)
+    - actor_id: string (optional)
+    - event_type: string (optional)
+    - resource_type: string (optional)
+    - target_user_id: string (optional)
+    - from_date: ISO timestamp (optional)
+    - to_date: ISO timestamp (optional)
+    
+    Requires admin authentication.
+    """
+    await _require_read_auth(request)
+
+    params = request.query_params
+    page = int(params.get("page", "1"))
+    limit = int(params.get("limit", "50"))
+    actor_id = params.get("actor_id")
+    event_type = params.get("event_type")
+    resource_type = params.get("resource_type")
+    target_user_id = params.get("target_user_id")
+    from_date = params.get("from_date")
+    to_date = params.get("to_date")
+
+    # Validate pagination
+    if page < 1:
+        page = 1
+    if limit < 1 or limit > 100:
+        limit = 50
+
+    await pg.connect()
+    result = await pg.list_audit_logs(
+        page=page,
+        limit=limit,
+        actor_id=actor_id,
+        event_type=event_type,
+        resource_type=resource_type,
+        target_user_id=target_user_id,
+        from_date=from_date,
+        to_date=to_date,
+    )
+
+    return {
+        "logs": [_format_audit_log(log) for log in result["logs"]],
+        "pagination": result["pagination"],
+    }
+
+
+@router.get("/audit/logs/user/{user_id}")
+async def get_user_audit_trail(request: Request, user_id: str):
+    """
+    Get audit trail for a specific user.
+    
+    Returns all audit logs where the user is either the actor or the target.
+    
+    Query params:
+    - limit: int (default: 100, max: 500)
+    
+    Requires admin authentication.
+    """
+    await _require_read_auth(request)
+
+    from uuid import UUID
+    try:
+        UUID(user_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user_id format") from e
+
+    params = request.query_params
+    limit = int(params.get("limit", "100"))
+    if limit < 1 or limit > 500:
+        limit = 100
+
+    await pg.connect()
+    logs = await pg.get_user_audit_trail(user_id, limit)
+
+    return {
+        "user_id": user_id,
+        "logs": [_format_audit_log(log) for log in logs],
+    }
+
+
+# ============================================================================
+# Legacy Endpoint (backwards compatibility)
+# ============================================================================
+
+
+async def _extract_actor_from_headers(request: Request) -> tuple[Optional[str], List[dict]]:
+    """
+    Best-effort extract actor and roles from Authorization header if present.
+    Token is expected to be a signed JWT with `sub` and `roles` fields.
+    """
+    auth = request.headers.get("authorization") or ""
+    if not auth.lower().startswith("bearer "):
+        return None, []
+    token = auth.split(" ", 1)[1]
+    try:
+        headers = jwt.get_unverified_header(token)
+        kid = headers.get("kid")
+        if not kid:
+            return None, []
+        # Look up public key via active JWKS keys stored in DB.
+        await pg.connect()
+        jwks = await pg.list_public_jwks()
+        key_data = next((k for k in jwks if k.get("kid") == kid), None)
+        if not key_data:
+            return None, []
+        public_key = jwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(key_data))
+        data = jwt.decode(
+            token,
+            public_key,
+            algorithms=["RS256"],
+            issuer=JWT_ISSUER,
+            options={"verify_aud": False},  # audit context does not require audience
+        )
+        actor = data.get("sub")
+        roles = data.get("roles") or []
+        return actor, roles
+    except Exception:
+        return None, []
+
+
+@router.post("/authz/audit")
+async def legacy_audit(request: Request):
+    """
+    Legacy audit endpoint for backwards compatibility.
+    
+    DEPRECATED: Use POST /audit/log instead.
+    
+    Body: { actorId, action, resourceType, resourceId?, details? }
+    """
+    body = await request.json()
+    actor_id = body.get("actorId")
+    action = body.get("action")
+    resource_type = body.get("resourceType")
+    resource_id = body.get("resourceId")
+    details = body.get("details", {})
+
+    if not actor_id or not action or not resource_type:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"error": "actorId, action, and resourceType are required"}
+        )
+
+    await pg.connect()
+
+    # Attempt to propagate caller context if supplied
+    caller_user, caller_roles = await _extract_actor_from_headers(request)
+    
+    # Use the legacy insert_audit method for compatibility
+    await pg.insert_audit(
+        actor_id=actor_id,
+        action=action,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        details=details,
+        user_id=caller_user or actor_id,
+        role_ids=[r.get("id") for r in caller_roles if isinstance(r, dict) and r.get("id")] if isinstance(caller_roles, list) else [],
+    )
+
+    return {"status": "ok"}
+
