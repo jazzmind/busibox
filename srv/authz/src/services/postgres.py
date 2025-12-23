@@ -2172,6 +2172,19 @@ class PostgresService:
         details: dict | None = None,
     ) -> dict:
         """Insert an audit log entry with extended fields."""
+        # Handle "system" actor_id - use a well-known UUID for system events
+        # This UUID represents the system actor: 00000000-0000-0000-0000-000000000001
+        SYSTEM_ACTOR_UUID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        
+        if actor_id.lower() == "system":
+            actor_uuid = SYSTEM_ACTOR_UUID
+        else:
+            try:
+                actor_uuid = uuid.UUID(actor_id)
+            except ValueError:
+                # If it's not a valid UUID and not "system", use system UUID as fallback
+                actor_uuid = SYSTEM_ACTOR_UUID
+        
         async with self.acquire(None, None) as conn:
             row = await conn.fetchrow(
                 """
@@ -2182,7 +2195,7 @@ class PostgresService:
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb)
                 RETURNING id::text as audit_log_id, created_at
                 """,
-                uuid.UUID(actor_id),
+                actor_uuid,
                 action,
                 resource_type,
                 uuid.UUID(resource_id) if resource_id else None,
