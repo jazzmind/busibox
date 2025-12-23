@@ -144,8 +144,8 @@ Analyze this query and select the appropriate tools and/or agents."""
 
                 result = await dispatcher_agent.run(prompt)
                 
-                # PydanticAI with output_type returns validated structured data in .data
-                routing_decision = result.data
+                # PydanticAI with output_type returns validated structured data in .output
+                routing_decision = result.output
                 
                 logger.info(
                     "dispatcher_routing_success",
