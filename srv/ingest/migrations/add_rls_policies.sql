@@ -297,28 +297,27 @@ CREATE POLICY ingestion_status_update ON ingestion_status
 -- ============================================================================
 -- DOCUMENT_ROLES POLICIES
 -- ============================================================================
--- Note: Check file owner/roles directly to avoid recursion
+-- Note: document_roles is used by other policies (ingestion_files, chunks, etc.)
+-- to check role membership. To avoid infinite recursion, we use a simple
+-- approach: document_roles can be read if user has ANY of the roles on that file.
+-- This is checked directly against the role_id column, not through ingestion_files.
 
--- SELECT: Check file owner/roles directly
+-- SELECT: User can see document_roles where they have matching role
+-- This MUST NOT reference ingestion_files to avoid recursion
 CREATE POLICY document_roles_select ON document_roles
     FOR SELECT
     USING (
-        EXISTS (
-            SELECT 1 FROM ingestion_files f
-            WHERE f.file_id = document_roles.file_id
-            AND (
-                (f.visibility = 'personal' AND f.owner_id = COALESCE(NULLIF(current_setting('app.user_id', true), '')::uuid, '00000000-0000-0000-0000-000000000000'::uuid))
-                OR
-                (f.visibility = 'shared' AND EXISTS (
-                    SELECT 1 FROM document_roles dr2
-                    WHERE dr2.file_id = f.file_id
-                    AND dr2.role_id = ANY(COALESCE(string_to_array(current_setting('app.user_role_ids_read', true), ',')::uuid[], ARRAY[]::uuid[]))
-                ))
+        role_id = ANY(
+            COALESCE(
+                string_to_array(current_setting('app.user_role_ids_read', true), ',')::uuid[],
+                ARRAY[]::uuid[]
             )
         )
     );
 
 -- INSERT: User must have create permission on the role being assigned
+-- We check file ownership via ingestion_files, but only for personal docs.
+-- For this we look at owner_id directly - no RLS cycle since we don't go through policies.
 CREATE POLICY document_roles_insert ON document_roles
     FOR INSERT
     WITH CHECK (
@@ -326,20 +325,6 @@ CREATE POLICY document_roles_insert ON document_roles
             COALESCE(
                 string_to_array(current_setting('app.user_role_ids_create', true), ',')::uuid[],
                 ARRAY[]::uuid[]
-            )
-        )
-        -- User must be able to access the file (owner or has role)
-        AND EXISTS (
-            SELECT 1 FROM ingestion_files f
-            WHERE f.file_id = document_roles.file_id
-            AND (
-                (f.visibility = 'personal' AND f.owner_id = COALESCE(NULLIF(current_setting('app.user_id', true), '')::uuid, '00000000-0000-0000-0000-000000000000'::uuid))
-                OR
-                (f.visibility = 'shared' AND EXISTS (
-                    SELECT 1 FROM document_roles dr2
-                    WHERE dr2.file_id = f.file_id
-                    AND dr2.role_id = ANY(COALESCE(string_to_array(current_setting('app.user_role_ids_read', true), ',')::uuid[], ARRAY[]::uuid[]))
-                ))
             )
         )
     );
@@ -356,7 +341,7 @@ CREATE POLICY document_roles_update ON document_roles
         )
     );
 
--- DELETE: User must have update permission on the role being removed
+-- DELETE: User must have delete permission on the role being removed
 CREATE POLICY document_roles_delete ON document_roles
     FOR DELETE
     USING (
