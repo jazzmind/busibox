@@ -5,13 +5,28 @@ Integration tests for /streams SSE endpoints.
 import asyncio
 import json
 import uuid
-from unittest.mock import patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
+from app.auth.dependencies import get_principal
 from app.models.domain import AgentDefinition, RunRecord
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def override_principal(principal):
+    """Context manager to override get_principal dependency."""
+    async def override_get_principal():
+        return principal
+    
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[get_principal] = override_get_principal
+    try:
+        yield
+    finally:
+        app.dependency_overrides = original_overrides
 
 
 @pytest.fixture
@@ -50,11 +65,17 @@ async def test_run(test_session, test_agent, mock_principal):
 @pytest.mark.asyncio
 async def test_stream_run_not_found(test_session, mock_principal):
     """Test GET /streams/runs/{run_id} returns 404 for non-existent run."""
-    with patch("app.api.streams.get_principal", return_value=mock_principal):
+    async def override_get_principal():
+        return mock_principal
+    
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[get_principal] = override_get_principal
+    try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.get(f"/streams/runs/{uuid.uuid4()}")
-
-    assert response.status_code == 404
+        assert response.status_code == 404
+    finally:
+        app.dependency_overrides = original_overrides
 
 
 @pytest.mark.asyncio
@@ -76,11 +97,17 @@ async def test_stream_run_access_denied(test_session, test_agent):
 
     other_principal = Principal(sub="requesting-user", roles=[], scopes=[], token="test")
 
-    with patch("app.api.streams.get_principal", return_value=other_principal):
+    async def override_get_principal():
+        return other_principal
+    
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[get_principal] = override_get_principal
+    try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.get(f"/streams/runs/{run_record.id}")
-
-    assert response.status_code == 403
+        assert response.status_code == 403
+    finally:
+        app.dependency_overrides = original_overrides
 
 
 @pytest.mark.asyncio
@@ -101,7 +128,7 @@ async def test_stream_run_emits_status_changes(test_session, test_run, mock_prin
         test_session.add(test_run)
         await test_session.commit()
 
-    with patch("app.api.streams.get_principal", return_value=mock_principal):
+    async with override_principal(mock_principal):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             # Start background task to update run
             update_task = asyncio.create_task(update_run_status())
@@ -164,7 +191,7 @@ async def test_stream_run_emits_events(test_session, test_run, mock_principal):
         test_session.add(test_run)
         await test_session.commit()
 
-    with patch("app.api.streams.get_principal", return_value=mock_principal):
+    async with override_principal(mock_principal):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             update_task = asyncio.create_task(add_run_events())
             
@@ -207,7 +234,7 @@ async def test_stream_run_emits_output(test_session, test_run, mock_principal):
         test_session.add(test_run)
         await test_session.commit()
 
-    with patch("app.api.streams.get_principal", return_value=mock_principal):
+    async with override_principal(mock_principal):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             update_task = asyncio.create_task(complete_run())
             
@@ -244,7 +271,7 @@ async def test_stream_run_terminates_on_failure(test_session, test_run, mock_pri
         test_session.add(test_run)
         await test_session.commit()
 
-    with patch("app.api.streams.get_principal", return_value=mock_principal):
+    async with override_principal(mock_principal):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             update_task = asyncio.create_task(fail_run())
             
@@ -286,7 +313,7 @@ async def test_stream_run_terminates_on_timeout(test_session, test_run, mock_pri
         test_session.add(test_run)
         await test_session.commit()
 
-    with patch("app.api.streams.get_principal", return_value=mock_principal):
+    async with override_principal(mock_principal):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             update_task = asyncio.create_task(timeout_run())
             

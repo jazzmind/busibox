@@ -522,6 +522,7 @@ class PostgresService:
         Link new file to existing vectors (duplicate content).
         
         Creates a new file record linked to existing vectors via content_hash.
+        Also copies markdown and image paths so the duplicate file has full functionality.
         
         Args:
             new_file_id: ID for the new file record
@@ -531,11 +532,12 @@ class PostgresService:
         """
         import json
         async with self.acquire(request) as conn:
-            # Copy file record from existing file
+            # Copy file record from existing file (including markdown/images)
             existing = await conn.fetchrow("""
                 SELECT 
                     filename, original_filename, mime_type, size_bytes,
-                    storage_path, content_hash, metadata, chunk_count, vector_count
+                    storage_path, content_hash, metadata, chunk_count, vector_count,
+                    has_markdown, markdown_path, images_path, image_count
                 FROM ingestion_files
                 WHERE file_id = $1
             """, uuid.UUID(existing_file_id))
@@ -543,13 +545,14 @@ class PostgresService:
             if not existing:
                 raise ValueError(f"Existing file {existing_file_id} not found")
             
-            # Create new file record with same content_hash
+            # Create new file record with same content_hash AND markdown/image paths
             await conn.execute("""
                 INSERT INTO ingestion_files (
                     file_id, user_id, owner_id, filename, original_filename,
                     mime_type, size_bytes, storage_path, content_hash,
-                    metadata, permissions, chunk_count, vector_count, visibility
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                    metadata, permissions, chunk_count, vector_count, visibility,
+                    has_markdown, markdown_path, images_path, image_count
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
             """,
                 uuid.UUID(new_file_id),
                 uuid.UUID(user_id),
@@ -565,6 +568,10 @@ class PostgresService:
                 existing.get("chunk_count", 0),
                 existing.get("vector_count", 0),
                 "personal",  # visibility
+                existing.get("has_markdown", False),
+                existing.get("markdown_path"),
+                existing.get("images_path"),
+                existing.get("image_count", 0),
             )
             
             # Create completed status
@@ -583,6 +590,7 @@ class PostgresService:
                 new_file_id=new_file_id,
                 existing_file_id=existing_file_id,
                 user_id=user_id,
+                has_markdown=existing.get("has_markdown", False),
             )
     
     # ========================================================================
