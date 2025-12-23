@@ -14,6 +14,7 @@ Test Categories:
 """
 
 import os
+import sys
 import tempfile
 from pathlib import Path
 from typing import List
@@ -23,6 +24,13 @@ import pytest
 from processors.pdf_splitter import PDFSplitter, PDFSplitContext, DEFAULT_PAGES_PER_SPLIT
 from processors.text_extractor import TextExtractor
 
+# Add test_utils to path for shared testing utilities
+_srv_dir = Path(__file__).parent.parent.parent
+if str(_srv_dir) not in sys.path:
+    sys.path.insert(0, str(_srv_dir))
+
+from test_utils.testing.environment import get_test_doc_repo_path
+
 
 # ============================================================================
 # Test Fixtures
@@ -31,27 +39,7 @@ from processors.text_extractor import TextExtractor
 @pytest.fixture
 def samples_dir() -> Path:
     """Get the samples directory (busibox-testdocs)."""
-    # Check environment variable first (set by Makefile)
-    samples_env = os.environ.get("SAMPLES_DIR")
-    if samples_env:
-        return Path(samples_env)
-    
-    # Try to find relative to test file
-    # tests/ -> srv/ingest -> busibox -> samples (symlink to busibox-testdocs)
-    test_dir = Path(__file__).parent
-    repo_root = test_dir.parent.parent.parent
-    
-    # Check new testdocs structure
-    samples_path = repo_root / "samples"
-    if samples_path.exists():
-        return samples_path
-    
-    # Fallback to sibling busibox-testdocs repo
-    testdocs_path = repo_root.parent / "busibox-testdocs"
-    if testdocs_path.exists():
-        return testdocs_path
-    
-    pytest.skip("No samples directory found - need busibox-testdocs")
+    return get_test_doc_repo_path()
 
 
 @pytest.fixture

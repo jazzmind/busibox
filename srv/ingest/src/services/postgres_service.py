@@ -285,9 +285,15 @@ class PostgresService:
         chunk_count: Optional[int] = None,
         vector_count: Optional[int] = None,
         processing_duration_seconds: Optional[int] = None,
+        request=None,  # Optional RLS context (FastAPI Request or WorkerRLSContext)
     ):
-        """Update file metadata in ingestion_files table."""
-        conn = self._get_connection()
+        """
+        Update file metadata in ingestion_files table.
+        
+        Note: For RLS-enabled tables, pass a request/RLS context to ensure
+        the user has permission to update the file.
+        """
+        conn = self._get_connection(request)
         try:
             with conn.cursor() as cur:
                 update_fields = []

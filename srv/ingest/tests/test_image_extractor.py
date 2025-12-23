@@ -4,10 +4,18 @@ Tests for Image Extractor Module
 
 import pytest
 import os
+import sys
 from pathlib import Path
 from PIL import Image
 from io import BytesIO
 from processors.image_extractor import ImageExtractor
+
+# Add test_utils to path for shared testing utilities
+_srv_dir = Path(__file__).parent.parent.parent
+if str(_srv_dir) not in sys.path:
+    sys.path.insert(0, str(_srv_dir))
+
+from test_utils.testing.environment import get_test_doc_repo_path
 
 
 class TestImageExtractor:
@@ -16,7 +24,8 @@ class TestImageExtractor:
     def setup_method(self):
         """Setup test fixtures"""
         self.extractor = ImageExtractor()
-        self.test_data_dir = Path(__file__).parent.parent / "samples"
+        # Use shared test doc path utility
+        self.test_data_dir = get_test_doc_repo_path()
     
     def _find_sample(self, new_path, old_path):
         """Find sample file in new or old location."""

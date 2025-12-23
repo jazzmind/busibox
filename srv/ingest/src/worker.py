@@ -289,12 +289,13 @@ class IngestWorker:
                             total_chunks=chunk_count,
                         )
                         
-                        # Update file metadata
+                        # Update file metadata (pass RLS context)
                         self.postgres_service.update_file_metadata(
                             file_id=file_id,
                             chunk_count=chunk_count,
                             vector_count=vector_count,
                             processing_duration_seconds=0,  # Instant for duplicates
+                            request=self._current_rls_context,
                         )
                         
                         logger.info(
@@ -497,6 +498,7 @@ class IngestWorker:
             chunk_count=total_chunks,
             vector_count=len(text_vectors),
             processing_duration_seconds=int(processing_time),
+            request=self._current_rls_context,
         )
         
         self.history.log_stage_complete(
@@ -817,7 +819,7 @@ class IngestWorker:
                 extraction_result.text,
             )
             
-            # Update file metadata
+            # Update file metadata (pass RLS context)
             self.postgres_service.update_file_metadata(
                 file_id=file_id,
                 document_type=document_type,
@@ -827,6 +829,7 @@ class IngestWorker:
                 extracted_author=metadata.get("author"),
                 extracted_date=metadata.get("date"),
                 extracted_keywords=metadata.get("keywords", []),
+                request=self._current_rls_context,
             )
             
             # Update metadata JSON with page_count and word_count
@@ -1215,15 +1218,9 @@ class IngestWorker:
                         image_count = 0
                 
                 # Update database with markdown/image paths
+                # IMPORTANT: Use RLS context to ensure we can update the file record
                 try:
-                    import psycopg2
-                    conn = psycopg2.connect(
-                        host=self.config["postgres_host"],
-                        port=self.config["postgres_port"],
-                        database=self.config["postgres_db"],
-                        user=self.config["postgres_user"],
-                        password=self.config["postgres_password"]
-                    )
+                    conn = self.postgres_service._get_connection(self._current_rls_context)
                     try:
                         cur = conn.cursor()
                         cur.execute(
@@ -1239,15 +1236,23 @@ class IngestWorker:
                              image_count,
                              file_id)
                         )
+                        rows_updated = cur.rowcount
                         conn.commit()
                         cur.close()
+                        if rows_updated == 0:
+                            logger.warning(
+                                "Markdown update affected 0 rows - RLS may be blocking",
+                                file_id=file_id,
+                                user_id=getattr(self._current_rls_context.state, "user_id", None) if self._current_rls_context else None
+                            )
                     finally:
-                        conn.close()
+                        self.postgres_service._return_connection(conn)
                     logger.info(
                         "Database updated with markdown/image paths",
                         file_id=file_id,
                         has_markdown=markdown_path is not None,
-                        image_count=image_count
+                        image_count=image_count,
+                        rows_updated=rows_updated
                     )
                 except Exception as db_err:
                     logger.error(
@@ -1476,7 +1481,7 @@ class IngestWorker:
                 started_at=indexing_start
             )
             
-            # Update final metadata
+            # Update final metadata (pass RLS context)
             processing_duration = int(time.time() - start_time)
             
             self.postgres_service.update_file_metadata(
@@ -1484,6 +1489,7 @@ class IngestWorker:
                 chunk_count=total_chunks,
                 vector_count=vector_count,
                 processing_duration_seconds=processing_duration,
+                request=self._current_rls_context,
             )
             
             # Log final completion

@@ -13,8 +13,16 @@ Run with FAST=0 to include these tests.
 import pytest
 import uuid
 import time
+import sys
 from pathlib import Path
 from httpx import AsyncClient
+
+# Add test_utils to path for shared testing utilities
+_srv_dir = Path(__file__).parent.parent.parent.parent
+if str(_srv_dir) not in sys.path:
+    sys.path.insert(0, str(_srv_dir))
+
+from test_utils.testing.environment import get_test_doc_repo_path
 
 
 class TestFullDocumentPipeline:
@@ -29,14 +37,12 @@ class TestFullDocumentPipeline:
         Upload a real PDF and verify complete processing pipeline.
         This is the ONE test that actually matters.
         """
-        # Use a real sample PDF (new structure: pdf/text/, old: root)
-        samples_dir = Path(__file__).parent.parent.parent / "samples"
-        sample_pdf = samples_dir / "pdf" / "text" / "inthebeginning.pdf"
-        if not sample_pdf.exists():
-            sample_pdf = samples_dir / "inthebeginning.pdf"  # Fallback to old location
+        # Use shared test doc path utility
+        samples_dir = get_test_doc_repo_path()
+        sample_pdf = samples_dir / "pdf" / "general" / "doc03_chartparser_paper" / "source.pdf"
         
         if not sample_pdf.exists():
-            pytest.skip(f"Sample PDF not found in either location")
+            pytest.fail(f"Sample PDF not found: {sample_pdf}. TEST_DOC_REPO_PATH={samples_dir}")
         
         # Step 1: Upload the document
         with open(sample_pdf, "rb") as f:
@@ -146,14 +152,12 @@ class TestFullDocumentPipeline:
         """
         Test that reprocessing a document works correctly.
         """
-        # Upload a document (new structure: pdf/plans/, old: root)
-        samples_dir = Path(__file__).parent.parent.parent / "samples"
-        sample_pdf = samples_dir / "pdf" / "plans" / "doc2_washington" / "683 Washington Street As-Built (06-26-25) Sheet 1 (Rev 1) (09-14-25).pdf"
-        if not sample_pdf.exists():
-            sample_pdf = samples_dir / "diagram.pdf"  # Fallback to old location
+        # Use shared test doc path utility
+        samples_dir = get_test_doc_repo_path()
+        sample_pdf = samples_dir / "pdf" / "general" / "doc01_rfp_project_management" / "source.pdf"
         
         if not sample_pdf.exists():
-            pytest.skip("Sample PDF not found in either location")
+            pytest.fail(f"Sample PDF not found: {sample_pdf}. TEST_DOC_REPO_PATH={samples_dir}")
         
         with open(sample_pdf, "rb") as f:
             files = {"file": ("diagram.pdf", f, "application/pdf")}
@@ -210,28 +214,19 @@ class TestFullDocumentPipeline:
         Test processing multiple documents concurrently.
         Verifies the system can handle concurrent load.
         """
-        # Build list of sample PDFs with fallback paths
-        samples_dir = Path(__file__).parent.parent.parent / "samples"
+        # Use shared test doc path utility
+        samples_dir = get_test_doc_repo_path()
         
-        def find_sample(new_path, old_path):
-            """Find sample file in new or old location."""
-            new_full = samples_dir / new_path
-            if new_full.exists():
-                return new_full
-            old_full = samples_dir / old_path
-            if old_full.exists():
-                return old_full
-            return None
-        
+        # Use general PDFs that exist in testdocs
         sample_pdfs = [
-            find_sample("pdf/text/inthebeginning.pdf", "inthebeginning.pdf"),
-            find_sample("pdf/plans/doc2_washington/683 Washington Street As-Built (06-26-25) Sheet 1 (Rev 1) (09-14-25).pdf", "diagram.pdf"),
+            samples_dir / "pdf" / "general" / "doc01_rfp_project_management" / "source.pdf",
+            samples_dir / "pdf" / "general" / "doc03_chartparser_paper" / "source.pdf",
         ]
         
-        # Filter to existing files
-        existing_pdfs = [pdf for pdf in sample_pdfs if pdf is not None]
+        # Filter to existing files and fail if not found
+        existing_pdfs = [pdf for pdf in sample_pdfs if pdf.exists()]
         if len(existing_pdfs) < 2:
-            pytest.skip("Need at least 2 sample PDFs")
+            pytest.fail(f"Need at least 2 sample PDFs. Found: {[str(p) for p in sample_pdfs]}. TEST_DOC_REPO_PATH={samples_dir}")
         
         # Upload multiple documents
         file_ids = []
