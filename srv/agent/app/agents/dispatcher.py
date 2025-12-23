@@ -22,6 +22,7 @@ litellm_api_key = settings.litellm_api_key or "sk-1234"  # Fallback for local de
 os.environ["OPENAI_API_KEY"] = litellm_api_key
 
 # System prompt for dispatcher agent
+# Note: Response format is handled by PydanticAI's output_type - no need to specify JSON schema in prompt
 DISPATCHER_SYSTEM_PROMPT = """You are an intelligent routing agent that analyzes user queries and determines which tools and agents to use.
 
 Your job is to:
@@ -32,16 +33,10 @@ Your job is to:
 5. Suggest alternatives when confidence is low
 
 **CRITICAL RULES**:
-- You MUST ONLY use tools/agents that are in the user's enabled list (user_settings)
+- You MUST ONLY use tools/agents that are in the user's enabled list
 - If a tool/agent is not enabled, DO NOT select it, even if it seems appropriate
 - If NO tools/agents are available or enabled, return confidence=0 with empty selections
 - Use confidence < 0.7 to indicate uncertainty and need for disambiguation
-
-**Available Resources**:
-- available_tools: {available_tools}
-- available_agents: {available_agents}
-- enabled_tools: {enabled_tools}
-- enabled_agents: {enabled_agents}
 
 **Query Analysis Guidelines**:
 
@@ -58,58 +53,12 @@ Your job is to:
    Examples: "Help me write an email", "Explain this concept", "Brainstorm ideas"
 
 5. **File Attachments** → Prioritize tools/agents that support file processing
-   Check if attachments are present and route accordingly
 
 **Confidence Scoring**:
 - 0.9-1.0: Very clear intent, perfect tool/agent match
 - 0.7-0.9: Clear intent, good tool/agent match
-- 0.5-0.7: Moderate confidence, suggest alternatives (requires_disambiguation=true)
+- 0.5-0.7: Moderate confidence, suggest alternatives
 - 0.0-0.5: Low confidence or no available tools/agents
-
-**Response Format**:
-Return a RoutingDecision JSON object with these exact fields:
-- selected_tools: List of tool names to use (from enabled_tools only)
-- selected_agents: List of agent IDs to use (from enabled_agents only)
-- confidence: Your confidence score (0-1)
-- reasoning: Clear explanation of your decision (1-2 sentences)
-- alternatives: Other viable options (if any)
-- requires_disambiguation: Automatically set based on confidence < 0.7
-
-**Examples**:
-
-Query: "What does our Q4 report say about revenue?"
-Available: doc_search (enabled), web_search (enabled)
-Response:
-- selected_tools: ["doc_search"]
-- confidence: 0.95
-- reasoning: "Query asks about a specific document (Q4 report), doc_search is the appropriate tool for searching internal documents"
-- alternatives: []
-
-Query: "What's the weather today?"
-Available: doc_search (enabled), web_search (enabled)
-Response:
-- selected_tools: ["web_search"]
-- confidence: 0.9
-- reasoning: "Query asks for current weather information, which requires external web data via web_search"
-- alternatives: []
-
-Query: "Help me analyze this data"
-Available: doc_search (enabled), web_search (disabled)
-Attachments: data.csv
-Response:
-- selected_tools: ["doc_search"]
-- confidence: 0.6
-- reasoning: "Query involves data analysis with file attachment, but no specialized data analysis tools are enabled. doc_search may help with document-based analysis but confidence is moderate"
-- alternatives: ["Enable data analysis tools for better results"]
-
-Query: "Search for information about AI"
-Available: doc_search (disabled), web_search (disabled)
-Response:
-- selected_tools: []
-- selected_agents: []
-- confidence: 0.0
-- reasoning: "No tools are enabled. Both doc_search and web_search are disabled in user settings"
-- alternatives: ["Enable doc_search for internal documents", "Enable web_search for web information"]
 """
 
 # Create OpenAI-compatible model using LiteLLM
@@ -121,22 +70,18 @@ model = OpenAIModel(
 )
 
 # Create dispatcher agent with LiteLLM-backed model
-dispatcher_agent = Agent[None, RoutingDecision](
+# PydanticAI's output_type parameter enables structured output - the model will return
+# data that validates against the RoutingDecision schema
+dispatcher_agent: Agent[None, RoutingDecision] = Agent(
     model=model,
+    output_type=RoutingDecision,  # This tells PydanticAI to use structured output
     system_prompt=DISPATCHER_SYSTEM_PROMPT,
     model_settings={
         "temperature": 0.3,  # Low temperature for consistent routing
         "max_tokens": 1000,
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "routing_decision",
-                "strict": True,
-                "schema": RoutingDecision.model_json_schema()
-            }
-        }
     }
 )
+
 
 
 

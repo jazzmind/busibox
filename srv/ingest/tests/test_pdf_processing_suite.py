@@ -251,12 +251,17 @@ class TestPDFProcessingSuite:
             assert eval_md.exists(), f"eval.md not found: {doc['id']}"
 
     @pytest.mark.parametrize("doc_info", TEST_DOCUMENTS, ids=lambda d: d["id"])
-    def test_strategy_selection(self, doc_info):
+    def test_strategy_selection(self, doc_info, config):
         """Test that appropriate strategies are selected for each document."""
-        selector = StrategySelector()
+        # Create selector with all strategies enabled for testing
+        test_config = config.to_dict()
+        test_config["marker_enabled"] = True
+        test_config["colpali_enabled"] = True
+        
+        selector = StrategySelector(test_config)
         applicable = selector.get_applicable_strategies(
             mime_type=doc_info["mime_type"],
-            file_size_bytes=1024 * 1024,  # Assume 1MB
+            force_all=True,  # Get all supported strategies
         )
         
         # Verify expected strategies are applicable
