@@ -60,7 +60,6 @@ applications:
       - apps_container_ip
       - agent_container_ip
       - postgres_container_ip
-      - authz_client_secret
     optional_secrets:
       - resend_api_key
       - microsoft_client_id
