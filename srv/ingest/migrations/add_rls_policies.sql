@@ -1,6 +1,7 @@
 -- Migration: Add Row-Level Security (RLS) policies
 -- Created: 2025-11-24
 -- Updated: 2025-12-22 - Full role-based policies for owner + shared access
+-- Updated: 2025-12-22 - Added ingestion_status table, explicit FORCE for all tables
 -- Description: Enforces database-level access control for multi-tenancy
 --
 -- RLS Session Variables (set by application before each request):
@@ -13,19 +14,37 @@
 -- Access model:
 --   Personal documents: Only owner can access (visibility = 'personal')
 --   Shared documents: Users with matching roles can access (visibility = 'shared')
+--
+-- Tables covered:
+--   - ingestion_files: Main file metadata
+--   - ingestion_chunks: Text chunks for each file
+--   - ingestion_status: Processing status
+--   - processing_history: Detailed processing steps
+--   - document_roles: Role assignments for shared documents
 
 BEGIN;
 
 -- ============================================================================
--- ENABLE ROW-LEVEL SECURITY
+-- ENABLE ROW-LEVEL SECURITY ON ALL TABLES
 -- ============================================================================
 
+-- ingestion_files - main file records
 ALTER TABLE ingestion_files ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ingestion_files FORCE ROW LEVEL SECURITY;
+
+-- ingestion_chunks - text chunks for each file
 ALTER TABLE ingestion_chunks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ingestion_chunks FORCE ROW LEVEL SECURITY;
+
+-- ingestion_status - processing status (linked via file_id FK)
+ALTER TABLE ingestion_status ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ingestion_status FORCE ROW LEVEL SECURITY;
+
+-- processing_history - detailed processing steps
 ALTER TABLE processing_history ENABLE ROW LEVEL SECURITY;
 ALTER TABLE processing_history FORCE ROW LEVEL SECURITY;
+
+-- document_roles - role assignments for shared documents
 ALTER TABLE document_roles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE document_roles FORCE ROW LEVEL SECURITY;
 
@@ -48,10 +67,17 @@ DROP POLICY IF EXISTS shared_docs_delete ON ingestion_files;
 DROP POLICY IF EXISTS chunks_owner_all ON ingestion_chunks;
 DROP POLICY IF EXISTS chunks_select ON ingestion_chunks;
 DROP POLICY IF EXISTS chunks_insert ON ingestion_chunks;
+DROP POLICY IF EXISTS chunks_update ON ingestion_chunks;
+DROP POLICY IF EXISTS chunks_delete ON ingestion_chunks;
 
 DROP POLICY IF EXISTS processing_history_owner_all ON processing_history;
 DROP POLICY IF EXISTS processing_history_select ON processing_history;
 DROP POLICY IF EXISTS processing_history_insert ON processing_history;
+
+DROP POLICY IF EXISTS ingestion_status_owner_all ON ingestion_status;
+DROP POLICY IF EXISTS ingestion_status_select ON ingestion_status;
+DROP POLICY IF EXISTS ingestion_status_insert ON ingestion_status;
+DROP POLICY IF EXISTS ingestion_status_update ON ingestion_status;
 
 DROP POLICY IF EXISTS document_roles_select ON document_roles;
 DROP POLICY IF EXISTS document_roles_insert ON document_roles;
@@ -171,10 +197,20 @@ CREATE POLICY chunks_select ON ingestion_chunks
     FOR SELECT
     USING (file_id IN (SELECT file_id FROM ingestion_files));
 
--- INSERT: System/worker can insert (no user restriction)
+-- INSERT: System/worker can insert (for chunking)
 CREATE POLICY chunks_insert ON ingestion_chunks
     FOR INSERT
     WITH CHECK (true);
+
+-- UPDATE: Inherit from ingestion_files (can update chunks for docs they can update)
+CREATE POLICY chunks_update ON ingestion_chunks
+    FOR UPDATE
+    USING (file_id IN (SELECT file_id FROM ingestion_files));
+
+-- DELETE: Inherit from ingestion_files (for reprocessing - delete chunks and re-add)
+CREATE POLICY chunks_delete ON ingestion_chunks
+    FOR DELETE
+    USING (file_id IN (SELECT file_id FROM ingestion_files));
 
 -- ============================================================================
 -- PROCESSING_HISTORY POLICIES
@@ -185,10 +221,29 @@ CREATE POLICY processing_history_select ON processing_history
     FOR SELECT
     USING (file_id IN (SELECT file_id FROM ingestion_files));
 
--- INSERT: System/worker can insert
+-- INSERT: System/worker can insert (for processing logs)
 CREATE POLICY processing_history_insert ON processing_history
     FOR INSERT
     WITH CHECK (true);
+
+-- ============================================================================
+-- INGESTION_STATUS POLICIES
+-- ============================================================================
+
+-- SELECT: Inherit from ingestion_files (can see status for docs they can access)
+CREATE POLICY ingestion_status_select ON ingestion_status
+    FOR SELECT
+    USING (file_id IN (SELECT file_id FROM ingestion_files));
+
+-- INSERT: System/worker can insert (status is created with file)
+CREATE POLICY ingestion_status_insert ON ingestion_status
+    FOR INSERT
+    WITH CHECK (true);
+
+-- UPDATE: System/worker can update (for status changes during processing)
+CREATE POLICY ingestion_status_update ON ingestion_status
+    FOR UPDATE
+    USING (true);
 
 -- ============================================================================
 -- DOCUMENT_ROLES POLICIES
