@@ -149,22 +149,23 @@
     msg: "{{ 'Security model migration applied successfully' if security_model_result.changed else 'Security model migration already applied' }}"
   tags: [ingest, ingest_migrations]
 
-- name: Check if RLS policies are enabled
+- name: Check if RLS is enabled on all ingest tables
   shell: |
     PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -tAc \
-    "SELECT relrowsecurity FROM pg_class WHERE relname='ingestion_files';"
+    "SELECT COUNT(*) FROM pg_class WHERE relname IN ('ingestion_files', 'ingestion_chunks', 'ingestion_status', 'processing_history', 'document_roles') AND relrowsecurity = true;"
   register: rls_check
   changed_when: false
   tags: [ingest, ingest_migrations]
 
-- name: Apply RLS policies migration
+- name: Apply RLS policies migration (idempotent - runs each deploy to pick up changes)
   shell: |
     PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -f /srv/ingest/migrations/add_rls_policies.sql
-  when: rls_check.stdout != 't'
+  # Run if not all 5 tables have RLS enabled
+  when: rls_check.stdout | int < 5
   register: rls_result
   tags: [ingest, ingest_migrations]
 
 - name: Display RLS policies migration status
   debug:
-    msg: "{{ 'RLS policies applied successfully' if rls_result.changed else 'RLS policies already enabled' }}"
+    msg: "{{ 'RLS policies applied/updated for all tables' if rls_result.changed else ('RLS policies already enabled on all ' + rls_check.stdout|trim + ' tables') }}"
   tags: [ingest, ingest_migrations]
