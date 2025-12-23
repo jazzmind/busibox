@@ -62,38 +62,38 @@ async def sync_user(request: Request):
     # Upsert roles and get mapping of role names to IDs
     role_name_to_id = await pg.upsert_roles([r.model_dump() for r in su.roles])
     
-    # Resolve user_role_ids: if provided IDs don't exist, try to resolve by role name
+    # Build a mapping of role IDs (from ai-portal) to role names for lookup
+    role_id_to_name = {r.id: r.name for r in su.roles}
+    
+    # Resolve user_role_ids: map ai-portal role IDs to actual authz role IDs
+    # This handles the case where ai-portal and authz have the same role name but different IDs
     resolved_role_ids = []
     for role_id_or_name in su.user_role_ids:
         # Check if it's a UUID (role ID)
         try:
             uuid.UUID(role_id_or_name)
-            # It's a UUID, check if it exists
+            # It's a UUID, check if it exists in authz DB
             role = await pg.get_role_by_id(role_id_or_name)
             if role:
                 resolved_role_ids.append(role_id_or_name)
             else:
-                # UUID doesn't exist, try to find by name
-                role = await pg.get_role_by_name(role_id_or_name)
-                if role:
-                    resolved_role_ids.append(role["id"])
-                else:
-                    # Still not found, check if it's in the roles we just upserted
-                    if role_id_or_name in [r.id for r in su.roles]:
-                        # It's a role we just upserted, use it directly
-                        resolved_role_ids.append(role_id_or_name)
+                # UUID doesn't exist in authz, but if it's from su.roles, look up by name
+                # because upsert_roles may have found an existing role with the same name
+                if role_id_or_name in role_id_to_name:
+                    role_name = role_id_to_name[role_id_or_name]
+                    if role_name in role_name_to_id:
+                        # Use the actual ID from upsert_roles (may be different from ai-portal's ID)
+                        resolved_role_ids.append(role_name_to_id[role_name])
         except ValueError:
             # Not a valid UUID, treat as role name
-            role = await pg.get_role_by_name(role_id_or_name)
-            if role:
-                resolved_role_ids.append(role["id"])
-            elif role_id_or_name in role_name_to_id:
+            if role_id_or_name in role_name_to_id:
                 # Use the ID from the roles we just upserted (by name)
                 resolved_role_ids.append(role_name_to_id[role_id_or_name])
             else:
-                # Check if it's a role ID we just upserted (even if not a valid UUID format)
-                if role_id_or_name in [r.id for r in su.roles]:
-                    resolved_role_ids.append(role_id_or_name)
+                # Try looking up by name in DB directly
+                role = await pg.get_role_by_name(role_id_or_name)
+                if role:
+                    resolved_role_ids.append(role["id"])
     
     await pg.upsert_user_and_roles(
         user_id=su.user_id,
