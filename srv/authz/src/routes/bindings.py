@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, Request, Query, status
 from pydantic import BaseModel, Field
 
 from services.postgres import PostgresService
-from shared.config import Config
+from config import Config
 
 router = APIRouter()
 config = Config()
