@@ -225,7 +225,8 @@ class Chunker:
                 return self._chunk_simple(text, page_number)
         
         chunks = []
-        current_chunk_sentences = []
+        current_chunk_paragraphs = []  # List of paragraph texts
+        current_chunk_sentences = []  # Flat list for overlap calculation
         current_tokens = 0
         char_offset = 0
         chunk_index = 0
@@ -238,7 +239,8 @@ class Chunker:
             # Check if adding paragraph would exceed max tokens
             if current_tokens + para_tokens > self.max_tokens and current_tokens >= self.min_tokens:
                 # Save current chunk with markdown formatting
-                chunk_text = " ".join([s["text"] if isinstance(s, dict) else s for s in current_chunk_sentences])
+                # Join paragraphs with double newline to preserve structure
+                chunk_text = "\n\n".join(current_chunk_paragraphs)
                 markdown_text = self._convert_to_markdown(chunk_text)
                 
                 # Truncate if too long (safety check for Milvus varchar limit)
@@ -269,16 +271,22 @@ class Chunker:
                     overlap_tokens,
                     char_offset,
                 )
+                # Rebuild paragraphs from overlap sentences
+                current_chunk_paragraphs = [" ".join([s["text"] if isinstance(s, dict) else s for s in current_chunk_sentences])] if current_chunk_sentences else []
             
-            # Add paragraph sentences (store full sent_info for overlap calculation)
+            # Add paragraph to current chunk
+            current_chunk_paragraphs.append(para_text)
+            
+            # Also track sentences for overlap calculation
             for sent_info in para_sentences:
                 current_chunk_sentences.append(sent_info)
                 current_tokens += sent_info["tokens"]
                 char_offset = sent_info["end_char"]
         
         # Add final chunk with markdown formatting
-        if current_chunk_sentences:
-            chunk_text = " ".join([s["text"] if isinstance(s, dict) else s for s in current_chunk_sentences])
+        if current_chunk_paragraphs:
+            # Join paragraphs with double newline to preserve structure
+            chunk_text = "\n\n".join(current_chunk_paragraphs)
             markdown_text = self._convert_to_markdown(chunk_text)
             
             # Truncate if too long (safety check for Milvus varchar limit)
@@ -290,11 +298,13 @@ class Chunker:
                 )
                 markdown_text = markdown_text[:65000] + "... [truncated]"
             
+            # Calculate proper char_offset for final chunk
+            final_chunk_text = " ".join([s["text"] if isinstance(s, dict) else s for s in current_chunk_sentences])
             chunk = Chunk(
                 text=markdown_text,
                 chunk_index=chunk_index,
                 token_count=self._count_tokens(markdown_text),
-                char_offset=char_offset - len(chunk_text),
+                char_offset=char_offset - len(final_chunk_text) if final_chunk_text else 0,
                 page_number=page_number,
                 section_heading=self._extract_section_heading(chunk_text),
                 language=primary_lang,
@@ -314,23 +324,30 @@ class Chunker:
         """Extract paragraphs with sentence boundaries."""
         paragraphs = []
         current_para = {"sentences": [], "text": ""}
-        prev_sent_end = 0
+        prev_sent_text = ""
         
         for sent in doc.sents:
             sent_text = sent.text.strip()
             if not sent_text:
                 continue
             
-            # Check for paragraph break by looking at whitespace between sentences
-            # If there are 2+ newlines between previous sentence and this one, it's a new paragraph
-            between_text = doc.text[prev_sent_end:sent.start_char]
-            newline_count = between_text.count('\n')
+            # Check for paragraph break by looking at:
+            # 1. Newlines at the END of the previous sentence (spaCy includes trailing whitespace)
+            # 2. Newlines at the START of current sentence
+            # 3. Special heading/section markers
+            
+            # SpaCy includes trailing whitespace in sentences, so check the raw sentence text
+            prev_newlines = prev_sent_text.count('\n') if prev_sent_text else 0
+            curr_newlines = sent.text.count('\n') - sent_text.count('\n')  # Newlines before stripped text
+            total_newlines = prev_newlines + curr_newlines
             
             # Start new paragraph if:
             # 1. Multiple newlines between sentences (paragraph break)
-            # 2. Special heading/section marker
+            # 2. Previous sentence ends with double newline (common pattern)
+            # 3. Special heading/section marker
             should_break = (
-                newline_count >= 2 or
+                total_newlines >= 2 or
+                prev_sent_text.endswith('\n\n') or
                 self._is_paragraph_break(sent)
             )
             
@@ -347,7 +364,7 @@ class Chunker:
                 "end_char": sent.end_char,
             })
             
-            prev_sent_end = sent.end_char
+            prev_sent_text = sent.text  # Keep raw text with whitespace
         
         # Add final paragraph
         if current_para["sentences"]:
