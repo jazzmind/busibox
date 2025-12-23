@@ -43,6 +43,10 @@ TEST_DB_PASSWORD = os.getenv("TEST_DB_PASSWORD", "")
 TEST_AUTHZ_URL = os.getenv("TEST_AUTHZ_URL", "http://10.96.201.210:8010")
 ADMIN_TOKEN = os.getenv("AUTHZ_ADMIN_TOKEN", "")
 
+# OAuth client credentials
+BOOTSTRAP_CLIENT_ID = os.getenv("AUTHZ_BOOTSTRAP_CLIENT_ID", "ai-portal")
+BOOTSTRAP_CLIENT_SECRET = os.getenv("AUTHZ_BOOTSTRAP_CLIENT_SECRET", "")
+
 
 def skip_if_no_credentials():
     """Skip tests if credentials are not set."""
@@ -50,6 +54,13 @@ def skip_if_no_credentials():
         pytest.skip("TEST_DB_PASSWORD not set - cannot connect to test database")
     if not ADMIN_TOKEN:
         pytest.skip("AUTHZ_ADMIN_TOKEN not set - cannot authenticate to authz service")
+
+
+def skip_if_no_oauth_credentials():
+    """Skip tests if OAuth client credentials are not set."""
+    skip_if_no_credentials()
+    if not BOOTSTRAP_CLIENT_SECRET:
+        pytest.skip("AUTHZ_BOOTSTRAP_CLIENT_SECRET not set - cannot test OAuth flows")
 
 
 # ============================================================================
@@ -1780,13 +1791,13 @@ class TestOAuthTokenExchange:
             jwk = jwks["keys"][0]
             
             # Exchange for access token
+            skip_if_no_oauth_credentials()
             exchange_resp = await client.post(
                 f"{TEST_AUTHZ_URL}/oauth/token",
-                headers=admin_headers,
                 json={
                     "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-                    "client_id": "ai-portal",
-                    "client_secret": ADMIN_TOKEN,  # Using admin token as client secret for test
+                    "client_id": BOOTSTRAP_CLIENT_ID,
+                    "client_secret": BOOTSTRAP_CLIENT_SECRET,
                     "audience": "ingest-api",
                     "requested_subject": str(user_id),
                     "requested_purpose": "integration-test",
@@ -1896,8 +1907,8 @@ class TestOAuthTokenExchange:
                 headers=admin_headers,
                 json={
                     "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-                    "client_id": "ai-portal",
-                    "client_secret": ADMIN_TOKEN,
+                    "client_id": BOOTSTRAP_CLIENT_ID,
+                    "client_secret": BOOTSTRAP_CLIENT_SECRET,
                     "audience": "search-api",
                     "requested_subject": str(user_id),
                 },
@@ -1939,8 +1950,8 @@ class TestOAuthTokenExchange:
                 headers=admin_headers,
                 json={
                     "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-                    "client_id": "ai-portal",
-                    "client_secret": ADMIN_TOKEN,
+                    "client_id": BOOTSTRAP_CLIENT_ID,
+                    "client_secret": BOOTSTRAP_CLIENT_SECRET,
                     "audience": "ingest-api",
                     "requested_subject": fake_user_id,
                 },
@@ -1972,8 +1983,8 @@ class TestOAuthTokenExchange:
                 headers=admin_headers,
                 json={
                     "grant_type": "client_credentials",
-                    "client_id": "ai-portal",
-                    "client_secret": ADMIN_TOKEN,
+                    "client_id": BOOTSTRAP_CLIENT_ID,
+                    "client_secret": BOOTSTRAP_CLIENT_SECRET,
                     "audience": "ingest-api",
                     "scope": "ingest.write",
                 },
@@ -1995,7 +2006,7 @@ class TestOAuthTokenExchange:
             )
             
             # For client_credentials, sub is the client_id
-            assert decoded["sub"] == "ai-portal"
+            assert decoded["sub"] == BOOTSTRAP_CLIENT_ID
             assert decoded["scope"] == "ingest.write"
             assert decoded["roles"] == []  # No user roles for service tokens
 
@@ -2046,8 +2057,8 @@ class TestJWKSEndpoint:
                 headers=admin_headers,
                 json={
                     "grant_type": "client_credentials",
-                    "client_id": "ai-portal",
-                    "client_secret": ADMIN_TOKEN,
+                    "client_id": BOOTSTRAP_CLIENT_ID,
+                    "client_secret": BOOTSTRAP_CLIENT_SECRET,
                     "audience": "test-audience",
                     "scope": "test.read",
                 },
@@ -2066,7 +2077,7 @@ class TestJWKSEndpoint:
                 options={"verify_aud": False},
             )
             
-            assert decoded["sub"] == "ai-portal"
+            assert decoded["sub"] == BOOTSTRAP_CLIENT_ID
             assert "exp" in decoded
             assert "iat" in decoded
             assert "jti" in decoded
@@ -2123,29 +2134,24 @@ class TestAdminRoleEndpoints:
             
             # Our test role should be in the list
             role_ids = [r["id"] for r in data]
-            assert test_role in role_ids
+            assert test_role["id"] in role_ids
     
     @pytest.mark.asyncio
     async def test_get_role(self, admin_headers, test_role, db_pool):
         """Test getting a specific role by ID."""
-        # Get role name from database
-        async with db_pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT name, description FROM authz_roles WHERE id = $1",
-                uuid.UUID(test_role),
-            )
+        role_id = test_role["id"]
         
         async with httpx.AsyncClient() as client:
             resp = await client.get(
-                f"{TEST_AUTHZ_URL}/admin/roles/{test_role}",
+                f"{TEST_AUTHZ_URL}/admin/roles/{role_id}",
                 headers=admin_headers,
                 timeout=30.0,
             )
             
             assert resp.status_code == 200
             data = resp.json()
-            assert data["id"] == test_role
-            assert data["name"] == row["name"]
+            assert data["id"] == role_id
+            assert data["name"] == test_role["name"]
     
     @pytest.mark.asyncio
     async def test_update_role(self, admin_headers, db_pool, clean_test_data):
@@ -2241,34 +2247,40 @@ class TestUserRoleAdminEndpoints:
     @pytest.mark.asyncio
     async def test_add_user_role_via_admin_endpoint(self, admin_headers, test_user, test_role, db_pool):
         """Test adding a role to a user via admin endpoint."""
+        user_id = test_user["id"]
+        role_id = test_role["id"]
+        
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 f"{TEST_AUTHZ_URL}/admin/user-roles",
                 headers=admin_headers,
                 json={
-                    "user_id": test_user,
-                    "role_id": test_role,
+                    "user_id": user_id,
+                    "role_id": role_id,
                 },
                 timeout=30.0,
             )
             
-            assert resp.status_code == 200
+            assert resp.status_code == 200, f"Add user role failed: {resp.text}"
             data = resp.json()
-            assert data["user_id"] == test_user
-            assert data["role_id"] == test_role
+            assert data["user_id"] == user_id
+            assert data["role_id"] == role_id
             
             # Verify in database
             async with db_pool.acquire() as conn:
                 row = await conn.fetchrow(
                     "SELECT * FROM authz_user_roles WHERE user_id = $1 AND role_id = $2",
-                    uuid.UUID(test_user),
-                    uuid.UUID(test_role),
+                    uuid.UUID(user_id),
+                    uuid.UUID(role_id),
                 )
                 assert row is not None
     
     @pytest.mark.asyncio
     async def test_remove_user_role_via_admin_endpoint(self, admin_headers, test_user, test_role, db_pool):
         """Test removing a role from a user via admin endpoint."""
+        user_id = test_user["id"]
+        role_id = test_role["id"]
+        
         # First add the role
         async with db_pool.acquire() as conn:
             await conn.execute(
@@ -2277,8 +2289,8 @@ class TestUserRoleAdminEndpoints:
                 VALUES ($1, $2)
                 ON CONFLICT DO NOTHING
                 """,
-                uuid.UUID(test_user),
-                uuid.UUID(test_role),
+                uuid.UUID(user_id),
+                uuid.UUID(role_id),
             )
         
         import json as json_lib
@@ -2288,8 +2300,8 @@ class TestUserRoleAdminEndpoints:
                 f"{TEST_AUTHZ_URL}/admin/user-roles",
                 headers={**admin_headers, "Content-Type": "application/json"},
                 content=json_lib.dumps({
-                    "user_id": test_user,
-                    "role_id": test_role,
+                    "user_id": user_id,
+                    "role_id": role_id,
                 }),
                 timeout=30.0,
             )
@@ -2301,14 +2313,17 @@ class TestUserRoleAdminEndpoints:
             async with db_pool.acquire() as conn:
                 row = await conn.fetchrow(
                     "SELECT * FROM authz_user_roles WHERE user_id = $1 AND role_id = $2",
-                    uuid.UUID(test_user),
-                    uuid.UUID(test_role),
+                    uuid.UUID(user_id),
+                    uuid.UUID(role_id),
                 )
                 assert row is None
     
     @pytest.mark.asyncio
     async def test_get_user_roles_via_admin_endpoint(self, admin_headers, test_user, test_role, db_pool):
         """Test getting user roles via admin endpoint."""
+        user_id = test_user["id"]
+        role_id = test_role["id"]
+        
         # Add role to user
         async with db_pool.acquire() as conn:
             await conn.execute(
@@ -2317,13 +2332,13 @@ class TestUserRoleAdminEndpoints:
                 VALUES ($1, $2)
                 ON CONFLICT DO NOTHING
                 """,
-                uuid.UUID(test_user),
-                uuid.UUID(test_role),
+                uuid.UUID(user_id),
+                uuid.UUID(role_id),
             )
         
         async with httpx.AsyncClient() as client:
             resp = await client.get(
-                f"{TEST_AUTHZ_URL}/admin/users/{test_user}/roles",
+                f"{TEST_AUTHZ_URL}/admin/users/{user_id}/roles",
                 headers=admin_headers,
                 timeout=30.0,
             )
@@ -2334,7 +2349,7 @@ class TestUserRoleAdminEndpoints:
             
             # Our test role should be in the list
             role_ids = [r["id"] for r in data]
-            assert test_role in role_ids
+            assert role_id in role_ids
 
 
 class TestOAuthFormEncoding:
@@ -2347,8 +2362,8 @@ class TestOAuthFormEncoding:
             # Test form-encoded request (standard OAuth2 format)
             form_data = {
                 "grant_type": "client_credentials",
-                "client_id": "ai-portal",
-                "client_secret": ADMIN_TOKEN,
+                "client_id": BOOTSTRAP_CLIENT_ID,
+                "client_secret": BOOTSTRAP_CLIENT_SECRET,
                 "audience": "ingest-api",
                 "scope": "ingest.write",
             }
@@ -2371,8 +2386,8 @@ class TestOAuthFormEncoding:
         async with httpx.AsyncClient() as client:
             json_data = {
                 "grant_type": "client_credentials",
-                "client_id": "ai-portal",
-                "client_secret": ADMIN_TOKEN,
+                "client_id": BOOTSTRAP_CLIENT_ID,
+                "client_secret": BOOTSTRAP_CLIENT_SECRET,
                 "audience": "search-api",
                 "scope": "search.read",
             }
@@ -2392,6 +2407,8 @@ class TestOAuthFormEncoding:
     @pytest.mark.asyncio
     async def test_token_exchange_with_form_encoding(self, admin_headers, db_pool, clean_test_data):
         """Test token exchange with form-encoded request."""
+        skip_if_no_oauth_credentials()
+        
         # Create a user with roles first
         user_id = str(uuid.uuid4())
         role_id = str(uuid.uuid4())
@@ -2399,11 +2416,11 @@ class TestOAuthFormEncoding:
         async with db_pool.acquire() as conn:
             await conn.execute(
                 """
-                INSERT INTO authz_users (id, email, status)
-                VALUES ($1, $2, 'active')
+                INSERT INTO authz_users (user_id, email, status)
+                VALUES ($1, $2, 'ACTIVE')
                 """,
                 uuid.UUID(user_id),
-                f"form-test-{user_id[:8]}@example.com",
+                f"form-test-{user_id[:8]}@test.example.com",
             )
             await conn.execute(
                 """
@@ -2411,7 +2428,7 @@ class TestOAuthFormEncoding:
                 VALUES ($1, $2, $3)
                 """,
                 uuid.UUID(role_id),
-                f"form-test-role-{role_id[:8]}",
+                f"TestRole_form-{role_id[:8]}",
                 ["search.read", "ingest.read"],
             )
             await conn.execute(
@@ -2427,8 +2444,8 @@ class TestOAuthFormEncoding:
             # Test token exchange with form encoding
             form_data = {
                 "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-                "client_id": "ai-portal",
-                "client_secret": ADMIN_TOKEN,
+                "client_id": BOOTSTRAP_CLIENT_ID,
+                "client_secret": BOOTSTRAP_CLIENT_SECRET,
                 "audience": "agent-api",
                 "scope": "agent.execute",
                 "requested_subject": user_id,
@@ -2455,6 +2472,8 @@ class TestAuditWithBearerContext:
         import jwt
         import json
         
+        skip_if_no_oauth_credentials()
+        
         # Create a user with roles
         user_id = str(uuid.uuid4())
         role_id = str(uuid.uuid4())
@@ -2462,11 +2481,11 @@ class TestAuditWithBearerContext:
         async with db_pool.acquire() as conn:
             await conn.execute(
                 """
-                INSERT INTO authz_users (id, email, status)
-                VALUES ($1, $2, 'active')
+                INSERT INTO authz_users (user_id, email, status)
+                VALUES ($1, $2, 'ACTIVE')
                 """,
                 uuid.UUID(user_id),
-                f"audit-test-{user_id[:8]}@example.com",
+                f"audit-test-{user_id[:8]}@test.example.com",
             )
             await conn.execute(
                 """
@@ -2474,7 +2493,7 @@ class TestAuditWithBearerContext:
                 VALUES ($1, $2)
                 """,
                 uuid.UUID(role_id),
-                f"audit-test-role-{role_id[:8]}",
+                f"TestRole_audit-{role_id[:8]}",
             )
             await conn.execute(
                 """
@@ -2492,8 +2511,8 @@ class TestAuditWithBearerContext:
                 headers=admin_headers,
                 json={
                     "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-                    "client_id": "ai-portal",
-                    "client_secret": ADMIN_TOKEN,
+                    "client_id": BOOTSTRAP_CLIENT_ID,
+                    "client_secret": BOOTSTRAP_CLIENT_SECRET,
                     "audience": "test-audience",
                     "requested_subject": user_id,
                 },
@@ -2536,17 +2555,19 @@ class TestAuditWithBearerContext:
     @pytest.mark.asyncio
     async def test_legacy_authz_audit_endpoint(self, admin_headers, test_user, db_pool):
         """Test the legacy /authz/audit endpoint still works."""
+        skip_if_no_oauth_credentials()
+        user_id = test_user["id"]
+        
         async with httpx.AsyncClient() as client:
             # Get a token for the test user
             token_resp = await client.post(
                 f"{TEST_AUTHZ_URL}/oauth/token",
-                headers=admin_headers,
                 json={
                     "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-                    "client_id": "ai-portal",
-                    "client_secret": ADMIN_TOKEN,
+                    "client_id": BOOTSTRAP_CLIENT_ID,
+                    "client_secret": BOOTSTRAP_CLIENT_SECRET,
                     "audience": "test-audience",
-                    "requested_subject": test_user,
+                    "requested_subject": user_id,
                 },
                 timeout=30.0,
             )
@@ -2561,7 +2582,7 @@ class TestAuditWithBearerContext:
                 f"{TEST_AUTHZ_URL}/authz/audit",
                 headers={"Authorization": f"Bearer {access_token}"},
                 json={
-                    "actorId": test_user,
+                    "actorId": user_id,
                     "action": "legacy.test",
                     "resourceType": "test",
                     "resourceId": "test-123",

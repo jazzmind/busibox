@@ -134,7 +134,7 @@ def _format_user(user: dict) -> dict:
     roles = []
     for r in user.get("roles", []):
         roles.append({
-            "id": r.get("id"),
+            "id": str(r.get("id")) if r.get("id") else None,
             "name": r.get("name"),
             "description": r.get("description"),
             "scopes": r.get("scopes", []),
@@ -142,8 +142,12 @@ def _format_user(user: dict) -> dict:
             "updated_at": r.get("updated_at").isoformat() if r.get("updated_at") else "",
         })
     
+    # user_id might be a UUID object, convert to string
+    user_id = user.get("user_id")
+    user_id_str = str(user_id) if user_id else None
+    
     return {
-        "user_id": user.get("user_id") or str(user.get("user_id")),
+        "user_id": user_id_str,
         "email": user.get("email"),
         "status": user.get("status"),
         "email_verified_at": user.get("email_verified_at").isoformat() if user.get("email_verified_at") else None,
