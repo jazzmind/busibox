@@ -1,9 +1,10 @@
 """
-Authorization and audit endpoints.
+Authorization endpoints for ingest service.
 
 Provides:
 - POST /authz/token : issue scoped JWT for downstream services
-- POST /authz/audit : append audit log entry
+
+NOTE: Audit logging should go through the central authz service at /audit/log.
 """
 
 import os
@@ -79,35 +80,6 @@ async def create_token(request: Request):
     return {"token": token, "audience": audience, "roles": roles}
 
 
-@router.post("/authz/audit")
-async def audit(request: Request):
-    """
-    Append an audit log entry.
-    Body: { actorId, action, resourceType, resourceId?, details? }
-    """
-    body = await request.json()
-    actor_id = body.get("actorId")
-    action = body.get("action")
-    resource_type = body.get("resourceType")
-    resource_id = body.get("resourceId")
-    details = body.get("details", {})
-
-    if not actor_id or not action or not resource_type:
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content={"error": "actorId, action, and resourceType are required"}
-        )
-
-    await write_audit(
-        actor_id=actor_id,
-        action=action,
-        resource_type=resource_type,
-        resource_id=resource_id,
-        details=details,
-        request=request,
-    )
-
-    return {"status": "ok"}
 
 
 async def write_audit(actor_id: str, action: str, resource_type: str, resource_id: Optional[str], details: dict, request: Request):
