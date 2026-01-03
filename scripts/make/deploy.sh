@@ -886,6 +886,201 @@ deployment_menu() {
     done
 }
 
+# Docker service selection submenu
+docker_select_service() {
+    local action="$1"  # "build", "start", "restart", "stop", "logs"
+    local compose_file="${REPO_ROOT}/docker-compose.local.yml"
+    local env_file="${REPO_ROOT}/.env.local"
+    
+    # Capitalize first letter (compatible with bash 3.x / zsh / macOS)
+    local action_title="$(echo "$action" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')"
+    
+    while true; do
+        echo ""
+        menu "Select Service to ${action_title}" \
+            "authz-api" \
+            "ingest-api" \
+            "search-api" \
+            "agent-api" \
+            "nginx" \
+            "litellm" \
+            "postgres" \
+            "redis" \
+            "minio" \
+            "milvus" \
+            "Back"
+        
+        read -p "$(echo -e "${BOLD}Select option [1-11]:${NC} ")" choice
+        
+        local service_name=""
+        case $choice in
+            1) service_name="authz-api" ;;
+            2) service_name="ingest-api" ;;
+            3) service_name="search-api" ;;
+            4) service_name="agent-api" ;;
+            5) service_name="nginx" ;;
+            6) service_name="litellm" ;;
+            7) service_name="postgres" ;;
+            8) service_name="redis" ;;
+            9) service_name="minio" ;;
+            10) service_name="milvus" ;;
+            11) return 0 ;;
+            *) error "Invalid selection"; continue ;;
+        esac
+        
+        echo ""
+        case "$action" in
+            build)
+                info "Building $service_name..."
+                docker compose -f "$compose_file" --env-file "$env_file" build "$service_name"
+                success "Build complete!"
+                ;;
+            start)
+                info "Starting $service_name..."
+                docker compose -f "$compose_file" --env-file "$env_file" up -d "$service_name"
+                success "Service started!"
+                ;;
+            restart)
+                info "Restarting $service_name..."
+                docker compose -f "$compose_file" --env-file "$env_file" restart "$service_name"
+                success "Service restarted!"
+                ;;
+            stop)
+                info "Stopping $service_name..."
+                docker compose -f "$compose_file" --env-file "$env_file" stop "$service_name"
+                success "Service stopped!"
+                ;;
+            logs)
+                info "Showing logs for $service_name (press Ctrl+C to stop)..."
+                docker compose -f "$compose_file" logs -f "$service_name" || true
+                ;;
+        esac
+        pause
+    done
+}
+
+# Docker deployment menu
+docker_deploy_menu() {
+    while true; do
+        echo ""
+        menu "Docker Deployment - Local Development" \
+            "Build All Services" \
+            "Build Specific Service" \
+            "Start All Services" \
+            "Start Specific Service" \
+            "Restart All Services" \
+            "Restart Specific Service" \
+            "Stop All Services" \
+            "Stop Specific Service" \
+            "View Service Status" \
+            "View All Logs" \
+            "View Service Logs" \
+            "Clean Up (remove containers & volumes)" \
+            "Exit"
+        
+        read -p "$(echo -e "${BOLD}Select option [1-13]:${NC} ")" choice
+        
+        local compose_file="${REPO_ROOT}/docker-compose.local.yml"
+        local env_file="${REPO_ROOT}/.env.local"
+        
+        # Create .env.local if it doesn't exist
+        if [[ ! -f "$env_file" ]] && [[ -f "${REPO_ROOT}/env.local.example" ]]; then
+            warn "Creating .env.local from env.local.example..."
+            cp "${REPO_ROOT}/env.local.example" "$env_file"
+        fi
+        
+        case $choice in
+            1)
+                header "Build All Docker Services" 70
+                echo ""
+                info "Building all Docker images..."
+                echo ""
+                docker compose -f "$compose_file" --env-file "$env_file" build
+                echo ""
+                success "Build complete!"
+                pause
+                ;;
+            2)
+                docker_select_service "build"
+                ;;
+            3)
+                header "Start All Docker Services" 70
+                echo ""
+                info "Starting all Docker services..."
+                echo ""
+                docker compose -f "$compose_file" --env-file "$env_file" up -d
+                echo ""
+                success "Services started!"
+                echo ""
+                docker compose -f "$compose_file" ps
+                pause
+                ;;
+            4)
+                docker_select_service "start"
+                ;;
+            5)
+                header "Restart All Docker Services" 70
+                echo ""
+                info "Restarting all Docker services..."
+                echo ""
+                docker compose -f "$compose_file" --env-file "$env_file" restart
+                echo ""
+                success "Services restarted!"
+                pause
+                ;;
+            6)
+                docker_select_service "restart"
+                ;;
+            7)
+                header "Stop All Docker Services" 70
+                echo ""
+                if confirm "Stop all Docker services?"; then
+                    docker compose -f "$compose_file" down
+                    success "Services stopped!"
+                fi
+                pause
+                ;;
+            8)
+                docker_select_service "stop"
+                ;;
+            9)
+                header "Docker Service Status" 70
+                echo ""
+                docker compose -f "$compose_file" ps
+                pause
+                ;;
+            10)
+                header "Docker Service Logs" 70
+                echo ""
+                info "Showing all logs (press Ctrl+C to stop)..."
+                echo ""
+                docker compose -f "$compose_file" logs -f || true
+                ;;
+            11)
+                docker_select_service "logs"
+                ;;
+            12)
+                header "Clean Up Docker Environment" 70
+                echo ""
+                warn "This will remove all containers and volumes!"
+                warn "All data (database, minio, etc.) will be LOST!"
+                echo ""
+                if confirm "Are you sure you want to clean up?" "n"; then
+                    docker compose -f "$compose_file" down -v --remove-orphans
+                    success "Cleanup complete!"
+                fi
+                pause
+                ;;
+            13)
+                return 0
+                ;;
+            *)
+                error "Invalid selection. Please enter 1-13."
+                ;;
+        esac
+    done
+}
+
 # Main menu
 main() {
     # Check for command-line arguments for non-interactive mode
@@ -903,7 +1098,24 @@ main() {
         echo "Service: $service | Environment: $env"
         echo ""
         
-        # Check Ansible
+        # Handle Docker environment
+        if [[ "$env" == "docker" ]]; then
+            local compose_file="${REPO_ROOT}/docker-compose.local.yml"
+            local env_file="${REPO_ROOT}/.env.local"
+            
+            if [[ ! -f "$env_file" ]] && [[ -f "${REPO_ROOT}/env.local.example" ]]; then
+                cp "${REPO_ROOT}/env.local.example" "$env_file"
+            fi
+            
+            if [[ "$service" == "all" ]]; then
+                docker compose -f "$compose_file" --env-file "$env_file" up -d --build
+            else
+                docker compose -f "$compose_file" --env-file "$env_file" up -d --build "$service"
+            fi
+            exit $?
+        fi
+        
+        # Check Ansible for non-Docker deployments
         if ! check_ansible; then
             exit 1
         fi
@@ -920,17 +1132,31 @@ main() {
     info "Deploy services using Ansible"
     echo ""
     
-    # Check Ansible
+    # Select environment
+    ENV=$(select_environment)
+    
+    success "Selected environment: $ENV"
+    
+    # Handle Docker environment separately
+    if [[ "$ENV" == "docker" ]]; then
+        docker_deploy_menu
+        echo ""
+        box "Deployment Complete" 70
+        echo ""
+        summary "Next Steps" \
+            "Run tests: ${CYAN}make docker-test SERVICE=authz${NC}" \
+            "View logs: ${CYAN}make docker-logs${NC}" \
+            "Check status: ${CYAN}make docker-ps${NC}"
+        echo ""
+        exit 0
+    fi
+    
+    # Check Ansible for non-Docker deployments
     if ! check_ansible; then
         exit 1
     fi
     
     echo ""
-    
-    # Select environment
-    ENV=$(select_environment)
-    
-    success "Selected environment: $ENV"
     
     # For test environment, default to alias mode (can be changed in LLM Services menu)
     # For production, always deploy its own vLLM

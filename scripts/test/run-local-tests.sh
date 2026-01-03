@@ -35,9 +35,14 @@ PYTEST_ARGS="$*"
 
 # FAST mode: skip slow and GPU tests
 # Set via environment variable FAST=1
+# Note: Only add FAST filter if user hasn't specified their own -m filter
 if [[ "${FAST:-}" == "1" ]]; then
-    PYTEST_ARGS="-m 'not slow and not gpu' $PYTEST_ARGS"
-    info "FAST mode: skipping @pytest.mark.slow and @pytest.mark.gpu tests"
+    if [[ "$PYTEST_ARGS" != *"-m "* ]]; then
+        PYTEST_ARGS="-m 'not slow and not gpu' $PYTEST_ARGS"
+        info "FAST mode: skipping @pytest.mark.slow and @pytest.mark.gpu tests"
+    else
+        info "FAST mode: disabled because -m filter was specified in ARGS"
+    fi
 fi
 
 # WORKER mode: start a local worker for tests that require it
@@ -75,21 +80,100 @@ esac
 # Step 1: Generate environment file
 header "Step 1: Generate Environment" 70
 
-info "Extracting secrets and generating .env.local..."
-if ! bash "${SCRIPT_DIR}/generate-local-test-env.sh" "$SERVICE" "$ENV" > /dev/null; then
-    error "Failed to generate environment file"
-    exit 1
-fi
-
-if [[ "$SERVICE" == "all" ]]; then
+# For Docker environment, use the root .env.local with Docker-specific overrides
+if [[ "$ENV" == "docker" ]]; then
+    info "Using Docker environment configuration..."
     ENV_FILE="${REPO_ROOT}/.env.local"
+    
+    if [[ ! -f "$ENV_FILE" ]]; then
+        if [[ -f "${REPO_ROOT}/env.local.example" ]]; then
+            warn "No .env.local found. Creating from env.local.example..."
+            cp "${REPO_ROOT}/env.local.example" "$ENV_FILE"
+        else
+            error "No .env.local found and no env.local.example to copy from"
+            exit 1
+        fi
+    fi
+    
+    # Docker-specific environment overrides (services are on localhost)
+    export POSTGRES_HOST=localhost
+    export POSTGRES_PORT=5432
+    export POSTGRES_DB=busibox
+    export POSTGRES_USER=busibox_user
+    export POSTGRES_PASSWORD=devpassword
+    export REDIS_HOST=localhost
+    export REDIS_PORT=6379
+    export MILVUS_HOST=localhost
+    export MILVUS_PORT=19530
+    export MINIO_ENDPOINT=localhost:9000
+    export MINIO_ACCESS_KEY=minioadmin
+    export MINIO_SECRET_KEY=minioadmin
+    export AUTHZ_JWKS_URL=http://localhost:8010/.well-known/jwks.json
+    export AUTHZ_ISSUER=busibox-authz
+    export AUTHZ_TOKEN_URL=http://localhost:8010/oauth/token
+    export AUTHZ_ADMIN_TOKEN=local-admin-token
+    export AUTHZ_BOOTSTRAP_CLIENT_ID=ai-portal
+    export AUTHZ_BOOTSTRAP_CLIENT_SECRET=ai-portal-secret
+    export TEST_AUTHZ_URL=http://localhost:8010
+    export LITELLM_BASE_URL=http://localhost:4000
+    export LITELLM_API_KEY=sk-local-dev-key
+    export EMBEDDING_SERVICE_URL=http://localhost:8002
+    export SEARCH_API_URL=http://localhost:8003
+    export INGEST_API_URL=http://localhost:8002
+    export AGENT_API_URL=http://localhost:8000
+    
+    # Agent API uses AUTH_* (without Z) for its own auth config
+    export AUTH_JWKS_URL=http://localhost:8010/.well-known/jwks.json
+    export AUTH_ISSUER=busibox-authz
+    export AUTH_TOKEN_URL=http://localhost:8010/oauth/token
+    
+    # Database URLs for each service
+    export DATABASE_URL=postgresql+asyncpg://busibox_user:devpassword@localhost:5432/agent_server
+    
+    # Test-specific environment variables (needed for integration tests)
+    export TEST_DB_HOST=localhost
+    export TEST_DB_PORT=5432
+    export TEST_DB_NAME=busibox
+    export TEST_DB_USER=busibox_user
+    export TEST_DB_PASSWORD=devpassword
+    
+    # Test user for auth tests - fetch from database or run bootstrap to create
+    TEST_USER_ID=$(docker exec local-postgres psql -U busibox_user -d busibox -t -A -c "SELECT user_id FROM authz_users WHERE email = 'test@busibox.local' LIMIT 1;" 2>/dev/null || echo "")
+    
+    if [[ -z "$TEST_USER_ID" ]]; then
+        info "Test user not found. Running bootstrap to create..."
+        # Run bootstrap script and capture the test user ID
+        BOOTSTRAP_OUTPUT=$(bash "${SCRIPT_DIR}/bootstrap-test-credentials.sh" docker 2>&1)
+        TEST_USER_ID=$(echo "$BOOTSTRAP_OUTPUT" | grep "^TEST_USER_ID=" | cut -d'=' -f2)
+        if [[ -z "$TEST_USER_ID" ]]; then
+            error "Failed to create test user via bootstrap"
+            exit 1
+        fi
+        info "Created test user: ${TEST_USER_ID}"
+    fi
+    
+    export TEST_USER_ID
+    export TEST_USER_EMAIL=test@busibox.local
+    
+    success "Docker environment configured (services on localhost)"
 else
-    ENV_FILE="${REPO_ROOT}/srv/${SERVICE}/.env.local"
-fi
+    # For Proxmox environments, use the generate script
+    info "Extracting secrets and generating .env.local..."
+    if ! bash "${SCRIPT_DIR}/generate-local-test-env.sh" "$SERVICE" "$ENV" > /dev/null; then
+        error "Failed to generate environment file"
+        exit 1
+    fi
 
-if [[ ! -f "$ENV_FILE" ]]; then
-    error "Environment file not generated: $ENV_FILE"
-    exit 1
+    if [[ "$SERVICE" == "all" ]]; then
+        ENV_FILE="${REPO_ROOT}/.env.local"
+    else
+        ENV_FILE="${REPO_ROOT}/srv/${SERVICE}/.env.local"
+    fi
+
+    if [[ ! -f "$ENV_FILE" ]]; then
+        error "Environment file not generated: $ENV_FILE"
+        exit 1
+    fi
 fi
 
 success "Environment file ready: $ENV_FILE"
@@ -240,10 +324,31 @@ run_service_tests() {
         info "Activating virtual environment: $venv_dir"
         source "${venv_dir}/bin/activate"
         
-        # Install test dependencies if present (assumes main requirements already installed)
-        if [[ -f "requirements.test.txt" ]]; then
-            info "Installing test dependencies..."
-            pip install -q -r requirements.test.txt 2>/dev/null || true
+        # Always ensure core test tools are installed
+        # This handles cases where venv exists but is incomplete
+        if ! python -c "import pytest" 2>/dev/null; then
+            info "Installing core test dependencies (pytest missing)..."
+            pip install -q --upgrade pip
+            
+            # Install main requirements if present
+            if [[ -f "requirements.txt" ]]; then
+                info "Installing requirements.txt..."
+                pip install -q -r requirements.txt
+            fi
+            
+            # Install test requirements if present
+            if [[ -f "requirements.test.txt" ]]; then
+                info "Installing requirements.test.txt..."
+                pip install -q -r requirements.test.txt
+            fi
+            
+            # Always ensure pytest and httpx are available for tests
+            pip install -q pytest pytest-asyncio httpx
+        else
+            # Pytest exists, just ensure test dependencies are up to date
+            if [[ -f "requirements.test.txt" ]]; then
+                pip install -q -r requirements.test.txt 2>/dev/null || true
+            fi
         fi
     fi
     
@@ -254,10 +359,10 @@ run_service_tests() {
         return 0
     fi
     
-    # Use pytest from venv if activated, otherwise system pytest
-    local pytest_cmd="pytest"
-    if [[ -n "$venv_dir" ]] && [[ -f "${venv_dir}/bin/pytest" ]]; then
-        pytest_cmd="${venv_dir}/bin/pytest"
+    # Use python -m pytest to avoid broken shebang issues in venv
+    local pytest_cmd="python -m pytest"
+    if [[ -n "$venv_dir" ]] && [[ -f "${venv_dir}/bin/python" ]]; then
+        pytest_cmd="${venv_dir}/bin/python -m pytest"
     fi
     
     info "Running: $pytest_cmd $test_dir -v $PYTEST_ARGS"

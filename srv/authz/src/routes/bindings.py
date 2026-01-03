@@ -96,12 +96,21 @@ async def _require_admin_auth(request: Request) -> str:
 
 def _format_binding(binding: dict) -> dict:
     """Format a binding record for API response."""
+    # Handle permissions - may be stored as JSON string in text column
+    permissions = binding.get("permissions") or {}
+    if isinstance(permissions, str):
+        import json
+        try:
+            permissions = json.loads(permissions)
+        except (json.JSONDecodeError, TypeError):
+            permissions = {}
+    
     return {
         "id": binding["id"],
         "role_id": binding["role_id"],
         "resource_type": binding["resource_type"],
         "resource_id": binding["resource_id"],
-        "permissions": binding.get("permissions") or {},
+        "permissions": permissions,
         "created_at": binding["created_at"].isoformat() if binding.get("created_at") else None,
         "created_by": binding.get("created_by"),
     }

@@ -62,12 +62,202 @@ class PostgresService:
             )
             self._pool_loop = current_loop
             logger.info("PostgreSQL connection pool created")
+            # Ensure required tables exist (idempotent)
+            await self.ensure_schema()
+
+    async def ensure_schema(self) -> None:
+        """
+        Create ingest tables if missing.
+        
+        Uses CREATE TABLE IF NOT EXISTS for idempotency - safe to run on every startup.
+        This ensures the schema exists regardless of deployment mode (Docker, Proxmox, etc.)
+        """
+        if not self.pool:
+            return
+        
+        async with self.pool.acquire() as conn:
+            # Ensure pgcrypto extension for gen_random_uuid()
+            await conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto;")
+            
+            # Main ingestion_files table with all columns needed by the application
+            # This includes columns from base schema + migrations for full compatibility
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS ingestion_files (
+                    file_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    user_id UUID NOT NULL,
+                    owner_id UUID,
+                    filename VARCHAR(255) NOT NULL,
+                    original_filename VARCHAR(255) NOT NULL,
+                    mime_type VARCHAR(100) NOT NULL,
+                    size_bytes BIGINT NOT NULL,
+                    storage_path TEXT NOT NULL,
+                    content_hash VARCHAR(64) NOT NULL,
+                    document_type VARCHAR(50),
+                    primary_language VARCHAR(10),
+                    detected_languages VARCHAR(10)[],
+                    classification_confidence REAL CHECK (classification_confidence >= 0 AND classification_confidence <= 1),
+                    chunk_count INTEGER DEFAULT 0,
+                    vector_count INTEGER DEFAULT 0,
+                    processing_duration_seconds INTEGER,
+                    extracted_title VARCHAR(500),
+                    extracted_author VARCHAR(255),
+                    extracted_date DATE,
+                    extracted_keywords TEXT[],
+                    metadata JSONB DEFAULT '{}',
+                    permissions JSONB NOT NULL DEFAULT '{"visibility": "private"}',
+                    visibility VARCHAR(20) DEFAULT 'personal',
+                    has_markdown BOOLEAN DEFAULT false,
+                    markdown_path VARCHAR(512),
+                    images_path VARCHAR(512),
+                    image_count INTEGER DEFAULT 0,
+                    processing_strategies JSONB DEFAULT '[]'::jsonb,
+                    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+                );
+            """)
+            
+            # Backfill owner_id from user_id if null (for compatibility with new schema)
+            await conn.execute("""
+                UPDATE ingestion_files SET owner_id = user_id WHERE owner_id IS NULL;
+            """)
+            
+            # Ingestion status table
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS ingestion_status (
+                    file_id UUID PRIMARY KEY REFERENCES ingestion_files(file_id) ON DELETE CASCADE,
+                    stage VARCHAR(50) NOT NULL DEFAULT 'queued',
+                    progress INTEGER NOT NULL DEFAULT 0 CHECK (progress >= 0 AND progress <= 100),
+                    chunks_processed INTEGER,
+                    total_chunks INTEGER,
+                    pages_processed INTEGER,
+                    total_pages INTEGER,
+                    error_message TEXT,
+                    retry_count INTEGER DEFAULT 0,
+                    started_at TIMESTAMP,
+                    completed_at TIMESTAMP,
+                    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+                );
+            """)
+            
+            # Ingestion chunks table
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS ingestion_chunks (
+                    chunk_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    file_id UUID NOT NULL REFERENCES ingestion_files(file_id) ON DELETE CASCADE,
+                    chunk_index INTEGER NOT NULL,
+                    text TEXT NOT NULL,
+                    char_offset INTEGER,
+                    token_count INTEGER,
+                    page_number INTEGER,
+                    section_heading VARCHAR(500),
+                    processing_strategy VARCHAR(50) DEFAULT 'simple',
+                    metadata JSONB DEFAULT '{}',
+                    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                    UNIQUE (file_id, chunk_index)
+                );
+            """)
+            
+            # Document roles table
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS document_roles (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    file_id UUID NOT NULL REFERENCES ingestion_files(file_id) ON DELETE CASCADE,
+                    role_id UUID NOT NULL,
+                    role_name VARCHAR(100) NOT NULL,
+                    added_at TIMESTAMP DEFAULT NOW(),
+                    added_by UUID,
+                    UNIQUE(file_id, role_id)
+                );
+            """)
+            
+            # Create indexes (IF NOT EXISTS is implicit for CREATE INDEX in recent PostgreSQL)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_ingestion_files_user_id ON ingestion_files(user_id);
+                CREATE INDEX IF NOT EXISTS idx_ingestion_files_content_hash ON ingestion_files(content_hash);
+                CREATE INDEX IF NOT EXISTS idx_ingestion_files_document_type ON ingestion_files(document_type);
+                CREATE INDEX IF NOT EXISTS idx_ingestion_files_created_at ON ingestion_files(created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_ingestion_status_stage ON ingestion_status(stage);
+                CREATE INDEX IF NOT EXISTS idx_ingestion_chunks_file_id ON ingestion_chunks(file_id);
+                CREATE INDEX IF NOT EXISTS idx_document_roles_file ON document_roles(file_id);
+                CREATE INDEX IF NOT EXISTS idx_document_roles_role ON document_roles(role_id);
+            """)
+            
+            # Apply migrations from the migrations directory
+            # These are idempotent (use IF NOT EXISTS, ADD COLUMN IF NOT EXISTS, etc.)
+            await self._apply_migrations(conn)
+            
+            logger.info("Ingest schema ensured")
+            self._document_roles_ready = True
+    
+    async def _apply_migrations(self, conn) -> None:
+        """
+        Apply migration SQL files from the migrations directory.
+        
+        Migrations should be idempotent (use IF NOT EXISTS, etc.) so they can
+        be safely re-run on every startup.
+        """
+        import os
+        from pathlib import Path
+        
+        # Find migrations directory relative to this file
+        # When deployed: /opt/ingest/migrations/ or /app/migrations/
+        # When local: srv/ingest/migrations/
+        possible_paths = [
+            Path(__file__).parent.parent.parent.parent / "migrations",  # From src/api/services/ -> srv/ingest/migrations
+            Path("/opt/ingest/migrations"),  # Deployed path
+            Path("/app/migrations"),  # Docker path
+        ]
+        
+        migrations_dir = None
+        for path in possible_paths:
+            if path.exists() and path.is_dir():
+                migrations_dir = path
+                break
+        
+        if not migrations_dir:
+            logger.debug("No migrations directory found, skipping migrations")
+            return
+        
+        # Order of migrations matters - apply in specific order
+        migration_order = [
+            "add_markdown_storage.sql",
+            "add_multi_flow_support.sql",
+            "add_cleanup_stage.sql",
+            "add_processing_history.sql",
+            "add_rbac_schema.sql",
+            "add_rls_policies.sql",
+            "003_security_model.sql",
+        ]
+        
+        for migration_file in migration_order:
+            migration_path = migrations_dir / migration_file
+            if migration_path.exists():
+                try:
+                    sql = migration_path.read_text()
+                    
+                    # Execute the entire migration file at once
+                    # asyncpg supports multi-statement execution
+                    try:
+                        await conn.execute(sql)
+                        logger.debug(f"Applied migration: {migration_file}")
+                    except Exception as e:
+                        error_str = str(e).lower()
+                        # Ignore "already exists" and "does not exist" errors - migration already applied
+                        if "already exists" in error_str or "does not exist" in error_str:
+                            logger.debug(f"Migration {migration_file} already applied (or partially applied)")
+                        else:
+                            logger.warning(f"Migration {migration_file} had errors: {str(e)[:200]}")
+                except Exception as e:
+                    logger.warning(f"Failed to read migration {migration_file}: {e}")
 
     async def _ensure_document_roles(self, conn):
         """
         Defensive: ensure document_roles table exists (for environments where
         migrations have not been applied yet). Uses IF NOT EXISTS so it is safe
         to run repeatedly.
+        
+        Note: This is now handled by ensure_schema() on connect(), but kept for
+        backward compatibility with existing code paths.
         """
         if self._document_roles_ready:
             return

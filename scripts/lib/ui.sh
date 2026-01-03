@@ -127,34 +127,39 @@ confirm() {
 
 # Environment selection
 # Usage: ENV=$(select_environment)
-# Returns: "test" or "production"
+# Returns: "docker", "test", or "production"
 select_environment() {
     # Send display output to stderr so it shows on terminal (not captured by command substitution)
     {
         echo ""
         box "Environment Selection"
         echo ""
-        echo -e "  ${CYAN}1)${NC} Test Environment       (10.96.201.x network)"
-        echo -e "  ${CYAN}2)${NC} Production Environment (10.96.200.x network)"
+        echo -e "  ${CYAN}1)${NC} Local Docker          (localhost development)"
+        echo -e "  ${CYAN}2)${NC} Test Environment      (10.96.201.x network)"
+        echo -e "  ${CYAN}3)${NC} Production Environment (10.96.200.x network)"
         echo ""
     } >&2
     
     while true; do
         # Read from terminal and show prompt on stderr
-        echo -ne "${BOLD}Select environment [1-2]:${NC} " >&2
+        echo -ne "${BOLD}Select environment [1-3]:${NC} " >&2
         read choice < /dev/tty
         case $choice in
             1)
                 # Only output result to stdout (will be captured)
-                echo "test"
+                echo "docker"
                 return 0
                 ;;
             2)
+                echo "test"
+                return 0
+                ;;
+            3)
                 echo "production"
                 return 0
                 ;;
             *)
-                error "Invalid selection. Please enter 1 or 2."
+                error "Invalid selection. Please enter 1, 2, or 3."
                 ;;
         esac
     done

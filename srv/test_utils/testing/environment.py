@@ -61,10 +61,12 @@ def load_env_files(service_dir: Optional[Path] = None) -> bool:
     
     loaded = False
     if env_local.exists():
-        load_dotenv(env_local, override=True)
+        # override=False means env vars set by the test script take precedence
+        # This allows run-local-tests.sh to override .env.local settings
+        load_dotenv(env_local, override=False)
         loaded = True
     elif env_file.exists():
-        load_dotenv(env_file, override=True)
+        load_dotenv(env_file, override=False)
         loaded = True
     
     return loaded

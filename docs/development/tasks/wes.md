@@ -1,4 +1,8 @@
 # Wes's Tasks
+a) get cashman laptop running busibox
+b) make sure ai-portal chat works with tavily + aws bedrock
+
+
 
 Agent tasks:
 2 - make sure all busibox-app tests pass

@@ -1,0 +1,125 @@
+# =============================================================================
+# LiteLLM Configuration for Busibox Local Development
+# =============================================================================
+#
+# This configuration provides a unified LLM gateway that:
+# - Routes requests to OpenAI, Anthropic, AWS Bedrock, or local models
+# - Provides model aliases for semantic naming
+# - Supports fallback configurations
+#
+# Updated: January 2026 with latest models
+#
+# Usage:
+#   docker compose -f docker-compose.local.yml up litellm
+#
+# Access:
+#   - API: http://localhost:4000
+#   - Swagger: http://localhost:4000/docs
+#
+# =============================================================================
+
+model_list:
+  # ===========================================================================
+  # SEMANTIC MODEL ALIASES
+  # ===========================================================================
+  # These aliases let you reference models by purpose rather than provider
+  
+  # Fast model - for quick tasks, tool calls, simple operations
+  - model_name: fast
+    litellm_params:
+      model: gpt-5-nano
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      description: "Fast model for simple tasks (GPT-5 Mini)"
+
+ # Fast model - for quick tasks, tool calls, simple operations
+  - model_name: chat
+    litellm_params:
+      model: gpt-5-mini
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      description: "Fast model for simple tasks (GPT-5 Mini)"
+
+  # Agent model - balanced performance for agent operations
+  - model_name: agent
+    litellm_params:
+      model: gpt-5.2
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      description: "Main agent model for complex reasoning (GPT-5.2)"
+      
+  # Frontier model - best available for complex reasoning
+  - model_name: frontier
+    litellm_params:
+      model: gpt-5.2
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      description: "Frontier model for complex analysis (GPT-5.2)"
+
+  # Embedding model (for semantic search)
+  - model_name: embedding
+    litellm_params:
+      model: text-embedding-3-large
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      description: "Text embedding model"
+
+ 
+  # ===========================================================================
+  # LOCAL MODEL ACCESS (Uncomment if running local vLLM)
+  # ===========================================================================
+  # These point to a local vLLM instance for on-device inference
+  
+  # - model_name: local
+  #   litellm_params:
+  #     model: openai/local-model
+  #     api_base: http://host.docker.internal:8080/v1
+  #     api_key: EMPTY
+  #   model_info:
+  #     description: "Local vLLM model"
+
+# ===========================================================================
+# GENERAL SETTINGS
+# ===========================================================================
+
+general_settings:
+  # Enable detailed logging
+  debug: true
+  
+  # Master key for admin access
+  master_key: os.environ/LITELLM_MASTER_KEY
+  
+  # Allow all models (no restrictions)
+  allow_user_auth: true
+
+# ===========================================================================
+# ROUTER SETTINGS
+# ===========================================================================
+
+router_settings:
+  # Enable caching for repeated requests
+  enable_cache: true
+  
+  # Retry configuration
+  num_retries: 3
+  retry_after: 5
+  
+  # Timeout settings (in seconds)
+  timeout: 120
+  
+  # Allow fallbacks between models
+  allowed_fails: 1
+
+# ===========================================================================
+# LITELLM SETTINGS
+# ===========================================================================
+
+litellm_settings:
+  # Drop unmapped params (for compatibility)
+  drop_params: true
+  
+  # Set modest timeouts
+  request_timeout: 120
+  
+  # Enable streaming
+  set_verbose: true

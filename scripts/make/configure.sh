@@ -655,6 +655,29 @@ SELECTED_ENV=$(select_environment)
 success "Selected environment: $SELECTED_ENV"
 echo ""
 
+# Handle Docker environment
+if [[ "$SELECTED_ENV" == "docker" ]]; then
+    info "Docker environment selected"
+    echo ""
+    info "Docker configuration is managed via:"
+    echo "  - docker-compose.local.yml  (service definitions)"
+    echo "  - .env.local                (environment variables)"
+    echo "  - config/                   (configuration files)"
+    echo ""
+    info "Key commands:"
+    echo "  make docker-build           # Build all images"
+    echo "  make docker-up              # Start all services"
+    echo "  make docker-down            # Stop all services"
+    echo "  make docker-ps              # Check service status"
+    echo "  make docker-logs            # View logs"
+    echo ""
+    info "To edit .env.local, run:"
+    echo "  \$EDITOR .env.local"
+    echo ""
+    pause
+    exit 0
+fi
+
 # Run main menu
 main_menu
 

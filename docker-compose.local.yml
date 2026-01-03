@@ -1,142 +1,634 @@
+# =============================================================================
+# Busibox Local Development Environment
+# =============================================================================
+#
+# A complete local Docker environment that mirrors the Proxmox deployment.
+# This is the recommended way to develop locally without deploying to Proxmox.
+#
+# Services included:
+#   - PostgreSQL (shared database)
+#   - MinIO (object storage)
+#   - Milvus (vector database)
+#   - Redis (job queue)
+#   - AuthZ API (authentication/authorization)
+#   - Ingest API (document processing)
+#   - Search API (semantic search)
+#   - Agent API (AI agents)
+#   - AI Portal (Next.js frontend)
+#   - Agent Manager (agent management UI)
+#   - LiteLLM (LLM gateway)
+#
+# HOT-RELOAD SUPPORT:
+#   Python API services (authz-api, ingest-api, search-api, agent-api) support
+#   hot-reload. Code changes are automatically detected and the service restarts.
+#   No need to rebuild containers when editing Python source code!
+#
+#   Note: You still need to rebuild if you:
+#     - Change requirements.txt (add/remove dependencies)
+#     - Modify Dockerfile
+#     - Change non-mounted files (e.g., alembic migrations for agent-api)
+#
+# Usage:
+#   # Start all infrastructure services
+#   docker compose -f docker-compose.local.yml up -d
+#
+#   # View logs
+#   docker compose -f docker-compose.local.yml logs -f
+#
+#   # Stop all services
+#   docker compose -f docker-compose.local.yml down
+#
+#   # Clean up volumes (WARNING: deletes all data)
+#   docker compose -f docker-compose.local.yml down -v
+#
+# Configuration:
+#   Copy .env.local.example to .env.local and configure your settings.
+#   The compose file will automatically load .env.local
+#
+# =============================================================================
+
 version: '3.8'
 
-# Local development containers for Ansible provisioning
-# These containers run systemd so Ansible can manage services just like on Proxmox
-# Usage: 
-#   docker compose -f docker-compose.local.yml up -d
-#   ansible-playbook -i inventory/local/hosts.yml site.yml
-
 services:
-  # PostgreSQL - Database
-  local-postgres:
+  # ===========================================================================
+  # INFRASTRUCTURE SERVICES
+  # ===========================================================================
+
+  # PostgreSQL - Shared Database
+  postgres:
     image: postgres:16-alpine
     container_name: local-postgres
-    hostname: local-postgres
+    hostname: postgres
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: devpassword
-      POSTGRES_DB: cashman
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
+      POSTGRES_DB: busibox
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./config/init-databases.sql:/docker-entrypoint-initdb.d/01-init-databases.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     networks:
-      local-net:
-        ipv4_address: 172.20.0.10
+      - busibox-net
 
-  # MinIO - Object Storage
-  local-minio:
-    image: debian:12
-    container_name: local-minio
-    hostname: local-minio
-    privileged: true
-    volumes:
-      - /sys/fs/cgroup:/sys/fs/cgroup:rw
-      - minio_data:/srv/minio/data
+  # Redis - Job Queue and Caching
+  redis:
+    image: redis:7-alpine
+    container_name: local-redis
+    hostname: redis
     ports:
-      - "9000:9000"
-      - "9001:9001"
-    networks:
-      local-net:
-        ipv4_address: 172.20.0.11
-    command: /sbin/init
-
-  # Milvus - Vector Database
-  local-milvus:
-    image: debian:12
-    container_name: local-milvus
-    hostname: local-milvus
-    privileged: true
+      - "6379:6379"
     volumes:
-      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - busibox-net
+
+  # MinIO - Object Storage (S3-compatible)
+  minio:
+    image: minio/minio:latest
+    container_name: local-minio
+    hostname: minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    ports:
+      - "9000:9000"   # API
+      - "9001:9001"   # Console
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - busibox-net
+
+  # MinIO bucket initialization
+  minio-init:
+    image: minio/mc
+    container_name: local-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set myminio http://minio:9000 ${MINIO_ACCESS_KEY:-minioadmin} ${MINIO_SECRET_KEY:-minioadmin};
+      mc mb myminio/documents --ignore-existing;
+      mc mb myminio/exports --ignore-existing;
+      mc anonymous set download myminio/exports;
+      echo 'Buckets created successfully';
+      "
+    networks:
+      - busibox-net
+
+  # Milvus - Vector Database (standalone mode with etcd + minio)
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.5
+    container_name: local-milvus-etcd
+    hostname: etcd
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - etcd_data:/etcd
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - busibox-net
+
+  milvus-minio:
+    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    container_name: local-milvus-minio
+    hostname: milvus-minio
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    ports:
+      - "9002:9000"   # Separate from main MinIO
+    volumes:
+      - milvus_minio_data:/minio_data
+    command: minio server /minio_data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - busibox-net
+
+  milvus:
+    image: milvusdb/milvus:v2.6.5
+    container_name: local-milvus
+    hostname: milvus
+    command: ["milvus", "run", "standalone"]
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: milvus-minio:9000
+    volumes:
       - milvus_data:/var/lib/milvus
     ports:
       - "19530:19530"
       - "9091:9091"
+    depends_on:
+      etcd:
+        condition: service_healthy
+      milvus-minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      start_period: 90s
+      timeout: 20s
+      retries: 3
     networks:
-      local-net:
-        ipv4_address: 172.20.0.12
-    command: /sbin/init
+      - busibox-net
 
-  # Agent API
-  local-agent-api:
-    image: debian:12
-    container_name: local-agent-api
-    hostname: local-agent-api
-    privileged: true
-    volumes:
-      - /sys/fs/cgroup:/sys/fs/cgroup:rw
-      - ../agent-server:/opt/agent-server:ro
+  # ===========================================================================
+  # LLM GATEWAY
+  # ===========================================================================
+
+  # LiteLLM - Unified LLM Gateway
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: local-litellm
+    hostname: litellm
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-local-dev-key}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # AWS Bedrock - pass BEDROCK_API_KEY directly as bearer token
+      AWS_BEARER_TOKEN_BEDROCK: ${BEDROCK_API_KEY:-}
+      AWS_REGION_NAME: ${AWS_REGION_NAME:-us-east-1}
     ports:
-      - "3001:3001"
-    networks:
-      local-net:
-        ipv4_address: 172.20.0.13
-    command: /sbin/init
-
-  # Ingest Worker
-  local-ingest:
-    image: debian:12
-    container_name: local-ingest
-    hostname: local-ingest
-    privileged: true
+      - "4000:4000"
     volumes:
-      - /sys/fs/cgroup:/sys/fs/cgroup:rw
-      - ../doc-intel:/opt/doc-intel:ro
+      - ./config/litellm-config.yaml:/app/config.yaml:ro
+    command: --config /app/config.yaml --port 4000 --detailed_debug
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
     networks:
-      local-net:
-        ipv4_address: 172.20.0.14
-    command: /sbin/init
+      - busibox-net
 
-  # AI Portal (Next.js)
-  local-apps:
-    image: debian:12
-    container_name: local-apps
-    hostname: local-apps
-    privileged: true
+  # ===========================================================================
+  # PYTHON API SERVICES
+  # ===========================================================================
+
+  # AuthZ API - Authentication & Authorization Service
+  authz-api:
+    build:
+      context: ./srv/authz
+      dockerfile: Dockerfile
+    container_name: local-authz-api
+    hostname: authz-api
+    # Hot-reload: mount source code and use --reload flag
     volumes:
-      - /sys/fs/cgroup:/sys/fs/cgroup:rw
-      - ../ai-portal:/opt/ai-portal:ro
+      - ./srv/authz/src:/app/src:ro
+    command: ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8010", "--reload", "--reload-dir", "/app/src"]
+    environment:
+      # PostgreSQL
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: busibox
+      POSTGRES_USER: ${POSTGRES_USER:-busibox_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
+      # AuthZ Configuration
+      AUTHZ_ISSUER: busibox-authz
+      AUTHZ_ACCESS_TOKEN_TTL: ${AUTHZ_ACCESS_TOKEN_TTL:-900}
+      AUTHZ_SIGNING_ALG: RS256
+      AUTHZ_RSA_KEY_SIZE: 2048
+      AUTHZ_ADMIN_TOKEN: ${AUTHZ_ADMIN_TOKEN:-local-admin-token}
+      AUTHZ_MASTER_KEY: ${AUTHZ_MASTER_KEY:-local-master-key-change-in-production}
+      # Bootstrap client (ai-portal)
+      AUTHZ_BOOTSTRAP_CLIENT_ID: ${AUTHZ_BOOTSTRAP_CLIENT_ID:-ai-portal}
+      AUTHZ_BOOTSTRAP_CLIENT_SECRET: ${AUTHZ_BOOTSTRAP_CLIENT_SECRET:-ai-portal-secret}
+      AUTHZ_BOOTSTRAP_ALLOWED_AUDIENCES: ingest-api,search-api,agent-api
+      AUTHZ_BOOTSTRAP_ALLOWED_SCOPES: read,write,search.read,ingest.write,ingest.read,agent.execute
+    ports:
+      - "8010:8010"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8010/health/live')"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    networks:
+      - busibox-net
+
+  # Ingest API - Document Processing Service
+  ingest-api:
+    build:
+      context: ./srv
+      dockerfile: ingest/Dockerfile
+    container_name: local-ingest-api
+    hostname: ingest-api
+    # Hot-reload: mount source code and use --reload flag
+    volumes:
+      - ./srv/ingest/src:/app/src:ro
+      - ./srv/ingest/migrations:/app/migrations:ro
+      - ./srv/shared_auth:/app/shared_auth:ro
+      - ingest_temp:/tmp/ingest
+    command: ["python", "-m", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8002", "--reload", "--reload-dir", "/app/src"]
+    environment:
+      # Service
+      SERVICE_PORT: 8002
+      # PostgreSQL
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: busibox
+      POSTGRES_USER: ${POSTGRES_USER:-busibox_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
+      # Redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      # MinIO
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_SECURE: "false"
+      MINIO_BUCKET: documents
+      # Milvus
+      MILVUS_HOST: milvus
+      MILVUS_PORT: 19530
+      MILVUS_COLLECTION: documents
+      # LiteLLM
+      LITELLM_BASE_URL: http://litellm:4000
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-local-dev-key}
+      # AuthZ
+      AUTHZ_JWKS_URL: http://authz-api:8010/.well-known/jwks.json
+      AUTHZ_ISSUER: busibox-authz
+      AUTHZ_AUDIENCE: ingest-api
+      # Processing
+      MARKER_ENABLED: ${MARKER_ENABLED:-true}
+      MARKER_USE_GPU: ${MARKER_USE_GPU:-false}
+      COLPALI_ENABLED: ${COLPALI_ENABLED:-false}
+      LLM_CLEANUP_ENABLED: ${LLM_CLEANUP_ENABLED:-true}
+    ports:
+      - "8002:8002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      milvus:
+        condition: service_healthy
+      authz-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/')"]
+      interval: 10s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+    networks:
+      - busibox-net
+
+  # Search API - Semantic Search Service
+  search-api:
+    build:
+      context: ./srv
+      dockerfile: search/Dockerfile
+    container_name: local-search-api
+    hostname: search-api
+    # Hot-reload: mount source code and use --reload flag
+    volumes:
+      - ./srv/search/src:/app/src:ro
+      - ./srv/shared_auth:/app/shared_auth:ro
+    command: ["python", "-m", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8003", "--reload", "--reload-dir", "/app/src"]
+    environment:
+      # Service
+      SERVICE_PORT: 8003
+      LOG_LEVEL: INFO
+      # PostgreSQL
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: busibox
+      POSTGRES_USER: ${POSTGRES_USER:-busibox_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
+      # Milvus
+      MILVUS_HOST: milvus
+      MILVUS_PORT: 19530
+      MILVUS_COLLECTION: documents
+      # Redis (caching)
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      ENABLE_CACHING: "true"
+      # Embedding service (ingest-api)
+      EMBEDDING_SERVICE_URL: http://ingest-api:8002
+      # LiteLLM
+      LITELLM_BASE_URL: http://litellm:4000
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-local-dev-key}
+      # AuthZ
+      AUTHZ_JWKS_URL: http://authz-api:8010/.well-known/jwks.json
+      AUTHZ_ISSUER: busibox-authz
+      AUTHZ_AUDIENCE: search-api
+      AUTHZ_TOKEN_URL: http://authz-api:8010/oauth/token
+      # Reranking (disabled by default in local Docker to avoid 2GB model download)
+      ENABLE_RERANKING: ${ENABLE_RERANKING:-false}
+    ports:
+      - "8003:8003"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      milvus:
+        condition: service_healthy
+      authz-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/')"]
+      interval: 10s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+    networks:
+      - busibox-net
+
+  # Agent API - AI Agent Service
+  agent-api:
+    build:
+      context: ./srv/agent
+      dockerfile: Dockerfile
+    container_name: local-agent-api
+    hostname: agent-api
+    # Hot-reload: mount source code and use --reload flag
+    # Note: migrations still run on startup, but code changes hot-reload
+    volumes:
+      - ./srv/agent/app:/app/app:ro
+    command: ["sh", "-c", "python -m alembic upgrade head && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/app"]
+    environment:
+      # Service
+      ENVIRONMENT: development
+      DEBUG: "true"
+      LOG_LEVEL: INFO
+      # Database
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-busibox_user}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/agent_server
+      # Redis
+      REDIS_URL: redis://redis:6379/0
+      # Busibox services
+      SEARCH_API_URL: http://search-api:8003
+      INGEST_API_URL: http://ingest-api:8002
+      RAG_API_URL: http://search-api:8003
+      # Milvus
+      MILVUS_HOST: milvus
+      MILVUS_PORT: 19530
+      # LiteLLM
+      LITELLM_BASE_URL: http://litellm:4000/v1
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-local-dev-key}
+      DEFAULT_MODEL: agent
+      # AuthZ
+      AUTH_JWKS_URL: http://authz-api:8010/.well-known/jwks.json
+      AUTH_ISSUER: busibox-authz
+      AUTH_AUDIENCE: agent-api
+      AUTH_TOKEN_URL: http://authz-api:8010/oauth/token
+      AUTH_CLIENT_ID: ${AGENT_API_CLIENT_ID:-agent-api}
+      AUTH_CLIENT_SECRET: ${AGENT_API_CLIENT_SECRET:-agent-api-secret}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      milvus:
+        condition: service_healthy
+      authz-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    networks:
+      - busibox-net
+
+  # ===========================================================================
+  # NEXT.JS APPLICATIONS
+  # ===========================================================================
+
+  # AI Portal - Main Frontend
+  ai-portal:
+    build:
+      context: ../ai-portal
+      dockerfile: Dockerfile.local
+      args:
+        GITHUB_AUTH_TOKEN: ${GITHUB_AUTH_TOKEN:-}
+    container_name: local-ai-portal
+    hostname: ai-portal
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      # Database
+      DATABASE_URL: postgresql://${POSTGRES_USER:-busibox_user}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/ai_portal
+      # Auth - use https://localhost for SSL
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-dev-secret-change-in-production}
+      BETTER_AUTH_URL: https://localhost/portal
+      # Email (optional - uses console logging in dev)
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      EMAIL_FROM: ${EMAIL_FROM:-noreply@localhost}
+      # Admin
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@localhost}
+      ALLOWED_EMAIL_DOMAINS: ${ALLOWED_EMAIL_DOMAINS:-*}
+      # AuthZ - use internal container URLs
+      AUTHZ_BASE_URL: http://authz-api:8010
+      AUTHZ_ADMIN_TOKEN: ${AUTHZ_ADMIN_TOKEN:-local-admin-token}
+      AUTHZ_CLIENT_ID: ${AUTHZ_BOOTSTRAP_CLIENT_ID:-ai-portal}
+      AUTHZ_CLIENT_SECRET: ${AUTHZ_BOOTSTRAP_CLIENT_SECRET:-ai-portal-secret}
+      # LiteLLM
+      LITELLM_BASE_URL: http://litellm:4000/v1
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-local-dev-key}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # SSO
+      SSO_JWT_SECRET: ${SSO_JWT_SECRET:-dev-sso-secret}
+      # Service URLs (for SSO redirect via nginx proxy)
+      NEXT_PUBLIC_AGENT_MANAGER_URL: https://localhost/agents
+      NEXT_PUBLIC_APP_URL: https://localhost/portal
+      # Base path for nginx subpath routing
+      NEXT_PUBLIC_BASE_PATH: /portal
     ports:
       - "3000:3000"
-    networks:
-      local-net:
-        ipv4_address: 172.20.0.15
-    command: /sbin/init
-
-  # Nginx Proxy
-  local-proxy:
-    image: debian:12
-    container_name: local-proxy
-    hostname: local-proxy
-    privileged: true
     volumes:
-      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - ../ai-portal:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      postgres:
+        condition: service_healthy
+      authz-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    networks:
+      - busibox-net
+
+  # Agent Manager - Agent Management UI
+  agent-manager:
+    build:
+      context: ../agent-manager
+      dockerfile: Dockerfile.local
+      args:
+        GITHUB_AUTH_TOKEN: ${GITHUB_AUTH_TOKEN:-}
+    container_name: local-agent-manager
+    hostname: agent-manager
+    environment:
+      NODE_ENV: development
+      PORT: 3001
+      # API URLs - use nginx proxy paths for CORS compliance
+      NEXT_PUBLIC_AGENT_API_URL: https://localhost/api/agent
+      NEXT_PUBLIC_INGEST_API_URL: https://localhost/api/ingest
+      NEXT_PUBLIC_SEARCH_API_URL: https://localhost/api/search
+      # AI Portal (SSO) via nginx
+      NEXT_PUBLIC_AI_PORTAL_URL: https://localhost/portal
+      # AuthZ - internal container URL
+      AUTHZ_BASE_URL: http://authz-api:8010
+      AUTHZ_CLIENT_ID: ${AGENT_MANAGER_CLIENT_ID:-agent-manager}
+      AUTHZ_CLIENT_SECRET: ${AGENT_MANAGER_CLIENT_SECRET:-agent-manager-secret}
+      # Base path for nginx subpath routing
+      NEXT_PUBLIC_BASE_PATH: /agents
+      NEXT_PUBLIC_APP_URL: https://localhost/agents
+    ports:
+      - "3001:3001"
+    volumes:
+      - ../agent-manager:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      authz-api:
+        condition: service_healthy
+      # agent-api excluded - has schema issue
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    networks:
+      - busibox-net
+
+# ===========================================================================
+  # NGINX REVERSE PROXY
+  # ===========================================================================
+
+  # Nginx - Reverse Proxy (routes traffic to all services)
+  nginx:
+    image: nginx:alpine
+    container_name: local-nginx
+    hostname: nginx
     ports:
       - "80:80"
       - "443:443"
+    volumes:
+      - ./config/nginx-local.conf:/etc/nginx/nginx.conf:ro
+      - ./config/nginx-sites:/etc/nginx/conf.d:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      authz-api:
+        condition: service_healthy
+      ingest-api:
+        condition: service_healthy
+      search-api:
+        condition: service_healthy
+      agent-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 10s
+      retries: 3
     networks:
-      local-net:
-        ipv4_address: 172.20.0.16
-    command: /sbin/init
+      - busibox-net
+
+# ===========================================================================
+# VOLUMES
+# ===========================================================================
 
 volumes:
   postgres_data:
+  redis_data:
   minio_data:
+  etcd_data:
+  milvus_minio_data:
   milvus_data:
+  ingest_temp:
+
+# ===========================================================================
+# NETWORKS
+# ===========================================================================
 
 networks:
-  local-net:
+  busibox-net:
     driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/24
-
-
-
-
-
-
-
-
-
+    name: busibox-local

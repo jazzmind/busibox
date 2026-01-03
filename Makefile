@@ -1,4 +1,5 @@
-.PHONY: menu help setup configure deploy test test-local test-security mcp
+.PHONY: menu help setup configure deploy test test-local test-security mcp \
+        docker-up docker-down docker-restart docker-build docker-logs docker-ps docker-test docker-clean
 
 # Default target - interactive menu
 .DEFAULT_GOAL := menu
@@ -19,6 +20,10 @@ FAST ?=
 # WORKER mode: start local ingest worker for integration tests
 # - Set WORKER=1 to start a local worker for full pipeline tests
 WORKER ?=
+
+# Docker compose configuration
+COMPOSE_FILE := docker-compose.local.yml
+ENV_FILE := .env.local
 
 # Interactive menu (default when running just 'make')
 menu:
@@ -66,14 +71,44 @@ help:
 	@echo "  mcp           - Build MCP server for Cursor AI"
 	@echo "  help          - Show this help message"
 	@echo ""
-	@echo "Testing (on containers):"
+	@echo "═══════════════════════════════════════════════════════════════════════"
+	@echo "                    LOCAL DOCKER DEVELOPMENT"
+	@echo "═══════════════════════════════════════════════════════════════════════"
+	@echo ""
+	@echo "Docker commands for local development (mirrors Proxmox environment):"
+	@echo ""
+	@echo "  make docker-up                              # Start all services"
+	@echo "  make docker-up SERVICE=authz-api            # Start specific service"
+	@echo "  make docker-down                            # Stop all services"
+	@echo "  make docker-restart                         # Restart all services"
+	@echo "  make docker-restart SERVICE=authz-api       # Restart specific service"
+	@echo "  make docker-build                           # Build all images"
+	@echo "  make docker-build SERVICE=authz-api         # Build specific image"
+	@echo "  make docker-logs                            # View all logs"
+	@echo "  make docker-logs SERVICE=authz-api          # View specific logs"
+	@echo "  make docker-ps                              # Show service status"
+	@echo "  make docker-test SERVICE=authz              # Run tests against Docker"
+	@echo "  make docker-test SERVICE=all                # Run all tests"
+	@echo "  make docker-clean                           # Remove containers & volumes"
+	@echo ""
+	@echo "Docker Quick Start:"
+	@echo "  1. make docker-build                        # Build all images"
+	@echo "  2. make docker-up                           # Start all services"
+	@echo "  3. make docker-test SERVICE=authz           # Verify authz works"
+	@echo "  4. make docker-logs                         # View logs"
+	@echo ""
+	@echo "═══════════════════════════════════════════════════════════════════════"
+	@echo "                    PROXMOX DEPLOYMENT"
+	@echo "═══════════════════════════════════════════════════════════════════════"
+	@echo ""
+	@echo "Testing (on Proxmox containers):"
 	@echo "  make test                                 # Interactive menu"
 	@echo "  make test SERVICE=authz INV=test          # Run authz tests on test containers"
 	@echo "  make test SERVICE=ingest INV=test         # Run ingest tests on test containers"
 	@echo "  make test SERVICE=search INV=test         # Run search tests on test containers"
 	@echo "  make test SERVICE=agent INV=test          # Run agent tests on test containers"
 	@echo ""
-	@echo "Local Testing (run tests on your machine against container backends):"
+	@echo "Local Testing (run tests on your machine against Proxmox backends):"
 	@echo "  make test SERVICE=authz INV=test MODE=local  # Run authz tests locally"
 	@echo "  make test-local SERVICE=authz INV=test       # Same as above (shorthand)"
 	@echo "  make test-local SERVICE=ingest INV=test      # Run ingest tests locally"
@@ -95,7 +130,7 @@ help:
 	@echo "      test (on containers) runs ALL tests by default"
 	@echo "      WORKER=1 starts a local ingest worker for full pipeline tests"
 	@echo ""
-	@echo "Quick Start:"
+	@echo "Quick Start (Proxmox):"
 	@echo "  1. make setup      # On Proxmox host"
 	@echo "  2. make configure  # Configure models/GPUs"
 	@echo "  3. make deploy     # Deploy services"
@@ -155,3 +190,98 @@ test-security:
 
 mcp:
 	@bash scripts/make/mcp.sh
+
+# =============================================================================
+# DOCKER LOCAL DEVELOPMENT
+# =============================================================================
+# These commands manage the local Docker development environment.
+# This mirrors the Proxmox deployment but runs everything in Docker.
+
+# Start all Docker services (infrastructure + APIs)
+# Usage: make docker-up
+#        make docker-up SERVICE=authz-api  # Start specific service
+docker-up:
+	@if [ ! -f $(ENV_FILE) ]; then \
+		echo "Creating $(ENV_FILE) from env.local.example..."; \
+		cp env.local.example $(ENV_FILE); \
+		echo "Edit $(ENV_FILE) to add your API keys (OPENAI_API_KEY, etc.)"; \
+	fi
+ifdef SERVICE
+	docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) up -d $(SERVICE)
+else
+	docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) up -d
+endif
+	@echo ""
+	@echo "Services started. Use 'make docker-ps' to check status."
+	@echo "Use 'make docker-logs' to view logs."
+
+# Stop all Docker services
+# Usage: make docker-down
+docker-down:
+	docker compose -f $(COMPOSE_FILE) down
+
+# Restart Docker services
+# Usage: make docker-restart                    # Restart all
+#        make docker-restart SERVICE=authz-api  # Restart specific service
+docker-restart:
+ifdef SERVICE
+	docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) restart $(SERVICE)
+else
+	docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) restart
+endif
+
+# Build Docker images
+# Usage: make docker-build                    # Build all
+#        make docker-build SERVICE=authz-api  # Build specific service
+docker-build:
+ifdef SERVICE
+	docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) build $(SERVICE)
+else
+	docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) build
+endif
+
+# View Docker logs
+# Usage: make docker-logs                    # All services
+#        make docker-logs SERVICE=authz-api  # Specific service
+docker-logs:
+ifdef SERVICE
+	docker compose -f $(COMPOSE_FILE) logs -f $(SERVICE)
+else
+	docker compose -f $(COMPOSE_FILE) logs -f
+endif
+
+# Show Docker service status
+docker-ps:
+	docker compose -f $(COMPOSE_FILE) ps
+
+# Run tests against local Docker environment
+# Usage: make docker-test SERVICE=authz                    # Run all authz tests
+#        make docker-test SERVICE=authz ARGS="-m pvt"      # Run only PVT tests
+#        make docker-test SERVICE=authz ARGS="-k health"   # Run tests matching 'health'
+#        make docker-test SERVICE=authz FAST=0             # Run all tests (no FAST filter)
+#        make docker-test SERVICE=all                      # Run all service tests
+# Note: FAST=1 by default skips @slow/@gpu tests UNLESS you specify -m in ARGS
+docker-test:
+ifndef SERVICE
+	@echo "Error: SERVICE is required"
+	@echo "Usage: make docker-test SERVICE=authz"
+	@echo "       make docker-test SERVICE=authz ARGS=\"-m pvt\""
+	@echo "       make docker-test SERVICE=authz ARGS=\"-k health\""
+	@echo "       make docker-test SERVICE=authz FAST=0  # run ALL tests"
+	@echo ""
+	@echo "Available services: authz, ingest, search, agent, all"
+	@echo "Note: FAST=1 (default) skips @slow/@gpu tests unless you specify -m in ARGS"
+	@exit 1
+endif
+	@FAST=$${FAST:-1} INV=docker bash scripts/test/run-local-tests.sh $(SERVICE) docker $(ARGS)
+
+# Clean up Docker environment (removes containers and volumes)
+docker-clean:
+	@echo "WARNING: This will remove all containers and volumes (all data will be lost)!"
+	@read -p "Are you sure? (y/N) " confirm; \
+	if [ "$$confirm" = "y" ] || [ "$$confirm" = "Y" ]; then \
+		docker compose -f $(COMPOSE_FILE) down -v --remove-orphans; \
+		echo "Cleanup complete."; \
+	else \
+		echo "Cancelled."; \
+	fi

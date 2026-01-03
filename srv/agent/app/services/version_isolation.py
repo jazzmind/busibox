@@ -60,7 +60,7 @@ async def capture_definition_snapshot(
         "model": agent.model,
         "instructions": agent.instructions,
         "tools": agent.tools,
-        "workflow": agent.workflow,
+        "workflows": agent.workflows,
         "scopes": agent.scopes,
         "version": agent.version,
         "is_builtin": agent.is_builtin,

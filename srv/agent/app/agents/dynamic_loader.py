@@ -100,7 +100,7 @@ async def register_agent(
         model=payload.model,
         instructions=payload.instructions,
         tools=payload.tools,
-        workflow=payload.workflow,
+        workflows=payload.workflows,
         scopes=payload.scopes,
         is_active=payload.is_active,
         is_builtin=is_builtin,

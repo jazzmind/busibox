@@ -1377,6 +1377,88 @@ run_container_tests() {
     esac
 }
 
+# Docker test menu (for local Docker environment)
+docker_test_menu() {
+    while true; do
+        echo ""
+        menu "Docker Test Suite - Local Development" \
+            "Authz - Run authz tests" \
+            "Ingest - Run ingest tests" \
+            "Search - Run search tests" \
+            "Agent - Run agent tests" \
+            "All Services - Run all tests" \
+            "Check Docker Services Status" \
+            "View Docker Logs" \
+            "Exit"
+        
+        read -p "$(echo -e "${BOLD}Select option [1-8]:${NC} ")" choice
+        
+        case $choice in
+            1)
+                header "Docker Authz Tests" 70
+                echo ""
+                info "Running authz tests against local Docker services..."
+                echo ""
+                bash "${REPO_ROOT}/scripts/test/run-local-tests.sh" authz docker || true
+                pause
+                ;;
+            2)
+                header "Docker Ingest Tests" 70
+                echo ""
+                info "Running ingest tests against local Docker services..."
+                echo ""
+                bash "${REPO_ROOT}/scripts/test/run-local-tests.sh" ingest docker || true
+                pause
+                ;;
+            3)
+                header "Docker Search Tests" 70
+                echo ""
+                info "Running search tests against local Docker services..."
+                echo ""
+                bash "${REPO_ROOT}/scripts/test/run-local-tests.sh" search docker || true
+                pause
+                ;;
+            4)
+                header "Docker Agent Tests" 70
+                echo ""
+                info "Running agent tests against local Docker services..."
+                echo ""
+                bash "${REPO_ROOT}/scripts/test/run-local-tests.sh" agent docker || true
+                pause
+                ;;
+            5)
+                header "All Docker Tests" 70
+                echo ""
+                warn "This will run all service tests. May take a while."
+                if confirm "Continue?"; then
+                    bash "${REPO_ROOT}/scripts/test/run-local-tests.sh" all docker || true
+                fi
+                pause
+                ;;
+            6)
+                header "Docker Services Status" 70
+                echo ""
+                docker compose -f "${REPO_ROOT}/docker-compose.local.yml" ps
+                echo ""
+                pause
+                ;;
+            7)
+                header "Docker Service Logs" 70
+                echo ""
+                info "Showing last 50 lines of logs (press Ctrl+C to stop)..."
+                echo ""
+                docker compose -f "${REPO_ROOT}/docker-compose.local.yml" logs --tail=50 -f || true
+                ;;
+            8)
+                return 0
+                ;;
+            *)
+                error "Invalid selection. Please enter 1-8."
+                ;;
+        esac
+    done
+}
+
 # Main function
 main() {
     # Check for command-line arguments for non-interactive mode
@@ -1393,7 +1475,8 @@ main() {
         info "Service: $service | Environment: $env | Mode: $mode"
         echo ""
         
-        if [[ "$mode" == "local" ]]; then
+        # Docker environment always runs locally against Docker containers
+        if [[ "$env" == "docker" ]] || [[ "$mode" == "local" ]]; then
             info "Running local tests for $service on $env..."
             bash "${REPO_ROOT}/scripts/test/run-local-tests.sh" "$service" "$env"
             exit $?
@@ -1417,8 +1500,12 @@ main() {
     
     success "Selected environment: $ENV"
     
-    # Show test menu
-    main_menu "$ENV"
+    # Show test menu based on environment type
+    if [[ "$ENV" == "docker" ]]; then
+        docker_test_menu
+    else
+        main_menu "$ENV"
+    fi
     
     echo ""
     box "Testing Complete" 70

@@ -94,8 +94,12 @@ def admin_headers():
 
 
 @pytest.fixture
-async def test_role(db_pool):
-    """Create a test role and clean it up after the test."""
+async def test_role(db_pool, clean_test_data):
+    """Create a test role and clean it up after the test.
+    
+    Depends on clean_test_data to ensure old test data is cleaned up
+    before we create new test data.
+    """
     role_id = uuid.uuid4()
     role_name = f"TestRole_{role_id}"
     
@@ -119,8 +123,12 @@ async def test_role(db_pool):
 
 
 @pytest.fixture
-async def test_user(db_pool):
-    """Create a test user and clean it up after the test."""
+async def test_user(db_pool, clean_test_data):
+    """Create a test user and clean it up after the test.
+    
+    Depends on clean_test_data to ensure old test data is cleaned up
+    before we create new test data.
+    """
     user_id = uuid.uuid4()
     email = f"test_{user_id}@test.example.com"
     

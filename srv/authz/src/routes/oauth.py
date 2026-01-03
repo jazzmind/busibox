@@ -36,6 +36,36 @@ def set_pg_service(pg_service):
     _pg = pg_service
 
 
+async def _ensure_bootstrap_roles() -> None:
+    """
+    Ensure essential roles exist (Admin, User).
+    These roles are created if they don't exist.
+    """
+    # Define essential roles with their scopes/permissions
+    essential_roles = [
+        {
+            "name": "Admin",
+            "description": "Full administrative access",
+            "scopes": ["admin.*", "users.*", "roles.*", "apps.*", "libraries.*", "ingest.*", "search.*", "agent.*"],
+        },
+        {
+            "name": "User", 
+            "description": "Standard user access",
+            "scopes": ["search.read", "ingest.read", "agent.execute"],
+        },
+    ]
+    
+    for role_def in essential_roles:
+        existing = await _pg.get_role_by_name(role_def["name"])
+        if not existing:
+            created = await _pg.create_role(
+                name=role_def["name"],
+                description=role_def["description"],
+                scopes=role_def["scopes"],
+            )
+            logger.info("Bootstrapped role", role_name=role_def["name"], role_id=created.get("id"))
+
+
 async def _ensure_bootstrap() -> None:
     """
     Ensure authz has at least one active signing key and (optionally) a bootstrap OAuth client.
@@ -76,6 +106,9 @@ async def _ensure_bootstrap() -> None:
                 is_active=True,
             )
             logger.info("Bootstrapped authz OAuth client", client_id=config.bootstrap_client_id)
+    
+    # 3) bootstrap essential roles
+    await _ensure_bootstrap_roles()
 
 
 async def _require_client(client_id: str, client_secret: str) -> dict:
