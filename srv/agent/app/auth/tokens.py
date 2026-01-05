@@ -88,6 +88,34 @@ def _extract_scopes(claims: Dict) -> List[str]:
     return []
 
 
+def _extract_roles(claims: Dict) -> List[str]:
+    """
+    Extract role IDs from claims.
+    
+    The authz service returns roles as objects: [{"id": "...", "name": "..."}]
+    but the Principal model expects a list of strings (role IDs).
+    
+    This function handles both formats for backward compatibility.
+    """
+    roles_claim = claims.get("roles", [])
+    if not roles_claim:
+        return []
+    
+    roles: List[str] = []
+    for role in roles_claim:
+        if isinstance(role, str):
+            # Already a string (role ID or name)
+            roles.append(role)
+        elif isinstance(role, dict):
+            # Role object from authz: {"id": "...", "name": "..."}
+            # Prefer ID if available, fall back to name
+            role_id = role.get("id") or role.get("name")
+            if role_id:
+                roles.append(str(role_id))
+    
+    return roles
+
+
 async def validate_bearer(token: str) -> Principal:
     jwks = await jwks_cache.get()
     claims = await _verify_signature(token, jwks)
@@ -113,7 +141,7 @@ async def validate_bearer(token: str) -> Principal:
     principal = Principal(
         sub=sub,
         scopes=_extract_scopes(claims),
-        roles=claims.get("roles", []),
+        roles=_extract_roles(claims),
         email=claims.get("email"),
         token=token,
     )

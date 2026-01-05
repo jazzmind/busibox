@@ -64,7 +64,8 @@ class AgentExecutionResult:
         success: bool,
         output: str,
         metadata: Optional[Dict[str, Any]] = None,
-        error: Optional[str] = None
+        error: Optional[str] = None,
+        agent_name: Optional[str] = None
     ):
         self.agent_id = agent_id
         self.run_id = run_id
@@ -72,10 +73,11 @@ class AgentExecutionResult:
         self.output = output
         self.metadata = metadata or {}
         self.error = error
+        self.agent_name = agent_name
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
-        return {
+        result = {
             "agent_id": self.agent_id,
             "run_id": str(self.run_id),
             "success": self.success,
@@ -83,6 +85,9 @@ class AgentExecutionResult:
             "metadata": self.metadata,
             "error": self.error
         }
+        if self.agent_name:
+            result["agent_name"] = self.agent_name
+        return result
 
 
 class ChatExecutionResult:
@@ -320,12 +325,13 @@ async def execute_agent(
         agent_uuid = uuid.UUID(agent_id) if isinstance(agent_id, str) else agent_id
         
         # Check if agent uses tools to determine if we need token exchange
-        # Get agent definition to check for tools
+        # Get agent definition to check for tools and get agent name
         from app.models.domain import AgentDefinition
         from sqlalchemy import select
         from app.services.builtin_agents import get_builtin_agent_definitions
         
         needs_token_exchange = True  # Default to needing it
+        agent_name = None  # Track agent name for response
         
         # Check built-in agents first
         builtin_defs = get_builtin_agent_definitions()
@@ -334,6 +340,7 @@ async def execute_agent(
                 # Check if this built-in has tools
                 tool_names = builtin_def.tools.get("names", []) if builtin_def.tools else []
                 needs_token_exchange = len(tool_names) > 0
+                agent_name = builtin_def.display_name or builtin_def.name
                 break
         else:
             # Not a built-in, check database
@@ -343,6 +350,7 @@ async def execute_agent(
             if db_def:
                 tool_names = db_def.tools.get("names", []) if db_def.tools else []
                 needs_token_exchange = len(tool_names) > 0
+                agent_name = db_def.display_name or db_def.name
         
         # Set scopes based on whether agent uses tools
         if needs_token_exchange:
@@ -425,7 +433,8 @@ async def execute_agent(
                 "events": run_record.events or [],
                 "timestamp": datetime.now(timezone.utc).isoformat()
             },
-            error=error
+            error=error,
+            agent_name=agent_name
         )
         
     except Exception as e:
@@ -435,7 +444,7 @@ async def execute_agent(
             exc_info=True
         )
         
-        # Return error result with a generated run_id
+        # Return error result with a generated run_id (agent_name may not be available on error)
         return AgentExecutionResult(
             agent_id=agent_id,
             run_id=uuid.uuid4(),
@@ -521,10 +530,11 @@ async def synthesize_response(
     
     # Add agent results
     for result in agent_results:
+        agent_label = result.agent_name if result.agent_name else f"Agent {result.agent_id}"
         if result.success:
-            context_parts.append(f"**Agent {result.agent_id} Output:**\n{result.output}")
+            context_parts.append(f"**{agent_label}:**\n{result.output}")
         else:
-            context_parts.append(f"**Agent {result.agent_id}:** {result.error}")
+            context_parts.append(f"**{agent_label}:** {result.error}")
     
     if not context_parts:
         return "I wasn't able to gather information to answer your question. Please try rephrasing or enabling additional tools."

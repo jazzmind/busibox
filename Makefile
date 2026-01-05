@@ -1,5 +1,5 @@
 .PHONY: menu help setup configure deploy test test-local test-security mcp \
-        docker-up docker-down docker-restart docker-build docker-logs docker-ps docker-test docker-clean
+        docker-up docker-down docker-restart docker-build docker-logs docker-ps docker-test docker-clean ssl-check
 
 # Default target - interactive menu
 .DEFAULT_GOAL := menu
@@ -77,13 +77,14 @@ help:
 	@echo ""
 	@echo "Docker commands for local development (mirrors Proxmox environment):"
 	@echo ""
-	@echo "  make docker-up                              # Start all services"
+	@echo "  make docker-up                              # Start backend services"
 	@echo "  make docker-up SERVICE=authz-api            # Start specific service"
 	@echo "  make docker-down                            # Stop all services"
 	@echo "  make docker-restart                         # Restart all services"
 	@echo "  make docker-restart SERVICE=authz-api       # Restart specific service"
-	@echo "  make docker-build                           # Build all images"
+	@echo "  make docker-build                           # Build backend images (cached)"
 	@echo "  make docker-build SERVICE=authz-api         # Build specific image"
+	@echo "  make docker-build NO_CACHE=1                # Force rebuild without cache"
 	@echo "  make docker-logs                            # View all logs"
 	@echo "  make docker-logs SERVICE=authz-api          # View specific logs"
 	@echo "  make docker-ps                              # Show service status"
@@ -91,11 +92,12 @@ help:
 	@echo "  make docker-test SERVICE=all                # Run all tests"
 	@echo "  make docker-clean                           # Remove containers & volumes"
 	@echo ""
-	@echo "Docker Quick Start:"
-	@echo "  1. make docker-build                        # Build all images"
-	@echo "  2. make docker-up                           # Start all services"
-	@echo "  3. make docker-test SERVICE=authz           # Verify authz works"
-	@echo "  4. make docker-logs                         # View logs"
+	@echo "Docker Quick Start (Hybrid Mode - Recommended):"
+	@echo "  1. make docker-build                        # Build backend images"
+	@echo "  2. make docker-up                           # Start backend services"
+	@echo "  3. cd ../ai-portal && npm run dev           # Run frontend locally"
+	@echo "  4. cd ../agent-manager && npm run dev       # Run agent-manager locally"
+	@echo "  5. Open https://localhost/portal            # Access via nginx"
 	@echo ""
 	@echo "═══════════════════════════════════════════════════════════════════════"
 	@echo "                    PROXMOX DEPLOYMENT"
@@ -230,14 +232,30 @@ else
 	docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) restart
 endif
 
-# Build Docker images
-# Usage: make docker-build                    # Build all
+# Ensure SSL certificates exist for local nginx
+ssl-check:
+	@if [ ! -f ssl/localhost.crt ] || [ ! -f ssl/localhost.key ]; then \
+		echo "[INFO] SSL certificates not found, generating..."; \
+		bash scripts/setup/generate-local-ssl.sh; \
+	fi
+
+# Build Docker images (uses Docker layer cache by default for speed)
+# Usage: make docker-build                    # Build all (cached)
 #        make docker-build SERVICE=authz-api  # Build specific service
-docker-build:
+#        make docker-build NO_CACHE=1         # Force rebuild without cache
+docker-build: ssl-check
 ifdef SERVICE
+ifdef NO_CACHE
+	docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) build --no-cache $(SERVICE)
+else
 	docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) build $(SERVICE)
+endif
+else
+ifdef NO_CACHE
+	docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) build --no-cache
 else
 	docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) build
+endif
 endif
 
 # View Docker logs

@@ -2,52 +2,51 @@
 # Busibox Local Development Environment
 # =============================================================================
 #
-# A complete local Docker environment that mirrors the Proxmox deployment.
-# This is the recommended way to develop locally without deploying to Proxmox.
+# A local Docker environment for backend services. Next.js frontends run
+# locally with `npm run dev` for faster iteration (hot-reload, debugging).
 #
-# Services included:
-#   - PostgreSQL (shared database)
-#   - MinIO (object storage)
-#   - Milvus (vector database)
-#   - Redis (job queue)
-#   - AuthZ API (authentication/authorization)
-#   - Ingest API (document processing)
-#   - Search API (semantic search)
-#   - Agent API (AI agents)
-#   - AI Portal (Next.js frontend)
-#   - Agent Manager (agent management UI)
+# HYBRID MODE (default) - Recommended for development:
+#   - Backend services (APIs, databases) run in Docker
+#   - Frontend apps run locally with `npm run dev`
+#   - Nginx proxies to host.docker.internal for frontends
+#
+# FULL DOCKER MODE - For testing the complete stack:
+#   - Use `--profile full` to include frontend containers
+#   - docker compose --profile full -f docker-compose.local.yml up
+#
+# Services (default profile):
+#   - PostgreSQL, MinIO, Milvus, Redis (infrastructure)
+#   - AuthZ, Ingest, Search, Agent APIs (Python services)
 #   - LiteLLM (LLM gateway)
+#   - Nginx (reverse proxy)
+#
+# Services (full profile adds):
+#   - AI Portal (Next.js) - better to run locally with npm
+#   - Agent Manager (Next.js) - better to run locally with npm
 #
 # HOT-RELOAD SUPPORT:
-#   Python API services (authz-api, ingest-api, search-api, agent-api) support
-#   hot-reload. Code changes are automatically detected and the service restarts.
-#   No need to rebuild containers when editing Python source code!
-#
-#   Note: You still need to rebuild if you:
-#     - Change requirements.txt (add/remove dependencies)
-#     - Modify Dockerfile
-#     - Change non-mounted files (e.g., alembic migrations for agent-api)
+#   Python API services support hot-reload. Code changes auto-restart.
+#   Note: Rebuild needed if you change requirements.txt or Dockerfile.
 #
 # Usage:
-#   # Start all infrastructure services
-#   docker compose -f docker-compose.local.yml up -d
+#   # Start backend services (hybrid mode - run Next.js locally)
+#   make docker-up
+#   cd ../ai-portal && npm run dev      # in another terminal
+#   cd ../agent-manager && npm run dev  # in another terminal
+#
+#   # Full Docker mode (everything containerized)
+#   docker compose --profile full -f docker-compose.local.yml up -d
 #
 #   # View logs
-#   docker compose -f docker-compose.local.yml logs -f
+#   make docker-logs
 #
 #   # Stop all services
-#   docker compose -f docker-compose.local.yml down
-#
-#   # Clean up volumes (WARNING: deletes all data)
-#   docker compose -f docker-compose.local.yml down -v
+#   make docker-down
 #
 # Configuration:
 #   Copy .env.local.example to .env.local and configure your settings.
-#   The compose file will automatically load .env.local
 #
 # =============================================================================
-
-version: '3.8'
 
 services:
   # ===========================================================================
@@ -406,8 +405,8 @@ services:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/')"]
       interval: 10s
       timeout: 5s
-      start_period: 60s
-      retries: 3
+      start_period: 120s  # Allow time for sentence-transformers model download on first run
+      retries: 5
     networks:
       - busibox-net
 
@@ -475,7 +474,10 @@ services:
   # ===========================================================================
 
   # AI Portal - Main Frontend
+  # NOTE: For local dev, run this with `npm run dev` instead of Docker.
+  # Only use this container for full-stack Docker testing.
   ai-portal:
+    profiles: ["full"]  # Only starts with: docker compose --profile full up
     build:
       context: ../ai-portal
       dockerfile: Dockerfile.local
@@ -534,7 +536,10 @@ services:
       - busibox-net
 
   # Agent Manager - Agent Management UI
+  # NOTE: For local dev, run this with `npm run dev` instead of Docker.
+  # Only use this container for full-stack Docker testing.
   agent-manager:
+    profiles: ["full"]  # Only starts with: docker compose --profile full up
     build:
       context: ../agent-manager
       dockerfile: Dockerfile.local
@@ -582,6 +587,7 @@ services:
   # ===========================================================================
 
   # Nginx - Reverse Proxy (routes traffic to all services)
+  # In hybrid mode (default), proxies to locally-running Next.js apps on host ports
   nginx:
     image: nginx:alpine
     container_name: local-nginx
@@ -593,6 +599,8 @@ services:
       - ./config/nginx-local.conf:/etc/nginx/nginx.conf:ro
       - ./config/nginx-sites:/etc/nginx/conf.d:ro
       - ./ssl:/etc/nginx/ssl:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # Access host's localhost from container
     depends_on:
       authz-api:
         condition: service_healthy

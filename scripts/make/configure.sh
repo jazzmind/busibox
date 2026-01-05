@@ -544,6 +544,92 @@ container_configuration() {
     done
 }
 
+# App Configuration Menu (ai-portal, agent-manager)
+app_configuration() {
+    while true; do
+        echo ""
+        menu "App Configuration (ai-portal, agent-manager)" \
+            "Run All App Setup (recommended)" \
+            "Activate Admin User" \
+            "Fix Built-in Apps (Video, Chat, Documents)" \
+            "Register AuthZ Clients" \
+            "Back to Main Menu"
+        
+        read -p "$(echo -e "${BOLD}Select option [1-5]:${NC} ")" choice
+        
+        case $choice in
+            1)
+                header "Full App Configuration" 70
+                echo ""
+                info "This will:"
+                echo "  1. Activate the admin user"
+                echo "  2. Fix built-in apps (Video Generator, AI Chat, Document Manager)"
+                echo "  3. Register AuthZ clients for ai-portal and agent-manager"
+                echo ""
+                
+                if confirm "Run full app configuration?"; then
+                    bash "${REPO_ROOT}/scripts/setup/configure-apps.sh" --all || {
+                        error "App configuration failed"
+                    }
+                fi
+                pause
+                ;;
+            2)
+                header "Activate Admin User" 70
+                echo ""
+                info "This will activate the first user in the database as admin"
+                echo ""
+                
+                if confirm "Activate admin user?"; then
+                    bash "${REPO_ROOT}/scripts/setup/configure-apps.sh" --admin || {
+                        error "Admin activation failed"
+                    }
+                fi
+                pause
+                ;;
+            3)
+                header "Fix Built-in Apps" 70
+                echo ""
+                info "This will ensure built-in apps are properly configured:"
+                echo "  - Video Generator"
+                echo "  - AI Chat"
+                echo "  - Document Manager"
+                echo ""
+                
+                if confirm "Fix built-in apps?"; then
+                    bash "${REPO_ROOT}/scripts/setup/configure-apps.sh" --apps || {
+                        error "Built-in apps fix failed"
+                    }
+                fi
+                pause
+                ;;
+            4)
+                header "Register AuthZ Clients" 70
+                echo ""
+                info "This will register OAuth clients with the AuthZ service:"
+                echo "  - ai-portal (for token exchange)"
+                echo "  - agent-manager (for agent API access)"
+                echo ""
+                info "This also updates .env files with the generated secrets"
+                echo ""
+                
+                if confirm "Register AuthZ clients?"; then
+                    bash "${REPO_ROOT}/scripts/setup/configure-apps.sh" --authz || {
+                        error "AuthZ client registration failed"
+                    }
+                fi
+                pause
+                ;;
+            5)
+                return 0
+                ;;
+            *)
+                error "Invalid selection. Please enter 1-5."
+                ;;
+        esac
+    done
+}
+
 # Secrets Configuration Menu
 secrets_configuration() {
     while true; do
@@ -612,11 +698,12 @@ main_menu() {
             "Verify Configuration (recommended first step)" \
             "Model Configuration" \
             "Container Configuration" \
+            "App Configuration (ai-portal, agent-manager)" \
             "Secrets & Configuration" \
             "Change Environment" \
             "Exit"
         
-        read -p "$(echo -e "${BOLD}Select option [1-6]:${NC} ")" choice
+        read -p "$(echo -e "${BOLD}Select option [1-7]:${NC} ")" choice
         
         case $choice in
             1)
@@ -630,21 +717,24 @@ main_menu() {
                 container_configuration
                 ;;
             4)
-                secrets_configuration
+                app_configuration
                 ;;
             5)
+                secrets_configuration
+                ;;
+            6)
                 SELECTED_ENV=""
                 SELECTED_ENV=$(select_environment)
                 success "Changed to: $SELECTED_ENV"
                 pause
                 ;;
-            6)
+            7)
                 echo ""
                 info "Exiting..."
                 exit 0
                 ;;
             *)
-                error "Invalid selection. Please enter 1-6."
+                error "Invalid selection. Please enter 1-7."
                 ;;
         esac
     done
@@ -655,26 +745,87 @@ SELECTED_ENV=$(select_environment)
 success "Selected environment: $SELECTED_ENV"
 echo ""
 
+# Docker/Local environment menu
+docker_menu() {
+    while true; do
+        echo ""
+        menu "Docker/Local Development Configuration" \
+            "App Configuration (ai-portal, agent-manager)" \
+            "Docker Service Commands" \
+            "Edit .env.local" \
+            "Exit"
+        
+        read -p "$(echo -e "${BOLD}Select option [1-4]:${NC} ")" choice
+        
+        case $choice in
+            1)
+                app_configuration
+                ;;
+            2)
+                echo ""
+                info "Docker commands available via make:"
+                echo ""
+                echo "  make docker-build           # Build all images"
+                echo "  make docker-up              # Start all services"
+                echo "  make docker-down            # Stop all services"
+                echo "  make docker-restart         # Restart all services"
+                echo "  make docker-ps              # Check service status"
+                echo "  make docker-logs            # View logs"
+                echo "  make docker-test SERVICE=X  # Run tests"
+                echo "  make docker-clean           # Remove containers & volumes"
+                echo ""
+                info "Configuration files:"
+                echo "  - docker-compose.local.yml  (service definitions)"
+                echo "  - .env.local                (environment variables)"
+                echo "  - config/                   (configuration files)"
+                echo ""
+                pause
+                ;;
+            3)
+                header "Edit .env.local" 70
+                local env_file="${REPO_ROOT}/.env.local"
+                if [ ! -f "$env_file" ]; then
+                    warn ".env.local not found, creating from template..."
+                    if [ -f "${REPO_ROOT}/env.local.example" ]; then
+                        cp "${REPO_ROOT}/env.local.example" "$env_file"
+                        success "Created .env.local from template"
+                    else
+                        error "env.local.example not found"
+                        pause
+                        continue
+                    fi
+                fi
+                
+                # Try to open with available editor
+                if [ -n "${EDITOR:-}" ]; then
+                    $EDITOR "$env_file"
+                elif command -v nano &> /dev/null; then
+                    nano "$env_file"
+                elif command -v vim &> /dev/null; then
+                    vim "$env_file"
+                else
+                    error "No editor found. Set EDITOR environment variable."
+                    info "File location: $env_file"
+                fi
+                pause
+                ;;
+            4)
+                echo ""
+                info "Exiting..."
+                exit 0
+                ;;
+            *)
+                error "Invalid selection. Please enter 1-4."
+                ;;
+        esac
+    done
+}
+
 # Handle Docker environment
 if [[ "$SELECTED_ENV" == "docker" ]]; then
-    info "Docker environment selected"
+    info "Docker/Local development environment selected"
     echo ""
-    info "Docker configuration is managed via:"
-    echo "  - docker-compose.local.yml  (service definitions)"
-    echo "  - .env.local                (environment variables)"
-    echo "  - config/                   (configuration files)"
-    echo ""
-    info "Key commands:"
-    echo "  make docker-build           # Build all images"
-    echo "  make docker-up              # Start all services"
-    echo "  make docker-down            # Stop all services"
-    echo "  make docker-ps              # Check service status"
-    echo "  make docker-logs            # View logs"
-    echo ""
-    info "To edit .env.local, run:"
-    echo "  \$EDITOR .env.local"
-    echo ""
-    pause
+    docker_menu
     exit 0
 fi
 
