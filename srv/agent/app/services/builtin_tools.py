@@ -17,7 +17,7 @@ from app.schemas.definitions import ToolDefinitionRead
 BUILTIN_TOOL_METADATA = {
     "web_search_tool": {
         "name": "web_search",
-        "description": "Search the web for current, up-to-date information using DuckDuckGo. Returns titles, URLs, and snippets from search results.",
+        "description": "Search the web for current, up-to-date information. Supports multiple providers (DuckDuckGo, Perplexity, Tavily, Brave). Returns titles, URLs, and snippets from search results.",
         "entrypoint": "app.tools.web_search_tool:search_web",
         "scopes": [],
         "version": 1,
@@ -31,7 +31,7 @@ BUILTIN_TOOL_METADATA = {
                     },
                     "max_results": {
                         "type": "integer",
-                        "description": "Maximum number of results to return (default: 5)",
+                        "description": "Maximum number of results per provider (default: 5). Each enabled provider returns up to this many results.",
                         "default": 5
                     }
                 },
@@ -41,9 +41,11 @@ BUILTIN_TOOL_METADATA = {
                 "type": "object",
                 "properties": {
                     "found": {"type": "boolean", "description": "Whether results were found"},
-                    "result_count": {"type": "integer", "description": "Number of results returned"},
+                    "result_count": {"type": "integer", "description": "Total number of results returned"},
                     "results": {"type": "array", "description": "List of search results"},
                     "query": {"type": "string", "description": "The search query used"},
+                    "providers_used": {"type": "array", "description": "List of providers that returned results"},
+                    "results_per_provider": {"type": "object", "description": "Number of results from each provider"},
                     "error": {"type": "string", "description": "Error message if search failed"}
                 }
             }

@@ -79,6 +79,15 @@ class Settings(BaseSettings):
     # Redis/background tasks
     redis_url: str = Field("redis://localhost:6379/0", description="Redis URL for queues/locks")
 
+    # Web Search Provider Configuration
+    search_duckduckgo_enabled: bool = Field(True, description="Enable DuckDuckGo search (free)")
+    search_tavily_enabled: bool = Field(False, description="Enable Tavily search")
+    tavily_api_key: Optional[str] = Field(None, description="Tavily API key")
+    search_perplexity_enabled: bool = Field(False, description="Enable Perplexity search")
+    perplexity_api_key: Optional[str] = Field(None, description="Perplexity API key")
+    search_brave_enabled: bool = Field(False, description="Enable Brave search")
+    brave_api_key: Optional[str] = Field(None, description="Brave API key")
+
     # CORS
     cors_origins: List[str] = Field(default_factory=lambda: ["*"])
 

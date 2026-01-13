@@ -1,0 +1,95 @@
+---
+# Tailscale Installation and Configuration
+# Created: 2026-01-13
+# Purpose: Install Tailscale mesh VPN for secure remote access
+
+- name: Install required packages
+  ansible.builtin.apt:
+    name:
+      - curl
+      - gnupg
+      - apt-transport-https
+    state: present
+    update_cache: true
+
+- name: Add Tailscale GPG key
+  ansible.builtin.shell: |
+    curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.noarmor.gpg | tee /usr/share/keyrings/tailscale-archive-keyring.gpg > /dev/null
+  args:
+    creates: /usr/share/keyrings/tailscale-archive-keyring.gpg
+
+- name: Add Tailscale repository
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu jammy main"
+    state: present
+    filename: tailscale
+
+- name: Install Tailscale
+  ansible.builtin.apt:
+    name: tailscale
+    state: present
+    update_cache: true
+
+- name: Enable and start tailscaled service
+  ansible.builtin.systemd:
+    name: tailscaled
+    enabled: "{{ tailscale_enabled }}"
+    state: "{{ 'started' if tailscale_started else 'stopped' }}"
+
+- name: Check Tailscale status
+  ansible.builtin.command: tailscale status --json
+  register: tailscale_status
+  changed_when: false
+  failed_when: false
+
+- name: Parse Tailscale status
+  ansible.builtin.set_fact:
+    tailscale_logged_in: "{{ (tailscale_status.stdout | from_json).BackendState == 'Running' }}"
+  when: tailscale_status.rc == 0
+
+- name: Set Tailscale as not logged in
+  ansible.builtin.set_fact:
+    tailscale_logged_in: false
+  when: tailscale_status.rc != 0
+
+- name: Authenticate with Tailscale
+  ansible.builtin.command: >
+    tailscale up
+    --authkey={{ tailscale_auth_key }}
+    --hostname={{ tailscale_hostname }}
+    {% if tailscale_advertise_routes %}--advertise-routes={{ tailscale_routes }}{% endif %}
+    {% if tailscale_exit_node %}--advertise-exit-node{% endif %}
+    {% if tailscale_accept_routes %}--accept-routes{% endif %}
+    {% if tailscale_accept_dns %}--accept-dns{% endif %}
+    {% for tag in tailscale_tags %}--advertise-tags={{ tag }}{% endfor %}
+  when:
+    - not tailscale_logged_in
+    - tailscale_auth_key != ''
+  no_log: true
+
+- name: Display Tailscale IP
+  ansible.builtin.command: tailscale ip -4
+  register: tailscale_ip
+  changed_when: false
+  when: tailscale_logged_in or tailscale_auth_key != ''
+
+- name: Show Tailscale IP address
+  ansible.builtin.debug:
+    msg: "Tailscale IP: {{ tailscale_ip.stdout }}"
+  when: tailscale_ip is defined and tailscale_ip.stdout is defined
+
+- name: Create Tailscale status script
+  ansible.builtin.copy:
+    dest: /usr/local/bin/check-tailscale.sh
+    mode: '0755'
+    content: |
+      #!/bin/bash
+      # Check Tailscale status
+      echo "=== Tailscale Status ==="
+      tailscale status
+      echo ""
+      echo "=== Tailscale IP ==="
+      tailscale ip -4
+      echo ""
+      echo "=== Tailscale DNS ==="
+      tailscale dns status 2>/dev/null || echo "DNS status not available"

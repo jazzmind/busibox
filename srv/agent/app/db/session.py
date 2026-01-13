@@ -1,3 +1,6 @@
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator
+
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config.settings import get_settings
@@ -21,3 +24,16 @@ SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSe
 async def get_session() -> AsyncSession:
     async with SessionLocal() as session:
         yield session
+
+
+@asynccontextmanager
+async def get_session_context() -> AsyncGenerator[AsyncSession, None]:
+    """
+    Context manager for getting a database session outside of FastAPI dependency injection.
+    Use this when you need a session in non-request contexts (e.g., background tasks, tools).
+    """
+    async with SessionLocal() as session:
+        try:
+            yield session
+        finally:
+            await session.close()

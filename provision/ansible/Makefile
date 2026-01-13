@@ -1,4 +1,4 @@
-.PHONY: ping all files pg milvus nginx search search-api agent ingest ingest-api ingest-worker ingest-update-tests apps openwebui deploy-apps deploy-ai-portal deploy-agent-client deploy-doc-intel deploy-foundation deploy-project-analysis deploy-innovation verify verify-health verify-smoke test test-menu test-ingest test-ingest-all test-ingest-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-authz test-apps test-security test-security-auth test-security-injection test-security-fuzz test-all configure generate-token-keys bootstrap-test-creds
+.PHONY: ping all files pg milvus nginx search search-api agent ingest ingest-api ingest-worker ingest-update-tests apps openwebui deploy-apps deploy-ai-portal deploy-agent-client deploy-doc-intel deploy-foundation deploy-project-analysis deploy-innovation verify verify-health verify-smoke test test-menu test-ingest test-ingest-all test-ingest-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-authz test-apps test-security test-security-auth test-security-injection test-security-fuzz test-all configure generate-token-keys bootstrap-test-creds signal-bot tailscale test-signal-bot
 # Default to production inventory (can override with: make all INV=inventory/test)
 INV=inventory/production
 
@@ -94,6 +94,19 @@ apps:
 
 openwebui:
 	ansible-playbook -i $(INV) -l openwebui site.yml $(VAULT_FLAGS)
+
+# Signal Bot (for Signal messenger integration)
+signal-bot:
+	ansible-playbook -i $(INV) -l agent site.yml --tags signal-bot $(VAULT_FLAGS)
+
+# Tailscale VPN (for secure remote access)
+tailscale:
+	ansible-playbook -i $(INV) -l proxy site.yml --tags tailscale $(VAULT_FLAGS)
+
+# Test Signal bot integration
+test-signal-bot:
+	@echo "Testing Signal bot integration on agent container ($(AGENT_IP))..."
+	@ssh root@$(AGENT_IP) 'bash -s' < ../../scripts/test/test-signal-bot.sh
 
 # T029: Deploy applications (runs app_deployer + secrets roles)
 deploy-apps:

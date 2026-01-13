@@ -516,36 +516,81 @@ async def synthesize_response(
     # If we have a single successful agent result with no tools, return it directly
     # (agent already generated a complete response)
     if len(agent_results) == 1 and not tool_results and agent_results[0].success:
-        return agent_results[0].output
+        output = agent_results[0].output
+        # Clean up AgentRunResult wrapper if present
+        if "AgentRunResult(output=" in output:
+            # Extract the actual output from the wrapper
+            import re
+            match = re.search(r"AgentRunResult\(output=['\"](.+)['\"]\)", output, re.DOTALL)
+            if match:
+                output = match.group(1)
+                # Unescape newlines
+                output = output.replace("\\n", "\n")
+        return output
     
-    # Build context from results for multi-step responses
+    # If we have multiple agent results, find the best one
+    # Prefer the most complete/detailed response
+    best_agent_output = None
+    for result in agent_results:
+        if result.success and result.output:
+            output = result.output
+            # Clean up AgentRunResult wrapper if present
+            if "AgentRunResult(output=" in output:
+                import re
+                match = re.search(r"AgentRunResult\(output=['\"](.+)['\"]\)", output, re.DOTALL)
+                if match:
+                    output = match.group(1)
+                    output = output.replace("\\n", "\n")
+            
+            # Pick the longest/most detailed response
+            if best_agent_output is None or len(output) > len(best_agent_output):
+                best_agent_output = output
+    
+    # If we have a good agent response, return it directly
+    if best_agent_output and len(best_agent_output) > 100:
+        return best_agent_output
+    
+    # Build context from results for synthesis
     context_parts = []
     
-    # Add tool results
+    # Add tool results (but not raw output, just summaries)
     for result in tool_results:
         if result.success:
-            context_parts.append(f"**{result.tool_name.replace('_', ' ').title()} Results:**\n{result.output}")
-        else:
-            context_parts.append(f"**{result.tool_name.replace('_', ' ').title()}:** {result.error}")
+            # Truncate long outputs for context
+            output_preview = result.output[:500] if len(result.output) > 500 else result.output
+            context_parts.append(f"[{result.tool_name}]: {output_preview}")
     
     # Add agent results
     for result in agent_results:
-        agent_label = result.agent_name if result.agent_name else f"Agent {result.agent_id}"
-        if result.success:
-            context_parts.append(f"**{agent_label}:**\n{result.output}")
-        else:
-            context_parts.append(f"**{agent_label}:** {result.error}")
+        if result.success and result.output:
+            output = result.output
+            # Clean up wrapper
+            if "AgentRunResult(output=" in output:
+                import re
+                match = re.search(r"AgentRunResult\(output=['\"](.+)['\"]\)", output, re.DOTALL)
+                if match:
+                    output = match.group(1).replace("\\n", "\n")
+            context_parts.append(output)
     
     if not context_parts:
         return "I wasn't able to gather information to answer your question. Please try rephrasing or enabling additional tools."
     
-    # For now, return formatted results
-    # TODO: Use LLM to synthesize a natural response
-    response = f"Based on your query: \"{query}\"\n\n"
-    response += "\n\n".join(context_parts)
-    response += "\n\n---\n*Response synthesized from tool and agent results*"
+    # If we have agent responses, use the best one
+    # If only tool results, summarize them
+    if agent_results and any(r.success for r in agent_results):
+        # Return the best agent response
+        for result in agent_results:
+            if result.success and result.output:
+                output = result.output
+                if "AgentRunResult(output=" in output:
+                    import re
+                    match = re.search(r"AgentRunResult\(output=['\"](.+)['\"]\)", output, re.DOTALL)
+                    if match:
+                        output = match.group(1).replace("\\n", "\n")
+                return output
     
-    return response
+    # Fallback: return tool results with minimal formatting
+    return "\n\n".join(context_parts)
 
 
 async def execute_chat(
@@ -682,6 +727,9 @@ async def execute_chat_stream(
     """
     Execute chat with streaming updates and descriptive status messages.
     
+    Streams results in real-time as tools and agents complete, providing
+    immediate feedback to the user.
+    
     Yields:
         Dict with event type, data, and human-readable message
     """
@@ -711,8 +759,10 @@ async def execute_chat_stream(
             }
         }
     
-    # Execute tools with descriptive messages
     tool_results = []
+    agent_results = []
+    
+    # Execute tools one at a time with real-time updates
     if routing_decision.selected_tools:
         for tool_name in routing_decision.selected_tools:
             display_name = _get_tool_display_name(tool_name)
@@ -723,23 +773,21 @@ async def execute_chat_stream(
                 "message": f"Running {display_name}...",
                 "data": {"tool": tool_name, "display_name": display_name}
             }
-        
-        # Execute all tools
-        tool_results = await execute_tools(routing_decision.selected_tools, query, user_id)
-        
-        # Report results
-        for result in tool_results:
-            display_name = _get_tool_display_name(result.tool_name)
-            summary = _summarize_tool_result(result.tool_name, result)
             
-            yield {
-                "type": "tool_result",
-                "message": f"{display_name} {summary}.",
-                "data": result.to_dict()
-            }
+            # Execute this tool immediately and report result
+            results = await execute_tools([tool_name], query, user_id)
+            if results:
+                result = results[0]
+                tool_results.append(result)
+                summary = _summarize_tool_result(result.tool_name, result)
+                
+                yield {
+                    "type": "tool_result",
+                    "message": f"{display_name} {summary}.",
+                    "data": result.to_dict()
+                }
     
-    # Execute agents with descriptive messages
-    agent_results = []
+    # Execute agents one at a time with real-time streaming
     if routing_decision.selected_agents:
         for agent_id in routing_decision.selected_agents:
             display_name = _get_agent_display_name(agent_id)
@@ -750,25 +798,43 @@ async def execute_chat_stream(
                 "message": f"Consulting {display_name}...",
                 "data": {"agent": agent_id, "display_name": display_name}
             }
-        
-        # Execute all agents
-        agent_results = await execute_agents(
-            routing_decision.selected_agents,
-            query,
-            user_id,
-            session,
-            principal
-        )
-        
-        # Report results
-        for result in agent_results:
-            display_name = _get_agent_display_name(result.agent_id)
+            
+            # Execute agent and stream its response
+            result = await execute_agent(agent_id, query, user_id, session, principal)
+            agent_results.append(result)
             
             if result.success:
+                # Clean up the output for display
+                output = result.output
+                if "AgentRunResult(output=" in output:
+                    import re
+                    match = re.search(r"AgentRunResult\(output=['\"](.+)['\"]\)", output, re.DOTALL)
+                    if match:
+                        output = match.group(1).replace("\\n", "\n")
+                
+                # Stream the agent's response in chunks for real-time feel
+                yield {
+                    "type": "agent_response_start",
+                    "message": f"{display_name} is responding...",
+                    "data": {"agent": agent_id}
+                }
+                
+                # Stream content word by word
+                words = output.split()
+                for i, word in enumerate(words):
+                    chunk = word + (" " if i < len(words) - 1 else "")
+                    yield {
+                        "type": "content_chunk",
+                        "data": {"chunk": chunk, "source": agent_id}
+                    }
+                    # Faster streaming for agent responses
+                    if i % 5 == 0:  # Yield every 5 words for smoother streaming
+                        await asyncio.sleep(0.01)
+                
                 yield {
                     "type": "agent_result",
-                    "message": f"{display_name} responded.",
-                    "data": result.to_dict()
+                    "message": f"{display_name} completed.",
+                    "data": {**result.to_dict(), "output": output}
                 }
             else:
                 yield {
@@ -777,39 +843,48 @@ async def execute_chat_stream(
                     "data": result.to_dict()
                 }
     
-    # Synthesize response
-    yield {
-        "type": "synthesis_start",
-        "message": "Combining results to create your answer...",
-        "data": {"tool_count": len(tool_results), "agent_count": len(agent_results)}
-    }
-    
-    content = await synthesize_response(
-        query,
-        tool_results,
-        agent_results,
-        model,
-        conversation_history
+    # Only synthesize if we have ONLY tools (no agent response streamed yet)
+    # or if we have multiple agents that need combining
+    # Don't synthesize if we already streamed a single agent's response
+    needs_synthesis = (
+        (len(tool_results) > 0 and len(agent_results) == 0) or  # Tools only, no agent
+        len(agent_results) > 1  # Multiple agents need combining
     )
+    
+    if needs_synthesis:
+        yield {
+            "type": "synthesis_start",
+            "message": "Combining results...",
+            "data": {"tool_count": len(tool_results), "agent_count": len(agent_results)}
+        }
+        
+        content = await synthesize_response(
+            query,
+            tool_results,
+            agent_results,
+            model,
+            conversation_history
+        )
+        
+        # Stream synthesized content
+        words = content.split()
+        for i, word in enumerate(words):
+            chunk = word + (" " if i < len(words) - 1 else "")
+            yield {
+                "type": "content_chunk",
+                "data": {"chunk": chunk, "source": "synthesis"}
+            }
+            if i % 5 == 0:
+                await asyncio.sleep(0.01)
     
     logger.info(
-        f"Synthesized content for streaming",
+        f"Streaming chat completed for user {user_id}",
         extra={
             "user_id": user_id,
-            "content_length": len(content),
-            "content_preview": content[:200]
+            "tool_count": len(tool_results),
+            "agent_count": len(agent_results)
         }
     )
-    
-    # Stream content in chunks
-    words = content.split()
-    for i, word in enumerate(words):
-        chunk = word + (" " if i < len(words) - 1 else "")
-        yield {
-            "type": "content_chunk",
-            "data": {"chunk": chunk}
-        }
-        await asyncio.sleep(0.02)  # Small delay for streaming effect
     
     yield {
         "type": "execution_complete",

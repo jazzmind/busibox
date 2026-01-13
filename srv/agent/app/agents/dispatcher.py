@@ -78,7 +78,7 @@ dispatcher_agent: Agent[None, RoutingDecision] = Agent(
     system_prompt=DISPATCHER_SYSTEM_PROMPT,
     model_settings={
         "temperature": 0.3,  # Low temperature for consistent routing
-        "max_tokens": 1000,
+        "max_tokens": 10000,  # Increased from 1000 to handle structured output
     }
 )
 

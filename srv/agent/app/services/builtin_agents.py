@@ -16,13 +16,15 @@ from app.schemas.definitions import AgentDefinitionRead
 
 
 # Mapping of agent file names to their metadata
+# The 'tools' field explicitly lists the tool names used by each agent
 BUILTIN_AGENT_METADATA = {
     "chat_agent": {
         "name": "chat",
         "display_name": "Chat Assistant",
-        "description": "General purpose chat agent for answering questions and having conversations",
+        "description": "General purpose chat agent with access to web search, weather, document search, and ingestion tools",
         "model": "chat",
         "version": 1,
+        "tools": ["web_search", "get_weather", "document_search", "ingest_document"],
     },
     "document_agent": {
         "name": "document-agent",
@@ -30,6 +32,7 @@ BUILTIN_AGENT_METADATA = {
         "description": "Intelligent document Q&A agent that searches and answers questions from your documents",
         "model": "agent",
         "version": 1,
+        "tools": ["document_search"],
     },
     "web_search_agent": {
         "name": "web-search",
@@ -37,6 +40,7 @@ BUILTIN_AGENT_METADATA = {
         "description": "Finds up-to-date information from the internet using web search",
         "model": "agent",
         "version": 1,
+        "tools": ["web_search", "web_scraper"],
     },
     "rag_search_agent": {
         "name": "rag-search",
@@ -44,6 +48,7 @@ BUILTIN_AGENT_METADATA = {
         "description": "Retrieval Augmented Generation agent for document-grounded responses",
         "model": "agent",
         "version": 1,
+        "tools": ["document_search"],
     },
     "attachment_agent": {
         "name": "attachment",
@@ -51,6 +56,7 @@ BUILTIN_AGENT_METADATA = {
         "description": "Analyzes and decides how to process file attachments",
         "model": "fast",
         "version": 1,
+        "tools": ["ingest_document"],
     },
     "weather_agent": {
         "name": "weather",
@@ -58,6 +64,7 @@ BUILTIN_AGENT_METADATA = {
         "description": "Provides weather information for any location using real-time data",
         "model": "agent",
         "version": 1,
+        "tools": ["get_weather"],
     },
     "rfp_agent": {
         "name": "rfp-analyst",
@@ -65,6 +72,7 @@ BUILTIN_AGENT_METADATA = {
         "description": "Expert document analyst for RFP (Request for Proposal) analysis and evaluation",
         "model": "fast",
         "version": 1,
+        "tools": ["document_search"],
     },
     "template_generator_agent": {
         "name": "template-generator",
@@ -72,6 +80,7 @@ BUILTIN_AGENT_METADATA = {
         "description": "Generates document templates based on requirements and examples",
         "model": "agent",
         "version": 1,
+        "tools": [],
     },
     "template_improvement_agent": {
         "name": "template-improvement",
@@ -79,6 +88,7 @@ BUILTIN_AGENT_METADATA = {
         "description": "Analyzes and improves existing document templates",
         "model": "agent",
         "version": 1,
+        "tools": [],
     },
     "summary_comparison_agent": {
         "name": "summary-comparison",
@@ -86,6 +96,7 @@ BUILTIN_AGENT_METADATA = {
         "description": "Compares and analyzes multiple document summaries",
         "model": "agent",
         "version": 1,
+        "tools": [],
     },
 }
 
@@ -141,9 +152,8 @@ def get_builtin_agent_definitions() -> List[AgentDefinitionRead]:
         # Generate a deterministic UUID based on the agent name
         agent_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, f"busibox.builtin.{metadata['name']}")
         
-        # Extract instructions and tools from the agent if possible
+        # Extract instructions from the agent if possible
         instructions = f"Built-in {metadata['display_name']} agent"
-        tool_names = []
         try:
             module = importlib.import_module(f"app.agents.{module_name}")
             agent_var_name = module_name
@@ -161,14 +171,11 @@ def get_builtin_agent_definitions() -> List[AgentDefinitionRead]:
                                 instructions = str(first_prompt()) or instructions
                             except:
                                 pass
-                    
-                    # Extract tool names from the agent
-                    # PydanticAI stores tools in _function_tools dict
-                    if hasattr(agent_instance, '_function_tools') and agent_instance._function_tools:
-                        for tool_name in agent_instance._function_tools.keys():
-                            tool_names.append(tool_name)
         except Exception as e:
-            print(f"Warning: Failed to extract metadata from {module_name}: {e}")
+            print(f"Warning: Failed to extract instructions from {module_name}: {e}")
+        
+        # Get tool names from explicit metadata (more reliable than introspection)
+        tool_names = metadata.get("tools", [])
         
         # Use current timestamp
         now = datetime.now(timezone.utc)
@@ -180,7 +187,7 @@ def get_builtin_agent_definitions() -> List[AgentDefinitionRead]:
             description=metadata["description"],
             model=metadata["model"],
             instructions=instructions,
-            tools={"names": tool_names},  # Extract from agent instance
+            tools={"names": tool_names},  # Use explicit tool list from metadata
             workflow=None,
             scopes=[],
             is_active=True,

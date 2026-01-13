@@ -23,6 +23,8 @@
   roles:
     - role: agent_api
       tags: [agent, agent_api]
+    - role: signal_bot
+      tags: [signal-bot, signal_bot]
 
 - hosts: files
   roles:
@@ -49,6 +51,8 @@
       tags: [proxy, nginx, secrets]
     - role: nginx
       tags: [proxy, nginx]
+    - role: tailscale
+      tags: [tailscale]
 
 - hosts: apps
   roles:

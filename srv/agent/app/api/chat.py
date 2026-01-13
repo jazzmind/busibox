@@ -612,6 +612,166 @@ async def send_chat_message_stream(
     )
 
 
+@router.post("/message/stream/agentic")
+async def send_chat_message_stream_agentic(
+    payload: ChatMessageRequest,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+) -> StreamingResponse:
+    """
+    Send a chat message using the agentic dispatcher with real-time streaming.
+    
+    This endpoint provides a more interactive experience where:
+    - The dispatcher explains what it's doing in real-time
+    - Agents stream their thoughts and tool usage
+    - Users can see the research process as it happens
+    
+    Event types:
+    - thought: Dispatcher/agent reasoning (for collapsible thinking section)
+    - tool_start: Starting a tool execution
+    - tool_result: Tool completed with result
+    - content: Final response content (streams to chat message)
+    - complete: Execution finished
+    - error: Error occurred
+    
+    Args:
+        payload: Chat message request
+        principal: Authenticated user
+        session: Database session
+        
+    Returns:
+        StreamingResponse with SSE events
+    """
+    from app.services.agentic_dispatcher import run_agentic_dispatcher
+    
+    # Create cancellation event
+    cancel_event = asyncio.Event()
+    
+    async def generate_events() -> AsyncGenerator[str, None]:
+        """Generate SSE events from agentic dispatcher."""
+        try:
+            # Get or create conversation
+            if payload.conversation_id:
+                result = await session.execute(
+                    select(Conversation).where(
+                        Conversation.id == payload.conversation_id,
+                        Conversation.user_id == principal.sub
+                    )
+                )
+                conversation = result.scalar_one_or_none()
+                
+                if not conversation:
+                    yield f"event: error\ndata: {json.dumps({'error': 'Conversation not found'})}\n\n"
+                    return
+            else:
+                conversation = Conversation(
+                    title=payload.message[:50] + "..." if len(payload.message) > 50 else payload.message,
+                    user_id=principal.sub
+                )
+                session.add(conversation)
+                await session.flush()
+                
+                # Send conversation created event
+                yield f"event: conversation_created\ndata: {json.dumps({'conversation_id': str(conversation.id)})}\n\n"
+            
+            # Store user message
+            user_message = Message(
+                conversation_id=conversation.id,
+                role="user",
+                content=payload.message,
+                attachments=[att.model_dump() for att in payload.attachments] if payload.attachments else None
+            )
+            session.add(user_message)
+            await session.flush()
+            
+            # Get conversation history
+            history_result = await session.execute(
+                select(Message)
+                .where(Message.conversation_id == conversation.id)
+                .order_by(Message.created_at.asc())
+                .limit(20)
+            )
+            history_messages = history_result.scalars().all()
+            history_dicts = [
+                {"role": msg.role, "content": msg.content}
+                for msg in history_messages
+            ]
+            
+            # Determine available agents
+            available_agents = ["web_search", "chat"]
+            if payload.selected_agents:
+                available_agents = payload.selected_agents
+            
+            # Collect content for storing
+            full_content = []
+            thoughts = []
+            
+            # Run agentic dispatcher
+            async for event in run_agentic_dispatcher(
+                query=payload.message,
+                user_id=principal.sub,
+                session=session,
+                cancel=cancel_event,
+                available_agents=available_agents,
+                conversation_history=history_dicts,
+            ):
+                # Yield event to client
+                yield f"event: {event.type}\ndata: {event.model_dump_json()}\n\n"
+                
+                # Collect content and thoughts
+                if event.type == "content":
+                    full_content.append(event.message)
+                elif event.type in ("thought", "tool_start", "tool_result"):
+                    thoughts.append({
+                        "type": event.type,
+                        "source": event.source,
+                        "message": event.message,
+                    })
+            
+            # Store assistant message
+            response_text = "\n".join(full_content) if full_content else "No response generated."
+            
+            assistant_message = Message(
+                conversation_id=conversation.id,
+                role="assistant",
+                content=response_text,
+                routing_decision={
+                    "thoughts": thoughts,
+                    "selected_agents": available_agents,  # Store which agents were used
+                } if thoughts or available_agents else None,
+            )
+            session.add(assistant_message)
+            
+            conversation.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            
+            await session.commit()
+            await session.refresh(assistant_message)
+            
+            # Send completion event with message ID
+            completion_data = {
+                'message_id': str(assistant_message.id),
+                'conversation_id': str(conversation.id),
+            }
+            yield f"event: message_complete\ndata: {json.dumps(completion_data)}\n\n"
+            
+        except asyncio.CancelledError:
+            logger.info("Agentic chat cancelled by client")
+            cancel_event.set()
+        except Exception as e:
+            logger.error(f"Agentic streaming chat failed: {e}", exc_info=True)
+            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+    
+    return StreamingResponse(
+        generate_events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"  # Disable nginx buffering
+        }
+    )
+
+
 @router.post("/{conversation_id}/generate-insights")
 async def generate_conversation_insights(
     conversation_id: uuid.UUID,
@@ -910,4 +1070,60 @@ async def chat_legacy(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Chat request failed: {str(e)}",
         )
+
+
+# =============================================================================
+# MESSAGE DELETION
+# =============================================================================
+
+@router.delete("/{conversation_id}/messages/{message_id}")
+async def delete_message(
+    conversation_id: uuid.UUID,
+    message_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """
+    Delete a message from a conversation.
+    
+    Only the conversation owner can delete messages.
+    """
+    # Verify conversation exists and user owns it
+    result = await session.execute(
+        select(Conversation).where(
+            Conversation.id == conversation_id,
+            Conversation.user_id == principal.sub,
+        )
+    )
+    conversation = result.scalar_one_or_none()
+    
+    if not conversation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found or you don't have permission to modify it",
+        )
+    
+    # Find and delete the message
+    result = await session.execute(
+        select(Message).where(
+            Message.id == message_id,
+            Message.conversation_id == conversation_id,
+        )
+    )
+    message = result.scalar_one_or_none()
+    
+    if not message:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Message not found",
+        )
+    
+    await session.delete(message)
+    await session.commit()
+    
+    logger.info(
+        f"Message {message_id} deleted from conversation {conversation_id} by user {principal.sub}"
+    )
+    
+    return {"success": True, "message_id": str(message_id)}
 

@@ -1,0 +1,165 @@
+---
+# Signal Bot Installation and Configuration
+# Created: 2026-01-13
+# Purpose: Deploy Signal bot and signal-cli-rest-api
+
+- name: Install Docker (for signal-cli-rest-api)
+  ansible.builtin.apt:
+    name:
+      - docker.io
+      - docker-compose
+      - python3-docker
+    state: present
+    update_cache: true
+
+- name: Ensure Docker is running
+  ansible.builtin.systemd:
+    name: docker
+    state: started
+    enabled: true
+
+- name: Create signal-cli data directory
+  ansible.builtin.file:
+    path: "{{ signal_cli_data_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Pull signal-cli-rest-api image
+  community.docker.docker_image:
+    name: "{{ signal_cli_image }}"
+    source: pull
+    force_source: true
+
+- name: Run signal-cli-rest-api container
+  community.docker.docker_container:
+    name: "{{ signal_cli_container_name }}"
+    image: "{{ signal_cli_image }}"
+    state: started
+    restart_policy: unless-stopped
+    ports:
+      - "{{ signal_cli_port }}:8080"
+    volumes:
+      - "{{ signal_cli_data_dir }}:/home/.local/share/signal-cli"
+    env:
+      MODE: "json-rpc"
+
+- name: Wait for signal-cli-rest-api to be ready
+  ansible.builtin.uri:
+    url: "http://localhost:{{ signal_cli_port }}/v1/about"
+    method: GET
+  register: signal_cli_health
+  until: signal_cli_health.status == 200
+  retries: 30
+  delay: 2
+
+# Signal Bot Python Service
+- name: Install Python dependencies
+  ansible.builtin.apt:
+    name:
+      - python3
+      - python3-pip
+      - python3-venv
+    state: present
+
+- name: Create signal bot user
+  ansible.builtin.user:
+    name: "{{ signal_bot_user }}"
+    system: true
+    shell: /usr/sbin/nologin
+    home: "{{ signal_bot_dir }}"
+    create_home: false
+
+- name: Create signal bot directory
+  ansible.builtin.file:
+    path: "{{ signal_bot_dir }}"
+    state: directory
+    owner: "{{ signal_bot_user }}"
+    group: "{{ signal_bot_group }}"
+    mode: "0755"
+
+- name: Create signal bot app directory
+  ansible.builtin.file:
+    path: "{{ signal_bot_dir }}/app"
+    state: directory
+    owner: "{{ signal_bot_user }}"
+    group: "{{ signal_bot_group }}"
+    mode: "0755"
+
+- name: Copy signal bot source code
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../srv/signal-bot/app/"
+    dest: "{{ signal_bot_dir }}/app/"
+    owner: "{{ signal_bot_user }}"
+    group: "{{ signal_bot_group }}"
+    mode: "0644"
+  notify: restart signal-bot
+
+- name: Copy requirements.txt
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../srv/signal-bot/requirements.txt"
+    dest: "{{ signal_bot_dir }}/requirements.txt"
+    owner: "{{ signal_bot_user }}"
+    group: "{{ signal_bot_group }}"
+    mode: "0644"
+
+- name: Create Python virtual environment
+  ansible.builtin.command:
+    cmd: python3 -m venv {{ signal_bot_venv }}
+    creates: "{{ signal_bot_venv }}/bin/python"
+
+- name: Install Python dependencies in venv
+  ansible.builtin.pip:
+    requirements: "{{ signal_bot_dir }}/requirements.txt"
+    virtualenv: "{{ signal_bot_venv }}"
+    state: present
+
+- name: Set venv ownership
+  ansible.builtin.file:
+    path: "{{ signal_bot_venv }}"
+    owner: "{{ signal_bot_user }}"
+    group: "{{ signal_bot_group }}"
+    recurse: true
+
+- name: Create signal bot environment file
+  ansible.builtin.template:
+    src: signal-bot.env.j2
+    dest: "{{ signal_bot_dir }}/.env"
+    owner: "{{ signal_bot_user }}"
+    group: "{{ signal_bot_group }}"
+    mode: "0600"
+  notify: restart signal-bot
+
+- name: Create signal bot systemd service
+  ansible.builtin.template:
+    src: signal-bot.service.j2
+    dest: /etc/systemd/system/{{ signal_bot_service_name }}.service
+    mode: "0644"
+  notify: restart signal-bot
+
+- name: Enable and start signal bot service
+  ansible.builtin.systemd:
+    name: "{{ signal_bot_service_name }}"
+    enabled: "{{ signal_bot_enabled }}"
+    state: "{{ 'started' if signal_bot_enabled else 'stopped' }}"
+    daemon_reload: true
+
+- name: Create registration helper script
+  ansible.builtin.template:
+    src: register-signal.sh.j2
+    dest: /usr/local/bin/register-signal
+    mode: "0755"
+
+- name: Create status script
+  ansible.builtin.copy:
+    dest: /usr/local/bin/signal-bot-status
+    mode: "0755"
+    content: |
+      #!/bin/bash
+      echo "=== Signal CLI REST API ==="
+      curl -s http://localhost:{{ signal_cli_port }}/v1/about | jq .
+      echo ""
+      echo "=== Signal Bot Service ==="
+      systemctl status {{ signal_bot_service_name }} --no-pager
+      echo ""
+      echo "=== Recent Logs ==="
+      journalctl -u {{ signal_bot_service_name }} -n 20 --no-pager

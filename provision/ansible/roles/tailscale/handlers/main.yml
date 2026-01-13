@@ -1,0 +1,13 @@
+---
+# Tailscale Handlers
+
+- name: restart tailscale
+  ansible.builtin.systemd:
+    name: tailscaled
+    state: restarted
+    daemon_reload: true
+  when: tailscale_enabled
+
+- name: reload tailscale
+  ansible.builtin.command: tailscale up --reset
+  when: tailscale_enabled

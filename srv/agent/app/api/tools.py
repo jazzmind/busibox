@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,6 +32,10 @@ logger = get_logger(__name__)
 class ToolTestRequest(BaseModel):
     """Request schema for testing a tool."""
     input: Dict[str, Any] = Field(description="Input parameters for the tool")
+    providers: Optional[Dict[str, Any]] = Field(
+        default=None, 
+        description="Provider configuration for multi-provider tools (e.g., web_search)"
+    )
 
 
 class ToolTestResult(BaseModel):
@@ -42,6 +46,7 @@ class ToolTestResult(BaseModel):
     execution_time_ms: int = Field(description="Execution time in milliseconds")
     tool_name: str = Field(description="Name of the executed tool")
     input_used: Dict[str, Any] = Field(description="Input parameters that were used")
+    providers_used: Optional[list] = Field(default=None, description="Providers that returned results (for multi-provider tools)")
 
 
 @router.get("/{tool_id}", response_model=ToolDefinitionRead)
@@ -361,8 +366,15 @@ async def test_tool(
                 detail=f"Tool '{tool_name}' does not support direct testing. Only built-in tools can be tested."
             )
         
+        # Build kwargs for executor
+        exec_kwargs = dict(payload.input)
+        
+        # For web_search tool, pass providers config if available
+        if tool_name == "web_search" and payload.providers:
+            exec_kwargs["providers"] = payload.providers
+        
         # Execute the tool with provided input
-        result = await executor(**payload.input)
+        result = await executor(**exec_kwargs)
         
         end_time = time.time()
         execution_time_ms = int((end_time - start_time) * 1000)
@@ -375,13 +387,21 @@ async def test_tool(
         else:
             output = {"result": str(result)}
         
+        # Extract providers_used if available (for web_search and similar tools)
+        providers_used = None
+        if hasattr(result, 'providers_used'):
+            providers_used = result.providers_used
+        elif isinstance(output, dict) and 'providers_used' in output:
+            providers_used = output.get('providers_used')
+        
         logger.info(
             "tool_test_completed",
             tool_id=str(tool_id),
             tool_name=tool_name,
             user_id=principal.sub,
             execution_time_ms=execution_time_ms,
-            success=True
+            success=True,
+            providers_used=providers_used
         )
         
         return ToolTestResult(
@@ -390,7 +410,8 @@ async def test_tool(
             error=None,
             execution_time_ms=execution_time_ms,
             tool_name=tool_name,
-            input_used=payload.input
+            input_used=payload.input,
+            providers_used=providers_used
         )
         
     except HTTPException:
@@ -419,9 +440,299 @@ async def test_tool(
         )
 
 
+# ========== Tool Configuration Endpoints ==========
+
+class ToolConfigRequest(BaseModel):
+    """Request schema for tool configuration."""
+    providers: Optional[Dict[str, Any]] = Field(default=None, description="Provider configuration")
+    settings: Optional[Dict[str, Any]] = Field(default=None, description="Additional settings")
+    scope: str = Field(default="user", description="Config scope: system, agent, or user")
+    agent_id: Optional[str] = Field(default=None, description="Agent ID for agent-scoped config")
 
 
+class ToolConfigResponse(BaseModel):
+    """Response schema for tool configuration."""
+    tool_id: str
+    tool_name: str
+    scope: str = "user"
+    providers: Dict[str, Any] = Field(default_factory=dict)
+    settings: Dict[str, Any] = Field(default_factory=dict)
+    updated_at: Optional[str] = None
 
 
+@router.get("/{tool_id}/config", response_model=ToolConfigResponse)
+async def get_tool_config(
+    tool_id: uuid.UUID,
+    scope: str = Query("user", description="Config scope to retrieve: system, agent, or user"),
+    agent_id: Optional[str] = Query(None, description="Agent ID for agent-scoped config"),
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+) -> ToolConfigResponse:
+    """
+    Get configuration for a specific tool.
+    
+    Config hierarchy (checked in order if not found at requested scope):
+    1. User-level (scope=user)
+    2. Agent-level (scope=agent, requires agent_id)
+    3. System-level (scope=system)
+    """
+    from app.models.domain import ToolConfig
+    from app.services.builtin_tools import get_builtin_tool_by_id
+    from sqlalchemy import and_
+    
+    # Get tool name
+    builtin_tool = get_builtin_tool_by_id(tool_id)
+    if builtin_tool:
+        tool_name = builtin_tool.name
+    else:
+        tool = await session.get(ToolDefinition, tool_id)
+        if not tool:
+            raise HTTPException(status_code=404, detail="Tool not found")
+        tool_name = tool.name
+    
+    config = None
+    found_scope = scope
+    
+    # Try requested scope first, then fall back through hierarchy
+    scopes_to_try = []
+    if scope == "user":
+        scopes_to_try = ["user", "agent", "system"] if agent_id else ["user", "system"]
+    elif scope == "agent":
+        scopes_to_try = ["agent", "system"]
+    else:
+        scopes_to_try = ["system"]
+    
+    for try_scope in scopes_to_try:
+        if try_scope == "user":
+            stmt = select(ToolConfig).where(
+                and_(
+                    ToolConfig.tool_id == tool_id,
+                    ToolConfig.scope == "user",
+                    ToolConfig.user_id == principal.sub
+                )
+            )
+        elif try_scope == "agent" and agent_id:
+            try:
+                agent_uuid = uuid.UUID(agent_id)
+                stmt = select(ToolConfig).where(
+                    and_(
+                        ToolConfig.tool_id == tool_id,
+                        ToolConfig.scope == "agent",
+                        ToolConfig.agent_id == agent_uuid
+                    )
+                )
+            except ValueError:
+                continue
+        elif try_scope == "system":
+            stmt = select(ToolConfig).where(
+                and_(
+                    ToolConfig.tool_id == tool_id,
+                    ToolConfig.scope == "system"
+                )
+            )
+        else:
+            continue
+        
+        result = await session.execute(stmt)
+        config = result.scalar_one_or_none()
+        if config:
+            found_scope = try_scope
+            break
+    
+    if not config:
+        return ToolConfigResponse(
+            tool_id=str(tool_id),
+            tool_name=tool_name,
+            scope=scope,
+            providers={},
+            settings={},
+        )
+    
+    return ToolConfigResponse(
+        tool_id=str(tool_id),
+        tool_name=tool_name,
+        scope=found_scope,
+        providers=config.config.get("providers", {}),
+        settings=config.config.get("settings", {}),
+        updated_at=config.updated_at.isoformat() if config.updated_at else None,
+    )
 
 
+@router.put("/{tool_id}/config", response_model=ToolConfigResponse)
+async def update_tool_config(
+    tool_id: uuid.UUID,
+    payload: ToolConfigRequest,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+) -> ToolConfigResponse:
+    """
+    Update configuration for a specific tool.
+    
+    Scope determines where the config is stored:
+    - user: Per-user config (default)
+    - agent: Per-agent config (requires agent_id)
+    - system: System-wide default config
+    """
+    from app.models.domain import ToolConfig
+    from app.services.builtin_tools import get_builtin_tool_by_id
+    from sqlalchemy import and_
+    
+    scope = payload.scope or "user"
+    agent_uuid = None
+    
+    # Validate scope and agent_id
+    if scope == "agent":
+        if not payload.agent_id:
+            raise HTTPException(status_code=400, detail="agent_id required for agent-scoped config")
+        try:
+            agent_uuid = uuid.UUID(payload.agent_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid agent_id format")
+    
+    # Get tool name
+    builtin_tool = get_builtin_tool_by_id(tool_id)
+    if builtin_tool:
+        tool_name = builtin_tool.name
+    else:
+        tool = await session.get(ToolDefinition, tool_id)
+        if not tool:
+            raise HTTPException(status_code=404, detail="Tool not found")
+        tool_name = tool.name
+    
+    # Find or create config at the specified scope
+    if scope == "user":
+        stmt = select(ToolConfig).where(
+            and_(
+                ToolConfig.tool_id == tool_id,
+                ToolConfig.scope == "user",
+                ToolConfig.user_id == principal.sub
+            )
+        )
+    elif scope == "agent":
+        stmt = select(ToolConfig).where(
+            and_(
+                ToolConfig.tool_id == tool_id,
+                ToolConfig.scope == "agent",
+                ToolConfig.agent_id == agent_uuid
+            )
+        )
+    else:  # system
+        stmt = select(ToolConfig).where(
+            and_(
+                ToolConfig.tool_id == tool_id,
+                ToolConfig.scope == "system"
+            )
+        )
+    
+    result = await session.execute(stmt)
+    config = result.scalar_one_or_none()
+    
+    if not config:
+        config = ToolConfig(
+            tool_id=tool_id,
+            tool_name=tool_name,
+            scope=scope,
+            user_id=principal.sub if scope == "user" else None,
+            agent_id=agent_uuid if scope == "agent" else None,
+            config={},
+        )
+        session.add(config)
+    
+    # Update config
+    config.config = {
+        "providers": payload.providers or {},
+        "settings": payload.settings or {},
+    }
+    
+    await session.commit()
+    await session.refresh(config)
+    
+    logger.info(
+        "tool_config_updated",
+        tool_id=str(tool_id),
+        tool_name=tool_name,
+        scope=scope,
+        user_id=principal.sub,
+    )
+    
+    return ToolConfigResponse(
+        tool_id=str(tool_id),
+        tool_name=tool_name,
+        scope=scope,
+        providers=config.config.get("providers", {}),
+        settings=config.config.get("settings", {}),
+        updated_at=config.updated_at.isoformat() if config.updated_at else None,
+    )
+
+
+@router.delete("/tools/{tool_id}/config")
+async def delete_tool_config(
+    tool_id: uuid.UUID,
+    scope: str = Query(default="user", description="Configuration scope to delete: user, agent, or system"),
+    agent_id: Optional[str] = Query(default=None, description="Agent ID for agent-scoped config"),
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+):
+    """
+    Delete tool configuration at a specific scope.
+    
+    This allows users to clear their personal or agent-level overrides
+    and fall back to the inherited configuration from a higher scope.
+    
+    - Personal (user) scope: Clears user's personal config, falls back to agent or system
+    - Agent scope: Clears agent-specific config, falls back to system
+    - System scope: Cannot be deleted (returns error)
+    """
+    
+    # Prevent deleting system config
+    if scope == "system":
+        raise HTTPException(
+            status_code=400, 
+            detail="Cannot delete system configuration. It serves as the default for all users."
+        )
+    
+    agent_uuid = None
+    if scope == "agent":
+        if not agent_id:
+            raise HTTPException(status_code=400, detail="agent_id required for agent-scoped config")
+        try:
+            agent_uuid = uuid.UUID(agent_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid agent_id format")
+    
+    # Find the config to delete
+    if scope == "user":
+        stmt = select(ToolConfig).where(
+            and_(
+                ToolConfig.tool_id == tool_id,
+                ToolConfig.scope == "user",
+                ToolConfig.user_id == principal.sub
+            )
+        )
+    else:  # agent
+        stmt = select(ToolConfig).where(
+            and_(
+                ToolConfig.tool_id == tool_id,
+                ToolConfig.scope == "agent",
+                ToolConfig.agent_id == agent_uuid
+            )
+        )
+    
+    result = await session.execute(stmt)
+    config = result.scalar_one_or_none()
+    
+    if not config:
+        raise HTTPException(status_code=404, detail="No configuration found at this scope")
+    
+    # Delete the config
+    await session.delete(config)
+    await session.commit()
+    
+    logger.info(
+        "tool_config_deleted",
+        tool_id=str(tool_id),
+        scope=scope,
+        user_id=principal.sub,
+    )
+    
+    return {"success": True, "message": f"Configuration at {scope} scope deleted successfully"}

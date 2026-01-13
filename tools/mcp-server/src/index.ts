@@ -105,9 +105,9 @@ const CONTAINERS: ContainerConfig[] = [
     name: 'apps-lxc',
     ip: '10.96.200.201',
     testIp: '10.96.201.201',
-    purpose: 'Next.js apps (AI Portal, Agent Client, etc.)',
+    purpose: 'Next.js apps (AI Portal, Agent Manager, etc.)',
     ports: [{ port: 3000, service: 'Next.js apps (proxied via proxy-lxc)' }],
-    services: ['nginx', 'ai-portal', 'agent-client', 'doc-intel', 'foundation', 'project-analysis', 'innovation'],
+    services: ['nginx', 'ai-portal', 'agent-manager', 'doc-intel', 'foundation', 'project-analysis', 'innovation'],
     notes: 'No direct access to ingest/search; proxies internal calls',
   },
   {
@@ -254,7 +254,7 @@ const MAKE_TARGETS: Record<string, { description: string; category: string; requ
   // App deployment
   'deploy-apps': { description: 'Deploy all applications', category: 'app-deployment', requiresEnv: true },
   'deploy-ai-portal': { description: 'Deploy AI Portal app', category: 'app-deployment', requiresEnv: true },
-  'deploy-agent-client': { description: 'Deploy Agent Client app', category: 'app-deployment', requiresEnv: true },
+  'deploy-agent-manager': { description: 'Deploy Agent Manager app', category: 'app-deployment', requiresEnv: true },
   'deploy-doc-intel': { description: 'Deploy Doc Intel app', category: 'app-deployment', requiresEnv: true },
   'deploy-foundation': { description: 'Deploy Foundation app', category: 'app-deployment', requiresEnv: true },
   'deploy-project-analysis': { description: 'Deploy Project Analysis app', category: 'app-deployment', requiresEnv: true },
@@ -2242,7 +2242,7 @@ Or use \`list_make_targets\` with category: "testing" to see all options.`,
 **Available App Deployment Targets**:
 - \`deploy-apps\`: All applications
 - \`deploy-ai-portal\`: AI Portal
-- \`deploy-agent-client\`: Agent Client
+- \`deploy-agent-manager\`: Agent Manager
 - \`deploy-doc-intel\`: Doc Intel
 - \`deploy-foundation\`: Foundation
 - \`deploy-project-analysis\`: Project Analysis

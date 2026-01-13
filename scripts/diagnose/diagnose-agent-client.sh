@@ -1,5 +1,5 @@
 #!/bin/bash
-# Agent Client Diagnostic Script
+# Agent Manager Diagnostic Script
 # Execution Context: Proxmox host
 # Usage: bash scripts/diagnose/diagnose-agent-client.sh
 # Created: 2025-11-06
@@ -13,7 +13,7 @@ AGENT_CLIENT_PATH="/srv/apps/agent-client"
 FAILED_PATH="/srv/apps/agent-client.failed.20251106-205132"
 
 echo "==================================="
-echo "Agent Client Diagnostic"
+echo "Agent Manager Diagnostic"
 echo "==================================="
 echo ""
 

@@ -1,0 +1,48 @@
+---
+# Signal Bot Role Defaults
+# Created: 2026-01-13
+# Purpose: Configure Signal messenger bot for AI Portal integration
+
+# Signal CLI REST API configuration
+signal_cli_image: "bbernhard/signal-cli-rest-api:latest"
+signal_cli_container_name: "signal-cli-rest-api"
+signal_cli_port: 8080
+signal_cli_data_dir: "/srv/signal-cli"
+
+# Signal bot configuration
+signal_bot_dir: "/srv/signal-bot"
+signal_bot_venv: "/srv/signal-bot/venv"
+signal_bot_user: "signalbot"
+signal_bot_group: "signalbot"
+
+# Service configuration
+signal_bot_service_name: "signal-bot"
+signal_bot_enabled: true
+
+# Bot behavior
+signal_bot_enable_web_search: true
+signal_bot_enable_doc_search: false
+signal_bot_default_model: "auto"
+signal_bot_poll_interval: 1.0
+
+# Rate limiting
+signal_bot_rate_limit_messages: 30
+signal_bot_rate_limit_window: 60
+
+# Max message length (Signal has a ~8000 char limit, use 4000 for safety)
+signal_bot_max_message_length: 4000
+
+# Logging
+signal_bot_log_level: "INFO"
+signal_bot_debug: false
+
+# Phone number (from vault)
+signal_bot_phone_number: "{{ secrets.signal_bot.phone_number }}"
+
+# Auth configuration (from vault)
+signal_bot_auth_client_id: "signal-bot-client"
+signal_bot_auth_client_secret: "{{ secrets.jwt_secret }}"
+signal_bot_service_user_id: "{{ secrets.signal_bot.service_user_id }}"
+
+# Allowed phone numbers (empty = allow all)
+signal_bot_allowed_numbers: []
