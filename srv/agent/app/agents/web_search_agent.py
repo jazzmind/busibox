@@ -5,6 +5,7 @@ from pydantic_ai.models.openai import OpenAIModel
 
 from app.config.settings import get_settings
 from app.tools.web_search_tool import web_search_tool
+from app.tools.web_scraper_tool import web_scraper_tool
 
 settings = get_settings()
 
@@ -19,40 +20,50 @@ model = OpenAIModel(
     provider="openai",
 )
 
-# Create the web search agent
+# Create the web search agent with search and scraping capabilities
 web_search_agent = Agent(
     model=model,
-    tools=[web_search_tool],
-    system_prompt="""You are a web search specialist that finds up-to-date information on the internet.
+    tools=[web_search_tool, web_scraper_tool],
+    system_prompt="""You are a web research specialist that finds and extracts up-to-date information from the internet.
 
-Your workflow:
+**Available Tools:**
+- **web_search**: Search the web using DuckDuckGo to find relevant pages
+- **web_scraper**: Fetch and extract full content from a specific URL
 
-1. **Search First**: Always call the web_search tool first with the user's query
+**Your Workflow:**
+
+1. **Search First**: Start with web_search to find relevant pages
    - Use clear, specific search terms
-   - The tool will return titles, URLs, and snippets from web pages
+   - Review the titles and snippets to identify promising sources
 
-2. **Synthesize Results**: Create a concise answer from the search results
-   - Summarize the key information
-   - Cite URLs for sources
-   - Mention if results seem outdated or limited
+2. **Deep Dive When Needed**: Use web_scraper to get full content
+   - If search snippets are insufficient, scrape the most relevant URLs
+   - Extract detailed information from articles, documentation, or reports
+   - Useful for getting complete context beyond snippets
 
-3. **Handle Errors**: If the search fails or returns no results:
-   - Explain that web search is currently unavailable
-   - Suggest the user try rephrasing their query
-   - Don't make up information
+3. **Synthesize Results**: Create a comprehensive answer
+   - Combine information from multiple sources
+   - Cite URLs for all information
+   - Distinguish between snippet-level and full-page information
 
-Response format:
-- Start with a direct answer based on search results
-- Provide relevant details from multiple sources
-- End with source citations: "Sources: [URL1], [URL2]"
+4. **Handle Errors Gracefully**:
+   - If search fails, explain and suggest alternatives
+   - If scraping fails (blocked, timeout), use available snippets
+   - Never fabricate information
 
-Example:
-"Based on current web search results, [answer]. According to [source], [detail]. (Sources: https://example.com, https://example2.com)"
+**Response Format:**
+- Start with a direct answer
+- Provide supporting details with source attribution
+- End with a sources section listing all URLs used
 
-If web search is unavailable:
-"I'm unable to search the web right now. Please try again later or rephrase your query."
+**Example:**
+"Based on my research, [main finding]. According to [source name], [detailed information from scraped page]. Additional sources confirm that [supporting detail].
 
-Remember: Your value is in finding and synthesizing current information from the web, not from your training data.""",
+Sources:
+- https://example.com (full article)
+- https://example2.com (search result)"
+
+Remember: Your value is in thorough research - search broadly, then dive deep into the most relevant sources.""",
     retries=2,
 )
 

@@ -49,34 +49,61 @@ async def search_web(query: str, max_results: int = 5) -> WebSearchOutput:
         # - Tavily API
         # - Brave Search API
         
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            # DuckDuckGo lite HTML search
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            # Use DuckDuckGo HTML search (more reliable than lite)
             response = await client.get(
-                "https://lite.duckduckgo.com/lite/",
+                "https://html.duckduckgo.com/html/",
                 params={"q": query},
                 headers={
-                    "User-Agent": "Mozilla/5.0 (compatible; BusiboxBot/1.0)",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.5",
                 },
             )
             response.raise_for_status()
             
-            # Parse HTML results (simplified)
+            # Parse HTML results
             html = response.text
             results = []
             
-            # Basic HTML parsing (in production, use BeautifulSoup or similar)
-            # This is a simplified version that looks for result patterns
             import re
             
-            # Find result blocks (simplified pattern matching)
-            # Format: <a href="URL">Title</a> followed by snippet
-            pattern = r'<a[^>]*href="([^"]+)"[^>]*>([^<]+)</a>'
-            matches = re.findall(pattern, html)
+            # DuckDuckGo HTML results pattern:
+            # Results are in <a class="result__a" href="...">Title</a>
+            # with snippets in <a class="result__snippet">...</a>
+            
+            # Find result links - DuckDuckGo wraps URLs in redirect
+            result_pattern = r'<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([^<]+)</a>'
+            snippet_pattern = r'<a[^>]*class="result__snippet"[^>]*>([^<]+(?:<[^>]+>[^<]*</[^>]+>)*[^<]*)</a>'
+            
+            # Alternative pattern for direct links
+            alt_pattern = r'<a[^>]*href="(https?://[^"]+)"[^>]*>([^<]+)</a>'
+            
+            matches = re.findall(result_pattern, html)
+            snippets = re.findall(snippet_pattern, html)
+            
+            # If no results from result pattern, try alternative
+            if not matches:
+                matches = re.findall(alt_pattern, html)
             
             seen_urls = set()
-            for url, title in matches[:max_results * 2]:  # Get extra to filter
+            snippet_idx = 0
+            
+            for url, title in matches[:max_results * 3]:  # Get extra to filter
+                # Extract actual URL from DuckDuckGo redirect
+                if "duckduckgo.com" in url and "uddg=" in url:
+                    # Extract the actual URL from the redirect
+                    import urllib.parse
+                    parsed = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+                    if "uddg" in parsed:
+                        url = urllib.parse.unquote(parsed["uddg"][0])
+                
                 # Skip DuckDuckGo internal links
-                if url.startswith("/") or "duckduckgo.com" in url:
+                if "duckduckgo.com" in url or url.startswith("/"):
+                    continue
+                
+                # Skip non-http URLs
+                if not url.startswith("http"):
                     continue
                 
                 # Skip duplicates
@@ -84,12 +111,22 @@ async def search_web(query: str, max_results: int = 5) -> WebSearchOutput:
                     continue
                 seen_urls.add(url)
                 
-                # Create result (snippet extraction would need more parsing)
+                # Get snippet if available
+                snippet = f"Result from {url}"
+                if snippet_idx < len(snippets):
+                    # Clean HTML tags from snippet
+                    raw_snippet = snippets[snippet_idx]
+                    clean_snippet = re.sub(r'<[^>]+>', '', raw_snippet).strip()
+                    if clean_snippet:
+                        snippet = clean_snippet[:200]
+                    snippet_idx += 1
+                
+                # Create result
                 results.append(
                     WebSearchResult(
                         title=title.strip(),
                         url=url,
-                        snippet=f"Result from {url}",  # Simplified
+                        snippet=snippet,
                     )
                 )
                 
@@ -102,7 +139,7 @@ async def search_web(query: str, max_results: int = 5) -> WebSearchOutput:
                     result_count=0,
                     results=[],
                     query=query,
-                    error="No results found or parsing failed",
+                    error="No results found. The search may have been blocked or returned no matches.",
                 )
             
             return WebSearchOutput(
@@ -111,6 +148,15 @@ async def search_web(query: str, max_results: int = 5) -> WebSearchOutput:
                 results=results,
                 query=query,
             )
+    
+    except httpx.TimeoutException:
+        return WebSearchOutput(
+            found=False,
+            result_count=0,
+            results=[],
+            query=query,
+            error="Web search timed out. Please try again.",
+        )
     
     except Exception as e:
         return WebSearchOutput(

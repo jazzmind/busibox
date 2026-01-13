@@ -134,10 +134,8 @@ async def route_query(
                 # Format prompt with context
                 prompt = f"""Query: {request.query}
 
-Available tools: {', '.join(request.available_tools) if request.available_tools else 'none'}
-Available agents: {', '.join(request.available_agents) if request.available_agents else 'none'}
-Enabled tools: {', '.join(enabled_tools) if enabled_tools else 'none'}
-Enabled agents: {', '.join(enabled_agents) if enabled_agents else 'none'}
+Available tools: {', '.join(enabled_tools) if enabled_tools else 'none'}
+Available agents: {', '.join(enabled_agents) if enabled_agents else 'none'}
 Attachments: {len(request.attachments)} file(s) attached
 
 Analyze this query and select the appropriate tools and/or agents."""

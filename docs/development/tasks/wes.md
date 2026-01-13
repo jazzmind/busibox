@@ -1,6 +1,13 @@
 # Wes's Tasks
-a) get cashman laptop running busibox
-b) make sure ai-portal chat works with tavily + aws bedrock
+1 - get agent manager to be able to run the web search tool via the web research agent
+2 - use this agent via the ai-portal chat
+3 - deploy all this to busibox
+4 - improve existing agents - chat (has websearch, filesearch, upload), web search (focus on deep research), RAG Search Agent
+
+
+
+
+a) make sure ai-portal chat works with tavily + aws bedrock
 
 
 

@@ -169,9 +169,41 @@ async def list_tools(
     principal: Principal = Depends(get_principal),
     session: AsyncSession = Depends(get_session),
 ) -> List[ToolDefinitionRead]:
+    """
+    List tools with built-in tools included.
+    
+    Returns:
+    - All built-in tools (dynamically loaded from app/tools/)
+    - All custom tools from database
+    
+    Built-in tools take precedence over database entries with the same name.
+    """
+    from app.services.builtin_tools import get_builtin_tool_definitions
+    
+    # Get built-in tools from code
+    builtin_tools = get_builtin_tool_definitions()
+    
+    # Get custom tools from database
     stmt = select(ToolDefinition).where(ToolDefinition.is_active.is_(True))
     result = await session.execute(stmt)
-    return [ToolDefinitionRead.model_validate(t) for t in result.scalars().all()]
+    db_tools = [ToolDefinitionRead.model_validate(t) for t in result.scalars().all()]
+    
+    # Combine: built-in tools take precedence over database entries with same name
+    tools_dict = {tool.name: tool for tool in db_tools}
+    for builtin in builtin_tools:
+        tools_dict[builtin.name] = builtin
+    
+    tools = list(tools_dict.values())
+    
+    logger.info(
+        "tools_listed",
+        user_id=principal.sub,
+        total_count=len(tools),
+        builtin_count=sum(1 for t in tools if t.is_builtin),
+        custom_count=sum(1 for t in tools if not t.is_builtin),
+    )
+    
+    return tools
 
 
 @router.post("/tools", response_model=ToolDefinitionRead, status_code=status.HTTP_201_CREATED)

@@ -614,6 +614,62 @@ async def execute_chat(
     )
 
 
+# Friendly display names for tools
+TOOL_DISPLAY_NAMES = {
+    "web_search": "Web Search",
+    "document_search": "Document Search",
+    "get_weather": "Weather",
+    "ingest_document": "Document Ingestion",
+    "web_scraper": "Web Page Reader",
+}
+
+# Friendly display names for agents
+AGENT_DISPLAY_NAMES = {
+    "web_search_agent": "Web Research Agent",
+    "document_agent": "Document Analysis Agent",
+    "weather_agent": "Weather Agent",
+    "chat_agent": "Chat Agent",
+}
+
+
+def _get_tool_display_name(tool_name: str) -> str:
+    """Get friendly display name for a tool."""
+    return TOOL_DISPLAY_NAMES.get(tool_name, tool_name.replace("_", " ").title())
+
+
+def _get_agent_display_name(agent_id: str) -> str:
+    """Get friendly display name for an agent."""
+    return AGENT_DISPLAY_NAMES.get(agent_id, agent_id.replace("_", " ").title())
+
+
+def _summarize_tool_result(tool_name: str, result: ToolExecutionResult) -> str:
+    """Generate a brief summary of a tool result."""
+    if not result.success:
+        return f"encountered an issue: {result.error or 'Unknown error'}"
+    
+    output = result.output
+    if tool_name == "web_search":
+        # Try to count results from output
+        if "result" in output.lower():
+            return "found relevant web results"
+        return "completed web search"
+    
+    elif tool_name == "document_search":
+        if "found" in output.lower() or "result" in output.lower():
+            return "found relevant documents"
+        return "completed document search"
+    
+    elif tool_name == "get_weather":
+        if "°" in output or "temperature" in output.lower():
+            return "retrieved current weather"
+        return "completed weather lookup"
+    
+    elif tool_name == "web_scraper":
+        return "extracted page content"
+    
+    return "completed successfully"
+
+
 async def execute_chat_stream(
     query: str,
     routing_decision: RoutingDecision,
@@ -624,40 +680,78 @@ async def execute_chat_stream(
     conversation_history: Optional[List[Dict[str, str]]] = None
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
-    Execute chat with streaming updates.
+    Execute chat with streaming updates and descriptive status messages.
     
     Yields:
-        Dict with event type and data
+        Dict with event type, data, and human-readable message
     """
     logger.info(
         f"Executing streaming chat for user {user_id}",
         extra={"user_id": user_id, "model": model}
     )
     
-    # Execute tools
-    if routing_decision.selected_tools:
+    # Announce what we're about to do
+    tool_names = [_get_tool_display_name(t) for t in routing_decision.selected_tools]
+    agent_names = [_get_agent_display_name(a) for a in routing_decision.selected_agents]
+    
+    resources_used = []
+    if tool_names:
+        resources_used.append(f"tools ({', '.join(tool_names)})")
+    if agent_names:
+        resources_used.append(f"agents ({', '.join(agent_names)})")
+    
+    if resources_used:
         yield {
-            "type": "tools_start",
-            "data": {"tools": routing_decision.selected_tools}
+            "type": "planning",
+            "message": f"I'll use {' and '.join(resources_used)} to help with this.",
+            "data": {
+                "tools": routing_decision.selected_tools,
+                "agents": routing_decision.selected_agents,
+                "reasoning": routing_decision.reasoning,
+            }
         }
+    
+    # Execute tools with descriptive messages
+    tool_results = []
+    if routing_decision.selected_tools:
+        for tool_name in routing_decision.selected_tools:
+            display_name = _get_tool_display_name(tool_name)
+            
+            # Announce tool start
+            yield {
+                "type": "tool_start",
+                "message": f"Running {display_name}...",
+                "data": {"tool": tool_name, "display_name": display_name}
+            }
         
+        # Execute all tools
         tool_results = await execute_tools(routing_decision.selected_tools, query, user_id)
         
+        # Report results
         for result in tool_results:
+            display_name = _get_tool_display_name(result.tool_name)
+            summary = _summarize_tool_result(result.tool_name, result)
+            
             yield {
                 "type": "tool_result",
+                "message": f"{display_name} {summary}.",
                 "data": result.to_dict()
             }
-    else:
-        tool_results = []
     
-    # Execute agents
+    # Execute agents with descriptive messages
+    agent_results = []
     if routing_decision.selected_agents:
-        yield {
-            "type": "agents_start",
-            "data": {"agents": routing_decision.selected_agents}
-        }
+        for agent_id in routing_decision.selected_agents:
+            display_name = _get_agent_display_name(agent_id)
+            
+            # Announce agent start
+            yield {
+                "type": "agent_start",
+                "message": f"Consulting {display_name}...",
+                "data": {"agent": agent_id, "display_name": display_name}
+            }
         
+        # Execute all agents
         agent_results = await execute_agents(
             routing_decision.selected_agents,
             query,
@@ -666,16 +760,29 @@ async def execute_chat_stream(
             principal
         )
         
+        # Report results
         for result in agent_results:
-            yield {
-                "type": "agent_result",
-                "data": result.to_dict()
-            }
-    else:
-        agent_results = []
+            display_name = _get_agent_display_name(result.agent_id)
+            
+            if result.success:
+                yield {
+                    "type": "agent_result",
+                    "message": f"{display_name} responded.",
+                    "data": result.to_dict()
+                }
+            else:
+                yield {
+                    "type": "agent_result",
+                    "message": f"{display_name} encountered an issue: {result.error or 'Unknown error'}",
+                    "data": result.to_dict()
+                }
     
     # Synthesize response
-    yield {"type": "synthesis_start", "data": {}}
+    yield {
+        "type": "synthesis_start",
+        "message": "Combining results to create your answer...",
+        "data": {"tool_count": len(tool_results), "agent_count": len(agent_results)}
+    }
     
     content = await synthesize_response(
         query,
@@ -706,6 +813,7 @@ async def execute_chat_stream(
     
     yield {
         "type": "execution_complete",
+        "message": "Done!",
         "data": {
             "tool_count": len(tool_results),
             "agent_count": len(agent_results)

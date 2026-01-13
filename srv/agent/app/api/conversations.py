@@ -112,24 +112,81 @@ async def list_conversations(
     offset: int = Query(0, ge=0, description="Number of conversations to skip"),
     order_by: str = Query("created_at", description="Field to order by"),
     order: str = Query("desc", pattern="^(asc|desc)$", description="Sort order"),
+    agent_id: Optional[str] = Query(None, description="Filter by agent ID (conversations where agent was used)"),
 ) -> ConversationListResponse:
     """
     List user's conversations with pagination and ordering.
     
     Returns conversations with message count and last message preview.
+    
+    If agent_id is provided, only returns conversations where a message
+    has this agent in its routing_decision.selected_agents list.
     """
     try:
+        # Base filter for user ownership
+        base_filter = Conversation.user_id == principal.sub
+        
+        # If agent_id is provided, find conversations with messages that used this agent
+        if agent_id:
+            # Subquery to find conversation IDs with messages that used this agent
+            # We check if the agent_id is in routing_decision.selected_agents
+            from sqlalchemy import and_, cast, String
+            from sqlalchemy.dialects.postgresql import JSONB
+            
+            # Find messages where routing_decision contains the agent_id
+            agent_conversations_subquery = (
+                select(Message.conversation_id)
+                .where(
+                    Message.routing_decision.isnot(None)
+                )
+                .distinct()
+            )
+            
+            # Get all matching conversation IDs first
+            conv_ids_result = await session.execute(agent_conversations_subquery)
+            potential_conv_ids = [row[0] for row in conv_ids_result.fetchall()]
+            
+            # Filter to conversations where routing_decision.selected_agents contains agent_id
+            matching_conv_ids = []
+            for conv_id in potential_conv_ids:
+                # Get messages for this conversation
+                msg_query = select(Message).where(
+                    and_(
+                        Message.conversation_id == conv_id,
+                        Message.routing_decision.isnot(None)
+                    )
+                )
+                msg_result = await session.execute(msg_query)
+                messages = msg_result.scalars().all()
+                
+                for msg in messages:
+                    routing = msg.routing_decision
+                    if routing and isinstance(routing, dict):
+                        selected_agents = routing.get('selected_agents', [])
+                        if agent_id in selected_agents:
+                            matching_conv_ids.append(conv_id)
+                            break
+            
+            # Filter to matching conversations owned by user
+            if not matching_conv_ids:
+                return ConversationListResponse(
+                    conversations=[],
+                    total=0,
+                    limit=limit,
+                    offset=offset
+                )
+            
+            base_filter = and_(base_filter, Conversation.id.in_(matching_conv_ids))
+        
         # Get total count
-        count_query = select(func.count()).select_from(Conversation).where(
-            Conversation.user_id == principal.sub
-        )
+        count_query = select(func.count()).select_from(Conversation).where(base_filter)
         total_result = await session.execute(count_query)
         total = total_result.scalar_one()
         
         # Build query
         query = (
             select(Conversation)
-            .where(Conversation.user_id == principal.sub)
+            .where(base_filter)
             .offset(offset)
             .limit(limit)
         )
@@ -195,7 +252,7 @@ async def list_conversations(
         
         logger.info(
             f"Listed {len(conversation_reads)} conversations for user {principal.sub}",
-            extra={"user_sub": principal.sub, "total": total}
+            extra={"user_sub": principal.sub, "total": total, "agent_id_filter": agent_id}
         )
         
         return ConversationListResponse(
