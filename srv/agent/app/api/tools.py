@@ -386,7 +386,8 @@ async def test_tool(
             
             # Determine required scopes based on tool
             # For now, search tools need search scopes
-            scopes = ["search:read"] if "search" in tool_name.lower() else []
+            # Note: scopes use dots (search.read) not colons (search:read)
+            scopes = ["search.read"] if "search" in tool_name.lower() else []
             purpose = "search" if "search" in tool_name.lower() else "agent"
             
             # Get or exchange token for downstream service

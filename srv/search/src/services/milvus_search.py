@@ -30,7 +30,19 @@ class MilvusSearchService:
         self.collection = None
         
         # Reranker configuration
-        self.reranker_enabled = config.get("reranker_enabled", True)
+        # reranking_mode: "none", "vllm"/"qwen3-gpu", "local"/"baai-cpu"
+        self.reranking_mode = config.get("reranking_mode", "none")
+        # Map mode aliases to canonical names
+        if self.reranking_mode == "vllm":
+            self.reranking_mode = "qwen3-gpu"
+        elif self.reranking_mode == "local":
+            self.reranking_mode = "baai-cpu"
+        
+        # Legacy: enable_reranking bool (superseded by reranking_mode)
+        # If reranking_mode is "none", disable reranking regardless of this setting
+        enable_reranking = config.get("enable_reranking", True)
+        self.reranker_enabled = enable_reranking and self.reranking_mode != "none"
+        
         # Call vLLM reranker directly (not through liteLLM) since liteLLM doesn't support /rerank for openai provider
         self.reranker_base_url = config.get("vllm_reranker_url", "http://10.96.200.208:8002/v1")
         self.reranker_api_key = "EMPTY"  # vLLM doesn't require auth
@@ -330,7 +342,7 @@ class MilvusSearchService:
         sparse_weight: float = 0.3,
         filters: Optional[Dict] = None,
         use_reranker: bool = True,
-        reranker_model: str = "qwen3-gpu",
+        reranker_model: Optional[str] = None,  # None = use configured reranking_mode
         partition_names: Optional[List[str]] = None,
         readable_role_ids: Optional[List[str]] = None,
     ) -> List[Dict]:
@@ -405,14 +417,16 @@ class MilvusSearchService:
             )
             
             # Apply reranking if enabled
-            if use_reranker and self.reranker_enabled and reranker_model != "none":
+            # Use configured reranking_mode if no explicit model specified
+            effective_reranker = reranker_model if reranker_model is not None else self.reranking_mode
+            if use_reranker and self.reranker_enabled and effective_reranker != "none":
                 # Rerank with more candidates than final top_k for better quality
                 rerank_candidates = min(len(fused_results), rerank_k // 2)  # Use half of rerank_k candidates
                 fused_results = await self.rerank_results(
                     query=query_text,
                     results=fused_results[:rerank_candidates],
                     top_k=top_k,
-                    reranker_model=reranker_model,
+                    reranker_model=effective_reranker,
                 )
             else:
                 # Take top-k after fusion
