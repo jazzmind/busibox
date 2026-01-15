@@ -56,11 +56,15 @@ async def get_or_exchange_token(
         )
 
     exchanged = await exchange_token(principal, scopes=scopes_out, purpose=purpose)
+    
+    # Convert expires_at to naive datetime for PostgreSQL TIMESTAMP WITHOUT TIME ZONE
+    expires_at_naive = exchanged.expires_at.replace(tzinfo=None) if exchanged.expires_at.tzinfo else exchanged.expires_at
+    
     record = TokenGrant(
         subject=principal.sub,
         scopes=scopes_key,
         token=exchanged.access_token,
-        expires_at=exchanged.expires_at,
+        expires_at=expires_at_naive,
     )
     session.add(record)
     await session.commit()

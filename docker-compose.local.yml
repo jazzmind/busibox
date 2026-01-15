@@ -481,7 +481,13 @@ services:
       AUTHZ_ISSUER: busibox-authz
       AUTHZ_AUDIENCE: search-api
       AUTHZ_TOKEN_URL: http://authz-api:8010/oauth/token
-      # Reranking (disabled by default in local Docker to avoid 2GB model download)
+      # API Service client for calling other services (e.g., ingest-api for embeddings)
+      API_SERVICE_CLIENT_ID: ${AUTHZ_BOOTSTRAP_CLIENT_ID:-ai-portal}
+      API_SERVICE_CLIENT_SECRET: ${AUTHZ_BOOTSTRAP_CLIENT_SECRET:-ai-portal-secret}
+      # Reranking mode: "none" (skip), "vllm" (GPU), "local" (CPU, slow startup)
+      # Default to "none" in local Docker to avoid 2GB model download and vLLM dependency
+      RERANKING_MODE: ${RERANKING_MODE:-none}
+      # Legacy bool (superseded by RERANKING_MODE)
       ENABLE_RERANKING: ${ENABLE_RERANKING:-false}
     ports:
       - "8003:8003"

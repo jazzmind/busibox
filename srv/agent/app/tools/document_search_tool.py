@@ -102,7 +102,7 @@ async def search_documents(
                 source_info += f", Page {result_item.page_number}"
             
             context_parts.append(
-                f"--- Document {idx} [Source: {source_info}, Relevance: {result_item.score:.2f}] ---\n{result.text}"
+                f"--- Document {idx} [Source: {source_info}, Relevance: {result_item.score:.2f}] ---\n{result.get('text', '')}"
             )
         
         # Combine context
