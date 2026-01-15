@@ -71,12 +71,12 @@ async def _sign_session_jwt(user_id: str, email: str, session_id: str) -> tuple[
     
     claims = {
         "iss": config.issuer,
-        "sub": user_id,
+        "sub": str(user_id),
         "aud": "ai-portal",  # Session tokens are for ai-portal
         "exp": exp,
         "iat": now,
         "nbf": now,
-        "jti": session_id,  # Use session ID as JTI for revocation tracking
+        "jti": str(session_id),  # Use session ID as JTI for revocation tracking
         "typ": "session",
         "email": email,
     }

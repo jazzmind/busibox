@@ -442,6 +442,23 @@ class PostgresService:
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_passkey_challenges_challenge ON authz_passkey_challenges(challenge);")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_passkey_challenges_expires_at ON authz_passkey_challenges(expires_at);")
             
+            # Delegation tokens table (for background tasks)
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS authz_delegation_tokens (
+                  jti uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                  user_id uuid NOT NULL REFERENCES authz_users(user_id) ON DELETE CASCADE,
+                  scopes text[] NOT NULL DEFAULT '{}',
+                  name text NOT NULL,
+                  expires_at timestamptz NOT NULL,
+                  created_at timestamptz NOT NULL DEFAULT now(),
+                  revoked_at timestamptz NULL
+                );
+                """
+            )
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_delegation_tokens_user_id ON authz_delegation_tokens(user_id);")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_delegation_tokens_expires_at ON authz_delegation_tokens(expires_at);")
+            
             # ----------------------------------------------------------------
             # Phase 1: Email Domain Configuration
             # ----------------------------------------------------------------
@@ -1591,6 +1608,22 @@ class PostgresService:
             }
             return session
 
+    async def get_session_by_id(self, session_id: str) -> dict | None:
+        """Get a session by its ID (for JTI verification in JWT tokens)."""
+        sid = validate_uuid(session_id, "session_id")
+        
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT s.id::text as session_id, s.user_id::text, s.token, s.expires_at,
+                       s.ip_address, s.user_agent, s.created_at
+                FROM authz_sessions s
+                WHERE s.id = $1 AND s.expires_at > now()
+                """,
+                sid,
+            )
+            return dict(row) if row else None
+
     async def delete_session(self, token: str) -> bool:
         """Delete a session by token."""
         async with self.acquire(None, None) as conn:
@@ -2068,6 +2101,91 @@ class PostgresService:
         async with self.acquire(None, None) as conn:
             result = await conn.execute(
                 "DELETE FROM authz_passkey_challenges WHERE expires_at < now()"
+            )
+            return int(result.split()[-1]) if result else 0
+
+    # ---------------------------------------------------------------------
+    # Delegation Tokens
+    # ---------------------------------------------------------------------
+
+    async def create_delegation_token(
+        self,
+        *,
+        user_id: str,
+        scopes: List[str],
+        name: str,
+        expires_at: str,
+    ) -> dict:
+        """Create a delegation token for background tasks."""
+        uid = validate_uuid(user_id, "user_id")
+        from datetime import datetime
+        exp = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO authz_delegation_tokens (user_id, scopes, name, expires_at)
+                VALUES ($1, $2, $3, $4)
+                RETURNING jti::text, user_id::text, scopes, name, expires_at, created_at
+                """,
+                uid,
+                scopes,
+                name,
+                exp,
+            )
+            return dict(row)
+
+    async def get_delegation_token(self, jti: str) -> dict | None:
+        """Get a delegation token by JTI."""
+        token_id = validate_uuid(jti, "jti")
+        
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT jti::text, user_id::text, scopes, name, expires_at, created_at, revoked_at
+                FROM authz_delegation_tokens
+                WHERE jti = $1 AND expires_at > now() AND revoked_at IS NULL
+                """,
+                token_id,
+            )
+            return dict(row) if row else None
+
+    async def list_user_delegation_tokens(self, user_id: str) -> List[dict]:
+        """List all active delegation tokens for a user."""
+        uid = validate_uuid(user_id, "user_id")
+        
+        async with self.acquire(None, None) as conn:
+            rows = await conn.fetch(
+                """
+                SELECT jti::text, user_id::text, scopes, name, expires_at, created_at, revoked_at
+                FROM authz_delegation_tokens
+                WHERE user_id = $1 AND expires_at > now()
+                ORDER BY created_at DESC
+                """,
+                uid,
+            )
+            return [dict(row) for row in rows]
+
+    async def revoke_delegation_token(self, jti: str) -> bool:
+        """Revoke a delegation token."""
+        token_id = validate_uuid(jti, "jti")
+        
+        async with self.acquire(None, None) as conn:
+            result = await conn.execute(
+                """
+                UPDATE authz_delegation_tokens
+                SET revoked_at = now()
+                WHERE jti = $1 AND revoked_at IS NULL
+                """,
+                token_id,
+            )
+            return result != "UPDATE 0"
+
+    async def cleanup_expired_delegation_tokens(self) -> int:
+        """Delete all expired delegation tokens."""
+        async with self.acquire(None, None) as conn:
+            result = await conn.execute(
+                "DELETE FROM authz_delegation_tokens WHERE expires_at < now()"
             )
             return int(result.split()[-1]) if result else 0
 

@@ -122,14 +122,23 @@ async def _check_client_auth_from_body(body: dict) -> bool:
 def _is_security_event(action: str) -> bool:
     """
     Check if an action is a security-related event that should be allowed
-    without authentication (e.g., failed login attempts).
+    without authentication.
+    
+    This includes:
+    - Failed authentication attempts (for security monitoring)
+    - Pre-authentication events like sending magic links/TOTP codes
+      (which happen before the user is authenticated)
     """
     security_actions = [
+        # Failed auth attempts
         "user.login.failed",
         "totp.code_failed",
         "passkey.login_failed",
         "magic_link.expired",
         "oauth.token_rejected",
+        # Pre-authentication events (user not yet authenticated)
+        "magic_link.sent",
+        "totp.code_sent",
     ]
     return action in security_actions
 
