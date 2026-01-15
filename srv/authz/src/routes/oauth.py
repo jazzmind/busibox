@@ -3,18 +3,24 @@ OAuth2 endpoints for authz.
 
 - GET /.well-known/jwks.json
 - POST /oauth/token
+
+Token Exchange Modes:
+1. Client Credentials + requested_subject (legacy) - requires client_id/client_secret
+2. Subject Token (Zero Trust) - validates JWT signature, no client credentials needed
 """
 
 from __future__ import annotations
 
 import time
 import uuid
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import jwt
 import structlog
+from cryptography.hazmat.primitives import serialization
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 from config import Config
 from oauth.claims import AccessTokenClaims
@@ -26,6 +32,9 @@ logger = structlog.get_logger()
 router = APIRouter()
 
 config = Config()
+
+# Subject token types
+SUBJECT_TOKEN_TYPE_JWT = "urn:ietf:params:oauth:token-type:jwt"
 
 # PostgresService instance - will be set by main.py
 _pg = None
@@ -131,6 +140,120 @@ async def _require_client(client_id: str, client_secret: str) -> dict:
     return client
 
 
+async def _verify_subject_token(subject_token: str) -> Tuple[str, str, str]:
+    """
+    Verify a subject_token JWT signed by authz.
+    
+    Returns (user_id, email, jti) if valid.
+    Raises HTTPException if invalid.
+    """
+    await _pg.connect()
+    
+    # Get the active signing key's public key for verification
+    row = await _pg.get_active_signing_key()
+    if not row:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="no_signing_key_configured"
+        )
+    
+    # Get public key from the stored JWK
+    public_jwk = row.get("public_jwk", {})
+    kid = row["kid"]
+    alg = row["alg"]
+    
+    # Also load private key to extract public key (more reliable)
+    private_pem = row["private_key_pem"]
+    private_key = load_private_key(private_pem, config.key_encryption_passphrase)
+    public_key = private_key.public_key()
+    
+    try:
+        # Decode and verify the JWT
+        # First decode without verification to get the header
+        unverified = jwt.decode(subject_token, options={"verify_signature": False})
+        token_kid = jwt.get_unverified_header(subject_token).get("kid")
+        
+        # Verify the token was signed by our key
+        if token_kid != kid:
+            logger.warning("Subject token signed by unknown key", token_kid=token_kid, expected_kid=kid)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="invalid_subject_token_key"
+            )
+        
+        # Now verify the signature
+        claims = jwt.decode(
+            subject_token,
+            public_key,
+            algorithms=[alg],
+            issuer=config.issuer,
+            audience="ai-portal",  # Session tokens are issued for ai-portal
+            options={"require": ["exp", "iat", "sub", "jti", "typ"]}
+        )
+        
+        # Verify token type is session or delegation
+        token_type = claims.get("typ")
+        if token_type not in ("session", "delegation"):
+            logger.warning("Invalid subject token type", typ=token_type)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="invalid_subject_token_type"
+            )
+        
+        user_id = claims["sub"]
+        email = claims.get("email", "")
+        jti = claims["jti"]
+        
+        # Check if token has been revoked (jti = session_id or delegation_id)
+        if token_type == "session":
+            session = await _pg.get_session_by_id(jti)
+            if not session:
+                logger.warning("Session revoked or not found", jti=jti)
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="session_revoked"
+                )
+        elif token_type == "delegation":
+            delegation = await _pg.get_delegation_token(jti)
+            if not delegation:
+                logger.warning("Delegation token revoked or not found", jti=jti)
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="delegation_revoked"
+                )
+        
+        logger.info(
+            "Subject token verified",
+            user_id=user_id,
+            token_type=token_type,
+            jti=jti,
+        )
+        
+        return user_id, email, jti
+        
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="subject_token_expired"
+        )
+    except jwt.InvalidAudienceError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid_subject_token_audience"
+        )
+    except jwt.InvalidIssuerError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid_subject_token_issuer"
+        )
+    except jwt.PyJWTError as e:
+        logger.warning("Subject token verification failed", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid_subject_token"
+        )
+
+
 def _enforce_audience(client: dict, audience: str) -> None:
     allowed = client.get("allowed_audiences") or []
     if audience not in allowed:
@@ -165,6 +288,39 @@ async def _sign_access_token(claims: dict) -> str:
     return token
 
 
+async def _sign_delegation_token(user_id: str, email: str, jti: str, scopes: List[str], expires_at: int) -> str:
+    """
+    Sign a delegation token JWT for background tasks.
+    """
+    await _pg.connect()
+    row = await _pg.get_active_signing_key()
+    if not row:
+        raise RuntimeError("no active signing key configured")
+    
+    kid = row["kid"]
+    alg = row["alg"]
+    private_pem = row["private_key_pem"]
+    key_obj = load_private_key(private_pem, config.key_encryption_passphrase)
+    
+    now = int(time.time())
+    
+    claims = {
+        "iss": config.issuer,
+        "sub": user_id,
+        "aud": "ai-portal",  # Delegation tokens are for ai-portal to present
+        "exp": expires_at,
+        "iat": now,
+        "nbf": now,
+        "jti": jti,
+        "typ": "delegation",
+        "email": email,
+        "scope": " ".join(scopes),
+    }
+    
+    token = jwt.encode(claims, key_obj, algorithm=alg, headers={"kid": kid, "typ": "JWT"})
+    return token
+
+
 @router.get("/.well-known/jwks.json")
 async def jwks():
     await _ensure_bootstrap()
@@ -178,8 +334,10 @@ async def token(request: Request):
     OAuth2 token endpoint.
 
     Supports:
-    - grant_type=client_credentials
+    - grant_type=client_credentials (requires client_id/client_secret)
     - grant_type=urn:ietf:params:oauth:grant-type:token-exchange
+      - With subject_token: Zero Trust mode - no client credentials needed
+      - With client credentials + requested_subject: Legacy mode
 
     Accepts both application/x-www-form-urlencoded and JSON bodies.
     """
@@ -197,9 +355,13 @@ async def token(request: Request):
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_request") from e
 
-    client = await _require_client(token_req.client_id, token_req.client_secret)
-
+    # Client credentials grant always requires client authentication
     if token_req.grant_type == "client_credentials":
+        if not token_req.client_id or not token_req.client_secret:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="client_credentials_required")
+        
+        client = await _require_client(token_req.client_id, token_req.client_secret)
+        
         if not token_req.audience:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="audience_required")
         _enforce_audience(client, token_req.audience)
@@ -229,28 +391,49 @@ async def token(request: Request):
     if token_req.grant_type == TOKEN_EXCHANGE_GRANT:
         if not token_req.audience:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="audience_required")
-        if not token_req.requested_subject:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="requested_subject_required")
-
-        # Validate requested_subject is a valid UUID format
-        try:
-            uuid.UUID(token_req.requested_subject)
-        except (ValueError, AttributeError, TypeError):
+        
+        # Determine authentication mode: subject_token (Zero Trust) or client credentials (legacy)
+        user_id: str
+        purpose: str = token_req.requested_purpose or "token-exchange"
+        
+        if token_req.subject_token:
+            # Zero Trust mode: Verify the subject_token JWT
+            # No client credentials required - the JWT signature proves identity
+            logger.info("Token exchange with subject_token (Zero Trust mode)")
+            
+            user_id, email, jti = await _verify_subject_token(token_req.subject_token)
+            purpose = f"subject_token:{jti[:8]}"
+            
+        elif token_req.client_id and token_req.client_secret and token_req.requested_subject:
+            # Legacy mode: Client credentials + requested_subject
+            logger.info("Token exchange with client credentials (legacy mode)")
+            
+            client = await _require_client(token_req.client_id, token_req.client_secret)
+            _enforce_audience(client, token_req.audience)
+            
+            # Validate requested_subject is a valid UUID format
+            try:
+                uuid.UUID(token_req.requested_subject)
+            except (ValueError, AttributeError, TypeError):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, 
+                    detail="invalid_subject_format"
+                )
+            
+            user_id = token_req.requested_subject
+            
+        else:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, 
-                detail="invalid_subject_format"
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="subject_token_or_client_credentials_required"
             )
 
-        _enforce_audience(client, token_req.audience)
-        scope = _enforce_scopes(client, token_req.scope)
-
-        # Pull RBAC from authz DB (synced from ai-portal initially).
-        # First check if user exists (get_user_roles returns empty list for non-existent users)
+        # Pull RBAC from authz DB
         await _pg.connect()
-        if not await _pg.user_exists(token_req.requested_subject):
+        if not await _pg.user_exists(user_id):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unknown_subject")
         
-        roles = await _pg.get_user_roles(token_req.requested_subject)
+        roles = await _pg.get_user_roles(user_id)
 
         # Build role claims (id + name only, for data access filtering)
         role_claims = [
@@ -269,7 +452,7 @@ async def token(request: Request):
         exp = now + config.access_token_ttl
         claims = AccessTokenClaims(
             iss=config.issuer,
-            sub=token_req.requested_subject,
+            sub=user_id,
             aud=token_req.audience,
             iat=now,
             nbf=now,
@@ -281,29 +464,214 @@ async def token(request: Request):
 
         access_token = await _sign_access_token(claims)
 
-        # Audit (best-effort): actor is the subject, caller is the OAuth client.
+        # Audit (best-effort)
         await _pg.insert_audit(
-            actor_id=token_req.requested_subject,
+            actor_id=user_id,
             action="oauth.token.issued",
             resource_type="oauth_token",
             resource_id=None,
             details={
                 "grant_type": TOKEN_EXCHANGE_GRANT,
-                "client_id": token_req.client_id,
                 "audience": token_req.audience,
-                "scope": scope,
-                "purpose": token_req.requested_purpose,
+                "purpose": purpose,
+                "mode": "subject_token" if token_req.subject_token else "client_credentials",
             },
-            user_id=token_req.requested_subject,
+            user_id=user_id,
             role_ids=[r["id"] for r in roles],
         )
 
         return OAuthTokenResponse(
             access_token=access_token,
             expires_in=config.access_token_ttl,
-            scope=scope,
+            scope=aggregated_scope,
             issued_token_type="urn:ietf:params:oauth:token-type:access_token",
         ).model_dump()
 
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unsupported_grant_type")
 
+
+# ============================================================================
+# Delegation Token Endpoints
+# ============================================================================
+
+
+class DelegationTokenRequest(BaseModel):
+    """Request to create a delegation token for background tasks."""
+    subject_token: str = Field(..., description="Session JWT to authorize delegation")
+    name: str = Field(..., min_length=1, max_length=100, description="Human-readable name for the delegation")
+    scopes: List[str] = Field(default_factory=list, description="Scopes to delegate (subset of user's scopes)")
+    expires_in_seconds: int = Field(default=604800, ge=3600, le=2592000, description="TTL in seconds (1 hour to 30 days)")
+
+
+class DelegationTokenResponse(BaseModel):
+    """Response containing a delegation token."""
+    delegation_token: str
+    token_type: str = "Bearer"
+    expires_in: int
+    expires_at: str
+    jti: str
+    name: str
+    scopes: List[str]
+
+
+@router.post("/oauth/delegation")
+async def create_delegation_token(request: Request):
+    """
+    Create a delegation token for background tasks.
+    
+    The user must authenticate with their session JWT (subject_token).
+    The delegation token has a longer TTL but can be revoked.
+    
+    Use case: User creates a recurring task that needs to run when they're offline.
+    """
+    await _ensure_bootstrap()
+    
+    body = await request.json()
+    try:
+        req = DelegationTokenRequest.model_validate(body)
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    
+    # Verify the session JWT
+    user_id, email, session_jti = await _verify_subject_token(req.subject_token)
+    
+    # Get user's roles to validate requested scopes
+    await _pg.connect()
+    user = await _pg.get_user_with_roles(user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user_not_found")
+    
+    # Aggregate all scopes the user has
+    all_user_scopes: set[str] = set()
+    for role in user.get("roles", []):
+        role_scopes = role.get("scopes") or []
+        all_user_scopes.update(role_scopes)
+    
+    # If no scopes requested, use all user's scopes
+    if not req.scopes:
+        requested_scopes = list(all_user_scopes)
+    else:
+        # Validate requested scopes are a subset of user's scopes
+        requested_set = set(req.scopes)
+        invalid_scopes = requested_set - all_user_scopes
+        if invalid_scopes:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"requested_scopes_not_allowed: {', '.join(invalid_scopes)}"
+            )
+        requested_scopes = req.scopes
+    
+    # Calculate expiration
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(seconds=req.expires_in_seconds)
+    expires_at_ts = int(expires_at.timestamp())
+    
+    # Create delegation token record in DB
+    delegation = await _pg.create_delegation_token(
+        user_id=user_id,
+        scopes=requested_scopes,
+        name=req.name,
+        expires_at=expires_at.isoformat(),
+    )
+    
+    jti = delegation["jti"]
+    
+    # Sign the delegation JWT
+    delegation_jwt = await _sign_delegation_token(
+        user_id=user_id,
+        email=email,
+        jti=jti,
+        scopes=requested_scopes,
+        expires_at=expires_at_ts,
+    )
+    
+    logger.info(
+        "Delegation token created",
+        user_id=user_id,
+        jti=jti,
+        name=req.name,
+        scopes=requested_scopes,
+        expires_in=req.expires_in_seconds,
+    )
+    
+    return DelegationTokenResponse(
+        delegation_token=delegation_jwt,
+        expires_in=req.expires_in_seconds,
+        expires_at=expires_at.isoformat(),
+        jti=jti,
+        name=req.name,
+        scopes=requested_scopes,
+    ).model_dump()
+
+
+@router.get("/oauth/delegations")
+async def list_delegation_tokens(request: Request):
+    """
+    List all active delegation tokens for the authenticated user.
+    
+    Requires session JWT in Authorization header.
+    """
+    await _ensure_bootstrap()
+    
+    # Get session JWT from Authorization header
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.lower().startswith("bearer "):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="bearer_token_required")
+    
+    subject_token = auth_header[7:]
+    user_id, email, session_jti = await _verify_subject_token(subject_token)
+    
+    await _pg.connect()
+    delegations = await _pg.list_user_delegation_tokens(user_id)
+    
+    return {
+        "delegations": [
+            {
+                "jti": d["jti"],
+                "name": d["name"],
+                "scopes": d["scopes"],
+                "expires_at": d["expires_at"].isoformat() if hasattr(d["expires_at"], "isoformat") else str(d["expires_at"]),
+                "created_at": d["created_at"].isoformat() if hasattr(d["created_at"], "isoformat") else str(d["created_at"]),
+                "revoked": d.get("revoked_at") is not None,
+            }
+            for d in delegations
+        ],
+    }
+
+
+@router.delete("/oauth/delegations/{jti}")
+async def revoke_delegation_token(request: Request, jti: str):
+    """
+    Revoke a delegation token.
+    
+    Requires session JWT in Authorization header.
+    User can only revoke their own delegation tokens.
+    """
+    await _ensure_bootstrap()
+    
+    # Get session JWT from Authorization header
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.lower().startswith("bearer "):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="bearer_token_required")
+    
+    subject_token = auth_header[7:]
+    user_id, email, session_jti = await _verify_subject_token(subject_token)
+    
+    await _pg.connect()
+    
+    # Verify the delegation token belongs to this user
+    delegation = await _pg.get_delegation_token(jti)
+    if not delegation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="delegation_not_found")
+    
+    if delegation["user_id"] != user_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="not_owner")
+    
+    revoked = await _pg.revoke_delegation_token(jti)
+    if not revoked:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="delegation_not_found_or_already_revoked")
+    
+    logger.info("Delegation token revoked", user_id=user_id, jti=jti)
+    
+    return {"status": "ok", "revoked": True, "jti": jti}

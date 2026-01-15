@@ -20,23 +20,27 @@ TOKEN_EXCHANGE_GRANT = "urn:ietf:params:oauth:grant-type:token-exchange"
 class OAuthTokenRequest(BaseModel):
     grant_type: str = Field(..., description="OAuth2 grant type")
 
-    # OAuth2 client authentication (body form for now; HTTP Basic can be added later)
-    client_id: str = Field(..., min_length=1)
-    client_secret: str = Field(..., min_length=1)
+    # OAuth2 client authentication (optional when subject_token is provided)
+    client_id: Optional[str] = Field(None, min_length=1)
+    client_secret: Optional[str] = Field(None, min_length=1)
 
     # Requested token restrictions
     scope: str = Field("", description="Space-delimited OAuth2 scopes")
     audience: Optional[str] = Field(None, description="Requested audience/service identifier (e.g. ingest-api)")
 
-    # Token exchange (OBO) inputs
+    # Token exchange (OBO) inputs - RFC 8693
+    # When subject_token is provided, client credentials are NOT required
     subject_token: Optional[str] = Field(
         None,
-        description="RFC8693 subject_token (optional; not relied upon initially for ai-portal)",
+        description="RFC8693 subject_token - a signed JWT (session or delegation token)",
     )
-    subject_token_type: Optional[str] = Field(None, description="RFC8693 subject_token_type")
+    subject_token_type: Optional[str] = Field(
+        None, 
+        description="RFC8693 subject_token_type (e.g. urn:ietf:params:oauth:token-type:jwt)"
+    )
 
-    # Compatibility with existing agent token-exchange client code
-    requested_subject: Optional[str] = Field(None, description="User ID (uuid) to mint token for")
+    # Legacy: Compatibility with existing token-exchange using client credentials
+    requested_subject: Optional[str] = Field(None, description="User ID (uuid) - DEPRECATED, use subject_token instead")
     requested_purpose: Optional[str] = Field(None, description="Purpose label (audit/debug)")
 
     @field_validator("scope")
