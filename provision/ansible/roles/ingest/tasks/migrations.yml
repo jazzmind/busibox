@@ -14,11 +14,11 @@
     state: present
   tags: [ingest, ingest_migrations, ingest_db]
 
-- name: Ensure files_test database exists (for pytest)
+- name: Ensure test_files database exists (for pytest)
   become_user: postgres
   delegate_to: "{{ postgres_host }}"
   postgresql_db:
-    name: "files_test"
+    name: "test_files"
     owner: "{{ postgres_user }}"
     encoding: UTF8
     lc_collate: en_US.UTF-8

@@ -17,18 +17,39 @@ from api.middleware.jwt_auth import set_rls_session_vars
 logger = structlog.get_logger()
 
 
+# Test mode header name
+TEST_MODE_HEADER = "X-Test-Mode"
+
+
 class PostgresService:
     """Service for PostgreSQL operations."""
     
-    def __init__(self, config: dict, request=None):
-        """Initialize PostgreSQL connection pool."""
+    def __init__(self, config: dict, request=None, use_test_db: bool = False):
+        """Initialize PostgreSQL connection pool.
+        
+        Args:
+            config: Database configuration dictionary
+            request: Optional FastAPI request object
+            use_test_db: If True, use test database configuration
+        """
         self.config = config
-        self.host = config.get("postgres_host", "10.96.200.203")
-        self.port = config.get("postgres_port", 5432)
-        self.database = config.get("postgres_db", "busibox")
-        self.user = config.get("postgres_user", "postgres")
-        self.password = config.get("postgres_password", "")
         self.request = request
+        
+        # Select database credentials based on test mode
+        if use_test_db and config.get("test_mode_enabled"):
+            self.host = config.get("postgres_host", "10.96.200.203")
+            self.port = config.get("postgres_port", 5432)
+            self.database = config.get("test_postgres_db", "test_files")
+            self.user = config.get("test_postgres_user", "busibox_test_user")
+            self.password = config.get("test_postgres_password", "testpassword")
+            self._is_test_db = True
+        else:
+            self.host = config.get("postgres_host", "10.96.200.203")
+            self.port = config.get("postgres_port", 5432)
+            self.database = config.get("postgres_db", "busibox")
+            self.user = config.get("postgres_user", "postgres")
+            self.password = config.get("postgres_password", "")
+            self._is_test_db = False
         
         self.pool: Optional[asyncpg.Pool] = None
         self._pool_loop: Optional[asyncio.AbstractEventLoop] = None

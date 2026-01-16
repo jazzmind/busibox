@@ -1339,13 +1339,13 @@ run_container_tests() {
                 fi
             fi
             
-            # Pytest uses agent_server_test database (not the production agent_server database)
+            # Pytest uses test_agent_server database (not the production agent_server database)
             # Also set TEST_DATABASE_URL which the agent conftest.py checks first
-            local agent_test_db_url="postgresql+asyncpg://${db_user}:${db_password}@${postgres_ip}:5432/agent_server_test"
+            local agent_test_db_url="postgresql+asyncpg://${db_user}:${db_password}@${postgres_ip}:5432/test_agent_server"
             local test_env="POSTGRES_HOST=${postgres_ip}"
             test_env="${test_env} POSTGRES_USER=${db_user}"
             test_env="${test_env} POSTGRES_PASSWORD=${db_password}"
-            test_env="${test_env} POSTGRES_DB=agent_server_test"
+            test_env="${test_env} POSTGRES_DB=test_agent_server"
             test_env="${test_env} TEST_DATABASE_URL=${agent_test_db_url}"
             test_env="${test_env} AUTHZ_URL=http://${authz_ip}:8010"
             test_env="${test_env} AUTHZ_JWKS_URL=http://${authz_ip}:8010/.well-known/jwks.json"
@@ -1379,21 +1379,67 @@ run_container_tests() {
     esac
 }
 
+# Check if test databases are bootstrapped
+check_test_db_status() {
+    local result
+    result=$(docker exec local-postgres psql -U busibox_test_user -d test_authz -t -c \
+        "SELECT COUNT(*) FROM authz_signing_keys WHERE is_active = true;" 2>/dev/null | tr -d ' ' || echo "0")
+    
+    if [[ "$result" -gt 0 ]]; then
+        return 0  # Bootstrapped
+    else
+        return 1  # Not bootstrapped
+    fi
+}
+
 # Docker test menu (for local Docker environment)
 docker_test_menu() {
     while true; do
         echo ""
-        menu "Docker Test Suite - Local Development" \
-            "Authz - Run authz tests" \
-            "Ingest - Run ingest tests" \
-            "Search - Run search tests" \
-            "Agent - Run agent tests" \
-            "All Services - Run all tests" \
-            "Check Docker Services Status" \
-            "View Docker Logs" \
-            "Exit"
         
-        read -p "$(echo -e "${BOLD}Select option [1-8]:${NC} ")" choice
+        # Check test database status
+        local test_db_status
+        if check_test_db_status; then
+            test_db_status="${GREEN}✓ Ready${NC}"
+            local tests_enabled=true
+        else
+            test_db_status="${YELLOW}⚠ Not Initialized${NC}"
+            local tests_enabled=false
+        fi
+        
+        echo -e "  Test Databases: ${test_db_status}"
+        echo ""
+        
+        if [[ "$tests_enabled" == "true" ]]; then
+            menu "Docker Test Suite - Local Development" \
+                "Authz - Run authz tests" \
+                "Ingest - Run ingest tests" \
+                "Search - Run search tests" \
+                "Agent - Run agent tests" \
+                "All Services - Run all tests" \
+                "Reinitialize Test Databases" \
+                "Check Docker Services Status" \
+                "View Docker Logs" \
+                "Exit"
+            
+            read -p "$(echo -e "${BOLD}Select option [1-9]:${NC} ")" choice
+        else
+            menu "Docker Test Suite - Local Development" \
+                "Initialize Test Databases (REQUIRED)" \
+                "Check Docker Services Status" \
+                "View Docker Logs" \
+                "Exit"
+            
+            read -p "$(echo -e "${BOLD}Select option [1-4]:${NC} ")" choice
+            
+            # Remap choices when tests disabled
+            case $choice in
+                1) choice="init" ;;
+                2) choice="status" ;;
+                3) choice="logs" ;;
+                4) choice="exit" ;;
+            esac
+        fi
         
         case $choice in
             1)
@@ -1437,25 +1483,41 @@ docker_test_menu() {
                 fi
                 pause
                 ;;
-            6)
+            6|init)
+                header "Initialize Test Databases" 70
+                echo ""
+                info "Bootstrapping test databases with schema and OAuth clients..."
+                echo ""
+                (cd "$REPO_ROOT" && make test-db-init) || {
+                    error "Failed to initialize test databases"
+                }
+                echo ""
+                if check_test_db_status; then
+                    success "Test databases initialized successfully!"
+                else
+                    error "Test database initialization may have failed. Check logs above."
+                fi
+                pause
+                ;;
+            7|status)
                 header "Docker Services Status" 70
                 echo ""
                 docker compose -f "${REPO_ROOT}/docker-compose.local.yml" ps
                 echo ""
                 pause
                 ;;
-            7)
+            8|logs)
                 header "Docker Service Logs" 70
                 echo ""
                 info "Showing last 50 lines of logs (press Ctrl+C to stop)..."
                 echo ""
                 docker compose -f "${REPO_ROOT}/docker-compose.local.yml" logs --tail=50 -f || true
                 ;;
-            8)
+            9|exit)
                 return 0
                 ;;
             *)
-                error "Invalid selection. Please enter 1-8."
+                error "Invalid selection."
                 ;;
         esac
     done

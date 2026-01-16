@@ -10,6 +10,11 @@ class Config:
     - Issues internal access tokens (asymmetric signing + JWKS)
     - Supports OAuth2 token exchange / client credentials flows
     - Stores internal RBAC (users, roles, bindings) in PostgreSQL
+    
+    Test Mode:
+    - When X-Test-Mode: true header is sent, use test database instead
+    - Test database is completely isolated from production
+    - Enable with AUTHZ_TEST_MODE_ENABLED=true
     """
 
     def __init__(self):
@@ -18,6 +23,13 @@ class Config:
         self.postgres_db = os.getenv("POSTGRES_DB", "busibox")
         self.postgres_user = os.getenv("POSTGRES_USER", "busibox_user")
         self.postgres_password = os.getenv("POSTGRES_PASSWORD", "")
+        
+        # Test mode configuration (isolated test database)
+        # Enable test mode header support (X-Test-Mode: true)
+        self.test_mode_enabled = os.getenv("AUTHZ_TEST_MODE_ENABLED", "false").lower() == "true"
+        self.test_db_name = os.getenv("TEST_DB_NAME", "test_authz")
+        self.test_db_user = os.getenv("TEST_DB_USER", "busibox_test_user")
+        self.test_db_password = os.getenv("TEST_DB_PASSWORD", "testpassword")
 
         # Token issuer used by *downstream services* when validating internal access tokens.
         self.issuer = os.getenv("AUTHZ_ISSUER", os.getenv("JWT_ISSUER", "busibox-authz"))
@@ -77,6 +89,10 @@ class Config:
             "bootstrap_client_allowed_scopes": self.bootstrap_client_allowed_scopes,
             "admin_token": self.admin_token,
             "master_key": self.master_key,
+            "test_mode_enabled": self.test_mode_enabled,
+            "test_db_name": self.test_db_name,
+            "test_db_user": self.test_db_user,
+            "test_db_password": self.test_db_password,
         }
 
 

@@ -171,10 +171,31 @@ check_configuration() {
                 CONFIG_OK=0
             fi
             
-            # Check vault
-            local vault_file="${REPO_ROOT}/provision/ansible/roles/secrets/vars/vault.yml"
-            if [[ -f "$vault_file" ]]; then
-                if head -1 "$vault_file" | grep -q '^\$ANSIBLE_VAULT'; then
+            # Check vault - can be in inventory group_vars or in secrets role
+            # Staging and production share the same secrets vault structure
+            local vault_found=0
+            local vault_encrypted=0
+            
+            # Check inventory-level vault first (preferred location)
+            local inv_vault_file="${REPO_ROOT}/provision/ansible/inventory/${env}/group_vars/all/vault.yml"
+            if [[ -f "$inv_vault_file" ]]; then
+                vault_found=1
+                if head -1 "$inv_vault_file" | grep -q '^\$ANSIBLE_VAULT'; then
+                    vault_encrypted=1
+                fi
+            fi
+            
+            # Fallback: check secrets role vault (shared between environments)
+            local role_vault_file="${REPO_ROOT}/provision/ansible/roles/secrets/vars/vault.yml"
+            if [[ $vault_found -eq 0 ]] && [[ -f "$role_vault_file" ]]; then
+                vault_found=1
+                if head -1 "$role_vault_file" | grep -q '^\$ANSIBLE_VAULT'; then
+                    vault_encrypted=1
+                fi
+            fi
+            
+            if [[ $vault_found -eq 1 ]]; then
+                if [[ $vault_encrypted -eq 1 ]]; then
                     CONFIG_FOUND+=("Ansible vault (encrypted)")
                 else
                     CONFIG_ISSUES+=("Ansible vault not encrypted")
@@ -198,6 +219,22 @@ check_configuration() {
 # Service Health Checks
 # ============================================================================
 
+# Quick TCP port check with very short timeout
+# Usage: quick_port_check "localhost" "5432"
+# Returns: 0 if port is open, 1 if not
+quick_port_check() {
+    local host="$1"
+    local port="$2"
+    
+    # Use nc (netcat) if available for faster check
+    if command -v nc &>/dev/null; then
+        nc -z -w 1 "$host" "$port" 2>/dev/null
+    else
+        # Fallback to bash /dev/tcp with short timeout
+        timeout 1 bash -c "echo > /dev/tcp/$host/$port" 2>/dev/null
+    fi
+}
+
 # Check if a service is healthy
 # Usage: check_service_health "postgres" "localhost" "5432"
 # Returns: 0 if healthy, 1 if not
@@ -206,57 +243,8 @@ check_service_health() {
     local host="$2"
     local port="$3"
     
-    case "$service" in
-        postgres)
-            # Try to connect to postgres
-            if command -v pg_isready &>/dev/null; then
-                pg_isready -h "$host" -p "$port" &>/dev/null
-            else
-                # Fallback to TCP check
-                timeout 2 bash -c "echo > /dev/tcp/$host/$port" 2>/dev/null
-            fi
-            ;;
-        redis)
-            # Try TCP connection
-            timeout 2 bash -c "echo > /dev/tcp/$host/$port" 2>/dev/null
-            ;;
-        milvus)
-            # Check Milvus health endpoint
-            curl -sf --connect-timeout 2 "http://${host}:9091/healthz" &>/dev/null
-            ;;
-        minio)
-            # Check MinIO health
-            curl -sf --connect-timeout 2 "http://${host}:${port}/minio/health/live" &>/dev/null
-            ;;
-        authz|authz-api)
-            # Check AuthZ API health
-            curl -sf --connect-timeout 2 "http://${host}:${port}/health" &>/dev/null
-            ;;
-        ingest|ingest-api)
-            # Check Ingest API health
-            curl -sf --connect-timeout 2 "http://${host}:${port}/health" &>/dev/null
-            ;;
-        search|search-api)
-            # Check Search API health
-            curl -sf --connect-timeout 2 "http://${host}:${port}/health" &>/dev/null
-            ;;
-        agent|agent-api)
-            # Check Agent API health
-            curl -sf --connect-timeout 2 "http://${host}:${port}/health" &>/dev/null
-            ;;
-        litellm)
-            # Check LiteLLM health
-            curl -sf --connect-timeout 2 "http://${host}:${port}/health" &>/dev/null
-            ;;
-        nginx)
-            # Check nginx via HTTPS
-            curl -sfk --connect-timeout 2 "https://${host}:${port}/" &>/dev/null
-            ;;
-        *)
-            # Generic TCP check
-            timeout 2 bash -c "echo > /dev/tcp/$host/$port" 2>/dev/null
-            ;;
-    esac
+    # Fast path: just check if port is open (1 second timeout)
+    quick_port_check "$host" "$port"
 }
 
 # Check all services for environment/backend
@@ -479,4 +467,60 @@ quick_health_check() {
     
     run_health_check "$env" "$backend"
     echo "$HEALTH_STATUS"
+}
+
+# Run a minimal/fast health check for initial menu load
+# Only checks dependencies and config, skips service health checks
+# Usage: run_quick_health_check "local" "docker"
+run_quick_health_check() {
+    local env="$1"
+    local backend="$2"
+    
+    # Only check dependencies and config - skip service checks for speed
+    check_all_dependencies "$env" "$backend"
+    check_configuration "$env" "$backend"
+    
+    # Quick service check - just check if Docker is running containers
+    SERVICES_HEALTHY=()
+    SERVICES_UNHEALTHY=()
+    SERVICES_OK=1
+    
+    if [[ "$backend" == "docker" ]]; then
+        # Fast check: are any containers running?
+        if docker ps -q 2>/dev/null | head -1 | grep -q .; then
+            # Get running container count
+            local running=$(docker compose -f "${REPO_ROOT}/docker-compose.local.yml" ps -q --status running 2>/dev/null | wc -l | tr -d ' ')
+            if [[ "$running" -gt 0 ]]; then
+                SERVICES_HEALTHY+=("docker:$running containers running")
+                SERVICES_OK=1
+            fi
+        fi
+    else
+        # For Proxmox, just check if we can reach the network
+        local network_base
+        if [[ "$env" == "production" ]]; then
+            network_base="10.96.200"
+        else
+            network_base="10.96.201"
+        fi
+        # Quick ping check to proxy (gateway)
+        if ping -c 1 -W 1 "${network_base}.200" &>/dev/null; then
+            SERVICES_HEALTHY+=("network:reachable")
+            SERVICES_OK=1
+        fi
+    fi
+    
+    # Determine status based on deps and config only
+    if [[ $DEPS_OK -eq 0 ]]; then
+        HEALTH_STATUS="$STATUS_NOT_INSTALLED"
+    elif [[ $CONFIG_OK -eq 0 ]]; then
+        HEALTH_STATUS="$STATUS_INSTALLED"
+    elif [[ ${#SERVICES_HEALTHY[@]} -eq 0 ]]; then
+        HEALTH_STATUS="$STATUS_CONFIGURED"
+    else
+        HEALTH_STATUS="$STATUS_DEPLOYED"
+    fi
+    
+    # Update state file
+    set_install_status "$HEALTH_STATUS"
 }

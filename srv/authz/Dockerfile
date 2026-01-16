@@ -19,13 +19,17 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Copy requirements first (for caching)
-COPY requirements.txt .
+COPY authz/requirements.txt .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copy and install busibox_common shared library
+COPY shared/ ./shared/
+RUN pip install --no-cache-dir ./shared
+
 # Copy source code
-COPY src/ ./src/
+COPY authz/src/ ./src/
 
 # Set Python path
 ENV PYTHONPATH=/app/src

@@ -73,9 +73,14 @@ def auth_header(auth_client: AuthTestClient):
     
     The test user should have NO roles by default.
     Use auth_client.add_role_to_user() to add roles for specific tests.
+    
+    Includes X-Test-Mode header to route API requests to test database.
     """
     token = auth_client.get_token(audience="search-api")
-    return {"Authorization": f"Bearer {token}"}
+    return {
+        "Authorization": f"Bearer {token}",
+        "X-Test-Mode": "true",
+    }
 
 
 @pytest.fixture(scope="module")
@@ -87,8 +92,14 @@ def real_access_token():
 
 @pytest.fixture(scope="module")
 def real_auth_header(real_access_token):
-    """Returns an Authorization header with a real token."""
-    return {"Authorization": f"Bearer {real_access_token}"}
+    """Returns an Authorization header with a real token.
+    
+    Includes X-Test-Mode header to route API requests to test database.
+    """
+    return {
+        "Authorization": f"Bearer {real_access_token}",
+        "X-Test-Mode": "true",
+    }
 
 
 # =============================================================================

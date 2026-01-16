@@ -29,6 +29,11 @@ import httpx
 import pytest
 
 
+# Test mode header - tells the API to route to test database
+TEST_MODE_HEADER = "X-Test-Mode"
+TEST_MODE_VALUE = "true"
+
+
 class AuthTestClient:
     """
     Client for managing test authentication state.
@@ -85,8 +90,11 @@ class AuthTestClient:
             pytest.fail("TEST_USER_ID not configured")
     
     def _admin_headers(self) -> Dict[str, str]:
-        """Get headers for admin API calls."""
-        return {"Authorization": f"Bearer {self.admin_token}"}
+        """Get headers for admin API calls. Includes X-Test-Mode header."""
+        return {
+            "Authorization": f"Bearer {self.admin_token}",
+            TEST_MODE_HEADER: TEST_MODE_VALUE,
+        }
     
     # =========================================================================
     # Token Management
@@ -116,6 +124,7 @@ class AuthTestClient:
                     "audience": audience,
                     "scope": scopes,
                 },
+                headers={TEST_MODE_HEADER: TEST_MODE_VALUE},
                 timeout=10.0,
             )
             
@@ -132,14 +141,19 @@ class AuthTestClient:
         """
         Get an Authorization header with a valid token.
         
+        Includes X-Test-Mode header to route API requests to test database.
+        
         Args:
             audience: Target audience for the token
             
         Returns:
-            Dict with Authorization header
+            Dict with Authorization and X-Test-Mode headers
         """
         token = self.get_token(audience)
-        return {"Authorization": f"Bearer {token}"}
+        return {
+            "Authorization": f"Bearer {token}",
+            TEST_MODE_HEADER: TEST_MODE_VALUE,
+        }
     
     # =========================================================================
     # Role Management
@@ -379,11 +393,13 @@ class AuthTestClient:
         Clean up all changes made during testing.
         
         Removes roles added to user and deletes created roles.
+        All cleanup operations use X-Test-Mode header to target test database.
         """
         # Remove roles from user
         for role_id in list(self._added_roles):
             try:
                 with httpx.Client() as client:
+                    # Note: _admin_headers() already includes X-Test-Mode
                     client.delete(
                         f"{self.authz_url}/admin/users/{self.test_user_id}/roles/{role_id}",
                         headers=self._admin_headers(),

@@ -24,6 +24,10 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copy and install busibox_common shared library
+COPY shared/ ./shared/
+RUN pip install --no-cache-dir ./shared
+
 # Copy source code
 COPY app/ ./app/
 COPY alembic/ ./alembic/

@@ -23,21 +23,43 @@ logger = structlog.get_logger()
 
 router = APIRouter(prefix="/keystore", tags=["Keystore"])
 
-# Module-level service reference (set during startup)
+# Module-level service references (set during startup)
 _pg: Optional[PostgresService] = None
+_pg_test: Optional[PostgresService] = None
+
+# Header name for test mode
+TEST_MODE_HEADER = "X-Test-Mode"
+
+# Load config for test_mode_enabled
+from config import Config
+config = Config()
 
 
-def set_pg_service(pg: PostgresService):
-    """Set the PostgreSQL service instance."""
-    global _pg
+def set_pg_service(pg: PostgresService, pg_test: PostgresService = None):
+    """Set the PostgreSQL service instances."""
+    global _pg, _pg_test
     _pg = pg
+    _pg_test = pg_test
 
 
 def get_pg() -> PostgresService:
-    """Get the PostgreSQL service instance."""
+    """Get the production PostgreSQL service instance."""
     if _pg is None:
         raise RuntimeError("PostgreSQL service not initialized")
     return _pg
+
+
+def _get_pg(request: Request) -> PostgresService:
+    """Get the appropriate PostgresService based on request headers.
+    
+    If X-Test-Mode: true header is present and test mode is enabled,
+    returns the test database service. Otherwise returns production.
+    """
+    if _pg_test and config.test_mode_enabled:
+        test_mode = request.headers.get(TEST_MODE_HEADER, "").lower() == "true"
+        if test_mode:
+            return _pg_test
+    return get_pg()
 
 
 # ============================================================================
@@ -156,13 +178,13 @@ async def require_keystore_auth(request: Request):
 # ============================================================================
 
 @router.post("/kek", response_model=KekResponse, dependencies=[Depends(require_keystore_auth)])
-async def create_kek(body: CreateKekRequest):
+async def create_kek(request: Request, body: CreateKekRequest):
     """
     Create a new Key Encryption Key for a role, user, or system.
     
     The KEK is generated, encrypted with the master key, and stored.
     """
-    pg = get_pg()
+    pg = _get_pg(request)
     encryption = get_encryption_service()
     
     # Check if KEK already exists for this owner
@@ -203,9 +225,9 @@ async def create_kek(body: CreateKekRequest):
 
 
 @router.get("/kek/{owner_type}/{owner_id}", response_model=KekResponse, dependencies=[Depends(require_keystore_auth)])
-async def get_kek(owner_type: str, owner_id: str):
+async def get_kek(request: Request, owner_type: str, owner_id: str):
     """Get KEK metadata for an owner (does not return the key itself)."""
-    pg = get_pg()
+    pg = _get_pg(request)
     
     result = await pg.get_kek_for_owner(owner_type, owner_id if owner_id != "system" else None)
     if not result:
@@ -226,12 +248,12 @@ async def get_kek(owner_type: str, owner_id: str):
 
 
 @router.post("/kek/ensure-for-role/{role_id}", response_model=KekResponse, dependencies=[Depends(require_keystore_auth)])
-async def ensure_kek_for_role(role_id: str):
+async def ensure_kek_for_role(request: Request, role_id: str):
     """
     Ensure a KEK exists for a role, creating one if necessary.
     This is idempotent - returns existing KEK if present.
     """
-    pg = get_pg()
+    pg = _get_pg(request)
     encryption = get_encryption_service()
     
     # Check if KEK already exists
@@ -271,7 +293,7 @@ async def ensure_kek_for_role(role_id: str):
 
 
 @router.post("/kek/rotate", response_model=KekResponse, dependencies=[Depends(require_keystore_auth)])
-async def rotate_kek(body: RotateKekRequest):
+async def rotate_kek(request: Request, body: RotateKekRequest):
     """
     Rotate a KEK by creating a new version.
     
@@ -279,7 +301,7 @@ async def rotate_kek(body: RotateKekRequest):
     will need to be re-wrapped with the new KEK. This is typically done
     during a background key rotation job.
     """
-    pg = get_pg()
+    pg = _get_pg(request)
     encryption = get_encryption_service()
     
     # Generate new KEK
@@ -316,7 +338,7 @@ async def rotate_kek(body: RotateKekRequest):
 # ============================================================================
 
 @router.post("/encrypt", response_model=EncryptContentResponse, dependencies=[Depends(require_keystore_auth)])
-async def encrypt_content(body: EncryptContentRequest):
+async def encrypt_content(request: Request, body: EncryptContentRequest):
     """
     Encrypt file content using envelope encryption.
     
@@ -325,7 +347,7 @@ async def encrypt_content(body: EncryptContentRequest):
     3. Wraps the DEK with KEKs for specified roles/user
     4. Stores wrapped DEKs in the keystore
     """
-    pg = get_pg()
+    pg = _get_pg(request)
     encryption = get_encryption_service()
     
     # Decode content
@@ -392,7 +414,7 @@ async def encrypt_content(body: EncryptContentRequest):
 
 
 @router.post("/decrypt", response_model=DecryptContentResponse, dependencies=[Depends(require_keystore_auth)])
-async def decrypt_content(body: DecryptContentRequest, request: Request):
+async def decrypt_content(request: Request, body: DecryptContentRequest):
     """
     Decrypt file content.
     
@@ -401,7 +423,7 @@ async def decrypt_content(body: DecryptContentRequest, request: Request):
     - role_ids from the caller's JWT token
     - user_id from the caller's JWT token
     """
-    pg = get_pg()
+    pg = _get_pg(request)
     encryption = get_encryption_service()
     
     # Decode encrypted content
@@ -465,14 +487,14 @@ async def decrypt_content(body: DecryptContentRequest, request: Request):
 # ============================================================================
 
 @router.post("/file/{file_id}/add-role/{role_id}", dependencies=[Depends(require_keystore_auth)])
-async def add_role_access(file_id: str, role_id: str):
+async def add_role_access(request: Request, file_id: str, role_id: str):
     """
     Add a role's access to a file by wrapping the DEK with the role's KEK.
     
     Requires an existing wrapped DEK (from admin or another authorized role)
     to be provided in the request to re-wrap.
     """
-    pg = get_pg()
+    pg = _get_pg(request)
     encryption = get_encryption_service()
     
     # Get existing wrapped DEKs for the file
@@ -526,9 +548,9 @@ async def add_role_access(file_id: str, role_id: str):
 
 
 @router.delete("/file/{file_id}/remove-role/{role_id}", dependencies=[Depends(require_keystore_auth)])
-async def remove_role_access(file_id: str, role_id: str):
+async def remove_role_access(request: Request, file_id: str, role_id: str):
     """Remove a role's access to a file by deleting their wrapped DEK."""
-    pg = get_pg()
+    pg = _get_pg(request)
     
     removed = await pg.remove_wrapped_dek_for_role(file_id=file_id, role_id=role_id)
     
@@ -544,9 +566,9 @@ async def remove_role_access(file_id: str, role_id: str):
 
 
 @router.delete("/file/{file_id}", dependencies=[Depends(require_keystore_auth)])
-async def delete_file_keys(file_id: str):
+async def delete_file_keys(request: Request, file_id: str):
     """Delete all wrapped DEKs for a file (called when file is deleted)."""
-    pg = get_pg()
+    pg = _get_pg(request)
     
     count = await pg.delete_wrapped_deks_for_file(file_id)
     

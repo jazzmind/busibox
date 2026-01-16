@@ -222,6 +222,32 @@ services:
       - busibox-net
     restart: "no"
 
+  # Test Database Bootstrap (on-demand, run via: make test-db-init)
+  # Initializes test databases (test_authz, test_files, test_agent_server) with
+  # schema and bootstrap data for running integration tests
+  # This container is NOT started automatically - use the test menu to run it
+  test-db-init:
+    image: python:3.11-slim
+    container_name: local-test-db-init
+    profiles: ["test"]  # Only start with --profile test
+    volumes:
+      - ./scripts/docker/bootstrap-test-databases.py:/app/bootstrap.py:ro
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      TEST_DB_USER: busibox_test_user
+      TEST_DB_PASSWORD: testpassword
+      AUTHZ_BOOTSTRAP_CLIENT_ID: ${AUTHZ_BOOTSTRAP_CLIENT_ID:-ai-portal}
+      AUTHZ_BOOTSTRAP_CLIENT_SECRET: ${AUTHZ_BOOTSTRAP_CLIENT_SECRET:-ai-portal-secret}
+      AUTHZ_ADMIN_TOKEN: ${AUTHZ_ADMIN_TOKEN:-local-admin-token}
+    command: ["sh", "-c", "pip install -q asyncpg cryptography && python /app/bootstrap.py"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - busibox-net
+    restart: "no"
+
   # ===========================================================================
   # LLM GATEWAY
   # ===========================================================================
@@ -259,8 +285,8 @@ services:
   # AuthZ API - Authentication & Authorization Service
   authz-api:
     build:
-      context: ./srv/authz
-      dockerfile: Dockerfile
+      context: ./srv
+      dockerfile: authz/Dockerfile
     container_name: local-authz-api
     hostname: authz-api
     # Hot-reload: mount source code and use --reload flag
@@ -268,12 +294,17 @@ services:
       - ./srv/authz/src:/app/src:ro
     command: ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8010", "--reload", "--reload-dir", "/app/src"]
     environment:
-      # PostgreSQL
+      # PostgreSQL - uses dedicated authz database
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
-      POSTGRES_DB: busibox
+      POSTGRES_DB: authz
       POSTGRES_USER: ${POSTGRES_USER:-busibox_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
+      # Test Mode Configuration (routes X-Test-Mode: true requests to test database)
+      AUTHZ_TEST_MODE_ENABLED: "true"
+      TEST_DB_NAME: test_authz
+      TEST_DB_USER: busibox_test_user
+      TEST_DB_PASSWORD: testpassword
       # AuthZ Configuration
       AUTHZ_ISSUER: busibox-authz
       AUTHZ_ACCESS_TOKEN_TTL: ${AUTHZ_ACCESS_TOKEN_TTL:-900}
@@ -319,12 +350,17 @@ services:
     environment:
       # Service
       SERVICE_PORT: 8002
-      # PostgreSQL
+      # PostgreSQL - uses dedicated files database
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
-      POSTGRES_DB: busibox
+      POSTGRES_DB: files
       POSTGRES_USER: ${POSTGRES_USER:-busibox_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
+      # Test Mode Configuration (routes X-Test-Mode: true requests to test database)
+      INGEST_TEST_MODE_ENABLED: "true"
+      TEST_DB_NAME: test_files
+      TEST_DB_USER: busibox_test_user
+      TEST_DB_PASSWORD: testpassword
       # Redis
       REDIS_HOST: redis
       REDIS_PORT: 6379
@@ -390,10 +426,10 @@ services:
     # Run the worker process instead of the API
     command: ["python", "src/worker.py"]
     environment:
-      # PostgreSQL
+      # PostgreSQL - uses dedicated files database
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
-      POSTGRES_DB: busibox
+      POSTGRES_DB: files
       POSTGRES_USER: ${POSTGRES_USER:-busibox_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
       # Redis
@@ -434,7 +470,14 @@ services:
         condition: service_completed_successfully
       ingest-api:
         condition: service_healthy
-    # No healthcheck needed - worker just processes jobs
+    # Worker healthcheck - verify the Python worker process is running (PID 1)
+    # Uses /proc/1/cmdline since pgrep isn't available in slim image
+    healthcheck:
+      test: ["CMD-SHELL", "grep -q 'worker.py' /proc/1/cmdline"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
     restart: unless-stopped
     networks:
       - busibox-net
@@ -457,12 +500,17 @@ services:
       # Service
       SERVICE_PORT: 8003
       LOG_LEVEL: INFO
-      # PostgreSQL
+      # PostgreSQL - uses dedicated files database
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
-      POSTGRES_DB: busibox
+      POSTGRES_DB: files
       POSTGRES_USER: ${POSTGRES_USER:-busibox_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
+      # Test Mode Configuration (routes X-Test-Mode: true requests to test database)
+      SEARCH_TEST_MODE_ENABLED: "true"
+      TEST_DB_NAME: test_files
+      TEST_DB_USER: busibox_test_user
+      TEST_DB_PASSWORD: testpassword
       # Milvus
       MILVUS_HOST: milvus
       MILVUS_PORT: 19530
@@ -529,6 +577,9 @@ services:
       LOG_LEVEL: INFO
       # Database
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-busibox_user}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/agent_server
+      # Test Mode Configuration (routes X-Test-Mode: true requests to test database)
+      AGENT_TEST_MODE_ENABLED: "true"
+      TEST_DATABASE_URL: postgresql+asyncpg://busibox_test_user:testpassword@postgres:5432/test_agent_server
       # Redis
       REDIS_URL: redis://redis:6379/0
       # Busibox services

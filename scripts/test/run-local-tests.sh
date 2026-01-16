@@ -270,6 +270,12 @@ run_service_tests() {
     info "Testing: $service"
     echo ""
     
+    # For Docker environment, run tests inside the container
+    if [[ "$ENV" == "docker" ]]; then
+        run_docker_container_tests "$service"
+        return $?
+    fi
+    
     # Start local worker if requested and testing ingest
     if [[ "$START_LOCAL_WORKER" == "1" ]] && [[ "$service" == "ingest" ]]; then
         if [[ -z "$WORKER_PID" ]]; then
@@ -374,6 +380,106 @@ run_service_tests() {
     
     # Use eval to properly handle quoted arguments in PYTEST_ARGS
     if eval "$pytest_cmd $test_dir -v $PYTEST_ARGS"; then
+        success "$service tests passed!"
+        return 0
+    else
+        error "$service tests failed!"
+        return 1
+    fi
+}
+
+# Run tests inside Docker container
+# This avoids Python version compatibility issues (host Python 3.14 vs container Python 3.11)
+run_docker_container_tests() {
+    local service="$1"
+    
+    # Map service name to container name
+    local container_name=""
+    case "$service" in
+        authz)   container_name="local-authz-api" ;;
+        ingest)  container_name="local-ingest-api" ;;
+        search)  container_name="local-search-api" ;;
+        agent)   container_name="local-agent-api" ;;
+        *)
+            error "Unknown service: $service"
+            return 1
+            ;;
+    esac
+    
+    # Check if container is running
+    if ! docker ps --format '{{.Names}}' | grep -q "^${container_name}$"; then
+        error "Container not running: $container_name"
+        info "Start Docker services first: make docker-up"
+        return 1
+    fi
+    
+    info "Running tests inside container: $container_name"
+    echo ""
+    
+    # Copy test files to container (they may have changed)
+    local service_dir="${REPO_ROOT}/srv/${service}"
+    if [[ -d "${service_dir}/tests" ]]; then
+        info "Syncing test files to container..."
+        docker cp "${service_dir}/tests/." "${container_name}:/app/tests/"
+    fi
+    
+    # Copy test requirements if present
+    if [[ -f "${service_dir}/requirements.test.txt" ]]; then
+        docker cp "${service_dir}/requirements.test.txt" "${container_name}:/app/"
+    fi
+    
+    # Copy pytest.ini if present (needed for pytest-asyncio config)
+    if [[ -f "${service_dir}/pytest.ini" ]]; then
+        docker cp "${service_dir}/pytest.ini" "${container_name}:/app/"
+    fi
+    
+    # Copy conftest.py if present
+    if [[ -f "${service_dir}/tests/conftest.py" ]]; then
+        docker cp "${service_dir}/tests/conftest.py" "${container_name}:/app/tests/"
+    fi
+    
+    # Install test dependencies and run tests inside container
+    # Use a single exec to avoid multiple container connections
+    local pytest_filter=""
+    if [[ -n "$PYTEST_ARGS" ]]; then
+        pytest_filter="$PYTEST_ARGS"
+    else
+        # Default: skip slow and gpu tests
+        pytest_filter="-m 'not slow and not gpu'"
+    fi
+    
+    info "Running: pytest tests -v $pytest_filter"
+    echo ""
+    
+    # Build test database environment variables
+    # Tests ALWAYS use ISOLATED test databases (test_authz, test_files, test_agent_server)
+    # owned by busibox_test_user - NEVER production databases
+    # See config/init-databases.sql for test database setup
+    local test_db_name="test_authz"
+    case "$service" in
+        authz)  test_db_name="test_authz" ;;
+        ingest) test_db_name="test_files" ;;
+        search) test_db_name="test_files" ;;
+        agent)  test_db_name="test_agent_server" ;;
+    esac
+    
+    # Run tests with proper error handling
+    # Tests use isolated test databases with busibox_test_user
+    if docker exec \
+        -e PYTHONPATH=/app/src:/app \
+        -e TEST_DB_HOST=postgres \
+        -e TEST_DB_PORT=5432 \
+        -e TEST_DB_NAME="$test_db_name" \
+        -e TEST_DB_USER=busibox_test_user \
+        -e TEST_DB_PASSWORD=testpassword \
+        -e TEST_AUTHZ_URL=http://authz-api:8010 \
+        -e AUTHZ_BOOTSTRAP_CLIENT_ID=ai-portal \
+        -e AUTHZ_BOOTSTRAP_CLIENT_SECRET=ai-portal-secret \
+        -e AUTHZ_ADMIN_TOKEN=local-admin-token \
+        "$container_name" \
+        sh -c "pip install -q pytest pytest-asyncio httpx 2>/dev/null; \
+               if [ -f /app/requirements.test.txt ]; then pip install -q -r /app/requirements.test.txt 2>/dev/null || true; fi; \
+               cd /app && python -m pytest tests -v $pytest_filter"; then
         success "$service tests passed!"
         return 0
     else

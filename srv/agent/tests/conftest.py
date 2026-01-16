@@ -70,7 +70,7 @@ set_auth_env = create_service_auth_fixture("agent")
 
 # Use TEST_DATABASE_URL if provided, otherwise use the service's configured DATABASE_URL
 # When running tests on the test environment, the ansible deployment should have configured
-# the service to use the test database (agent_server_test instead of agent_server)
+# the service to use the test database (test_agent_server instead of agent_server)
 settings = get_settings()
 TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL", settings.database_url)
 
@@ -293,8 +293,14 @@ def mock_token(mock_jwt_token: str) -> str:
 
 @pytest.fixture
 def auth_headers(mock_jwt_token: str) -> dict:
-    """Get authentication headers with a real JWT token."""
-    return {"Authorization": f"Bearer {mock_jwt_token}"}
+    """Get authentication headers with a real JWT token.
+    
+    Includes X-Test-Mode header to route API requests to test database.
+    """
+    return {
+        "Authorization": f"Bearer {mock_jwt_token}",
+        "X-Test-Mode": "true",
+    }
 
 
 # =============================================================================

@@ -76,6 +76,17 @@ class Settings(BaseSettings):
         "postgresql+asyncpg://busibox_user:devpassword@localhost:5432/agent_server",
         description="SQLAlchemy connection URL",
     )
+    
+    # Test mode configuration
+    # When enabled, requests with X-Test-Mode: true header will use test database
+    test_mode_enabled: bool = Field(
+        False,
+        description="Enable test mode support (routes test requests to test database)",
+    )
+    test_database_url: str = Field(
+        "postgresql+asyncpg://busibox_test_user:testpassword@localhost:5432/test_agent_server",
+        description="SQLAlchemy connection URL for test database",
+    )
 
     # Redis/background tasks
     redis_url: str = Field("redis://localhost:6379/0", description="Redis URL for queues/locks")

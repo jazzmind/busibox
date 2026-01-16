@@ -28,7 +28,7 @@ from testing.database import DatabasePool, RLSEnabledPool
 # Test Configuration
 # =============================================================================
 
-# Database for files (always "files", never "files_test")
+# Database for files (production: "files", tests: "test_files")
 FILES_DB = os.getenv("POSTGRES_DB", "files")
 FILES_HOST = os.getenv("POSTGRES_HOST", "localhost")
 

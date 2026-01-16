@@ -18,13 +18,34 @@ from config import Config
 
 router = APIRouter()
 config = Config()
-pg: PostgresService = None  # Set via set_pg_service()
+
+# PostgresService instances - will be set by main.py
+# pg is production, pg_test is test database (optional)
+pg: PostgresService = None
+pg_test: PostgresService = None
+
+# Header name for test mode
+TEST_MODE_HEADER = "X-Test-Mode"
 
 
-def set_pg_service(service: PostgresService):
-    """Set the shared PostgresService instance."""
-    global pg
+def set_pg_service(service: PostgresService, test_service: PostgresService = None):
+    """Set the shared PostgresService instances."""
+    global pg, pg_test
     pg = service
+    pg_test = test_service
+
+
+def _get_pg(request: Request) -> PostgresService:
+    """Get the appropriate PostgresService based on request headers.
+    
+    If X-Test-Mode: true header is present and test mode is enabled,
+    returns the test database service. Otherwise returns production.
+    """
+    if pg_test and config.test_mode_enabled:
+        test_mode = request.headers.get(TEST_MODE_HEADER, "").lower() == "true"
+        if test_mode:
+            return pg_test
+    return pg
 
 
 # -----------------------------------------------------------------------------
@@ -129,10 +150,11 @@ async def create_binding(request: Request, body: RoleBindingCreate):
     """
     actor_id = await _require_admin_auth(request)
     
-    await pg.connect()
+    db = _get_pg(request)
+    await db.connect()
     
     # Check if role exists
-    role = await pg.get_role(body.role_id)
+    role = await db.get_role(body.role_id)
     if not role:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -140,7 +162,7 @@ async def create_binding(request: Request, body: RoleBindingCreate):
         )
     
     # Check if binding already exists
-    existing = await pg.get_role_binding_by_unique(
+    existing = await db.get_role_binding_by_unique(
         role_id=body.role_id,
         resource_type=body.resource_type,
         resource_id=body.resource_id,
@@ -153,7 +175,7 @@ async def create_binding(request: Request, body: RoleBindingCreate):
     
     # Create the binding
     try:
-        binding = await pg.create_role_binding(
+        binding = await db.create_role_binding(
             role_id=body.role_id,
             resource_type=body.resource_type,
             resource_id=body.resource_id,
@@ -184,10 +206,11 @@ async def list_bindings(
     """
     await _require_admin_auth(request)
     
-    await pg.connect()
+    db = _get_pg(request)
+    await db.connect()
     
     try:
-        bindings = await pg.list_role_bindings(
+        bindings = await db.list_role_bindings(
             role_id=role_id,
             resource_type=resource_type,
             resource_id=resource_id,
@@ -211,10 +234,11 @@ async def get_binding(request: Request, binding_id: str):
     """
     await _require_admin_auth(request)
     
-    await pg.connect()
+    db = _get_pg(request)
+    await db.connect()
     
     try:
-        binding = await pg.get_role_binding(binding_id)
+        binding = await db.get_role_binding(binding_id)
         if not binding:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -237,10 +261,11 @@ async def delete_binding(request: Request, binding_id: str):
     """
     await _require_admin_auth(request)
     
-    await pg.connect()
+    db = _get_pg(request)
+    await db.connect()
     
     try:
-        deleted = await pg.delete_role_binding(binding_id)
+        deleted = await db.delete_role_binding(binding_id)
         if not deleted:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -271,10 +296,11 @@ async def get_role_bindings(
     """
     await _require_admin_auth(request)
     
-    await pg.connect()
+    db = _get_pg(request)
+    await db.connect()
     
     # Check if role exists
-    role = await pg.get_role(role_id)
+    role = await db.get_role(role_id)
     if not role:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -282,7 +308,7 @@ async def get_role_bindings(
         )
     
     try:
-        bindings = await pg.get_resources_for_role(role_id, resource_type)
+        bindings = await db.get_resources_for_role(role_id, resource_type)
         return [_format_binding(b) for b in bindings]
     except ValueError as e:
         raise HTTPException(
@@ -305,9 +331,10 @@ async def get_resource_roles(request: Request, resource_type: str, resource_id: 
     """
     await _require_admin_auth(request)
     
-    await pg.connect()
+    db = _get_pg(request)
+    await db.connect()
     
-    roles = await pg.get_roles_for_resource(resource_type, resource_id)
+    roles = await db.get_roles_for_resource(resource_type, resource_id)
     
     return [
         {
@@ -337,10 +364,11 @@ async def check_user_access(request: Request, user_id: str, resource_type: str, 
     """
     await _require_admin_auth(request)
     
-    await pg.connect()
+    db = _get_pg(request)
+    await db.connect()
     
     try:
-        has_access = await pg.user_can_access_resource(user_id, resource_type, resource_id)
+        has_access = await db.user_can_access_resource(user_id, resource_type, resource_id)
         return {"has_access": has_access}
     except ValueError as e:
         raise HTTPException(
@@ -359,10 +387,11 @@ async def get_user_resources(request: Request, user_id: str, resource_type: str)
     """
     await _require_admin_auth(request)
     
-    await pg.connect()
+    db = _get_pg(request)
+    await db.connect()
     
     try:
-        resource_ids = await pg.get_user_accessible_resources(user_id, resource_type)
+        resource_ids = await db.get_user_accessible_resources(user_id, resource_type)
         return {"resource_ids": resource_ids}
     except ValueError as e:
         raise HTTPException(

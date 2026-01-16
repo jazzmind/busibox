@@ -13,7 +13,8 @@ import os
 from typing import List
 import httpx
 import structlog
-from shared.model_registry import get_registry
+
+from busibox_common.llm import get_registry
 
 logger = structlog.get_logger()
 

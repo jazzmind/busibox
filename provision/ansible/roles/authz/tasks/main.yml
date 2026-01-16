@@ -54,7 +54,7 @@
 
 - name: Create authz pytest database
   postgresql_db:
-    name: "authz_test"
+    name: "test_authz"
     owner: "{{ authz_postgres_user }}"
     encoding: UTF8
     lc_collate: en_US.UTF-8

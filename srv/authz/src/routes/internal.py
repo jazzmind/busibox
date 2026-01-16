@@ -19,22 +19,43 @@ from oauth.contracts import SyncUser
 router = APIRouter()
 config = Config()
 
-# PostgresService instance - will be set by main.py
+# PostgresService instances - will be set by main.py
+# pg is production, pg_test is test database (optional)
 pg = None
+pg_test = None
 
-def set_pg_service(pg_service):
-    """Set the shared PostgresService instance."""
-    global pg
+# Header name for test mode
+TEST_MODE_HEADER = "X-Test-Mode"
+
+
+def set_pg_service(pg_service, pg_test_service=None):
+    """Set the shared PostgresService instances."""
+    global pg, pg_test
     pg = pg_service
+    pg_test = pg_test_service
 
 
-async def _require_oauth_client(body: dict) -> dict:
+def _get_pg(request: Request):
+    """Get the appropriate PostgresService based on request headers.
+    
+    If X-Test-Mode: true header is present and test mode is enabled,
+    returns the test database service. Otherwise returns production.
+    """
+    if pg_test and config.test_mode_enabled:
+        test_mode = request.headers.get(TEST_MODE_HEADER, "").lower() == "true"
+        if test_mode:
+            return pg_test
+    return pg
+
+
+async def _require_oauth_client(request: Request, body: dict) -> dict:
     client_id = body.get("client_id")
     client_secret = body.get("client_secret")
     if not client_id or not client_secret:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_client")
-    await pg.connect()
-    client = await pg.get_oauth_client(client_id)
+    db = _get_pg(request)
+    await db.connect()
+    client = await db.get_oauth_client(client_id)
     if not client or not client.get("is_active"):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_client")
     if not verify_client_secret(client_secret, client["client_secret_hash"]):
@@ -49,7 +70,7 @@ async def sync_user(request: Request):
     Called by ai-portal (server-to-server).
     """
     body = await request.json()
-    await _require_oauth_client(body)
+    await _require_oauth_client(request, body)
 
     # accept payload nested under `user` or directly
     payload = body.get("user") or body
@@ -58,9 +79,10 @@ async def sync_user(request: Request):
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_request") from e
 
-    await pg.connect()
+    db = _get_pg(request)
+    await db.connect()
     # Upsert roles and get mapping of role names to IDs
-    role_name_to_id = await pg.upsert_roles([r.model_dump() for r in su.roles])
+    role_name_to_id = await db.upsert_roles([r.model_dump() for r in su.roles])
     
     # Build a mapping of role IDs (from ai-portal) to role names for lookup
     role_id_to_name = {r.id: r.name for r in su.roles}
@@ -73,7 +95,7 @@ async def sync_user(request: Request):
         try:
             uuid.UUID(role_id_or_name)
             # It's a UUID, check if it exists in authz DB
-            role = await pg.get_role_by_id(role_id_or_name)
+            role = await db.get_role_by_id(role_id_or_name)
             if role:
                 resolved_role_ids.append(role_id_or_name)
             else:
@@ -91,11 +113,11 @@ async def sync_user(request: Request):
                 resolved_role_ids.append(role_name_to_id[role_id_or_name])
             else:
                 # Try looking up by name in DB directly
-                role = await pg.get_role_by_name(role_id_or_name)
+                role = await db.get_role_by_name(role_id_or_name)
                 if role:
                     resolved_role_ids.append(role["id"])
     
-    await pg.upsert_user_and_roles(
+    await db.upsert_user_and_roles(
         user_id=su.user_id,
         email=su.email,
         status=su.status,

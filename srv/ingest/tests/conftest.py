@@ -221,6 +221,8 @@ async def async_client(initialized_app, auth_client, ingest_full_access_role):
     
     This fixture automatically grants the test user full ingest permissions
     and cleans them up after the test.
+    
+    Includes X-Test-Mode header to route API requests to test database.
     """
     app, _ = initialized_app
     
@@ -229,7 +231,10 @@ async def async_client(initialized_app, auth_client, ingest_full_access_role):
     
     transport = ASGITransport(app=app, raise_app_exceptions=False)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        client.headers.update({"Authorization": f"Bearer {token}"})
+        client.headers.update({
+            "Authorization": f"Bearer {token}",
+            "X-Test-Mode": "true",
+        })
         yield client
 
 
@@ -251,6 +256,8 @@ async def async_client_read_only(initialized_app, auth_client, ingest_read_role)
     """
     Async HTTP client with only read scope.
     Use this to test scope enforcement.
+    
+    Includes X-Test-Mode header to route API requests to test database.
     """
     app, _ = initialized_app
     
@@ -258,7 +265,10 @@ async def async_client_read_only(initialized_app, auth_client, ingest_read_role)
     
     transport = ASGITransport(app=app, raise_app_exceptions=False)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        client.headers.update({"Authorization": f"Bearer {token}"})
+        client.headers.update({
+            "Authorization": f"Bearer {token}",
+            "X-Test-Mode": "true",
+        })
         yield client
 
 

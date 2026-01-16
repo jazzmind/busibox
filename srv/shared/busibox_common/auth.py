@@ -1,12 +1,13 @@
 """
-Shared JWT Authentication Utilities for Busibox Services
+Shared Authentication Utilities for Busibox Services.
 
-This module provides common JWT authentication, scope checking, and RLS
-utilities used across all busibox services (ingest, search, agent).
+This module provides common JWT authentication, token exchange, scope checking,
+and RLS utilities used across all busibox services (ingest, search, agent).
 
 Features:
-- JWT token validation via JWKS
+- JWT token validation via JWKS (using pyjwt library)
 - User context extraction (user_id, email, scopes, roles)
+- OAuth2 token exchange for service-to-service calls
 - OAuth2 scope checking utilities
 - PostgreSQL RLS session variable helpers
 - Milvus partition building utilities
@@ -17,20 +18,29 @@ Environment Variables:
 - AUTHZ_ISSUER / JWT_ISSUER: Expected JWT issuer (default: busibox-authz)
 - AUTHZ_AUDIENCE / JWT_AUDIENCE: Expected JWT audience (service-specific)
 - JWT_ALGORITHMS: Comma-separated list of algorithms (default: RS256)
+- AUTHZ_TOKEN_URL: Token endpoint for OAuth2 token exchange
+- API_SERVICE_CLIENT_ID: Client ID for service-to-service token exchange
+- API_SERVICE_CLIENT_SECRET: Client secret for token exchange
 """
 
-import json
 import os
+import time
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional, Set
+from datetime import datetime, timedelta, timezone
+from typing import Callable, Dict, List, Optional, Set
 
+import httpx
 import jwt
 import structlog
+from cachetools import TTLCache
 from fastapi import Request, status
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 logger = structlog.get_logger()
+
+# Token exchange grant type constant
+TOKEN_EXCHANGE_GRANT = "urn:ietf:params:oauth:grant-type:token-exchange"
 
 
 # ============================================================================
@@ -77,12 +87,14 @@ class UserContext:
     - scopes: Set of OAuth2 scopes for operation authorization
     - roles: List of Role objects for data access filtering
     - authorization_header: Original auth header for passthrough to downstream services
+    - token: The raw JWT token string (for token exchange)
     """
     user_id: str
     email: Optional[str] = None
     scopes: Set[str] = field(default_factory=set)
     roles: List[Role] = field(default_factory=list)
     authorization_header: Optional[str] = None
+    token: Optional[str] = None
     
     @property
     def role_ids(self) -> List[str]:
@@ -185,13 +197,18 @@ def parse_jwt_token(
         return None
 
 
-def extract_user_context(payload: dict, auth_header: Optional[str] = None) -> UserContext:
+def extract_user_context(
+    payload: dict, 
+    auth_header: Optional[str] = None,
+    token: Optional[str] = None,
+) -> UserContext:
     """
     Extract UserContext from JWT payload.
     
     Args:
         payload: Decoded JWT payload
         auth_header: Original Authorization header for passthrough
+        token: Raw JWT token string (for token exchange)
     
     Returns:
         UserContext with extracted user information.
@@ -199,18 +216,33 @@ def extract_user_context(payload: dict, auth_header: Optional[str] = None) -> Us
     user_id = payload.get("sub", "")
     email = payload.get("email")
     
-    # Extract scopes (space-delimited string)
-    scope_str = payload.get("scope", "")
-    scopes = set(s for s in scope_str.split() if s)
+    # Extract scopes (space-delimited string or list)
+    scope_claim = payload.get("scope", "")
+    if isinstance(scope_claim, str):
+        scopes = set(s for s in scope_claim.split() if s)
+    elif isinstance(scope_claim, list):
+        scopes = set(str(s) for s in scope_claim if s)
+    else:
+        scopes = set()
+    
+    # Also check for 'scp' claim (used by some providers)
+    scp_claim = payload.get("scp", [])
+    if isinstance(scp_claim, list):
+        scopes.update(str(s) for s in scp_claim if s)
     
     # Extract roles (for data access filtering)
     roles = []
     for role_data in payload.get("roles", []):
-        role = Role(
-            id=role_data.get("id", ""),
-            name=role_data.get("name", ""),
-        )
-        roles.append(role)
+        if isinstance(role_data, str):
+            # Just a role ID/name string
+            roles.append(Role(id=role_data, name=role_data))
+        elif isinstance(role_data, dict):
+            # Role object from authz: {"id": "...", "name": "..."}
+            role = Role(
+                id=role_data.get("id", ""),
+                name=role_data.get("name", ""),
+            )
+            roles.append(role)
     
     return UserContext(
         user_id=user_id,
@@ -218,7 +250,254 @@ def extract_user_context(payload: dict, auth_header: Optional[str] = None) -> Us
         scopes=scopes,
         roles=roles,
         authorization_header=auth_header,
+        token=token,
     )
+
+
+# ============================================================================
+# Token Exchange
+# ============================================================================
+
+# Global token cache for service-to-service token exchange
+# TTL is slightly less than token lifetime to ensure we don't use expired tokens
+_token_cache: TTLCache = TTLCache(maxsize=1000, ttl=840)  # 14 minutes (tokens are 15 min)
+
+
+class TokenExchangeClient:
+    """
+    Client for OAuth2 Token Exchange (RFC 8693).
+    
+    Used for service-to-service authentication where one service needs to
+    call another service on behalf of a user.
+    
+    The exchanged token will have:
+    - The correct audience for the target service
+    - The original user's identity (sub) and roles preserved
+    - Proper RLS enforcement in the downstream service
+    
+    Usage:
+        client = TokenExchangeClient()
+        token = await client.get_token_for_service(
+            user_id="user-uuid",
+            target_audience="ingest-api",
+        )
+        if token:
+            headers = {"Authorization": f"Bearer {token}"}
+    """
+    
+    def __init__(
+        self,
+        token_url: Optional[str] = None,
+        client_id: Optional[str] = None,
+        client_secret: Optional[str] = None,
+        timeout: float = 10.0,
+    ):
+        """
+        Initialize token exchange client.
+        
+        Args:
+            token_url: OAuth2 token endpoint URL (default from env)
+            client_id: OAuth2 client ID (default from env)
+            client_secret: OAuth2 client secret (default from env)
+            timeout: HTTP request timeout in seconds
+        """
+        self.token_url = token_url or os.environ.get(
+            "AUTHZ_TOKEN_URL", "http://10.96.200.210:8010/oauth/token"
+        )
+        self.client_id = client_id or os.environ.get(
+            "API_SERVICE_CLIENT_ID", "api-service"
+        )
+        self.client_secret = client_secret or os.environ.get(
+            "API_SERVICE_CLIENT_SECRET", ""
+        )
+        self.timeout = timeout
+    
+    @classmethod
+    def from_config(cls, config: Dict) -> "TokenExchangeClient":
+        """
+        Create a TokenExchangeClient from a config dictionary.
+        
+        Args:
+            config: Dictionary with authz_token_url, api_service_client_id,
+                    api_service_client_secret keys
+        
+        Returns:
+            Configured TokenExchangeClient instance
+        """
+        return cls(
+            token_url=config.get("authz_token_url"),
+            client_id=config.get("api_service_client_id"),
+            client_secret=config.get("api_service_client_secret"),
+        )
+    
+    async def get_token_for_service(
+        self,
+        user_id: str,
+        target_audience: str,
+        scope: str = "read write",
+        use_cache: bool = True,
+    ) -> Optional[str]:
+        """
+        Get a token for calling another service on behalf of a user.
+        
+        Args:
+            user_id: The user ID to impersonate (from the incoming request's JWT)
+            target_audience: The audience of the target service (e.g., "ingest-api")
+            scope: Requested scopes (space-separated)
+            use_cache: Whether to use cached tokens (default True)
+        
+        Returns:
+            Access token string, or None if exchange fails
+        """
+        # Check cache first
+        if use_cache:
+            cache_key = f"{user_id}:{target_audience}"
+            cached_token = _token_cache.get(cache_key)
+            if cached_token:
+                logger.debug(
+                    "Using cached token for service call",
+                    user_id=user_id,
+                    target_audience=target_audience,
+                )
+                return cached_token
+        
+        if not self.client_secret:
+            logger.error(
+                "API service client secret not configured",
+                client_id=self.client_id,
+            )
+            return None
+        
+        try:
+            logger.info(
+                "Exchanging token for service call",
+                user_id=user_id,
+                target_audience=target_audience,
+            )
+            
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    self.token_url,
+                    data={
+                        "grant_type": TOKEN_EXCHANGE_GRANT,
+                        "client_id": self.client_id,
+                        "client_secret": self.client_secret,
+                        "requested_subject": user_id,
+                        "audience": target_audience,
+                        "scope": scope,
+                    },
+                )
+                
+                if response.status_code != 200:
+                    logger.error(
+                        "Token exchange failed",
+                        status_code=response.status_code,
+                        response=response.text[:200],
+                        user_id=user_id,
+                        target_audience=target_audience,
+                    )
+                    return None
+                
+                data = response.json()
+                access_token = data.get("access_token")
+                
+                if access_token and use_cache:
+                    # Cache the token
+                    cache_key = f"{user_id}:{target_audience}"
+                    _token_cache[cache_key] = access_token
+                    logger.debug(
+                        "Token exchange successful",
+                        user_id=user_id,
+                        target_audience=target_audience,
+                        expires_in=data.get("expires_in"),
+                    )
+                
+                return access_token
+        
+        except Exception as e:
+            logger.error(
+                "Token exchange error",
+                error=str(e),
+                user_id=user_id,
+                target_audience=target_audience,
+                exc_info=True,
+            )
+            return None
+    
+    async def exchange_token(
+        self,
+        user_context: UserContext,
+        scopes: List[str],
+        purpose: str,
+    ) -> Optional[Dict]:
+        """
+        Exchange a user token for a downstream token.
+        
+        This is a higher-level method that infers the target audience from
+        the purpose and returns full token response data.
+        
+        Args:
+            user_context: Current user context with token
+            scopes: List of scopes to request
+            purpose: Purpose string (e.g., "ingest", "search", "rag")
+        
+        Returns:
+            Dict with access_token, token_type, expires_at, scopes or None
+        """
+        audience = self._audience_for_purpose(purpose, scopes)
+        
+        token = await self.get_token_for_service(
+            user_id=user_context.user_id,
+            target_audience=audience,
+            scope=" ".join(scopes),
+        )
+        
+        if not token:
+            return None
+        
+        # Standard response format
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=840)  # ~14 min
+        return {
+            "access_token": token,
+            "token_type": "bearer",
+            "expires_at": expires_at,
+            "scopes": scopes,
+        }
+    
+    def _audience_for_purpose(self, purpose: str, scopes: List[str]) -> str:
+        """
+        Infer the downstream audience from purpose and/or scopes.
+        
+        Args:
+            purpose: Purpose string (e.g., "ingest", "search", "rag")
+            scopes: List of requested scopes
+        
+        Returns:
+            Target audience string (e.g., "ingest-api")
+        """
+        p = (purpose or "").lower()
+        if "ingest" in p:
+            return "ingest-api"
+        if "search" in p or "rag" in p:
+            return "search-api"
+        
+        # Fallback: infer by scope prefix
+        for s in scopes:
+            if s.startswith("ingest."):
+                return "ingest-api"
+            if s.startswith("search."):
+                return "search-api"
+        
+        return "agent-api"
+
+
+# Legacy alias for backward compatibility
+TokenExchangeService = TokenExchangeClient
+
+
+def clear_token_cache():
+    """Clear the token exchange cache (useful for testing)."""
+    _token_cache.clear()
 
 
 # ============================================================================
@@ -280,7 +559,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
             )
             
             if payload:
-                user_context = extract_user_context(payload, auth_header)
+                user_context = extract_user_context(payload, auth_header, token)
                 logger.debug(
                     "JWT authenticated",
                     user_id=user_context.user_id,
@@ -333,7 +612,7 @@ class WorkerRLSContext:
     RLS session variables to enforce row-level security.
     
     Usage:
-        from shared_auth.jwt_auth import WorkerRLSContext, set_rls_session_vars_sync
+        from busibox_common.auth import WorkerRLSContext, set_rls_session_vars_sync
         
         # Create RLS context from job data
         rls_context = WorkerRLSContext(user_id=job_data["user_id"], role_ids=role_ids)
@@ -599,4 +878,3 @@ def get_partition_names_for_search(request: Request, include_personal: bool = Tr
         partitions.append(f"role_{role_id}")
     
     return partitions
-

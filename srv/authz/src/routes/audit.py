@@ -26,14 +26,33 @@ router = APIRouter()
 config = Config()
 JWT_ISSUER = config.issuer
 
-# PostgresService instance - will be set by main.py
+# PostgresService instances - will be set by main.py
+# pg is production, pg_test is test database (optional)
 pg = None
+pg_test = None
+
+# Header name for test mode
+TEST_MODE_HEADER = "X-Test-Mode"
 
 
-def set_pg_service(pg_service):
-    """Set the shared PostgresService instance."""
-    global pg
+def set_pg_service(pg_service, pg_test_service=None):
+    """Set the shared PostgresService instances."""
+    global pg, pg_test
     pg = pg_service
+    pg_test = pg_test_service
+
+
+def _get_pg(request: Request):
+    """Get the appropriate PostgresService based on request headers.
+    
+    If X-Test-Mode: true header is present and test mode is enabled,
+    returns the test database service. Otherwise returns production.
+    """
+    if pg_test and config.test_mode_enabled:
+        test_mode = request.headers.get(TEST_MODE_HEADER, "").lower() == "true"
+        if test_mode:
+            return pg_test
+    return pg
 
 
 # ============================================================================
@@ -80,8 +99,9 @@ async def _require_client_auth(request: Request) -> None:
         client_secret = body.get("client_secret")
 
         if client_id and client_secret:
-            await pg.connect()
-            client = await pg.get_oauth_client(client_id)
+            db = _get_pg(request)
+            await db.connect()
+            client = await db.get_oauth_client(client_id)
             if client and client.get("is_active"):
                 if verify_client_secret(client_secret, client["client_secret_hash"]):
                     return
@@ -94,22 +114,20 @@ async def _require_client_auth(request: Request) -> None:
     )
 
 
-async def _check_client_auth_from_body(body: dict) -> bool:
+async def _check_client_auth_from_body(request: Request, body: dict) -> bool:
     """
     Check if request has valid client auth from parsed body, but don't raise if missing.
     Returns True if authenticated, False otherwise.
     """
-    # Try admin token first (from headers - but we can't access request here)
-    # This function only checks body-based auth
-    
     # Try OAuth client credentials in body
     try:
         client_id = body.get("client_id")
         client_secret = body.get("client_secret")
 
         if client_id and client_secret:
-            await pg.connect()
-            client = await pg.get_oauth_client(client_id)
+            db = _get_pg(request)
+            await db.connect()
+            client = await db.get_oauth_client(client_id)
             if client and client.get("is_active"):
                 if verify_client_secret(client_secret, client["client_secret_hash"]):
                     return True
@@ -237,7 +255,7 @@ async def create_audit_log(request: Request):
         
         # If not authenticated via admin token, check OAuth client credentials in body
         if not is_authenticated:
-            is_authenticated = await _check_client_auth_from_body(body)
+            is_authenticated = await _check_client_auth_from_body(request, body)
         
         if not is_authenticated:
             raise HTTPException(
@@ -251,9 +269,10 @@ async def create_audit_log(request: Request):
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
 
-    await pg.connect()
+    db = _get_pg(request)
+    await db.connect()
 
-    result = await pg.insert_audit_extended(
+    result = await db.insert_audit_extended(
         actor_id=log_data.actor_id,
         action=log_data.action,
         resource_type=log_data.resource_type,
@@ -311,8 +330,9 @@ async def list_audit_logs(request: Request):
     if limit < 1 or limit > 100:
         limit = 50
 
-    await pg.connect()
-    result = await pg.list_audit_logs(
+    db = _get_pg(request)
+    await db.connect()
+    result = await db.list_audit_logs(
         page=page,
         limit=limit,
         actor_id=actor_id,
@@ -354,8 +374,9 @@ async def get_user_audit_trail(request: Request, user_id: str):
     if limit < 1 or limit > 500:
         limit = 100
 
-    await pg.connect()
-    logs = await pg.get_user_audit_trail(user_id, limit)
+    db = _get_pg(request)
+    await db.connect()
+    logs = await db.get_user_audit_trail(user_id, limit)
 
     return {
         "user_id": user_id,
@@ -383,8 +404,9 @@ async def _extract_actor_from_headers(request: Request) -> tuple[Optional[str], 
         if not kid:
             return None, []
         # Look up public key via active JWKS keys stored in DB.
-        await pg.connect()
-        jwks = await pg.list_public_jwks()
+        db = _get_pg(request)
+        await db.connect()
+        jwks = await db.list_public_jwks()
         key_data = next((k for k in jwks if k.get("kid") == kid), None)
         if not key_data:
             return None, []

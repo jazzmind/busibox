@@ -36,13 +36,35 @@ config = Config()
 # Subject token types
 SUBJECT_TOKEN_TYPE_JWT = "urn:ietf:params:oauth:token-type:jwt"
 
-# PostgresService instance - will be set by main.py
+# PostgresService instances - will be set by main.py
+# _pg is production, _pg_test is test database (optional)
 _pg = None
+_pg_test = None
 
-def set_pg_service(pg_service):
-    """Set the shared PostgresService instance."""
-    global _pg
+# Header name for test mode
+TEST_MODE_HEADER = "X-Test-Mode"
+
+
+def set_pg_service(pg_service, pg_test_service=None):
+    """Set the shared PostgresService instances."""
+    global _pg, _pg_test
     _pg = pg_service
+    _pg_test = pg_test_service
+
+
+def _get_pg(request: Request = None):
+    """Get the appropriate PostgresService based on request headers.
+    
+    If X-Test-Mode: true header is present and test mode is enabled,
+    returns the test database service. Otherwise returns production.
+    
+    If request is None, returns production database.
+    """
+    if request and _pg_test and config.test_mode_enabled:
+        test_mode = request.headers.get(TEST_MODE_HEADER, "").lower() == "true"
+        if test_mode:
+            return _pg_test
+    return _pg
 
 
 async def _ensure_bootstrap_roles() -> None:
@@ -322,9 +344,11 @@ async def _sign_delegation_token(user_id: str, email: str, jti: str, scopes: Lis
 
 
 @router.get("/.well-known/jwks.json")
-async def jwks():
+async def jwks(request: Request):
     await _ensure_bootstrap()
-    keys = await _pg.list_public_jwks()
+    db = _get_pg(request)
+    await db.connect()
+    keys = await db.list_public_jwks()
     return {"keys": keys}
 
 
@@ -429,11 +453,12 @@ async def token(request: Request):
             )
 
         # Pull RBAC from authz DB
-        await _pg.connect()
-        if not await _pg.user_exists(user_id):
+        db = _get_pg(request)
+        await db.connect()
+        if not await db.user_exists(user_id):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unknown_subject")
         
-        roles = await _pg.get_user_roles(user_id)
+        roles = await db.get_user_roles(user_id)
 
         # Build role claims (id + name only, for data access filtering)
         role_claims = [
@@ -465,7 +490,7 @@ async def token(request: Request):
         access_token = await _sign_access_token(claims)
 
         # Audit (best-effort)
-        await _pg.insert_audit(
+        await db.insert_audit(
             actor_id=user_id,
             action="oauth.token.issued",
             resource_type="oauth_token",
@@ -536,8 +561,9 @@ async def create_delegation_token(request: Request):
     user_id, email, session_jti = await _verify_subject_token(req.subject_token)
     
     # Get user's roles to validate requested scopes
-    await _pg.connect()
-    user = await _pg.get_user_with_roles(user_id)
+    db = _get_pg(request)
+    await db.connect()
+    user = await db.get_user_with_roles(user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user_not_found")
     
@@ -568,7 +594,7 @@ async def create_delegation_token(request: Request):
     expires_at_ts = int(expires_at.timestamp())
     
     # Create delegation token record in DB
-    delegation = await _pg.create_delegation_token(
+    delegation = await db.create_delegation_token(
         user_id=user_id,
         scopes=requested_scopes,
         name=req.name,
@@ -622,8 +648,9 @@ async def list_delegation_tokens(request: Request):
     subject_token = auth_header[7:]
     user_id, email, session_jti = await _verify_subject_token(subject_token)
     
-    await _pg.connect()
-    delegations = await _pg.list_user_delegation_tokens(user_id)
+    db = _get_pg(request)
+    await db.connect()
+    delegations = await db.list_user_delegation_tokens(user_id)
     
     return {
         "delegations": [
@@ -658,17 +685,18 @@ async def revoke_delegation_token(request: Request, jti: str):
     subject_token = auth_header[7:]
     user_id, email, session_jti = await _verify_subject_token(subject_token)
     
-    await _pg.connect()
+    db = _get_pg(request)
+    await db.connect()
     
     # Verify the delegation token belongs to this user
-    delegation = await _pg.get_delegation_token(jti)
+    delegation = await db.get_delegation_token(jti)
     if not delegation:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="delegation_not_found")
     
     if delegation["user_id"] != user_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="not_owner")
     
-    revoked = await _pg.revoke_delegation_token(jti)
+    revoked = await db.revoke_delegation_token(jti)
     if not revoked:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="delegation_not_found_or_already_revoked")
     

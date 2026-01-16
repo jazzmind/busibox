@@ -49,17 +49,12 @@ def _ensure_openai_env():
     configuration, overriding any existing OpenAI keys. This is because
     we route all LLM calls through LiteLLM proxy, not direct to OpenAI.
     """
+    from busibox_common.llm import ensure_openai_env
     settings = get_settings()
-    
-    # Always set to LiteLLM endpoint (we proxy through LiteLLM, not direct OpenAI)
-    os.environ["OPENAI_BASE_URL"] = str(settings.litellm_base_url)
-    
-    # Use LiteLLM API key (not OpenAI key)
-    api_key = settings.litellm_api_key
-    if not api_key:
-        logger.warning("LITELLM_API_KEY not set in environment or settings - LLM calls will fail")
-        api_key = "sk-not-configured"
-    os.environ["OPENAI_API_KEY"] = api_key
+    ensure_openai_env(
+        base_url=str(settings.litellm_base_url),
+        api_key=settings.litellm_api_key,
+    )
 
 
 class ExecutionMode(str, Enum):

@@ -240,24 +240,33 @@ status_bar() {
         env_display="$env ($backend)"
     fi
     
+    # Map status to display text and color
     local status_color="$NC"
     local status_icon="○"
+    local status_display="$status"
     case "$status" in
-        healthy) status_color="$GREEN"; status_icon="✓" ;;
-        deployed) status_color="$CYAN"; status_icon="●" ;;
-        configured) status_color="$YELLOW"; status_icon="◐" ;;
-        installed) status_color="$YELLOW"; status_icon="○" ;;
-        not_installed) status_color="$RED"; status_icon="✗" ;;
+        healthy) 
+            status_color="$GREEN"; status_icon="✓"; status_display="healthy" ;;
+        deployed) 
+            status_color="$CYAN"; status_icon="●"; status_display="deployed" ;;
+        configured) 
+            status_color="$YELLOW"; status_icon="◐"; status_display="configured" ;;
+        installed)
+            # "installed" really means dependencies are ready but not configured
+            # Show more descriptive status 
+            status_color="$YELLOW"; status_icon="○"; status_display="ready" ;;
+        not_installed) 
+            status_color="$RED"; status_icon="✗"; status_display="not ready" ;;
     esac
     
     local left_text="Environment: $env_display"
-    local right_text="Status: $status $status_icon"
+    local right_text="Status: $status_display $status_icon"
     local left_len=${#left_text}
     local right_len=$((${#right_text} + 2))
     local spaces=$((width - left_len - right_len - 4))
     
     echo ""
-    echo -e "  ${BOLD}Environment:${NC} ${CYAN}$env_display${NC}$(printf '%*s' $spaces '')${BOLD}Status:${NC} ${status_color}$status $status_icon${NC}"
+    echo -e "  ${BOLD}Environment:${NC} ${CYAN}$env_display${NC}$(printf '%*s' $spaces '')${BOLD}Status:${NC} ${status_color}$status_display $status_icon${NC}"
     separator "$width"
 }
 
@@ -338,7 +347,82 @@ select_environment_with_backend() {
     echo "${env}:${backend}"
 }
 
+# Enhanced environment selection with auto-detection
+# Tries to auto-detect backend before asking user
+# Returns: "env:backend" (e.g., "staging:proxmox")
+select_environment_with_backend_autodetect() {
+    local env backend detected
+    
+    {
+        echo ""
+        box "Environment Selection"
+        echo ""
+        echo -e "  ${CYAN}1)${NC} Local              ${DIM}(Docker on localhost)${NC}"
+        echo -e "  ${CYAN}2)${NC} Staging            ${DIM}(10.96.201.x network)${NC}"
+        echo -e "  ${CYAN}3)${NC} Production         ${DIM}(10.96.200.x network)${NC}"
+        echo ""
+    } >&2
+    
+    while true; do
+        echo -ne "${BOLD}Select environment [1-3]:${NC} " >&2
+        read choice < /dev/tty
+        case $choice in
+            1) echo "local:docker"; return 0 ;;
+            2) env="staging"; break ;;
+            3) env="production"; break ;;
+            *) error "Invalid selection. Please enter 1, 2, or 3." >&2 ;;
+        esac
+    done
+    
+    # Try to auto-detect backend
+    detected=$(auto_detect_backend_ui "$env")
+    if [[ -n "$detected" ]]; then
+        echo -e "${GREEN}✓${NC} Auto-detected backend: ${BOLD}$detected${NC}" >&2
+        echo -e "  ${DIM}Press Enter to use $detected, or 'c' to choose manually${NC}" >&2
+        local confirm_choice=""
+        read -t 5 -n 1 confirm_choice < /dev/tty 2>/dev/null || true
+        if [[ "${confirm_choice:-}" != "c" ]]; then
+            echo "${env}:${detected}"
+            return 0
+        fi
+    fi
+    
+    backend=$(select_backend)
+    echo "${env}:${backend}"
+}
+
+# Auto-detect backend for UI purposes (quick check)
+# Returns: "docker" or "proxmox" if detected, empty string if not
+auto_detect_backend_ui() {
+    local env="$1"
+    
+    # Get network base for this environment
+    local network_base
+    case "$env" in
+        production) network_base="10.96.200" ;;
+        staging) network_base="10.96.201" ;;
+        *) return 1 ;;
+    esac
+    
+    # Check if Proxmox network is reachable (quick ping to gateway)
+    if ping -c 1 -W 1 "${network_base}.200" &>/dev/null 2>&1; then
+        echo "proxmox"
+        return 0
+    fi
+    
+    # Check if Docker containers for this env are running locally
+    if command -v docker &>/dev/null && docker ps --format '{{.Names}}' 2>/dev/null | grep -qE "(local|${env})" ; then
+        echo "docker"
+        return 0
+    fi
+    
+    # Not detected
+    echo ""
+    return 1
+}
+
 # Display dynamic menu based on available features
+# Outputs menu to stderr, returns choice to stdout
 dynamic_menu() {
     local status="${1:-not_installed}"
     local last_cmd="${2:-}"
@@ -354,7 +438,8 @@ dynamic_menu() {
     fi
     
     if [[ "$status" == "configured" || "$status" == "deployed" || "$status" == "healthy" ]]; then
-        options+=("Deploy"); option_keys+=("deploy")
+        options+=("Deploy (build images)"); option_keys+=("deploy")
+        options+=("Services (start/stop/restart)"); option_keys+=("services")
     fi
     
     if [[ "$status" == "deployed" || "$status" == "healthy" ]]; then
@@ -365,32 +450,35 @@ dynamic_menu() {
     options+=("Help"); option_keys+=("help")
     options+=("Quit"); option_keys+=("quit")
     
-    echo ""
-    echo -e "  ${BOLD}Main Menu:${NC}"
-    local i=1
-    for option in "${options[@]}"; do
-        echo -e "    ${CYAN}$i)${NC} $option"
-        ((i++))
-    done
-    echo ""
+    # Display menu to stderr so it shows on screen
+    {
+        echo ""
+        echo -e "  ${BOLD}Main Menu:${NC}"
+        local i=1
+        for option in "${options[@]}"; do
+            echo -e "    ${CYAN}$i)${NC} $option"
+            ((i++))
+        done
+        echo ""
+    } >&2
     
     while true; do
-        echo -ne "  ${BOLD}Select option [1-${#options[@]}]:${NC} "
+        echo -ne "  ${BOLD}Select option [1-${#options[@]}]:${NC} " >&2
         read choice < /dev/tty
         
-        if [[ "$choice" == "r" ]] && [[ -n "$last_cmd" ]]; then
+        if [[ "${choice:-}" == "r" ]] && [[ -n "$last_cmd" ]]; then
             echo "rerun"; return 0
-        elif [[ "$choice" == "s" ]]; then
+        elif [[ "${choice:-}" == "s" ]]; then
             echo "status"; return 0
-        elif [[ "$choice" == "q" ]] || [[ "$choice" == "Q" ]]; then
+        elif [[ "${choice:-}" == "q" ]] || [[ "${choice:-}" == "Q" ]]; then
             echo "quit"; return 0
         fi
         
-        if [[ "$choice" =~ ^[0-9]+$ ]] && [[ $choice -ge 1 ]] && [[ $choice -le ${#options[@]} ]]; then
+        if [[ "${choice:-}" =~ ^[0-9]+$ ]] && [[ $choice -ge 1 ]] && [[ $choice -le ${#options[@]} ]]; then
             echo "${option_keys[$((choice-1))]}"; return 0
         fi
         
-        error "Invalid selection."
+        error "Invalid selection." >&2
     done
 }
 

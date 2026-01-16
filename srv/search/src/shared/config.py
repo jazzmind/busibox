@@ -27,6 +27,13 @@ class Config(BaseSettings):
     postgres_user: str = os.getenv("POSTGRES_USER", "app_user")
     postgres_password: str = os.getenv("POSTGRES_PASSWORD", "")
     
+    # Test mode configuration
+    # When enabled, requests with X-Test-Mode: true header will use test database
+    test_mode_enabled: bool = os.getenv("SEARCH_TEST_MODE_ENABLED", "false").lower() == "true"
+    test_postgres_db: str = os.getenv("TEST_DB_NAME", "test_files")
+    test_postgres_user: str = os.getenv("TEST_DB_USER", "busibox_test_user")
+    test_postgres_password: str = os.getenv("TEST_DB_PASSWORD", "testpassword")
+    
     # Redis (optional caching)
     redis_host: Optional[str] = os.getenv("REDIS_HOST", None)
     redis_port: int = int(os.getenv("REDIS_PORT", "6379"))

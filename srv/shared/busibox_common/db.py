@@ -132,11 +132,12 @@ class SchemaManager:
     
     def _get_execute_func(self, conn) -> Callable[[str], Awaitable]:
         """Get the appropriate execute function for the connection type."""
-        # asyncpg connection
-        if hasattr(conn, 'execute') and asyncio.iscoroutinefunction(conn.execute):
+        # Check for asyncpg connection by module name (more reliable than coroutine check)
+        conn_type = type(conn).__module__
+        if 'asyncpg' in conn_type:
             return conn.execute
         
-        # SQLAlchemy async connection
+        # SQLAlchemy async connection - wrap with text()
         if hasattr(conn, 'execute'):
             from sqlalchemy import text
             async def sqlalchemy_execute(sql: str):

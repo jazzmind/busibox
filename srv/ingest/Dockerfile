@@ -43,13 +43,16 @@ COPY ingest/src/ ./src/
 # Copy migrations directory
 COPY ingest/migrations/ ./migrations/
 
-# Copy shared_auth module
-COPY shared_auth/ ./shared_auth/
+# Copy busibox_common shared library
+COPY shared/ ./shared/
+
+# Install busibox_common
+RUN pip install --no-cache-dir ./shared
 
 # Create temp directory for processing
 RUN mkdir -p /tmp/ingest
 
-# Set Python path to include both src and shared_auth
+# Set Python path
 ENV PYTHONPATH=/app/src:/app
 ENV PYTHONUNBUFFERED=1
 

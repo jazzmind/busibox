@@ -22,14 +22,21 @@ TOOL_REGISTRY = {
 }
 
 
+def _configure_litellm_env():
+    """Configure OpenAI environment for LiteLLM using shared utilities."""
+    from busibox_common.llm import ensure_openai_env
+    ensure_openai_env(
+        base_url=str(settings.litellm_base_url),
+        api_key=settings.litellm_api_key,
+    )
+
+
 async def load_active_agents(session: AsyncSession) -> Dict[uuid.UUID, Agent[BusiboxDeps, object]]:
     """
     Hydrate active agent definitions from the database and register allowed tools.
     """
     # Configure OpenAI client to use LiteLLM
-    os.environ["OPENAI_BASE_URL"] = str(settings.litellm_base_url)
-    litellm_api_key = settings.litellm_api_key or "sk-1234"
-    os.environ["OPENAI_API_KEY"] = litellm_api_key
+    _configure_litellm_env()
     
     stmt = select(AgentDefinition).where(AgentDefinition.is_active.is_(True))
     result = await session.execute(stmt)
@@ -111,9 +118,7 @@ async def register_agent(
     await session.refresh(definition)
     
     # Configure OpenAI client to use LiteLLM
-    os.environ["OPENAI_BASE_URL"] = str(settings.litellm_base_url)
-    litellm_api_key = settings.litellm_api_key or "sk-1234"
-    os.environ["OPENAI_API_KEY"] = litellm_api_key
+    _configure_litellm_env()
     
     # Create OpenAI-compatible model for LiteLLM
     model = OpenAIModel(

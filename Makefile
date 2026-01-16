@@ -181,6 +181,17 @@ ifndef SERVICE
 endif
 	@FAST=$${FAST:-1} WORKER=$${WORKER:-0} bash scripts/test/run-local-tests.sh $(SERVICE) $(INV) $(ARGS)
 
+# Bootstrap test databases (schema + OAuth clients + signing keys)
+# Run this before running tests to initialize test_authz, test_files, test_agent_server
+test-db-init:
+	@echo "Bootstrapping test databases..."
+	@docker compose -f docker-compose.local.yml --env-file .env.local run --rm test-db-init
+
+# Check if test databases are bootstrapped
+test-db-check:
+	@echo "Checking test database status..."
+	@docker exec local-postgres psql -U busibox_test_user -d test_authz -c "SELECT COUNT(*) as signing_keys FROM authz_signing_keys WHERE is_active = true;" 2>/dev/null || echo "Test databases not initialized. Run: make test-db-init"
+
 # Run tests against local Docker
 # Usage: make test-docker SERVICE=authz
 test-docker:

@@ -20,19 +20,58 @@ engine = create_async_engine(
 )
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
+# Test database engine and session factory (only created if test mode is enabled)
+test_engine = None
+TestSessionLocal = None
+
+if settings.test_mode_enabled and settings.test_database_url:
+    test_engine = create_async_engine(
+        settings.test_database_url,
+        pool_pre_ping=True,
+        pool_size=5,
+        max_overflow=10,
+        pool_recycle=3600,
+        future=True
+    )
+    TestSessionLocal = async_sessionmaker(test_engine, expire_on_commit=False, class_=AsyncSession)
+
+
+# Test mode header
+TEST_MODE_HEADER = "X-Test-Mode"
+
+
+def get_session_factory(use_test: bool = False):
+    """Get the appropriate session factory based on test mode."""
+    if use_test and TestSessionLocal:
+        return TestSessionLocal
+    return SessionLocal
+
 
 async def get_session() -> AsyncSession:
+    """
+    Get a database session.
+    
+    Note: This uses the production database. For test mode support, 
+    see get_session_for_test which checks the X-Test-Mode header.
+    
+    Yields:
+        AsyncSession connected to production database
+    """
     async with SessionLocal() as session:
         yield session
 
 
 @asynccontextmanager
-async def get_session_context() -> AsyncGenerator[AsyncSession, None]:
+async def get_session_context(use_test_db: bool = False) -> AsyncGenerator[AsyncSession, None]:
     """
     Context manager for getting a database session outside of FastAPI dependency injection.
     Use this when you need a session in non-request contexts (e.g., background tasks, tools).
+    
+    Args:
+        use_test_db: If True and test mode is enabled, use test database
     """
-    async with SessionLocal() as session:
+    factory = TestSessionLocal if (use_test_db and TestSessionLocal) else SessionLocal
+    async with factory() as session:
         try:
             yield session
         finally:

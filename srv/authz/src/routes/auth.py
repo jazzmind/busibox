@@ -35,14 +35,33 @@ from oauth.keys import load_private_key
 router = APIRouter()
 config = Config()
 
-# PostgresService instance - will be set by main.py
+# PostgresService instances - will be set by main.py
+# pg is production, pg_test is test database (optional)
 pg = None
+pg_test = None
+
+# Header name for test mode
+TEST_MODE_HEADER = "X-Test-Mode"
 
 
-def set_pg_service(pg_service):
-    """Set the shared PostgresService instance."""
-    global pg
+def set_pg_service(pg_service, pg_test_service=None):
+    """Set the shared PostgresService instances."""
+    global pg, pg_test
     pg = pg_service
+    pg_test = pg_test_service
+
+
+def _get_pg(request: Request):
+    """Get the appropriate PostgresService based on request headers.
+    
+    If X-Test-Mode: true header is present and test mode is enabled,
+    returns the test database service. Otherwise returns production.
+    """
+    if pg_test and config.test_mode_enabled:
+        test_mode = request.headers.get(TEST_MODE_HEADER, "").lower() == "true"
+        if test_mode:
+            return pg_test
+    return pg
 
 
 # ============================================================================
@@ -50,14 +69,17 @@ def set_pg_service(pg_service):
 # ============================================================================
 
 
-async def _sign_session_jwt(user_id: str, email: str, session_id: str) -> tuple[str, int]:
+async def _sign_session_jwt(user_id: str, email: str, session_id: str, db=None) -> tuple[str, int]:
     """
     Sign a session JWT for a user.
     
     Returns (jwt_string, expires_at_timestamp)
+    
+    If db is provided, uses that PostgresService instance. Otherwise uses production.
     """
-    await pg.connect()
-    row = await pg.get_active_signing_key()
+    db = db or pg
+    await db.connect()
+    row = await db.get_active_signing_key()
     if not row:
         raise RuntimeError("no active signing key configured")
     
@@ -179,8 +201,9 @@ async def _require_client_auth(request: Request) -> None:
         client_secret = body.get("client_secret")
 
         if client_id and client_secret:
-            await pg.connect()
-            client = await pg.get_oauth_client(client_id)
+            db = _get_pg(request)
+            await db.connect()
+            client = await db.get_oauth_client(client_id)
             if client and client.get("is_active"):
                 if verify_client_secret(client_secret, client["client_secret_hash"]):
                     return
@@ -240,14 +263,15 @@ async def create_session(request: Request):
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user_id format") from e
 
-    await pg.connect()
+    db = _get_pg(request)
+    await db.connect()
 
     # Check user exists
-    user = await pg.get_user(session_data.user_id)
+    user = await db.get_user(session_data.user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    session = await pg.create_session(
+    session = await db.create_session(
         user_id=session_data.user_id,
         token=session_data.token,
         expires_at=session_data.expires_at,
@@ -275,8 +299,9 @@ async def validate_session(request: Request, token: str):
     """
     await _require_client_auth(request)
 
-    await pg.connect()
-    session = await pg.get_session(token)
+    db = _get_pg(request)
+    await db.connect()
+    session = await db.get_session(token)
 
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found or expired")
@@ -300,8 +325,9 @@ async def delete_session(request: Request, token: str):
     """
     await _require_client_auth(request)
 
-    await pg.connect()
-    deleted = await pg.delete_session(token)
+    db = _get_pg(request)
+    await db.connect()
+    deleted = await db.delete_session(token)
 
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
@@ -321,8 +347,9 @@ async def delete_user_sessions(request: Request, user_id: str):
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user_id format") from e
 
-    await pg.connect()
-    count = await pg.delete_user_sessions(user_id)
+    db = _get_pg(request)
+    await db.connect()
+    count = await db.delete_user_sessions(user_id)
 
     return {"status": "ok", "deleted_count": count}
 
@@ -360,14 +387,15 @@ async def create_magic_link(request: Request):
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user_id format") from e
 
-    await pg.connect()
+    db = _get_pg(request)
+    await db.connect()
 
     # Check user exists
-    user = await pg.get_user(link_data.user_id)
+    user = await db.get_user(link_data.user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    link = await pg.create_magic_link(
+    link = await db.create_magic_link(
         user_id=link_data.user_id,
         email=link_data.email,
         expires_in_seconds=link_data.expires_in_seconds,
@@ -391,8 +419,9 @@ async def validate_magic_link(request: Request, token: str):
     """
     await _require_client_auth(request)
 
-    await pg.connect()
-    link = await pg.get_magic_link(token)
+    db = _get_pg(request)
+    await db.connect()
+    link = await db.get_magic_link(token)
 
     if not link:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Magic link not found")
@@ -429,8 +458,9 @@ async def use_magic_link(request: Request, token: str):
     """
     await _require_client_auth(request)
 
-    await pg.connect()
-    result = await pg.use_magic_link(token)
+    db = _get_pg(request)
+    await db.connect()
+    result = await db.use_magic_link(token)
 
     if not result:
         raise HTTPException(
@@ -446,6 +476,7 @@ async def use_magic_link(request: Request, token: str):
         user_id=user["user_id"],
         email=user["email"],
         session_id=session["session_id"],
+        db=db,
     )
 
     return {
@@ -499,14 +530,15 @@ async def create_totp_code(request: Request):
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user_id format") from e
 
-    await pg.connect()
+    db = _get_pg(request)
+    await db.connect()
 
     # Check user exists
-    user = await pg.get_user(totp_data.user_id)
+    user = await db.get_user(totp_data.user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    result = await pg.create_totp_code(
+    result = await db.create_totp_code(
         user_id=totp_data.user_id,
         email=totp_data.email,
         expires_in_seconds=totp_data.expires_in_seconds,
@@ -541,8 +573,9 @@ async def verify_totp_code(request: Request):
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
 
-    await pg.connect()
-    result = await pg.verify_totp_code(verify_data.email, verify_data.code)
+    db = _get_pg(request)
+    await db.connect()
+    result = await db.verify_totp_code(verify_data.email, verify_data.code)
 
     if not result:
         raise HTTPException(
@@ -558,6 +591,7 @@ async def verify_totp_code(request: Request):
         user_id=user["user_id"],
         email=user["email"],
         session_id=session["session_id"],
+        db=db,
     )
 
     return {
@@ -614,15 +648,16 @@ async def create_passkey_challenge(request: Request):
         except ValueError as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user_id format") from e
 
-    await pg.connect()
+    db = _get_pg(request)
+    await db.connect()
 
     # For registration, verify user exists
     if challenge_data.user_id:
-        user = await pg.get_user(challenge_data.user_id)
+        user = await db.get_user(challenge_data.user_id)
         if not user:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    result = await pg.create_passkey_challenge(
+    result = await db.create_passkey_challenge(
         challenge_type=challenge_data.type,
         user_id=challenge_data.user_id,
     )
@@ -640,8 +675,9 @@ async def get_passkey_challenge(request: Request, challenge: str):
     """
     await _require_client_auth(request)
 
-    await pg.connect()
-    result = await pg.get_passkey_challenge(challenge)
+    db = _get_pg(request)
+    await db.connect()
+    result = await db.get_passkey_challenge(challenge)
 
     if not result:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Challenge not found or expired")
@@ -684,22 +720,23 @@ async def register_passkey(request: Request):
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user_id format") from e
 
-    await pg.connect()
+    db = _get_pg(request)
+    await db.connect()
 
     # Check user exists
-    user = await pg.get_user(passkey_data.user_id)
+    user = await db.get_user(passkey_data.user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     # Check if credential already exists
-    existing = await pg.get_passkey_by_credential_id(passkey_data.credential_id)
+    existing = await db.get_passkey_by_credential_id(passkey_data.credential_id)
     if existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Passkey with this credential ID already exists",
         )
 
-    result = await pg.register_passkey(
+    result = await db.register_passkey(
         user_id=passkey_data.user_id,
         credential_id=passkey_data.credential_id,
         credential_public_key=passkey_data.credential_public_key,
@@ -731,8 +768,9 @@ async def list_user_passkeys(request: Request, user_id: str):
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user_id format") from e
 
-    await pg.connect()
-    passkeys = await pg.list_user_passkeys(user_id)
+    db = _get_pg(request)
+    await db.connect()
+    passkeys = await db.list_user_passkeys(user_id)
 
     return {
         "passkeys": [
@@ -763,8 +801,9 @@ async def delete_passkey(request: Request, passkey_id: str):
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid passkey_id format") from e
 
-    await pg.connect()
-    deleted = await pg.delete_passkey(passkey_id)
+    db = _get_pg(request)
+    await db.connect()
+    deleted = await db.delete_passkey(passkey_id)
 
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Passkey not found")
@@ -802,8 +841,9 @@ async def authenticate_with_passkey(request: Request):
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
 
-    await pg.connect()
-    result = await pg.authenticate_with_passkey(
+    db = _get_pg(request)
+    await db.connect()
+    result = await db.authenticate_with_passkey(
         credential_id=auth_data.credential_id,
         new_counter=auth_data.new_counter,
     )
@@ -822,6 +862,7 @@ async def authenticate_with_passkey(request: Request):
         user_id=user["user_id"],
         email=user["email"],
         session_id=session["session_id"],
+        db=db,
     )
 
     return {
@@ -858,12 +899,13 @@ async def cleanup_expired(request: Request):
     """
     await _require_client_auth(request)
 
-    await pg.connect()
+    db = _get_pg(request)
+    await db.connect()
 
-    sessions = await pg.cleanup_expired_sessions()
-    magic_links = await pg.cleanup_expired_magic_links()
-    totp_codes = await pg.cleanup_expired_totp_codes()
-    challenges = await pg.cleanup_expired_passkey_challenges()
+    sessions = await db.cleanup_expired_sessions()
+    magic_links = await db.cleanup_expired_magic_links()
+    totp_codes = await db.cleanup_expired_totp_codes()
+    challenges = await db.cleanup_expired_passkey_challenges()
 
     return {
         "status": "ok",

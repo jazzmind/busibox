@@ -329,13 +329,13 @@ pytest tests/unit/test_auth.py -v
 
 ```bash
 # Requires test database
-createdb agent_server_test
+createdb test_agent_server
 
 # Run integration tests
 pytest tests/integration/ -v
 
 # Run with test database URL
-DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_server_test \
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/test_agent_server \
   pytest tests/integration/ -v
 ```
 
