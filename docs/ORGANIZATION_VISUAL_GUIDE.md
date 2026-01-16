@@ -1,7 +1,7 @@
 # Visual Organization Guide (Authoritative)
 
 **Created**: 2025-10-30  
-**Last Updated**: 2025-12-09  
+**Last Updated**: 2026-01-16  
 **Status**: Active  
 **Category**: Reference  
 **Related Docs**:  
@@ -85,7 +85,7 @@
 │  │  • check-*.sh           Validate host state             │         │
 │  │  • list-*.sh            List resources                  │         │
 │  │  • vars.env             Production config               │         │
-│  │  • test-vars.env        Test config                     │         │
+│  │  • staging-vars.env     Staging config                  │         │
 │  │                                                          │         │
 │  │  Execution: ON Proxmox host (direct or SSH)             │         │
 │  │  Privileges: root (requires pct/pvesm)                  │         │

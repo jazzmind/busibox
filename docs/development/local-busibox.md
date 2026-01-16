@@ -158,17 +158,35 @@ make test-local SERVICE=authz
 ### Database Access
 
 ```bash
-# Connect to PostgreSQL
-docker exec -it local-postgres psql -U busibox_user -d busibox
+# Connect to PostgreSQL (use service-specific databases)
+docker exec -it local-postgres psql -U busibox_user -d agent_server  # Agent API
+docker exec -it local-postgres psql -U busibox_user -d authz         # AuthZ
+docker exec -it local-postgres psql -U busibox_user -d files         # Ingest
 
-# View databases
-\l
+# Test databases (for pytest isolation)
+docker exec -it local-postgres psql -U busibox_test_user -d test_agent_server
+docker exec -it local-postgres psql -U busibox_test_user -d test_authz
+docker exec -it local-postgres psql -U busibox_test_user -d test_files
+
+# View all databases
+docker exec -it local-postgres psql -U postgres -c "\l"
 
 # Connect to specific database
 \c agent_server
+\c authz
+\c files
 \c ai_portal
-\c busibox
 ```
+
+**Database Layout:**
+
+| Service | Database | Owner |
+|---------|----------|-------|
+| Agent API | `agent_server` | `busibox_user` |
+| AuthZ | `authz` | `busibox_user` |
+| Ingest | `files` | `busibox_user` |
+| AI Portal | `ai_portal` | `busibox_user` |
+| Tests | `test_*` | `busibox_test_user` |
 
 ### Viewing Logs
 

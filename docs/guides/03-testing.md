@@ -1,14 +1,26 @@
 # Testing Guide
 
 **Created**: 2025-12-09  
-**Last Updated**: 2025-12-21  
+**Last Updated**: 2026-01-16  
 **Status**: Active  
 **Category**: Guide  
 **Related Docs**:  
 - `guides/02-deployment.md`  
-- `guides/testing/master-guide.md`  
-- `guides/testing/TEST_STRATEGY.md`  
+- `guides/database-separation-migration.md`  
+- `architecture/08-tests.md`  
 - `guides/agent-server-testing.md`
+
+## Test Database Isolation
+
+All tests run against dedicated test databases, separate from production:
+
+| Service | Test Database | Owner |
+|---------|---------------|-------|
+| Agent | `test_agent_server` | `busibox_test_user` |
+| AuthZ | `test_authz` | `busibox_test_user` |
+| Ingest | `test_files` | `busibox_test_user` |
+
+This ensures tests never pollute production data. The `make test` commands automatically connect to the appropriate test databases.
 
 ## Platform Checks (Ansible)
 - **Smoke/health**:
@@ -57,8 +69,8 @@
 - **Deployed testing** (via MCP):
   ```bash
   cd provision/ansible
-  make test-agent INV=inventory/test
-  make test-agent-coverage INV=inventory/test
+  make test-agent INV=inventory/staging
+  make test-agent-coverage INV=inventory/staging
   ```
 
 - **Test structure**:
@@ -85,7 +97,7 @@ For local integration testing with real services:
 
 ```bash
 cd provision/ansible
-make bootstrap-test-creds INV=inventory/test
+make bootstrap-test-creds INV=inventory/staging
 ```
 
 This generates:

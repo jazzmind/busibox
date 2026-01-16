@@ -1,7 +1,7 @@
 # Testing Architecture
 
 **Created**: 2025-12-21  
-**Updated**: 2025-12-21  
+**Updated**: 2026-01-16  
 **Status**: Active  
 **Category**: Architecture  
 
@@ -44,15 +44,15 @@ This launches an interactive menu that lets you:
 
 ```bash
 # Run tests on container
-make test SERVICE=authz INV=test
+make test SERVICE=authz INV=staging
 
 # Run tests locally against container backends
-make test SERVICE=authz INV=test MODE=local
+make test SERVICE=authz INV=staging MODE=local
 ```
 
 **Parameters:**
 - `SERVICE`: authz, ingest, search, agent, all
-- `INV`: test, production (default: test)
+- `INV`: staging, production (default: staging)
 - `MODE`: container (default), local
 
 **When to use:** CI/CD pipelines, scripts, repeatable test runs.
@@ -60,7 +60,7 @@ make test SERVICE=authz INV=test MODE=local
 ### 3. Local Testing Against Remote Containers (Recommended for Development)
 
 ```bash
-make test-local SERVICE=authz INV=test
+make test-local SERVICE=authz INV=staging
 ```
 
 This runs:
@@ -85,25 +85,25 @@ This runs:
 
 ```bash
 # Basic local testing (FAST=1 by default, skips slow tests)
-make test-local SERVICE=authz INV=test
+make test-local SERVICE=authz INV=staging
 
 # Run ALL tests including slow/GPU (override FAST default)
-make test-local SERVICE=search INV=test FAST=0
+make test-local SERVICE=search INV=staging FAST=0
 
 # Run only PVT (Post-deployment Validation) tests
-make test-local SERVICE=ingest INV=test ARGS="-m pvt"
+make test-local SERVICE=ingest INV=staging ARGS="-m pvt"
 
 # Run tests matching a pattern
-make test-local SERVICE=authz INV=test ARGS="-k test_health"
+make test-local SERVICE=authz INV=staging ARGS="-k test_health"
 
 # Run with short tracebacks
-make test-local SERVICE=search INV=test ARGS="--tb=short"
+make test-local SERVICE=search INV=staging ARGS="--tb=short"
 
 # Combine options
-make test-local SERVICE=ingest INV=test FAST=0 ARGS="-k encryption --tb=long"
+make test-local SERVICE=ingest INV=staging FAST=0 ARGS="-k encryption --tb=long"
 
 # Run full pipeline tests with local worker (for PDF processing tests)
-make test-local SERVICE=ingest INV=test WORKER=1 FAST=0
+make test-local SERVICE=ingest INV=staging WORKER=1 FAST=0
 ```
 
 NOTE: Do not tail the output of the tests. It will slow down the tests and make it difficult to debug.
@@ -138,9 +138,9 @@ make test-local SERVICE=ingest WORKER=1 ARGS="tests/integration/test_full_pipeli
 
 | Mode | Command | Behavior |
 |------|---------|----------|
-| **FAST** (default for local) | `make test-local SERVICE=x INV=test` | Skips `@pytest.mark.slow` and `@pytest.mark.gpu` |
-| **Full** (default for container) | `make test SERVICE=x INV=test` | Runs ALL tests |
-| **Full locally** | `make test-local SERVICE=x INV=test FAST=0` | Runs ALL tests locally |
+| **FAST** (default for local) | `make test-local SERVICE=x INV=staging` | Skips `@pytest.mark.slow` and `@pytest.mark.gpu` |
+| **Full** (default for container) | `make test SERVICE=x INV=staging` | Runs ALL tests |
+| **Full locally** | `make test-local SERVICE=x INV=staging FAST=0` | Runs ALL tests locally |
 
 **Why FAST is default for local?**
 - Local machines may not have GPUs
@@ -199,10 +199,10 @@ pytest tests/ -v
 
 ```bash
 # On container (via make)
-make test SERVICE=authz INV=test
+make test SERVICE=authz INV=staging
 
 # Locally
-make test-local SERVICE=authz INV=test
+make test-local SERVICE=authz INV=staging
 
 # Direct - DO NOT USE UNLESS ABSOLUTELY NECESSARY
 ssh root@10.96.201.210 "cd /srv/authz/app && source ../venv/bin/activate && pytest tests/ -v"
@@ -219,10 +219,10 @@ ssh root@10.96.201.210 "cd /srv/authz/app && source ../venv/bin/activate && pyte
 
 ```bash
 # On container (via make)
-make test SERVICE=ingest INV=test
+make test SERVICE=ingest INV=staging
 
 # Locally
-make test-local SERVICE=ingest INV=test
+make test-local SERVICE=ingest INV=staging
 
 # Direct - DO NOT USE UNLESS ABSOLUTELY NECESSARY
 ssh root@10.96.201.206 "cd /srv/ingest && source venv/bin/activate && pytest tests/ -v"
@@ -241,7 +241,7 @@ ssh root@10.96.201.206 "cd /srv/ingest && source venv/bin/activate && pytest tes
 ### Search Service
 
 ```bash
-make test SERVICE=search INV=test
+make test SERVICE=search INV=staging
 ```
 
 **Test coverage:**
@@ -252,7 +252,7 @@ make test SERVICE=search INV=test
 ### Agent Service
 
 ```bash
-make test SERVICE=agent INV=test
+make test SERVICE=agent INV=staging
 ```
 
 **Test coverage:**
@@ -269,7 +269,7 @@ make test SERVICE=agent INV=test
 
 ```bash
 # Run with verbose output
-make test SERVICE=ingest INV=test  # Check output for patterns
+make test SERVICE=ingest INV=staging  # Check output for patterns
 ```
 
 **Import Errors** (during collection):
@@ -408,7 +408,22 @@ Our Ansible deployment now cleans these automatically before syncing.
 
 ## Test Infrastructure
 
-### Container IP Addresses (Test Environment)
+### Database Isolation
+
+Tests run against dedicated test databases, separate from production/staging:
+
+| Service | Test Database | Owner | Production Database |
+|---------|---------------|-------|---------------------|
+| Agent | `test_agent_server` | `busibox_test_user` | `agent_server` |
+| AuthZ | `test_authz` | `busibox_test_user` | `authz` |
+| Ingest | `test_files` | `busibox_test_user` | `files` |
+
+This isolation ensures:
+- Tests don't pollute production data
+- Tests can be run safely at any time
+- Test fixtures are properly cleaned up
+
+### Container IP Addresses (Staging Environment)
 
 | Service    | IP              | Port  |
 |------------|-----------------|-------|
@@ -423,7 +438,8 @@ Our Ansible deployment now cleans these automatically before syncing.
 ### Required Secrets
 
 Tests require these secrets from `vault.yml`:
-- `secrets.postgresql.password` - Database password
+- `secrets.postgresql.password` - Database password for `busibox_user`
+- `secrets.postgresql.test_password` - Database password for `busibox_test_user`
 - `secrets.authz.admin_token` - Admin token for RBAC
 - `secrets.authz.master_key` - Encryption master key
 - `secrets.minio.access_key` / `secret_key` - Object storage

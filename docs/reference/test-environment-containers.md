@@ -1,127 +1,133 @@
 ---
 created: 2025-12-15
-updated: 2025-12-15
+updated: 2026-01-16
 status: active
 category: reference
 ---
 
-# Test Environment Containers Reference
+# Staging Environment Containers Reference
 
 ## Critical: Container IP Addresses and Services
 
-**IMPORTANT**: This document exists because we frequently get confused about which container is which in the test environment. Always refer to this when working with test infrastructure.
+**IMPORTANT**: This document clarifies which container is which in the staging environment (formerly called "test environment"). Always refer to this when working with staging infrastructure.
 
-### Test Environment Container Map
+### Terminology Clarification
+
+| Term | Meaning |
+|------|---------|
+| **Staging Environment** | The pre-production Proxmox containers (10.96.201.x) |
+| **Test Databases** | Dedicated PostgreSQL databases for pytest (`test_*`) |
+| **Production Environment** | Live Proxmox containers (10.96.200.x) |
+
+### Staging Environment Container Map
 
 | Service | IP Address | Container ID | Database | Purpose |
 |---------|-----------|--------------|----------|---------|
-| **agent** | 10.96.201.202 | 302 | Uses pg-lxc | Agent API and liteLLM |
-| **pg** | 10.96.201.203 | 303 | PostgreSQL | Main database server |
-| **authz** | 10.96.201.210 | 310 | Uses pg-lxc | OAuth2 authorization service |
+| **agent** | 10.96.201.202 | 302 | `agent_server` | Agent API |
+| **pg** | 10.96.201.203 | 303 | PostgreSQL | Database server (multiple databases) |
+| **authz** | 10.96.201.210 | 310 | `authz` | OAuth2 authorization service |
+| **ingest** | 10.96.201.206 | 306 | `files` | File ingestion service |
+
+### Database Architecture
+
+Each service has its own dedicated database:
+
+| Service | Database | Owner | Description |
+|---------|----------|-------|-------------|
+| Agent API | `agent_server` | `busibox_user` | Agent definitions, conversations |
+| AuthZ | `authz` | `busibox_user` | Users, roles, sessions, audit logs |
+| Ingest | `files` | `busibox_user` | File metadata, chunks |
+
+#### Test Databases (for pytest)
+
+For pytest isolation, a separate user owns identical databases:
+
+| Database | Owner | Purpose |
+|----------|-------|---------|
+| `test_agent_server` | `busibox_test_user` | Agent service tests |
+| `test_authz` | `busibox_test_user` | AuthZ service tests |
+| `test_files` | `busibox_test_user` | Ingest service tests |
 
 ### Database Connection Details
 
 **PostgreSQL (pg-lxc)**
 - **Host**: 10.96.201.203
 - **Port**: 5432
-- **Database**: busibox_test
-- **User**: busibox_test_user
-- **Password**: `0f7806b26ec51d4884ea1fa74cb0e58b4cb6cf396249ce2f95c793554019a833`
-  - Found in: `/srv/authz/.env` on authz container (10.96.201.210)
-  - Variable: `POSTGRES_PASSWORD`
-
-### Authz Service Tables
-
-The authz service uses tables with the `authz_` prefix in the shared PostgreSQL database:
-
-- `authz_oauth_clients` - OAuth client credentials
-- `authz_users` - User accounts
-- `authz_roles` - Role definitions
-- `authz_user_roles` - User-role assignments
-- `authz_signing_keys` - JWT signing keys
-
-**Common Mistake**: Looking for tables named `oauth_clients` or `users` - they're prefixed with `authz_`.
+- **Users**: `busibox_user` (production), `busibox_test_user` (tests)
+- **Password**: Found in vault or `/srv/<service>/.env` on each container
 
 ### Quick Database Access
 
 From Proxmox host:
 
 ```bash
-# Connect to PostgreSQL
-PGPASSWORD='0f7806b26ec51d4884ea1fa74cb0e58b4cb6cf396249ce2f95c793554019a833' \
-  psql -h 10.96.201.203 -U busibox_test_user -d busibox_test
+# Connect to service-specific databases
+PGPASSWORD='$PASSWORD' psql -h 10.96.201.203 -U busibox_user -d agent_server
+PGPASSWORD='$PASSWORD' psql -h 10.96.201.203 -U busibox_user -d authz
+PGPASSWORD='$PASSWORD' psql -h 10.96.201.203 -U busibox_user -d files
 
-# List all tables
-PGPASSWORD='0f7806b26ec51d4884ea1fa74cb0e58b4cb6cf396249ce2f95c793554019a833' \
-  psql -h 10.96.201.203 -U busibox_test_user -d busibox_test -c "\dt"
+# Connect to test databases
+PGPASSWORD='$PASSWORD' psql -h 10.96.201.203 -U busibox_test_user -d test_authz
 
-# Check OAuth clients
-PGPASSWORD='0f7806b26ec51d4884ea1fa74cb0e58b4cb6cf396249ce2f95c793554019a833' \
-  psql -h 10.96.201.203 -U busibox_test_user -d busibox_test \
-  -c "SELECT client_id, allowed_audiences, created_at FROM authz_oauth_clients ORDER BY created_at DESC LIMIT 5;"
+# List all databases
+PGPASSWORD='$PASSWORD' psql -h 10.96.201.203 -U postgres -c "\l"
 
-# Check users
-PGPASSWORD='0f7806b26ec51d4884ea1fa74cb0e58b4cb6cf396249ce2f95c793554019a833' \
-  psql -h 10.96.201.203 -U busibox_test_user -d busibox_test \
-  -c "SELECT user_id, email, status, created_at FROM authz_users ORDER BY created_at DESC LIMIT 5;"
+# Check authz tables
+PGPASSWORD='$PASSWORD' psql -h 10.96.201.203 -U busibox_user -d authz -c "\dt"
 ```
+
+### Authz Service Tables
+
+The authz service uses tables with the `authz_` prefix:
+
+- `authz_oauth_clients` - OAuth client credentials
+- `authz_users` - User accounts
+- `authz_roles` - Role definitions
+- `authz_user_roles` - User-role assignments
+- `authz_signing_keys` - JWT signing keys
+- `authz_sessions` - Active sessions
+- `authz_passkeys` - WebAuthn credentials
+- `audit_logs` - Security audit trail
+
+**Common Mistake**: Looking for tables named `oauth_clients` or `users` - they're prefixed with `authz_`.
 
 ### Service URLs
 
 - **Authz Service**: http://10.96.201.210:8010
 - **Agent API**: http://10.96.201.202:8000
 - **Ingest API**: http://10.96.201.206:8002
+- **Search API**: http://10.96.201.207:8003
 
 ### Test Credentials
 
-Generated by `scripts/bootstrap-test-credentials.sh test --force`:
+Generated by `scripts/bootstrap-test-credentials.sh staging --force`:
 
 ```bash
-# OAuth Client
-AUTHZ_TEST_CLIENT_ID=test-client-1765825117
-AUTHZ_TEST_CLIENT_SECRET=05a231ceca662e1a622eaf1744f3134c76eda5592a987569b05e4d77e9a4a68d
-
-# Admin Token
-AUTHZ_ADMIN_TOKEN=8891a5fa9163d53d9e7c61c322d5a46e80833c3f5459de7b564a4ff9964a0d99
-
-# Test User
-TEST_USER_ID=a44358d1-02a7-458c-82e2-9c7ac6bfa603
-TEST_USER_EMAIL=test@busibox.local
+# See guides/auth-api/bootstrap-test-credentials.md for current values
 ```
-
-### Verifying Credentials
-
-Test OAuth token exchange:
-
-```bash
-curl -X POST http://10.96.201.210:8010/oauth/token \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "grant_type=client_credentials&client_id=test-client-1765825117&client_secret=05a231ceca662e1a622eaf1744f3134c76eda5592a987569b05e4d77e9a4a68d&audience=agent-api"
-```
-
-Should return a JWT access token.
 
 ### Common Issues
 
 1. **"password authentication failed"**
-   - Check you're using the correct password from `/srv/authz/.env`
-   - Password is NOT `busibox_test_pass` (that's a common assumption)
+   - Check you're using the correct password from vault
+   - Ensure using correct user (`busibox_user` vs `busibox_test_user`)
 
 2. **"relation 'oauth_clients' does not exist"**
    - Table is named `authz_oauth_clients` (note the prefix)
+   - Make sure you're connected to the `authz` database, not `busibox`
 
-3. **"column 'name' does not exist"**
-   - Check the actual schema with `\d authz_oauth_clients`
-   - OAuth clients don't have a `name` column, only `client_id`
-
-4. **"Connection refused to 10.96.201.203"**
+3. **"Connection refused to 10.96.201.203"**
    - Verify you're running commands from Proxmox host (not local machine)
    - Check container is running: `pct status 303`
 
+4. **Tests polluting production data**
+   - Ensure tests use `busibox_test_user` and `test_*` databases
+   - Check `TEST_DATABASE_URL` is set correctly
+
 ### Related Documentation
 
-- [Bootstrap Test Credentials](../guides/bootstrap-test-credentials.md)
-- [Authz Service](../architecture/authz-service.md)
-- [Testing Strategy](../../TESTING.md)
-
-
+- [Database Architecture](../architecture/09-databases.md)
+- [Database Commands Reference](../development/reference/database-commands.md)
+- [Bootstrap Test Credentials](../guides/auth-api/bootstrap-test-credentials.md)
+- [Testing Architecture](../architecture/08-tests.md)
+- [Database Separation Migration](../guides/database-separation-migration.md)
