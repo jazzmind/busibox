@@ -767,7 +767,7 @@ security_tests_menu() {
         
         read -p "$(echo -e "${BOLD}Select option [1-7]:${NC} ")" choice
         
-        local test_env="test"
+        local test_env="staging"
         if [[ "$env" == "production" ]]; then
             test_env="production"
         fi

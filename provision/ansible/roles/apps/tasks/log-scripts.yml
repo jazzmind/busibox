@@ -10,7 +10,7 @@
 
 - name: Deploy view-app-logs.sh script
   copy:
-    src: "{{ playbook_dir }}/../../scripts/view-app-logs.sh"
+    src: "{{ playbook_dir }}/scripts/view-app-logs.sh"
     dest: /usr/local/bin/view-app-logs.sh
     mode: '0755'
     owner: root
@@ -18,7 +18,7 @@
 
 - name: Deploy tail-app-logs.sh script
   copy:
-    src: "{{ playbook_dir }}/../../scripts/tail-app-logs.sh"
+    src: "{{ playbook_dir }}/scripts/tail-app-logs.sh"
     dest: /usr/local/bin/tail-app-logs.sh
     mode: '0755'
     owner: root

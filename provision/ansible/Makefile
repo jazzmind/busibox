@@ -106,7 +106,7 @@ tailscale:
 # Test Signal bot integration
 test-signal-bot:
 	@echo "Testing Signal bot integration on agent container ($(AGENT_IP))..."
-	@ssh root@$(AGENT_IP) 'bash -s' < ../../scripts/test/test-signal-bot.sh
+	@ssh root@$(AGENT_IP) 'bash -s' < scripts/test-signal-bot.sh
 
 # T029: Deploy applications (runs app_deployer + secrets roles)
 deploy-apps:
@@ -141,12 +141,12 @@ configure:
 	@bash ../../scripts/make/configure.sh
 
 generate-token-keys:
-	@bash ../../scripts/generate/generate-token-service-keys.sh
+	@bash scripts/generate-token-service-keys.sh
 
 # Bootstrap test credentials for local integration testing
 bootstrap-test-creds:
 	@echo "Bootstrapping test credentials for $(INV)..."
-	@bash ../../scripts/test/bootstrap-test-credentials.sh $(shell echo $(INV) | grep -q test && echo test || echo production)
+	@bash scripts/bootstrap-test-credentials.sh $(shell echo $(INV) | grep -q staging && echo staging || echo production)
 
 # Verification targets
 verify: verify-health verify-smoke

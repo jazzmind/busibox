@@ -6,7 +6,8 @@
 # PURPOSE: Generate Ed25519 keys for agent-server token service and add to vault
 #
 # USAGE:
-#   bash scripts/generate/generate-token-service-keys.sh
+#   From ansible dir: bash scripts/generate-token-service-keys.sh
+#   From repo root:   bash provision/ansible/scripts/generate-token-service-keys.sh
 #
 # REQUIRES:
 #   - Python 3.11+ with cryptography library
@@ -14,16 +15,17 @@
 #
 set -euo pipefail
 
-# Get script directory
+# Get script directory (provision/ansible/scripts)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+ANSIBLE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+REPO_ROOT="$(cd "${ANSIBLE_DIR}/../.." && pwd)"
 
-# Source UI library
+# Source UI library from main scripts
 source "${REPO_ROOT}/scripts/lib/ui.sh"
 
-# Paths
-KEY_GENERATOR_DIR="${REPO_ROOT}/scripts/lib"
-VAULT_FILE="${REPO_ROOT}/provision/ansible/roles/secrets/vars/vault.yml"
+# Paths - key generator is local to this script
+KEY_GENERATOR_DIR="${SCRIPT_DIR}"
+VAULT_FILE="${ANSIBLE_DIR}/roles/secrets/vars/vault.yml"
 VAULT_PASS_FILE="$HOME/.vault_pass"
 
 # Check if vault password file exists
