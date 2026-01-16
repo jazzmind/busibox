@@ -2,7 +2,7 @@
 title: OAuth2 Token Exchange Implementation Summary
 category: guides
 created: 2024-12-14
-updated: 2024-12-14
+updated: 2026-01-15
 status: active
 ---
 
@@ -10,7 +10,9 @@ status: active
 
 ## Overview
 
-This document summarizes the implementation of OAuth2-aligned RBAC + token exchange for the Busibox platform, following the plan outlined in `evolve_authz_to_oauth2_token-exchange_f02bec2c.plan.md`.
+This document summarizes the implementation of OAuth2-aligned RBAC + token exchange for the Busibox platform.
+
+> **Important Update (2026-01-15)**: Busibox now uses a Zero Trust authentication architecture where AuthZ issues all session JWTs directly. See `docs/architecture/03-authentication.md` for the authoritative architecture documentation.
 
 ## What Was Built
 
@@ -185,6 +187,8 @@ The internal access token contract was already defined in `busibox/srv/authz/src
 
 ## Architecture Diagram
 
+> **Note**: This diagram shows the legacy flow. For the current Zero Trust architecture, see `docs/architecture/03-authentication.md`.
+
 ```mermaid
 sequenceDiagram
   participant Browser
@@ -193,22 +197,22 @@ sequenceDiagram
   participant IngestApi
   participant SearchApi
 
-  Browser->>AiPortal: Login (better-auth)
-  AiPortal->>AiPortal: Session cookie set
+  Browser->>AiPortal: Login (passkey/TOTP/magic link)
+  AiPortal->>AuthZ: POST /auth/totp/verify (or passkey/magic-link)
+  AuthZ-->>AiPortal: RS256 Session JWT
+  AiPortal->>Browser: Set busibox-session cookie with JWT
 
   Note over Browser,AiPortal: App needs downstream token
 
-  Browser->>AiPortal: Request token (audience=search-api)
-  AiPortal->>AuthZ: POST /oauth/token (token-exchange)
-  Note over AiPortal,AuthZ: ai-portal authenticates as OAuth client
-  AuthZ->>AuthZ: Resolve user + roles
+  AiPortal->>AuthZ: POST /oauth/token (subject_token=JWT)
+  Note over AiPortal,AuthZ: No client credentials needed - JWT is cryptographically verified
+  AuthZ->>AuthZ: Verify JWT signature, resolve user + roles
   AuthZ-->>AiPortal: access_token (aud=search-api, exp=15min)
-  AiPortal-->>Browser: access_token
 
-  Browser->>SearchApi: API call Authorization: Bearer <token>
+  AiPortal->>SearchApi: API call Authorization: Bearer <access_token>
   SearchApi->>AuthZ: (JWKS fetch cached)
   SearchApi->>SearchApi: Validate token + enforce RLS
-  SearchApi-->>Browser: response
+  SearchApi-->>AiPortal: response
 ```
 
 ## Key Benefits
@@ -249,10 +253,12 @@ sequenceDiagram
 - [x] Busibox-app token manager
 - [x] Integration tests
 - [x] Deployment documentation
+- [x] **Zero Trust Architecture** - AuthZ issues session JWTs directly
+- [x] **Subject Token Exchange** - User operations use session JWT as subject_token
+- [x] **Delegation Tokens** - Background tasks use explicit user delegation
 
 ### 🚧 In Progress
 
-- [ ] Migrate remaining ai-portal routes from `X-User-Id` to authz tokens
 - [ ] Deploy authz service to test environment
 - [ ] Update Ansible playbooks with authz configuration
 
@@ -261,7 +267,6 @@ sequenceDiagram
 - [ ] Deploy to production
 - [ ] Remove legacy `X-User-Id` support from services
 - [ ] Add Grafana dashboards for token metrics
-- [ ] Implement token revocation (optional)
 - [ ] Add external IdP integration (validate upstream tokens)
 
 ## Files Created/Modified

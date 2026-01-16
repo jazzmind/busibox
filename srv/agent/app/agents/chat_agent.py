@@ -1,38 +1,35 @@
-"""General chat agent with context awareness and tool access."""
-import os
-from pydantic_ai import Agent
-from pydantic_ai.models.openai import OpenAIModel
+"""
+Chat Agent.
 
-from app.config.settings import get_settings
-from app.tools.web_search_tool import web_search_tool
-from app.tools.weather_tool import weather_tool
-from app.tools.document_search_tool import document_search_tool
-from app.tools.ingestion_tool import ingestion_tool
+A versatile chat agent with access to multiple tools for comprehensive assistance.
+Uses LLM-driven tool selection to proactively help users with various tasks.
 
-settings = get_settings()
+This agent extends BaseStreamingAgent with multi-tool access and LLM-driven
+tool selection strategy.
+"""
 
-# Configure OpenAI client to use LiteLLM
-os.environ["OPENAI_BASE_URL"] = str(settings.litellm_base_url)
-litellm_api_key = settings.litellm_api_key or "sk-1234"
-os.environ["OPENAI_API_KEY"] = litellm_api_key
+import logging
+from typing import Any, List
 
-# Create OpenAIModel
-model = OpenAIModel(
-    model_name=settings.default_model,
-    provider="openai",
+from app.agents.base_agent import (
+    AgentConfig,
+    AgentContext,
+    BaseStreamingAgent,
+    ExecutionMode,
+    PipelineStep,
+    ToolStrategy,
 )
 
-# Create the chat agent with full tool access
-chat_agent = Agent(
-    model=model,
-    tools=[web_search_tool, weather_tool, document_search_tool, ingestion_tool],
-    system_prompt="""You are a versatile chat agent with access to multiple tools for comprehensive assistance.
+logger = logging.getLogger(__name__)
+
+
+# Chat agent synthesis prompt
+CHAT_SYSTEM_PROMPT = """You are a versatile chat agent with access to multiple tools for comprehensive assistance.
 
 **Available Tools:**
 - **web_search**: Search the internet for current information, news, and real-time data
 - **get_weather**: Get current weather for any city
 - **document_search**: Search through the user's uploaded documents
-- **ingest_document**: Process and index new documents
 
 **Your Workflow:**
 
@@ -40,7 +37,6 @@ chat_agent = Agent(
    - Questions about current events, news, prices → use web_search
    - Questions about weather → use get_weather
    - Questions about user's documents → use document_search
-   - File processing requests → use ingest_document
    - General knowledge questions → respond directly
 
 2. **Use Tools Proactively**: Don't wait for explicit requests
@@ -62,14 +58,72 @@ chat_agent = Agent(
    - Provide supporting details
    - End with sources when using tools
 
-Be helpful, accurate, and proactive in using your tools to provide the best possible assistance.""",
-    retries=2,
-)
+Be helpful, accurate, and proactive in using your tools to provide the best possible assistance."""
 
 
+class ChatAgent(BaseStreamingAgent):
+    """
+    A versatile streaming chat agent that:
+    1. Analyzes user queries to determine appropriate tools
+    2. Uses LLM-driven tool selection for flexible assistance
+    3. Synthesizes results from multiple sources
+    
+    All steps stream their progress to the user in real-time.
+    """
+    
+    def __init__(self):
+        config = AgentConfig(
+            name="chat-agent",
+            display_name="Chat Agent",
+            instructions=CHAT_SYSTEM_PROMPT,
+            tools=["web_search", "get_weather", "document_search"],
+            execution_mode=ExecutionMode.RUN_ONCE,
+            tool_strategy=ToolStrategy.LLM_DRIVEN,  # Let LLM decide which tools to use
+        )
+        super().__init__(config)
+    
+    def pipeline_steps(self, query: str, context: AgentContext) -> List[PipelineStep]:
+        """
+        For LLM_DRIVEN strategy, this returns an empty list.
+        The LLM will decide which tools to call.
+        """
+        return []
+    
+    def _build_synthesis_context(self, query: str, context: AgentContext) -> str:
+        """
+        Build context for synthesis from all tool results.
+        """
+        parts = [f"User Question: {query}\n"]
+        
+        if not context.tool_results:
+            parts.append("No tools were called - provide a general response.")
+            return "\n".join(parts)
+        
+        parts.append("Tool Results:\n")
+        
+        for tool_name, result in context.tool_results.items():
+            parts.append(f"\n--- {tool_name} ---")
+            if hasattr(result, 'model_dump'):
+                parts.append(str(result.model_dump()))
+            else:
+                parts.append(str(result))
+        
+        parts.append("\nPlease synthesize a helpful response based on these results.")
+        return "\n".join(parts)
+    
+    def _build_fallback_response(self, query: str, context: AgentContext) -> str:
+        """
+        Build fallback response if synthesis fails.
+        """
+        if not context.tool_results:
+            return "I'm here to help! What would you like to know?"
+        
+        parts = [f"Here's what I found:\n"]
+        for tool_name, result in context.tool_results.items():
+            parts.append(f"\n**{tool_name}**: {str(result)[:500]}")
+        
+        return "\n".join(parts)
 
 
-
-
-
-
+# Singleton instance
+chat_agent = ChatAgent()

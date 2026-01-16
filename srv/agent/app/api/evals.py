@@ -127,7 +127,7 @@ async def update_evaluator(
     
     # Increment version and update timestamp
     evaluator.version += 1
-    evaluator.updated_at = datetime.now(timezone.utc)
+    evaluator.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     
     await session.commit()
     await session.refresh(evaluator)

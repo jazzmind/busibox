@@ -725,6 +725,7 @@ async def send_chat_message_stream_agentic(
                 cancel=cancel_event,
                 available_agents=available_agents,
                 conversation_history=history_dicts,
+                principal=principal,
             ):
                 # Yield event to client
                 yield f"event: {event.type}\ndata: {event.model_dump_json()}\n\n"

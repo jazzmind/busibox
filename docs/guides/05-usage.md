@@ -1,7 +1,15 @@
+---
+title: "Using Busibox Services"
+category: "user"
+order: 2
+description: "Learn how to use Busibox APIs, upload documents, search, and interact with agents"
+published: true
+---
+
 # Usage Guide (APIs & Flows)
 
 **Created**: 2025-12-09  
-**Last Updated**: 2025-12-15  
+**Last Updated**: 2026-01-15  
 **Status**: Active  
 **Category**: Guide  
 **Related Docs**:  
@@ -92,11 +100,21 @@ curl -X POST http://10.96.200.207:4111/api/chat \
 
 ## Authentication & Authorization
 
+### Zero Trust Architecture
+
+Busibox uses a Zero Trust authentication model where AuthZ is the sole authentication authority:
+
+1. **User authenticates with AuthZ** (passkey, TOTP, or magic link) → receives RS256 session JWT
+2. **App exchanges session JWT** for audience-bound access tokens (no client credentials needed for user operations)
+3. **Services validate tokens cryptographically** via JWKS (no database lookups required)
+
+See `docs/architecture/03-authentication.md` for complete details.
+
 ### OAuth2 Token Exchange
 
 Busibox uses OAuth2 token exchange (RFC 8693) for service authentication:
 
-1. **App authenticates user** (e.g., better-auth session)
+1. **App authenticates user** via AuthZ (session JWT stored in `busibox-session` cookie)
 2. **App requests service token** from AuthZ:
    ```bash
    curl -X POST http://10.96.200.210:8010/oauth/token \

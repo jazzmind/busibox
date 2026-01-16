@@ -390,7 +390,7 @@ test-authz:
 		echo "WARNING: Could not extract AUTHZ_ADMIN_TOKEN from vault"; \
 	fi; \
 	echo "Running tests with real database integration..."; \
-	ssh -o StrictHostKeyChecking=no root@$(AUTHZ_IP) "cd /srv/authz/app && source ../venv/bin/activate && pip install -q -r requirements.test.txt 2>/dev/null; export TEST_DB_USER='busibox_test_user' TEST_DB_PASSWORD='$$TEST_DB_PASSWORD' TEST_DB_NAME='busibox_test' TEST_DB_HOST='10.96.201.203' AUTHZ_ADMIN_TOKEN='$$AUTHZ_ADMIN_TOKEN' && pytest -v --tb=short" || (echo "Authz tests FAILED" && exit 1)
+	ssh -o StrictHostKeyChecking=no root@$(AUTHZ_IP) "cd /srv/authz/app && source ../venv/bin/activate && pip install -q -r requirements.test.txt 2>/dev/null; export TEST_DB_USER='busibox_user' TEST_DB_PASSWORD='$$TEST_DB_PASSWORD' TEST_DB_NAME='authz_test' TEST_DB_HOST='10.96.201.203' POSTGRES_DB='authz_test' AUTHZ_ADMIN_TOKEN='$$AUTHZ_ADMIN_TOKEN' && pytest -v --tb=short" || (echo "Authz tests FAILED" && exit 1)
 	@echo "✓ Authz tests passed"
 	@echo ""
 

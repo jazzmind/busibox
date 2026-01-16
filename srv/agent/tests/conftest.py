@@ -68,9 +68,11 @@ set_auth_env = create_service_auth_fixture("agent")
 # Database settings
 # =============================================================================
 
-# Use the actual database from settings (PostgreSQL)
+# Use TEST_DATABASE_URL if provided, otherwise use the service's configured DATABASE_URL
+# When running tests on the test environment, the ansible deployment should have configured
+# the service to use the test database (agent_server_test instead of agent_server)
 settings = get_settings()
-TEST_DATABASE_URL = settings.database_url
+TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL", settings.database_url)
 
 # Get real test credentials from environment
 TEST_USER_ID = os.getenv("TEST_USER_ID", "test-user-123")
@@ -154,6 +156,7 @@ def mock_principal() -> Principal:
         email=TEST_USER_EMAIL,
         roles=["Admin", "User"],
         scopes=["read", "write", "admin"],
+        token="test-access-token",  # Include token for auth checks
     )
 
 
@@ -165,7 +168,40 @@ def admin_principal() -> Principal:
         email="admin@example.com",
         roles=["admin", "user"],
         scopes=["admin.read", "admin.write", "search.read", "ingest.write", "rag.query"],
+        token="admin-access-token",  # Include token for auth checks
     )
+
+
+@pytest.fixture
+def auth_context(mock_principal, test_session) -> dict:
+    """
+    Create auth context dict for agent tests with real database session.
+    
+    Provides principal with token and database session needed for
+    agent authentication and token exchange.
+    
+    Use this for tests that need real database operations.
+    """
+    return {
+        "principal": mock_principal,
+        "session": test_session,
+        "user_id": TEST_USER_ID,
+    }
+
+
+@pytest.fixture
+def mock_auth_context(mock_principal) -> dict:
+    """
+    Create auth context with mock session for tests that mock token exchange.
+    
+    Does not require database connection - use when token exchange is mocked.
+    """
+    from unittest.mock import AsyncMock
+    return {
+        "principal": mock_principal,
+        "session": AsyncMock(),  # Mock session - token exchange should be mocked
+        "user_id": TEST_USER_ID,
+    }
 
 
 # =============================================================================
@@ -338,3 +374,37 @@ async def test_token(test_session: AsyncSession) -> TokenGrant:
 async def db_session(test_session: AsyncSession) -> AsyncSession:
     """Alias for test_session for consistency."""
     return test_session
+
+
+# =============================================================================
+# Insights / Milvus fixtures
+# =============================================================================
+
+@pytest.fixture(scope="session")
+def insights_service():
+    """
+    Initialize and return the insights service for tests requiring Milvus.
+    
+    This fixture initializes the global insights service singleton that
+    would normally be initialized in main.py on server startup.
+    
+    Tests using this should be marked with @pytest.mark.milvus.
+    """
+    from app.api.insights import init_insights_service, get_insights_service, _insights_service
+    
+    # Only initialize if not already done
+    if _insights_service is None:
+        # Get Milvus config from settings
+        settings = get_settings()
+        milvus_config = {
+            "host": getattr(settings, 'milvus_host', 'localhost'),
+            "port": getattr(settings, 'milvus_port', 19530),
+            "collection": getattr(settings, 'milvus_collection', 'insights'),
+        }
+        
+        try:
+            init_insights_service(milvus_config)
+        except Exception as e:
+            pytest.skip(f"Milvus not available: {e}")
+    
+    return get_insights_service()

@@ -40,6 +40,7 @@ get_container_ip() {
     if [[ "$env" == "production" ]]; then
         network_base="10.96.200"
     else
+        # staging (formerly "test") and docker both use 10.96.201.x
         network_base="10.96.201"
     fi
     
@@ -1184,20 +1185,17 @@ run_container_tests() {
     minio_ip=$(get_container_ip minio "$env")
     milvus_ip=$(get_container_ip milvus "$env")
     
-    # Set database user based on environment
-    # NOTE: Each service uses its own database:
-    #   - authz: "authz" database
-    #   - ingest: "files" database  
-    #   - search: "files" database
-    #   - agent: "agent_server" database
+    # Database configuration for pytest
+    # NOTE: Pytest tests run against isolated test databases owned by busibox_test_user:
+    #   - test_authz (for authz service tests)
+    #   - test_files (for ingest/search service tests)
+    #   - test_agent_server (for agent service tests)
+    #
+    # The test user has identical table structures but completely isolated data.
+    # Environment (staging/production) only determines which network/containers we SSH to.
     local db_user db_password
-    if [[ "$env" == "test" ]]; then
-        db_user="busibox_test_user"
-        db_password="${TEST_DB_PASSWORD}"
-    else
-        db_user="busibox"
-        db_password="${POSTGRES_PASSWORD}"
-    fi
+    db_user="busibox_test_user"
+    db_password="${PYTEST_DB_PASSWORD:-testpassword}"
     
     case "$service" in
         authz)
@@ -1205,15 +1203,15 @@ run_container_tests() {
             info "Running authz tests on ${authz_ip}..."
             
             # Build environment variables
-            # Authz uses dedicated "authz" database
+            # Pytest uses test_authz database (owned by busibox_test_user)
             local test_env="TEST_DB_USER=${db_user}"
             test_env="${test_env} TEST_DB_PASSWORD=${db_password}"
-            test_env="${test_env} TEST_DB_NAME=authz"
+            test_env="${test_env} TEST_DB_NAME=test_authz"
             test_env="${test_env} TEST_DB_HOST=${postgres_ip}"
             test_env="${test_env} POSTGRES_HOST=${postgres_ip}"
             test_env="${test_env} POSTGRES_USER=${db_user}"
             test_env="${test_env} POSTGRES_PASSWORD=${db_password}"
-            test_env="${test_env} POSTGRES_DB=authz"
+            test_env="${test_env} POSTGRES_DB=test_authz"
             test_env="${test_env} AUTHZ_ADMIN_TOKEN=${AUTHZ_ADMIN_TOKEN}"
             test_env="${test_env} AUTHZ_MASTER_KEY=${AUTHZ_MASTER_KEY}"
             test_env="${test_env} AUTHZ_SERVICE_URL=http://${authz_ip}:8010"
@@ -1256,11 +1254,11 @@ run_container_tests() {
                 info "Created test user: ${TEST_USER_ID}"
             fi
             
-            # Ingest uses "files" database
+            # Pytest uses test_files database (owned by busibox_test_user)
             local test_env="POSTGRES_HOST=${postgres_ip}"
             test_env="${test_env} POSTGRES_USER=${db_user}"
             test_env="${test_env} POSTGRES_PASSWORD=${db_password}"
-            test_env="${test_env} POSTGRES_DB=files"
+            test_env="${test_env} POSTGRES_DB=test_files"
             test_env="${test_env} MINIO_HOST=${minio_ip}"
             test_env="${test_env} MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}"
             test_env="${test_env} MINIO_SECRET_KEY=${MINIO_SECRET_KEY}"
@@ -1299,11 +1297,11 @@ run_container_tests() {
                 fi
             fi
             
-            # Search uses "files" database (always), not busibox_test
+            # Pytest uses test_files database (owned by busibox_test_user)
             local test_env="POSTGRES_HOST=${postgres_ip}"
             test_env="${test_env} POSTGRES_USER=${db_user}"
             test_env="${test_env} POSTGRES_PASSWORD=${db_password}"
-            test_env="${test_env} POSTGRES_DB=files"
+            test_env="${test_env} POSTGRES_DB=test_files"
             test_env="${test_env} MILVUS_HOST=${milvus_ip}"
             test_env="${test_env} AUTHZ_URL=http://${authz_ip}:8010"
             test_env="${test_env} AUTHZ_JWKS_URL=http://${authz_ip}:8010/.well-known/jwks.json"
@@ -1341,10 +1339,14 @@ run_container_tests() {
                 fi
             fi
             
+            # Pytest uses agent_server_test database (not the production agent_server database)
+            # Also set TEST_DATABASE_URL which the agent conftest.py checks first
+            local agent_test_db_url="postgresql+asyncpg://${db_user}:${db_password}@${postgres_ip}:5432/agent_server_test"
             local test_env="POSTGRES_HOST=${postgres_ip}"
             test_env="${test_env} POSTGRES_USER=${db_user}"
             test_env="${test_env} POSTGRES_PASSWORD=${db_password}"
-            test_env="${test_env} POSTGRES_DB=${db_name}"
+            test_env="${test_env} POSTGRES_DB=agent_server_test"
+            test_env="${test_env} TEST_DATABASE_URL=${agent_test_db_url}"
             test_env="${test_env} AUTHZ_URL=http://${authz_ip}:8010"
             test_env="${test_env} AUTHZ_JWKS_URL=http://${authz_ip}:8010/.well-known/jwks.json"
             test_env="${test_env} AUTHZ_ADMIN_TOKEN=${AUTHZ_ADMIN_TOKEN}"
@@ -1465,7 +1467,7 @@ main() {
     if [[ $# -ge 1 ]]; then
         # Non-interactive mode: scripts/test.sh <service> [environment] [mode]
         local service="$1"
-        local env="${2:-test}"
+        local env="${2:-staging}"
         local mode="${3:-container}"
         
         # Don't clear screen in non-interactive mode

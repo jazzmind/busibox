@@ -1,3 +1,11 @@
+---
+title: "Container Architecture"
+category: "developer"
+order: 2
+description: "LXC container topology, network layout, and service responsibilities"
+published: true
+---
+
 # Container Topology
 
 **Created**: 2025-12-09  

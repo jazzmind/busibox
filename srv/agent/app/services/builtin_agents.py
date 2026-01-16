@@ -17,6 +17,16 @@ from app.schemas.definitions import AgentDefinitionRead
 
 # Mapping of agent file names to their metadata
 # The 'tools' field explicitly lists the tool names used by each agent
+#
+# NOTE: Agents in the 'in-progress' folder are not included here.
+# They will be added back when they are ready for production use.
+# In-progress agents:
+#   - attachment_agent
+#   - rag_search_agent
+#   - rfp_agent
+#   - summary_comparison_agent
+#   - template_generator_agent
+#   - template_improvement_agent
 BUILTIN_AGENT_METADATA = {
     "chat_agent": {
         "name": "chat",
@@ -42,22 +52,6 @@ BUILTIN_AGENT_METADATA = {
         "version": 1,
         "tools": ["web_search", "web_scraper"],
     },
-    "rag_search_agent": {
-        "name": "rag-search",
-        "display_name": "RAG Search Agent",
-        "description": "Retrieval Augmented Generation agent for document-grounded responses",
-        "model": "agent",
-        "version": 1,
-        "tools": ["document_search"],
-    },
-    "attachment_agent": {
-        "name": "attachment",
-        "display_name": "Attachment Handler",
-        "description": "Analyzes and decides how to process file attachments",
-        "model": "fast",
-        "version": 1,
-        "tools": ["ingest_document"],
-    },
     "weather_agent": {
         "name": "weather",
         "display_name": "Weather Agent",
@@ -65,38 +59,6 @@ BUILTIN_AGENT_METADATA = {
         "model": "agent",
         "version": 1,
         "tools": ["get_weather"],
-    },
-    "rfp_agent": {
-        "name": "rfp-analyst",
-        "display_name": "RFP Analyst",
-        "description": "Expert document analyst for RFP (Request for Proposal) analysis and evaluation",
-        "model": "fast",
-        "version": 1,
-        "tools": ["document_search"],
-    },
-    "template_generator_agent": {
-        "name": "template-generator",
-        "display_name": "Template Generator",
-        "description": "Generates document templates based on requirements and examples",
-        "model": "agent",
-        "version": 1,
-        "tools": [],
-    },
-    "template_improvement_agent": {
-        "name": "template-improvement",
-        "display_name": "Template Improver",
-        "description": "Analyzes and improves existing document templates",
-        "model": "agent",
-        "version": 1,
-        "tools": [],
-    },
-    "summary_comparison_agent": {
-        "name": "summary-comparison",
-        "display_name": "Summary Comparator",
-        "description": "Compares and analyzes multiple document summaries",
-        "model": "agent",
-        "version": 1,
-        "tools": [],
     },
 }
 

@@ -1,3 +1,11 @@
+---
+title: "Architecture Overview"
+category: "developer"
+order: 1
+description: "High-level system architecture and design principles of the Busibox platform"
+published: true
+---
+
 # Busibox Architecture Overview
 
 **Created**: 2025-12-09  

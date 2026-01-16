@@ -60,8 +60,8 @@ async def search(
     user_id = request.state.user_id
     # Get authorization header for JWT passthrough to downstream services
     authorization = getattr(request.state, 'authorization', None)
-    # Get readable role IDs from JWT (set by JWTAuthMiddleware)
-    readable_role_ids = getattr(request.state, 'readable_role_ids', [])
+    # Get role IDs from JWT (set by JWTAuthMiddleware)
+    role_ids = getattr(request.state, 'role_ids', [])
     
     try:
         logger.info(
@@ -70,7 +70,7 @@ async def search(
             query=search_request.query,
             mode=search_request.mode,
             limit=search_request.limit,
-            readable_roles=len(readable_role_ids),
+            role_count=len(role_ids),
         )
         
         # Prepare filters (exclude None values)
@@ -86,7 +86,7 @@ async def search(
                 user_id=user_id,
                 top_k=search_request.rerank_k if search_request.rerank else search_request.limit,
                 filters=filters,
-                readable_role_ids=readable_role_ids,
+                readable_role_ids=role_ids,
             )
             
             # Apply reranking if requested
@@ -122,7 +122,7 @@ async def search(
                 user_id=user_id,
                 top_k=search_request.rerank_k if search_request.rerank else search_request.limit,
                 filters=filters,
-                readable_role_ids=readable_role_ids,
+                readable_role_ids=role_ids,
             )
             
             # Apply reranking if requested
@@ -164,7 +164,7 @@ async def search(
                 filters=filters,
                 use_reranker=search_request.rerank,
                 reranker_model=search_request.reranker_model or "qwen3-gpu",
-                readable_role_ids=readable_role_ids,
+                readable_role_ids=role_ids,
             )
         
         else:
@@ -362,7 +362,7 @@ async def explain_result(
     """
     user_id = request.state.user_id
     authorization = getattr(request.state, 'authorization', None)
-    readable_role_ids = getattr(request.state, 'readable_role_ids', [])
+    role_ids = getattr(request.state, 'role_ids', [])
     
     try:
         # Get the document (with role-based access control)
@@ -370,7 +370,7 @@ async def explain_result(
             file_id=explain_request.file_id,
             chunk_index=explain_request.chunk_index,
             user_id=user_id,
-            readable_role_ids=readable_role_ids,
+            readable_role_ids=role_ids,
         )
         
         if not document:
@@ -461,11 +461,14 @@ async def explain_result(
 async def _set_rls_session_vars(conn, request: Request):
     """Set session variables for RLS on ingestion DB."""
     user_id = getattr(request.state, "user_id", "")
-    readable_role_ids = getattr(request.state, "readable_role_ids", [])
+    # Use role_ids (set by JWTAuthMiddleware) not readable_role_ids
+    role_ids = getattr(request.state, "role_ids", [])
     # PostgreSQL SET command doesn't support parameterized queries
     # Use string formatting with proper escaping
-    await conn.execute(f"SET LOCAL app.user_id = '{user_id}'")
-    await conn.execute(f"SET LOCAL app.user_role_ids_read = '{','.join(readable_role_ids)}'")
+    # NOTE: Use SET (not SET LOCAL) because asyncpg uses autocommit by default
+    # SET LOCAL only persists within a transaction block
+    await conn.execute(f"SET app.user_id = '{user_id}'")
+    await conn.execute(f"SET app.user_role_ids_read = '{','.join(role_ids)}'")
 
 
 async def _enrich_results(results: list, request: Request) -> list:

@@ -519,6 +519,8 @@ services:
     volumes:
       - ./srv/agent/app:/app/app:ro
       - ./srv/agent/alembic:/app/alembic:ro
+      - ./srv/agent/tests:/app/tests:ro
+      - ./srv/test_utils:/app/test_utils:ro
     command: ["sh", "-c", "echo 'Migration files:' && ls -la /app/alembic/versions/ && echo 'Current alembic head:' && python -m alembic heads && echo 'Current DB version:' && python -m alembic current && echo 'Running migrations...' && python -m alembic upgrade head && echo 'Migrations complete' && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/app"]
     environment:
       # Service

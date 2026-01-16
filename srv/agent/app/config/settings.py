@@ -71,8 +71,9 @@ class Settings(BaseSettings):
     auth_client_secret: str = Field("test-client-secret", description="Client secret for token exchange")
 
     # Database configuration
+    # Default credentials match docker-compose.local.yml (busibox_user:devpassword)
     database_url: str = Field(
-        "postgresql+asyncpg://agent_server:agent_server@localhost:5432/agent_server",
+        "postgresql+asyncpg://busibox_user:devpassword@localhost:5432/agent_server",
         description="SQLAlchemy connection URL",
     )
 

@@ -1,17 +1,21 @@
 ---
-# Global Variables for Busibox Application Deployment - TEST
+# Global Variables for Busibox Application Deployment - STAGING
 # Created: 2025-10-15
 # Updated: 2025-10-23
-# Purpose: Centralized configuration for TEST environment
+# Purpose: Centralized configuration for STAGING environment
 #
-# This file contains ONLY test-specific configuration.
+# This file contains ONLY staging-specific configuration.
 # Secrets are stored in roles/secrets/vars/vault.yml (encrypted)
+#
+# NOTE: "Staging" is the pre-production environment for testing deployments.
+#       "Test databases" (*_test suffix) are for running automated tests (pytest).
+#       These are separate concepts - staging has its own databases AND test databases.
 
 # ============================================================================
 # Environment Configuration
 # ============================================================================
-busibox_env: test
-busibox_test_mode: true
+busibox_env: staging
+enable_pytest_databases: true  # Create *_test databases for running automated tests
 node_env: development  # For Node.js applications
 
 # ============================================================================
@@ -46,14 +50,14 @@ ollama_ip: "{{ network_base_octets }}.209"
 authz_ip: "{{ network_base_octets }}.210"
 
 # ============================================================================
-# Domain Configuration - Test
+# Domain Configuration - Staging
 # ============================================================================
 # Base domain from vault (deployment-specific)
-env_suffix: test
+env_suffix: staging
 domain: "ai.{{ base_domain }}"
 full_domain: "{{ env_suffix }}.{{ domain }}"
 www_domain: "www.{{ full_domain }}"
-env_subdomain_suffix: "-test"  # Suffix for test subdomains (e.g., "agents-test")
+env_subdomain_suffix: "-staging"  # Suffix for staging subdomains (e.g., "agents-staging")
 
 # SSL Certificate Mode
 # Options: "letsencrypt", "provisioned", "selfsigned"
@@ -65,8 +69,8 @@ ssl_mode: provisioned  # Use self-signed for testing
 # ============================================================================
 postgres_host: "{{ postgres_ip }}"
 postgres_port: 5432
-postgres_db: busibox_test
-postgres_user: busibox_test_user
+postgres_db: busibox
+postgres_user: busibox_user
 
 # Files/Ingestion database
 files_db: files

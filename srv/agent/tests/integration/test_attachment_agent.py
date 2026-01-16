@@ -1,8 +1,18 @@
-"""Integration tests for attachment agent with local LLM."""
-import pytest
-import json
+"""Integration tests for attachment agent with local LLM.
 
-from app.agents.attachment_agent import attachment_agent
+NOTE: These tests are skipped because the attachment_agent is in-progress
+and has been moved to app/agents/in-progress/. The agent will be re-enabled
+when it's ready for production use.
+"""
+import pytest
+
+
+# Skip all tests in this module - agent is in development
+pytestmark = pytest.mark.skip(reason="attachment_agent is in-progress and not yet ready")
+
+
+# Original import commented out until agent is ready:
+# from app.agents.attachment_agent import attachment_agent
 
 
 class TestAttachmentAgent:

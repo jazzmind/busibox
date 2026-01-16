@@ -13,13 +13,16 @@ from pydantic_ai.models.openai import OpenAIModel
 from app.config.settings import get_settings
 from app.schemas.dispatcher import RoutingDecision
 
-# Configure OpenAI client to use LiteLLM via environment variables
+# Get settings (OpenAI env vars are configured lazily by BaseStreamingAgent)
 settings = get_settings()
-os.environ["OPENAI_BASE_URL"] = str(settings.litellm_base_url)
 
-# Get LiteLLM API key from settings (loaded from .env)
-litellm_api_key = settings.litellm_api_key or "sk-1234"  # Fallback for local dev
-os.environ["OPENAI_API_KEY"] = litellm_api_key
+def _ensure_dispatcher_env():
+    """Ensure OpenAI env is set for dispatcher agent using LiteLLM."""
+    # Always set to LiteLLM (we proxy through LiteLLM, not direct OpenAI)
+    os.environ["OPENAI_BASE_URL"] = str(settings.litellm_base_url)
+    api_key = settings.litellm_api_key
+    if api_key:
+        os.environ["OPENAI_API_KEY"] = api_key
 
 # System prompt for dispatcher agent
 # Note: Response format is handled by PydanticAI's output_type - no need to specify JSON schema in prompt
@@ -61,8 +64,10 @@ Your job is to:
 - 0.0-0.5: Low confidence or no available tools/agents
 """
 
+# Ensure env is configured before creating model
+_ensure_dispatcher_env()
+
 # Create OpenAI-compatible model using LiteLLM
-# The model will automatically use the OPENAI_BASE_URL and OPENAI_API_KEY we set above
 # Use "fast" purpose for quick dispatcher routing decisions
 model = OpenAIModel(
     model_name="fast",  # LiteLLM routes to fast model (phi-4)

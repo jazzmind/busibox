@@ -169,13 +169,18 @@ async def execute_web_search(query: str, user_id: str) -> ToolExecutionResult:
         )
 
 
-async def execute_document_search(query: str, user_id: str) -> ToolExecutionResult:
+async def execute_document_search(
+    query: str, 
+    user_id: str,
+    principal: Optional[Principal] = None,
+) -> ToolExecutionResult:
     """
     Execute document search tool.
     
     Args:
         query: Search query
         user_id: User ID for logging
+        principal: Optional authenticated principal for API access
         
     Returns:
         ToolExecutionResult with search results
@@ -186,8 +191,25 @@ async def execute_document_search(query: str, user_id: str) -> ToolExecutionResu
             extra={"user_id": user_id, "query": query[:100]}
         )
         
-        # Run the document agent
-        result = await document_agent.run(query)
+        # Check if we have authentication
+        if not principal or not principal.token:
+            return ToolExecutionResult(
+                tool_name="doc_search",
+                success=False,
+                output="",
+                error="Document search requires authentication. Please sign in."
+            )
+        
+        # Import here to avoid circular imports
+        from app.agents.core import BusiboxDeps
+        from app.clients.busibox import BusiboxClient
+        
+        # Create BusiboxClient with user's token
+        busibox_client = BusiboxClient(access_token=principal.token)
+        deps = BusiboxDeps(principal=principal, busibox_client=busibox_client)
+        
+        # Run the document agent with deps
+        result = await document_agent.run(query, deps=deps)
         
         # Extract output
         output = result.data if hasattr(result, 'data') else str(result)
@@ -225,7 +247,8 @@ async def execute_document_search(query: str, user_id: str) -> ToolExecutionResu
 async def execute_tools(
     selected_tools: List[str],
     query: str,
-    user_id: str
+    user_id: str,
+    principal: Optional[Principal] = None,
 ) -> List[ToolExecutionResult]:
     """
     Execute selected tools in parallel.
@@ -234,6 +257,7 @@ async def execute_tools(
         selected_tools: List of tool names to execute
         query: User query
         user_id: User ID for logging
+        principal: Optional authenticated principal for tools that require it
         
     Returns:
         List of ToolExecutionResult
@@ -252,7 +276,7 @@ async def execute_tools(
         if tool_name == "web_search":
             tasks.append(execute_web_search(query, user_id))
         elif tool_name == "doc_search":
-            tasks.append(execute_document_search(query, user_id))
+            tasks.append(execute_document_search(query, user_id, principal=principal))
         else:
             logger.warning(
                 f"Unknown tool: {tool_name}",

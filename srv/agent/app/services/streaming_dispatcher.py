@@ -16,11 +16,13 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.core import BusiboxDeps
 from app.agents.dispatcher import dispatcher_agent
 from app.agents.web_search_agent import web_search_agent
 from app.agents.document_agent import document_agent
 from app.agents.weather_agent import weather_agent
 from app.agents.chat_agent import chat_agent
+from app.clients.busibox import BusiboxClient
 from app.core.logging import get_logger
 from app.models.dispatcher_log import DispatcherDecisionLog
 from app.schemas.auth import Principal
@@ -269,6 +271,7 @@ Analyze this query and select the appropriate tools and/or agents."""
                     user_id,
                     session,
                     tool_results,  # Pass tool results as context
+                    principal=principal,  # Pass principal for agents that need authentication
                 )
                 agent_results.append(agent_result)
                 
@@ -435,6 +438,7 @@ async def _execute_agent(
     user_id: str,
     session: AsyncSession,
     tool_context: List[Dict[str, Any]],
+    principal: Optional[Principal] = None,
 ) -> Dict[str, Any]:
     """Execute an agent and return the result."""
     # Map agent IDs to agent instances
@@ -444,6 +448,9 @@ async def _execute_agent(
         "weather_agent": weather_agent,
         "chat_agent": chat_agent,
     }
+    
+    # Agents that require BusiboxDeps (for authenticated API calls)
+    agents_requiring_deps = {"document_agent"}
     
     agent = agents.get(agent_id)
     if not agent:
@@ -463,7 +470,23 @@ async def _execute_agent(
         if context_parts:
             augmented_query = f"{query}\n\nContext from previous tools:\n" + "\n".join(context_parts)
         
-        result = await agent.run(augmented_query)
+        # Check if agent requires BusiboxDeps
+        if agent_id in agents_requiring_deps:
+            if not principal or not principal.token:
+                return {
+                    "success": False, 
+                    "error": f"Agent {agent_id} requires authentication but no principal/token provided"
+                }
+            
+            # Create BusiboxClient with the user's token
+            busibox_client = BusiboxClient(access_token=principal.token)
+            deps = BusiboxDeps(principal=principal, busibox_client=busibox_client)
+            
+            # Run agent with deps
+            result = await agent.run(augmented_query, deps=deps)
+        else:
+            # Run agent without deps
+            result = await agent.run(augmented_query)
         
         # Extract output
         output = result.data if hasattr(result, 'data') else str(result)

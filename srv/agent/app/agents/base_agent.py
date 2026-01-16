@@ -1,0 +1,860 @@
+"""
+Base Agent Framework.
+
+Provides a flexible BaseStreamingAgent class that handles:
+- Authentication and token exchange
+- Tool execution with configurable strategies
+- Streaming of thoughts, tool events, and content
+- Configurable execution modes (run once, until done, max iterations)
+
+Specific agents extend this class and only define their unique aspects:
+- System prompts and instructions
+- Tool configuration
+- Pipeline steps (for predefined pipelines)
+- Exit conditions
+"""
+
+import asyncio
+import logging
+import os
+from abc import abstractmethod
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Type, Union
+
+from pydantic import BaseModel
+from pydantic_ai import Agent
+from pydantic_ai.models.openai import OpenAIModel
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.agents.core import BusiboxDeps
+from app.agents.streaming_agent import StreamingAgent, StreamCallback
+from app.clients.busibox import BusiboxClient
+from app.config.settings import get_settings
+from app.schemas.auth import Principal
+from app.schemas.streaming import StreamEvent, thought, tool_start, tool_result, content, error, complete
+from app.services.token_service import get_or_exchange_token
+
+logger = logging.getLogger(__name__)
+
+
+def _ensure_openai_env():
+    """
+    Ensure OpenAI environment is configured for LiteLLM.
+    
+    Called lazily when agents are instantiated, not at module import time.
+    This allows test conftest to load .env files first.
+    
+    Note: We always set OPENAI_BASE_URL and OPENAI_API_KEY to our LiteLLM
+    configuration, overriding any existing OpenAI keys. This is because
+    we route all LLM calls through LiteLLM proxy, not direct to OpenAI.
+    """
+    settings = get_settings()
+    
+    # Always set to LiteLLM endpoint (we proxy through LiteLLM, not direct OpenAI)
+    os.environ["OPENAI_BASE_URL"] = str(settings.litellm_base_url)
+    
+    # Use LiteLLM API key (not OpenAI key)
+    api_key = settings.litellm_api_key
+    if not api_key:
+        logger.warning("LITELLM_API_KEY not set in environment or settings - LLM calls will fail")
+        api_key = "sk-not-configured"
+    os.environ["OPENAI_API_KEY"] = api_key
+
+
+class ExecutionMode(str, Enum):
+    """How the agent should handle iterations."""
+    RUN_ONCE = "run_once"  # Execute pipeline once and synthesize
+    RUN_UNTIL_DONE = "run_until_done"  # Loop until LLM signals completion
+    RUN_MAX_ITERATIONS = "run_max_iterations"  # Loop up to max_iterations times
+
+
+class ToolStrategy(str, Enum):
+    """How tools should be executed."""
+    SEQUENTIAL = "sequential"  # Execute tools one at a time in order
+    PARALLEL = "parallel"  # Execute independent tools concurrently
+    PREDEFINED_PIPELINE = "predefined_pipeline"  # Follow pipeline_steps() definition
+    LLM_DRIVEN = "llm_driven"  # Let LLM decide which tools to call
+
+
+# Mapping of tool names to their required OAuth scopes
+TOOL_SCOPES: Dict[str, List[str]] = {
+    "document_search": ["search.read"],
+    "web_search": [],  # No auth needed
+    "web_scraper": [],  # No auth needed
+    "ingest_document": ["ingest.write"],
+    "get_weather": [],  # No auth needed
+    "rag_query": ["rag.read"],
+}
+
+
+@dataclass
+class PipelineStep:
+    """A single step in a predefined pipeline."""
+    tool: str
+    args: Dict[str, Any] = field(default_factory=dict)
+    condition: Optional[Callable[[Any], bool]] = None  # Optional condition to run step
+
+
+@dataclass
+class AgentConfig:
+    """Configuration for a streaming agent."""
+    name: str  # Internal identifier
+    display_name: str  # Human-readable name
+    instructions: str  # System prompt for synthesis
+    tools: List[str]  # Tool names from registry
+    model: str = "agent"  # LiteLLM model name
+    streaming: bool = True  # Whether to stream responses
+    execution_mode: ExecutionMode = ExecutionMode.RUN_ONCE
+    tool_strategy: ToolStrategy = ToolStrategy.PREDEFINED_PIPELINE
+    max_iterations: int = 5
+    synthesis_prompt: Optional[str] = None  # Override default synthesis prompt
+    
+    def get_required_scopes(self) -> List[str]:
+        """Get all OAuth scopes required by this agent's tools."""
+        scopes = []
+        for tool_name in self.tools:
+            scopes.extend(TOOL_SCOPES.get(tool_name, []))
+        return list(set(scopes))  # Deduplicate
+    
+    def requires_auth(self) -> bool:
+        """Check if any tools require authentication."""
+        return len(self.get_required_scopes()) > 0
+
+
+class ToolRegistry:
+    """Registry for tool functions that can be called by agents."""
+    
+    _tools: Dict[str, Callable] = {}
+    _tool_outputs: Dict[str, Type[BaseModel]] = {}
+    
+    @classmethod
+    def register(cls, name: str, func: Callable, output_type: Optional[Type[BaseModel]] = None):
+        """Register a tool function."""
+        cls._tools[name] = func
+        if output_type:
+            cls._tool_outputs[name] = output_type
+    
+    @classmethod
+    def get(cls, name: str) -> Optional[Callable]:
+        """Get a tool function by name."""
+        return cls._tools.get(name)
+    
+    @classmethod
+    def get_output_type(cls, name: str) -> Optional[Type[BaseModel]]:
+        """Get the output type for a tool."""
+        return cls._tool_outputs.get(name)
+    
+    @classmethod
+    def has(cls, name: str) -> bool:
+        """Check if a tool is registered."""
+        return name in cls._tools
+
+
+# Register built-in tools
+def _register_builtin_tools():
+    """Register all built-in tools with the registry."""
+    from app.tools.document_search_tool import search_documents, DocumentSearchOutput
+    from app.tools.web_search_tool import search_web, WebSearchOutput
+    from app.tools.web_scraper_tool import scrape_webpage, WebScraperOutput
+    from app.tools.weather_tool import get_weather, WeatherOutput
+    
+    ToolRegistry.register("document_search", search_documents, DocumentSearchOutput)
+    ToolRegistry.register("web_search", search_web, WebSearchOutput)
+    ToolRegistry.register("web_scraper", scrape_webpage, WebScraperOutput)
+    ToolRegistry.register("get_weather", get_weather, WeatherOutput)
+
+
+# Initialize tool registry on module load
+try:
+    _register_builtin_tools()
+except ImportError as e:
+    logger.warning(f"Could not register all builtin tools: {e}")
+
+
+@dataclass
+class AgentContext:
+    """Runtime context for agent execution."""
+    principal: Optional[Principal] = None
+    session: Optional[AsyncSession] = None
+    deps: Optional[BusiboxDeps] = None
+    tool_results: Dict[str, Any] = field(default_factory=dict)
+    iteration: int = 0
+    user_id: Optional[str] = None
+    agent_id: Optional[str] = None
+    conversation_history: List[Dict[str, Any]] = field(default_factory=list)
+
+
+class BaseStreamingAgent(StreamingAgent):
+    """
+    Base class for streaming agents with authentication, tool execution, and synthesis.
+    
+    Subclasses should override:
+    - pipeline_steps() - For PREDEFINED_PIPELINE strategy
+    - process_tool_result() - For dynamic pipeline modification
+    - _build_synthesis_context() - For custom synthesis context building
+    """
+    
+    def __init__(self, config: AgentConfig):
+        self.config = config
+        self.name = config.display_name
+        
+        # Ensure OpenAI environment is configured (lazy init for test support)
+        _ensure_openai_env()
+        
+        # Get fresh settings after env is configured
+        settings = get_settings()
+        
+        # Create synthesis model
+        self.synthesis_model = OpenAIModel(
+            model_name=settings.default_model,
+            provider="openai",
+        )
+        
+        # Create synthesis agent
+        self.synthesis_agent = Agent(
+            model=self.synthesis_model,
+            system_prompt=config.synthesis_prompt or config.instructions,
+        )
+    
+    def pipeline_steps(self, query: str, context: AgentContext) -> List[PipelineStep]:
+        """
+        Define the pipeline steps to execute.
+        
+        Override in subclasses to define a predefined pipeline.
+        Default implementation returns empty list (for LLM_DRIVEN strategy).
+        
+        Args:
+            query: The user's query
+            context: Current execution context
+            
+        Returns:
+            List of PipelineStep objects to execute
+        """
+        return []
+    
+    async def process_tool_result(
+        self, 
+        step: PipelineStep, 
+        result: Any, 
+        context: AgentContext
+    ) -> List[PipelineStep]:
+        """
+        Process a tool result and optionally add more pipeline steps.
+        
+        Override in subclasses to implement dynamic pipelines (e.g., web search
+        that adds scrape steps based on search results).
+        
+        Args:
+            step: The pipeline step that was executed
+            result: The result from the tool
+            context: Current execution context
+            
+        Returns:
+            List of additional PipelineStep objects to add to the pipeline
+        """
+        return []
+    
+    async def should_continue(self, context: AgentContext) -> bool:
+        """
+        Check if execution should continue for another iteration.
+        
+        Override in subclasses for custom exit conditions.
+        
+        Args:
+            context: Current execution context
+            
+        Returns:
+            True if another iteration should run, False to stop
+        """
+        if self.config.execution_mode == ExecutionMode.RUN_ONCE:
+            return False
+        
+        if self.config.execution_mode == ExecutionMode.RUN_MAX_ITERATIONS:
+            return context.iteration < self.config.max_iterations
+        
+        # RUN_UNTIL_DONE - subclass should override with LLM-based check
+        return False
+    
+    async def run(
+        self, 
+        query: str, 
+        deps: Any = None,
+        context: Optional[dict] = None,
+    ) -> Any:
+        """
+        Backward-compatible run method for legacy code.
+        
+        Runs the agent without streaming, collecting output directly.
+        This allows BaseStreamingAgent to be used where PydanticAI agents
+        were previously expected.
+        
+        Args:
+            query: The user's query
+            deps: Optional dependencies (ignored, for API compatibility)
+            context: Optional context dict with principal, session, etc.
+            
+        Returns:
+            A result-like object with .data attribute containing the output
+        """
+        # Create a simple result collector
+        collected_content = []
+        
+        async def collect_stream(event: StreamEvent):
+            if event.type == "content":
+                collected_content.append(event.message)
+        
+        cancel = asyncio.Event()
+        result = await self.run_with_streaming(
+            query, collect_stream, cancel, context=context or {}
+        )
+        
+        # Return a result-like object for backward compatibility
+        class AgentResult:
+            def __init__(self, data):
+                self.data = data
+                self.output = data
+        
+        return AgentResult("".join(collected_content) if collected_content else result)
+    
+    async def run_with_streaming(
+        self,
+        query: str,
+        stream: StreamCallback,
+        cancel: asyncio.Event,
+        context: Optional[dict] = None,
+    ) -> str:
+        """
+        Execute the agent with real-time streaming of progress.
+        
+        Args:
+            query: The user's query
+            stream: Callback to stream events to the user
+            cancel: Event to signal cancellation
+            context: Optional context dict (principal, session, etc.)
+            
+        Returns:
+            Final output string
+        """
+        logger.info(f"{self.name}.run_with_streaming called with query: {query[:50]}...")
+        
+        # Setup execution context
+        agent_context = await self._setup_context(context, stream)
+        if agent_context is None:
+            return "Authentication or session error. Please sign in and try again."
+        
+        if cancel.is_set():
+            return ""
+        
+        # Execute based on strategy
+        try:
+            if self.config.tool_strategy == ToolStrategy.LLM_DRIVEN:
+                await self._execute_llm_driven(query, stream, cancel, agent_context)
+            else:
+                await self._execute_pipeline(query, stream, cancel, agent_context)
+        except Exception as e:
+            logger.error(f"Agent execution error: {e}", exc_info=True)
+            await stream(error(
+                source=self.name,
+                message=f"Error during execution: {str(e)}"
+            ))
+            return f"I encountered an error: {str(e)}"
+        
+        if cancel.is_set():
+            return ""
+        
+        # Synthesize final response
+        return await self._synthesize(query, stream, cancel, agent_context)
+    
+    async def _setup_context(
+        self, 
+        context: Optional[dict], 
+        stream: StreamCallback
+    ) -> Optional[AgentContext]:
+        """
+        Setup execution context including authentication and dependencies.
+        
+        Args:
+            context: Raw context dict from dispatcher
+            stream: Stream callback for error reporting
+            
+        Returns:
+            AgentContext if successful, None if auth failed
+        """
+        agent_context = AgentContext()
+        
+        if context:
+            agent_context.principal = context.get("principal")
+            agent_context.session = context.get("session")
+            agent_context.user_id = context.get("user_id")
+            agent_context.agent_id = context.get("agent_id")
+            agent_context.conversation_history = context.get("conversation_history", [])
+        
+        # Authentication is always required
+        if not agent_context.principal or not agent_context.principal.token:
+            logger.warning(f"Missing authentication for {self.name}")
+            await stream(error(
+                source=self.name,
+                message="Authentication required. Please sign in."
+            ))
+            return None
+        
+        if not agent_context.session:
+            logger.error(f"Missing database session for {self.name}")
+            await stream(error(
+                source=self.name,
+                message="Internal error: missing database session."
+            ))
+            return None
+        
+        # Perform token exchange for tools that require scopes
+        scopes = self.config.get_required_scopes()
+        if scopes:
+            try:
+                # Determine purpose from first scope (e.g., "search.read" -> "search")
+                purpose = scopes[0].split(".")[0] if scopes else "search"
+                
+                exchanged_token = await get_or_exchange_token(
+                    session=agent_context.session,
+                    principal=agent_context.principal,
+                    scopes=scopes,
+                    purpose=purpose
+                )
+                logger.info(f"Token exchange successful for {self.name}")
+                
+                # Create authenticated client
+                busibox_client = BusiboxClient(access_token=exchanged_token.access_token)
+                agent_context.deps = BusiboxDeps(
+                    principal=agent_context.principal,
+                    busibox_client=busibox_client
+                )
+            except Exception as e:
+                logger.error(f"Token exchange failed: {e}", exc_info=True)
+                await stream(error(
+                    source=self.name,
+                    message=f"Authentication error: {str(e)}"
+                ))
+                return None
+        
+        return agent_context
+    
+    async def _execute_pipeline(
+        self,
+        query: str,
+        stream: StreamCallback,
+        cancel: asyncio.Event,
+        context: AgentContext,
+    ) -> None:
+        """
+        Execute tools according to predefined pipeline.
+        
+        Args:
+            query: User's query
+            stream: Stream callback
+            cancel: Cancellation event
+            context: Execution context
+        """
+        # Get initial pipeline steps
+        steps = self.pipeline_steps(query, context)
+        pending_steps = list(steps)
+        
+        while pending_steps:
+            if cancel.is_set():
+                return
+            
+            context.iteration += 1
+            
+            if self.config.tool_strategy == ToolStrategy.PARALLEL:
+                # Execute all pending steps in parallel
+                await self._execute_steps_parallel(pending_steps, stream, cancel, context)
+                pending_steps = []
+            else:
+                # Execute one step at a time (SEQUENTIAL or PREDEFINED_PIPELINE)
+                step = pending_steps.pop(0)
+                result = await self._execute_step(step, stream, cancel, context)
+                
+                # Check for dynamic steps
+                if result is not None:
+                    additional_steps = await self.process_tool_result(step, result, context)
+                    pending_steps.extend(additional_steps)
+            
+            # Check exit condition
+            if not await self.should_continue(context):
+                break
+    
+    async def _execute_steps_parallel(
+        self,
+        steps: List[PipelineStep],
+        stream: StreamCallback,
+        cancel: asyncio.Event,
+        context: AgentContext,
+    ) -> None:
+        """Execute multiple pipeline steps in parallel."""
+        tasks = [
+            self._execute_step(step, stream, cancel, context)
+            for step in steps
+        ]
+        await asyncio.gather(*tasks, return_exceptions=True)
+    
+    async def _execute_step(
+        self,
+        step: PipelineStep,
+        stream: StreamCallback,
+        cancel: asyncio.Event,
+        context: AgentContext,
+    ) -> Optional[Any]:
+        """
+        Execute a single pipeline step.
+        
+        Args:
+            step: Pipeline step to execute
+            stream: Stream callback
+            cancel: Cancellation event
+            context: Execution context
+            
+        Returns:
+            Tool result if successful, None on error
+        """
+        if cancel.is_set():
+            return None
+        
+        # Check condition if present
+        if step.condition and not step.condition(context.tool_results):
+            logger.debug(f"Skipping step {step.tool} - condition not met")
+            return None
+        
+        # Get tool function
+        tool_func = ToolRegistry.get(step.tool)
+        if not tool_func:
+            logger.error(f"Tool not found: {step.tool}")
+            await stream(error(
+                source=self.name,
+                message=f"Tool not found: {step.tool}"
+            ))
+            return None
+        
+        # Stream tool start
+        await stream(tool_start(
+            source=step.tool,
+            message=f"Executing {step.tool}...",
+            data={"args": step.args}
+        ))
+        
+        try:
+            # Execute tool
+            # Check if tool needs BusiboxDeps context
+            tool_scopes = TOOL_SCOPES.get(step.tool, [])
+            if tool_scopes and context.deps:
+                # Create mock context for tools that need BusiboxDeps
+                class MockRunContext:
+                    def __init__(self, deps):
+                        self.deps = deps
+                
+                mock_ctx = MockRunContext(context.deps)
+                result = await tool_func(ctx=mock_ctx, **step.args)
+            else:
+                # Tool doesn't need deps context - call directly
+                result = await tool_func(**step.args)
+            
+            # Store result
+            context.tool_results[step.tool] = result
+            
+            # Stream tool result
+            result_data = result.model_dump() if hasattr(result, 'model_dump') else str(result)
+            await stream(tool_result(
+                source=step.tool,
+                message=self._format_tool_result_message(step.tool, result),
+                data=result_data if isinstance(result_data, dict) else {"result": result_data}
+            ))
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Tool execution error for {step.tool}: {e}", exc_info=True)
+            await stream(error(
+                source=step.tool,
+                message=f"Tool error: {str(e)}"
+            ))
+            return None
+    
+    def _format_tool_result_message(self, tool_name: str, result: Any) -> str:
+        """Format a human-readable message for tool results."""
+        if hasattr(result, 'result_count'):
+            return f"Found **{result.result_count} results**"
+        if hasattr(result, 'found') and not result.found:
+            return "No results found"
+        if hasattr(result, 'success') and result.success:
+            return "Successfully completed"
+        if hasattr(result, 'success') and not result.success:
+            return f"Failed: {getattr(result, 'error', 'Unknown error')}"
+        return "Completed"
+    
+    async def _execute_llm_driven(
+        self,
+        query: str,
+        stream: StreamCallback,
+        cancel: asyncio.Event,
+        context: AgentContext,
+    ) -> None:
+        """
+        Execute tools with LLM deciding which tools to call.
+        
+        For LLM_DRIVEN strategy, we use PydanticAI's native tool calling.
+        """
+        # Build tool-calling agent dynamically
+        from pydantic_ai import Agent
+        
+        # Get tool functions for this agent
+        tools = []
+        for tool_name in self.config.tools:
+            tool_func = ToolRegistry.get(tool_name)
+            if tool_func:
+                tools.append(tool_func)
+        
+        if not tools:
+            logger.warning(f"No tools registered for {self.name}")
+            return
+        
+        # Create agent with tools
+        agent = Agent(
+            model=self.synthesis_model,
+            tools=tools,
+            system_prompt=self.config.instructions,
+        )
+        
+        # Run agent
+        try:
+            result = await agent.run(query, deps=context.deps)
+            
+            # Store result for synthesis
+            context.tool_results["llm_response"] = result.output
+            
+        except Exception as e:
+            logger.error(f"LLM-driven execution error: {e}", exc_info=True)
+            await stream(error(
+                source=self.name,
+                message=f"Error: {str(e)}"
+            ))
+    
+    async def _synthesize(
+        self,
+        query: str,
+        stream: StreamCallback,
+        cancel: asyncio.Event,
+        context: AgentContext,
+    ) -> str:
+        """
+        Synthesize final response from tool results.
+        
+        Args:
+            query: User's query
+            stream: Stream callback
+            cancel: Cancellation event
+            context: Execution context with tool results
+            
+        Returns:
+            Final output string
+        """
+        if cancel.is_set():
+            return ""
+        
+        # Check if we have any results
+        if not context.tool_results:
+            await stream(content(
+                source=self.name,
+                message="I couldn't find any relevant information.",
+            ))
+            return "I couldn't find any relevant information."
+        
+        # For LLM_DRIVEN, return the LLM's response directly
+        if "llm_response" in context.tool_results:
+            response = str(context.tool_results["llm_response"])
+            await stream(content(source=self.name, message=response))
+            return response
+        
+        # Build synthesis context
+        synthesis_context = self._build_synthesis_context(query, context)
+        
+        await stream(thought(
+            source=self.name,
+            message="Synthesizing answer from results..."
+        ))
+        
+        try:
+            # Run synthesis with streaming
+            full_output = ""
+            
+            async with self.synthesis_agent.run_stream(synthesis_context) as result:
+                async for chunk in result.stream_text(delta=True):
+                    if cancel.is_set():
+                        break
+                    
+                    full_output += chunk
+                    await stream(content(
+                        source=self.name,
+                        message=chunk,
+                        data={"streaming": True, "partial": True}
+                    ))
+            
+            # Send completion marker
+            await stream(content(
+                source=self.name,
+                message="",
+                data={
+                    "streaming": False,
+                    "partial": False,
+                    "complete": True,
+                }
+            ))
+            
+            return full_output.strip()
+            
+        except Exception as e:
+            logger.error(f"Synthesis error: {e}", exc_info=True)
+            await stream(error(
+                source=self.name,
+                message=f"Error synthesizing answer: {str(e)}"
+            ))
+            
+            # Return fallback
+            fallback = self._build_fallback_response(query, context)
+            await stream(content(source=self.name, message=fallback))
+            return fallback
+    
+    def _build_synthesis_context(self, query: str, context: AgentContext) -> str:
+        """
+        Build context string for synthesis.
+        
+        Override in subclasses for custom context building.
+        
+        Args:
+            query: User's query
+            context: Execution context with tool results
+            
+        Returns:
+            Context string for synthesis agent
+        """
+        parts = [f"User Question: {query}\n\nResults:\n"]
+        
+        for tool_name, result in context.tool_results.items():
+            if hasattr(result, 'context'):
+                # Document search style result
+                parts.append(f"\n--- {tool_name} ---\n{result.context}")
+            elif hasattr(result, 'results') and isinstance(result.results, list):
+                # List of results
+                parts.append(f"\n--- {tool_name} ({len(result.results)} items) ---")
+                for i, item in enumerate(result.results[:5], 1):
+                    if hasattr(item, 'model_dump'):
+                        parts.append(f"\n{i}. {item.model_dump()}")
+                    else:
+                        parts.append(f"\n{i}. {item}")
+            elif hasattr(result, 'content'):
+                # Web scraper style result
+                parts.append(f"\n--- {tool_name} ---\n{result.content[:2000]}")
+            else:
+                # Generic result
+                parts.append(f"\n--- {tool_name} ---\n{result}")
+        
+        parts.append("\n\nPlease answer the user's question based on these results.")
+        return "\n".join(parts)
+    
+    def _build_fallback_response(self, query: str, context: AgentContext) -> str:
+        """
+        Build fallback response when synthesis fails.
+        
+        Override in subclasses for custom fallback handling.
+        
+        Args:
+            query: User's query
+            context: Execution context
+            
+        Returns:
+            Fallback response string
+        """
+        parts = [f"Here's what I found about **{query}**:\n"]
+        
+        for tool_name, result in context.tool_results.items():
+            if hasattr(result, 'results') and isinstance(result.results, list):
+                parts.append(f"\n### {tool_name} Results:")
+                for item in result.results[:3]:
+                    if hasattr(item, 'text'):
+                        parts.append(f"\n- {item.text[:200]}...")
+                    elif hasattr(item, 'title'):
+                        parts.append(f"\n- {item.title}")
+        
+        return "\n".join(parts)
+
+
+def create_agent_from_definition(definition: Any) -> BaseStreamingAgent:
+    """
+    Create a streaming agent from a database AgentDefinition.
+    
+    Args:
+        definition: AgentDefinition database model
+        
+    Returns:
+        Configured BaseStreamingAgent instance
+    """
+    # Extract workflows config
+    workflows = definition.workflows or {}
+    
+    # Parse execution mode
+    execution_mode_str = workflows.get("execution_mode", "run_once")
+    try:
+        execution_mode = ExecutionMode(execution_mode_str)
+    except ValueError:
+        logger.warning(f"Invalid execution_mode '{execution_mode_str}', defaulting to RUN_ONCE")
+        execution_mode = ExecutionMode.RUN_ONCE
+    
+    # Parse tool strategy
+    tool_strategy_str = workflows.get("tool_strategy", "llm_driven")
+    try:
+        tool_strategy = ToolStrategy(tool_strategy_str)
+    except ValueError:
+        logger.warning(f"Invalid tool_strategy '{tool_strategy_str}', defaulting to LLM_DRIVEN")
+        tool_strategy = ToolStrategy.LLM_DRIVEN
+    
+    # Get tool names
+    tools_config = definition.tools or {}
+    tool_names = tools_config.get("names", []) if isinstance(tools_config, dict) else []
+    
+    # Create config
+    config = AgentConfig(
+        name=definition.name,
+        display_name=definition.display_name or definition.name,
+        instructions=definition.instructions or "You are a helpful assistant.",
+        tools=tool_names,
+        model=definition.model or "agent",
+        streaming=True,  # Default for DB agents
+        execution_mode=execution_mode,
+        tool_strategy=tool_strategy,
+        max_iterations=workflows.get("max_iterations", 5),
+    )
+    
+    # Check for predefined pipeline
+    pipeline_config = workflows.get("pipeline", [])
+    
+    if pipeline_config:
+        # Create agent with predefined pipeline
+        class DatabasePipelineAgent(BaseStreamingAgent):
+            def __init__(self, config: AgentConfig, pipeline: List[Dict]):
+                super().__init__(config)
+                self._pipeline = pipeline
+            
+            def pipeline_steps(self, query: str, context: AgentContext) -> List[PipelineStep]:
+                steps = []
+                for step_config in self._pipeline:
+                    args = dict(step_config.get("args", {}))
+                    # Substitute {query} placeholder
+                    for key, value in args.items():
+                        if value == "{query}":
+                            args[key] = query
+                    steps.append(PipelineStep(
+                        tool=step_config.get("tool", ""),
+                        args=args,
+                    ))
+                return steps
+        
+        return DatabasePipelineAgent(config, pipeline_config)
+    
+    return BaseStreamingAgent(config)

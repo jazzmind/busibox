@@ -278,12 +278,13 @@ run_service_tests() {
     fi
     
     # Find virtual environment (check common names)
-    if [[ -d "${service_dir}/venv" ]]; then
+    # Prefer test_venv first as it's specifically for testing and may have newer Python
+    if [[ -d "${service_dir}/test_venv" ]]; then
+        venv_dir="${service_dir}/test_venv"
+    elif [[ -d "${service_dir}/venv" ]]; then
         venv_dir="${service_dir}/venv"
     elif [[ -d "${service_dir}/.venv" ]]; then
         venv_dir="${service_dir}/.venv"
-    elif [[ -d "${service_dir}/test_venv" ]]; then
-        venv_dir="${service_dir}/test_venv"
     fi
     
     # Change to service directory

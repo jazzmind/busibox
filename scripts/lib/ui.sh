@@ -127,15 +127,15 @@ confirm() {
 
 # Environment selection
 # Usage: ENV=$(select_environment)
-# Returns: "docker", "test", or "production"
+# Returns: "docker", "staging", or "production"
 select_environment() {
     # Send display output to stderr so it shows on terminal (not captured by command substitution)
     {
         echo ""
         box "Environment Selection"
         echo ""
-        echo -e "  ${CYAN}1)${NC} Local Docker          (localhost development)"
-        echo -e "  ${CYAN}2)${NC} Test Environment      (10.96.201.x network)"
+        echo -e "  ${CYAN}1)${NC} Local Docker           (localhost development)"
+        echo -e "  ${CYAN}2)${NC} Staging Environment   (10.96.201.x network)"
         echo -e "  ${CYAN}3)${NC} Production Environment (10.96.200.x network)"
         echo ""
     } >&2
@@ -151,7 +151,7 @@ select_environment() {
                 return 0
                 ;;
             2)
-                echo "test"
+                echo "staging"
                 return 0
                 ;;
             3)

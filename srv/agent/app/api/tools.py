@@ -164,7 +164,7 @@ async def update_tool(
     
     # Increment version and update timestamp
     tool.version += 1
-    tool.updated_at = datetime.now(timezone.utc)
+    tool.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     
     await session.commit()
     await session.refresh(tool)

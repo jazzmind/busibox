@@ -1,7 +1,7 @@
 # Authentication & Authorization
 
 **Created**: 2025-12-09  
-**Last Updated**: 2026-01-14  
+**Last Updated**: 2026-01-15  
 **Status**: Active  
 **Category**: Architecture  
 **Related Docs**:  
@@ -629,6 +629,22 @@ All token issuance and sensitive operations are logged:
   }
 }
 ```
+
+### Pre-Authentication Events
+
+Certain audit events occur before the user is authenticated and are allowed without authentication:
+
+| Event | Description |
+|-------|-------------|
+| `magic_link.sent` | Magic link email sent to user |
+| `totp.code_sent` | TOTP code email sent to user |
+| `user.login.failed` | Failed login attempt |
+| `totp.code_failed` | Invalid TOTP code entered |
+| `passkey.login_failed` | Failed passkey authentication |
+| `magic_link.expired` | Magic link used after expiration |
+| `oauth.token_rejected` | Token validation failed |
+
+These events are logged for security monitoring without requiring authentication, since they represent actions taken before or during the authentication process.
 
 ---
 

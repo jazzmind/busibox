@@ -1,3 +1,11 @@
+---
+title: "Configuration"
+category: "developer"
+order: 4
+description: "Environment variables, secrets management, and service configuration"
+published: true
+---
+
 # Configuration Guide
 
 **Created**: 2025-12-09  

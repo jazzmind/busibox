@@ -19,7 +19,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.streaming_agent import StreamingAgent
-from app.agents.web_search_agent_streaming import web_search_agent_streaming
+from app.agents.web_search_agent import web_search_agent, WebSearchAgent
+from app.agents.document_agent import document_agent, DocumentAgent
+from app.agents.weather_agent import weather_agent, WeatherAgent
+from app.agents.chat_agent import chat_agent, ChatAgent
+from app.agents.base_agent import create_agent_from_definition, BaseStreamingAgent
 from app.config.settings import get_settings
 from app.core.logging import get_logger
 from app.schemas.streaming import StreamEvent, thought, content, complete, error
@@ -27,19 +31,29 @@ from app.schemas.streaming import StreamEvent, thought, content, complete, error
 logger = get_logger(__name__)
 settings = get_settings()
 
-# Configure OpenAI for routing decisions
-os.environ["OPENAI_BASE_URL"] = str(settings.litellm_base_url)
-os.environ["OPENAI_API_KEY"] = settings.litellm_api_key or "sk-1234"
+# Note: OpenAI env vars are configured lazily by BaseStreamingAgent._ensure_openai_env()
+# This allows test conftest to load .env files before agents are instantiated
 
 
 # Registry of available streaming agents by type/name
 STREAMING_AGENTS: Dict[str, StreamingAgent] = {
-    "web_search": web_search_agent_streaming,
-    "web_search_agent": web_search_agent_streaming,  # Alias
+    "web_search": web_search_agent,
+    "web_search_agent": web_search_agent,  # Alias
+    "web-search": web_search_agent,  # Alias with hyphen
+    "document": document_agent,
+    "document_agent": document_agent,  # Alias
+    "document-agent": document_agent,  # Alias with hyphen
+    "weather": weather_agent,
+    "weather_agent": weather_agent,  # Alias
+    "weather-agent": weather_agent,  # Alias with hyphen
+    "chat": chat_agent,
+    "chat_agent": chat_agent,  # Alias
+    "chat-agent": chat_agent,  # Alias with hyphen
 }
 
 # Map agent names/types to streaming agent keys
 AGENT_TYPE_MAPPING = {
+    # Web search mappings
     "web_search": "web_search",
     "web_search_agent": "web_search",
     "web-search": "web_search",
@@ -47,6 +61,23 @@ AGENT_TYPE_MAPPING = {
     "research": "web_search",
     "web search agent": "web_search",
     "web_search_agent_streaming": "web_search",
+    # Document agent mappings
+    "document": "document",
+    "document_agent": "document",
+    "document-agent": "document",
+    "doc_search": "document",
+    "document_search": "document",
+    "document assistant": "document",
+    # Weather agent mappings
+    "weather": "weather",
+    "weather_agent": "weather",
+    "weather-agent": "weather",
+    "weather agent": "weather",
+    # Chat agent mappings
+    "chat": "chat",
+    "chat_agent": "chat",
+    "chat-agent": "chat",
+    "chat assistant": "chat",
 }
 
 # Agent descriptions for routing
@@ -118,15 +149,19 @@ Choose the most appropriate single agent for the query.""",
             builtin_agents = get_builtin_agent_definitions()
             for agent_def in builtin_agents:
                 if str(agent_def.id) == agent_id:
+                    # Extract tool names from tools dict
+                    tools = agent_def.tools or {}
+                    tool_names = tools.get("names", []) if isinstance(tools, dict) else []
+                    
                     agent_info = {
                         "id": str(agent_def.id),
                         "name": agent_def.name,
                         "display_name": agent_def.display_name or agent_def.name,
-                        "agent_type": agent_def.agent_type or agent_def.name,
-                        "tools": agent_def.tools or [],
+                        "agent_type": agent_def.name,  # Use name as agent_type for built-ins
+                        "tools": tool_names,
                     }
                     self._agent_cache[agent_id] = agent_info
-                    logger.info(f"Found built-in agent: {agent_info['display_name']}")
+                    logger.info(f"Found built-in agent: {agent_info['display_name']} (type: {agent_info['agent_type']}, tools: {tool_names})")
                     return agent_info
         except Exception as e:
             logger.warning(f"Failed to check built-in agents: {e}")
@@ -141,12 +176,17 @@ Choose the most appropriate single agent for the query.""",
             agent_def = result.scalar_one_or_none()
             
             if agent_def:
+                # Extract tool names
+                tools_config = agent_def.tools or {}
+                tool_names = tools_config.get("names", []) if isinstance(tools_config, dict) else []
+                
                 agent_info = {
                     "id": str(agent_def.id),
                     "name": agent_def.name,
                     "display_name": agent_def.display_name or agent_def.name,
-                    "agent_type": agent_def.agent_type,
-                    "tools": agent_def.tools or [],
+                    "agent_type": getattr(agent_def, 'agent_type', None) or agent_def.name,
+                    "tools": tool_names,
+                    "definition": agent_def,  # Store full definition for factory
                 }
                 self._agent_cache[agent_id] = agent_info
                 return agent_info
@@ -177,13 +217,43 @@ Choose the most appropriate single agent for the query.""",
             return "web_search"
         if "research" in name_lower:
             return "web_search"
+        if "document" in name_lower or "doc" in name_lower:
+            return "document"
         
-        # Check tools - if it has web_search tool, use web_search agent
+        # Check tools - map to appropriate agent based on tool
         tools = agent_info.get("tools", [])
-        if any("web_search" in str(t).lower() for t in tools):
+        tools_str = " ".join(str(t).lower() for t in tools)
+        
+        # Document search takes priority if present (more specific)
+        if "document_search" in tools_str or "doc_search" in tools_str:
+            return "document"
+        
+        if "web_search" in tools_str:
             return "web_search"
         
+        # Check if we have a full definition - can create a dynamic agent
+        if "definition" in agent_info:
+            return "dynamic"
+        
         return None
+    
+    def _create_dynamic_agent(self, agent_info: Dict[str, Any]) -> Optional[StreamingAgent]:
+        """
+        Create a streaming agent from a database AgentDefinition.
+        
+        Uses the agent factory to create agents with custom configurations.
+        """
+        definition = agent_info.get("definition")
+        if not definition:
+            return None
+        
+        try:
+            agent = create_agent_from_definition(definition)
+            logger.info(f"Created dynamic agent from definition: {agent.name}")
+            return agent
+        except Exception as e:
+            logger.error(f"Failed to create dynamic agent: {e}", exc_info=True)
+            return None
     
     async def run(
         self,
@@ -193,6 +263,7 @@ Choose the most appropriate single agent for the query.""",
         cancel: asyncio.Event,
         available_agents: Optional[List[str]] = None,
         conversation_history: Optional[List[Dict[str, str]]] = None,
+        principal: Optional[Any] = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """
         Main entry point for agentic dispatch.
@@ -206,6 +277,7 @@ Choose the most appropriate single agent for the query.""",
             cancel: Cancellation event
             available_agents: List of agent IDs that can be used (can be UUIDs or names)
             conversation_history: Previous messages for context
+            principal: Authenticated user principal for tools that require auth
         """
         start_time = datetime.now(timezone.utc)
         
@@ -287,8 +359,21 @@ Choose the most appropriate single agent for the query.""",
                 return
             
             # Step 3: Execute the selected agent
-            if selected_streaming_key and selected_streaming_key in STREAMING_AGENTS:
+            logger.info(f"Executing agent: streaming_key={selected_streaming_key}, in_registry={selected_streaming_key in STREAMING_AGENTS if selected_streaming_key else False}")
+            
+            # Determine which agent to use
+            agent: Optional[StreamingAgent] = None
+            
+            if selected_streaming_key == "dynamic":
+                # Create dynamic agent from database definition
+                agent_info = await self._lookup_agent_by_id(selected_id, session)
+                if agent_info:
+                    agent = self._create_dynamic_agent(agent_info)
+            elif selected_streaming_key and selected_streaming_key in STREAMING_AGENTS:
                 agent = STREAMING_AGENTS[selected_streaming_key]
+            
+            if agent:
+                logger.info(f"Running streaming agent: {agent.name}")
                 
                 # Create a queue to collect agent events
                 events_queue: asyncio.Queue[StreamEvent] = asyncio.Queue()
@@ -305,19 +390,28 @@ Choose the most appropriate single agent for the query.""",
                 # Run agent in background task
                 async def run_agent():
                     try:
+                        logger.info(f"Starting agent.run_with_streaming for {agent.name}")
                         result = await agent.run_with_streaming(
                             query=query,
                             stream=stream_callback,
                             cancel=cancel,
-                            context={"conversation_history": conversation_history}
+                            context={
+                                "conversation_history": conversation_history,
+                                "principal": principal,
+                                "user_id": user_id,
+                                "session": session,  # Pass DB session for token exchange
+                            }
                         )
+                        logger.info(f"Agent {agent.name} completed with result length: {len(result) if result else 0}")
                         agent_result["output"] = result
                     except Exception as e:
+                        logger.error(f"Agent {agent.name} error: {str(e)}", exc_info=True)
                         await events_queue.put(error(
                             source=agent.name,
                             message=f"Agent error: {str(e)}"
                         ))
                     finally:
+                        logger.info(f"Agent {agent.name} setting complete flag")
                         agent_complete.set()
                 
                 # Start agent task
@@ -351,9 +445,9 @@ Choose the most appropriate single agent for the query.""",
                 
                 # Wait for agent to finish
                 await agent_task
-                
+            
             else:
-                # Fallback for non-streaming agents (chat, etc.)
+                # Fallback for non-streaming agents (chat, etc.) or when no agent resolved
                 yield thought(
                     source="dispatcher",
                     message=f"Processing with general assistant..."
@@ -493,6 +587,7 @@ async def run_agentic_dispatcher(
     cancel: asyncio.Event,
     available_agents: Optional[List[str]] = None,
     conversation_history: Optional[List[Dict[str, str]]] = None,
+    principal: Optional[Any] = None,
 ) -> AsyncGenerator[StreamEvent, None]:
     """
     Convenience function to run the agentic dispatcher.
@@ -506,5 +601,6 @@ async def run_agentic_dispatcher(
         cancel=cancel,
         available_agents=available_agents,
         conversation_history=conversation_history,
+        principal=principal,
     ):
         yield event

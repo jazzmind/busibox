@@ -184,6 +184,41 @@
     var: migration_result.stdout_lines
   when: migration_result.stdout_lines is defined
 
+# =============================================================================
+# Pytest Database Migrations
+# =============================================================================
+# When pytest databases are enabled, also run migrations on the test database
+# This ensures pytest schemas stay in sync with the main schemas
+#
+# Test database: test_agent_server (owned by busibox_test_user)
+
+- name: Build pytest database URL
+  set_fact:
+    agent_pytest_database_url: "postgresql+asyncpg://busibox_test_user:{{ pytest_db_password | default('testpassword') }}@{{ postgres_host }}:{{ postgres_port }}/test_agent_server"
+  when: enable_pytest_databases | default(false)
+  tags: [agent, agent_pytest_db]
+
+- name: Run migrations on pytest database
+  shell: |
+    cd /srv/agent
+    . .venv/bin/activate
+    alembic upgrade head
+  become: yes
+  become_user: "{{ agent_api_user }}"
+  environment:
+    DATABASE_URL: "{{ agent_pytest_database_url }}"
+    PYTHONPATH: "/srv/agent"
+  register: pytest_migration_result
+  changed_when: "'Running upgrade' in pytest_migration_result.stderr"
+  when: enable_pytest_databases | default(false)
+  tags: [agent, agent_pytest_db]
+
+- name: Display pytest migration output
+  debug:
+    var: pytest_migration_result.stdout_lines
+  when: enable_pytest_databases | default(false) and pytest_migration_result.stdout_lines is defined
+  tags: [agent, agent_pytest_db]
+
 - name: Deploy agent service systemd unit
   template:
     src: agent-api.service.j2

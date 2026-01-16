@@ -20,7 +20,7 @@ fi
 
 # Create group_vars/all directories
 mkdir -p inventory/production/group_vars/all
-mkdir -p inventory/test/group_vars/all
+mkdir -p inventory/staging/group_vars/all
 
 # Move main config files if they're in the wrong place
 if [ -f "inventory/production/group_vars/all.yml" ]; then
@@ -28,9 +28,9 @@ if [ -f "inventory/production/group_vars/all.yml" ]; then
     mv inventory/production/group_vars/all.yml inventory/production/group_vars/all/00-main.yml
 fi
 
-if [ -f "inventory/test/group_vars/all.yml" ]; then
-    echo "Moving inventory/test/group_vars/all.yml to all/00-main.yml"
-    mv inventory/test/group_vars/all.yml inventory/test/group_vars/all/00-main.yml
+if [ -f "inventory/staging/group_vars/all.yml" ]; then
+    echo "Moving inventory/staging/group_vars/all.yml to all/00-main.yml"
+    mv inventory/staging/group_vars/all.yml inventory/staging/group_vars/all/00-main.yml
 fi
 
 # Create symlinks
@@ -39,8 +39,8 @@ cd inventory/production/group_vars/all
 ln -sf ../../../../roles/secrets/vars/vault.yml vault.yml || true
 cd "$SCRIPT_DIR"
 
-echo "Creating symlink: inventory/test/group_vars/all/vault.yml"
-cd inventory/test/group_vars/all
+echo "Creating symlink: inventory/staging/group_vars/all/vault.yml"
+cd inventory/staging/group_vars/all
 ln -sf ../../../../roles/secrets/vars/vault.yml vault.yml || true
 cd "$SCRIPT_DIR"
 
@@ -49,9 +49,9 @@ echo "✓ Vault symlinks created successfully"
 echo ""
 echo "Verification:"
 ls -la inventory/production/group_vars/all/vault.yml
-ls -la inventory/test/group_vars/all/vault.yml
+ls -la inventory/staging/group_vars/all/vault.yml
 echo ""
 echo "Test variable loading:"
-echo "  ansible-inventory -i inventory/test --list | grep network_base_octets"
+echo "  ansible-inventory -i inventory/staging --list | grep network_base_octets"
 echo ""
 
