@@ -318,8 +318,8 @@ class TestEmbeddingGeneration:
         
         page_embedding = embeddings[0]
         print(f"\n✓ Generated PDF page embedding")
-        print(f"  Patches: {len(page_embedding)}")
-        print(f"  Total dimensions: {len(page_embedding) * EXPECTED_PATCH_DIM}")
+        print(f"  Embedding dimensions: {len(page_embedding)}")
+        assert len(page_embedding) == EXPECTED_POOLED_DIM, f"Expected {EXPECTED_POOLED_DIM} dimensions, got {len(page_embedding)}"
 
 
 # ============================================================================
@@ -652,6 +652,8 @@ class TestIntegration:
         # 1. Load config
         config = Config()
         config_dict = config.to_dict()
+        # Explicitly enable ColPali for this test
+        config_dict["colpali_enabled"] = True
         
         # 2. Create embedder
         embedder = ColPaliEmbedder(config_dict)
@@ -667,12 +669,13 @@ class TestIntegration:
         # 5. Validate results
         assert embeddings is not None
         assert len(embeddings) == 1
-        assert len(embeddings[0]) >= MIN_PATCHES
+        # After pooling, each page embedding is a single 128-d vector
+        assert len(embeddings[0]) == EXPECTED_POOLED_DIM, f"Expected {EXPECTED_POOLED_DIM} dimensions, got {len(embeddings[0])}"
         
         print(f"\n✓ Full workflow successful")
         print(f"  Health: OK")
         print(f"  Embeddings: {len(embeddings)} pages")
-        print(f"  Patches per page: {len(embeddings[0])}")
+        print(f"  Embedding dimensions: {len(embeddings[0])}")
 
 
 # ============================================================================
@@ -734,8 +737,8 @@ async def test_diagnostic_report():
         if embeddings:
             print(f"   Status: ✓ Embedding generated")
             print(f"   Time: {elapsed:.3f}s")
-            print(f"   Patches: {len(embeddings[0])}")
-            print(f"   Dimensions: {len(embeddings[0][0])}")
+            print(f"   Pages: {len(embeddings)}")
+            print(f"   Dimensions per page: {len(embeddings[0])}")
         else:
             print(f"   Status: ✗ Embedding generation failed")
         

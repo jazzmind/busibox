@@ -28,6 +28,9 @@ load_env_files(Path(__file__).parent.parent)
 # This must be done AFTER loading env files since dotenv overrides env vars
 os.environ["auth_audience"] = ""
 
+# Enable pytest plugin for failed test filter generation
+pytest_plugins = ["testing.pytest_failed_filter"]
+
 # Clear settings cache immediately after loading env files
 try:
     from app.config.settings import get_settings

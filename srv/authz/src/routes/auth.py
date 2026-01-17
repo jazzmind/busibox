@@ -295,13 +295,35 @@ async def validate_session(request: Request, token: str):
     """
     Validate a session by token.
     
+    The token can be either:
+    1. A JWT session token (returned by magic link, TOTP, etc.) - extracts jti to lookup session
+    2. A database session token (legacy) - looks up directly
+    
     Returns the session and user info if valid, 404 if not found/expired.
     """
     await _require_client_auth(request)
 
     db = _get_pg(request)
     await db.connect()
-    session = await db.get_session(token)
+    
+    session = None
+    
+    # Try to decode as JWT first
+    try:
+        # Decode without verification to check if it's a JWT and extract jti
+        unverified = jwt.decode(token, options={"verify_signature": False})
+        jti = unverified.get("jti")
+        
+        if jti:
+            # Look up session by session_id (jti)
+            session = await db.get_session_by_id(jti)
+    except (jwt.DecodeError, jwt.InvalidTokenError):
+        # Not a JWT, try as database token
+        pass
+    
+    # If JWT lookup didn't work, try as database token
+    if not session:
+        session = await db.get_session(token)
 
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found or expired")
@@ -309,7 +331,7 @@ async def validate_session(request: Request, token: str):
     return {
         "session_id": session["session_id"],
         "user_id": session["user_id"],
-        "token": session["token"],
+        "token": session.get("token", token),  # Return original token if JWT
         "expires_at": _format_datetime(session["expires_at"]),
         "ip_address": session.get("ip_address"),
         "user_agent": session.get("user_agent"),

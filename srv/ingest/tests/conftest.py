@@ -44,6 +44,9 @@ from testing.auth import AuthTestClient, auth_client  # noqa: F401 - auth_client
 from testing.fixtures import require_env
 from testing.database import RLSEnabledPool
 
+# Enable pytest plugin for failed test filter generation
+pytest_plugins = ["testing.pytest_failed_filter"]
+
 
 # =============================================================================
 # Environment setup - using shared service auth fixture factory

@@ -1220,11 +1220,16 @@ run_container_tests() {
             test_env="${test_env} AUTHZ_BOOTSTRAP_CLIENT_SECRET=${JWT_SECRET}"
             
             # Run tests via SSH
-            ssh "root@${authz_ip}" "cd /srv/authz/app && source ../venv/bin/activate && export PYTHONPATH=/srv/authz/app/src && source /srv/authz/.env && export ${test_env} && python -m pytest tests/ -v --tb=short" || {
+            if ssh "root@${authz_ip}" "cd /srv/authz/app && source ../venv/bin/activate && export PYTHONPATH=/srv/authz/app/src && source /srv/authz/.env && export ${test_env} && python -m pytest tests/ -v --tb=short"; then
+                success "Authz tests passed!"
+            else
                 error "Authz tests failed"
-                exit 1
-            }
-            success "Authz tests passed!"
+                echo ""
+                warn "To rerun failed tests, check output above for pytest filter"
+                echo ""
+                # Don't exit - continue to show summary
+                return 1
+            fi
             ;;
         ingest)
             header "Ingest Service Tests" 70
@@ -1272,11 +1277,17 @@ run_container_tests() {
             # Parse additional pytest args
             local pytest_args="${PYTEST_ARGS:-}"
             
-            ssh "root@${ingest_ip}" "cd /srv/ingest && source venv/bin/activate && export PYTHONPATH=/srv/ingest/src && source .env && export ${test_env} && python -m pytest tests/ -v --tb=short ${pytest_args}" || {
+            # Run tests with wrapper that captures failures
+            if ssh "root@${ingest_ip}" "cd /srv/ingest && source venv/bin/activate && export PYTHONPATH=/srv/ingest/src && source .env && export ${test_env} && python -m pytest tests/ -v --tb=short ${pytest_args}"; then
+                success "Ingest tests passed!"
+            else
                 error "Ingest tests failed"
-                exit 1
-            }
-            success "Ingest tests passed!"
+                echo ""
+                warn "To rerun failed tests, check output above for pytest filter"
+                echo ""
+                # Don't exit - continue to show summary
+                return 1
+            fi
             ;;
         search)
             header "Search Service Tests" 70
@@ -1314,11 +1325,16 @@ run_container_tests() {
             local pytest_args="${PYTEST_ARGS:-}"
             
             # Search service is deployed to /opt/search on milvus container
-            ssh "root@${search_ip}" "cd /opt/search && source venv/bin/activate && export PYTHONPATH=/opt/search/src && source .env && export ${test_env} && python -m pytest tests/ -v --tb=short ${pytest_args}" || {
+            if ssh "root@${search_ip}" "cd /opt/search && source venv/bin/activate && export PYTHONPATH=/opt/search/src && source .env && export ${test_env} && python -m pytest tests/ -v --tb=short ${pytest_args}"; then
+                success "Search tests passed!"
+            else
                 error "Search tests failed"
-                exit 1
-            }
-            success "Search tests passed!"
+                echo ""
+                warn "To rerun failed tests, check output above for pytest filter"
+                echo ""
+                # Don't exit - continue to show summary
+                return 1
+            fi
             ;;
         agent)
             header "Agent Service Tests" 70
@@ -1360,16 +1376,39 @@ run_container_tests() {
             local pytest_args="${PYTEST_ARGS:-}"
             
             # Agent uses .venv not venv
-            ssh "root@${agent_ip}" "cd /srv/agent && source .venv/bin/activate && source .env && export ${test_env} && python -m pytest tests/ -v --tb=short ${pytest_args}" || {
+            if ssh "root@${agent_ip}" "cd /srv/agent && source .venv/bin/activate && source .env && export ${test_env} && python -m pytest tests/ -v --tb=short ${pytest_args}"; then
+                success "Agent tests passed!"
+            else
                 error "Agent tests failed"
-                exit 1
-            }
-            success "Agent tests passed!"
+                echo ""
+                warn "To rerun failed tests, check output above for pytest filter"
+                echo ""
+                # Don't exit - continue to show summary
+                return 1
+            fi
             ;;
         all)
+            local failed_services=()
             for svc in authz ingest search agent; do
-                run_container_tests "$svc" "$env"
+                if ! run_container_tests "$svc" "$env"; then
+                    failed_services+=("$svc")
+                fi
             done
+            
+            echo ""
+            echo "═══════════════════════════════════════════════════════════════════════"
+            echo "Test Summary"
+            echo "═══════════════════════════════════════════════════════════════════════"
+            echo ""
+            
+            if [[ ${#failed_services[@]} -eq 0 ]]; then
+                success "All service tests passed!"
+            else
+                error "Failed services: ${failed_services[*]}"
+                echo ""
+                warn "Review output above for pytest filters to rerun failed tests"
+                return 1
+            fi
             ;;
         *)
             error "Unknown service: $service"

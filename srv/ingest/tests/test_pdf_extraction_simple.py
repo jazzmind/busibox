@@ -67,6 +67,9 @@ def test_pdf_extraction():
         # Try without pdf/general suffix (might be the docs dir itself)
         samples_dir = get_test_doc_repo_path()
     
+    if not samples_dir.exists():
+        pytest.skip(f"Test documents directory not found. Set TEST_DOC_REPO_PATH or SAMPLES_DIR env var. Expected: {samples_dir}")
+    
     print("\n" + "="*80)
     print("PDF EXTRACTION TEST - SIMPLE STRATEGY")
     print("="*80)

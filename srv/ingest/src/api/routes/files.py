@@ -238,12 +238,13 @@ async def get_file_metadata(fileId: str, request: Request):
                 ORDER BY created_at ASC
             """, uuid.UUID(fileId))
             
-            # Get page_count and word_count from processing_history metadata (fallback)
+            # Get page_count and word_count from processing_strategy_results metadata (fallback)
             history_metadata_row = await conn.fetchrow("""
                 SELECT metadata
-                FROM processing_history
+                FROM processing_strategy_results
                 WHERE file_id = $1 
                   AND metadata IS NOT NULL 
+                  AND success = true
                   AND (metadata->>'page_count' IS NOT NULL OR metadata->>'text_length' IS NOT NULL)
                 ORDER BY created_at DESC
                 LIMIT 1

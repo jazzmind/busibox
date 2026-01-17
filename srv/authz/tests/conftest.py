@@ -3,6 +3,12 @@ import sys
 import importlib
 import pytest
 
+# Enable pytest plugin for failed test filter generation (if available)
+try:
+    pytest_plugins = ["testing.pytest_failed_filter"]
+except ImportError:
+    pass  # Plugin not available in authz (no shared testing lib)
+
 
 @pytest.fixture(autouse=True)
 def set_env(monkeypatch):

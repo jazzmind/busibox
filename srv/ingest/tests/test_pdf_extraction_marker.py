@@ -163,6 +163,8 @@ def test_pdf_extraction_marker():
     2. Extracts text from all test PDFs using the deployed worker
     3. Checks worker logs for critical errors (especially meta tensor errors)
     4. Fails if any critical errors found OR if extraction fails
+    
+    SKIPS if test documents directory is not available.
     """
     
     # Record start time for log checking
@@ -179,7 +181,7 @@ def test_pdf_extraction_marker():
         # Try without pdf/general suffix (might be the docs dir itself)
         samples_dir = get_test_doc_repo_path()
     if not samples_dir.exists():
-        raise FileNotFoundError(f"Could not find samples directory. Set TEST_DOC_REPO_PATH or SAMPLES_DIR env var. Tried: {samples_dir}")
+        pytest.skip(f"Test documents directory not found. Set TEST_DOC_REPO_PATH or SAMPLES_DIR env var. Expected: {samples_dir}")
     
     print(f"Samples directory: {samples_dir}")
     assert samples_dir.exists(), f"Samples directory not found: {samples_dir}"

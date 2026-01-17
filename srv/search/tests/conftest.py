@@ -39,6 +39,9 @@ from testing.environment import create_service_auth_fixture, load_env_files
 # Load environment files before other imports
 load_env_files(Path(__file__).parent.parent)
 
+# Enable pytest plugin for failed test filter generation
+pytest_plugins = ["testing.pytest_failed_filter"]
+
 
 # =============================================================================
 # Re-export shared fixtures

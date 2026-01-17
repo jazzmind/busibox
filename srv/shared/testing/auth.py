@@ -97,6 +97,80 @@ class AuthTestClient:
         }
     
     # =========================================================================
+    # User Management
+    # =========================================================================
+    
+    def ensure_test_user_exists(self) -> None:
+        """
+        Ensure the test user exists in the database.
+        
+        Checks if the configured TEST_USER_ID exists. If not, tries to create
+        a test user. This handles cases where the bootstrap script hasn't been run.
+        """
+        self._require_config()
+        
+        with httpx.Client() as client:
+            # Check if user with TEST_USER_ID exists
+            resp = client.get(
+                f"{self.authz_url}/admin/users/{self.test_user_id}",
+                headers=self._admin_headers(),
+                timeout=10.0,
+            )
+            
+            if resp.status_code == 200:
+                # User already exists
+                return
+            
+            # User with TEST_USER_ID doesn't exist.
+            # This can happen if bootstrap-test-credentials wasn't run.
+            # Try to create a user (it will get a different UUID, but we'll use it)
+            email = f"test-user-{self.test_user_id[:8]}@test.example.com"  # Use test.example.com (allowed domain)
+            
+            # First check if a user with this email already exists
+            resp = client.get(
+                f"{self.authz_url}/admin/users/by-email/{email}",
+                headers=self._admin_headers(),
+                timeout=10.0,
+            )
+            
+            if resp.status_code == 200:
+                # User with this email exists, use its ID
+                user_data = resp.json()
+                actual_id = user_data.get("user_id") or user_data.get("id")
+                if actual_id != self.test_user_id:
+                    import structlog
+                    logger = structlog.get_logger()
+                    logger.info(
+                        "Using existing test user with different ID",
+                        configured_id=self.test_user_id,
+                        actual_id=actual_id,
+                    )
+                    self.test_user_id = actual_id
+                return
+            
+            # Create new user
+            resp = client.post(
+                f"{self.authz_url}/admin/users",
+                headers=self._admin_headers(),
+                json={
+                    "email": email,
+                    "status": "ACTIVE",
+                },
+                timeout=10.0,
+            )
+            
+            if resp.status_code in [200, 201]:
+                user_data = resp.json()
+                actual_id = user_data.get("user_id") or user_data.get("id")
+                import structlog
+                logger = structlog.get_logger()
+                logger.info("Created test user", user_id=actual_id)
+                # Update our test_user_id to the newly created ID
+                self.test_user_id = actual_id
+            else:
+                pytest.fail(f"Failed to create test user: {resp.status_code} - {resp.text}")
+    
+    # =========================================================================
     # Token Management
     # =========================================================================
     
@@ -497,7 +571,7 @@ def auth_client():
     """
     Pytest fixture for AuthTestClient (session-scoped).
     
-    At session start, cleans up any stale test roles from previous runs.
+    At session start, ensures test user exists and cleans up any stale test roles.
     At session end, cleans up any roles created during this session.
     
     Usage:
@@ -508,6 +582,9 @@ def auth_client():
             # Cleanup happens automatically at session end
     """
     client = AuthTestClient()
+    
+    # Ensure test user exists in the database
+    client.ensure_test_user_exists()
     
     # Clean up stale test roles from previous interrupted runs
     _cleanup_stale_test_roles(client)
