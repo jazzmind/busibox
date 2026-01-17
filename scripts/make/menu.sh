@@ -1161,6 +1161,165 @@ view_service_logs() {
     fi
 }
 
+# Handle database migration
+handle_migration() {
+    local env backend
+    
+    env=$(get_environment)
+    backend=$(get_backend "$env")
+    
+    echo ""
+    header "Database Migration" 70
+    echo ""
+    
+    # Only Docker local environment uses the migration script directly
+    # Staging/Production use Ansible
+    if [[ "$backend" != "docker" ]]; then
+        warn "Migration for $backend environments should be done via Ansible."
+        echo ""
+        info "For staging/production, use:"
+        echo "  cd provision/ansible"
+        echo "  make ${env:-production} deploy-postgres"
+        pause
+        return 0
+    fi
+    
+    local migration_script="${REPO_ROOT}/scripts/migrations/migrate_to_separate_databases.py"
+    
+    if [[ ! -f "$migration_script" ]]; then
+        error "Migration script not found: $migration_script"
+        pause
+        return 1
+    fi
+    
+    # Determine how to run the migration script
+    # We run it inside the authz-api container which has asyncpg installed
+    local run_migration_cmd=""
+    local pg_password
+    pg_password=$(grep -E "^POSTGRES_PASSWORD=" "${REPO_ROOT}/.env.local" 2>/dev/null | cut -d'=' -f2 || echo "devpassword")
+    
+    # Check if authz-api container is running
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "local-authz-api"; then
+        # Run inside Docker container
+        run_migration_cmd="docker exec -e POSTGRES_HOST=postgres -e POSTGRES_PORT=5432 -e POSTGRES_PASSWORD=${pg_password} -e SOURCE_PASSWORD=${pg_password} local-authz-api python"
+        info "Running migration inside Docker container (authz-api)..."
+    else
+        # Try running locally
+        if ! command -v python3 &>/dev/null; then
+            error "Python 3 is required. Start Docker containers or install Python 3."
+            pause
+            return 1
+        fi
+        if ! python3 -c "import asyncpg" 2>/dev/null; then
+            error "asyncpg is not installed. Start Docker containers to run migration."
+            info "Run: make docker-up"
+            pause
+            return 1
+        fi
+        run_migration_cmd="python3"
+        export POSTGRES_HOST="${POSTGRES_HOST:-localhost}"
+        export POSTGRES_PORT="${POSTGRES_PORT:-5432}"
+        export POSTGRES_PASSWORD="${pg_password:-devpassword}"
+        export SOURCE_PASSWORD="${pg_password:-devpassword}"
+    fi
+    
+    echo ""
+    menu "Database Migration Options" \
+        "Check Migration Status (dry run)" \
+        "Verify Existing Migrations" \
+        "Migrate AuthZ Service (busibox -> authz)" \
+        "Migrate Ingest Service (busibox -> files)" \
+        "Migrate All Services" \
+        "Cleanup Source (remove migrated tables from busibox)" \
+        "Back to Main Menu"
+    
+    echo ""
+    read -p "$(echo -e "${BOLD}Select option [1-7]:${NC} ")" migration_choice
+    
+    # For Docker execution, we need to copy the script into the container or cat it
+    local docker_script_path="/tmp/migrate_db.py"
+    if [[ "$run_migration_cmd" == docker* ]]; then
+        # Copy migration script to container
+        docker cp "$migration_script" local-authz-api:"$docker_script_path" 2>/dev/null || {
+            error "Failed to copy migration script to container"
+            pause
+            return 1
+        }
+        run_migration_cmd="docker exec -e POSTGRES_HOST=postgres -e POSTGRES_PORT=5432 -e POSTGRES_PASSWORD=${pg_password} -e SOURCE_PASSWORD=${pg_password} local-authz-api python $docker_script_path"
+    else
+        run_migration_cmd="python3 $migration_script"
+    fi
+    
+    case "$migration_choice" in
+        1)
+            echo ""
+            header "Migration Status (Dry Run)" 70
+            echo ""
+            info "Checking what migrations would be performed..."
+            echo ""
+            $run_migration_cmd --all --dry-run || true
+            pause
+            ;;
+        2)
+            echo ""
+            header "Verify Existing Migrations" 70
+            echo ""
+            info "Verifying data in target databases..."
+            echo ""
+            $run_migration_cmd --verify-only || true
+            pause
+            ;;
+        3)
+            echo ""
+            header "Migrate AuthZ Service" 70
+            echo ""
+            if confirm "Migrate authz tables from 'busibox' to 'authz' database?"; then
+                $run_migration_cmd --service authz || true
+            fi
+            pause
+            ;;
+        4)
+            echo ""
+            header "Migrate Ingest Service" 70
+            echo ""
+            if confirm "Migrate ingest tables from 'busibox' to 'files' database?"; then
+                $run_migration_cmd --service ingest || true
+            fi
+            pause
+            ;;
+        5)
+            echo ""
+            header "Migrate All Services" 70
+            echo ""
+            if confirm "Migrate ALL tables from 'busibox' to their dedicated databases?"; then
+                $run_migration_cmd --all || true
+            fi
+            pause
+            ;;
+        6)
+            echo ""
+            header "Cleanup Source Database" 70
+            echo ""
+            warn "This will REMOVE migrated tables from the 'busibox' database!"
+            warn "Only run this AFTER verifying migrations are complete."
+            echo ""
+            if confirm "Are you SURE you want to cleanup source tables?"; then
+                if confirm "Last chance - this is destructive! Proceed?"; then
+                    $run_migration_cmd --all --cleanup || true
+                fi
+            fi
+            pause
+            ;;
+        7)
+            return 0
+            ;;
+        *)
+            error "Invalid selection."
+            pause
+            ;;
+    esac
+}
+
 handle_test() {
     local env backend
     

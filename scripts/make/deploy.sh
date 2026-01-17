@@ -30,6 +30,9 @@ ALIAS_CONFIGURED=false
 # Non-interactive mode flag
 NON_INTERACTIVE=false
 
+# Track failed services for summary at end
+FAILED_SERVICES=()
+
 # Check if Ansible is available
 check_ansible() {
     if ! command -v ansible-playbook &>/dev/null; then
@@ -185,31 +188,49 @@ deploy_service() {
     # Track command for re-run
     save_last_command "make deploy SERVICE=$service INV=$env"
     
-    # Use make targets for common services
+    # Capture exit code instead of failing immediately
+    local result=0
     case "$service" in
         all)
-            make all INV="$inv" $extra_args || {
-                error "Deployment failed"
-                return 1
-            }
+            make all INV="$inv" $extra_args || result=$?
             ;;
         *)
-            make "$service" INV="$inv" $extra_args || {
-                error "Deployment failed"
-                return 1
-            }
+            make "$service" INV="$inv" $extra_args || result=$?
             ;;
     esac
     
     cd "$REPO_ROOT"
+    
+    if [[ $result -ne 0 ]]; then
+        error "Deployment of $service failed (exit code: $result)"
+        FAILED_SERVICES+=("$service")
+        return $result
+    fi
     
     # Update state
     add_deployed_service "$service"
     set_install_status "deployed"
     
     echo ""
-    success "Deployment completed successfully!"
+    success "Deployment of $service completed successfully!"
     return 0
+}
+
+# Show deployment summary (for batch deployments)
+show_deployment_summary() {
+    echo ""
+    if [[ ${#FAILED_SERVICES[@]} -gt 0 ]]; then
+        error "The following services failed to deploy:"
+        for svc in "${FAILED_SERVICES[@]}"; do
+            echo "  - $svc"
+        done
+        echo ""
+        warn "Review the errors above and re-run failed deployments"
+        return 1
+    else
+        success "All deployments completed successfully!"
+        return 0
+    fi
 }
 
 # vLLM deployment submenu
@@ -458,10 +479,13 @@ core_services_menu() {
         case "$choice" in
             1)
                 if confirm "Deploy ALL core services (files, pg, milvus, authz) to $env?"; then
-                    deploy_service "files" "$env" && \
-                    deploy_service "pg" "$env" && \
-                    deploy_service "milvus" "$env" && \
-                    deploy_service "authz" "$env"
+                    # Reset failed services list
+                    FAILED_SERVICES=()
+                    # Deploy each service, continue on failure
+                    for svc in files pg milvus authz; do
+                        deploy_service "$svc" "$env" || true
+                    done
+                    show_deployment_summary
                 fi
                 pause
                 ;;
@@ -572,9 +596,13 @@ llm_services_menu() {
                     fi
                 else
                     if confirm "Deploy ALL LLM services (vLLM, ColPali, LiteLLM) to $env?"; then
-                        deploy_service "vllm" "$env" && \
-                        deploy_service "colpali" "$env" && \
-                        deploy_service "litellm" "$env"
+                        # Reset failed services list
+                        FAILED_SERVICES=()
+                        # Deploy each service, continue on failure
+                        for svc in vllm colpali litellm; do
+                            deploy_service "$svc" "$env" || true
+                        done
+                        show_deployment_summary
                     fi
                 fi
                 pause
@@ -693,10 +721,13 @@ apis_menu() {
         case "$choice" in
             1)
                 if confirm "Deploy ALL APIs (ingest, search, agent, docs) to $env?"; then
-                    deploy_service "ingest" "$env" && \
-                    deploy_service "search-api" "$env" && \
-                    deploy_service "agent" "$env" && \
-                    deploy_service "docs" "$env"
+                    # Reset failed services list
+                    FAILED_SERVICES=()
+                    # Deploy each service, continue on failure
+                    for svc in ingest search-api agent docs; do
+                        deploy_service "$svc" "$env" || true
+                    done
+                    show_deployment_summary
                 fi
                 pause
                 ;;

@@ -39,6 +39,18 @@
 # Database Setup
 # =============================================================================
 
+# Ensure the database user exists (may have been created by postgres role)
+# This makes the authz role self-sufficient - it can be deployed standalone
+- name: Ensure authz database user exists
+  postgresql_user:
+    name: "{{ authz_postgres_user }}"
+    password: "{{ authz_postgres_password }}"
+    role_attr_flags: "LOGIN,CREATEDB"
+    state: present
+  become_user: postgres
+  delegate_to: "{{ groups['pg'][0] }}"
+  tags: [authz, authz_db]
+
 - name: Create authz database
   postgresql_db:
     name: "{{ authz_postgres_db }}"

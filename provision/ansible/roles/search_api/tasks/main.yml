@@ -89,8 +89,8 @@
 
 - name: Copy shared auth library
   synchronize:
-    src: "{{ playbook_dir }}/../../srv/shared_auth/"
-    dest: /opt/search/shared_auth/
+    src: "{{ playbook_dir }}/../../srv/shared/busibox_common/"
+    dest: /opt/search/busibox_common/
     delete: yes
     rsync_opts:
       - "--exclude=__pycache__"

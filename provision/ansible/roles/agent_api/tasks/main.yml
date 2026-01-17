@@ -124,6 +124,35 @@
     owner: "{{ agent_api_user }}"
     group: "{{ agent_api_user }}"
 
+# =============================================================================
+# Database Setup
+# =============================================================================
+# Ensure the database user and database exist before running migrations
+# This makes the agent_api role self-sufficient - it can be deployed standalone
+
+- name: Ensure agent database user exists
+  postgresql_user:
+    name: "{{ postgres_user }}"
+    password: "{{ secrets.postgresql.password }}"
+    role_attr_flags: "LOGIN,CREATEDB"
+    state: present
+  become_user: postgres
+  delegate_to: "{{ groups['pg'][0] }}"
+  tags: [agent, agent_api]
+
+- name: Ensure agent_server database exists
+  postgresql_db:
+    name: agent_server
+    owner: "{{ postgres_user }}"
+    encoding: UTF8
+    lc_collate: en_US.UTF-8
+    lc_ctype: en_US.UTF-8
+    template: template0
+    state: present
+  become_user: postgres
+  delegate_to: "{{ groups['pg'][0] }}"
+  tags: [agent, agent_api]
+
 - name: Check if alembic version table exists
   shell: |
     cd /srv/agent
