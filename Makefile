@@ -1,5 +1,5 @@
 .PHONY: menu help setup configure deploy test test-local test-docker test-security mcp \
-        docker-up docker-down docker-restart docker-build docker-logs docker-ps docker-clean ssl-check
+        docker-up docker-start docker-down docker-restart docker-build docker-logs docker-ps docker-clean ssl-check
 
 # Default target - interactive menu with health check
 .DEFAULT_GOAL := menu
@@ -237,12 +237,22 @@ _ensure-env:
 		fi; \
 	fi
 
-# Start Docker services
+# Start Docker services (may rebuild if files changed)
 docker-up: _ensure-env
 ifdef SERVICE
 	docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) up -d $(SERVICE)
 else
 	docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) up -d
+endif
+	@echo ""
+	@echo "Services started. Use 'make docker-ps' to check status."
+
+# Start Docker services without rebuilding (fast start)
+docker-start: _ensure-env
+ifdef SERVICE
+	docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) up -d --no-build $(SERVICE)
+else
+	docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) up -d --no-build
 endif
 	@echo ""
 	@echo "Services started. Use 'make docker-ps' to check status."

@@ -124,12 +124,29 @@ verify_vault_access() {
     info "Testing vault access..."
     echo ""
     
+    # First, check if vault symlinks need to be set up
+    check_and_setup_vault_links "$env"
+    
     # Find the vault file - check inventory location first, then secrets role
     local vault_file=""
     local inv_vault="${REPO_ROOT}/provision/ansible/inventory/${env}/group_vars/all/vault.yml"
     local role_vault="${REPO_ROOT}/provision/ansible/roles/secrets/vars/vault.yml"
     
-    if [[ -f "$inv_vault" ]]; then
+    if [[ -f "$inv_vault" ]] || [[ -L "$inv_vault" ]]; then
+        # Check if symlink is valid
+        if [[ -L "$inv_vault" ]] && [[ ! -e "$inv_vault" ]]; then
+            warn "Vault symlink exists but target is missing"
+            info "Symlink: $inv_vault"
+            info "Expected target: $role_vault"
+            
+            if [[ ! -f "$role_vault" ]]; then
+                error "Missing vault file: $role_vault"
+                info "Create from template:"
+                echo "  cp roles/secrets/vars/vault.example.yml roles/secrets/vars/vault.yml"
+                echo "  ansible-vault encrypt roles/secrets/vars/vault.yml"
+                return 1
+            fi
+        fi
         vault_file="$inv_vault"
         info "Using inventory vault: inventory/${env}/group_vars/all/vault.yml"
     elif [[ -f "$role_vault" ]]; then
@@ -138,8 +155,14 @@ verify_vault_access() {
     else
         warn "No vault file found"
         info "Expected locations:"
-        echo "  - inventory/${env}/group_vars/all/vault.yml"
-        echo "  - roles/secrets/vars/vault.yml"
+        echo "  - inventory/${env}/group_vars/all/vault.yml (symlink)"
+        echo "  - roles/secrets/vars/vault.yml (actual file)"
+        info ""
+        info "Create vault file from template:"
+        echo "  cd provision/ansible"
+        echo "  cp roles/secrets/vars/vault.example.yml roles/secrets/vars/vault.yml"
+        echo "  ansible-vault encrypt roles/secrets/vars/vault.yml"
+        echo "  bash ../../scripts/vault/setup-vault-links.sh"
         return 1
     fi
     
@@ -169,6 +192,52 @@ verify_vault_access() {
         info "You will be prompted for vault password during operations"
         info "Tip: Create it with: echo 'your-password' > ~/.vault_pass && chmod 600 ~/.vault_pass"
         return 0
+    fi
+}
+
+# Check and setup vault symlinks if needed
+check_and_setup_vault_links() {
+    local env="$1"
+    local ansible_dir="${REPO_ROOT}/provision/ansible"
+    local role_vault="${ansible_dir}/roles/secrets/vars/vault.yml"
+    local inv_vault_dir="${ansible_dir}/inventory/${env}/group_vars/all"
+    local inv_vault="${inv_vault_dir}/vault.yml"
+    
+    # Check if the role vault exists
+    if [[ ! -f "$role_vault" ]]; then
+        # Can't set up symlinks without the source file
+        return 0
+    fi
+    
+    # Check if inventory vault symlink exists and is valid
+    if [[ -L "$inv_vault" ]]; then
+        # Symlink exists - check if it's valid
+        if [[ -e "$inv_vault" ]]; then
+            # Valid symlink, nothing to do
+            return 0
+        else
+            # Broken symlink - recreate it
+            info "Fixing broken vault symlink for ${env}..."
+            rm -f "$inv_vault"
+        fi
+    elif [[ -f "$inv_vault" ]]; then
+        # Regular file exists - don't replace it
+        return 0
+    fi
+    
+    # Need to create symlink
+    info "Setting up vault symlink for ${env}..."
+    mkdir -p "$inv_vault_dir"
+    
+    # Create relative symlink
+    cd "$inv_vault_dir"
+    ln -sf "../../../../roles/secrets/vars/vault.yml" "vault.yml"
+    cd "${REPO_ROOT}"
+    
+    if [[ -L "$inv_vault" ]] && [[ -e "$inv_vault" ]]; then
+        success "Vault symlink created for ${env}"
+    else
+        warn "Failed to create vault symlink for ${env}"
     fi
 }
 
@@ -262,17 +331,22 @@ verify_all_configuration() {
     local errors=0
     
     echo ""
-    echo -e "${BLUE}[1/3] Ansible Connectivity${NC}"
+    echo -e "${BLUE}[1/4] Vault Links${NC}"
     separator
-    verify_ansible_connectivity "$ENV" || ((errors++))
+    verify_vault_links || ((errors++))
     
     echo ""
-    echo -e "${BLUE}[2/3] Vault Access${NC}"
+    echo -e "${BLUE}[2/4] Vault Access${NC}"
     separator
     verify_vault_access || ((errors++))
     
     echo ""
-    echo -e "${BLUE}[3/3] Service Health${NC}"
+    echo -e "${BLUE}[3/4] Ansible Connectivity${NC}"
+    separator
+    verify_ansible_connectivity "$ENV" || ((errors++))
+    
+    echo ""
+    echo -e "${BLUE}[4/4] Service Health${NC}"
     separator
     verify_service_health "$ENV"
     
@@ -284,6 +358,68 @@ verify_all_configuration() {
         warn "$errors check(s) had issues"
     fi
     separator 70
+}
+
+# Verify vault links are set up for both staging and production
+verify_vault_links() {
+    echo ""
+    info "Checking vault symlinks..."
+    echo ""
+    
+    local ansible_dir="${REPO_ROOT}/provision/ansible"
+    local role_vault="${ansible_dir}/roles/secrets/vars/vault.yml"
+    local issues=0
+    
+    # Check if the role vault exists
+    if [[ ! -f "$role_vault" ]]; then
+        error "Main vault file missing: roles/secrets/vars/vault.yml"
+        info "Create from template:"
+        echo "  cd provision/ansible"
+        echo "  cp roles/secrets/vars/vault.example.yml roles/secrets/vars/vault.yml"
+        echo "  ansible-vault encrypt roles/secrets/vars/vault.yml"
+        return 1
+    fi
+    
+    success "Main vault file exists: roles/secrets/vars/vault.yml"
+    
+    # Check symlinks for both environments
+    for env in staging production; do
+        local inv_vault="${ansible_dir}/inventory/${env}/group_vars/all/vault.yml"
+        
+        if [[ -L "$inv_vault" ]]; then
+            if [[ -e "$inv_vault" ]]; then
+                echo -e "  ${GREEN}✓${NC} ${env}: symlink OK"
+            else
+                echo -e "  ${RED}✗${NC} ${env}: broken symlink"
+                info "Fixing symlink for ${env}..."
+                check_and_setup_vault_links "$env"
+                ((issues++))
+            fi
+        elif [[ -f "$inv_vault" ]]; then
+            echo -e "  ${YELLOW}○${NC} ${env}: regular file (not symlinked)"
+        else
+            echo -e "  ${RED}✗${NC} ${env}: missing vault symlink"
+            info "Creating symlink for ${env}..."
+            check_and_setup_vault_links "$env"
+            
+            # Verify it was created
+            if [[ -L "$inv_vault" ]] && [[ -e "$inv_vault" ]]; then
+                echo -e "  ${GREEN}✓${NC} ${env}: symlink created"
+            else
+                ((issues++))
+            fi
+        fi
+    done
+    
+    echo ""
+    
+    if [[ $issues -eq 0 ]]; then
+        success "Vault links verified"
+        return 0
+    else
+        warn "Some vault links had issues"
+        return 1
+    fi
 }
 
 # ========================================================================

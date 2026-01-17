@@ -273,6 +273,7 @@ check_all_services() {
                 "ingest-api:localhost:8002"
                 "search-api:localhost:8003"
                 "agent-api:localhost:8000"
+                "docs-api:localhost:8004"
                 "litellm:localhost:4000"
                 "nginx:localhost:443"
             )
@@ -294,9 +295,11 @@ check_all_services() {
                 "ingest-api:${network_base}.206:8002"
                 "search-api:${network_base}.204:8003"
                 "agent-api:${network_base}.202:8000"
+                "docs-api:${network_base}.201:8004"
                 "litellm:${network_base}.207:4000"
                 "nginx:${network_base}.200:443"
             )
+            # Note: docs-api runs on apps container (.201)
             ;;
     esac
     
@@ -339,6 +342,10 @@ STATUS_INSTALLED="installed"
 STATUS_CONFIGURED="configured"
 STATUS_DEPLOYED="deployed"
 STATUS_HEALTHY="healthy"
+
+# Docker-specific status levels (for local environment)
+STATUS_DOCKER_NOT_RUNNING="docker_not_running"
+STATUS_CONTAINERS_NOT_RUNNING="containers_not_running"
 
 # Run full health check and determine system status
 # Usage: run_health_check "local" "docker"
@@ -485,14 +492,28 @@ run_quick_health_check() {
     SERVICES_UNHEALTHY=()
     SERVICES_OK=1
     
+    # Track Docker-specific state for local environment
+    DOCKER_DAEMON_RUNNING=0
+    DOCKER_CONTAINERS_EXIST=0
+    DOCKER_CONTAINERS_RUNNING=0
+    
     if [[ "$backend" == "docker" ]]; then
-        # Fast check: are any containers running?
-        if docker ps -q 2>/dev/null | head -1 | grep -q .; then
-            # Get running container count
-            local running=$(docker compose -f "${REPO_ROOT}/docker-compose.local.yml" ps -q --status running 2>/dev/null | wc -l | tr -d ' ')
-            if [[ "$running" -gt 0 ]]; then
-                SERVICES_HEALTHY+=("docker:$running containers running")
-                SERVICES_OK=1
+        # Check if Docker daemon is running
+        if docker info &>/dev/null 2>&1; then
+            DOCKER_DAEMON_RUNNING=1
+            
+            # Check if busibox containers exist (created but maybe not running)
+            local existing=$(docker compose -f "${REPO_ROOT}/docker-compose.local.yml" ps -q 2>/dev/null | wc -l | tr -d ' ')
+            if [[ "$existing" -gt 0 ]]; then
+                DOCKER_CONTAINERS_EXIST=1
+                
+                # Check if any are running
+                local running=$(docker compose -f "${REPO_ROOT}/docker-compose.local.yml" ps -q --status running 2>/dev/null | wc -l | tr -d ' ')
+                if [[ "$running" -gt 0 ]]; then
+                    DOCKER_CONTAINERS_RUNNING=1
+                    SERVICES_HEALTHY+=("docker:$running containers running")
+                    SERVICES_OK=1
+                fi
             fi
         fi
     else
@@ -510,11 +531,20 @@ run_quick_health_check() {
         fi
     fi
     
-    # Determine status based on deps and config only
+    # Determine status based on deps, config, and Docker state
     if [[ $DEPS_OK -eq 0 ]]; then
         HEALTH_STATUS="$STATUS_NOT_INSTALLED"
     elif [[ $CONFIG_OK -eq 0 ]]; then
         HEALTH_STATUS="$STATUS_INSTALLED"
+    elif [[ "$backend" == "docker" ]]; then
+        # Docker-specific status logic
+        if [[ $DOCKER_DAEMON_RUNNING -eq 0 ]]; then
+            HEALTH_STATUS="$STATUS_DOCKER_NOT_RUNNING"
+        elif [[ $DOCKER_CONTAINERS_RUNNING -eq 0 ]]; then
+            HEALTH_STATUS="$STATUS_CONTAINERS_NOT_RUNNING"
+        else
+            HEALTH_STATUS="$STATUS_DEPLOYED"
+        fi
     elif [[ ${#SERVICES_HEALTHY[@]} -eq 0 ]]; then
         HEALTH_STATUS="$STATUS_CONFIGURED"
     else

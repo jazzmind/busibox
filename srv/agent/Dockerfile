@@ -19,7 +19,7 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Copy requirements first (for caching)
-COPY requirements.txt .
+COPY agent/requirements.txt .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
@@ -29,9 +29,9 @@ COPY shared/ ./shared/
 RUN pip install --no-cache-dir ./shared
 
 # Copy source code
-COPY app/ ./app/
-COPY alembic/ ./alembic/
-COPY alembic.ini .
+COPY agent/app/ ./app/
+COPY agent/alembic/ ./alembic/
+COPY agent/alembic.ini .
 
 # Set Python path
 ENV PYTHONPATH=/app

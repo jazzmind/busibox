@@ -1,4 +1,4 @@
-.PHONY: ping all files pg milvus nginx search search-api agent ingest ingest-api ingest-worker ingest-update-tests apps openwebui deploy-apps deploy-ai-portal deploy-agent-client deploy-doc-intel deploy-foundation deploy-project-analysis deploy-innovation verify verify-health verify-smoke test test-menu test-ingest test-ingest-all test-ingest-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-authz test-apps test-security test-security-auth test-security-injection test-security-fuzz test-all configure generate-token-keys bootstrap-test-creds signal-bot tailscale test-signal-bot
+.PHONY: ping all files pg milvus nginx search search-api agent ingest ingest-api ingest-worker ingest-update-tests docs apps openwebui deploy-apps deploy-ai-portal deploy-agent-client deploy-doc-intel deploy-foundation deploy-project-analysis deploy-innovation verify verify-health verify-smoke test test-menu test-ingest test-ingest-all test-ingest-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-authz test-apps test-security test-security-auth test-security-injection test-security-fuzz test-all configure generate-token-keys bootstrap-test-creds signal-bot tailscale test-signal-bot
 # Default to production inventory (can override with: make all INV=inventory/test)
 INV=inventory/production
 
@@ -89,6 +89,10 @@ ingest-update-tests:
 	ansible-playbook -i $(INV) -l ingest site.yml --tags ingest_update_tests $(VAULT_FLAGS)
 	@echo "✓ Test files updated"
 
+# Docs API - Documentation service (runs on apps container)
+docs:
+	ansible-playbook -i $(INV) -l apps site.yml --tags docs $(VAULT_FLAGS)
+
 apps:
 	ansible-playbook -i $(INV) -l apps site.yml $(VAULT_FLAGS)
 
@@ -160,6 +164,10 @@ verify-health:
 	@echo "=== Agent API ==="
 	@curl -f -s http://10.96.200.202:8000/health > /dev/null || (echo "Agent API health check FAILED (may not be deployed yet)" && exit 0)
 	@echo "✓ Agent API is healthy (or not deployed yet)"
+	@echo ""
+	@echo "=== Docs API ==="
+	@curl -f -s http://$(APPS_IP):8004/health/live > /dev/null || (echo "Docs API health check FAILED (may not be deployed yet)" && exit 0)
+	@echo "✓ Docs API is healthy (or not deployed yet)"
 	@echo ""
 	@echo "=== PostgreSQL ==="
 	@psql -h 10.96.200.203 -U busibox_user -d busibox -c "SELECT version();" || (echo "PostgreSQL health check FAILED" && exit 1)

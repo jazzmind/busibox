@@ -202,6 +202,12 @@ handle_menu_selection() {
     backend=$(get_backend "$env")
     
     case "$selection" in
+        start_docker)
+            handle_start_docker
+            ;;
+        start_busibox)
+            handle_start_busibox
+            ;;
         install)
             handle_install
             ;;
@@ -247,6 +253,104 @@ handle_menu_selection() {
 # ============================================================================
 # Action Handlers
 # ============================================================================
+
+# Handle starting Docker daemon
+handle_start_docker() {
+    echo ""
+    info "Docker is not running."
+    echo ""
+    
+    # Detect OS and provide appropriate instructions
+    if [[ "$(uname)" == "Darwin" ]]; then
+        # macOS
+        echo -e "  To start Docker on macOS:"
+        echo -e "    1. Open Docker Desktop from Applications"
+        echo -e "    2. Or run: ${CYAN}open -a Docker${NC}"
+        echo ""
+        
+        if confirm "Try to open Docker Desktop now?"; then
+            open -a Docker 2>/dev/null || {
+                error "Could not open Docker Desktop"
+                echo "Please install Docker Desktop from: https://docs.docker.com/desktop/install/mac-install/"
+            }
+            echo ""
+            info "Waiting for Docker to start..."
+            echo -e "  ${DIM}(this may take 30-60 seconds)${NC}"
+            echo ""
+            
+            # Wait for Docker to be ready (max 90 seconds)
+            local waited=0
+            while [[ $waited -lt 90 ]]; do
+                if docker info &>/dev/null 2>&1; then
+                    success "Docker is now running!"
+                    # Re-run health check
+                    local env backend
+                    env=$(get_environment)
+                    backend=$(get_backend "$env")
+                    run_quick_health_check "$env" "$backend"
+                    pause
+                    return 0
+                fi
+                sleep 3
+                ((waited+=3))
+                echo -ne "\r  ${DIM}Waiting... ${waited}s${NC}   "
+            done
+            echo ""
+            warn "Docker did not start within 90 seconds."
+            echo "Please wait for Docker Desktop to fully start, then try again."
+        fi
+    elif [[ "$(uname)" == "Linux" ]]; then
+        # Linux
+        echo -e "  To start Docker on Linux:"
+        echo -e "    ${CYAN}sudo systemctl start docker${NC}"
+        echo ""
+        
+        if confirm "Try to start Docker service now? (requires sudo)"; then
+            if sudo systemctl start docker 2>/dev/null; then
+                success "Docker service started!"
+                # Re-run health check
+                local env backend
+                env=$(get_environment)
+                backend=$(get_backend "$env")
+                run_quick_health_check "$env" "$backend"
+            else
+                error "Failed to start Docker. Please check your Docker installation."
+            fi
+        fi
+    else
+        echo -e "  Please start Docker Desktop or the Docker service manually."
+    fi
+    
+    pause
+}
+
+# Handle starting Busibox containers
+handle_start_busibox() {
+    echo ""
+    info "Starting Busibox services..."
+    echo ""
+    
+    # Use docker-start (--no-build) to start existing containers quickly
+    # If images don't exist, use docker-up which will build them
+    save_last_command "make docker-start"
+    (cd "$REPO_ROOT" && make docker-start)
+    
+    # Re-run health check to update status
+    local env backend
+    env=$(get_environment)
+    backend=$(get_backend "$env")
+    run_quick_health_check "$env" "$backend"
+    
+    if [[ "$HEALTH_STATUS" == "deployed" || "$HEALTH_STATUS" == "healthy" ]]; then
+        set_install_status "deployed"
+        success "Busibox services started!"
+    else
+        warn "Some services may not have started correctly."
+        echo "Run a full status check to see details."
+    fi
+    
+    pause
+}
 
 # Show detailed requirements checklist
 # Displays to stderr, returns "issues:warnings" to stdout

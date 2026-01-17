@@ -46,18 +46,41 @@ const CONTAINER_SSH_KEY_PATH = process.env.CONTAINER_SSH_KEY_PATH || join(homedi
 const BUSIBOX_PATH_ON_PROXMOX = process.env.BUSIBOX_PATH_ON_PROXMOX || '/root/busibox';
 
 /**
- * Documentation categories as defined in .cursor/rules/001-documentation-organization.md
+ * Documentation categories - updated to reflect current docs structure
+ * 
+ * Current structure:
+ * - docs/architecture/     - System design and architecture
+ * - docs/deployment/       - Deployment procedures
+ * - docs/development/      - Development docs (includes session-notes, troubleshooting, tasks)
+ * - docs/guides/           - How-to guides (includes configuration, API guides)
+ * - docs/reference/        - Reference documentation
  */
 const DOC_CATEGORIES = [
   'architecture',
   'deployment',
-  'configuration',
-  'troubleshooting',
-  'reference',
-  'guides',
-  'session-notes',
   'development',
+  'guides',
+  'reference',
 ] as const;
+
+/**
+ * Nested documentation paths for deeper searches
+ */
+const DOC_NESTED_PATHS: Record<string, string[]> = {
+  'development': [
+    'development/session-notes',
+    'development/troubleshooting',
+    'development/tasks',
+    'development/decisions',
+    'development/reference',
+  ],
+  'guides': [
+    'guides/agent-api',
+    'guides/ingest-api',
+    'guides/search-api',
+    'guides/auth-api',
+  ],
+};
 
 /**
  * Script directories and their execution contexts
@@ -226,7 +249,173 @@ const CONTAINERS: ContainerConfig[] = [
 ];
 
 /**
- * Available Make targets and their descriptions
+ * Main Makefile targets (in /root/busibox/Makefile)
+ * These are used with `make <target>` from the project root
+ */
+const MAIN_MAKEFILE_TARGETS: Record<string, {
+  description: string;
+  category: 'menu' | 'setup' | 'deploy' | 'test' | 'docker' | 'mcp';
+  variables?: Record<string, string>;
+  examples?: string[];
+}> = {
+  // Main menu
+  'menu': {
+    description: 'Interactive menu with environment selection and health checks (default)',
+    category: 'menu',
+    variables: { ENV: 'Environment: local, staging, production' },
+    examples: ['make', 'make ENV=staging', 'make ENV=production'],
+  },
+  'help': {
+    description: 'Show all available commands with examples',
+    category: 'menu',
+    examples: ['make help'],
+  },
+  
+  // Setup & Configure
+  'setup': {
+    description: 'Initial setup - install dependencies (Ansible, etc.)',
+    category: 'setup',
+    examples: ['make setup'],
+  },
+  'configure': {
+    description: 'Configure models, GPUs, secrets (interactive wizard)',
+    category: 'setup',
+    examples: ['make configure'],
+  },
+  
+  // Deploy (Ansible-based)
+  'deploy': {
+    description: 'Deploy services via Ansible',
+    category: 'deploy',
+    variables: {
+      SERVICE: 'Service to deploy (authz, ingest, search, agent, etc.)',
+      INV: 'Inventory: staging or production',
+    },
+    examples: ['make deploy', 'make deploy SERVICE=authz INV=staging'],
+  },
+  
+  // Testing
+  'test': {
+    description: 'Run tests on containers (via SSH)',
+    category: 'test',
+    variables: {
+      SERVICE: 'Service to test: authz, ingest, search, agent, all',
+      INV: 'Inventory: staging or production',
+      MODE: 'Test mode: container (default)',
+      ARGS: 'Extra pytest arguments',
+    },
+    examples: ['make test', 'make test SERVICE=agent INV=staging'],
+  },
+  'test-local': {
+    description: 'Run tests locally against remote containers',
+    category: 'test',
+    variables: {
+      SERVICE: 'Required: authz, ingest, search, agent, all',
+      INV: 'Required: staging or production',
+      FAST: 'Skip slow/GPU tests (default: 1)',
+      WORKER: 'Start local ingest worker (default: 0)',
+      ARGS: 'Extra pytest arguments',
+    },
+    examples: [
+      'make test-local SERVICE=agent INV=staging',
+      'make test-local SERVICE=all INV=production',
+      "make test-local SERVICE=agent INV=staging ARGS='-k test_weather'",
+    ],
+  },
+  'test-docker': {
+    description: 'Run tests against local Docker services',
+    category: 'test',
+    variables: {
+      SERVICE: 'Required: authz, ingest, search, agent, all',
+      FAST: 'Skip slow/GPU tests (default: 1)',
+      ARGS: 'Extra pytest arguments',
+    },
+    examples: [
+      'make test-docker SERVICE=agent',
+      'make test-docker SERVICE=all',
+      "make test-docker SERVICE=agent ARGS='-k test_weather'",
+      'make test-docker SERVICE=agent FAST=0  # Include slow tests',
+    ],
+  },
+  'test-db-init': {
+    description: 'Bootstrap test databases (schema + OAuth clients + signing keys)',
+    category: 'test',
+    examples: ['make test-db-init'],
+  },
+  'test-db-check': {
+    description: 'Check if test databases are properly initialized',
+    category: 'test',
+    examples: ['make test-db-check'],
+  },
+  'test-security': {
+    description: 'Run security tests',
+    category: 'test',
+    examples: ['make test-security'],
+  },
+  
+  // Docker development
+  'docker-up': {
+    description: 'Start Docker services',
+    category: 'docker',
+    variables: { SERVICE: 'Optional: specific service to start' },
+    examples: ['make docker-up', 'make docker-up SERVICE=authz-api'],
+  },
+  'docker-down': {
+    description: 'Stop all Docker services',
+    category: 'docker',
+    examples: ['make docker-down'],
+  },
+  'docker-restart': {
+    description: 'Restart Docker services',
+    category: 'docker',
+    variables: { SERVICE: 'Optional: specific service to restart' },
+    examples: ['make docker-restart', 'make docker-restart SERVICE=authz-api'],
+  },
+  'docker-build': {
+    description: 'Build Docker images',
+    category: 'docker',
+    variables: {
+      SERVICE: 'Optional: specific service to build',
+      NO_CACHE: 'Set to 1 to rebuild without cache',
+    },
+    examples: [
+      'make docker-build',
+      'make docker-build SERVICE=authz-api',
+      'make docker-build NO_CACHE=1',
+    ],
+  },
+  'docker-ps': {
+    description: 'Show Docker service status',
+    category: 'docker',
+    examples: ['make docker-ps'],
+  },
+  'docker-logs': {
+    description: 'View Docker logs',
+    category: 'docker',
+    variables: { SERVICE: 'Optional: specific service logs' },
+    examples: ['make docker-logs', 'make docker-logs SERVICE=authz-api'],
+  },
+  'docker-clean': {
+    description: 'Remove all containers and volumes (interactive confirmation)',
+    category: 'docker',
+    examples: ['make docker-clean'],
+  },
+  'ssl-check': {
+    description: 'Check/generate SSL certificates for local development',
+    category: 'docker',
+    examples: ['make ssl-check'],
+  },
+  
+  // MCP
+  'mcp': {
+    description: 'Build the MCP server for Cursor AI',
+    category: 'mcp',
+    examples: ['make mcp'],
+  },
+};
+
+/**
+ * Available Make targets and their descriptions (Ansible Makefile - provision/ansible/Makefile)
  */
 const MAKE_TARGETS: Record<string, { description: string; category: string; requiresEnv?: boolean }> = {
   // Basic deployment
@@ -321,15 +510,17 @@ function listFilesRecursive(dir: string, pattern: string = '*'): string[] {
 }
 
 /**
- * Helper: Get documentation files by category
+ * Helper: Get documentation files by category or path
+ * Supports both top-level categories (e.g., 'architecture') and 
+ * nested paths (e.g., 'development/session-notes')
  */
-function getDocsByCategory(category: string): Array<{ name: string; path: string }> {
-  const docsDir = join(PROJECT_ROOT, 'docs', category);
+function getDocsByCategory(categoryOrPath: string): Array<{ name: string; path: string }> {
+  const docsDir = join(PROJECT_ROOT, 'docs', categoryOrPath);
   if (!existsSync(docsDir)) {
     return [];
   }
 
-  const files = listFilesRecursive(`docs/${category}`, '*.md');
+  const files = listFilesRecursive(`docs/${categoryOrPath}`, '*.md');
   return files.map(file => ({
     name: relative(docsDir, file),
     path: relative(PROJECT_ROOT, file),
@@ -532,7 +723,7 @@ function getContainerIP(containerName: string, environment: 'production' | 'test
 const server = new Server(
   {
     name: 'busibox-mcp-server',
-    version: '2.0.0',
+    version: '2.2.0',
   },
   {
     capabilities: {
@@ -558,6 +749,22 @@ server.setRequestHandler(ListResourcesRequestSchema, async () => {
       description: `Browse ${category} documentation`,
     });
   }
+
+  // Add nested documentation paths as resources
+  resources.push(
+    {
+      uri: 'busibox://docs/session-notes',
+      mimeType: 'text/markdown',
+      name: 'Session Notes',
+      description: 'Development session notes (in development/session-notes)',
+    },
+    {
+      uri: 'busibox://docs/troubleshooting',
+      mimeType: 'text/markdown',
+      name: 'Troubleshooting',
+      description: 'Troubleshooting guides (in development/troubleshooting)',
+    }
+  );
 
   // Add special resources
   resources.push(
@@ -616,8 +823,24 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
 
   // Handle documentation category listing
   if (uri.startsWith('busibox://docs/') && uri !== 'busibox://docs/all') {
-    const category = uri.replace('busibox://docs/', '');
-    const docs = getDocsByCategory(category);
+    let category = uri.replace('busibox://docs/', '');
+    
+    // Map legacy/shorthand names to actual paths
+    const categoryMappings: Record<string, string> = {
+      'session-notes': 'development/session-notes',
+      'troubleshooting': 'development/troubleshooting',
+      'configuration': 'guides',  // Configuration is now in guides
+      'tasks': 'development/tasks',
+    };
+    
+    const actualPath = categoryMappings[category] || category;
+    const docs = getDocsByCategory(actualPath);
+    
+    // Also get nested docs if this is a parent category
+    const nestedPaths = DOC_NESTED_PATHS[category] || [];
+    for (const nestedPath of nestedPaths) {
+      docs.push(...getDocsByCategory(nestedPath));
+    }
     
     let content = `# ${category.charAt(0).toUpperCase() + category.slice(1)} Documentation\n\n`;
     content += `Found ${docs.length} documents:\n\n`;
@@ -652,10 +875,32 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     
     for (const category of DOC_CATEGORIES) {
       const docs = getDocsByCategory(category);
-      content += `## ${category.charAt(0).toUpperCase() + category.slice(1)} (${docs.length} documents)\n\n`;
       
+      // Get nested docs count
+      const nestedPaths = DOC_NESTED_PATHS[category] || [];
+      let nestedDocs: Array<{ name: string; path: string }> = [];
+      for (const nestedPath of nestedPaths) {
+        nestedDocs.push(...getDocsByCategory(nestedPath));
+      }
+      
+      const totalCount = docs.length + nestedDocs.length;
+      content += `## ${category.charAt(0).toUpperCase() + category.slice(1)} (${totalCount} documents)\n\n`;
+      
+      // List direct docs
       for (const doc of docs) {
         content += `- **${doc.name}** - \`${doc.path}\`\n`;
+      }
+      
+      // List nested docs by subfolder
+      for (const nestedPath of nestedPaths) {
+        const subDocs = getDocsByCategory(nestedPath);
+        if (subDocs.length > 0) {
+          const subFolder = nestedPath.split('/').pop() || nestedPath;
+          content += `\n### ${subFolder} (${subDocs.length})\n`;
+          for (const doc of subDocs) {
+            content += `- ${doc.name} - \`${doc.path}\`\n`;
+          }
+        }
       }
       content += '\n';
     }
@@ -865,8 +1110,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             category: {
               type: 'string',
-              enum: [...DOC_CATEGORIES, 'all'],
-              description: 'Limit search to specific documentation category',
+              enum: [...DOC_CATEGORIES, 'session-notes', 'troubleshooting', 'tasks', 'all'],
+              description: 'Limit search to specific documentation category (session-notes and troubleshooting are in development/)',
             },
           },
           required: ['query'],
@@ -1114,6 +1359,155 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {},
         },
       },
+      // =========================================================================
+      // MAIN MAKEFILE TOOLS (for testing and deployment workflows)
+      // =========================================================================
+      {
+        name: 'get_makefile_help',
+        description: 'Get comprehensive help for using the Busibox Makefile, including all available targets, variables, and examples. Call this first when you need to run tests or deployments.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            category: {
+              type: 'string',
+              enum: ['menu', 'setup', 'deploy', 'test', 'docker', 'mcp', 'all'],
+              description: 'Filter targets by category (default: all)',
+            },
+          },
+        },
+      },
+      {
+        name: 'run_docker_tests',
+        description: 'Run tests against local Docker services. Use this for local development testing.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            service: {
+              type: 'string',
+              enum: ['authz', 'ingest', 'search', 'agent', 'all'],
+              description: 'Service to test',
+            },
+            fast: {
+              type: 'boolean',
+              description: 'Skip slow/GPU tests (default: true)',
+            },
+            pytest_args: {
+              type: 'string',
+              description: 'Extra pytest arguments (e.g., "-k test_name", "-v", "--tb=short")',
+            },
+          },
+          required: ['service'],
+        },
+      },
+      {
+        name: 'run_remote_tests',
+        description: 'Run tests locally against remote staging/production containers. Tests run on your machine but connect to remote services.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            service: {
+              type: 'string',
+              enum: ['authz', 'ingest', 'search', 'agent', 'all'],
+              description: 'Service to test',
+            },
+            environment: {
+              type: 'string',
+              enum: ['staging', 'production'],
+              description: 'Target environment',
+            },
+            fast: {
+              type: 'boolean',
+              description: 'Skip slow/GPU tests (default: true)',
+            },
+            worker: {
+              type: 'boolean',
+              description: 'Start local ingest worker for pipeline tests (default: false)',
+            },
+            pytest_args: {
+              type: 'string',
+              description: 'Extra pytest arguments (e.g., "-k test_name", "-v")',
+            },
+          },
+          required: ['service', 'environment'],
+        },
+      },
+      {
+        name: 'run_container_tests',
+        description: 'Run tests directly on containers via SSH. Tests execute inside the containers.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            service: {
+              type: 'string',
+              enum: ['authz', 'ingest', 'search', 'agent', 'all'],
+              description: 'Service to test',
+            },
+            environment: {
+              type: 'string',
+              enum: ['staging', 'production'],
+              description: 'Target environment',
+            },
+            pytest_args: {
+              type: 'string',
+              description: 'Extra pytest arguments',
+            },
+          },
+          required: ['service', 'environment'],
+        },
+      },
+      {
+        name: 'docker_control',
+        description: 'Control Docker services for local development (start, stop, restart, status, logs)',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            action: {
+              type: 'string',
+              enum: ['up', 'down', 'restart', 'ps', 'logs', 'build', 'clean'],
+              description: 'Docker action to perform',
+            },
+            service: {
+              type: 'string',
+              description: 'Optional: specific service (e.g., authz-api, ingest-api, search-api, agent-api)',
+            },
+            no_cache: {
+              type: 'boolean',
+              description: 'For build action: rebuild without cache',
+            },
+          },
+          required: ['action'],
+        },
+      },
+      {
+        name: 'init_test_databases',
+        description: 'Initialize test databases with schema, OAuth clients, and signing keys. Run this before running tests.',
+        inputSchema: {
+          type: 'object',
+          properties: {},
+        },
+      },
+      {
+        name: 'check_test_databases',
+        description: 'Check if test databases are properly initialized and ready for tests.',
+        inputSchema: {
+          type: 'object',
+          properties: {},
+        },
+      },
+      {
+        name: 'get_testing_guide',
+        description: 'Get a comprehensive guide on how to run tests in Busibox, including prerequisites, common patterns, and troubleshooting.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            topic: {
+              type: 'string',
+              enum: ['overview', 'docker', 'remote', 'container', 'troubleshooting', 'all'],
+              description: 'Specific topic to get help on (default: overview)',
+            },
+          },
+        },
+      },
     ],
   };
 });
@@ -1129,10 +1523,36 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { query, category = 'all' } = args as { query: string; category?: string };
       const results: Array<{ file: string; matches: string[] }> = [];
 
-      const categoriesToSearch = category === 'all' ? DOC_CATEGORIES : [category];
+      // Build list of paths to search
+      let pathsToSearch: string[] = [];
+      
+      if (category === 'all') {
+        // Search all categories and their nested paths
+        pathsToSearch = [...DOC_CATEGORIES];
+        for (const [cat, nestedPaths] of Object.entries(DOC_NESTED_PATHS)) {
+          pathsToSearch.push(...nestedPaths);
+        }
+      } else {
+        // Map legacy names to actual paths
+        const categoryMappings: Record<string, string> = {
+          'session-notes': 'development/session-notes',
+          'troubleshooting': 'development/troubleshooting',
+          'configuration': 'guides',
+          'tasks': 'development/tasks',
+        };
+        const actualPath = categoryMappings[category] || category;
+        pathsToSearch = [actualPath];
+        
+        // Also include nested paths if searching a parent category
+        const nestedPaths = DOC_NESTED_PATHS[category] || [];
+        pathsToSearch.push(...nestedPaths);
+      }
 
-      for (const cat of categoriesToSearch) {
-        const docs = getDocsByCategory(cat);
+      // Remove duplicates
+      pathsToSearch = [...new Set(pathsToSearch)];
+
+      for (const searchPath of pathsToSearch) {
+        const docs = getDocsByCategory(searchPath);
         for (const doc of docs) {
           const content = safeReadFile(join(PROJECT_ROOT, doc.path));
           if (!content) continue;
@@ -1847,6 +2267,455 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
     }
 
+    // =========================================================================
+    // MAIN MAKEFILE TOOL HANDLERS
+    // =========================================================================
+    
+    case 'get_makefile_help': {
+      const { category = 'all' } = args as { category?: string };
+      
+      const filteredTargets = category === 'all'
+        ? MAIN_MAKEFILE_TARGETS
+        : Object.fromEntries(
+            Object.entries(MAIN_MAKEFILE_TARGETS).filter(([_, t]) => t.category === category)
+          );
+      
+      const byCategory: Record<string, typeof MAIN_MAKEFILE_TARGETS> = {};
+      for (const [target, info] of Object.entries(filteredTargets)) {
+        if (!byCategory[info.category]) {
+          byCategory[info.category] = {};
+        }
+        byCategory[info.category][target] = info;
+      }
+      
+      let helpText = `# Busibox Makefile Help\n\n`;
+      helpText += `## Environments\n`;
+      helpText += `- **local** - Docker on localhost (development)\n`;
+      helpText += `- **staging** - 10.96.201.x network (pre-production)\n`;
+      helpText += `- **production** - 10.96.200.x network (live)\n\n`;
+      
+      for (const [cat, targets] of Object.entries(byCategory)) {
+        helpText += `## ${cat.charAt(0).toUpperCase() + cat.slice(1)} Commands\n\n`;
+        for (const [target, info] of Object.entries(targets)) {
+          helpText += `### make ${target}\n`;
+          helpText += `${info.description}\n`;
+          if (info.variables) {
+            helpText += `\n**Variables:**\n`;
+            for (const [v, desc] of Object.entries(info.variables)) {
+              helpText += `- \`${v}\`: ${desc}\n`;
+            }
+          }
+          if (info.examples) {
+            helpText += `\n**Examples:**\n`;
+            for (const ex of info.examples) {
+              helpText += `\`\`\`bash\n${ex}\n\`\`\`\n`;
+            }
+          }
+          helpText += `\n`;
+        }
+      }
+      
+      return {
+        content: [{ type: 'text', text: helpText }],
+      };
+    }
+
+    case 'run_docker_tests': {
+      const { service, fast = true, pytest_args = '' } = args as {
+        service: string;
+        fast?: boolean;
+        pytest_args?: string;
+      };
+      
+      const fastFlag = fast ? 'FAST=1' : 'FAST=0';
+      const argsFlag = pytest_args ? `ARGS='${pytest_args}'` : '';
+      const cmd = `cd ${BUSIBOX_PATH_ON_PROXMOX} && make test-docker SERVICE=${service} ${fastFlag} ${argsFlag}`.trim();
+      
+      // For Docker tests, we need to run locally, not on Proxmox
+      // Return the command to run instead of executing remotely
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              note: 'Docker tests should be run locally on your development machine, not on Proxmox.',
+              command: `make test-docker SERVICE=${service} ${fastFlag} ${argsFlag}`.trim(),
+              description: `Run ${service} tests against local Docker services`,
+              prerequisites: [
+                'Docker services must be running: make docker-up',
+                'Test databases must be initialized: make test-db-init',
+              ],
+              examples: [
+                `make test-docker SERVICE=${service}`,
+                `make test-docker SERVICE=${service} FAST=0  # Include slow tests`,
+                `make test-docker SERVICE=${service} ARGS='-k test_name -v'`,
+              ],
+            }, null, 2),
+          },
+        ],
+      };
+    }
+
+    case 'run_remote_tests': {
+      const { service, environment, fast = true, worker = false, pytest_args = '' } = args as {
+        service: string;
+        environment: string;
+        fast?: boolean;
+        worker?: boolean;
+        pytest_args?: string;
+      };
+      
+      const inv = environment === 'production' ? 'production' : 'staging';
+      const fastFlag = fast ? 'FAST=1' : 'FAST=0';
+      const workerFlag = worker ? 'WORKER=1' : '';
+      const argsFlag = pytest_args ? `ARGS='${pytest_args}'` : '';
+      
+      const cmd = `make test-local SERVICE=${service} INV=${inv} ${fastFlag} ${workerFlag} ${argsFlag}`.trim();
+      
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              note: 'Remote tests run locally on your machine but connect to remote services.',
+              command: cmd,
+              description: `Run ${service} tests against ${environment} environment`,
+              environment: {
+                name: environment,
+                network: environment === 'production' ? '10.96.200.x' : '10.96.201.x',
+              },
+              prerequisites: [
+                `VPN or network access to ${environment} network`,
+                'Python environment with test dependencies',
+              ],
+              examples: [
+                `make test-local SERVICE=${service} INV=${inv}`,
+                `make test-local SERVICE=${service} INV=${inv} FAST=0  # Include slow tests`,
+                `make test-local SERVICE=${service} INV=${inv} WORKER=1  # With ingest worker`,
+              ],
+            }, null, 2),
+          },
+        ],
+      };
+    }
+
+    case 'run_container_tests': {
+      const { service, environment, pytest_args = '' } = args as {
+        service: string;
+        environment: string;
+        pytest_args?: string;
+      };
+      
+      const inv = environment === 'production' ? 'production' : 'staging';
+      const argsFlag = pytest_args ? `ARGS='${pytest_args}'` : '';
+      
+      try {
+        const cmd = `cd ${BUSIBOX_PATH_ON_PROXMOX} && PYTEST_ARGS="${pytest_args}" make test SERVICE=${service} INV=${inv}`;
+        
+        const result = await executeSSHCommand(
+          PROXMOX_HOST_IP,
+          PROXMOX_HOST_USER,
+          cmd,
+          PROXMOX_SSH_KEY_PATH,
+          600000 // 10 minute timeout for tests
+        );
+        
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                command: `make test SERVICE=${service} INV=${inv} ${argsFlag}`.trim(),
+                exitCode: result.exitCode,
+                success: result.exitCode === 0,
+                stdout: result.stdout,
+                stderr: result.stderr,
+              }, null, 2),
+            },
+          ],
+        };
+      } catch (error: any) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                error: error.message || 'Unknown error',
+                note: 'Container tests run via SSH on the Proxmox host',
+              }, null, 2),
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case 'docker_control': {
+      const { action, service, no_cache = false } = args as {
+        action: string;
+        service?: string;
+        no_cache?: boolean;
+      };
+      
+      let cmd = `make docker-${action}`;
+      if (service) cmd += ` SERVICE=${service}`;
+      if (no_cache && action === 'build') cmd += ' NO_CACHE=1';
+      
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              note: 'Docker commands should be run locally on your development machine.',
+              command: cmd,
+              description: `${action} Docker services${service ? ` (${service})` : ''}`,
+              alternatives: {
+                'up': 'make docker-up - Start services',
+                'down': 'make docker-down - Stop services',
+                'restart': 'make docker-restart - Restart services',
+                'ps': 'make docker-ps - Show status',
+                'logs': 'make docker-logs - View logs',
+                'build': 'make docker-build - Build images',
+                'clean': 'make docker-clean - Remove all containers/volumes',
+              },
+            }, null, 2),
+          },
+        ],
+      };
+    }
+
+    case 'init_test_databases': {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              note: 'This command runs locally against Docker.',
+              command: 'make test-db-init',
+              description: 'Bootstrap test databases with schema, OAuth clients, and signing keys',
+              databases: ['test_authz', 'test_files', 'test_agent_server'],
+              user: 'busibox_test_user',
+              prerequisites: [
+                'Docker services must be running: make docker-up',
+                'PostgreSQL must be healthy',
+              ],
+            }, null, 2),
+          },
+        ],
+      };
+    }
+
+    case 'check_test_databases': {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              note: 'This command runs locally against Docker.',
+              command: 'make test-db-check',
+              description: 'Check if test databases are properly initialized',
+              what_it_checks: [
+                'test_authz database has active signing keys',
+                'test_files database exists',
+                'test_agent_server database exists',
+              ],
+            }, null, 2),
+          },
+        ],
+      };
+    }
+
+    case 'get_testing_guide': {
+      const { topic = 'overview' } = args as { topic?: string };
+      
+      const guides: Record<string, string> = {
+        overview: `# Busibox Testing Overview
+
+## Test Types
+
+1. **Docker Tests** (\`make test-docker\`)
+   - Run locally against Docker services
+   - Best for development and CI
+   - Requires: Docker running, test DBs initialized
+
+2. **Remote Tests** (\`make test-local\`)
+   - Run locally but connect to remote staging/production
+   - Tests your local code against real services
+   - Requires: Network access to staging/production
+
+3. **Container Tests** (\`make test\`)
+   - Run directly on containers via SSH
+   - Tests the deployed code
+   - Requires: SSH access to Proxmox
+
+## Quick Start
+
+\`\`\`bash
+# Start Docker services
+make docker-up
+
+# Initialize test databases (first time)
+make test-db-init
+
+# Run agent tests
+make test-docker SERVICE=agent
+
+# Run all tests
+make test-docker SERVICE=all
+\`\`\`
+`,
+        docker: `# Docker Testing Guide
+
+## Prerequisites
+1. Docker Desktop running
+2. Services started: \`make docker-up\`
+3. Test DBs initialized: \`make test-db-init\`
+
+## Commands
+
+\`\`\`bash
+# Run specific service tests
+make test-docker SERVICE=authz
+make test-docker SERVICE=ingest
+make test-docker SERVICE=search
+make test-docker SERVICE=agent
+
+# Run all tests
+make test-docker SERVICE=all
+
+# Include slow/GPU tests
+make test-docker SERVICE=agent FAST=0
+
+# Run specific test
+make test-docker SERVICE=agent ARGS='-k test_weather'
+
+# Verbose output
+make test-docker SERVICE=agent ARGS='-v --tb=short'
+\`\`\`
+
+## Services in Docker
+- authz-api: http://localhost:8080
+- ingest-api: http://localhost:8001
+- search-api: http://localhost:8003
+- agent-api: http://localhost:8000
+`,
+        remote: `# Remote Testing Guide
+
+Test your local code changes against staging/production services.
+
+## Prerequisites
+1. Network/VPN access to staging (10.96.201.x) or production (10.96.200.x)
+2. Python environment with dependencies
+
+## Commands
+
+\`\`\`bash
+# Test against staging
+make test-local SERVICE=agent INV=staging
+
+# Test against production
+make test-local SERVICE=agent INV=production
+
+# Include slow tests
+make test-local SERVICE=agent INV=staging FAST=0
+
+# With ingest worker (for pipeline tests)
+make test-local SERVICE=ingest INV=staging WORKER=1
+
+# Specific test
+make test-local SERVICE=agent INV=staging ARGS='-k test_weather'
+\`\`\`
+`,
+        container: `# Container Testing Guide
+
+Run tests directly on deployed containers via SSH.
+
+## Prerequisites
+1. SSH access to Proxmox host
+2. Services deployed to staging/production
+
+## Commands (run from Proxmox or via SSH)
+
+\`\`\`bash
+# Interactive menu
+make test
+
+# Direct command
+make test SERVICE=agent INV=staging
+
+# With pytest args
+PYTEST_ARGS='-k test_weather' make test SERVICE=agent INV=staging
+\`\`\`
+
+## What happens
+1. SSH to the service container
+2. Run pytest in the container's code directory
+3. Return results
+`,
+        troubleshooting: `# Testing Troubleshooting
+
+## Common Issues
+
+### "Test databases not initialized"
+\`\`\`bash
+make test-db-init
+\`\`\`
+
+### "Connection refused" in Docker tests
+\`\`\`bash
+# Check services are running
+make docker-ps
+
+# Restart services
+make docker-restart
+\`\`\`
+
+### "Network unreachable" for remote tests
+- Check VPN connection
+- Verify network access: \`ping 10.96.201.200\` (staging)
+
+### Tests timeout
+\`\`\`bash
+# Use FAST mode to skip slow tests
+make test-docker SERVICE=agent FAST=1
+\`\`\`
+
+### Permission denied
+- Check SSH keys are set up for Proxmox access
+- Verify container SSH access
+
+## Test Database Info
+
+Tests run against isolated databases:
+- test_authz (not authz)
+- test_files (not files)  
+- test_agent_server (not agent_server)
+
+User: busibox_test_user
+`,
+      };
+      
+      if (topic === 'all') {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: Object.values(guides).join('\n---\n\n'),
+            },
+          ],
+        };
+      }
+      
+      return {
+        content: [
+          {
+            type: 'text',
+            text: guides[topic] || guides.overview,
+          },
+        ],
+      };
+    }
+
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
@@ -1922,6 +2791,46 @@ server.setRequestHandler(ListPromptsRequestSchema, async () => {
             required: false,
           },
         ],
+      },
+      // NEW: Testing workflow prompt
+      {
+        name: 'testing_workflow',
+        description: 'Complete guide for testing Busibox services with the Makefile',
+        arguments: [
+          {
+            name: 'environment',
+            description: 'Where to run tests: docker (local), staging, or production',
+            required: true,
+          },
+          {
+            name: 'service',
+            description: 'Service to test: authz, ingest, search, agent, or all',
+            required: false,
+          },
+        ],
+      },
+      // NEW: Deployment workflow prompt
+      {
+        name: 'deployment_workflow',
+        description: 'Complete guide for deploying Busibox services',
+        arguments: [
+          {
+            name: 'target',
+            description: 'Deployment target: staging or production',
+            required: true,
+          },
+          {
+            name: 'service',
+            description: 'Service to deploy (optional, deploys all if not specified)',
+            required: false,
+          },
+        ],
+      },
+      // NEW: Docker development prompt
+      {
+        name: 'docker_development',
+        description: 'Guide for local Docker-based development workflow',
+        arguments: [],
       },
       {
         name: 'deploy_app',
@@ -2314,6 +3223,409 @@ ${environment === 'test'
       };
     }
 
+    // =========================================================================
+    // NEW MAKEFILE WORKFLOW PROMPTS
+    // =========================================================================
+
+    case 'testing_workflow': {
+      const { environment, service = 'all' } = args as { environment: string; service?: string };
+      
+      const isDocker = environment === 'docker' || environment === 'local';
+      const isStaging = environment === 'staging';
+      
+      return {
+        messages: [
+          {
+            role: 'user',
+            content: {
+              type: 'text',
+              text: `How do I run tests for ${service} in ${environment}?`,
+            },
+          },
+          {
+            role: 'assistant',
+            content: {
+              type: 'text',
+              text: isDocker ? `# Testing ${service} in Docker (Local Development)
+
+## Prerequisites
+
+1. **Start Docker services**:
+   \`\`\`bash
+   make docker-up
+   \`\`\`
+
+2. **Initialize test databases** (first time only):
+   \`\`\`bash
+   make test-db-init
+   \`\`\`
+
+3. **Verify databases are ready**:
+   \`\`\`bash
+   make test-db-check
+   \`\`\`
+
+## Run Tests
+
+\`\`\`bash
+# Run ${service} tests
+make test-docker SERVICE=${service}
+
+# Skip slow/GPU tests (default)
+make test-docker SERVICE=${service} FAST=1
+
+# Include slow tests
+make test-docker SERVICE=${service} FAST=0
+
+# Run specific test
+make test-docker SERVICE=${service} ARGS='-k test_name'
+
+# Verbose output
+make test-docker SERVICE=${service} ARGS='-v --tb=short'
+\`\`\`
+
+## Available Services
+- \`authz\` - Authorization service tests
+- \`ingest\` - Ingestion pipeline tests
+- \`search\` - Search API tests
+- \`agent\` - Agent API tests
+- \`all\` - All service tests
+
+## Troubleshooting
+
+If tests fail with "connection refused":
+\`\`\`bash
+make docker-ps   # Check if services are running
+make docker-restart  # Restart services
+\`\`\`
+
+If tests fail with "database not initialized":
+\`\`\`bash
+make test-db-init  # Reinitialize test databases
+\`\`\`
+
+## Important Note
+Tests run against **isolated test databases** (test_authz, test_files, test_agent_server), not production databases.`
+              : `# Testing ${service} Against ${environment.charAt(0).toUpperCase() + environment.slice(1)}
+
+## Option 1: Remote Tests (run locally, connect to ${environment})
+
+Tests run on your machine but connect to remote services.
+
+### Prerequisites
+- Network/VPN access to ${isStaging ? '10.96.201.x' : '10.96.200.x'} network
+- Python environment with dependencies
+
+### Commands
+\`\`\`bash
+# Run ${service} tests against ${environment}
+make test-local SERVICE=${service} INV=${environment}
+
+# Skip slow tests (default)
+make test-local SERVICE=${service} INV=${environment} FAST=1
+
+# Include slow tests
+make test-local SERVICE=${service} INV=${environment} FAST=0
+
+# With ingest worker (for pipeline tests)
+make test-local SERVICE=${service} INV=${environment} WORKER=1
+
+# Specific test
+make test-local SERVICE=${service} INV=${environment} ARGS='-k test_name'
+\`\`\`
+
+## Option 2: Container Tests (run on containers via SSH)
+
+Tests run directly inside the deployed containers.
+
+### Prerequisites
+- SSH access to Proxmox host
+- Services deployed to ${environment}
+
+### Commands (via MCP tools or SSH)
+\`\`\`bash
+# On Proxmox host or via execute_proxmox_command
+make test SERVICE=${service} INV=${environment}
+
+# With pytest args
+PYTEST_ARGS='-k test_name' make test SERVICE=${service} INV=${environment}
+\`\`\`
+
+## Available Services
+- \`authz\` - Authorization service
+- \`ingest\` - Ingestion pipeline
+- \`search\` - Search API
+- \`agent\` - Agent API
+- \`all\` - All services
+
+## Network Reference
+${isStaging ? `
+**Staging (10.96.201.x)**:
+- proxy: 10.96.201.200
+- apps: 10.96.201.201
+- agent: 10.96.201.202
+- postgres: 10.96.201.203
+- milvus/search: 10.96.201.204
+- files: 10.96.201.205
+- ingest: 10.96.201.206
+` : `
+**Production (10.96.200.x)**:
+- proxy: 10.96.200.200
+- apps: 10.96.200.201
+- agent: 10.96.200.202
+- postgres: 10.96.200.203
+- milvus/search: 10.96.200.204
+- files: 10.96.200.205
+- ingest: 10.96.200.206
+`}`,
+            },
+          },
+        ],
+      };
+    }
+
+    case 'deployment_workflow': {
+      const { target, service } = args as { target: string; service?: string };
+      const inv = target === 'production' ? '' : 'INV=inventory/test';
+      const networkBase = target === 'production' ? '10.96.200' : '10.96.201';
+      
+      return {
+        messages: [
+          {
+            role: 'user',
+            content: {
+              type: 'text',
+              text: `How do I deploy ${service || 'services'} to ${target}?`,
+            },
+          },
+          {
+            role: 'assistant',
+            content: {
+              type: 'text',
+              text: `# Deploying to ${target.charAt(0).toUpperCase() + target.slice(1)}
+
+## Method 1: Interactive Menu (Recommended)
+
+\`\`\`bash
+make            # Opens interactive menu
+# Select: Deploy
+# Choose services to deploy
+\`\`\`
+
+## Method 2: Direct Command
+
+${service ? `
+### Deploy ${service}
+\`\`\`bash
+make deploy SERVICE=${service} INV=${target}
+\`\`\`
+` : `
+### Deploy All Services
+\`\`\`bash
+make deploy INV=${target}
+\`\`\`
+
+### Deploy Specific Service
+\`\`\`bash
+make deploy SERVICE=<service> INV=${target}
+\`\`\`
+
+Available services:
+- \`authz\` - Authorization service
+- \`ingest\` - Ingestion API + worker
+- \`search\` - Search API + Milvus
+- \`agent\` - Agent API
+- \`apps\` - All Next.js apps
+- \`pg\` - PostgreSQL
+- \`litellm\` - LiteLLM gateway
+- \`nginx\` - Reverse proxy
+`}
+
+## Method 3: From Proxmox (via MCP)
+
+Use MCP tools in this order:
+
+1. **Pull latest code**:
+   Use \`git_pull_busibox\` tool
+
+2. **Deploy**:
+   Use \`run_make_target\` with:
+   - target: "${service || 'all'}"
+   - environment: "${target === 'production' ? 'production' : 'test'}"
+
+3. **Verify**:
+   Use \`get_container_service_status\` to check services
+
+## Pre-Deployment Checklist
+
+- [ ] Code is committed and pushed
+- [ ] Tests pass: \`make test-local SERVICE=all INV=${target}\`
+- [ ] Vault configured: \`make configure\` → Verify Configuration
+- [ ] Network access verified
+
+## Post-Deployment Verification
+
+\`\`\`bash
+# Check service health
+curl -s http://${networkBase}.202:8000/health  # Agent
+curl -s http://${networkBase}.204:8003/health  # Search
+curl -s http://${networkBase}.206:8000/health  # Ingest
+\`\`\`
+
+## Network Reference (${target})
+
+| Service | IP | Port |
+|---------|-----|------|
+| Proxy | ${networkBase}.200 | 80, 443 |
+| Apps | ${networkBase}.201 | 3000 |
+| Agent | ${networkBase}.202 | 8000 |
+| PostgreSQL | ${networkBase}.203 | 5432 |
+| Milvus/Search | ${networkBase}.204 | 19530, 8003 |
+| Files (MinIO) | ${networkBase}.205 | 9000 |
+| Ingest | ${networkBase}.206 | 8000, 6379 |
+| LiteLLM | ${networkBase}.207 | 4000 |`,
+            },
+          },
+        ],
+      };
+    }
+
+    case 'docker_development': {
+      return {
+        messages: [
+          {
+            role: 'user',
+            content: {
+              type: 'text',
+              text: 'How do I set up and use Docker for local development?',
+            },
+          },
+          {
+            role: 'assistant',
+            content: {
+              type: 'text',
+              text: `# Docker Local Development Guide
+
+## Initial Setup
+
+1. **Copy environment file**:
+   \`\`\`bash
+   cp env.local.example .env.local
+   # Edit .env.local with your API keys
+   \`\`\`
+
+2. **Generate SSL certificates**:
+   \`\`\`bash
+   make ssl-check
+   \`\`\`
+
+3. **Build images**:
+   \`\`\`bash
+   make docker-build
+   \`\`\`
+
+4. **Start services**:
+   \`\`\`bash
+   make docker-up
+   \`\`\`
+
+5. **Initialize test databases**:
+   \`\`\`bash
+   make test-db-init
+   \`\`\`
+
+## Daily Workflow
+
+\`\`\`bash
+# Start your day
+make docker-up
+
+# Check what's running
+make docker-ps
+
+# View logs
+make docker-logs              # All services
+make docker-logs SERVICE=agent-api  # Specific service
+
+# After code changes, rebuild
+make docker-build SERVICE=agent-api
+make docker-restart SERVICE=agent-api
+
+# Run tests
+make test-docker SERVICE=agent
+
+# End of day
+make docker-down
+\`\`\`
+
+## Service Ports (Local Docker)
+
+| Service | URL |
+|---------|-----|
+| AuthZ API | http://localhost:8080 |
+| Ingest API | http://localhost:8001 |
+| Search API | http://localhost:8003 |
+| Agent API | http://localhost:8000 |
+| PostgreSQL | localhost:5432 |
+| Redis | localhost:6379 |
+| MinIO | http://localhost:9000 |
+| MinIO Console | http://localhost:9001 |
+
+## Common Commands
+
+| Command | Description |
+|---------|-------------|
+| \`make docker-up\` | Start all services |
+| \`make docker-down\` | Stop all services |
+| \`make docker-restart\` | Restart services |
+| \`make docker-ps\` | Show status |
+| \`make docker-logs\` | View logs |
+| \`make docker-build\` | Build images |
+| \`make docker-build NO_CACHE=1\` | Rebuild without cache |
+| \`make docker-clean\` | Remove everything |
+
+## Troubleshooting
+
+### Service won't start
+\`\`\`bash
+make docker-logs SERVICE=<service>  # Check logs
+make docker-build SERVICE=<service>  # Rebuild
+make docker-restart SERVICE=<service>  # Restart
+\`\`\`
+
+### Port already in use
+\`\`\`bash
+# Find what's using the port
+lsof -i :<port>
+# Kill it or change port in docker-compose.local.yml
+\`\`\`
+
+### Database issues
+\`\`\`bash
+make test-db-check  # Check status
+make test-db-init   # Reinitialize
+\`\`\`
+
+### Complete reset
+\`\`\`bash
+make docker-clean   # WARNING: Removes all data
+make docker-build
+make docker-up
+make test-db-init
+\`\`\`
+
+## Files Reference
+
+- \`docker-compose.local.yml\` - Service definitions
+- \`.env.local\` - Environment variables
+- \`ssl/\` - SSL certificates
+- \`srv/\` - Service source code`,
+            },
+          },
+        ],
+      };
+    }
+
     default:
       throw new Error(`Unknown prompt: ${name}`);
   }
@@ -2325,7 +3637,7 @@ ${environment === 'test'
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error('Busibox MCP Server v2.0.0 running on stdio');
+  console.error('Busibox MCP Server v2.2.0 running on stdio');
 }
 
 main().catch((error) => {

@@ -668,7 +668,7 @@ llm_services_menu() {
     done
 }
 
-# APIs submenu (ingest, search, agent)
+# APIs submenu (ingest, search, agent, docs)
 apis_menu() {
     local env="$1"
     
@@ -683,18 +683,20 @@ apis_menu() {
         echo -e "  ${CYAN}2)${NC} Deploy Ingest API"
         echo -e "  ${CYAN}3)${NC} Deploy Search API"
         echo -e "  ${CYAN}4)${NC} Deploy Agent API"
-        echo -e "  ${CYAN}5)${NC} Back"
+        echo -e "  ${CYAN}5)${NC} Deploy Docs API"
+        echo -e "  ${CYAN}6)${NC} Back"
         echo ""
         
-        read -p "Select option [1-5]: " choice
+        read -p "Select option [1-6]: " choice
         echo ""
         
         case "$choice" in
             1)
-                if confirm "Deploy ALL APIs (ingest, search, agent) to $env?"; then
+                if confirm "Deploy ALL APIs (ingest, search, agent, docs) to $env?"; then
                     deploy_service "ingest" "$env" && \
                     deploy_service "search-api" "$env" && \
-                    deploy_service "agent" "$env"
+                    deploy_service "agent" "$env" && \
+                    deploy_service "docs" "$env"
                 fi
                 pause
                 ;;
@@ -717,6 +719,12 @@ apis_menu() {
                 pause
                 ;;
             5)
+                if confirm "Deploy Docs API to $env?"; then
+                    deploy_service "docs" "$env"
+                fi
+                pause
+                ;;
+            6)
                 return 0
                 ;;
             *)
@@ -911,6 +919,7 @@ docker_select_service() {
             "ingest-worker" \
             "search-api" \
             "agent-api" \
+            "docs-api" \
             "nginx" \
             "litellm" \
             "postgres" \
@@ -919,7 +928,7 @@ docker_select_service() {
             "milvus" \
             "Back"
         
-        read -p "$(echo -e "${BOLD}Select option [1-12]:${NC} ")" choice
+        read -p "$(echo -e "${BOLD}Select option [1-13]:${NC} ")" choice
         
         local service_name=""
         case $choice in
@@ -928,13 +937,14 @@ docker_select_service() {
             3) service_name="ingest-worker" ;;
             4) service_name="search-api" ;;
             5) service_name="agent-api" ;;
-            6) service_name="nginx" ;;
-            7) service_name="litellm" ;;
-            8) service_name="postgres" ;;
-            9) service_name="redis" ;;
-            10) service_name="minio" ;;
-            11) service_name="milvus" ;;
-            12) return 0 ;;
+            6) service_name="docs-api" ;;
+            7) service_name="nginx" ;;
+            8) service_name="litellm" ;;
+            9) service_name="postgres" ;;
+            10) service_name="redis" ;;
+            11) service_name="minio" ;;
+            12) service_name="milvus" ;;
+            13) return 0 ;;
             *) error "Invalid selection"; continue ;;
         esac
         
@@ -1069,6 +1079,7 @@ docker_individual_service_menu() {
             "ingest-worker" \
             "search-api" \
             "agent-api" \
+            "docs-api" \
             "nginx" \
             "litellm" \
             "postgres" \
@@ -1077,7 +1088,7 @@ docker_individual_service_menu() {
             "milvus" \
             "Back"
         
-        read -p "$(echo -e "${BOLD}Select option [1-12]:${NC} ")" choice
+        read -p "$(echo -e "${BOLD}Select option [1-13]:${NC} ")" choice
         
         local service_name=""
         case $choice in
@@ -1086,13 +1097,14 @@ docker_individual_service_menu() {
             3) service_name="ingest-worker" ;;
             4) service_name="search-api" ;;
             5) service_name="agent-api" ;;
-            6) service_name="nginx" ;;
-            7) service_name="litellm" ;;
-            8) service_name="postgres" ;;
-            9) service_name="redis" ;;
-            10) service_name="minio" ;;
-            11) service_name="milvus" ;;
-            12) return 0 ;;
+            6) service_name="docs-api" ;;
+            7) service_name="nginx" ;;
+            8) service_name="litellm" ;;
+            9) service_name="postgres" ;;
+            10) service_name="redis" ;;
+            11) service_name="minio" ;;
+            12) service_name="milvus" ;;
+            13) return 0 ;;
             *) error "Invalid selection"; continue ;;
         esac
         
@@ -1183,7 +1195,7 @@ docker_deploy_menu() {
                 docker_service_group_menu "All" ""
                 ;;
             2)  # All API Services
-                docker_service_group_menu "API" "authz-api ingest-api ingest-worker search-api agent-api"
+                docker_service_group_menu "API" "authz-api ingest-api ingest-worker search-api agent-api docs-api"
                 ;;
             3)  # All Data Services
                 docker_service_group_menu "Data" "postgres redis minio milvus"

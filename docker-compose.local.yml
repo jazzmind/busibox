@@ -558,8 +558,8 @@ services:
   # Agent API - AI Agent Service
   agent-api:
     build:
-      context: ./srv/agent
-      dockerfile: Dockerfile
+      context: ./srv
+      dockerfile: agent/Dockerfile
     container_name: local-agent-api
     hostname: agent-api
     # Hot-reload: mount source code and use --reload flag
@@ -618,6 +618,36 @@ services:
       interval: 10s
       timeout: 5s
       start_period: 30s
+      retries: 3
+    networks:
+      - busibox-net
+
+  # Docs API - Documentation Service
+  # Lightweight service for serving markdown docs and OpenAPI specs
+  docs-api:
+    build:
+      context: ./srv
+      dockerfile: docs/Dockerfile
+    container_name: local-docs-api
+    hostname: docs-api
+    # Hot-reload: mount source code and use --reload flag
+    volumes:
+      - ./srv/docs/src:/app/src:ro
+      - ./docs:/app/docs:ro
+      - ./openapi:/app/openapi:ro
+    command: ["python", "-m", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8004", "--reload", "--reload-dir", "/app/src"]
+    environment:
+      # Service
+      SERVICE_PORT: 8004
+      DOCS_PATH: /app/docs
+      OPENAPI_PATH: /app/openapi
+    ports:
+      - "8004:8004"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/health/live')"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
       retries: 3
     networks:
       - busibox-net

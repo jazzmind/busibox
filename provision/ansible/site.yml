@@ -62,6 +62,10 @@
       tags: [apps, secrets]
     - role: app_deployer
       tags: [apps, app_deployer]
+    - role: docs_api
+      tags: [docs, docs_api]
+      # Docs API is a lightweight Python service that serves documentation
+      # It runs on the apps container alongside Next.js apps but with its own role
 
 - hosts: openwebui
   roles:

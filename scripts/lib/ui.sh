@@ -257,6 +257,10 @@ status_bar() {
             status_color="$YELLOW"; status_icon="○"; status_display="ready" ;;
         not_installed) 
             status_color="$RED"; status_icon="✗"; status_display="not ready" ;;
+        docker_not_running)
+            status_color="$RED"; status_icon="○"; status_display="not running" ;;
+        containers_not_running)
+            status_color="$YELLOW"; status_icon="○"; status_display="not running" ;;
     esac
     
     local left_text="Environment: $env_display"
@@ -431,20 +435,37 @@ dynamic_menu() {
     local options=()
     local option_keys=()
     
-    options+=("Install/Setup"); option_keys+=("install")
-    
-    if [[ "$status" != "not_installed" ]]; then
-        options+=("Configure"); option_keys+=("configure")
-    fi
-    
-    if [[ "$status" == "configured" || "$status" == "deployed" || "$status" == "healthy" ]]; then
-        options+=("Deploy (build images)"); option_keys+=("deploy")
-        options+=("Services (start/stop/restart)"); option_keys+=("services")
-    fi
-    
-    if [[ "$status" == "deployed" || "$status" == "healthy" ]]; then
-        options+=("Test"); option_keys+=("test")
-    fi
+    # Docker-specific startup options based on status
+    case "$status" in
+        docker_not_running)
+            # Docker daemon is not running
+            options+=("Start Docker"); option_keys+=("start_docker")
+            ;;
+        containers_not_running)
+            # Docker is running but containers aren't
+            options+=("Start Busibox"); option_keys+=("start_busibox")
+            options+=("Install/Setup"); option_keys+=("install")
+            options+=("Configure"); option_keys+=("configure")
+            options+=("Deploy (build images)"); option_keys+=("deploy")
+            ;;
+        *)
+            # Normal flow for other statuses
+            options+=("Install/Setup"); option_keys+=("install")
+            
+            if [[ "$status" != "not_installed" ]]; then
+                options+=("Configure"); option_keys+=("configure")
+            fi
+            
+            if [[ "$status" == "configured" || "$status" == "deployed" || "$status" == "healthy" ]]; then
+                options+=("Deploy (build images)"); option_keys+=("deploy")
+                options+=("Services (start/stop/restart)"); option_keys+=("services")
+            fi
+            
+            if [[ "$status" == "deployed" || "$status" == "healthy" ]]; then
+                options+=("Test"); option_keys+=("test")
+            fi
+            ;;
+    esac
     
     options+=("Change Environment"); option_keys+=("change_env")
     options+=("Help"); option_keys+=("help")

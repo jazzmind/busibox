@@ -1,0 +1,450 @@
+openapi: 3.1.0
+info:
+  title: Busibox Docs API
+  description: |
+    Documentation API for Busibox platform.
+    
+    Provides REST endpoints for serving markdown documentation with frontmatter
+    parsing and OpenAPI specifications for all Busibox services.
+    
+    **Documentation Features:**
+    - Serve markdown documentation with frontmatter parsing
+    - Category-based organization (user/developer)
+    - Navigation support (prev/next links)
+    
+    **OpenAPI Features:**
+    - List available service API specifications
+    - Serve raw YAML OpenAPI specs for client generation
+  version: 1.0.0
+  contact:
+    name: Busibox Team
+  license:
+    name: Proprietary
+
+servers:
+  - url: http://localhost:8004
+    description: Local development
+  - url: https://localhost/api/docs
+    description: Local development via nginx
+
+tags:
+  - name: documentation
+    description: Markdown documentation endpoints
+  - name: openapi
+    description: OpenAPI specification endpoints
+  - name: health
+    description: Health check endpoints
+
+paths:
+  /:
+    get:
+      summary: Service info
+      description: Returns service information and available endpoints
+      operationId: getRoot
+      responses:
+        '200':
+          description: Service information
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  service:
+                    type: string
+                    example: Busibox Docs API
+                  version:
+                    type: string
+                    example: 1.0.0
+                  status:
+                    type: string
+                    example: operational
+                  endpoints:
+                    type: object
+                    additionalProperties:
+                      type: string
+
+  /docs/{category}:
+    get:
+      summary: List documentation for a category
+      description: |
+        Returns a list of all published documentation for the specified category.
+        Use this for building documentation sidebars or index pages.
+      operationId: listDocs
+      tags:
+        - documentation
+      parameters:
+        - name: category
+          in: path
+          required: true
+          description: Documentation category
+          schema:
+            type: string
+            enum:
+              - user
+              - developer
+      responses:
+        '200':
+          description: List of documentation navigation items
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocListResponse'
+        '422':
+          description: Invalid category value
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+
+  /docs/{category}/{slug}:
+    get:
+      summary: Get a single documentation file
+      description: |
+        Returns the full documentation file including frontmatter metadata
+        and markdown content.
+      operationId: getDoc
+      tags:
+        - documentation
+      parameters:
+        - name: category
+          in: path
+          required: true
+          description: Documentation category
+          schema:
+            type: string
+            enum:
+              - user
+              - developer
+        - name: slug
+          in: path
+          required: true
+          description: Document slug (URL-friendly identifier)
+          schema:
+            type: string
+            example: guides-00-setup
+      responses:
+        '200':
+          description: Full documentation file
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocResponse'
+        '404':
+          description: Document not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Invalid category value
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+
+  /docs/{category}/{slug}/navigation:
+    get:
+      summary: Get document navigation
+      description: |
+        Returns the previous and next documents for navigation links.
+        Useful for building "Previous" / "Next" navigation at the bottom
+        of documentation pages.
+      operationId: getDocNavigation
+      tags:
+        - documentation
+      parameters:
+        - name: category
+          in: path
+          required: true
+          description: Documentation category
+          schema:
+            type: string
+            enum:
+              - user
+              - developer
+        - name: slug
+          in: path
+          required: true
+          description: Document slug
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Navigation links
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocNavigationResponse'
+        '404':
+          description: Document not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /openapi:
+    get:
+      summary: List available OpenAPI specifications
+      description: |
+        Returns metadata about all available OpenAPI specifications
+        without the full YAML content.
+      operationId: listOpenAPISpecs
+      tags:
+        - openapi
+      responses:
+        '200':
+          description: List of available OpenAPI specifications
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenAPIListResponse'
+
+  /openapi/{service}:
+    get:
+      summary: Get an OpenAPI specification
+      description: |
+        Returns the raw YAML content of the specified service's
+        OpenAPI specification.
+      operationId: getOpenAPISpec
+      tags:
+        - openapi
+      parameters:
+        - name: service
+          in: path
+          required: true
+          description: Service name
+          schema:
+            type: string
+            enum:
+              - agent
+              - authz
+              - ingest
+              - search
+              - docs
+      responses:
+        '200':
+          description: OpenAPI specification YAML
+          content:
+            application/yaml:
+              schema:
+                type: string
+        '404':
+          description: Specification not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /health/live:
+    get:
+      summary: Liveness probe
+      description: Returns OK if the service is running
+      operationId: healthLive
+      tags:
+        - health
+      responses:
+        '200':
+          description: Service is alive
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /health/ready:
+    get:
+      summary: Readiness probe
+      description: Returns OK if the service is ready to accept requests
+      operationId: healthReady
+      tags:
+        - health
+      responses:
+        '200':
+          description: Service is ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+components:
+  schemas:
+    DocNavItem:
+      type: object
+      required:
+        - slug
+        - title
+        - description
+        - order
+      properties:
+        slug:
+          type: string
+          description: URL-friendly document identifier
+          example: guides-00-setup
+        title:
+          type: string
+          description: Document title
+          example: Getting Started
+        description:
+          type: string
+          description: Brief document description
+          example: Learn how to set up and configure the Busibox platform
+        order:
+          type: integer
+          description: Sort order within category
+          example: 1
+
+    DocFrontmatter:
+      type: object
+      required:
+        - title
+        - category
+        - order
+        - description
+        - published
+      properties:
+        title:
+          type: string
+          example: Getting Started
+        category:
+          type: string
+          enum:
+            - user
+            - developer
+          example: user
+        order:
+          type: integer
+          example: 1
+        description:
+          type: string
+          example: Learn how to set up and configure the Busibox platform
+        published:
+          type: boolean
+          example: true
+
+    DocListResponse:
+      type: object
+      required:
+        - category
+        - docs
+      properties:
+        category:
+          type: string
+          example: user
+        docs:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocNavItem'
+
+    DocResponse:
+      type: object
+      required:
+        - slug
+        - frontmatter
+        - content
+      properties:
+        slug:
+          type: string
+          example: guides-00-setup
+        frontmatter:
+          $ref: '#/components/schemas/DocFrontmatter'
+        content:
+          type: string
+          description: Markdown content (without frontmatter)
+          example: |
+            ## Introduction
+            
+            This guide will help you get started with Busibox...
+
+    DocNavigationResponse:
+      type: object
+      properties:
+        prev:
+          type: object
+          nullable: true
+          properties:
+            slug:
+              type: string
+            title:
+              type: string
+        next:
+          type: object
+          nullable: true
+          properties:
+            slug:
+              type: string
+            title:
+              type: string
+
+    OpenAPISpecInfo:
+      type: object
+      required:
+        - service
+        - title
+        - version
+        - description
+      properties:
+        service:
+          type: string
+          description: Service name
+          example: agent
+        title:
+          type: string
+          description: API title
+          example: Busibox Agent Server API
+        version:
+          type: string
+          description: API version
+          example: 1.0.0
+        description:
+          type: string
+          description: Brief description (truncated to 200 chars)
+          example: Production-grade agent server with Pydantic AI...
+
+    OpenAPIListResponse:
+      type: object
+      required:
+        - specs
+      properties:
+        specs:
+          type: array
+          items:
+            $ref: '#/components/schemas/OpenAPISpecInfo'
+
+    HealthResponse:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          example: ok
+
+    Error:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: string
+          description: Error message
+          example: Document not found
+
+    ValidationError:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            properties:
+              loc:
+                type: array
+                items:
+                  oneOf:
+                    - type: string
+                    - type: integer
+              msg:
+                type: string
+              type:
+                type: string
