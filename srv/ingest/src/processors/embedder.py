@@ -1,7 +1,11 @@
 """
 Embedding generation with FastEmbed.
 
-Uses BAAI/bge-large-en-v1.5 (1024-d) for high-quality local embeddings.
+Supports multiple BGE models:
+- BAAI/bge-small-en-v1.5 (384-d, ~134MB) - Fast, good for local dev
+- BAAI/bge-base-en-v1.5 (768-d, ~438MB) - Balanced
+- BAAI/bge-large-en-v1.5 (1024-d, ~1.3GB) - Best quality, production
+
 Runs on CPU, no external service dependencies.
 """
 
@@ -12,9 +16,23 @@ from fastembed import TextEmbedding
 
 logger = structlog.get_logger()
 
+# Model dimensions for FastEmbed BGE models
+MODEL_DIMENSIONS = {
+    "BAAI/bge-small-en-v1.5": 384,
+    "BAAI/bge-base-en-v1.5": 768,
+    "BAAI/bge-large-en-v1.5": 1024,
+    # Short aliases
+    "bge-small-en-v1.5": 384,
+    "bge-base-en-v1.5": 768,
+    "bge-large-en-v1.5": 1024,
+}
+
+# Default model for local development (faster download)
+DEFAULT_MODEL = "BAAI/bge-small-en-v1.5"
+
 
 class Embedder:
-    """Generate embeddings with FastEmbed (bge-large-en-v1.5)."""
+    """Generate embeddings with FastEmbed (configurable BGE model)."""
     
     def __init__(self, config: dict):
         """
@@ -24,8 +42,10 @@ class Embedder:
             config: Configuration dictionary
         """
         self.config = config
-        self.model_name = config.get("fastembed_model", "BAAI/bge-large-en-v1.5")
-        self.dimension = 1024  # bge-large-en-v1.5 dimension
+        self.model_name = config.get("fastembed_model", DEFAULT_MODEL)
+        
+        # Get dimension from model lookup, default to small model dimension
+        self.dimension = MODEL_DIMENSIONS.get(self.model_name, 384)
         self.batch_size = config.get("embedding_batch_size", 32)
         
         # Initialize FastEmbed model (lazy loading)

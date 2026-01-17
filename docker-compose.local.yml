@@ -386,6 +386,8 @@ services:
       MARKER_USE_GPU: ${MARKER_USE_GPU:-false}
       COLPALI_ENABLED: ${COLPALI_ENABLED:-false}
       LLM_CLEANUP_ENABLED: ${LLM_CLEANUP_ENABLED:-true}
+      # FastEmbed model - use small model for faster local dev (384-d, ~134MB vs 1024-d, ~1.3GB)
+      FASTEMBED_MODEL: ${FASTEMBED_MODEL:-BAAI/bge-small-en-v1.5}
     ports:
       - "8002:8002"
     depends_on:

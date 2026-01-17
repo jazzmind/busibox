@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 import structlog
 
-from processors.embedder import Embedder
+from processors.embedder import Embedder, MODEL_DIMENSIONS
 from shared.config import Config
 
 logger = structlog.get_logger()
@@ -25,8 +25,8 @@ class EmbeddingRequest(BaseModel):
         description="Text or list of texts to embed"
     )
     model: Optional[str] = Field(
-        default="bge-large-en-v1.5",
-        description="Embedding model name (currently only bge-large-en-v1.5 supported)"
+        default=None,
+        description="Embedding model name (optional, uses configured model if not specified)"
     )
     encoding_format: Optional[str] = Field(
         default="float",
@@ -98,12 +98,18 @@ async def create_embeddings(
         if not texts:
             raise HTTPException(status_code=400, detail="Input cannot be empty")
         
-        # Validate model
-        if embedding_request.model and embedding_request.model != "bge-large-en-v1.5":
-            raise HTTPException(
-                status_code=400,
-                detail=f"Model '{embedding_request.model}' not supported. Only 'bge-large-en-v1.5' is available."
-            )
+        # Validate model - allow the configured model or compatible aliases
+        configured_model = embedder.model_name
+        # Extract base model name without BAAI/ prefix for comparison
+        configured_base = configured_model.replace("BAAI/", "")
+        
+        if embedding_request.model:
+            requested_base = embedding_request.model.replace("BAAI/", "")
+            if requested_base != configured_base and embedding_request.model not in MODEL_DIMENSIONS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Model '{embedding_request.model}' not supported. Currently configured: '{configured_model}'"
+                )
         
         logger.info(
             "Generating embeddings",
@@ -130,7 +136,7 @@ async def create_embeddings(
         
         response = EmbeddingResponse(
             data=data,
-            model="bge-large-en-v1.5",
+            model=configured_base,
             usage={
                 "prompt_tokens": prompt_tokens,
                 "total_tokens": prompt_tokens,
@@ -177,15 +183,20 @@ async def list_models(request: Request):
     if not user_id:
         raise HTTPException(status_code=401, detail="User not authenticated")
     
+    # Return the currently configured model
+    configured_model = embedder.model_name
+    configured_base = configured_model.replace("BAAI/", "")
+    dimension = embedder.dimension
+    
     return {
         "object": "list",
         "data": [
             {
-                "id": "bge-large-en-v1.5",
+                "id": configured_base,
                 "object": "model",
                 "owned_by": "BAAI",
-                "dimension": 1024,
-                "description": "High-quality English embeddings (1024-d)",
+                "dimension": dimension,
+                "description": f"FastEmbed {configured_base} ({dimension}-d)",
             }
         ]
     }
