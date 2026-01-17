@@ -71,6 +71,25 @@ class Embedder:
                 model=self.model_name,
             )
     
+    def warmup(self):
+        """
+        Warm up the embedding model by loading it and running a test embedding.
+        
+        Call this at application startup to avoid cold-start latency on first request.
+        """
+        logger.info("Warming up embedding model", model=self.model_name)
+        self._init_embedder()
+        
+        # Run a test embedding to fully initialize the model
+        test_text = "warmup"
+        list(self.embedder.embed([test_text]))
+        
+        logger.info(
+            "Embedding model warmed up",
+            model=self.model_name,
+            dimension=self.dimension,
+        )
+    
     async def embed_single(self, text: str) -> Optional[List[float]]:
         """
         Generate embedding for a single text string.

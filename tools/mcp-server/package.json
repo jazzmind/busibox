@@ -1,6 +1,6 @@
 {
   "name": "@busibox/mcp-server",
-  "version": "2.2.0",
+  "version": "3.0.0",
   "description": "MCP server for Busibox documentation and script access",
   "type": "module",
   "main": "dist/index.js",

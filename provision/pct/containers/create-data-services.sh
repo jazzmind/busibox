@@ -10,7 +10,7 @@
 # Dependencies: pct, provision/pct/lib/functions.sh
 #
 # Usage:
-#   bash provision/pct/containers/create-data-services.sh [test|production]
+#   bash provision/pct/containers/create-data-services.sh [staging|production]
 #
 # Containers Created:
 #   - pg-lxc     - PostgreSQL database
@@ -31,7 +31,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PCT_DIR="$(dirname "$SCRIPT_DIR")"
 
 # Source configuration
-if [[ "$MODE" == "test" ]]; then
+if [[ "$MODE == "staging"" ]]; then
   echo "==> Creating data services in TEST mode"
   source "${PCT_DIR}/test-vars.env"
   PREFIX="${TEST_PREFIX}"

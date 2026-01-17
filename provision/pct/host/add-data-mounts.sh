@@ -10,7 +10,7 @@
 # - Adding mounts to existing containers created before automation
 #
 # Usage:
-#   bash add-data-mounts.sh [test|production]
+#   bash add-data-mounts.sh [staging|production]
 #
 set -e
 
@@ -22,7 +22,7 @@ MODE="${1:-production}"
 
 # Load variables from parent directory (provision/pct/)
 PCT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-if [[ "$MODE" == "test" ]]; then
+if [[ "$MODE" == "staging" ]]; then
     source "${PCT_DIR}/test-vars.env"
     CT_PG="$CT_PG_TEST"
     CT_FILES="$CT_FILES_TEST"
@@ -104,7 +104,7 @@ echo ""
 echo "⚠ Container restart required for changes to take effect"
 echo ""
 echo "To apply changes:"
-if [[ "$MODE" == "test" ]]; then
+if [[ "$MODE" == "staging" ]]; then
     echo "  pct stop ${CT_PG} && pct start ${CT_PG}"
     echo "  pct stop ${CT_FILES} && pct start ${CT_FILES}"
     echo "  pct stop ${CT_MILVUS} && pct start ${CT_MILVUS}"
@@ -117,7 +117,7 @@ else
 fi
 echo ""
 echo "Or restart all containers:"
-if [[ "$MODE" == "test" ]]; then
+if [[ "$MODE" == "staging" ]]; then
     echo "  for ct in ${CT_PG} ${CT_FILES} ${CT_MILVUS} ${CT_VLLM}; do pct stop \$ct; pct start \$ct; done"
 else
     echo "  for ct in ${CT_PG} ${CT_FILES} ${CT_MILVUS} ${CT_VLLM}; do pct stop \$ct; pct start \$ct; done"

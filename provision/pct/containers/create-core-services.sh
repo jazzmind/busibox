@@ -10,7 +10,7 @@
 # Dependencies: pct, provision/pct/lib/functions.sh
 #
 # Usage:
-#   bash provision/pct/containers/create-core-services.sh [test|production]
+#   bash provision/pct/containers/create-core-services.sh [staging|production]
 #
 # Containers Created:
 #   - proxy-lxc   - nginx reverse proxy (main entry point)
@@ -28,7 +28,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PCT_DIR="$(dirname "$SCRIPT_DIR")"
 
 # Source configuration
-if [[ "$MODE" == "test" ]]; then
+if [[ "$MODE == "staging"" ]]; then
   echo "==> Creating core services in TEST mode"
   source "${PCT_DIR}/test-vars.env"
   PREFIX="${TEST_PREFIX}"

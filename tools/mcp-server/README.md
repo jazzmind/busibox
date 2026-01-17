@@ -1,8 +1,8 @@
 # Busibox MCP Server
 
 **Created**: 2025-11-06  
-**Updated**: 2026-01-16  
-**Version**: 2.2.0  
+**Updated**: 2026-01-17  
+**Version**: 3.0.0  
 **Status**: Active  
 **Category**: Tools
 
@@ -38,7 +38,7 @@ The server exposes the following resources:
 - `busibox://rules` - Project organization rules
 - `busibox://architecture` - All architecture documents combined
 - `busibox://quickstart` - Quick start guide (CLAUDE.md)
-- `busibox://containers` - Complete container map with IPs for test/production
+- `busibox://containers` - Complete container map with IPs for staging/production
 - `busibox://make-targets` - Available make targets with descriptions
 
 ### Tools (23)
@@ -62,7 +62,7 @@ The server exposes the following resources:
 |------|-------------|
 | `git_pull_busibox` | Pull latest code on Proxmox host (supports branch, reset --hard) |
 | `git_status` | Check git status of busibox repo on Proxmox |
-| `run_make_target` | Run a make target with environment (test/production) |
+| `run_make_target` | Run a make target with environment (staging/production) |
 | `list_make_targets` | List available make targets by category |
 
 #### Container & Service Tools
@@ -230,7 +230,7 @@ The MCP server provides comprehensive testing guidance:
 ```
 "Deploy ingest to test"
 "Deploy ai-portal to production"
-"Run make all on test environment"
+"Run make all on staging environment"
 "What make targets are available for testing?"
 "Show me the deployment workflow for staging"
 ```
@@ -344,6 +344,12 @@ node dist/index.js
 
 ## Version History
 
+- **v3.0.0** (2026-01-17): **BREAKING CHANGE** - Renamed "test" environment to "staging":
+  - All API parameters: `environment: 'test'` → `environment: 'staging'`
+  - All inventory references: `inventory/test` → `inventory/staging`
+  - This aligns with the actual Ansible inventory structure where the pre-production environment is called "staging"
+  - TEST-* container prefix remains unchanged (refers to staging environment containers)
+  - Updated all tools, prompts, and documentation to use "staging" terminology
 - **v2.2.0** (2026-01-16): Added comprehensive testing/deployment tools and prompts for AI agents:
   - New tools: `run_docker_tests`, `run_remote_tests`, `run_container_tests`, `docker_control`, `init_test_databases`, `check_test_databases`, `get_makefile_help`, `get_testing_guide`
   - New prompts: `testing_workflow`, `deployment_workflow`, `docker_development`

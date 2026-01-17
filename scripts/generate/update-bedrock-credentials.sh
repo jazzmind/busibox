@@ -3,7 +3,7 @@
 # 
 # Execution context: Admin workstation
 # Purpose: Safely update Bedrock API credentials in vault
-# Usage: bash scripts/generate/update-bedrock-credentials.sh [test|production]
+# Usage: bash scripts/generate/update-bedrock-credentials.sh [staging|production]
 
 set -euo pipefail
 

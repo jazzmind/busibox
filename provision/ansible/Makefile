@@ -1,5 +1,5 @@
 .PHONY: ping all files pg milvus nginx search search-api agent ingest ingest-api ingest-worker ingest-update-tests docs apps openwebui deploy-apps deploy-ai-portal deploy-agent-client deploy-doc-intel deploy-foundation deploy-project-analysis deploy-innovation verify verify-health verify-smoke test test-menu test-ingest test-ingest-all test-ingest-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-authz test-apps test-security test-security-auth test-security-injection test-security-fuzz test-all configure generate-token-keys bootstrap-test-creds signal-bot tailscale test-signal-bot
-# Default to production inventory (can override with: make all INV=inventory/test)
+# Default to production inventory (can override with: make all INV=inventory/staging)
 INV=inventory/production
 
 # Vault password file (optional, can also use --ask-vault-pass)
@@ -10,11 +10,11 @@ VAULT_FLAGS=$(shell [ -f $(VAULT_PASS_FILE) ] && echo "--vault-password-file $(V
 # Extra arguments (can override with: make vllm-embedding EXTRA_ARGS="-e skip_model_check=true")
 EXTRA_ARGS=
 
-# Container IPs - production uses 10.96.200.x, test uses 10.96.201.x
+# Container IPs - production uses 10.96.200.x, staging uses 10.96.201.x
 # For production, IPs are static and defined in group_vars
-# For test, they use the TEST network (10.96.201.x)
-ifeq ($(INV),inventory/test)
-  # Test IPs (10.96.201.0/21 network)
+# For staging, they use the TEST network (10.96.201.x)
+ifeq ($(INV),inventory/staging)
+  # Staging IPs (10.96.201.0/21 network)
   INGEST_IP = 10.96.201.206
   AGENT_IP = 10.96.201.202
   APPS_IP = 10.96.201.201
@@ -138,7 +138,7 @@ deploy-innovation:
 # Deploy agent-server (internal API service)
 # Usage:
 # Note: agent-server (Python) now uses dedicated agent_api role
-# Deploy with: make agent INV=inventory/test
+# Deploy with: make agent INV=inventory/staging
 
 # Configuration targets
 configure:
@@ -461,7 +461,7 @@ test-all: test-ingest test-search test-agent test-authz test-apps
 # Security Tests (run from admin workstation)
 test-security:
 	@echo "Running security tests against $(INV)..."
-	@if [ "$(INV)" = "inventory/test" ]; then \
+	@if [ "$(INV)" = "inventory/staging" ]; then \
 		SECURITY_TEST_ENV=test bash ../../tests/security/run_tests.sh; \
 	else \
 		SECURITY_TEST_ENV=production bash ../../tests/security/run_tests.sh; \
@@ -469,7 +469,7 @@ test-security:
 
 test-security-auth:
 	@echo "Running authentication security tests..."
-	@if [ "$(INV)" = "inventory/test" ]; then \
+	@if [ "$(INV)" = "inventory/staging" ]; then \
 		SECURITY_TEST_ENV=test bash ../../tests/security/run_tests.sh --marker=auth; \
 	else \
 		SECURITY_TEST_ENV=production bash ../../tests/security/run_tests.sh --marker=auth; \
@@ -477,7 +477,7 @@ test-security-auth:
 
 test-security-injection:
 	@echo "Running injection security tests..."
-	@if [ "$(INV)" = "inventory/test" ]; then \
+	@if [ "$(INV)" = "inventory/staging" ]; then \
 		SECURITY_TEST_ENV=test bash ../../tests/security/run_tests.sh --marker=injection; \
 	else \
 		SECURITY_TEST_ENV=production bash ../../tests/security/run_tests.sh --marker=injection; \
@@ -485,7 +485,7 @@ test-security-injection:
 
 test-security-fuzz:
 	@echo "Running fuzzing security tests..."
-	@if [ "$(INV)" = "inventory/test" ]; then \
+	@if [ "$(INV)" = "inventory/staging" ]; then \
 		SECURITY_TEST_ENV=test bash ../../tests/security/run_tests.sh --marker=fuzz; \
 	else \
 		SECURITY_TEST_ENV=production bash ../../tests/security/run_tests.sh --marker=fuzz; \
