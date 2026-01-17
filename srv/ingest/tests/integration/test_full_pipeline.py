@@ -22,7 +22,7 @@ _srv_dir = Path(__file__).parent.parent.parent.parent
 if str(_srv_dir) not in sys.path:
     sys.path.insert(0, str(_srv_dir))
 
-from test_utils.testing.environment import get_test_doc_repo_path
+from testing.environment import get_test_doc_repo_path
 
 
 class TestFullDocumentPipeline:

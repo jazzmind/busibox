@@ -342,7 +342,7 @@ services:
     volumes:
       - ./srv/ingest/src:/app/src:ro
       - ./srv/ingest/migrations:/app/migrations:ro
-      - ./srv/shared_auth:/app/shared_auth:ro
+      - ./srv/shared:/app/shared:ro
       - ingest_temp:/tmp/ingest
       # Model cache - persists downloaded models across container rebuilds
       - model_cache:/root/.cache
@@ -419,7 +419,7 @@ services:
     # Hot-reload: mount source code for development
     volumes:
       - ./srv/ingest/src:/app/src:ro
-      - ./srv/shared_auth:/app/shared_auth:ro
+      - ./srv/shared:/app/shared:ro
       - ingest_temp:/tmp/ingest
       # Model cache - persists downloaded models across container rebuilds
       - model_cache:/root/.cache
@@ -492,7 +492,7 @@ services:
     # Hot-reload: mount source code and use --reload flag
     volumes:
       - ./srv/search/src:/app/src:ro
-      - ./srv/shared_auth:/app/shared_auth:ro
+      - ./srv/shared:/app/shared:ro
       # Model cache - persists downloaded models across container rebuilds
       - model_cache:/root/.cache
     command: ["python", "-m", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8003", "--reload", "--reload-dir", "/app/src"]
@@ -568,7 +568,7 @@ services:
       - ./srv/agent/app:/app/app:ro
       - ./srv/agent/alembic:/app/alembic:ro
       - ./srv/agent/tests:/app/tests:ro
-      - ./srv/test_utils:/app/test_utils:ro
+      - ./srv/shared:/app/shared:ro
     command: ["sh", "-c", "echo 'Migration files:' && ls -la /app/alembic/versions/ && echo 'Current alembic head:' && python -m alembic heads && echo 'Current DB version:' && python -m alembic current && echo 'Running migrations...' && python -m alembic upgrade head && echo 'Migrations complete' && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/app"]
     environment:
       # Service

@@ -158,8 +158,18 @@
 
 - name: Copy shared testing library
   synchronize:
-    src: "{{ playbook_dir }}/../../srv/test_utils/"
-    dest: "{{ authz_app_dir }}/test_utils/"
+    src: "{{ playbook_dir }}/../../srv/shared/testing/"
+    dest: "{{ authz_app_dir }}/src/testing/"
+    delete: yes
+    rsync_opts:
+      - "--exclude=__pycache__"
+      - "--exclude=*.pyc"
+  tags: [authz]
+
+- name: Copy shared busibox_common library
+  synchronize:
+    src: "{{ playbook_dir }}/../../srv/shared/busibox_common/"
+    dest: "{{ authz_app_dir }}/src/busibox_common/"
     delete: yes
     rsync_opts:
       - "--exclude=__pycache__"

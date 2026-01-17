@@ -61,12 +61,22 @@
 
 - name: Copy shared testing library
   synchronize:
-    src: "{{ playbook_dir }}/../../srv/test_utils/"
-    dest: "{{ agent_api_src_path }}/test_utils/"
+    src: "{{ playbook_dir }}/../../srv/shared/testing/"
+    dest: "{{ agent_api_src_path }}/testing/"
     delete: yes
     rsync_opts:
       - "--exclude=__pycache__"
       - "--exclude=*.pyc"
+
+- name: Copy shared busibox_common library
+  synchronize:
+    src: "{{ playbook_dir }}/../../srv/shared/busibox_common/"
+    dest: "{{ agent_api_src_path }}/busibox_common/"
+    delete: yes
+    rsync_opts:
+      - "--exclude=__pycache__"
+      - "--exclude=*.pyc"
+  notify: Restart agent-api
 
 - name: Fix ownership of agent directory
   file:

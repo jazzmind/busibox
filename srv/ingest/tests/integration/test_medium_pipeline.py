@@ -26,7 +26,7 @@ _srv_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.pa
 if _srv_dir not in sys.path:
     sys.path.insert(0, _srv_dir)
 
-from test_utils.testing.environment import get_test_doc_repo_path
+from testing.environment import get_test_doc_repo_path
 
 
 class TestMediumPipeline:

@@ -463,16 +463,26 @@ run_docker_container_tests() {
         agent)  test_db_name="test_agent_server" ;;
     esac
     
+    # Get test user ID from authz database (created by bootstrap)
+    local test_user_id
+    test_user_id=$(docker exec local-postgres psql -U postgres -d authz -t -A -c "SELECT user_id FROM authz_users WHERE email = 'test@busibox.local' LIMIT 1;" 2>/dev/null || echo "")
+    if [[ -z "$test_user_id" ]]; then
+        # Fallback to a well-known test user UUID
+        test_user_id="00000000-0000-0000-0000-000000000001"
+    fi
+    
     # Run tests with proper error handling
     # Tests use isolated test databases with busibox_test_user
+    # PYTHONPATH includes /app/shared for testing and busibox_common modules
     if docker exec \
-        -e PYTHONPATH=/app/src:/app \
+        -e PYTHONPATH=/app/src:/app:/app/shared \
         -e TEST_DB_HOST=postgres \
         -e TEST_DB_PORT=5432 \
         -e TEST_DB_NAME="$test_db_name" \
         -e TEST_DB_USER=busibox_test_user \
         -e TEST_DB_PASSWORD=testpassword \
         -e TEST_AUTHZ_URL=http://authz-api:8010 \
+        -e TEST_USER_ID="$test_user_id" \
         -e AUTHZ_BOOTSTRAP_CLIENT_ID=ai-portal \
         -e AUTHZ_BOOTSTRAP_CLIENT_SECRET=ai-portal-secret \
         -e AUTHZ_ADMIN_TOKEN=local-admin-token \

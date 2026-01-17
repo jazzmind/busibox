@@ -95,18 +95,18 @@
 
 - name: Copy shared testing library
   synchronize:
-    src: "{{ playbook_dir }}/../../srv/test_utils/"
-    dest: /srv/ingest/test_utils/
+    src: "{{ playbook_dir }}/../../srv/shared/testing/"
+    dest: /srv/ingest/src/testing/
     delete: yes
     rsync_opts:
       - "--exclude=__pycache__"
       - "--exclude=*.pyc"
   tags: [ingest, ingest_deploy, ingest_tests]
 
-- name: Copy shared auth library
+- name: Copy shared busibox_common library
   synchronize:
     src: "{{ playbook_dir }}/../../srv/shared/busibox_common/"
-    dest: /srv/ingest/busibox_common/
+    dest: /srv/ingest/src/busibox_common/
     delete: yes
     rsync_opts:
       - "--exclude=__pycache__"

@@ -78,8 +78,8 @@
 
 - name: Copy shared testing library
   synchronize:
-    src: "{{ playbook_dir }}/../../srv/test_utils/"
-    dest: /opt/search/test_utils/
+    src: "{{ playbook_dir }}/../../srv/shared/testing/"
+    dest: /opt/search/src/testing/
     delete: yes
     rsync_opts:
       - "--exclude=__pycache__"
@@ -87,10 +87,10 @@
   become: yes
   become_user: "{{ search_api_user }}"
 
-- name: Copy shared auth library
+- name: Copy shared busibox_common library
   synchronize:
     src: "{{ playbook_dir }}/../../srv/shared/busibox_common/"
-    dest: /opt/search/busibox_common/
+    dest: /opt/search/src/busibox_common/
     delete: yes
     rsync_opts:
       - "--exclude=__pycache__"
