@@ -223,6 +223,9 @@ handle_menu_selection() {
         test)
             handle_test
             ;;
+        migration)
+            handle_migration
+            ;;
         change_env)
             select_and_save_environment
             # Re-run health check for new environment

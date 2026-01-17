@@ -464,6 +464,11 @@ dynamic_menu() {
             if [[ "$status" == "deployed" || "$status" == "healthy" ]]; then
                 options+=("Test"); option_keys+=("test")
             fi
+            
+            # Migration is always available for configured+ status
+            if [[ "$status" == "configured" || "$status" == "deployed" || "$status" == "healthy" ]]; then
+                options+=("Migration (database)"); option_keys+=("migration")
+            fi
             ;;
     esac
     
