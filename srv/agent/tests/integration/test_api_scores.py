@@ -3,7 +3,7 @@ Integration tests for scores API endpoints.
 """
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 import pytest
 from httpx import AsyncClient
@@ -24,8 +24,8 @@ async def test_execute_score_success(test_client: AsyncClient, test_session, moc
     )
     test_session.add(scorer)
     
-    # Create completed run
-    now = datetime.now(timezone.utc)
+    # Create completed run (use naive datetime to match SQLAlchemy DateTime column)
+    now = datetime.utcnow()
     run_record = RunRecord(
         agent_id=uuid.uuid4(),
         status="succeeded",

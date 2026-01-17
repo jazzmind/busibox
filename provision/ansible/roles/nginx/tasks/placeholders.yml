@@ -68,7 +68,7 @@
       <head>
           <meta charset="UTF-8">
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Agent Client - Coming Soon</title>
+          <title>Agent Manager - Coming Soon</title>
           <style>
               body {
                   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -96,7 +96,7 @@
       </head>
       <body>
           <div class="container">
-              <h1>🤖 Agent Client</h1>
+              <h1>🤖 Agent Manager</h1>
               <p>Coming Soon</p>
               <div class="info">
                   <p>This is a placeholder page</p>

@@ -70,6 +70,7 @@ class ConversationBase(BaseModel):
 class ConversationCreate(BaseModel):
     """Schema for creating a conversation"""
     title: Optional[str] = Field(None, max_length=255, description="Optional conversation title")
+    source: Optional[str] = Field(None, max_length=50, description="App/client creating the conversation")
 
 
 class ConversationUpdate(BaseModel):
@@ -81,6 +82,7 @@ class ConversationRead(ConversationBase):
     """Schema for reading a conversation"""
     id: uuid.UUID
     user_id: str
+    source: Optional[str] = None
     message_count: Optional[int] = None
     last_message: Optional[MessagePreview] = None
     created_at: datetime

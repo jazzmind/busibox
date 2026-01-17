@@ -9,6 +9,10 @@ These endpoints allow ai-portal (or other admin tools) to manage users:
 - Create, list, get, update, delete users
 - Activate, deactivate, reactivate users
 - Manage user roles
+
+Test Mode:
+- Supports X-Test-Mode: true header to route to test database
+- Enable with AUTHZ_TEST_MODE_ENABLED=true environment variable
 """
 
 from __future__ import annotations
@@ -25,14 +29,33 @@ from oauth.client_auth import verify_client_secret
 router = APIRouter()
 config = Config()
 
-# PostgresService instance - will be set by main.py
+# PostgresService instances - will be set by main.py
+# pg is production, pg_test is test database (optional)
 pg = None
+pg_test = None
+
+# Header name for test mode
+TEST_MODE_HEADER = "X-Test-Mode"
 
 
-def set_pg_service(pg_service):
-    """Set the shared PostgresService instance."""
-    global pg
+def set_pg_service(pg_service, pg_test_service=None):
+    """Set the shared PostgresService instances."""
+    global pg, pg_test
     pg = pg_service
+    pg_test = pg_test_service
+
+
+def _get_pg(request: Request):
+    """Get the appropriate PostgresService based on request headers.
+    
+    If X-Test-Mode: true header is present and test mode is enabled,
+    returns the test database service. Otherwise returns production.
+    """
+    if pg_test and config.test_mode_enabled:
+        test_mode = request.headers.get(TEST_MODE_HEADER, "").lower() == "true"
+        if test_mode:
+            return pg_test
+    return pg
 
 
 # ============================================================================
@@ -115,8 +138,9 @@ async def _require_admin_auth(request: Request) -> None:
         client_secret = body.get("client_secret")
 
         if client_id and client_secret:
-            await pg.connect()
-            client = await pg.get_oauth_client(client_id)
+            db = _get_pg(request)
+            await db.connect()
+            client = await db.get_oauth_client(client_id)
             if client and client.get("is_active"):
                 if verify_client_secret(client_secret, client["client_secret_hash"]):
                     return
@@ -175,6 +199,9 @@ async def create_user(request: Request):
     - email: string (required)
     - role_ids: array of role UUIDs (optional)
     - status: PENDING | ACTIVE | DEACTIVATED (default: PENDING)
+    
+    Headers:
+    - X-Test-Mode: true (optional) - route to test database
     """
     await _require_admin_auth(request)
 
@@ -184,17 +211,19 @@ async def create_user(request: Request):
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
 
-    await pg.connect()
+    # Get appropriate database (test or production)
+    db = _get_pg(request)
+    await db.connect()
 
     # Validate email domain
-    if not await pg.is_email_domain_allowed(user_data.email):
+    if not await db.is_email_domain_allowed(user_data.email):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Email domain not allowed: {user_data.email.split('@')[-1]}",
         )
 
     # Check if user with this email already exists
-    existing = await pg.get_user_by_email(user_data.email)
+    existing = await db.get_user_by_email(user_data.email)
     if existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -211,7 +240,7 @@ async def create_user(request: Request):
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Invalid role ID format: {role_id}",
                 )
-            role = await pg.get_role(role_id)
+            role = await db.get_role(role_id)
             if not role:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -221,7 +250,7 @@ async def create_user(request: Request):
     # Get admin user ID from body if available
     assigned_by = body.get("assigned_by")
 
-    user = await pg.create_user(
+    user = await db.create_user(
         email=user_data.email,
         status=user_data.status,
         role_ids=user_data.role_ids,
@@ -243,6 +272,9 @@ async def list_users(request: Request):
     - search: string (email search, optional)
 
     Requires admin authentication.
+    
+    Headers:
+    - X-Test-Mode: true (optional) - route to test database
     """
     await _require_admin_auth(request)
 
@@ -258,8 +290,9 @@ async def list_users(request: Request):
     if limit < 1 or limit > 100:
         limit = 20
 
-    await pg.connect()
-    result = await pg.list_users(
+    db = _get_pg(request)
+    await db.connect()
+    result = await db.list_users(
         page=page,
         limit=limit,
         status=user_status,
@@ -282,8 +315,9 @@ async def get_user_by_email(request: Request, email: str):
     """
     await _require_admin_auth(request)
 
-    await pg.connect()
-    user = await pg.get_user_by_email(email)
+    db = _get_pg(request)
+    await db.connect()
+    user = await db.get_user_by_email(email)
 
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
@@ -305,8 +339,9 @@ async def get_user(request: Request, user_id: str):
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user ID format") from e
 
-    await pg.connect()
-    user = await pg.get_user_with_roles(user_id)
+    db = _get_pg(request)
+    await db.connect()
+    user = await db.get_user_with_roles(user_id)
 
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
@@ -341,22 +376,23 @@ async def update_user(request: Request, user_id: str):
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
 
-    await pg.connect()
+    db = _get_pg(request)
+    await db.connect()
 
     # Check if user exists
-    existing = await pg.get_user(user_id)
+    existing = await db.get_user(user_id)
     if not existing:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     # If changing email, validate domain
     if user_data.email and user_data.email != existing.get("email"):
-        if not await pg.is_email_domain_allowed(user_data.email):
+        if not await db.is_email_domain_allowed(user_data.email):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Email domain not allowed: {user_data.email.split('@')[-1]}",
             )
 
-    user = await pg.update_user(
+    user = await db.update_user(
         user_id,
         email=user_data.email,
         status=user_data.status,
@@ -387,8 +423,9 @@ async def delete_user(request: Request, user_id: str):
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user ID format") from e
 
-    await pg.connect()
-    deleted = await pg.delete_user(user_id)
+    db = _get_pg(request)
+    await db.connect()
+    deleted = await db.delete_user(user_id)
 
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
@@ -415,17 +452,18 @@ async def activate_user(request: Request, user_id: str):
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user ID format") from e
 
-    await pg.connect()
+    db = _get_pg(request)
+    await db.connect()
 
     # Check current status
-    existing = await pg.get_user(user_id)
+    existing = await db.get_user(user_id)
     if not existing:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     if existing.get("status") == "ACTIVE":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User is already active")
 
-    user = await pg.activate_user(user_id)
+    user = await db.activate_user(user_id)
 
     return _format_user(user)
 
@@ -446,20 +484,21 @@ async def deactivate_user(request: Request, user_id: str):
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user ID format") from e
 
-    await pg.connect()
+    db = _get_pg(request)
+    await db.connect()
 
     # Check current status
-    existing = await pg.get_user(user_id)
+    existing = await db.get_user(user_id)
     if not existing:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     if existing.get("status") == "DEACTIVATED":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User is already deactivated")
 
-    user = await pg.deactivate_user(user_id)
+    user = await db.deactivate_user(user_id)
 
     # Invalidate all sessions
-    await pg.delete_user_sessions(user_id)
+    await db.delete_user_sessions(user_id)
 
     return _format_user(user)
 
@@ -478,17 +517,18 @@ async def reactivate_user(request: Request, user_id: str):
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user ID format") from e
 
-    await pg.connect()
+    db = _get_pg(request)
+    await db.connect()
 
     # Check current status
-    existing = await pg.get_user(user_id)
+    existing = await db.get_user(user_id)
     if not existing:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     if existing.get("status") != "DEACTIVATED":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User is not deactivated")
 
-    user = await pg.reactivate_user(user_id)
+    user = await db.reactivate_user(user_id)
 
     return _format_user(user)
 
@@ -513,19 +553,20 @@ async def add_user_role(request: Request, user_id: str, role_id: str):
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid UUID format") from e
 
-    await pg.connect()
+    db = _get_pg(request)
+    await db.connect()
 
     # Check user exists
-    user = await pg.get_user(user_id)
+    user = await db.get_user(user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     # Check role exists
-    role = await pg.get_role(role_id)
+    role = await db.get_role(role_id)
     if not role:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
 
-    result = await pg.add_user_role(user_id=user_id, role_id=role_id)
+    result = await db.add_user_role(user_id=user_id, role_id=role_id)
 
     return {
         "status": "ok",
@@ -550,8 +591,9 @@ async def remove_user_role(request: Request, user_id: str, role_id: str):
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid UUID format") from e
 
-    await pg.connect()
-    deleted = await pg.remove_user_role(user_id=user_id, role_id=role_id)
+    db = _get_pg(request)
+    await db.connect()
+    deleted = await db.remove_user_role(user_id=user_id, role_id=role_id)
 
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role assignment not found")
@@ -573,8 +615,9 @@ async def list_email_domains(request: Request):
     """
     await _require_admin_auth(request)
 
-    await pg.connect()
-    domains = await pg.list_email_domain_rules()
+    db = _get_pg(request)
+    await db.connect()
+    domains = await db.list_email_domain_rules()
 
     return {
         "domains": [
@@ -610,8 +653,9 @@ async def add_email_domain(request: Request):
     if is_allowed is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="is_allowed is required")
 
-    await pg.connect()
-    result = await pg.add_email_domain_rule(domain, is_allowed)
+    db = _get_pg(request)
+    await db.connect()
+    result = await db.add_email_domain_rule(domain, is_allowed)
 
     return {
         "id": result["id"],
@@ -631,8 +675,9 @@ async def remove_email_domain(request: Request, domain: str):
     """
     await _require_admin_auth(request)
 
-    await pg.connect()
-    deleted = await pg.remove_email_domain_rule(domain)
+    db = _get_pg(request)
+    await db.connect()
+    deleted = await db.remove_email_domain_rule(domain)
 
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Domain rule not found")

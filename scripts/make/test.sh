@@ -40,6 +40,7 @@ get_container_ip() {
     if [[ "$env" == "production" ]]; then
         network_base="10.96.200"
     else
+        # staging (formerly "test") and docker both use 10.96.201.x
         network_base="10.96.201"
     fi
     
@@ -766,7 +767,7 @@ security_tests_menu() {
         
         read -p "$(echo -e "${BOLD}Select option [1-7]:${NC} ")" choice
         
-        local test_env="test"
+        local test_env="staging"
         if [[ "$env" == "production" ]]; then
             test_env="production"
         fi
@@ -1184,20 +1185,17 @@ run_container_tests() {
     minio_ip=$(get_container_ip minio "$env")
     milvus_ip=$(get_container_ip milvus "$env")
     
-    # Set database user based on environment
-    # NOTE: Each service uses its own database:
-    #   - authz: "authz" database
-    #   - ingest: "files" database  
-    #   - search: "files" database
-    #   - agent: "agent_server" database
+    # Database configuration for pytest
+    # NOTE: Pytest tests run against isolated test databases owned by busibox_test_user:
+    #   - test_authz (for authz service tests)
+    #   - test_files (for ingest/search service tests)
+    #   - test_agent_server (for agent service tests)
+    #
+    # The test user has identical table structures but completely isolated data.
+    # Environment (staging/production) only determines which network/containers we SSH to.
     local db_user db_password
-    if [[ "$env" == "test" ]]; then
-        db_user="busibox_test_user"
-        db_password="${TEST_DB_PASSWORD}"
-    else
-        db_user="busibox"
-        db_password="${POSTGRES_PASSWORD}"
-    fi
+    db_user="busibox_test_user"
+    db_password="${PYTEST_DB_PASSWORD:-testpassword}"
     
     case "$service" in
         authz)
@@ -1205,15 +1203,15 @@ run_container_tests() {
             info "Running authz tests on ${authz_ip}..."
             
             # Build environment variables
-            # Authz uses dedicated "authz" database
+            # Pytest uses test_authz database (owned by busibox_test_user)
             local test_env="TEST_DB_USER=${db_user}"
             test_env="${test_env} TEST_DB_PASSWORD=${db_password}"
-            test_env="${test_env} TEST_DB_NAME=authz"
+            test_env="${test_env} TEST_DB_NAME=test_authz"
             test_env="${test_env} TEST_DB_HOST=${postgres_ip}"
             test_env="${test_env} POSTGRES_HOST=${postgres_ip}"
             test_env="${test_env} POSTGRES_USER=${db_user}"
             test_env="${test_env} POSTGRES_PASSWORD=${db_password}"
-            test_env="${test_env} POSTGRES_DB=authz"
+            test_env="${test_env} POSTGRES_DB=test_authz"
             test_env="${test_env} AUTHZ_ADMIN_TOKEN=${AUTHZ_ADMIN_TOKEN}"
             test_env="${test_env} AUTHZ_MASTER_KEY=${AUTHZ_MASTER_KEY}"
             test_env="${test_env} AUTHZ_SERVICE_URL=http://${authz_ip}:8010"
@@ -1256,11 +1254,11 @@ run_container_tests() {
                 info "Created test user: ${TEST_USER_ID}"
             fi
             
-            # Ingest uses "files" database
+            # Pytest uses test_files database (owned by busibox_test_user)
             local test_env="POSTGRES_HOST=${postgres_ip}"
             test_env="${test_env} POSTGRES_USER=${db_user}"
             test_env="${test_env} POSTGRES_PASSWORD=${db_password}"
-            test_env="${test_env} POSTGRES_DB=files"
+            test_env="${test_env} POSTGRES_DB=test_files"
             test_env="${test_env} MINIO_HOST=${minio_ip}"
             test_env="${test_env} MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}"
             test_env="${test_env} MINIO_SECRET_KEY=${MINIO_SECRET_KEY}"
@@ -1299,11 +1297,11 @@ run_container_tests() {
                 fi
             fi
             
-            # Search uses "files" database (always), not busibox_test
+            # Pytest uses test_files database (owned by busibox_test_user)
             local test_env="POSTGRES_HOST=${postgres_ip}"
             test_env="${test_env} POSTGRES_USER=${db_user}"
             test_env="${test_env} POSTGRES_PASSWORD=${db_password}"
-            test_env="${test_env} POSTGRES_DB=files"
+            test_env="${test_env} POSTGRES_DB=test_files"
             test_env="${test_env} MILVUS_HOST=${milvus_ip}"
             test_env="${test_env} AUTHZ_URL=http://${authz_ip}:8010"
             test_env="${test_env} AUTHZ_JWKS_URL=http://${authz_ip}:8010/.well-known/jwks.json"
@@ -1341,10 +1339,14 @@ run_container_tests() {
                 fi
             fi
             
+            # Pytest uses test_agent_server database (not the production agent_server database)
+            # Also set TEST_DATABASE_URL which the agent conftest.py checks first
+            local agent_test_db_url="postgresql+asyncpg://${db_user}:${db_password}@${postgres_ip}:5432/test_agent_server"
             local test_env="POSTGRES_HOST=${postgres_ip}"
             test_env="${test_env} POSTGRES_USER=${db_user}"
             test_env="${test_env} POSTGRES_PASSWORD=${db_password}"
-            test_env="${test_env} POSTGRES_DB=${db_name}"
+            test_env="${test_env} POSTGRES_DB=test_agent_server"
+            test_env="${test_env} TEST_DATABASE_URL=${agent_test_db_url}"
             test_env="${test_env} AUTHZ_URL=http://${authz_ip}:8010"
             test_env="${test_env} AUTHZ_JWKS_URL=http://${authz_ip}:8010/.well-known/jwks.json"
             test_env="${test_env} AUTHZ_ADMIN_TOKEN=${AUTHZ_ADMIN_TOKEN}"
@@ -1377,13 +1379,157 @@ run_container_tests() {
     esac
 }
 
+# Check if test databases are bootstrapped
+check_test_db_status() {
+    local result
+    result=$(docker exec local-postgres psql -U busibox_test_user -d test_authz -t -c \
+        "SELECT COUNT(*) FROM authz_signing_keys WHERE is_active = true;" 2>/dev/null | tr -d ' ' || echo "0")
+    
+    if [[ "$result" -gt 0 ]]; then
+        return 0  # Bootstrapped
+    else
+        return 1  # Not bootstrapped
+    fi
+}
+
+# Docker test menu (for local Docker environment)
+docker_test_menu() {
+    while true; do
+        echo ""
+        
+        # Check test database status
+        local test_db_status
+        if check_test_db_status; then
+            test_db_status="${GREEN}✓ Ready${NC}"
+            local tests_enabled=true
+        else
+            test_db_status="${YELLOW}⚠ Not Initialized${NC}"
+            local tests_enabled=false
+        fi
+        
+        echo -e "  Test Databases: ${test_db_status}"
+        echo ""
+        
+        if [[ "$tests_enabled" == "true" ]]; then
+            menu "Docker Test Suite - Local Development" \
+                "Authz - Run authz tests" \
+                "Ingest - Run ingest tests" \
+                "Search - Run search tests" \
+                "Agent - Run agent tests" \
+                "All Services - Run all tests" \
+                "Reinitialize Test Databases" \
+                "Check Docker Services Status" \
+                "View Docker Logs" \
+                "Exit"
+            
+            read -p "$(echo -e "${BOLD}Select option [1-9]:${NC} ")" choice
+        else
+            menu "Docker Test Suite - Local Development" \
+                "Initialize Test Databases (REQUIRED)" \
+                "Check Docker Services Status" \
+                "View Docker Logs" \
+                "Exit"
+            
+            read -p "$(echo -e "${BOLD}Select option [1-4]:${NC} ")" choice
+            
+            # Remap choices when tests disabled
+            case $choice in
+                1) choice="init" ;;
+                2) choice="status" ;;
+                3) choice="logs" ;;
+                4) choice="exit" ;;
+            esac
+        fi
+        
+        case $choice in
+            1)
+                header "Docker Authz Tests" 70
+                echo ""
+                info "Running authz tests against local Docker services..."
+                echo ""
+                bash "${REPO_ROOT}/scripts/test/run-local-tests.sh" authz docker || true
+                pause
+                ;;
+            2)
+                header "Docker Ingest Tests" 70
+                echo ""
+                info "Running ingest tests against local Docker services..."
+                echo ""
+                bash "${REPO_ROOT}/scripts/test/run-local-tests.sh" ingest docker || true
+                pause
+                ;;
+            3)
+                header "Docker Search Tests" 70
+                echo ""
+                info "Running search tests against local Docker services..."
+                echo ""
+                bash "${REPO_ROOT}/scripts/test/run-local-tests.sh" search docker || true
+                pause
+                ;;
+            4)
+                header "Docker Agent Tests" 70
+                echo ""
+                info "Running agent tests against local Docker services..."
+                echo ""
+                bash "${REPO_ROOT}/scripts/test/run-local-tests.sh" agent docker || true
+                pause
+                ;;
+            5)
+                header "All Docker Tests" 70
+                echo ""
+                warn "This will run all service tests. May take a while."
+                if confirm "Continue?"; then
+                    bash "${REPO_ROOT}/scripts/test/run-local-tests.sh" all docker || true
+                fi
+                pause
+                ;;
+            6|init)
+                header "Initialize Test Databases" 70
+                echo ""
+                info "Bootstrapping test databases with schema and OAuth clients..."
+                echo ""
+                (cd "$REPO_ROOT" && make test-db-init) || {
+                    error "Failed to initialize test databases"
+                }
+                echo ""
+                if check_test_db_status; then
+                    success "Test databases initialized successfully!"
+                else
+                    error "Test database initialization may have failed. Check logs above."
+                fi
+                pause
+                ;;
+            7|status)
+                header "Docker Services Status" 70
+                echo ""
+                docker compose -f "${REPO_ROOT}/docker-compose.local.yml" ps
+                echo ""
+                pause
+                ;;
+            8|logs)
+                header "Docker Service Logs" 70
+                echo ""
+                info "Showing last 50 lines of logs (press Ctrl+C to stop)..."
+                echo ""
+                docker compose -f "${REPO_ROOT}/docker-compose.local.yml" logs --tail=50 -f || true
+                ;;
+            9|exit)
+                return 0
+                ;;
+            *)
+                error "Invalid selection."
+                ;;
+        esac
+    done
+}
+
 # Main function
 main() {
     # Check for command-line arguments for non-interactive mode
     if [[ $# -ge 1 ]]; then
         # Non-interactive mode: scripts/test.sh <service> [environment] [mode]
         local service="$1"
-        local env="${2:-test}"
+        local env="${2:-staging}"
         local mode="${3:-container}"
         
         # Don't clear screen in non-interactive mode
@@ -1393,7 +1539,8 @@ main() {
         info "Service: $service | Environment: $env | Mode: $mode"
         echo ""
         
-        if [[ "$mode" == "local" ]]; then
+        # Docker environment always runs locally against Docker containers
+        if [[ "$env" == "docker" ]] || [[ "$mode" == "local" ]]; then
             info "Running local tests for $service on $env..."
             bash "${REPO_ROOT}/scripts/test/run-local-tests.sh" "$service" "$env"
             exit $?
@@ -1417,8 +1564,12 @@ main() {
     
     success "Selected environment: $ENV"
     
-    # Show test menu
-    main_menu "$ENV"
+    # Show test menu based on environment type
+    if [[ "$ENV" == "docker" ]]; then
+        docker_test_menu
+    else
+        main_menu "$ENV"
+    fi
     
     echo ""
     box "Testing Complete" 70

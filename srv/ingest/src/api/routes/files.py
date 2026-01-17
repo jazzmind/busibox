@@ -1491,7 +1491,7 @@ async def reprocess_file(fileId: str, request: Request):
             
             # Add job back to Redis queue
             redis_client = redis_async.Redis(
-                host=config.get("redis_host", "localhost"),
+                host=config.get("redis_host", "redis"),
                 port=config.get("redis_port", 6379),
                 decode_responses=True,
             )

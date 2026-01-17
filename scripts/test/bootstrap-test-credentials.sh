@@ -4,13 +4,15 @@ set -euo pipefail
 #==============================================================================
 # Bootstrap Test Credentials for Busibox
 #
-# EXECUTION CONTEXT: Proxmox host (requires pct access)
+# EXECUTION CONTEXT: 
+#   - Proxmox host (requires pct access) for test/production environments
+#   - Local workstation for docker environment
 #
 # DESCRIPTION:
 #   Manages test credentials for Busibox integration testing:
 #   - Creates/retrieves a single test user
 #   - Ensures OAuth clients exist (ai-portal, api-service)
-#   - Updates ansible vault with credentials
+#   - Updates ansible vault with credentials (Proxmox only)
 #
 #   OAuth Client Architecture:
 #   - ai-portal: Used by frontend apps to exchange user credentials for tokens
@@ -20,7 +22,7 @@ set -euo pipefail
 #   different client_ids for audit trail purposes.
 #
 # USAGE:
-#   bash scripts/test/bootstrap-test-credentials.sh [test|production] [--force|-f]
+#   bash scripts/test/bootstrap-test-credentials.sh [docker|test|production] [--force|-f]
 #
 # OPTIONS:
 #   --force, -f    Delete existing test users and create fresh credentials
@@ -32,7 +34,7 @@ set -euo pipefail
 # OUTPUTS:
 #   - Test user in authz database (single user: test@busibox.local)
 #   - OAuth clients: ai-portal, api-service
-#   - Credentials saved to ansible vault
+#   - Credentials saved to ansible vault (Proxmox only)
 #==============================================================================
 
 # Colors for output
@@ -47,7 +49,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 # Parse arguments
-ENV="${1:-test}"
+ENV="${1:-docker}"
 FORCE=false
 
 for arg in "$@"; do
@@ -67,24 +69,40 @@ echo -e "${BLUE}========================================${NC}"
 echo ""
 
 # Environment-specific configuration
-if [ "$ENV" = "test" ]; then
+if [ "$ENV" = "docker" ]; then
+    # Docker local development environment
+    AUTHZ_HOST="localhost"
+    AUTHZ_URL="http://localhost:8010"
+    PG_CONTAINER="local-postgres"
+    PG_DB="busibox"
+    PG_USER="busibox_user"
+    ADMIN_TOKEN="local-admin-token"
+    CLIENT_SECRET="ai-portal-secret"
+    USE_DOCKER=true
+    echo -e "${GREEN}Environment: DOCKER (local development)${NC}"
+elif [ "$ENV" = "test" ]; then
     AUTHZ_HOST="10.96.201.210"
     AUTHZ_CTID=310
     PG_HOST="10.96.201.203"
     PG_CTID=303
-    echo -e "${GREEN}Environment: TEST${NC}"
+    USE_DOCKER=false
+    echo -e "${GREEN}Environment: TEST (Proxmox)${NC}"
 elif [ "$ENV" = "production" ]; then
     AUTHZ_HOST="10.96.200.210"
     AUTHZ_CTID=210
     PG_HOST="10.96.200.203"
     PG_CTID=203
-    echo -e "${YELLOW}Environment: PRODUCTION${NC}"
+    USE_DOCKER=false
+    echo -e "${YELLOW}Environment: PRODUCTION (Proxmox)${NC}"
 else
-    echo -e "${RED}Error: Invalid environment '$ENV'. Use 'test' or 'production'${NC}"
+    echo -e "${RED}Error: Invalid environment '$ENV'. Use 'docker', 'test', or 'production'${NC}"
     exit 1
 fi
 
-AUTHZ_URL="http://${AUTHZ_HOST}:8010"
+# Set AUTHZ_URL for non-docker environments
+if [ "$USE_DOCKER" = false ]; then
+    AUTHZ_URL="http://${AUTHZ_HOST}:8010"
+fi
 
 # Fixed test user email
 TEST_USER_EMAIL="test@busibox.local"
@@ -104,7 +122,13 @@ echo ""
 
 run_db_query() {
     local query="$1"
-    pct exec ${PG_CTID} -- sudo -u postgres psql -d busibox_test -t -A -c "$query" 2>/dev/null || echo ""
+    if [ "$USE_DOCKER" = true ]; then
+        # Docker: Use docker exec to run psql in the postgres container
+        docker exec ${PG_CONTAINER} psql -U ${PG_USER} -d ${PG_DB} -t -A -c "$query" 2>/dev/null || echo ""
+    else
+        # Proxmox: Use pct exec to run psql in the LXC container
+        pct exec ${PG_CTID} -- sudo -u postgres psql -d busibox_test -t -A -c "$query" 2>/dev/null || echo ""
+    fi
 }
 
 #==============================================================================
@@ -171,15 +195,22 @@ if [ -n "$API_SERVICE_EXISTS" ]; then
 else
     echo -e "${BLUE}Creating api-service client via authz admin API...${NC}"
     
-    # Get credentials for admin API call
-    ADMIN_TOKEN=$(pct exec ${AUTHZ_CTID} -- grep AUTHZ_ADMIN_TOKEN /srv/authz/.env 2>/dev/null | cut -d= -f2 || echo "")
-    JWT_SECRET=$(pct exec ${AUTHZ_CTID} -- grep AUTHZ_BOOTSTRAP_CLIENT_SECRET /srv/authz/.env 2>/dev/null | cut -d= -f2 || echo "")
+    # Get credentials for admin API call (environment-specific)
+    if [ "$USE_DOCKER" = true ]; then
+        # Docker: use the known local development values
+        ADMIN_TOKEN_FOR_CLIENT="local-admin-token"
+        JWT_SECRET="ai-portal-secret"
+    else
+        # Proxmox: fetch from container
+        ADMIN_TOKEN_FOR_CLIENT=$(pct exec ${AUTHZ_CTID} -- grep AUTHZ_ADMIN_TOKEN /srv/authz/.env 2>/dev/null | cut -d= -f2 || echo "")
+        JWT_SECRET=$(pct exec ${AUTHZ_CTID} -- grep AUTHZ_BOOTSTRAP_CLIENT_SECRET /srv/authz/.env 2>/dev/null | cut -d= -f2 || echo "")
+    fi
     
-    if [ -n "$ADMIN_TOKEN" ] && [ -n "$JWT_SECRET" ]; then
+    if [ -n "$ADMIN_TOKEN_FOR_CLIENT" ] && [ -n "$JWT_SECRET" ]; then
         # Create api-service client via admin API (proper hashing handled by authz)
         CREATE_RESPONSE=$(curl -s -X POST "${AUTHZ_URL}/admin/oauth-clients" \
             -H "Content-Type: application/json" \
-            -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+            -H "Authorization: Bearer ${ADMIN_TOKEN_FOR_CLIENT}" \
             -d "{
                 \"client_id\": \"api-service\",
                 \"client_secret\": \"${JWT_SECRET}\",
@@ -205,7 +236,14 @@ echo ""
 
 echo -e "${BLUE}Fetching admin token...${NC}"
 
-ADMIN_TOKEN=$(pct exec ${AUTHZ_CTID} -- grep '^AUTHZ_ADMIN_TOKEN=' /srv/authz/.env 2>/dev/null | cut -d'=' -f2 || echo "")
+if [ "$USE_DOCKER" = true ]; then
+    # Docker: use the known local development admin token
+    # (already set above in environment configuration)
+    :
+else
+    # Proxmox: fetch from container
+    ADMIN_TOKEN=$(pct exec ${AUTHZ_CTID} -- grep '^AUTHZ_ADMIN_TOKEN=' /srv/authz/.env 2>/dev/null | cut -d'=' -f2 || echo "")
+fi
 
 if [ -z "$ADMIN_TOKEN" ]; then
     echo -e "${RED}Error: Could not fetch admin token from authz service${NC}"
@@ -221,11 +259,17 @@ echo ""
 
 echo -e "${BLUE}Verifying token exchange...${NC}"
 
-JWT_SECRET=$(pct exec ${AUTHZ_CTID} -- grep AUTHZ_BOOTSTRAP_CLIENT_SECRET /srv/authz/.env 2>/dev/null | cut -d= -f2 || echo "")
+if [ "$USE_DOCKER" = true ]; then
+    # Docker: use the known local development client secret
+    TOKEN_SECRET="ai-portal-secret"
+else
+    # Proxmox: fetch from container
+    TOKEN_SECRET=$(pct exec ${AUTHZ_CTID} -- grep AUTHZ_BOOTSTRAP_CLIENT_SECRET /srv/authz/.env 2>/dev/null | cut -d= -f2 || echo "")
+fi
 
 TOKEN_RESPONSE=$(curl -s -X POST "${AUTHZ_URL}/oauth/token" \
     -H "Content-Type: application/x-www-form-urlencoded" \
-    -d "grant_type=client_credentials&client_id=ai-portal&client_secret=${JWT_SECRET}&audience=ingest-api" 2>&1 || echo "")
+    -d "grant_type=client_credentials&client_id=ai-portal&client_secret=${TOKEN_SECRET}&audience=ingest-api" 2>&1 || echo "")
 
 if echo "$TOKEN_RESPONSE" | grep -q "access_token"; then
     echo -e "${GREEN}✓ Token exchange verified${NC}"

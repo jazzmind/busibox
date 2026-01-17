@@ -29,6 +29,13 @@ class Config:
         self.postgres_user = os.getenv("POSTGRES_USER", "busibox_user")
         self.postgres_password = os.getenv("POSTGRES_PASSWORD", "")
         
+        # Test mode configuration
+        # When enabled, requests with X-Test-Mode: true header will use test database
+        self.test_mode_enabled = os.getenv("INGEST_TEST_MODE_ENABLED", "false").lower() == "true"
+        self.test_postgres_db = os.getenv("TEST_DB_NAME", "test_files")
+        self.test_postgres_user = os.getenv("TEST_DB_USER", "busibox_test_user")
+        self.test_postgres_password = os.getenv("TEST_DB_PASSWORD", "testpassword")
+        
         # Milvus configuration
         self.milvus_host = os.getenv("MILVUS_HOST", "10.96.200.204")
         self.milvus_port = int(os.getenv("MILVUS_PORT", "19530"))
@@ -88,7 +95,9 @@ class Config:
         return {
             "worker_id": self.worker_id,
             "stream_name": self.stream_name,
+            "redis_stream": self.stream_name,  # Alias for API compatibility
             "consumer_group": self.consumer_group,
+            "redis_consumer_group": self.consumer_group,  # Alias for API compatibility
             "redis_host": self.redis_host,
             "redis_port": self.redis_port,
             "postgres_host": self.postgres_host,
@@ -96,6 +105,10 @@ class Config:
             "postgres_db": self.postgres_db,
             "postgres_user": self.postgres_user,
             "postgres_password": self.postgres_password,
+            "test_mode_enabled": self.test_mode_enabled,
+            "test_postgres_db": self.test_postgres_db,
+            "test_postgres_user": self.test_postgres_user,
+            "test_postgres_password": self.test_postgres_password,
             "milvus_host": self.milvus_host,
             "milvus_port": self.milvus_port,
             "milvus_collection": self.milvus_collection,

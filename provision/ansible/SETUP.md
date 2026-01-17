@@ -24,7 +24,7 @@ ansible-vault edit roles/secrets/vars/vault.yml
 ```yaml
 # Network Configuration
 network_base_octets_production: "10.96.200"  # Your production network
-network_base_octets_test: "10.96.201"        # Your test network
+network_base_octets_staging: "10.96.201"        # Your test network
 
 # Domain Configuration
 base_domain: "yourdomain.com"                # Your domain
@@ -44,7 +44,7 @@ ansible-inventory -i inventory/test --list | grep network_base_octets
 
 # Should show:
 # "network_base_octets": "10.96.201",
-# "network_base_octets_test": "10.96.201",
+# "network_base_octets_staging": "10.96.201",
 ```
 
 ### 4. Deploy
@@ -118,7 +118,7 @@ ln -sf ../../../../roles/secrets/vars/vault.yml vault.yml
 
 ## Troubleshooting
 
-### Error: "network_base_octets_test is undefined"
+### Error: "network_base_octets_staging is undefined"
 
 **Cause**: Vault variables not loading at inventory time
 

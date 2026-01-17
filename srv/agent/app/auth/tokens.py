@@ -1,86 +1,53 @@
-import time
-from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional
+"""
+JWT Token validation and OAuth2 Token Exchange for Agent Service.
 
-import httpx
-from jose import jwk, jwt
-from jose.utils import base64url_decode
+This module provides token validation and exchange functionality for the agent service.
+Uses busibox_common.auth for shared JWT utilities.
+"""
+
+import logging
+from datetime import datetime, timedelta, timezone
+from typing import Dict, List
+
+from busibox_common.auth import (
+    create_jwks_client,
+    parse_jwt_token,
+    TokenExchangeClient,
+)
 
 from app.config.settings import get_settings
 from app.schemas.auth import Principal, TokenExchangeResponse
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
-CLAIM_LEEWAY_SECONDS = 30
-TOKEN_EXCHANGE_GRANT = "urn:ietf:params:oauth:grant-type:token-exchange"
-
-
-class JWKSCache:
-    def __init__(self) -> None:
-        self._jwks: Optional[Dict] = None
-        self._fetched_at: Optional[float] = None
-        self._ttl_seconds = 300
-
-    async def get(self) -> Dict:
-        now = time.time()
-        if self._jwks and self._fetched_at and now - self._fetched_at < self._ttl_seconds:
-            return self._jwks
-        if not settings.auth_jwks_url:
-            raise ValueError("auth_jwks_url not configured")
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(str(settings.auth_jwks_url), timeout=10)
-            resp.raise_for_status()
-            self._jwks = resp.json()
-            self._fetched_at = now
-            return self._jwks
+# Cached clients (lazy initialization)
+_jwks_client = None
+_token_exchange_client = None
 
 
-jwks_cache = JWKSCache()
+def _get_jwks_client():
+    """Get or create JWKS client."""
+    global _jwks_client
+    if _jwks_client is None:
+        _jwks_client = create_jwks_client(str(settings.auth_jwks_url))
+    return _jwks_client
 
 
-async def _verify_signature(token: str, jwks: Dict) -> Dict:
-    headers = jwt.get_unverified_header(token)
-    kid = headers.get("kid")
-    if not kid:
-        raise jwt.JWTError("kid missing from token header")
-
-    key_data = next((k for k in jwks.get("keys", []) if k.get("kid") == kid), None)
-    if not key_data:
-        raise jwt.JWTError("matching jwk not found")
-
-    public_key = jwk.construct(key_data)
-    message, encoded_sig = token.rsplit(".", 1)
-    decoded_sig = base64url_decode(encoded_sig.encode())
-    if not public_key.verify(message.encode(), decoded_sig):
-        raise jwt.JWTError("signature verification failed")
-
-    return jwt.get_unverified_claims(token)
-
-
-def _validate_claims(claims: Dict) -> None:
-    now = datetime.now(timezone.utc)
-    leeway = timedelta(seconds=CLAIM_LEEWAY_SECONDS)
-
-    exp = claims.get("exp")
-    if exp is not None:
-        exp_dt = datetime.fromtimestamp(exp, tz=timezone.utc)
-        if exp_dt <= now - leeway:
-            raise jwt.ExpiredSignatureError("token expired")
-
-    nbf = claims.get("nbf")
-    if nbf is not None:
-        nbf_dt = datetime.fromtimestamp(nbf, tz=timezone.utc)
-        if nbf_dt > now + leeway:
-            raise jwt.JWTError("token not yet valid")
-
-    iat = claims.get("iat")
-    if iat is not None:
-        iat_dt = datetime.fromtimestamp(iat, tz=timezone.utc)
-        if iat_dt > now + leeway:
-            raise jwt.JWTError("token issued in the future")
+def _get_token_exchange_client():
+    """Get or create token exchange client."""
+    global _token_exchange_client
+    if _token_exchange_client is None:
+        _token_exchange_client = TokenExchangeClient(
+            token_url=str(settings.auth_token_url),
+            client_id=settings.auth_client_id,
+            client_secret=settings.auth_client_secret,
+        )
+    return _token_exchange_client
 
 
 def _extract_scopes(claims: Dict) -> List[str]:
+    """Extract scopes from JWT claims."""
     if "scope" in claims and isinstance(claims["scope"], str):
         return claims["scope"].split()
     if "scp" in claims and isinstance(claims["scp"], list):
@@ -88,36 +55,53 @@ def _extract_scopes(claims: Dict) -> List[str]:
     return []
 
 
+def _extract_roles(claims: Dict) -> List[str]:
+    """
+    Extract role IDs from claims.
+    
+    The authz service returns roles as objects: [{"id": "...", "name": "..."}]
+    but the Principal model expects a list of strings (role IDs).
+    """
+    roles_claim = claims.get("roles", [])
+    if not roles_claim:
+        return []
+    
+    roles: List[str] = []
+    for role in roles_claim:
+        if isinstance(role, str):
+            roles.append(role)
+        elif isinstance(role, dict):
+            role_id = role.get("id") or role.get("name")
+            if role_id:
+                roles.append(str(role_id))
+    
+    return roles
+
+
 async def validate_bearer(token: str) -> Principal:
-    jwks = await jwks_cache.get()
-    claims = await _verify_signature(token, jwks)
-
-    _validate_claims(claims)
-
-    if settings.auth_issuer and claims.get("iss") != settings.auth_issuer:
-        raise jwt.JWTError(f"issuer mismatch: expected {settings.auth_issuer}, got {claims.get('iss')}")
-
-    audience_claim = claims.get("aud")
-    if settings.auth_audience:
-        if isinstance(audience_claim, list):
-            if settings.auth_audience not in audience_claim:
-                raise jwt.JWTError(f"audience mismatch: expected {settings.auth_audience} in {audience_claim}")
-        elif audience_claim and audience_claim != settings.auth_audience:
-            raise jwt.JWTError(f"audience mismatch: expected {settings.auth_audience}, got {audience_claim}")
-
-    try:
-        sub = claims["sub"]
-    except KeyError as exc:
-        raise jwt.JWTError("sub missing") from exc
-
-    principal = Principal(
-        sub=sub,
-        scopes=_extract_scopes(claims),
-        roles=claims.get("roles", []),
-        email=claims.get("email"),
+    """
+    Validate a bearer token and return a Principal.
+    """
+    jwks_client = _get_jwks_client()
+    audience = settings.auth_audience or "agent-api"
+    
+    payload = parse_jwt_token(
+        token,
+        jwks_client,
+        audience,
+        issuer=settings.auth_issuer,
+    )
+    
+    if not payload:
+        raise ValueError("Invalid or expired JWT token")
+    
+    return Principal(
+        sub=payload.get("sub", ""),
+        scopes=_extract_scopes(payload),
+        roles=_extract_roles(payload),
+        email=payload.get("email"),
         token=token,
     )
-    return principal
 
 
 async def exchange_token(
@@ -127,26 +111,22 @@ async def exchange_token(
     Exchange a user token for a downstream token using OAuth2 token exchange (RFC 8693 style).
     Tokens are audience-bound to a single downstream service.
     """
+    client = _get_token_exchange_client()
     audience = _audience_for_purpose(purpose, scopes)
-    payload = {
-        "grant_type": TOKEN_EXCHANGE_GRANT,
-        "client_id": settings.auth_client_id,
-        "client_secret": settings.auth_client_secret,
-        "scope": " ".join(scopes),
-        "audience": audience,
-        "requested_subject": principal.sub,
-        "requested_purpose": purpose,
-    }
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(str(settings.auth_token_url), data=payload, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-
-    expires_in = data.get("expires_in", 3600)
-    expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+    
+    access_token = await client.get_token_for_service(
+        user_id=principal.sub,
+        target_audience=audience,
+        scope=" ".join(scopes),
+    )
+    
+    if not access_token:
+        raise ValueError(f"Token exchange failed for audience {audience}")
+    
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=840)
     return TokenExchangeResponse(
-        access_token=data["access_token"],
-        token_type=data.get("token_type", "bearer"),
+        access_token=access_token,
+        token_type="bearer",
         expires_at=expires_at,
         scopes=scopes,
     )

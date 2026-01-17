@@ -1,7 +1,15 @@
+---
+title: "Architecture Overview"
+category: "developer"
+order: 1
+description: "High-level system architecture and design principles of the Busibox platform"
+published: true
+---
+
 # Busibox Architecture Overview
 
 **Created**: 2025-12-09  
-**Last Updated**: 2025-12-09  
+**Last Updated**: 2026-01-16  
 **Status**: Active  
 **Category**: Architecture  
 **Related Docs**:  
@@ -33,7 +41,11 @@ Busibox is a local-first LLM platform running on a single Proxmox host with isol
 
 ## Data Plane
 - **Object Storage**: MinIO in `files-lxc` stores originals and derived artifacts.
-- **Metadata & RLS**: PostgreSQL in `pg-lxc` holds file metadata, ingestion status, and role bindings.
+- **Databases**: PostgreSQL in `pg-lxc` hosts per-service databases:
+  - `agent_server` - Agent definitions, conversations, workflows
+  - `authz` - Users, roles, sessions, audit logs
+  - `files` - File metadata, ingestion status, chunks
+  - Plus test databases (`test_agent_server`, `test_authz`, `test_files`) for pytest isolation
 - **Vectors**: Milvus in `milvus-lxc` stores embeddings; partitions align to users/roles.
 - **Queue**: Redis Streams in `ingest-lxc` coordinates ingestion jobs.
 

@@ -52,6 +52,20 @@
   delegate_to: "{{ groups['pg'][0] }}"
   tags: [authz, authz_db]
 
+- name: Create authz pytest database
+  postgresql_db:
+    name: "test_authz"
+    owner: "{{ authz_postgres_user }}"
+    encoding: UTF8
+    lc_collate: en_US.UTF-8
+    lc_ctype: en_US.UTF-8
+    template: template0
+    state: present
+  become_user: postgres
+  delegate_to: "{{ groups['pg'][0] }}"
+  when: enable_pytest_databases | default(false)
+  tags: [authz, authz_db, authz_pytest_db]
+
 # =============================================================================
 # Source Code Deployment
 # =============================================================================

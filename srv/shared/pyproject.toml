@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "busibox-common"
+version = "0.1.0"
+description = "Shared utilities for Busibox services"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "Proprietary"}
+
+dependencies = [
+    "sqlalchemy>=2.0",
+    # Auth dependencies
+    "pyjwt>=2.8",
+    "httpx>=0.24",
+    "structlog>=23.0",
+    "cachetools>=5.3",
+]
+
+[project.optional-dependencies]
+asyncpg = ["asyncpg>=0.29"]
+alembic = ["alembic>=1.13"]
+fastapi = ["fastapi>=0.100", "starlette>=0.27"]
+full = [
+    "asyncpg>=0.29",
+    "alembic>=1.13",
+    "psycopg2-binary>=2.9",
+    "fastapi>=0.100",
+    "starlette>=0.27",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["busibox_common*"]

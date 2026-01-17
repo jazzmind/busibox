@@ -1,7 +1,7 @@
 # Authentication & Authorization
 
 **Created**: 2025-12-09  
-**Last Updated**: 2025-12-20  
+**Last Updated**: 2026-01-15  
 **Status**: Active  
 **Category**: Architecture  
 **Related Docs**:  
@@ -12,12 +12,52 @@
 
 ---
 
+## Zero Trust Architecture
+
+Busibox implements a Zero Trust authentication architecture where:
+
+1. **AuthZ is the sole authentication authority** - All session JWTs are issued by authz
+2. **Cryptographic verification** - Session JWTs are RS256-signed; downstream services verify signatures, no DB lookups required
+3. **Subject token exchange** - User operations use session JWTs as `subject_token`; no client credentials needed
+4. **Explicit delegation** - Background tasks require user-authorized delegation tokens
+
+### Authentication Flow
+
+```mermaid
+sequenceDiagram
+    participant Browser
+    participant AIPortal
+    participant AuthZ
+    participant IngestAPI
+    
+    Browser->>AIPortal: Login with passkey/email
+    AIPortal->>AuthZ: /auth/passkeys/authenticate or /auth/totp/verify
+    AuthZ-->>AIPortal: RS256 Session JWT
+    AIPortal->>Browser: Set session cookie with JWT
+    
+    Browser->>AIPortal: Request with session JWT cookie
+    AIPortal->>AuthZ: Token exchange with subject_token=JWT
+    Note right of AuthZ: Verifies JWT signature (no DB lookup)
+    AuthZ-->>AIPortal: Downstream JWT for user
+    AIPortal->>IngestAPI: Request with downstream JWT
+```
+
+### Key Principles
+
+1. **Cryptographic verification** - All tokens are JWTs signed by authz; no DB lookups required for basic validation
+2. **User identity in every request** - Session JWT contains user identity; downstream tokens derive from it
+3. **No service credentials for user operations** - Client credentials only for true service-to-service (no user context)
+4. **Explicit delegation** - Users must authorize background tasks; delegation tokens are scoped and time-limited
+5. **Revocation support** - JTI tracking allows immediate session/delegation revocation
+
+---
+
 ## Design Goals
 
 1. **Multi-provider authentication**: Authz service supports authenticating users via EntraID, SAML, other SSO, as well as via email + passkey/TOTP.
 2. **Role-based access with OAuth2 scopes**: Roles are assigned to users and contain OAuth2 scopes which control access to services and data. Users can have multiple roles; their effective scopes are the union of all role scopes.
-3. **OAuth2 session tokens**: When a user authenticates, they receive an OAuth2 session token that can be passed to any service they can access. Generally done via ai-portal, which is the primary authentication entry point.
-4. **Token exchange for service tokens**: ai-portal and downstream services exchange user tokens for API-specific tokens using OAuth2 token exchange (RFC 8693). Session tokens can have long durations while service tokens have shorter TTLs to ensure access/role changes are picked up quickly.
+3. **JWT session tokens**: When a user authenticates, they receive an RS256-signed JWT session token from authz.
+4. **Subject token exchange**: ai-portal exchanges session JWTs for audience-bound access tokens using OAuth2 token exchange (RFC 8693). No client credentials required for user operations.
 5. **Asymmetric signing (RS256)**: All tokens use asymmetric key signing. Keys are stored in PostgreSQL and published via JWKS.
 6. **Row-level security**: Files, embeddings, chunks, summaries, insights and other generated data use PostgreSQL RLS based on roles. Milvus partitions align with role IDs. MinIO object paths are organized by visibility (personal/role) with access validated at the application layer.
 
@@ -97,15 +137,39 @@ Only Finance Admin has write/delete scopes → they can MODIFY those documents.
 
 ### Endpoints
 
+**OAuth2 & Token Management:**
+
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/.well-known/jwks.json` | GET | Public JWKS for token validation |
-| `/oauth/token` | POST | Issue access tokens (client_credentials, token-exchange) |
-| `/authz/audit` | POST | Append audit log entries |
-| `/internal/sync/user` | POST | Sync user + roles from ai-portal |
+| `/oauth/token` | POST | Issue access tokens (subject_token, client_credentials) |
+| `/oauth/delegation` | POST | Create delegation token for background tasks |
+| `/oauth/delegations` | GET | List user's delegation tokens (requires session JWT) |
+| `/oauth/delegations/{jti}` | DELETE | Revoke a delegation token |
+
+**Authentication:**
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/auth/passkeys/challenge` | POST | Create WebAuthn challenge |
+| `/auth/passkeys` | POST | Register new passkey |
+| `/auth/passkeys/authenticate` | POST | Login with passkey → returns session JWT |
+| `/auth/totp` | POST | Create TOTP code (sends email) |
+| `/auth/totp/verify` | POST | Verify TOTP code → returns session JWT |
+| `/auth/magic-links` | POST | Create magic link (sends email) |
+| `/auth/magic-links/{token}/use` | POST | Use magic link → returns session JWT |
+| `/auth/sessions/{token}` | GET | Validate session |
+| `/auth/sessions/{token}` | DELETE | Logout (delete session) |
+
+**Administration:**
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
 | `/admin/roles` | CRUD | Role management (includes scopes) |
 | `/admin/user-roles` | POST/DELETE | User-role bindings |
 | `/admin/oauth-clients` | CRUD | OAuth client management |
+| `/internal/sync/user` | POST | Sync user + roles from ai-portal |
+| `/authz/audit` | POST | Append audit log entries |
 | `/health/live` | GET | Liveness probe |
 | `/health/ready` | GET | Readiness probe |
 
@@ -114,7 +178,8 @@ Only Finance Admin has write/delete scopes → they can MODIFY those documents.
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
 | `AUTHZ_ISSUER` | `busibox-authz` | Token issuer (iss claim) |
-| `AUTHZ_ACCESS_TOKEN_TTL` | `900` | Token TTL in seconds (15 min) |
+| `AUTHZ_ACCESS_TOKEN_TTL` | `900` | Access token TTL in seconds (15 min) |
+| `AUTHZ_SESSION_TOKEN_TTL` | `604800` | Session JWT TTL in seconds (7 days) |
 | `AUTHZ_SIGNING_ALG` | `RS256` | Signing algorithm |
 | `AUTHZ_RSA_KEY_SIZE` | `2048` | RSA key size |
 | `AUTHZ_KEY_ENCRYPTION_PASSPHRASE` | - | Encrypt private keys at rest |
@@ -131,7 +196,38 @@ Only Finance Admin has write/delete scopes → they can MODIFY those documents.
 
 ## OAuth2 Token Flows
 
-### Client Credentials Grant
+### Subject Token Exchange (Zero Trust - Recommended)
+
+For exchanging a user's session JWT for an audience-bound access token:
+
+```http
+POST /oauth/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=urn:ietf:params:oauth:grant-type:token-exchange&
+subject_token=<session-jwt>&
+subject_token_type=urn:ietf:params:oauth:token-type:jwt&
+audience=ingest-api
+```
+
+Response:
+```json
+{
+  "access_token": "<audience-bound-jwt>",
+  "token_type": "Bearer",
+  "expires_in": 900,
+  "scope": "ingest.read ingest.write search.read"
+}
+```
+
+**Key points:**
+- No `client_id` or `client_secret` required
+- AuthZ verifies the session JWT signature cryptographically
+- User's roles and scopes are looked up in the database
+- Issued token is bound to the requested audience
+
+### Client Credentials Grant (Service-to-Service)
+
 For service-to-service authentication (no user context):
 
 ```http
@@ -154,8 +250,9 @@ Response:
 }
 ```
 
-### Token Exchange Grant (On-Behalf-Of)
-For exchanging user session for service-specific token:
+### Legacy Token Exchange (Deprecated)
+
+For backward compatibility only - use subject token exchange instead:
 
 ```http
 POST /oauth/token
@@ -169,13 +266,40 @@ requested_subject=<user-uuid>&
 requested_purpose=document-upload
 ```
 
-Response includes user's role memberships and aggregated scopes.
+**Note:** This mode requires client credentials and trusts the client to assert user identity.
+Prefer subject token exchange for Zero Trust compliance.
 
 ---
 
-## Access Token Structure
+## Token Structures
 
-Tokens are signed JWTs (RS256) with the following claims:
+### Session Token (typ: session)
+
+Issued when user authenticates (passkey, TOTP, magic link):
+
+```json
+{
+  "iss": "busibox-authz",
+  "sub": "<user-uuid>",
+  "aud": "ai-portal",
+  "exp": 1703727056,
+  "iat": 1703122256,
+  "nbf": 1703122256,
+  "jti": "<session-id>",
+  "typ": "session",
+  "email": "user@example.com"
+}
+```
+
+**Properties:**
+- Long TTL (7 days default)
+- Used as `subject_token` for downstream token exchange
+- JTI is the session ID for revocation tracking
+- Stored in `busibox-session` cookie
+
+### Access Token (typ: access)
+
+Issued via token exchange for downstream services:
 
 ```json
 {
@@ -197,22 +321,115 @@ Tokens are signed JWTs (RS256) with the following claims:
 }
 ```
 
+**Properties:**
+- Short TTL (15 minutes default)
+- Audience-bound to specific service
+- Contains user's aggregated scopes from all roles
+- Contains role IDs for data access filtering (RLS)
+
+### Delegation Token (typ: delegation)
+
+Issued for background tasks that need to act on behalf of a user:
+
+```json
+{
+  "iss": "busibox-authz",
+  "sub": "<user-uuid>",
+  "aud": "ai-portal",
+  "exp": 1703727056,
+  "iat": 1703122256,
+  "nbf": 1703122256,
+  "jti": "<delegation-id>",
+  "typ": "delegation",
+  "email": "user@example.com",
+  "scope": "ingest.read search.read"
+}
+```
+
+**Properties:**
+- Long TTL (up to 30 days)
+- User explicitly authorizes delegation with limited scopes
+- Can be revoked by user at any time
+- Used by task runners for background operations
+
 ### Claims Reference
 
 | Claim | Type | Description |
 |-------|------|-------------|
 | `iss` | string | Token issuer (busibox-authz) |
 | `sub` | string | User UUID or client_id (for client_credentials) |
-| `aud` | string | Target service (ingest-api, search-api, agent-api) |
+| `aud` | string | Target service or `ai-portal` for session/delegation |
 | `exp` | int | Expiration timestamp |
 | `iat` | int | Issued-at timestamp |
 | `nbf` | int | Not-before timestamp |
-| `jti` | string | Unique token ID |
-| `typ` | string | Token type (access) |
-| `scope` | string | Space-delimited OAuth2 scopes (aggregated from all roles) |
-| `roles` | array | User's role memberships (for data access filtering) |
+| `jti` | string | Unique token ID (session/delegation ID for revocation) |
+| `typ` | string | Token type: `session`, `access`, or `delegation` |
+| `email` | string | User email (session/delegation tokens only) |
+| `scope` | string | Space-delimited OAuth2 scopes |
+| `roles` | array | User's role memberships (access tokens only) |
 
-**Important**: Scopes are aggregated from all user roles. Roles in the token contain only `id` and `name` (used for RLS/partition filtering), not scopes.
+**Important**: Scopes are aggregated from all user roles. Roles in access tokens contain only `id` and `name` (used for RLS/partition filtering), not scopes.
+
+---
+
+## Delegation Tokens
+
+Delegation tokens allow users to authorize background tasks to act on their behalf.
+
+### Creating a Delegation Token
+
+```http
+POST /oauth/delegation
+Content-Type: application/json
+
+{
+  "subject_token": "<session-jwt>",
+  "name": "Weekly Report Generator",
+  "scopes": ["search.read", "agent.read"],
+  "expires_in_seconds": 604800
+}
+```
+
+Response:
+```json
+{
+  "delegation_token": "<delegation-jwt>",
+  "token_type": "Bearer",
+  "expires_in": 604800,
+  "expires_at": "2026-01-21T12:00:00Z",
+  "jti": "<delegation-id>",
+  "name": "Weekly Report Generator",
+  "scopes": ["search.read", "agent.read"]
+}
+```
+
+### Using a Delegation Token
+
+The task runner stores the delegation token and uses it for token exchange:
+
+```http
+POST /oauth/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=urn:ietf:params:oauth:grant-type:token-exchange&
+subject_token=<delegation-jwt>&
+subject_token_type=urn:ietf:params:oauth:token-type:jwt&
+audience=search-api
+```
+
+### Managing Delegation Tokens
+
+List active delegations:
+```http
+GET /oauth/delegations
+Authorization: Bearer <session-jwt>
+```
+
+Revoke a delegation:
+```http
+DELETE /oauth/delegations/{jti}
+Authorization: Bearer <session-jwt>
+```
 
 ---
 
@@ -413,6 +630,22 @@ All token issuance and sensitive operations are logged:
 }
 ```
 
+### Pre-Authentication Events
+
+Certain audit events occur before the user is authenticated and are allowed without authentication:
+
+| Event | Description |
+|-------|-------------|
+| `magic_link.sent` | Magic link email sent to user |
+| `totp.code_sent` | TOTP code email sent to user |
+| `user.login.failed` | Failed login attempt |
+| `totp.code_failed` | Invalid TOTP code entered |
+| `passkey.login_failed` | Failed passkey authentication |
+| `magic_link.expired` | Magic link used after expiration |
+| `oauth.token_rejected` | Token validation failed |
+
+These events are logged for security monitoring without requiring authentication, since they represent actions taken before or during the authentication process.
+
 ---
 
 ## Database Schema
@@ -467,6 +700,28 @@ CREATE TABLE authz_user_roles (
   role_id UUID NOT NULL REFERENCES authz_roles(id) ON DELETE CASCADE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (user_id, role_id)
+);
+
+-- Sessions (for revocation tracking)
+CREATE TABLE authz_sessions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES authz_users(user_id) ON DELETE CASCADE,
+  token TEXT NOT NULL UNIQUE,
+  expires_at TIMESTAMPTZ NOT NULL,
+  ip_address TEXT,
+  user_agent TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Delegation tokens (for background tasks)
+CREATE TABLE authz_delegation_tokens (
+  jti UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES authz_users(user_id) ON DELETE CASCADE,
+  scopes TEXT[] NOT NULL DEFAULT '{}',
+  name TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_at TIMESTAMPTZ NULL
 );
 
 -- Audit log

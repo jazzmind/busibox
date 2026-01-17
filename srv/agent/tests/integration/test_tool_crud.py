@@ -225,7 +225,7 @@ async def test_delete_unused_tool_returns_204(
     assert response.status_code == 204
     
     # Verify tool is soft-deleted (query fresh from DB)
-    await db_session.expire_all()  # Expire all cached objects
+    db_session.expire_all()  # Expire all cached objects (sync method)
     from sqlalchemy import select
     stmt = select(ToolDefinition).where(ToolDefinition.id == tool_id)
     result = await db_session.execute(stmt)

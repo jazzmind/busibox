@@ -1,4 +1,4 @@
-.PHONY: ping all files pg milvus nginx search search-api agent ingest ingest-api ingest-worker ingest-update-tests apps openwebui deploy-apps deploy-ai-portal deploy-agent-client deploy-doc-intel deploy-foundation deploy-project-analysis deploy-innovation verify verify-health verify-smoke test test-menu test-ingest test-ingest-all test-ingest-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-authz test-apps test-security test-security-auth test-security-injection test-security-fuzz test-all configure generate-token-keys bootstrap-test-creds
+.PHONY: ping all files pg milvus nginx search search-api agent ingest ingest-api ingest-worker ingest-update-tests docs apps openwebui deploy-apps deploy-ai-portal deploy-agent-client deploy-doc-intel deploy-foundation deploy-project-analysis deploy-innovation verify verify-health verify-smoke test test-menu test-ingest test-ingest-all test-ingest-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-authz test-apps test-security test-security-auth test-security-injection test-security-fuzz test-all configure generate-token-keys bootstrap-test-creds signal-bot tailscale test-signal-bot
 # Default to production inventory (can override with: make all INV=inventory/test)
 INV=inventory/production
 
@@ -89,11 +89,28 @@ ingest-update-tests:
 	ansible-playbook -i $(INV) -l ingest site.yml --tags ingest_update_tests $(VAULT_FLAGS)
 	@echo "✓ Test files updated"
 
+# Docs API - Documentation service (runs on apps container)
+docs:
+	ansible-playbook -i $(INV) -l apps site.yml --tags docs $(VAULT_FLAGS)
+
 apps:
 	ansible-playbook -i $(INV) -l apps site.yml $(VAULT_FLAGS)
 
 openwebui:
 	ansible-playbook -i $(INV) -l openwebui site.yml $(VAULT_FLAGS)
+
+# Signal Bot (for Signal messenger integration)
+signal-bot:
+	ansible-playbook -i $(INV) -l agent site.yml --tags signal-bot $(VAULT_FLAGS)
+
+# Tailscale VPN (for secure remote access)
+tailscale:
+	ansible-playbook -i $(INV) -l proxy site.yml --tags tailscale $(VAULT_FLAGS)
+
+# Test Signal bot integration
+test-signal-bot:
+	@echo "Testing Signal bot integration on agent container ($(AGENT_IP))..."
+	@ssh root@$(AGENT_IP) 'bash -s' < scripts/test-signal-bot.sh
 
 # T029: Deploy applications (runs app_deployer + secrets roles)
 deploy-apps:
@@ -128,12 +145,12 @@ configure:
 	@bash ../../scripts/make/configure.sh
 
 generate-token-keys:
-	@bash ../../scripts/generate/generate-token-service-keys.sh
+	@bash scripts/generate-token-service-keys.sh
 
 # Bootstrap test credentials for local integration testing
 bootstrap-test-creds:
 	@echo "Bootstrapping test credentials for $(INV)..."
-	@bash ../../scripts/test/bootstrap-test-credentials.sh $(shell echo $(INV) | grep -q test && echo test || echo production)
+	@bash scripts/bootstrap-test-credentials.sh $(shell echo $(INV) | grep -q staging && echo staging || echo production)
 
 # Verification targets
 verify: verify-health verify-smoke
@@ -147,6 +164,10 @@ verify-health:
 	@echo "=== Agent API ==="
 	@curl -f -s http://10.96.200.202:8000/health > /dev/null || (echo "Agent API health check FAILED (may not be deployed yet)" && exit 0)
 	@echo "✓ Agent API is healthy (or not deployed yet)"
+	@echo ""
+	@echo "=== Docs API ==="
+	@curl -f -s http://$(APPS_IP):8004/health/live > /dev/null || (echo "Docs API health check FAILED (may not be deployed yet)" && exit 0)
+	@echo "✓ Docs API is healthy (or not deployed yet)"
 	@echo ""
 	@echo "=== PostgreSQL ==="
 	@psql -h 10.96.200.203 -U busibox_user -d busibox -c "SELECT version();" || (echo "PostgreSQL health check FAILED" && exit 1)
@@ -377,7 +398,7 @@ test-authz:
 		echo "WARNING: Could not extract AUTHZ_ADMIN_TOKEN from vault"; \
 	fi; \
 	echo "Running tests with real database integration..."; \
-	ssh -o StrictHostKeyChecking=no root@$(AUTHZ_IP) "cd /srv/authz/app && source ../venv/bin/activate && pip install -q -r requirements.test.txt 2>/dev/null; export TEST_DB_USER='busibox_test_user' TEST_DB_PASSWORD='$$TEST_DB_PASSWORD' TEST_DB_NAME='busibox_test' TEST_DB_HOST='10.96.201.203' AUTHZ_ADMIN_TOKEN='$$AUTHZ_ADMIN_TOKEN' && pytest -v --tb=short" || (echo "Authz tests FAILED" && exit 1)
+	ssh -o StrictHostKeyChecking=no root@$(AUTHZ_IP) "cd /srv/authz/app && source ../venv/bin/activate && pip install -q -r requirements.test.txt 2>/dev/null; export TEST_DB_USER='busibox_test_user' TEST_DB_PASSWORD='$$TEST_DB_PASSWORD' TEST_DB_NAME='test_authz' TEST_DB_HOST='10.96.201.203' POSTGRES_DB='test_authz' AUTHZ_ADMIN_TOKEN='$$AUTHZ_ADMIN_TOKEN' && pytest -v --tb=short" || (echo "Authz tests FAILED" && exit 1)
 	@echo "✓ Authz tests passed"
 	@echo ""
 

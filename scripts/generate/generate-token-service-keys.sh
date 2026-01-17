@@ -16,13 +16,13 @@ set -euo pipefail
 
 # Get script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 # Source UI library
-source "${SCRIPT_DIR}/lib/ui.sh"
+source "${REPO_ROOT}/scripts/lib/ui.sh"
 
 # Paths
-KEY_GENERATOR_DIR="${SCRIPT_DIR}/lib"
+KEY_GENERATOR_DIR="${REPO_ROOT}/scripts/lib"
 VAULT_FILE="${REPO_ROOT}/provision/ansible/roles/secrets/vars/vault.yml"
 VAULT_PASS_FILE="$HOME/.vault_pass"
 

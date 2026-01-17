@@ -64,7 +64,8 @@ class AgentExecutionResult:
         success: bool,
         output: str,
         metadata: Optional[Dict[str, Any]] = None,
-        error: Optional[str] = None
+        error: Optional[str] = None,
+        agent_name: Optional[str] = None
     ):
         self.agent_id = agent_id
         self.run_id = run_id
@@ -72,10 +73,11 @@ class AgentExecutionResult:
         self.output = output
         self.metadata = metadata or {}
         self.error = error
+        self.agent_name = agent_name
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
-        return {
+        result = {
             "agent_id": self.agent_id,
             "run_id": str(self.run_id),
             "success": self.success,
@@ -83,6 +85,9 @@ class AgentExecutionResult:
             "metadata": self.metadata,
             "error": self.error
         }
+        if self.agent_name:
+            result["agent_name"] = self.agent_name
+        return result
 
 
 class ChatExecutionResult:
@@ -164,13 +169,18 @@ async def execute_web_search(query: str, user_id: str) -> ToolExecutionResult:
         )
 
 
-async def execute_document_search(query: str, user_id: str) -> ToolExecutionResult:
+async def execute_document_search(
+    query: str, 
+    user_id: str,
+    principal: Optional[Principal] = None,
+) -> ToolExecutionResult:
     """
     Execute document search tool.
     
     Args:
         query: Search query
         user_id: User ID for logging
+        principal: Optional authenticated principal for API access
         
     Returns:
         ToolExecutionResult with search results
@@ -181,8 +191,25 @@ async def execute_document_search(query: str, user_id: str) -> ToolExecutionResu
             extra={"user_id": user_id, "query": query[:100]}
         )
         
-        # Run the document agent
-        result = await document_agent.run(query)
+        # Check if we have authentication
+        if not principal or not principal.token:
+            return ToolExecutionResult(
+                tool_name="doc_search",
+                success=False,
+                output="",
+                error="Document search requires authentication. Please sign in."
+            )
+        
+        # Import here to avoid circular imports
+        from app.agents.core import BusiboxDeps
+        from app.clients.busibox import BusiboxClient
+        
+        # Create BusiboxClient with user's token
+        busibox_client = BusiboxClient(access_token=principal.token)
+        deps = BusiboxDeps(principal=principal, busibox_client=busibox_client)
+        
+        # Run the document agent with deps
+        result = await document_agent.run(query, deps=deps)
         
         # Extract output
         output = result.data if hasattr(result, 'data') else str(result)
@@ -220,7 +247,8 @@ async def execute_document_search(query: str, user_id: str) -> ToolExecutionResu
 async def execute_tools(
     selected_tools: List[str],
     query: str,
-    user_id: str
+    user_id: str,
+    principal: Optional[Principal] = None,
 ) -> List[ToolExecutionResult]:
     """
     Execute selected tools in parallel.
@@ -229,6 +257,7 @@ async def execute_tools(
         selected_tools: List of tool names to execute
         query: User query
         user_id: User ID for logging
+        principal: Optional authenticated principal for tools that require it
         
     Returns:
         List of ToolExecutionResult
@@ -247,7 +276,7 @@ async def execute_tools(
         if tool_name == "web_search":
             tasks.append(execute_web_search(query, user_id))
         elif tool_name == "doc_search":
-            tasks.append(execute_document_search(query, user_id))
+            tasks.append(execute_document_search(query, user_id, principal=principal))
         else:
             logger.warning(
                 f"Unknown tool: {tool_name}",
@@ -320,12 +349,13 @@ async def execute_agent(
         agent_uuid = uuid.UUID(agent_id) if isinstance(agent_id, str) else agent_id
         
         # Check if agent uses tools to determine if we need token exchange
-        # Get agent definition to check for tools
+        # Get agent definition to check for tools and get agent name
         from app.models.domain import AgentDefinition
         from sqlalchemy import select
         from app.services.builtin_agents import get_builtin_agent_definitions
         
         needs_token_exchange = True  # Default to needing it
+        agent_name = None  # Track agent name for response
         
         # Check built-in agents first
         builtin_defs = get_builtin_agent_definitions()
@@ -334,6 +364,7 @@ async def execute_agent(
                 # Check if this built-in has tools
                 tool_names = builtin_def.tools.get("names", []) if builtin_def.tools else []
                 needs_token_exchange = len(tool_names) > 0
+                agent_name = builtin_def.display_name or builtin_def.name
                 break
         else:
             # Not a built-in, check database
@@ -343,6 +374,7 @@ async def execute_agent(
             if db_def:
                 tool_names = db_def.tools.get("names", []) if db_def.tools else []
                 needs_token_exchange = len(tool_names) > 0
+                agent_name = db_def.display_name or db_def.name
         
         # Set scopes based on whether agent uses tools
         if needs_token_exchange:
@@ -425,7 +457,8 @@ async def execute_agent(
                 "events": run_record.events or [],
                 "timestamp": datetime.now(timezone.utc).isoformat()
             },
-            error=error
+            error=error,
+            agent_name=agent_name
         )
         
     except Exception as e:
@@ -435,7 +468,7 @@ async def execute_agent(
             exc_info=True
         )
         
-        # Return error result with a generated run_id
+        # Return error result with a generated run_id (agent_name may not be available on error)
         return AgentExecutionResult(
             agent_id=agent_id,
             run_id=uuid.uuid4(),
@@ -507,35 +540,81 @@ async def synthesize_response(
     # If we have a single successful agent result with no tools, return it directly
     # (agent already generated a complete response)
     if len(agent_results) == 1 and not tool_results and agent_results[0].success:
-        return agent_results[0].output
+        output = agent_results[0].output
+        # Clean up AgentRunResult wrapper if present
+        if "AgentRunResult(output=" in output:
+            # Extract the actual output from the wrapper
+            import re
+            match = re.search(r"AgentRunResult\(output=['\"](.+)['\"]\)", output, re.DOTALL)
+            if match:
+                output = match.group(1)
+                # Unescape newlines
+                output = output.replace("\\n", "\n")
+        return output
     
-    # Build context from results for multi-step responses
+    # If we have multiple agent results, find the best one
+    # Prefer the most complete/detailed response
+    best_agent_output = None
+    for result in agent_results:
+        if result.success and result.output:
+            output = result.output
+            # Clean up AgentRunResult wrapper if present
+            if "AgentRunResult(output=" in output:
+                import re
+                match = re.search(r"AgentRunResult\(output=['\"](.+)['\"]\)", output, re.DOTALL)
+                if match:
+                    output = match.group(1)
+                    output = output.replace("\\n", "\n")
+            
+            # Pick the longest/most detailed response
+            if best_agent_output is None or len(output) > len(best_agent_output):
+                best_agent_output = output
+    
+    # If we have a good agent response, return it directly
+    if best_agent_output and len(best_agent_output) > 100:
+        return best_agent_output
+    
+    # Build context from results for synthesis
     context_parts = []
     
-    # Add tool results
+    # Add tool results (but not raw output, just summaries)
     for result in tool_results:
         if result.success:
-            context_parts.append(f"**{result.tool_name.replace('_', ' ').title()} Results:**\n{result.output}")
-        else:
-            context_parts.append(f"**{result.tool_name.replace('_', ' ').title()}:** {result.error}")
+            # Truncate long outputs for context
+            output_preview = result.output[:500] if len(result.output) > 500 else result.output
+            context_parts.append(f"[{result.tool_name}]: {output_preview}")
     
     # Add agent results
     for result in agent_results:
-        if result.success:
-            context_parts.append(f"**Agent {result.agent_id} Output:**\n{result.output}")
-        else:
-            context_parts.append(f"**Agent {result.agent_id}:** {result.error}")
+        if result.success and result.output:
+            output = result.output
+            # Clean up wrapper
+            if "AgentRunResult(output=" in output:
+                import re
+                match = re.search(r"AgentRunResult\(output=['\"](.+)['\"]\)", output, re.DOTALL)
+                if match:
+                    output = match.group(1).replace("\\n", "\n")
+            context_parts.append(output)
     
     if not context_parts:
         return "I wasn't able to gather information to answer your question. Please try rephrasing or enabling additional tools."
     
-    # For now, return formatted results
-    # TODO: Use LLM to synthesize a natural response
-    response = f"Based on your query: \"{query}\"\n\n"
-    response += "\n\n".join(context_parts)
-    response += "\n\n---\n*Response synthesized from tool and agent results*"
+    # If we have agent responses, use the best one
+    # If only tool results, summarize them
+    if agent_results and any(r.success for r in agent_results):
+        # Return the best agent response
+        for result in agent_results:
+            if result.success and result.output:
+                output = result.output
+                if "AgentRunResult(output=" in output:
+                    import re
+                    match = re.search(r"AgentRunResult\(output=['\"](.+)['\"]\)", output, re.DOTALL)
+                    if match:
+                        output = match.group(1).replace("\\n", "\n")
+                return output
     
-    return response
+    # Fallback: return tool results with minimal formatting
+    return "\n\n".join(context_parts)
 
 
 async def execute_chat(
@@ -604,6 +683,62 @@ async def execute_chat(
     )
 
 
+# Friendly display names for tools
+TOOL_DISPLAY_NAMES = {
+    "web_search": "Web Search",
+    "document_search": "Document Search",
+    "get_weather": "Weather",
+    "ingest_document": "Document Ingestion",
+    "web_scraper": "Web Page Reader",
+}
+
+# Friendly display names for agents
+AGENT_DISPLAY_NAMES = {
+    "web_search_agent": "Web Research Agent",
+    "document_agent": "Document Analysis Agent",
+    "weather_agent": "Weather Agent",
+    "chat_agent": "Chat Agent",
+}
+
+
+def _get_tool_display_name(tool_name: str) -> str:
+    """Get friendly display name for a tool."""
+    return TOOL_DISPLAY_NAMES.get(tool_name, tool_name.replace("_", " ").title())
+
+
+def _get_agent_display_name(agent_id: str) -> str:
+    """Get friendly display name for an agent."""
+    return AGENT_DISPLAY_NAMES.get(agent_id, agent_id.replace("_", " ").title())
+
+
+def _summarize_tool_result(tool_name: str, result: ToolExecutionResult) -> str:
+    """Generate a brief summary of a tool result."""
+    if not result.success:
+        return f"encountered an issue: {result.error or 'Unknown error'}"
+    
+    output = result.output
+    if tool_name == "web_search":
+        # Try to count results from output
+        if "result" in output.lower():
+            return "found relevant web results"
+        return "completed web search"
+    
+    elif tool_name == "document_search":
+        if "found" in output.lower() or "result" in output.lower():
+            return "found relevant documents"
+        return "completed document search"
+    
+    elif tool_name == "get_weather":
+        if "°" in output or "temperature" in output.lower():
+            return "retrieved current weather"
+        return "completed weather lookup"
+    
+    elif tool_name == "web_scraper":
+        return "extracted page content"
+    
+    return "completed successfully"
+
+
 async def execute_chat_stream(
     query: str,
     routing_decision: RoutingDecision,
@@ -614,88 +749,170 @@ async def execute_chat_stream(
     conversation_history: Optional[List[Dict[str, str]]] = None
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
-    Execute chat with streaming updates.
+    Execute chat with streaming updates and descriptive status messages.
+    
+    Streams results in real-time as tools and agents complete, providing
+    immediate feedback to the user.
     
     Yields:
-        Dict with event type and data
+        Dict with event type, data, and human-readable message
     """
     logger.info(
         f"Executing streaming chat for user {user_id}",
         extra={"user_id": user_id, "model": model}
     )
     
-    # Execute tools
-    if routing_decision.selected_tools:
-        yield {
-            "type": "tools_start",
-            "data": {"tools": routing_decision.selected_tools}
-        }
-        
-        tool_results = await execute_tools(routing_decision.selected_tools, query, user_id)
-        
-        for result in tool_results:
-            yield {
-                "type": "tool_result",
-                "data": result.to_dict()
-            }
-    else:
-        tool_results = []
+    # Announce what we're about to do
+    tool_names = [_get_tool_display_name(t) for t in routing_decision.selected_tools]
+    agent_names = [_get_agent_display_name(a) for a in routing_decision.selected_agents]
     
-    # Execute agents
-    if routing_decision.selected_agents:
+    resources_used = []
+    if tool_names:
+        resources_used.append(f"tools ({', '.join(tool_names)})")
+    if agent_names:
+        resources_used.append(f"agents ({', '.join(agent_names)})")
+    
+    if resources_used:
         yield {
-            "type": "agents_start",
-            "data": {"agents": routing_decision.selected_agents}
+            "type": "planning",
+            "message": f"I'll use {' and '.join(resources_used)} to help with this.",
+            "data": {
+                "tools": routing_decision.selected_tools,
+                "agents": routing_decision.selected_agents,
+                "reasoning": routing_decision.reasoning,
+            }
+        }
+    
+    tool_results = []
+    agent_results = []
+    
+    # Execute tools one at a time with real-time updates
+    if routing_decision.selected_tools:
+        for tool_name in routing_decision.selected_tools:
+            display_name = _get_tool_display_name(tool_name)
+            
+            # Announce tool start
+            yield {
+                "type": "tool_start",
+                "message": f"Running {display_name}...",
+                "data": {"tool": tool_name, "display_name": display_name}
+            }
+            
+            # Execute this tool immediately and report result
+            results = await execute_tools([tool_name], query, user_id)
+            if results:
+                result = results[0]
+                tool_results.append(result)
+                summary = _summarize_tool_result(result.tool_name, result)
+                
+                yield {
+                    "type": "tool_result",
+                    "message": f"{display_name} {summary}.",
+                    "data": result.to_dict()
+                }
+    
+    # Execute agents one at a time with real-time streaming
+    if routing_decision.selected_agents:
+        for agent_id in routing_decision.selected_agents:
+            display_name = _get_agent_display_name(agent_id)
+            
+            # Announce agent start
+            yield {
+                "type": "agent_start",
+                "message": f"Consulting {display_name}...",
+                "data": {"agent": agent_id, "display_name": display_name}
+            }
+            
+            # Execute agent and stream its response
+            result = await execute_agent(agent_id, query, user_id, session, principal)
+            agent_results.append(result)
+            
+            if result.success:
+                # Clean up the output for display
+                output = result.output
+                if "AgentRunResult(output=" in output:
+                    import re
+                    match = re.search(r"AgentRunResult\(output=['\"](.+)['\"]\)", output, re.DOTALL)
+                    if match:
+                        output = match.group(1).replace("\\n", "\n")
+                
+                # Stream the agent's response in chunks for real-time feel
+                yield {
+                    "type": "agent_response_start",
+                    "message": f"{display_name} is responding...",
+                    "data": {"agent": agent_id}
+                }
+                
+                # Stream content word by word
+                words = output.split()
+                for i, word in enumerate(words):
+                    chunk = word + (" " if i < len(words) - 1 else "")
+                    yield {
+                        "type": "content_chunk",
+                        "data": {"chunk": chunk, "source": agent_id}
+                    }
+                    # Faster streaming for agent responses
+                    if i % 5 == 0:  # Yield every 5 words for smoother streaming
+                        await asyncio.sleep(0.01)
+                
+                yield {
+                    "type": "agent_result",
+                    "message": f"{display_name} completed.",
+                    "data": {**result.to_dict(), "output": output}
+                }
+            else:
+                yield {
+                    "type": "agent_result",
+                    "message": f"{display_name} encountered an issue: {result.error or 'Unknown error'}",
+                    "data": result.to_dict()
+                }
+    
+    # Only synthesize if we have ONLY tools (no agent response streamed yet)
+    # or if we have multiple agents that need combining
+    # Don't synthesize if we already streamed a single agent's response
+    needs_synthesis = (
+        (len(tool_results) > 0 and len(agent_results) == 0) or  # Tools only, no agent
+        len(agent_results) > 1  # Multiple agents need combining
+    )
+    
+    if needs_synthesis:
+        yield {
+            "type": "synthesis_start",
+            "message": "Combining results...",
+            "data": {"tool_count": len(tool_results), "agent_count": len(agent_results)}
         }
         
-        agent_results = await execute_agents(
-            routing_decision.selected_agents,
+        content = await synthesize_response(
             query,
-            user_id,
-            session,
-            principal
+            tool_results,
+            agent_results,
+            model,
+            conversation_history
         )
         
-        for result in agent_results:
+        # Stream synthesized content
+        words = content.split()
+        for i, word in enumerate(words):
+            chunk = word + (" " if i < len(words) - 1 else "")
             yield {
-                "type": "agent_result",
-                "data": result.to_dict()
+                "type": "content_chunk",
+                "data": {"chunk": chunk, "source": "synthesis"}
             }
-    else:
-        agent_results = []
-    
-    # Synthesize response
-    yield {"type": "synthesis_start", "data": {}}
-    
-    content = await synthesize_response(
-        query,
-        tool_results,
-        agent_results,
-        model,
-        conversation_history
-    )
+            if i % 5 == 0:
+                await asyncio.sleep(0.01)
     
     logger.info(
-        f"Synthesized content for streaming",
+        f"Streaming chat completed for user {user_id}",
         extra={
             "user_id": user_id,
-            "content_length": len(content),
-            "content_preview": content[:200]
+            "tool_count": len(tool_results),
+            "agent_count": len(agent_results)
         }
     )
-    
-    # Stream content in chunks
-    words = content.split()
-    for i, word in enumerate(words):
-        chunk = word + (" " if i < len(words) - 1 else "")
-        yield {
-            "type": "content_chunk",
-            "data": {"chunk": chunk}
-        }
-        await asyncio.sleep(0.02)  # Small delay for streaming effect
     
     yield {
         "type": "execution_complete",
+        "message": "Done!",
         "data": {
             "tool_count": len(tool_results),
             "agent_count": len(agent_results)

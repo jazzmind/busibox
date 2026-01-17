@@ -52,6 +52,23 @@ class TraceContextFilter(logging.Filter):
             record.trace_id = "0" * 32
             record.span_id = "0" * 16
         return True
+    
+    @staticmethod
+    def add_trace_context(logger, method_name, event_dict):
+        """
+        Add trace context as a structlog processor.
+        
+        For use with structlog's ProcessorFormatter for non-structlog loggers.
+        """
+        span = trace.get_current_span()
+        if span and span.get_span_context().is_valid:
+            ctx = span.get_span_context()
+            event_dict["trace_id"] = format(ctx.trace_id, "032x")
+            event_dict["span_id"] = format(ctx.span_id, "016x")
+        else:
+            event_dict["trace_id"] = "0" * 32
+            event_dict["span_id"] = "0" * 16
+        return event_dict
 
 
 def setup_logging(settings: Settings) -> None:
@@ -61,23 +78,8 @@ def setup_logging(settings: Settings) -> None:
     Args:
         settings: Application settings with log_level configuration
     """
-    # Create JSON formatter with trace context (if available)
-    if HAS_JSON_LOGGER:
-        log_format = "%(asctime)s %(levelname)s %(name)s %(trace_id)s %(span_id)s %(message)s"
-        formatter = jsonlogger.JsonFormatter(
-            log_format,
-            rename_fields={
-                "asctime": "timestamp",
-                "levelname": "level",
-                "name": "logger",
-            },
-        )
-    else:
-        # Fallback to standard formatter
-        formatter = logging.Formatter(
-            "%(asctime)s | %(levelname)s | %(name)s | %(trace_id)s | %(span_id)s | %(message)s"
-        )
-
+    import structlog
+    
     # Configure root logger
     root_logger = logging.getLogger()
     root_logger.setLevel(getattr(logging, settings.log_level.upper()))
@@ -86,10 +88,26 @@ def setup_logging(settings: Settings) -> None:
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
 
-    # Add console handler with JSON formatting
+    # Use structlog's ProcessorFormatter for consistent JSON output
+    # This works with both structlog loggers and stdlib loggers
+    formatter = structlog.stdlib.ProcessorFormatter(
+        # For non-structlog log entries, add these processors
+        foreign_pre_chain=[
+            structlog.stdlib.add_logger_name,
+            structlog.stdlib.add_log_level,
+            structlog.processors.TimeStamper(fmt="iso"),
+            TraceContextFilter.add_trace_context,
+        ],
+        # Final processors for all log entries
+        processors=[
+            structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+            structlog.processors.JSONRenderer(),
+        ],
+    )
+
+    # Add console handler
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
-    console_handler.addFilter(TraceContextFilter())
     root_logger.addHandler(console_handler)
 
     # Reduce noise from third-party libraries
@@ -97,6 +115,31 @@ def setup_logging(settings: Settings) -> None:
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("asyncpg").setLevel(logging.WARNING)
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+    logging.getLogger("opentelemetry").setLevel(logging.WARNING)
+    logging.getLogger("opentelemetry.sdk").setLevel(logging.WARNING)
+    
+    # Suppress noisy INFO logs from uvicorn and watchfiles
+    logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
+    logging.getLogger("watchfiles").setLevel(logging.WARNING)
+    
+    # Add filter to suppress health check access logs
+    class HealthCheckFilter(logging.Filter):
+        """Filter out health check requests from access logs."""
+        
+        EXCLUDED_PATHS = {"/health", "/health/", "/", "/readiness", "/liveness"}
+        
+        def filter(self, record: logging.LogRecord) -> bool:
+            # Check if this is an access log with a health check path
+            message = record.getMessage()
+            for path in self.EXCLUDED_PATHS:
+                # Match patterns like 'GET /health' or '"GET /health HTTP/1.1"'
+                if f"GET {path} " in message or f"GET {path}\"" in message:
+                    return False
+            return True
+    
+    # Apply filter to uvicorn access logger
+    uvicorn_access = logging.getLogger("uvicorn.access")
+    uvicorn_access.addFilter(HealthCheckFilter())
 
 
 def setup_tracing(settings: Settings, app_name: Optional[str] = None) -> None:
@@ -121,8 +164,10 @@ def setup_tracing(settings: Settings, app_name: Optional[str] = None) -> None:
     # Create tracer provider
     provider = TracerProvider(resource=resource)
 
-    # Add console exporter for development
-    if settings.debug or settings.environment == "development":
+    # Console span exporter is disabled by default as it's very noisy
+    # Enable explicitly via OTEL_CONSOLE_EXPORT=true if needed for debugging
+    import os
+    if os.environ.get("OTEL_CONSOLE_EXPORT", "").lower() == "true":
         console_exporter = ConsoleSpanExporter()
         provider.add_span_processor(BatchSpanProcessor(console_exporter))
 
@@ -146,7 +191,19 @@ def instrument_fastapi(app) -> None:
     """
     Instrument FastAPI application with OpenTelemetry.
     
+    Excludes health check endpoints from tracing to reduce log noise.
+    
     Args:
         app: FastAPI application instance
     """
-    FastAPIInstrumentor.instrument_app(app)
+    # Exclude health check endpoints from tracing
+    def exclude_health_check(scope) -> bool:
+        """Return True to exclude from tracing."""
+        path = scope.get("path", "")
+        return path in ("/health", "/health/", "/", "/readiness", "/liveness")
+    
+    FastAPIInstrumentor.instrument_app(
+        app,
+        excluded_urls="health,health/,readiness,liveness",
+        tracer_provider=trace.get_tracer_provider(),
+    )

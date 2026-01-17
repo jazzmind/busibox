@@ -105,10 +105,12 @@ class AgentRegistry:
                 raise ValueError(f"agent {agent_id} is not active")
             
             # Configure OpenAI client to use LiteLLM
+            from busibox_common.llm import ensure_openai_env
             settings = get_settings()
-            os.environ["OPENAI_BASE_URL"] = str(settings.litellm_base_url)
-            litellm_api_key = os.getenv("LITELLM_API_KEY", "sk-1234")
-            os.environ["OPENAI_API_KEY"] = litellm_api_key
+            ensure_openai_env(
+                base_url=str(settings.litellm_base_url),
+                api_key=settings.litellm_api_key,
+            )
             
             # Create agent instance
             model = OpenAIModel(

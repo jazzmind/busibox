@@ -55,6 +55,64 @@ async def user_b_token() -> str:
     return "Bearer mock-token-user-b"
 
 
+# Thread-local storage for test principal override
+import threading
+_test_principal_storage = threading.local()
+
+
+def set_test_principal(principal):
+    """Set the principal for the current request context."""
+    _test_principal_storage.principal = principal
+
+
+def get_test_principal():
+    """Get the principal for the current request context."""
+    return getattr(_test_principal_storage, 'principal', None)
+
+
+def clear_test_principal():
+    """Clear the test principal."""
+    if hasattr(_test_principal_storage, 'principal'):
+        del _test_principal_storage.principal
+
+
+class UserClient:
+    """
+    A wrapper around AsyncClient that sets the correct principal for each request.
+    """
+    def __init__(self, base_client: "AsyncClient", principal):
+        self._client = base_client
+        self._principal = principal
+    
+    async def get(self, *args, **kwargs):
+        set_test_principal(self._principal)
+        try:
+            return await self._client.get(*args, **kwargs)
+        finally:
+            clear_test_principal()
+    
+    async def post(self, *args, **kwargs):
+        set_test_principal(self._principal)
+        try:
+            return await self._client.post(*args, **kwargs)
+        finally:
+            clear_test_principal()
+    
+    async def put(self, *args, **kwargs):
+        set_test_principal(self._principal)
+        try:
+            return await self._client.put(*args, **kwargs)
+        finally:
+            clear_test_principal()
+    
+    async def delete(self, *args, **kwargs):
+        set_test_principal(self._principal)
+        try:
+            return await self._client.delete(*args, **kwargs)
+        finally:
+            clear_test_principal()
+
+
 @pytest.fixture(scope="function")
 async def user_a_client(user_a_principal):
     """HTTP client authenticated as User A."""
@@ -62,19 +120,22 @@ async def user_a_client(user_a_principal):
     from app.auth.dependencies import get_principal
     from app.main import app
     
-    async def override_get_principal():
-        return user_a_principal
+    async def test_principal_override():
+        # Check thread-local storage first, fall back to user_a_principal
+        p = get_test_principal()
+        return p if p else user_a_principal
     
-    # Store original overrides
-    original_overrides = app.dependency_overrides.copy()
-    app.dependency_overrides[get_principal] = override_get_principal
+    original_override = app.dependency_overrides.get(get_principal)
+    app.dependency_overrides[get_principal] = test_principal_override
     
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            yield client
-    finally:
-        # Restore original overrides
-        app.dependency_overrides = original_overrides
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        yield UserClient(client, user_a_principal)
+    
+    # Restore
+    if original_override is not None:
+        app.dependency_overrides[get_principal] = original_override
+    elif get_principal in app.dependency_overrides:
+        del app.dependency_overrides[get_principal]
 
 
 @pytest.fixture(scope="function")
@@ -84,24 +145,30 @@ async def user_b_client(user_b_principal):
     from app.auth.dependencies import get_principal
     from app.main import app
     
-    async def override_get_principal():
-        return user_b_principal
+    async def test_principal_override():
+        # Check thread-local storage first, fall back to user_b_principal
+        p = get_test_principal()
+        return p if p else user_b_principal
     
-    # Store original overrides
-    original_overrides = app.dependency_overrides.copy()
-    app.dependency_overrides[get_principal] = override_get_principal
+    original_override = app.dependency_overrides.get(get_principal)
+    app.dependency_overrides[get_principal] = test_principal_override
     
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            yield client
-    finally:
-        # Restore original overrides
-        app.dependency_overrides = original_overrides
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        yield UserClient(client, user_b_principal)
+    
+    # Restore
+    if original_override is not None:
+        app.dependency_overrides[get_principal] = original_override
+    elif get_principal in app.dependency_overrides:
+        del app.dependency_overrides[get_principal]
 
 
 @pytest.fixture
 async def builtin_agent_id(db_session: AsyncSession) -> uuid.UUID:
-    """Create a built-in agent visible to all users."""
+    """Create a built-in agent visible to all users.
+    
+    Uses a savepoint to ensure cleanup even if test fails.
+    """
     unique_name = f"builtin-test-agent-{uuid.uuid4().hex[:8]}"
     agent = AgentDefinition(
         name=unique_name,
@@ -118,7 +185,19 @@ async def builtin_agent_id(db_session: AsyncSession) -> uuid.UUID:
     db_session.add(agent)
     await db_session.commit()
     await db_session.refresh(agent)
-    return agent.id
+    agent_id = agent.id
+    
+    yield agent_id
+    
+    # Cleanup: delete the test agent after test completes
+    try:
+        from sqlalchemy import delete
+        await db_session.execute(
+            delete(AgentDefinition).where(AgentDefinition.id == agent_id)
+        )
+        await db_session.commit()
+    except Exception:
+        pass  # Best effort cleanup
 
 
 @pytest.mark.asyncio

@@ -17,10 +17,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 ANSIBLE_DIR="${REPO_ROOT}/provision/ansible"
 
-# Source UI library
+# Source libraries
 source "${REPO_ROOT}/scripts/lib/ui.sh"
+source "${REPO_ROOT}/scripts/lib/state.sh"
 
-# vLLM mode for test environment: "alias" (use production) or "deploy" (own container)
+# vLLM mode for staging environment: "alias" (use production) or "deploy" (own container)
 VLLM_MODE="alias"
 
 # Track if IP aliasing has been configured
@@ -181,6 +182,9 @@ deploy_service() {
     info "Deploying $service to $env environment..."
     echo ""
     
+    # Track command for re-run
+    save_last_command "make deploy SERVICE=$service INV=$env"
+    
     # Use make targets for common services
     case "$service" in
         all)
@@ -198,6 +202,10 @@ deploy_service() {
     esac
     
     cd "$REPO_ROOT"
+    
+    # Update state
+    add_deployed_service "$service"
+    set_install_status "deployed"
     
     echo ""
     success "Deployment completed successfully!"
@@ -501,8 +509,8 @@ llm_services_menu() {
         box "LLM Services - $env" 70
         echo ""
         
-        # Show vLLM mode for test environment
-        if [ "$env" = "test" ]; then
+        # Show vLLM mode for staging environment
+        if [ "$env" = "staging" ]; then
             if [ "$VLLM_MODE" = "alias" ]; then
                 echo -e "  ${GREEN}vLLM Mode: Aliased to Production${NC}"
                 if [ "$ALIAS_CONFIGURED" = "true" ]; then
@@ -523,7 +531,7 @@ llm_services_menu() {
         echo -e "  ${CYAN}2)${NC} Deploy vLLM & Models"
         echo -e "  ${CYAN}3)${NC} Deploy ColPali (visual embeddings)"
         echo -e "  ${CYAN}4)${NC} Deploy LiteLLM (gateway)"
-        if [ "$env" = "test" ]; then
+        if [ "$env" = "staging" ]; then
             echo -e "  ${CYAN}5)${NC} Configure IP Aliasing"
             echo -e "  ${CYAN}6)${NC} Change vLLM Mode"
             echo -e "  ${CYAN}7)${NC} Back"
@@ -533,14 +541,14 @@ llm_services_menu() {
         echo ""
         
         local max_option=5
-        [ "$env" = "test" ] && max_option=7
+        [ "$env" = "staging" ] && max_option=7
         
         read -p "Select option [1-$max_option]: " choice
         echo ""
         
         case "$choice" in
             1)
-                if [ "$env" = "test" ] && [ "$VLLM_MODE" = "alias" ]; then
+                if [ "$env" = "staging" ] && [ "$VLLM_MODE" = "alias" ]; then
                     # Ensure IP aliasing is configured before deploying LiteLLM
                     if [ "$ALIAS_CONFIGURED" != "true" ]; then
                         warn "IP aliasing not yet configured"
@@ -572,7 +580,7 @@ llm_services_menu() {
                 pause
                 ;;
             2)
-                if [ "$env" = "test" ] && [ "$VLLM_MODE" = "alias" ]; then
+                if [ "$env" = "staging" ] && [ "$VLLM_MODE" = "alias" ]; then
                     warn "vLLM is aliased to production in test mode"
                     info "To deploy a test vLLM, change vLLM mode first (option 6)"
                     pause
@@ -581,7 +589,7 @@ llm_services_menu() {
                 fi
                 ;;
             3)
-                if [ "$env" = "test" ] && [ "$VLLM_MODE" = "alias" ]; then
+                if [ "$env" = "staging" ] && [ "$VLLM_MODE" = "alias" ]; then
                     warn "ColPali is aliased to production in test mode"
                     info "To deploy test ColPali, change vLLM mode first (option 6)"
                     pause
@@ -594,7 +602,7 @@ llm_services_menu() {
                 ;;
             4)
                 # Ensure IP aliasing is configured before deploying LiteLLM in alias mode
-                if [ "$env" = "test" ] && [ "$VLLM_MODE" = "alias" ]; then
+                if [ "$env" = "staging" ] && [ "$VLLM_MODE" = "alias" ]; then
                     if [ "$ALIAS_CONFIGURED" != "true" ]; then
                         warn "IP aliasing not yet configured"
                         if confirm "Configure IP aliasing now?"; then
@@ -615,7 +623,7 @@ llm_services_menu() {
                 pause
                 ;;
             5)
-                if [ "$env" = "test" ]; then
+                if [ "$env" = "staging" ]; then
                     # Configure IP aliasing submenu
                     echo ""
                     echo -e "  ${CYAN}1)${NC} Enable IP aliasing (test -> production)"
@@ -636,7 +644,7 @@ llm_services_menu() {
                 fi
                 ;;
             6)
-                if [ "$env" = "test" ]; then
+                if [ "$env" = "staging" ]; then
                     select_vllm_mode
                     pause
                 else
@@ -645,7 +653,7 @@ llm_services_menu() {
                 fi
                 ;;
             7)
-                if [ "$env" = "test" ]; then
+                if [ "$env" = "staging" ]; then
                     return 0
                 else
                     error "Invalid choice"
@@ -660,7 +668,7 @@ llm_services_menu() {
     done
 }
 
-# APIs submenu (ingest, search, agent)
+# APIs submenu (ingest, search, agent, docs)
 apis_menu() {
     local env="$1"
     
@@ -675,18 +683,20 @@ apis_menu() {
         echo -e "  ${CYAN}2)${NC} Deploy Ingest API"
         echo -e "  ${CYAN}3)${NC} Deploy Search API"
         echo -e "  ${CYAN}4)${NC} Deploy Agent API"
-        echo -e "  ${CYAN}5)${NC} Back"
+        echo -e "  ${CYAN}5)${NC} Deploy Docs API"
+        echo -e "  ${CYAN}6)${NC} Back"
         echo ""
         
-        read -p "Select option [1-5]: " choice
+        read -p "Select option [1-6]: " choice
         echo ""
         
         case "$choice" in
             1)
-                if confirm "Deploy ALL APIs (ingest, search, agent) to $env?"; then
+                if confirm "Deploy ALL APIs (ingest, search, agent, docs) to $env?"; then
                     deploy_service "ingest" "$env" && \
                     deploy_service "search-api" "$env" && \
-                    deploy_service "agent" "$env"
+                    deploy_service "agent" "$env" && \
+                    deploy_service "docs" "$env"
                 fi
                 pause
                 ;;
@@ -709,6 +719,12 @@ apis_menu() {
                 pause
                 ;;
             5)
+                if confirm "Deploy Docs API to $env?"; then
+                    deploy_service "docs" "$env"
+                fi
+                pause
+                ;;
+            6)
                 return 0
                 ;;
             *)
@@ -834,7 +850,7 @@ deployment_menu() {
         
         # Show vLLM mode for test environment
         local menu_title="Deploy Services - $env Environment"
-        if [ "$env" = "test" ]; then
+        if [ "$env" = "staging" ]; then
             if [ "$VLLM_MODE" = "alias" ]; then
                 menu_title="Deploy Services - $env (vLLM: Production)"
             else
@@ -886,6 +902,329 @@ deployment_menu() {
     done
 }
 
+# Docker service selection submenu
+docker_select_service() {
+    local action="$1"  # "build", "start", "restart", "stop", "logs", "status"
+    local compose_file="${REPO_ROOT}/docker-compose.local.yml"
+    local env_file="${REPO_ROOT}/.env.local"
+    
+    # Capitalize first letter (compatible with bash 3.x / zsh / macOS)
+    local action_title="$(echo "$action" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')"
+    
+    while true; do
+        echo ""
+        menu "Select Service to ${action_title}" \
+            "authz-api" \
+            "ingest-api" \
+            "ingest-worker" \
+            "search-api" \
+            "agent-api" \
+            "docs-api" \
+            "nginx" \
+            "litellm" \
+            "postgres" \
+            "redis" \
+            "minio" \
+            "milvus" \
+            "Back"
+        
+        read -p "$(echo -e "${BOLD}Select option [1-13]:${NC} ")" choice
+        
+        local service_name=""
+        case $choice in
+            1) service_name="authz-api" ;;
+            2) service_name="ingest-api" ;;
+            3) service_name="ingest-worker" ;;
+            4) service_name="search-api" ;;
+            5) service_name="agent-api" ;;
+            6) service_name="docs-api" ;;
+            7) service_name="nginx" ;;
+            8) service_name="litellm" ;;
+            9) service_name="postgres" ;;
+            10) service_name="redis" ;;
+            11) service_name="minio" ;;
+            12) service_name="milvus" ;;
+            13) return 0 ;;
+            *) error "Invalid selection"; continue ;;
+        esac
+        
+        echo ""
+        case "$action" in
+            build)
+                info "Building $service_name..."
+                docker compose -f "$compose_file" --env-file "$env_file" build "$service_name"
+                success "Build complete!"
+                ;;
+            start)
+                info "Starting $service_name..."
+                docker compose -f "$compose_file" --env-file "$env_file" up -d "$service_name"
+                success "Service started!"
+                ;;
+            restart)
+                info "Restarting $service_name..."
+                docker compose -f "$compose_file" --env-file "$env_file" restart "$service_name"
+                success "Service restarted!"
+                ;;
+            stop)
+                info "Stopping $service_name..."
+                docker compose -f "$compose_file" --env-file "$env_file" stop "$service_name"
+                success "Service stopped!"
+                ;;
+            logs)
+                info "Showing logs for $service_name (press Ctrl+C to stop)..."
+                docker compose -f "$compose_file" logs -f "$service_name" || true
+                ;;
+            status)
+                info "Status for $service_name..."
+                docker compose -f "$compose_file" ps "$service_name"
+                ;;
+        esac
+        pause
+    done
+}
+
+# Service group operations
+docker_service_group_menu() {
+    local group_name="$1"
+    local services="$2"
+    local compose_file="${REPO_ROOT}/docker-compose.local.yml"
+    local env_file="${REPO_ROOT}/.env.local"
+    
+    while true; do
+        echo ""
+        menu "${group_name} Services" \
+            "Build" \
+            "Status" \
+            "Restart" \
+            "Start" \
+            "Stop" \
+            "Logs" \
+            "Back"
+        
+        read -p "$(echo -e "${BOLD}Select option [1-7]:${NC} ")" choice
+        
+        case $choice in
+            1)  # Build
+                header "Build ${group_name} Services" 70
+                echo ""
+                info "Building: $services"
+                echo ""
+                docker compose -f "$compose_file" --env-file "$env_file" build $services
+                echo ""
+                success "Build complete!"
+                pause
+                ;;
+            2)  # Status
+                header "${group_name} Services Status" 70
+                echo ""
+                docker compose -f "$compose_file" ps $services
+                pause
+                ;;
+            3)  # Restart
+                header "Restart ${group_name} Services" 70
+                echo ""
+                info "Restarting: $services"
+                echo ""
+                docker compose -f "$compose_file" --env-file "$env_file" restart $services
+                echo ""
+                success "Services restarted!"
+                pause
+                ;;
+            4)  # Start
+                header "Start ${group_name} Services" 70
+                echo ""
+                info "Starting: $services"
+                echo ""
+                docker compose -f "$compose_file" --env-file "$env_file" up -d $services
+                echo ""
+                success "Services started!"
+                pause
+                ;;
+            5)  # Stop
+                header "Stop ${group_name} Services" 70
+                echo ""
+                if confirm "Stop ${group_name} services?"; then
+                    docker compose -f "$compose_file" stop $services
+                    success "Services stopped!"
+                fi
+                pause
+                ;;
+            6)  # Logs
+                header "${group_name} Services Logs" 70
+                echo ""
+                info "Showing logs (press Ctrl+C to stop)..."
+                echo ""
+                docker compose -f "$compose_file" logs -f $services || true
+                ;;
+            7)  # Back
+                return 0
+                ;;
+            *)
+                error "Invalid selection. Please enter 1-7."
+                ;;
+        esac
+    done
+}
+
+# Individual service operation menu
+docker_individual_service_menu() {
+    local compose_file="${REPO_ROOT}/docker-compose.local.yml"
+    local env_file="${REPO_ROOT}/.env.local"
+    
+    while true; do
+        echo ""
+        menu "Select Service" \
+            "authz-api" \
+            "ingest-api" \
+            "ingest-worker" \
+            "search-api" \
+            "agent-api" \
+            "docs-api" \
+            "nginx" \
+            "litellm" \
+            "postgres" \
+            "redis" \
+            "minio" \
+            "milvus" \
+            "Back"
+        
+        read -p "$(echo -e "${BOLD}Select option [1-13]:${NC} ")" choice
+        
+        local service_name=""
+        case $choice in
+            1) service_name="authz-api" ;;
+            2) service_name="ingest-api" ;;
+            3) service_name="ingest-worker" ;;
+            4) service_name="search-api" ;;
+            5) service_name="agent-api" ;;
+            6) service_name="docs-api" ;;
+            7) service_name="nginx" ;;
+            8) service_name="litellm" ;;
+            9) service_name="postgres" ;;
+            10) service_name="redis" ;;
+            11) service_name="minio" ;;
+            12) service_name="milvus" ;;
+            13) return 0 ;;
+            *) error "Invalid selection"; continue ;;
+        esac
+        
+        # Service-specific operations menu
+        while true; do
+            echo ""
+            menu "${service_name} Operations" \
+                "Build" \
+                "Status" \
+                "Restart" \
+                "Start" \
+                "Stop" \
+                "Logs" \
+                "Back"
+            
+            read -p "$(echo -e "${BOLD}Select option [1-7]:${NC} ")" op_choice
+            
+            case $op_choice in
+                1)  # Build
+                    info "Building $service_name..."
+                    docker compose -f "$compose_file" --env-file "$env_file" build "$service_name"
+                    success "Build complete!"
+                    pause
+                    ;;
+                2)  # Status
+                    info "Status for $service_name..."
+                    docker compose -f "$compose_file" ps "$service_name"
+                    pause
+                    ;;
+                3)  # Restart
+                    info "Restarting $service_name..."
+                    docker compose -f "$compose_file" --env-file "$env_file" restart "$service_name"
+                    success "Service restarted!"
+                    pause
+                    ;;
+                4)  # Start
+                    info "Starting $service_name..."
+                    docker compose -f "$compose_file" --env-file "$env_file" up -d "$service_name"
+                    success "Service started!"
+                    pause
+                    ;;
+                5)  # Stop
+                    info "Stopping $service_name..."
+                    docker compose -f "$compose_file" --env-file "$env_file" stop "$service_name"
+                    success "Service stopped!"
+                    pause
+                    ;;
+                6)  # Logs
+                    info "Showing logs for $service_name (press Ctrl+C to stop)..."
+                    docker compose -f "$compose_file" logs -f "$service_name" || true
+                    ;;
+                7)  # Back
+                    break
+                    ;;
+                *)
+                    error "Invalid selection. Please enter 1-7."
+                    ;;
+            esac
+        done
+    done
+}
+
+# Docker deployment menu
+docker_deploy_menu() {
+    local compose_file="${REPO_ROOT}/docker-compose.local.yml"
+    local env_file="${REPO_ROOT}/.env.local"
+    
+    # Create .env.local if it doesn't exist
+    if [[ ! -f "$env_file" ]] && [[ -f "${REPO_ROOT}/env.local.example" ]]; then
+        warn "Creating .env.local from env.local.example..."
+        cp "${REPO_ROOT}/env.local.example" "$env_file"
+    fi
+    
+    while true; do
+        echo ""
+        menu "Docker Deployment - Local Development" \
+            "All Services" \
+            "All API Services (authz, ingest+worker, search, agent)" \
+            "All Data Services (postgres, redis, minio, milvus)" \
+            "Individual Services" \
+            "Clean Up (remove containers & volumes)" \
+            "Exit"
+        
+        read -p "$(echo -e "${BOLD}Select option [1-6]:${NC} ")" choice
+        
+        case $choice in
+            1)  # All Services
+                docker_service_group_menu "All" ""
+                ;;
+            2)  # All API Services
+                docker_service_group_menu "API" "authz-api ingest-api ingest-worker search-api agent-api docs-api"
+                ;;
+            3)  # All Data Services
+                docker_service_group_menu "Data" "postgres redis minio milvus"
+                ;;
+            4)  # Individual Services
+                docker_individual_service_menu
+                ;;
+            5)  # Clean Up
+                header "Clean Up Docker Environment" 70
+                echo ""
+                warn "This will remove all containers and volumes!"
+                warn "All data (database, minio, etc.) will be LOST!"
+                echo ""
+                if confirm "Are you sure you want to clean up?" "n"; then
+                    docker compose -f "$compose_file" down -v --remove-orphans
+                    success "Cleanup complete!"
+                fi
+                pause
+                ;;
+            6)  # Exit
+                return 0
+                ;;
+            *)
+                error "Invalid selection. Please enter 1-6."
+                ;;
+        esac
+    done
+}
+
 # Main menu
 main() {
     # Check for command-line arguments for non-interactive mode
@@ -903,7 +1242,24 @@ main() {
         echo "Service: $service | Environment: $env"
         echo ""
         
-        # Check Ansible
+        # Handle Docker environment
+        if [[ "$env" == "docker" ]]; then
+            local compose_file="${REPO_ROOT}/docker-compose.local.yml"
+            local env_file="${REPO_ROOT}/.env.local"
+            
+            if [[ ! -f "$env_file" ]] && [[ -f "${REPO_ROOT}/env.local.example" ]]; then
+                cp "${REPO_ROOT}/env.local.example" "$env_file"
+            fi
+            
+            if [[ "$service" == "all" ]]; then
+                docker compose -f "$compose_file" --env-file "$env_file" up -d --build
+            else
+                docker compose -f "$compose_file" --env-file "$env_file" up -d --build "$service"
+            fi
+            exit $?
+        fi
+        
+        # Check Ansible for non-Docker deployments
         if ! check_ansible; then
             exit 1
         fi
@@ -920,21 +1276,50 @@ main() {
     info "Deploy services using Ansible"
     echo ""
     
-    # Check Ansible
+    # Use environment from state (set by main menu)
+    ENV=$(get_environment)
+    local BACKEND=$(get_backend "$ENV")
+    
+    if [[ -z "$ENV" ]]; then
+        # Fallback: select environment if not set in state
+        ENV=$(select_environment)
+    else
+        info "Using environment from state: $ENV ($BACKEND)"
+        echo ""
+        echo -e "  ${DIM}Press Enter to continue, or 'c' to change${NC}"
+        local change_choice=""
+        read -t 3 -n 1 change_choice 2>/dev/null || true
+        if [[ "${change_choice:-}" == "c" ]]; then
+            ENV=$(select_environment)
+        fi
+    fi
+    
+    success "Selected environment: $ENV"
+    
+    # Handle Docker environment separately
+    if [[ "$ENV" == "docker" ]]; then
+        docker_deploy_menu
+        echo ""
+        box "Deployment Complete" 70
+        echo ""
+        summary "Next Steps" \
+            "Run tests: ${CYAN}make docker-test SERVICE=authz${NC}" \
+            "View logs: ${CYAN}make docker-logs${NC}" \
+            "Check status: ${CYAN}make docker-ps${NC}"
+        echo ""
+        exit 0
+    fi
+    
+    # Check Ansible for non-Docker deployments
     if ! check_ansible; then
         exit 1
     fi
     
     echo ""
     
-    # Select environment
-    ENV=$(select_environment)
-    
-    success "Selected environment: $ENV"
-    
     # For test environment, default to alias mode (can be changed in LLM Services menu)
     # For production, always deploy its own vLLM
-    if [ "$ENV" != "test" ]; then
+    if [ "$ENV" != "staging" ]; then
         VLLM_MODE="deploy"
     fi
     # Note: Test env defaults to VLLM_MODE="alias" (set at top of script)

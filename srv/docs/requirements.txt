@@ -1,0 +1,12 @@
+# Busibox Docs API Dependencies
+# Minimal requirements for serving documentation
+
+# Web framework
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+
+# YAML parsing for frontmatter and OpenAPI specs
+pyyaml==6.0.2
+
+# Pydantic for data validation
+pydantic==2.10.4

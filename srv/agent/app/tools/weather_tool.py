@@ -88,7 +88,7 @@ async def get_weather(location: str) -> WeatherOutput:
     Fetch current weather for a location using Open-Meteo API.
     
     Args:
-        location: City name to get weather for
+        location: City name to get weather for (e.g., "New York", "London", "Tokyo")
         
     Returns:
         WeatherOutput with current weather data
@@ -97,15 +97,22 @@ async def get_weather(location: str) -> WeatherOutput:
         ValueError: If location is not found
         httpx.HTTPError: If API request fails
     """
+    import urllib.parse
+    
+    # Clean up location - remove state/country codes that confuse the geocoding API
+    # e.g., "New York, NY" -> "New York", "London, UK" -> "London"
+    clean_location = location.split(",")[0].strip()
+    
     async with httpx.AsyncClient(timeout=30.0) as client:
         # First, geocode the location
-        geocoding_url = f"https://geocoding-api.open-meteo.com/v1/search?name={location}&count=1"
+        encoded_location = urllib.parse.quote(clean_location)
+        geocoding_url = f"https://geocoding-api.open-meteo.com/v1/search?name={encoded_location}&count=5"
         geocoding_response = await client.get(geocoding_url)
         geocoding_response.raise_for_status()
         geocoding_data = GeocodingResponse.model_validate(geocoding_response.json())
         
         if not geocoding_data.results:
-            raise ValueError(f"Location '{location}' not found")
+            raise ValueError(f"Location '{location}' not found. Try using just the city name (e.g., 'New York' instead of 'New York, NY').")
         
         result = geocoding_data.results[0]
         

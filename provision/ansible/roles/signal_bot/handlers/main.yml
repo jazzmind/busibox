@@ -1,0 +1,21 @@
+---
+# Signal Bot Handlers
+
+- name: restart signal-cli
+  community.docker.docker_container:
+    name: "{{ signal_cli_container_name }}"
+    state: started
+    restart: true
+
+- name: restart signal-bot
+  ansible.builtin.systemd:
+    name: "{{ signal_bot_service_name }}"
+    state: restarted
+    daemon_reload: true
+  when: signal_bot_enabled
+
+- name: reload signal-bot
+  ansible.builtin.systemd:
+    name: "{{ signal_bot_service_name }}"
+    state: reloaded
+  when: signal_bot_enabled

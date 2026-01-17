@@ -1,0 +1,12 @@
+---
+# Docs API role defaults
+docs_user: docs
+docs_group: docs
+docs_base_dir: /srv/docs
+docs_src_dir: "{{ playbook_dir }}/../../srv/docs"
+docs_openapi_dir: "{{ playbook_dir }}/../../openapi"
+docs_content_dir: "{{ playbook_dir }}/../../docs"
+docs_service_name: docs-api
+docs_service_port: 8004
+docs_venv_dir: "{{ docs_base_dir }}/venv"
+docs_app_dir: "{{ docs_base_dir }}/app"

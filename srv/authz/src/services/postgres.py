@@ -74,411 +74,20 @@ class PostgresService:
         """
         Create authz tables if missing.
 
-        We intentionally use CREATE TABLE IF NOT EXISTS to avoid a migration dependency
-        for this service; Busibox infra can later formalize migrations if desired.
+        Uses the shared SchemaManager pattern for idempotent schema creation.
+        The schema is defined in schema.py and applied on every startup.
         """
         if not self.pool:
             # connect() will call ensure_schema() again; avoid recursion
             return
+        
+        from schema import get_authz_schema
+        
+        schema = get_authz_schema()
         async with self.pool.acquire() as conn:
-            # Needed for gen_random_uuid() default. If extension install is restricted in an env,
-            # infra should pre-provision it on the Busibox cluster DB.
-            await conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto;")
-            await conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS audit_logs (
-                  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-                  actor_id uuid NOT NULL,
-                  action text NOT NULL,
-                  resource_type text NOT NULL,
-                  resource_id uuid NULL,
-                  details jsonb NOT NULL DEFAULT '{}'::jsonb,
-                  created_at timestamptz NOT NULL DEFAULT now()
-                );
-                """
-            )
-
-            await conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS authz_oauth_clients (
-                  client_id text PRIMARY KEY,
-                  client_secret_hash text NOT NULL,
-                  allowed_audiences text[] NOT NULL DEFAULT '{}'::text[],
-                  allowed_scopes text[] NOT NULL DEFAULT '{}'::text[],
-                  is_active boolean NOT NULL DEFAULT true,
-                  created_at timestamptz NOT NULL DEFAULT now()
-                );
-                """
-            )
-
-            await conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS authz_signing_keys (
-                  kid text PRIMARY KEY,
-                  alg text NOT NULL,
-                  private_key_pem bytea NOT NULL,
-                  public_jwk jsonb NOT NULL,
-                  is_active boolean NOT NULL DEFAULT true,
-                  created_at timestamptz NOT NULL DEFAULT now()
-                );
-                """
-            )
-
-            await conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS authz_roles (
-                  id uuid PRIMARY KEY,
-                  name text NOT NULL UNIQUE,
-                  description text NULL,
-                  scopes text[] NOT NULL DEFAULT '{}'::text[],
-                  created_at timestamptz NOT NULL DEFAULT now(),
-                  updated_at timestamptz NOT NULL DEFAULT now()
-                );
-                """
-            )
-            
-            # Migration: Add scopes column if missing (for existing deployments)
-            await conn.execute(
-                """
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns 
-                        WHERE table_name = 'authz_roles' AND column_name = 'scopes'
-                    ) THEN
-                        ALTER TABLE authz_roles ADD COLUMN scopes text[] NOT NULL DEFAULT '{}'::text[];
-                    END IF;
-                END $$;
-                """
-            )
-
-            await conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS authz_users (
-                  user_id uuid PRIMARY KEY,
-                  email text NOT NULL,
-                  status text NULL,
-                  idp_provider text NULL,
-                  idp_tenant_id text NULL,
-                  idp_object_id text NULL,
-                  idp_roles jsonb NOT NULL DEFAULT '[]'::jsonb,
-                  idp_groups jsonb NOT NULL DEFAULT '[]'::jsonb,
-                  created_at timestamptz NOT NULL DEFAULT now(),
-                  updated_at timestamptz NOT NULL DEFAULT now()
-                );
-                """
-            )
-
-            await conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS authz_user_roles (
-                  user_id uuid NOT NULL REFERENCES authz_users(user_id) ON DELETE CASCADE,
-                  role_id uuid NOT NULL REFERENCES authz_roles(id) ON DELETE CASCADE,
-                  created_at timestamptz NOT NULL DEFAULT now(),
-                  PRIMARY KEY (user_id, role_id)
-                );
-                """
-            )
-            
-            # ----------------------------------------------------------------
-            # Envelope Encryption Keystore Tables
-            # ----------------------------------------------------------------
-            
-            # Master Key Encryption Keys (KEKs) - one per role or user
-            # The KEK itself is encrypted with the system master key (from env)
-            await conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS authz_key_encryption_keys (
-                  kek_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-                  owner_type text NOT NULL CHECK (owner_type IN ('role', 'user', 'system')),
-                  owner_id uuid NULL,  -- NULL for system-level keys
-                  encrypted_key bytea NOT NULL,  -- KEK encrypted with master key
-                  key_algorithm text NOT NULL DEFAULT 'AES-256-GCM',
-                  key_version integer NOT NULL DEFAULT 1,
-                  is_active boolean NOT NULL DEFAULT true,
-                  created_at timestamptz NOT NULL DEFAULT now(),
-                  rotated_at timestamptz NULL,
-                  UNIQUE (owner_type, owner_id, key_version)
-                );
-                """
-            )
-            
-            # Data Encryption Key registry - tracks DEKs wrapped with KEKs
-            # Each file's DEK can be wrapped with multiple KEKs (one per authorized role)
-            await conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS authz_wrapped_data_keys (
-                  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-                  file_id uuid NOT NULL,  -- Reference to the encrypted file
-                  kek_id uuid NOT NULL REFERENCES authz_key_encryption_keys(kek_id) ON DELETE CASCADE,
-                  wrapped_dek bytea NOT NULL,  -- DEK encrypted with the KEK
-                  dek_algorithm text NOT NULL DEFAULT 'AES-256-GCM',
-                  created_at timestamptz NOT NULL DEFAULT now(),
-                  UNIQUE (file_id, kek_id)
-                );
-                """
-            )
-            
-            # Index for fast lookups by file_id
-            await conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_wrapped_data_keys_file_id 
-                ON authz_wrapped_data_keys(file_id);
-                """
-            )
-
-            # ----------------------------------------------------------------
-            # Phase 1: Extended User/Role/Audit Columns (Migration)
-            # ----------------------------------------------------------------
-            
-            # Add new columns to authz_users
-            await conn.execute(
-                """
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns 
-                        WHERE table_name = 'authz_users' AND column_name = 'email_verified_at'
-                    ) THEN
-                        ALTER TABLE authz_users ADD COLUMN email_verified_at timestamptz NULL;
-                    END IF;
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns 
-                        WHERE table_name = 'authz_users' AND column_name = 'last_login_at'
-                    ) THEN
-                        ALTER TABLE authz_users ADD COLUMN last_login_at timestamptz NULL;
-                    END IF;
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns 
-                        WHERE table_name = 'authz_users' AND column_name = 'pending_expires_at'
-                    ) THEN
-                        ALTER TABLE authz_users ADD COLUMN pending_expires_at timestamptz NULL;
-                    END IF;
-                END $$;
-                """
-            )
-            
-            # Add is_system column to authz_roles
-            await conn.execute(
-                """
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns 
-                        WHERE table_name = 'authz_roles' AND column_name = 'is_system'
-                    ) THEN
-                        ALTER TABLE authz_roles ADD COLUMN is_system boolean NOT NULL DEFAULT false;
-                    END IF;
-                END $$;
-                """
-            )
-            
-            # Add assigned_by column to authz_user_roles
-            await conn.execute(
-                """
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns 
-                        WHERE table_name = 'authz_user_roles' AND column_name = 'assigned_by'
-                    ) THEN
-                        ALTER TABLE authz_user_roles ADD COLUMN assigned_by uuid NULL;
-                    END IF;
-                END $$;
-                """
-            )
-            
-            # Extend audit_logs with new columns
-            await conn.execute(
-                """
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns 
-                        WHERE table_name = 'audit_logs' AND column_name = 'event_type'
-                    ) THEN
-                        ALTER TABLE audit_logs ADD COLUMN event_type text NULL;
-                    END IF;
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns 
-                        WHERE table_name = 'audit_logs' AND column_name = 'target_user_id'
-                    ) THEN
-                        ALTER TABLE audit_logs ADD COLUMN target_user_id uuid NULL;
-                    END IF;
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns 
-                        WHERE table_name = 'audit_logs' AND column_name = 'target_role_id'
-                    ) THEN
-                        ALTER TABLE audit_logs ADD COLUMN target_role_id uuid NULL;
-                    END IF;
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns 
-                        WHERE table_name = 'audit_logs' AND column_name = 'target_app_id'
-                    ) THEN
-                        ALTER TABLE audit_logs ADD COLUMN target_app_id uuid NULL;
-                    END IF;
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns 
-                        WHERE table_name = 'audit_logs' AND column_name = 'ip_address'
-                    ) THEN
-                        ALTER TABLE audit_logs ADD COLUMN ip_address text NULL;
-                    END IF;
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns 
-                        WHERE table_name = 'audit_logs' AND column_name = 'user_agent'
-                    ) THEN
-                        ALTER TABLE audit_logs ADD COLUMN user_agent text NULL;
-                    END IF;
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns 
-                        WHERE table_name = 'audit_logs' AND column_name = 'success'
-                    ) THEN
-                        ALTER TABLE audit_logs ADD COLUMN success boolean NOT NULL DEFAULT true;
-                    END IF;
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns 
-                        WHERE table_name = 'audit_logs' AND column_name = 'error_message'
-                    ) THEN
-                        ALTER TABLE audit_logs ADD COLUMN error_message text NULL;
-                    END IF;
-                END $$;
-                """
-            )
-
-            # ----------------------------------------------------------------
-            # Phase 1: Authentication Tables
-            # ----------------------------------------------------------------
-            
-            # Sessions table (synced from better-auth)
-            await conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS authz_sessions (
-                  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-                  user_id uuid NOT NULL REFERENCES authz_users(user_id) ON DELETE CASCADE,
-                  token text NOT NULL UNIQUE,
-                  expires_at timestamptz NOT NULL,
-                  ip_address text NULL,
-                  user_agent text NULL,
-                  created_at timestamptz NOT NULL DEFAULT now()
-                );
-                """
-            )
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_sessions_token ON authz_sessions(token);")
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_sessions_user_id ON authz_sessions(user_id);")
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_sessions_expires_at ON authz_sessions(expires_at);")
-            
-            # Magic links table
-            await conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS authz_magic_links (
-                  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-                  user_id uuid NOT NULL REFERENCES authz_users(user_id) ON DELETE CASCADE,
-                  token text NOT NULL UNIQUE,
-                  email text NOT NULL,
-                  expires_at timestamptz NOT NULL,
-                  used_at timestamptz NULL,
-                  created_at timestamptz NOT NULL DEFAULT now()
-                );
-                """
-            )
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_magic_links_token ON authz_magic_links(token);")
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_magic_links_user_id ON authz_magic_links(user_id);")
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_magic_links_expires_at ON authz_magic_links(expires_at);")
-            
-            # TOTP codes table
-            await conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS authz_totp_codes (
-                  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-                  user_id uuid NOT NULL REFERENCES authz_users(user_id) ON DELETE CASCADE,
-                  code_hash text NOT NULL,
-                  email text NOT NULL,
-                  expires_at timestamptz NOT NULL,
-                  used_at timestamptz NULL,
-                  created_at timestamptz NOT NULL DEFAULT now()
-                );
-                """
-            )
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_totp_codes_user_id ON authz_totp_codes(user_id);")
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_totp_codes_email_code ON authz_totp_codes(email, code_hash);")
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_totp_codes_expires_at ON authz_totp_codes(expires_at);")
-            
-            # Passkeys table (WebAuthn credentials)
-            await conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS authz_passkeys (
-                  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-                  user_id uuid NOT NULL REFERENCES authz_users(user_id) ON DELETE CASCADE,
-                  credential_id text NOT NULL UNIQUE,
-                  credential_public_key text NOT NULL,
-                  counter bigint NOT NULL DEFAULT 0,
-                  device_type text NOT NULL,
-                  backed_up boolean NOT NULL DEFAULT false,
-                  transports text[] NOT NULL DEFAULT '{}'::text[],
-                  aaguid text NULL,
-                  name text NOT NULL,
-                  last_used_at timestamptz NULL,
-                  created_at timestamptz NOT NULL DEFAULT now(),
-                  updated_at timestamptz NOT NULL DEFAULT now()
-                );
-                """
-            )
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_passkeys_user_id ON authz_passkeys(user_id);")
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_passkeys_credential_id ON authz_passkeys(credential_id);")
-            
-            # Passkey challenges table
-            await conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS authz_passkey_challenges (
-                  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-                  challenge text NOT NULL UNIQUE,
-                  user_id uuid NULL,
-                  type text NOT NULL,
-                  expires_at timestamptz NOT NULL,
-                  created_at timestamptz NOT NULL DEFAULT now()
-                );
-                """
-            )
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_passkey_challenges_challenge ON authz_passkey_challenges(challenge);")
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_passkey_challenges_expires_at ON authz_passkey_challenges(expires_at);")
-            
-            # ----------------------------------------------------------------
-            # Phase 1: Email Domain Configuration
-            # ----------------------------------------------------------------
-            
-            await conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS authz_email_domain_config (
-                  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-                  domain text NOT NULL UNIQUE,
-                  is_allowed boolean NOT NULL DEFAULT true,
-                  created_at timestamptz NOT NULL DEFAULT now(),
-                  updated_at timestamptz NOT NULL DEFAULT now()
-                );
-                """
-            )
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_authz_email_domain_config_domain ON authz_email_domain_config(domain);")
-
-            # ----------------------------------------------------------------
-            # Role-Resource Bindings (generic role-to-resource mapping)
-            # ----------------------------------------------------------------
-            
-            await conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS authz_role_bindings (
-                  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-                  role_id uuid NOT NULL REFERENCES authz_roles(id) ON DELETE CASCADE,
-                  resource_type text NOT NULL,
-                  resource_id text NOT NULL,
-                  permissions jsonb DEFAULT '{}'::jsonb,
-                  created_at timestamptz DEFAULT now(),
-                  created_by uuid NULL,
-                  UNIQUE(role_id, resource_type, resource_id)
-                );
-                """
-            )
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_role_bindings_resource ON authz_role_bindings(resource_type, resource_id);")
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_role_bindings_role ON authz_role_bindings(role_id);")
+            await schema.apply(conn)
+        
+        logger.info("Authz schema initialization complete")
 
     # ---------------------------------------------------------------------
     # Audit
@@ -1591,6 +1200,22 @@ class PostgresService:
             }
             return session
 
+    async def get_session_by_id(self, session_id: str) -> dict | None:
+        """Get a session by its ID (for JTI verification in JWT tokens)."""
+        sid = validate_uuid(session_id, "session_id")
+        
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT s.id::text as session_id, s.user_id::text, s.token, s.expires_at,
+                       s.ip_address, s.user_agent, s.created_at
+                FROM authz_sessions s
+                WHERE s.id = $1 AND s.expires_at > now()
+                """,
+                sid,
+            )
+            return dict(row) if row else None
+
     async def delete_session(self, token: str) -> bool:
         """Delete a session by token."""
         async with self.acquire(None, None) as conn:
@@ -2068,6 +1693,91 @@ class PostgresService:
         async with self.acquire(None, None) as conn:
             result = await conn.execute(
                 "DELETE FROM authz_passkey_challenges WHERE expires_at < now()"
+            )
+            return int(result.split()[-1]) if result else 0
+
+    # ---------------------------------------------------------------------
+    # Delegation Tokens
+    # ---------------------------------------------------------------------
+
+    async def create_delegation_token(
+        self,
+        *,
+        user_id: str,
+        scopes: List[str],
+        name: str,
+        expires_at: str,
+    ) -> dict:
+        """Create a delegation token for background tasks."""
+        uid = validate_uuid(user_id, "user_id")
+        from datetime import datetime
+        exp = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO authz_delegation_tokens (user_id, scopes, name, expires_at)
+                VALUES ($1, $2, $3, $4)
+                RETURNING jti::text, user_id::text, scopes, name, expires_at, created_at
+                """,
+                uid,
+                scopes,
+                name,
+                exp,
+            )
+            return dict(row)
+
+    async def get_delegation_token(self, jti: str) -> dict | None:
+        """Get a delegation token by JTI."""
+        token_id = validate_uuid(jti, "jti")
+        
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT jti::text, user_id::text, scopes, name, expires_at, created_at, revoked_at
+                FROM authz_delegation_tokens
+                WHERE jti = $1 AND expires_at > now() AND revoked_at IS NULL
+                """,
+                token_id,
+            )
+            return dict(row) if row else None
+
+    async def list_user_delegation_tokens(self, user_id: str) -> List[dict]:
+        """List all active delegation tokens for a user."""
+        uid = validate_uuid(user_id, "user_id")
+        
+        async with self.acquire(None, None) as conn:
+            rows = await conn.fetch(
+                """
+                SELECT jti::text, user_id::text, scopes, name, expires_at, created_at, revoked_at
+                FROM authz_delegation_tokens
+                WHERE user_id = $1 AND expires_at > now()
+                ORDER BY created_at DESC
+                """,
+                uid,
+            )
+            return [dict(row) for row in rows]
+
+    async def revoke_delegation_token(self, jti: str) -> bool:
+        """Revoke a delegation token."""
+        token_id = validate_uuid(jti, "jti")
+        
+        async with self.acquire(None, None) as conn:
+            result = await conn.execute(
+                """
+                UPDATE authz_delegation_tokens
+                SET revoked_at = now()
+                WHERE jti = $1 AND revoked_at IS NULL
+                """,
+                token_id,
+            )
+            return result != "UPDATE 0"
+
+    async def cleanup_expired_delegation_tokens(self) -> int:
+        """Delete all expired delegation tokens."""
+        async with self.acquire(None, None) as conn:
+            result = await conn.execute(
+                "DELETE FROM authz_delegation_tokens WHERE expires_at < now()"
             )
             return int(result.split()[-1]) if result else 0
 

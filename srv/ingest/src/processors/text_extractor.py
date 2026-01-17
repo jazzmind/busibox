@@ -297,38 +297,51 @@ class TextExtractor:
                 )
                 
                 # Extract from this split
+                logger.debug(f"Calling _extract_single_pdf for split {split_idx + 1}")
                 result = self._extract_single_pdf(split_path)
+                logger.debug(f"_extract_single_pdf returned for split {split_idx + 1}")
                 
                 # Accumulate text
+                logger.debug(f"Accumulating text for split {split_idx + 1}")
                 if result.text:
                     # Add page range marker for debugging/reference
                     all_text_parts.append(result.text)
+                logger.debug(f"Text accumulated for split {split_idx + 1}")
                 
                 # Accumulate markdown
+                logger.debug(f"Accumulating markdown for split {split_idx + 1}")
                 if result.markdown:
                     all_markdown_parts.append(result.markdown)
+                logger.debug(f"Markdown accumulated for split {split_idx + 1}")
                 
                 # Accumulate page images (adjust paths to avoid conflicts)
+                logger.debug(f"Accumulating page images for split {split_idx + 1}")
                 if result.page_images:
                     all_page_images.extend(result.page_images)
+                logger.debug(f"Page images accumulated for split {split_idx + 1}: {len(result.page_images) if result.page_images else 0}")
                 
                 # Accumulate tables
+                logger.debug(f"Accumulating tables for split {split_idx + 1}")
                 if result.tables:
                     # Add page offset to table metadata
                     for table in result.tables:
                         if isinstance(table, dict):
                             table["page_offset"] = start_page - 1
                     all_tables.extend(result.tables)
+                logger.debug(f"Tables accumulated for split {split_idx + 1}")
                 
                 # Use extraction method from first successful extraction
+                logger.debug(f"Checking extraction method for split {split_idx + 1}")
                 if extraction_method == "unknown" and result.metadata.get("extraction_method"):
                     extraction_method = result.metadata.get("extraction_method")
+                logger.debug(f"Extraction method set: {extraction_method}")
                 
-                logger.debug(
+                logger.info(
                     "Split extraction complete",
                     split_num=split_idx + 1,
                     text_length=len(result.text) if result.text else 0,
                     page_images=len(result.page_images) if result.page_images else 0,
+                    has_markdown=result.markdown is not None,
                 )
         
         finally:
@@ -539,6 +552,12 @@ class TextExtractor:
                 page_count = 0
         
         # Detect scanned PDFs (no extractable text)
+        logger.debug(
+            "Checking if OCR needed",
+            file_path=file_path,
+            has_text=bool(text_content.strip()),
+            page_count=page_count,
+        )
         if not text_content.strip() and page_count > 0:
             logger.warning("No text extracted, PDF may be scanned - OCR required", file_path=file_path)
             # Trigger OCR processing (implemented separately)
@@ -554,8 +573,16 @@ class TextExtractor:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 logger.debug("Cleared CUDA cache after PDF extraction")
-        except Exception:
-            pass  # Not critical if this fails
+        except Exception as e:
+            logger.debug("GPU cache clear skipped", error=str(e))
+        
+        logger.info(
+            "PDF extraction complete, returning result",
+            file_path=file_path,
+            text_length=len(text_content),
+            page_count=page_count,
+            has_page_images=len(page_images) > 0,
+        )
         
         return ExtractionResult(
             text=text_content,
@@ -627,13 +654,53 @@ class TextExtractor:
         
         Images are scaled to ensure ColPali generates at most 32 patches (4096 dims)
         to avoid truncation and information loss.
+        
+        Returns empty list if poppler-utils is not installed or extraction fails.
         """
         try:
             from pdf2image import convert_from_path
+            from pdf2image.exceptions import (
+                PDFInfoNotInstalledError,
+                PDFPageCountError,
+                PDFSyntaxError
+            )
             from PIL import Image
             
             logger.info("Extracting PDF page images", file_path=file_path)
-            images = convert_from_path(file_path, dpi=150)
+            
+            # pdf2image needs poppler-utils (pdftoppm) installed
+            try:
+                images = convert_from_path(file_path, dpi=150)
+            except (PDFInfoNotInstalledError, PDFPageCountError) as e:
+                # Poppler not installed or can't read PDF
+                logger.warning(
+                    "Poppler not available, skipping page image extraction",
+                    file_path=file_path,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+                return []
+            except PDFSyntaxError as e:
+                # Malformed PDF
+                logger.warning(
+                    "PDF syntax error, skipping page image extraction",
+                    file_path=file_path,
+                    error=str(e),
+                )
+                return []
+            except Exception as conv_error:
+                # Other conversion errors
+                logger.error(
+                    "Page image extraction failed", 
+                    file_path=file_path, 
+                    error=str(conv_error),
+                    error_type=type(conv_error).__name__,
+                )
+                return []
+            
+            if not images:
+                logger.warning("No page images extracted", file_path=file_path)
+                return []
             
             # ColPali target: 32 patches max (32 * 128 = 4096 dims)
             # Each patch is roughly 14x14 pixels, so 32 patches ≈ 448x448 pixels
@@ -667,11 +734,20 @@ class TextExtractor:
             logger.info("Extracted page images", count=len(page_images), file_path=file_path)
             return page_images
         
-        except ImportError:
-            logger.warning("pdf2image not available, skipping page image extraction")
+        except ImportError as e:
+            # pdf2image or pdf2image.exceptions not available
+            logger.warning(
+                "pdf2image not available, skipping page image extraction",
+                error=str(e),
+            )
             return []
         except Exception as e:
-            logger.error("Page image extraction failed", file_path=file_path, error=str(e))
+            logger.error(
+                "Page image extraction failed unexpectedly", 
+                file_path=file_path, 
+                error=str(e),
+                error_type=type(e).__name__,
+            )
             return []
     
     def _ocr_pdf(self, file_path: str) -> str:

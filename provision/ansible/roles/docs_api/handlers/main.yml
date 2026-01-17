@@ -1,0 +1,6 @@
+---
+- name: Restart docs-api service
+  systemd:
+    name: "{{ docs_service_name }}"
+    state: restarted
+    daemon_reload: true

@@ -17,18 +17,39 @@ from api.middleware.jwt_auth import set_rls_session_vars
 logger = structlog.get_logger()
 
 
+# Test mode header name
+TEST_MODE_HEADER = "X-Test-Mode"
+
+
 class PostgresService:
     """Service for PostgreSQL operations."""
     
-    def __init__(self, config: dict, request=None):
-        """Initialize PostgreSQL connection pool."""
+    def __init__(self, config: dict, request=None, use_test_db: bool = False):
+        """Initialize PostgreSQL connection pool.
+        
+        Args:
+            config: Database configuration dictionary
+            request: Optional FastAPI request object
+            use_test_db: If True, use test database configuration
+        """
         self.config = config
-        self.host = config.get("postgres_host", "10.96.200.203")
-        self.port = config.get("postgres_port", 5432)
-        self.database = config.get("postgres_db", "busibox")
-        self.user = config.get("postgres_user", "postgres")
-        self.password = config.get("postgres_password", "")
         self.request = request
+        
+        # Select database credentials based on test mode
+        if use_test_db and config.get("test_mode_enabled"):
+            self.host = config.get("postgres_host", "10.96.200.203")
+            self.port = config.get("postgres_port", 5432)
+            self.database = config.get("test_postgres_db", "test_files")
+            self.user = config.get("test_postgres_user", "busibox_test_user")
+            self.password = config.get("test_postgres_password", "testpassword")
+            self._is_test_db = True
+        else:
+            self.host = config.get("postgres_host", "10.96.200.203")
+            self.port = config.get("postgres_port", 5432)
+            self.database = config.get("postgres_db", "busibox")
+            self.user = config.get("postgres_user", "postgres")
+            self.password = config.get("postgres_password", "")
+            self._is_test_db = False
         
         self.pool: Optional[asyncpg.Pool] = None
         self._pool_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -62,12 +83,108 @@ class PostgresService:
             )
             self._pool_loop = current_loop
             logger.info("PostgreSQL connection pool created")
+            # Ensure required tables exist (idempotent)
+            await self.ensure_schema()
+
+    async def ensure_schema(self) -> None:
+        """
+        Create ingest tables if missing.
+        
+        Uses the shared SchemaManager pattern for idempotent schema creation.
+        The schema is defined in schema.py and applied on every startup.
+        """
+        if not self.pool:
+            return
+        
+        # Import schema from parent directory
+        import sys
+        from pathlib import Path
+        schema_path = Path(__file__).parent.parent.parent
+        if str(schema_path) not in sys.path:
+            sys.path.insert(0, str(schema_path))
+        
+        from schema import get_ingest_schema
+        
+        schema = get_ingest_schema()
+        async with self.pool.acquire() as conn:
+            await schema.apply(conn)
+            
+            # Apply additional migrations from the migrations directory
+            # These are idempotent (use IF NOT EXISTS, ADD COLUMN IF NOT EXISTS, etc.)
+            await self._apply_migrations(conn)
+        
+        logger.info("Ingest schema ensured")
+        self._document_roles_ready = True
+    
+    async def _apply_migrations(self, conn) -> None:
+        """
+        Apply migration SQL files from the migrations directory.
+        
+        Migrations should be idempotent (use IF NOT EXISTS, etc.) so they can
+        be safely re-run on every startup.
+        """
+        import os
+        from pathlib import Path
+        
+        # Find migrations directory relative to this file
+        # When deployed: /opt/ingest/migrations/ or /app/migrations/
+        # When local: srv/ingest/migrations/
+        possible_paths = [
+            Path(__file__).parent.parent.parent.parent / "migrations",  # From src/api/services/ -> srv/ingest/migrations
+            Path("/opt/ingest/migrations"),  # Deployed path
+            Path("/app/migrations"),  # Docker path
+        ]
+        
+        migrations_dir = None
+        for path in possible_paths:
+            if path.exists() and path.is_dir():
+                migrations_dir = path
+                break
+        
+        if not migrations_dir:
+            logger.debug("No migrations directory found, skipping migrations")
+            return
+        
+        # Order of migrations matters - apply in specific order
+        migration_order = [
+            "add_markdown_storage.sql",
+            "add_multi_flow_support.sql",
+            "add_cleanup_stage.sql",
+            "add_processing_history.sql",
+            "add_rbac_schema.sql",
+            "add_rls_policies.sql",
+            "003_security_model.sql",
+        ]
+        
+        for migration_file in migration_order:
+            migration_path = migrations_dir / migration_file
+            if migration_path.exists():
+                try:
+                    sql = migration_path.read_text()
+                    
+                    # Execute the entire migration file at once
+                    # asyncpg supports multi-statement execution
+                    try:
+                        await conn.execute(sql)
+                        logger.debug(f"Applied migration: {migration_file}")
+                    except Exception as e:
+                        error_str = str(e).lower()
+                        # Ignore "already exists" and "does not exist" errors - migration already applied
+                        if "already exists" in error_str or "does not exist" in error_str:
+                            logger.debug(f"Migration {migration_file} already applied (or partially applied)")
+                        else:
+                            logger.warning(f"Migration {migration_file} had errors: {str(e)[:200]}")
+                except Exception as e:
+                    logger.warning(f"Failed to read migration {migration_file}: {e}")
 
     async def _ensure_document_roles(self, conn):
         """
         Defensive: ensure document_roles table exists (for environments where
         migrations have not been applied yet). Uses IF NOT EXISTS so it is safe
         to run repeatedly.
+        
+        Note: This is now handled by ensure_schema() on connect(), but kept for
+        backward compatibility with existing code paths.
         """
         if self._document_roles_ready:
             return

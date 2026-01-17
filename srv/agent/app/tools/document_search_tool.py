@@ -2,9 +2,9 @@
 from typing import List, Optional
 
 from pydantic import BaseModel, Field
-from pydantic_ai import Tool
+from pydantic_ai import Tool, RunContext
 
-from app.clients.search_client import SearchClient
+from app.agents.core import BusiboxDeps
 
 
 class DocumentSearchInput(BaseModel):
@@ -21,6 +21,7 @@ class SearchResultItem(BaseModel):
     text: str = Field(description="Relevant text excerpt from the document")
     score: float = Field(description="Relevance score")
     page_number: Optional[int] = Field(default=None, description="Page number if available")
+    chunk_index: int = Field(default=0, description="Chunk index within the document")
 
 
 class DocumentSearchOutput(BaseModel):
@@ -33,6 +34,7 @@ class DocumentSearchOutput(BaseModel):
 
 
 async def search_documents(
+    ctx: RunContext[BusiboxDeps],
     query: str,
     limit: int = 5,
     mode: str = "hybrid",
@@ -45,6 +47,7 @@ async def search_documents(
     document library. Results are automatically filtered based on user permissions.
     
     Args:
+        ctx: RunContext with authenticated BusiboxClient
         query: Search query string
         limit: Maximum number of results (default: 5, max: 50)
         mode: Search mode - "hybrid" (recommended), "semantic", or "keyword"
@@ -57,19 +60,20 @@ async def search_documents(
         Exception: If search API is unavailable or returns an error
     """
     try:
-        # Create search client (auth token should be set via context/environment)
-        async with SearchClient() as client:
-            # Perform search with reranking enabled
-            response = await client.search(
-                query=query,
-                limit=min(limit, 50),
-                mode=mode,
-                file_ids=file_ids,
-                rerank=True,  # Enable reranking for better results
-            )
+        # Use authenticated BusiboxClient from context
+        response = await ctx.deps.busibox_client.search(
+            query=query,
+            top_k=min(limit, 50),
+            mode=mode,
+            file_ids=file_ids,
+            rerank=True,  # Enable reranking for better results
+        )
+        
+        # Parse response - BusiboxClient returns raw dict from search API
+        results = response.get("results", [])
         
         # Check if we got results
-        if not response.results or len(response.results) == 0:
+        if not results or len(results) == 0:
             return DocumentSearchOutput(
                 found=False,
                 result_count=0,
@@ -81,13 +85,14 @@ async def search_documents(
         formatted_results = []
         context_parts = []
         
-        for idx, result in enumerate(response.results, 1):
+        for idx, result in enumerate(results, 1):
             # Create result item
             result_item = SearchResultItem(
-                filename=result.filename or f"Document {result.file_id[:8]}",
-                text=result.text,
-                score=result.score,
-                page_number=result.page_number if result.page_number > 0 else None,
+                filename=result.get("filename") or f"Document {result.get('file_id', 'unknown')[:8]}",
+                text=result.get("text", ""),
+                score=result.get("score", 0.0),
+                page_number=result.get("page_number") if result.get("page_number", 0) > 0 else None,
+                chunk_index=result.get("chunk_index", 0),
             )
             formatted_results.append(result_item)
             
@@ -97,7 +102,7 @@ async def search_documents(
                 source_info += f", Page {result_item.page_number}"
             
             context_parts.append(
-                f"--- Document {idx} [Source: {source_info}] ---\n{result.text}"
+                f"--- Document {idx} [Source: {source_info}, Relevance: {result_item.score:.2f}] ---\n{result.get('text', '')}"
             )
         
         # Combine context
@@ -125,7 +130,7 @@ async def search_documents(
 # Create the Pydantic AI tool
 document_search_tool = Tool(
     search_documents,
-    takes_ctx=False,
+    takes_ctx=True,  # Requires RunContext for authenticated API calls
     name="document_search",
     description="""Search through the user's uploaded documents to find relevant information.
 Use this tool when:
@@ -134,7 +139,10 @@ Use this tool when:
 - You want to provide context-aware answers based on the user's data
 
 The tool performs hybrid search (combining semantic and keyword matching) for best results.
-Results are automatically filtered based on user permissions.""",
+Results are automatically filtered based on user permissions (RLS).
+
+Example: "What does the compliance document say about data retention?"
+""",
 )
 
 

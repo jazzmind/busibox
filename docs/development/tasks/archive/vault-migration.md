@@ -117,7 +117,7 @@ ln -sf ../../../../roles/secrets/vars/vault.yml vault.yml
 ### Error: "vault.yml has merge conflicts"
 Solution: Use Option 1 above (recommended)
 
-### Error: "network_base_octets_test is undefined"
+### Error: "network_base_octets_staging is undefined"
 Solution: Vault isn't loading. Check:
 1. Symlinks exist in `inventory/*/group_vars/all/vault.yml`
 2. Actual vault exists at `roles/secrets/vars/vault.yml`

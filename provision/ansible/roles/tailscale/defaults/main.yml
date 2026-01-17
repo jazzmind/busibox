@@ -1,0 +1,34 @@
+---
+# Tailscale Role Defaults
+# Created: 2026-01-13
+# Purpose: Configure Tailscale mesh VPN for secure remote access
+
+# Tailscale authentication key (stored in vault)
+# Generate at: https://login.tailscale.com/admin/settings/keys
+# Use a reusable auth key for automation
+tailscale_auth_key: "{{ secrets.tailscale.auth_key | default('') }}"
+
+# Tailscale advertise routes (expose internal network to tailnet)
+# Set to true to allow other tailscale nodes to access the Busibox network
+tailscale_advertise_routes: false
+tailscale_routes: "{{ internal_network }}"
+
+# Tailscale exit node (allow this node to route all traffic)
+tailscale_exit_node: false
+
+# Tailscale hostname (defaults to ansible inventory hostname)
+tailscale_hostname: "{{ inventory_hostname }}"
+
+# Whether to accept routes advertised by other nodes
+tailscale_accept_routes: true
+
+# Whether to accept DNS settings from Tailscale
+tailscale_accept_dns: true
+
+# Tailscale tags for ACL management (optional)
+# Example: tag:busibox-server
+tailscale_tags: []
+
+# Service state
+tailscale_enabled: true
+tailscale_started: true

@@ -489,57 +489,57 @@ async def send_chat_message_stream(
                 # Send model selection event
                 yield f"event: model_selected\ndata: {json.dumps(model_selection.model_dump())}\n\n"
             
-            # If specific agents are selected, bypass dispatcher
+            # Route through dispatcher
+            # If specific agents are selected, use them as available_agents for intelligent routing
+            from app.models.domain import AgentDefinition
+            
+            enabled_tools = []
+            if payload.enable_web_search:
+                enabled_tools.append("web_search")
+            if payload.enable_doc_search:
+                enabled_tools.append("doc_search")
+            
+            if user_settings and user_settings.enabled_tools:
+                enabled_tools = [t for t in enabled_tools if t in user_settings.enabled_tools]
+            
+            # Determine available agents for dispatcher
+            # If user selected specific agents, use those as available options
+            # Otherwise, use all active agents
             if payload.selected_agents:
-                # Use selected agents directly
-                decision = RoutingDecision(
-                    selected_tools=[],
-                    selected_agents=payload.selected_agents,
-                    confidence=1.0,
-                    reasoning=f"Using pre-selected agent(s): {', '.join(payload.selected_agents)}",
-                    alternatives=[],
-                    requires_disambiguation=False
-                )
-                
-                # Send routing decision event
-                yield f"event: routing_decision\ndata: {json.dumps(decision.model_dump())}\n\n"
+                available_agents_for_routing = payload.selected_agents
             else:
-                # Route through dispatcher
-                enabled_tools = []
-                if payload.enable_web_search:
-                    enabled_tools.append("web_search")
-                if payload.enable_doc_search:
-                    enabled_tools.append("doc_search")
-                
-                if user_settings and user_settings.enabled_tools:
-                    enabled_tools = [t for t in enabled_tools if t in user_settings.enabled_tools]
-                
-                dispatcher_request = DispatcherRequest(
-                    query=payload.message,
-                    available_tools=["web_search", "doc_search"],
-                    available_agents=[],
-                    attachments=[
-                        FileAttachment(name=att.name, type=att.type, url=att.url)
-                        for att in (payload.attachments or [])
-                    ],
-                    user_settings=UserSettings(
-                        enabled_tools=enabled_tools,
-                        enabled_agents=user_settings.enabled_agents if user_settings else []
-                    )
+                # Get all active agents
+                stmt = select(AgentDefinition).where(AgentDefinition.is_active.is_(True))
+                result = await session.execute(stmt)
+                all_agents = result.scalars().all()
+                available_agents_for_routing = [str(agent.id) for agent in all_agents]
+            
+            dispatcher_request = DispatcherRequest(
+                query=payload.message,
+                available_tools=["web_search", "doc_search"],
+                available_agents=available_agents_for_routing,
+                attachments=[
+                    FileAttachment(name=att.name, type=att.type, url=att.url)
+                    for att in (payload.attachments or [])
+                ],
+                user_settings=UserSettings(
+                    enabled_tools=enabled_tools,
+                    enabled_agents=available_agents_for_routing  # Use the determined agents
                 )
-                
-                request_id = str(uuid.uuid4())
-                routing_response = await route_query(
-                    request=dispatcher_request,
-                    user_id=principal.sub,
-                    request_id=request_id,
-                    session=session
-                )
-                
-                decision = routing_response.routing_decision
-                
-                # Send routing decision event
-                yield f"event: routing_decision\ndata: {json.dumps(decision.model_dump())}\n\n"
+            )
+            
+            request_id = str(uuid.uuid4())
+            routing_response = await route_query(
+                request=dispatcher_request,
+                user_id=principal.sub,
+                request_id=request_id,
+                session=session
+            )
+            
+            decision = routing_response.routing_decision
+            
+            # Send routing decision event
+            yield f"event: routing_decision\ndata: {json.dumps(decision.model_dump())}\n\n"
             
             # Execute tools and agents with streaming
             full_content = []
@@ -599,6 +599,179 @@ async def send_chat_message_stream(
             
         except Exception as e:
             logger.error(f"Streaming chat failed: {e}", exc_info=True)
+            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+    
+    return StreamingResponse(
+        generate_events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"  # Disable nginx buffering
+        }
+    )
+
+
+@router.post("/message/stream/agentic")
+async def send_chat_message_stream_agentic(
+    payload: ChatMessageRequest,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+) -> StreamingResponse:
+    """
+    Send a chat message using the agentic dispatcher with real-time streaming.
+    
+    This endpoint provides a more interactive experience where:
+    - The dispatcher explains what it's doing in real-time
+    - Agents stream their thoughts and tool usage
+    - Users can see the research process as it happens
+    
+    Event types:
+    - thought: Dispatcher/agent reasoning (for collapsible thinking section)
+    - tool_start: Starting a tool execution
+    - tool_result: Tool completed with result
+    - content: Final response content (streams to chat message)
+    - complete: Execution finished
+    - error: Error occurred
+    
+    Args:
+        payload: Chat message request
+        principal: Authenticated user
+        session: Database session
+        
+    Returns:
+        StreamingResponse with SSE events
+    """
+    from app.services.agentic_dispatcher import run_agentic_dispatcher
+    
+    # Create cancellation event
+    cancel_event = asyncio.Event()
+    
+    async def generate_events() -> AsyncGenerator[str, None]:
+        """Generate SSE events from agentic dispatcher."""
+        try:
+            # Get or create conversation
+            title_updated = False
+            if payload.conversation_id:
+                result = await session.execute(
+                    select(Conversation).where(
+                        Conversation.id == payload.conversation_id,
+                        Conversation.user_id == principal.sub
+                    )
+                )
+                conversation = result.scalar_one_or_none()
+                
+                if not conversation:
+                    yield f"event: error\ndata: {json.dumps({'error': 'Conversation not found'})}\n\n"
+                    return
+                
+                # Update title if it's still the default "New Conversation"
+                if conversation.title == "New Conversation":
+                    generated_title = payload.message[:50] + "..." if len(payload.message) > 50 else payload.message
+                    conversation.title = generated_title
+                    title_updated = True
+                    # Send title update event
+                    yield f"event: title_update\ndata: {json.dumps({'conversation_id': str(conversation.id), 'title': generated_title})}\n\n"
+            else:
+                # Generate title from first message (truncate to 50 chars)
+                generated_title = payload.message[:50] + "..." if len(payload.message) > 50 else payload.message
+                conversation = Conversation(
+                    title=generated_title,
+                    user_id=principal.sub
+                )
+                session.add(conversation)
+                await session.flush()
+                
+                # Send conversation created event with title
+                yield f"event: conversation_created\ndata: {json.dumps({'conversation_id': str(conversation.id), 'title': generated_title})}\n\n"
+            
+            # Store user message
+            user_message = Message(
+                conversation_id=conversation.id,
+                role="user",
+                content=payload.message,
+                attachments=[att.model_dump() for att in payload.attachments] if payload.attachments else None
+            )
+            session.add(user_message)
+            await session.flush()
+            
+            # Get conversation history
+            history_result = await session.execute(
+                select(Message)
+                .where(Message.conversation_id == conversation.id)
+                .order_by(Message.created_at.asc())
+                .limit(20)
+            )
+            history_messages = history_result.scalars().all()
+            history_dicts = [
+                {"role": msg.role, "content": msg.content}
+                for msg in history_messages
+            ]
+            
+            # Determine available agents
+            available_agents = ["web_search", "chat"]
+            if payload.selected_agents:
+                available_agents = payload.selected_agents
+            
+            # Collect content for storing
+            full_content = []
+            thoughts = []
+            
+            # Run agentic dispatcher
+            async for event in run_agentic_dispatcher(
+                query=payload.message,
+                user_id=principal.sub,
+                session=session,
+                cancel=cancel_event,
+                available_agents=available_agents,
+                conversation_history=history_dicts,
+                principal=principal,
+            ):
+                # Yield event to client
+                yield f"event: {event.type}\ndata: {event.model_dump_json()}\n\n"
+                
+                # Collect content and thoughts
+                if event.type == "content":
+                    full_content.append(event.message)
+                elif event.type in ("thought", "tool_start", "tool_result"):
+                    thoughts.append({
+                        "type": event.type,
+                        "source": event.source,
+                        "message": event.message,
+                    })
+            
+            # Store assistant message
+            # Join without separator - content chunks are already properly formatted
+            response_text = "".join(full_content) if full_content else "No response generated."
+            
+            assistant_message = Message(
+                conversation_id=conversation.id,
+                role="assistant",
+                content=response_text,
+                routing_decision={
+                    "thoughts": thoughts,
+                    "selected_agents": available_agents,  # Store which agents were used
+                } if thoughts or available_agents else None,
+            )
+            session.add(assistant_message)
+            
+            conversation.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            
+            await session.commit()
+            await session.refresh(assistant_message)
+            
+            # Send completion event with message ID
+            completion_data = {
+                'message_id': str(assistant_message.id),
+                'conversation_id': str(conversation.id),
+            }
+            yield f"event: message_complete\ndata: {json.dumps(completion_data)}\n\n"
+            
+        except asyncio.CancelledError:
+            logger.info("Agentic chat cancelled by client")
+            cancel_event.set()
+        except Exception as e:
+            logger.error(f"Agentic streaming chat failed: {e}", exc_info=True)
             yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
     
     return StreamingResponse(
@@ -910,4 +1083,60 @@ async def chat_legacy(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Chat request failed: {str(e)}",
         )
+
+
+# =============================================================================
+# MESSAGE DELETION
+# =============================================================================
+
+@router.delete("/{conversation_id}/messages/{message_id}")
+async def delete_message(
+    conversation_id: uuid.UUID,
+    message_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """
+    Delete a message from a conversation.
+    
+    Only the conversation owner can delete messages.
+    """
+    # Verify conversation exists and user owns it
+    result = await session.execute(
+        select(Conversation).where(
+            Conversation.id == conversation_id,
+            Conversation.user_id == principal.sub,
+        )
+    )
+    conversation = result.scalar_one_or_none()
+    
+    if not conversation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found or you don't have permission to modify it",
+        )
+    
+    # Find and delete the message
+    result = await session.execute(
+        select(Message).where(
+            Message.id == message_id,
+            Message.conversation_id == conversation_id,
+        )
+    )
+    message = result.scalar_one_or_none()
+    
+    if not message:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Message not found",
+        )
+    
+    await session.delete(message)
+    await session.commit()
+    
+    logger.info(
+        f"Message {message_id} deleted from conversation {conversation_id} by user {principal.sub}"
+    )
+    
+    return {"success": True, "message_id": str(message_id)}
 

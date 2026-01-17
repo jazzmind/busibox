@@ -1,81 +1,153 @@
-"""Document assistant agent for intelligent document Q&A."""
-import os
-from pydantic_ai import Agent
-from pydantic_ai.models.openai import OpenAIModel
+"""
+Document Search Agent.
 
-from app.config.settings import get_settings
-from app.tools.document_search_tool import document_search_tool
+A document Q&A agent that streams its thoughts and progress in real-time,
+allowing users to see exactly what it's doing as it searches documents
+and synthesizes answers.
 
-settings = get_settings()
+This agent extends BaseStreamingAgent with document-specific configuration
+and synthesis prompts.
+"""
 
-# Configure OpenAI client to use LiteLLM
-os.environ["OPENAI_BASE_URL"] = str(settings.litellm_base_url)
-litellm_api_key = settings.litellm_api_key or "sk-1234"
-os.environ["OPENAI_API_KEY"] = litellm_api_key
+import logging
+from typing import List, Optional
 
-# Create OpenAI-compatible model
-model = OpenAIModel(
-    model_name=settings.default_model,
-    provider="openai",
+from app.agents.base_agent import (
+    AgentConfig,
+    AgentContext,
+    BaseStreamingAgent,
+    ExecutionMode,
+    PipelineStep,
+    ToolStrategy,
 )
+from app.tools.document_search_tool import DocumentSearchOutput
 
-# Create the document agent
-document_agent = Agent(
-    model=model,
-    tools=[document_search_tool],
-    system_prompt="""You are an intelligent document assistant that helps users find information in their uploaded documents.
+logger = logging.getLogger(__name__)
 
-## Your Capabilities
 
-1. **Document Search**: You can search through the user's documents to find relevant information
-2. **Question Answering**: You provide accurate answers based on document content
-3. **Citation**: You always cite which document and section your information comes from
+# Document-specific synthesis prompt
+DOCUMENT_SYNTHESIS_PROMPT = """You are an intelligent document assistant. Given a user's question and document excerpts, create a helpful, accurate answer.
 
-## How to Answer Questions
-
-When a user asks a question:
-
-1. **Search First**: ALWAYS use the document_search tool to find relevant content
-   - Use the user's query as the search query
-   - The tool will return relevant document excerpts with source information
-
-2. **Use Retrieved Context**: Base your answer ONLY on the document content returned by the search
-   - If the search returns relevant results, use them to answer the question
-   - Quote or paraphrase the relevant sections
-   - Cite the source document (filename, page number if available)
-
-3. **Be Honest About Limitations**:
-   - If no relevant documents are found, tell the user
-   - If the answer is not in the documents, say so
-   - Never make up information not present in the documents
-
-## Response Format
-
-When answering from documents:
+Guidelines:
+- Base your answer ONLY on the provided document content
 - Start with a direct answer to the question
-- Provide supporting details from the documents
-- End with source citations
+- Use **bold** for emphasis on key terms
+- Use bullet points (- ) for lists
+- Always cite your sources with format: (Source: filename, Page X)
+- If the documents don't contain the answer, say so clearly
+- Never make up information not present in the documents
 
-Example:
-"Based on your documents, [answer]. According to [Document Name], [relevant quote/detail]. (Source: filename.pdf, Page X)"
-
-## Tool Usage Flow
-
-1. Call document_search with:
-   - query: the user's question or search terms
-   - limit: 5 (default, increase for more comprehensive answers)
-   - mode: "hybrid" (recommended for best results)
-
-2. Use the returned context to formulate your answer
-
-Remember: Always search the documents before answering. Never guess or make assumptions about document content.""",
-    retries=2,
-)
+IMPORTANT: Output clean, well-formatted markdown without extra blank lines."""
 
 
+class DocumentAgent(BaseStreamingAgent):
+    """
+    A streaming document search agent that:
+    1. Searches through the user's documents
+    2. Retrieves relevant content with citations
+    3. Synthesizes an answer based on document context
+    
+    All steps stream their progress to the user in real-time.
+    """
+    
+    def __init__(self):
+        config = AgentConfig(
+            name="document-agent",
+            display_name="Document Assistant",
+            instructions=DOCUMENT_SYNTHESIS_PROMPT,
+            tools=["document_search"],
+            execution_mode=ExecutionMode.RUN_ONCE,
+            tool_strategy=ToolStrategy.PREDEFINED_PIPELINE,
+        )
+        super().__init__(config)
+    
+    def pipeline_steps(self, query: str, context: AgentContext) -> List[PipelineStep]:
+        """
+        Define the document search pipeline.
+        
+        For document search, we have a simple single-step pipeline:
+        1. Search documents with the user's query
+        """
+        return [
+            PipelineStep(
+                tool="document_search",
+                args={
+                    "query": query,
+                    "limit": 5,
+                    "mode": "hybrid",
+                }
+            )
+        ]
+    
+    def _build_synthesis_context(self, query: str, context: AgentContext) -> str:
+        """
+        Build context for synthesis from document search results.
+        
+        Formats results with source citations for the synthesis agent.
+        """
+        search_result = context.tool_results.get("document_search")
+        
+        if not search_result:
+            return f"User Question: {query}\n\nNo documents were found."
+        
+        # Handle DocumentSearchOutput
+        if hasattr(search_result, 'results'):
+            context_parts = [f"User Question: {query}\n\nDocument Excerpts:\n"]
+            
+            for i, result in enumerate(search_result.results, 1):
+                source_info = result.filename if hasattr(result, 'filename') else f"Document {i}"
+                if hasattr(result, 'page_number') and result.page_number:
+                    source_info += f", Page {result.page_number}"
+                
+                score = result.score if hasattr(result, 'score') else 0.0
+                text = result.text if hasattr(result, 'text') else str(result)
+                
+                context_parts.append(f"""
+---
+Source {i}: {source_info}
+Relevance Score: {score:.2f}
+
+Content:
+{text}
+---
+""")
+            
+            context_parts.append("\nPlease answer the user's question based only on these document excerpts.")
+            return "\n".join(context_parts)
+        
+        # Fallback for other result types
+        return f"User Question: {query}\n\nResults:\n{search_result}"
+    
+    def _build_fallback_response(self, query: str, context: AgentContext) -> str:
+        """
+        Build fallback response if synthesis fails.
+        
+        Returns raw document excerpts with citations.
+        """
+        search_result = context.tool_results.get("document_search")
+        
+        if not search_result or not hasattr(search_result, 'results'):
+            return f"I found some information about **{query}** but couldn't process it properly."
+        
+        parts = [f"Here's what I found in your documents about **{query}**:\n"]
+        
+        for result in search_result.results:
+            source_info = result.filename if hasattr(result, 'filename') else "Unknown"
+            if hasattr(result, 'page_number') and result.page_number:
+                source_info += f", Page {result.page_number}"
+            
+            score = result.score if hasattr(result, 'score') else 0.0
+            text = result.text if hasattr(result, 'text') else str(result)
+            
+            parts.append(f"\n### From: {source_info}")
+            parts.append(f"*Relevance: {score:.2f}*\n")
+            parts.append(text[:500] + ("..." if len(text) > 500 else ""))
+            parts.append("")
+        
+        return "\n".join(parts)
 
 
-
-
-
-
+# Singleton instances
+document_agent = DocumentAgent()
+# Alias for backward compatibility during migration
+document_agent_streaming = document_agent

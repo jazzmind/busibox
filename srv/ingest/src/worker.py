@@ -626,6 +626,13 @@ class IngestWorker:
                 role_count=len(role_ids) if role_ids else 0,
             )
             
+            # Update status to processing immediately
+            self.postgres_service.update_status(
+                file_id=file_id,
+                stage="processing",
+                progress=5,
+            )
+            
             # Get content_hash from database (with RLS context)
             conn = self.postgres_service._get_connection(self._current_rls_context)
             try:
@@ -1730,14 +1737,200 @@ class IngestWorker:
             # Clear RLS context after processing
             self._current_rls_context = None
     
+    def _check_file_exists(self, file_id: str) -> bool:
+        """
+        Check if a file exists in the database.
+        
+        Note: This bypasses RLS by not setting session variables, since the worker
+        needs to be able to check any file's existence regardless of ownership.
+        """
+        try:
+            conn = self.postgres_service._get_connection()  # No RLS context
+            try:
+                with conn.cursor() as cur:
+                    # Reset any previous RLS session vars to ensure we see all files
+                    cur.execute("RESET app.user_id;")
+                    cur.execute("RESET app.role_ids;")
+                    cur.execute(
+                        "SELECT 1 FROM ingestion_files WHERE file_id = %s LIMIT 1",
+                        (file_id,)
+                    )
+                    result = cur.fetchone()
+                    logger.debug(
+                        "File existence check",
+                        file_id=file_id,
+                        exists=result is not None,
+                    )
+                    return result is not None
+            finally:
+                self.postgres_service._return_connection(conn)
+        except Exception as e:
+            logger.warning(
+                "Error checking if file exists",
+                file_id=file_id,
+                error=str(e),
+            )
+            # Assume file exists if we can't check - let processing handle it
+            return True
+    
+    def _claim_pending_messages(self) -> int:
+        """
+        Claim and process pending messages that were delivered but not acknowledged.
+        
+        This handles the case where a previous worker instance received messages
+        but crashed before acknowledging them. Messages idle for >60 seconds
+        are claimed by this worker.
+        
+        Returns:
+            Number of messages claimed
+        """
+        claimed_count = 0
+        try:
+            # Check for pending messages in the consumer group
+            pending_info = self.redis_client.xpending(
+                self.stream_name,
+                self.consumer_group,
+            )
+            
+            if not pending_info or pending_info['pending'] == 0:
+                return 0
+            
+            pending_count = pending_info['pending']
+            logger.info(
+                "Found pending messages in consumer group",
+                stream=self.stream_name,
+                pending_count=pending_count,
+            )
+            
+            # Get detailed info about pending messages
+            # Only claim messages that have been idle for > 60 seconds
+            pending_messages = self.redis_client.xpending_range(
+                self.stream_name,
+                self.consumer_group,
+                min='-',
+                max='+',
+                count=100,  # Process up to 100 pending messages at a time
+            )
+            
+            for msg_info in pending_messages:
+                message_id = msg_info['message_id']
+                idle_time_ms = msg_info['time_since_delivered']
+                
+                # Only claim messages idle for > 60 seconds (60000ms)
+                if idle_time_ms > 60000:
+                    try:
+                        # Claim the message for this consumer
+                        claimed = self.redis_client.xclaim(
+                            self.stream_name,
+                            self.consumer_group,
+                            self.consumer_name,
+                            min_idle_time=60000,  # 60 seconds
+                            message_ids=[message_id],
+                        )
+                        
+                        if claimed:
+                            for msg_id, msg_data in claimed:
+                                claimed_count += 1
+                                file_id = msg_data.get("file_id")
+                                logger.info(
+                                    "Claimed pending message",
+                                    message_id=msg_id,
+                                    idle_time_seconds=idle_time_ms / 1000,
+                                    file_id=file_id,
+                                )
+                                
+                                # Check if file still exists in database before processing
+                                file_exists = self._check_file_exists(file_id)
+                                if not file_exists:
+                                    logger.warning(
+                                        "Acknowledging orphaned message - file no longer exists",
+                                        message_id=msg_id,
+                                        file_id=file_id,
+                                    )
+                                    # Acknowledge the orphaned message to remove it from pending
+                                    self.redis_client.xack(
+                                        self.stream_name,
+                                        self.consumer_group,
+                                        msg_id
+                                    )
+                                    continue
+                                
+                                # Process the claimed message
+                                job_id = msg_data.get("job_id")
+                                trace_id = msg_data.get("trace_id", f"trace-{uuid.uuid4()}")
+                                
+                                try:
+                                    self.process_job(job_id, msg_data, trace_id)
+                                    # Acknowledge the message
+                                    self.redis_client.xack(
+                                        self.stream_name,
+                                        self.consumer_group,
+                                        msg_id
+                                    )
+                                except ValueError as e:
+                                    # File not found or similar - acknowledge to prevent infinite retry
+                                    if "not found" in str(e).lower():
+                                        logger.warning(
+                                            "Acknowledging failed message - file not found",
+                                            message_id=msg_id,
+                                            file_id=file_id,
+                                            error=str(e),
+                                        )
+                                        self.redis_client.xack(
+                                            self.stream_name,
+                                            self.consumer_group,
+                                            msg_id
+                                        )
+                                    else:
+                                        logger.error(
+                                            "Failed to process claimed message",
+                                            message_id=msg_id,
+                                            error=str(e),
+                                            exc_info=True,
+                                        )
+                                except Exception as e:
+                                    logger.error(
+                                        "Failed to process claimed message",
+                                        message_id=msg_id,
+                                        error=str(e),
+                                        exc_info=True,
+                                    )
+                                    # Don't ack - will be retried
+                    
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to claim message",
+                            message_id=message_id,
+                            error=str(e),
+                        )
+        
+        except Exception as e:
+            logger.error(
+                "Error checking pending messages",
+                error=str(e),
+                exc_info=True,
+            )
+        
+        return claimed_count
+    
     def run(self):
         """Main worker loop - consume and process jobs."""
         self.running = True
         logger.info("Worker started", worker_id=self.worker_id)
         
+        # On startup, claim any pending messages from crashed workers
+        logger.info("Checking for pending messages from previous workers...")
+        claimed = self._claim_pending_messages()
+        if claimed:
+            logger.info(f"Claimed and processed {claimed} pending messages")
+        
         # Heartbeat counter for periodic logging
         heartbeat_counter = 0
         heartbeat_interval = 12  # Log every 60 seconds (12 * 5 second blocks)
+        
+        # Pending message check counter (check every 5 minutes = 60 heartbeats)
+        pending_check_counter = 0
+        pending_check_interval = 60
         
         while self.running:
             try:
@@ -1751,6 +1944,14 @@ class IngestWorker:
                         consumer_group=self.consumer_group,
                     )
                     heartbeat_counter = 0
+                
+                # Periodically check for pending messages (every 5 minutes)
+                pending_check_counter += 1
+                if pending_check_counter >= pending_check_interval:
+                    claimed = self._claim_pending_messages()
+                    if claimed:
+                        logger.info(f"Periodic check: claimed and processed {claimed} pending messages")
+                    pending_check_counter = 0
                 
                 # Read from stream (block for 5 seconds)
                 messages = self.redis_client.xreadgroup(

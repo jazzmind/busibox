@@ -1,3 +1,11 @@
+---
+title: "Getting Started"
+category: "user"
+order: 1
+description: "Quick start guide for setting up Busibox on your infrastructure"
+published: true
+---
+
 # Setup Guide
 
 **Created**: 2025-12-09  

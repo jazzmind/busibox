@@ -68,7 +68,7 @@ Edit `vault.yml` with deployment-specific values:
 ```yaml
 # Network Configuration
 network_base_octets_production: "10.96.200"  # Customer's production network
-network_base_octets_test: "10.96.201"        # Customer's test network
+network_base_octets_staging: "10.96.201"        # Customer's test network
 
 # Domain Configuration
 base_domain: "customer1.com"                  # Customer's domain

@@ -18,7 +18,7 @@ The busibox repository is designed as a **generic, reusable infrastructure templ
 ```yaml
 # vault.yml - encrypted, gitignored
 network_base_octets_production: "10.96.200"
-network_base_octets_test: "10.96.201"
+network_base_octets_staging: "10.96.201"
 base_domain: "customer1.com"
 ssl_email: "admin@customer1.com"
 secrets:
@@ -87,7 +87,7 @@ ansible-playbook -i inventory/production site.yml --ask-vault-pass
 ```yaml
 # Network - deployment-specific
 network_base_octets_production: "10.96.200"
-network_base_octets_test: "10.96.201"
+network_base_octets_staging: "10.96.201"
 
 # Domain - deployment-specific
 base_domain: "jaycashman.com"

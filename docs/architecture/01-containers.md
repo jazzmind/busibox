@@ -1,7 +1,15 @@
+---
+title: "Container Architecture"
+category: "developer"
+order: 2
+description: "LXC container topology, network layout, and service responsibilities"
+published: true
+---
+
 # Container Topology
 
 **Created**: 2025-12-09  
-**Last Updated**: 2025-12-09  
+**Last Updated**: 2026-01-16  
 **Status**: Active  
 **Category**: Architecture  
 **Related Docs**:  
@@ -26,7 +34,7 @@
 | `proxy-lxc` | 200 | 10.96.200.200 | nginx reverse proxy | 80/443 | Fronts apps; terminates TLS in production. |
 | `apps-lxc` | 201 | 10.96.200.201 | Next.js apps (AI Portal, Agent Client, etc.) | 3000 (internal), proxied via 80/443 on proxy | No direct access to ingest/search; proxies internal calls. |
 | `agent-lxc` | 202 | 10.96.200.202 | Agent API skeleton | 8001 (intended) | Currently stub FastAPI; should call search + liteLLM rather than own ingest. |
-| `pg-lxc` | 203 | 10.96.200.203 | PostgreSQL (files + authz/audit) | 5432 | RLS policies enforced; ingest/search/authz write here. |
+| `pg-lxc` | 203 | 10.96.200.203 | PostgreSQL (multi-database) | 5432 | RLS policies enforced. Separate databases per service: `agent_server`, `authz`, `files`. |
 | `milvus-lxc` | 204 | 10.96.200.204 | Milvus vector DB | 19530 | Stores document embeddings; partitioned by user/role. |
 | `files-lxc` | 205 | 10.96.200.205 | MinIO object storage | 9000 (S3), 9001 (console) | Holds originals and derived artifacts. |
 | `ingest-lxc` | 206 | 10.96.200.206 | Ingestion API + worker + Redis Streams | 8000 (API), 6379 (Redis) | Internal-only API for upload/status/search/embeddings. |

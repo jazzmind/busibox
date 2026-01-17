@@ -88,6 +88,78 @@
     lc_ctype: en_US.UTF-8
     template: template0
 
+# =============================================================================
+# Pytest Database Infrastructure
+# =============================================================================
+# When enable_pytest_databases is enabled, create a separate test user with
+# their own set of databases (same table names, different owner).
+# 
+# This provides complete isolation for automated tests while using identical
+# table names so test code doesn't need to change.
+#
+# Architecture:
+#   busibox_user     -> agent_server, authz, files (production/staging)
+#   busibox_test_user -> test_agent_server, test_authz, test_files (pytest)
+
+- name: Create pytest test user
+  become_user: postgres
+  postgresql_user:
+    name: "busibox_test_user"
+    password: "{{ pytest_db_password | default('testpassword') }}"
+    role_attr_flags: "LOGIN,CREATEDB"
+    state: present
+  when: enable_pytest_databases | default(false)
+  tags: [postgres, pytest_databases]
+
+- name: Create pytest test databases
+  become_user: postgres
+  postgresql_db:
+    name: "{{ item }}"
+    owner: "busibox_test_user"
+    encoding: UTF8
+    lc_collate: en_US.UTF-8
+    lc_ctype: en_US.UTF-8
+    template: template0
+    state: present
+  loop:
+    - test_agent_server
+    - test_authz
+    - test_files
+  when: enable_pytest_databases | default(false)
+  tags: [postgres, pytest_databases]
+
+- name: Grant pytest database permissions
+  become_user: postgres
+  postgresql_query:
+    db: "{{ item }}"
+    query: |
+      GRANT ALL ON SCHEMA public TO busibox_test_user;
+      GRANT CREATE ON SCHEMA public TO busibox_test_user;
+      ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO busibox_test_user;
+      ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO busibox_test_user;
+  loop:
+    - test_agent_server
+    - test_authz
+    - test_files
+  when: enable_pytest_databases | default(false)
+  failed_when: false
+  tags: [postgres, pytest_databases]
+
+- name: Enable required extensions in pytest databases
+  become_user: postgres
+  postgresql_query:
+    db: "{{ item }}"
+    query: |
+      CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+      CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+  loop:
+    - test_agent_server
+    - test_authz
+    - test_files
+  when: enable_pytest_databases | default(false)
+  failed_when: false
+  tags: [postgres, pytest_databases]
+
 - name: Load secrets to determine which apps need databases
   include_vars:
     file: "{{ playbook_dir }}/roles/secrets/vars/vault.yml"

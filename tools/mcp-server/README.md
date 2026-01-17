@@ -1,8 +1,8 @@
 # Busibox MCP Server
 
 **Created**: 2025-11-06  
-**Updated**: 2025-12-21  
-**Version**: 2.0.0  
+**Updated**: 2026-01-16  
+**Version**: 2.2.0  
 **Status**: Active  
 **Category**: Tools
 
@@ -12,15 +12,17 @@ A Model Context Protocol (MCP) server that provides AI coding agents and maintai
 
 This MCP server exposes Busibox's organizational structure and operations through a standardized protocol that AI coding assistants (like Claude, Cursor, etc.) can use to:
 
+- **Run tests** using Docker, remote, or container testing modes
+- **Deploy services** to staging or production via Makefile
 - **Pull latest code** on Proxmox host
 - **Run make targets** for deployment and testing
-- **Browse documentation** by category
+- **Browse documentation** by category (updated structure)
 - **Search documentation** by keyword
 - **Get container/service info** including IPs and ports
 - **Execute SSH commands** on Proxmox and containers
 - **View container logs** via journalctl
 - **Get script information** including purpose, usage, and execution context
-- **Get guided assistance** for common tasks
+- **Get guided assistance** for testing, deployment, and Docker development workflows
 
 ## Features
 
@@ -29,7 +31,8 @@ This MCP server exposes Busibox's organizational structure and operations throug
 The server exposes the following resources:
 
 - `busibox://docs/{category}` - Browse documentation by category
-  - architecture, deployment, configuration, troubleshooting, reference, guides, session-notes, development
+  - Top-level: architecture, deployment, development, guides, reference
+  - Nested: session-notes, troubleshooting, tasks (in development/)
 - `busibox://docs/all` - Complete documentation index
 - `busibox://scripts/index` - Index of all scripts by execution context
 - `busibox://rules` - Project organization rules
@@ -38,7 +41,20 @@ The server exposes the following resources:
 - `busibox://containers` - Complete container map with IPs for test/production
 - `busibox://make-targets` - Available make targets with descriptions
 
-### Tools (15)
+### Tools (23)
+
+#### Testing Tools (NEW in v2.2.0)
+
+| Tool | Description |
+|------|-------------|
+| `get_makefile_help` | Get comprehensive Makefile help by category |
+| `run_docker_tests` | Run tests against local Docker services |
+| `run_remote_tests` | Run tests locally against remote staging/production |
+| `run_container_tests` | Run tests directly on containers via SSH |
+| `docker_control` | Control Docker services (up, down, restart, logs, etc.) |
+| `init_test_databases` | Initialize test databases for testing |
+| `check_test_databases` | Verify test databases are ready |
+| `get_testing_guide` | Get comprehensive testing documentation |
 
 #### Git & Deployment Tools
 
@@ -75,7 +91,7 @@ The server exposes the following resources:
 | `get_script_info` | Get info about a script (purpose, usage, context) |
 | `find_scripts` | Find scripts by execution context or purpose |
 
-### Prompts (7)
+### Prompts (10)
 
 Guided assistance for common tasks:
 
@@ -86,6 +102,9 @@ Guided assistance for common tasks:
 5. **run_tests** - Guide for running tests
 6. **deploy_app** - Guide for deploying applications
 7. **update_and_deploy** - Guide for pulling code and deploying
+8. **testing_workflow** - Complete testing workflow for Docker/staging/production (NEW)
+9. **deployment_workflow** - Complete deployment workflow guide (NEW)
+10. **docker_development** - Docker local development setup and workflow (NEW)
 
 ## Installation
 
@@ -169,6 +188,35 @@ Add to Cursor MCP settings (Settings > MCP Servers):
 
 ## Usage Examples
 
+### Testing (NEW in v2.2.0)
+
+```
+"How do I run tests for the agent service?"
+"Run agent tests against Docker"
+"What's the testing workflow for staging?"
+"Initialize the test databases"
+"Get help with testing"
+```
+
+The MCP server provides comprehensive testing guidance:
+
+1. **Docker Tests** - For local development
+   ```bash
+   make docker-up          # Start Docker
+   make test-db-init       # Initialize test DBs
+   make test-docker SERVICE=agent
+   ```
+
+2. **Remote Tests** - Test local code against staging/production
+   ```bash
+   make test-local SERVICE=agent INV=staging
+   ```
+
+3. **Container Tests** - Run directly on containers
+   ```bash
+   make test SERVICE=agent INV=staging
+   ```
+
 ### Git Operations
 
 ```
@@ -184,6 +232,7 @@ Add to Cursor MCP settings (Settings > MCP Servers):
 "Deploy ai-portal to production"
 "Run make all on test environment"
 "What make targets are available for testing?"
+"Show me the deployment workflow for staging"
 ```
 
 ### Container Information
@@ -295,6 +344,11 @@ node dist/index.js
 
 ## Version History
 
+- **v2.2.0** (2026-01-16): Added comprehensive testing/deployment tools and prompts for AI agents:
+  - New tools: `run_docker_tests`, `run_remote_tests`, `run_container_tests`, `docker_control`, `init_test_databases`, `check_test_databases`, `get_makefile_help`, `get_testing_guide`
+  - New prompts: `testing_workflow`, `deployment_workflow`, `docker_development`
+  - Updated docs structure to reflect current organization (development/session-notes, etc.)
+- **v2.1.0** (2026-01-16): Updated documentation paths to match refactored docs structure
 - **v2.0.0** (2025-12-21): Added git operations, make target execution, enhanced container info, service endpoints
 - **v1.0.0** (2025-11-06): Initial release with documentation and SSH commands
 

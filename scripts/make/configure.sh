@@ -2,75 +2,34 @@
 #
 # Busibox Configuration Script
 #
-# EXECUTION CONTEXT: Proxmox host (as root) for container configuration
-#                    Or admin workstation for model configuration
-# PURPOSE: Interactive configuration menu for models and containers
+# EXECUTION CONTEXT: Admin workstation or Proxmox host
+# PURPOSE: Interactive configuration menu for models, containers, and apps
 #
 # USAGE:
 #   make configure
 #   OR
-#   bash scripts/configure.sh
+#   bash scripts/make/configure.sh
 #
 set -euo pipefail
 
 # Get script directory
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"/..
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-# Source UI library
-source "${SCRIPT_DIR}/lib/ui.sh"
+# Source libraries
+source "${REPO_ROOT}/scripts/lib/ui.sh"
+source "${REPO_ROOT}/scripts/lib/state.sh"
 
-# Display welcome
-clear
-box "Busibox Configuration" 70
-echo ""
-info "Configure models, GPUs, and container settings"
-echo ""
-
-# Global environment variable (set by select_environment)
-SELECTED_ENV=""
+# Get environment from state
+ENV=$(get_environment)
+BACKEND=$(get_backend "$ENV")
 
 # ========================================================================
-# Verification Functions
+# Verification Functions (Proxmox)
 # ========================================================================
 
-verify_ansible_connectivity() {
-    local inv="$1"
-    echo ""
-    info "Testing Ansible connectivity to all hosts..."
-    echo ""
-    
-    # Get vault flags
-    local vault_flags=$(get_vault_flags)
-    
-    cd "${REPO_ROOT}/provision/ansible"
-    
-    # Run ping and capture output (don't fail on unreachable hosts)
-    local output
-    output=$(ansible -i "inventory/${inv}" all -m ping $vault_flags 2>&1) || true
-    
-    echo "$output"
-    
-    # Count results
-    local success_count=$(echo "$output" | grep -c "SUCCESS" || echo "0")
-    local unreachable_count=$(echo "$output" | grep -c "UNREACHABLE" || echo "0")
-    
-    echo ""
-    if [ "$unreachable_count" -gt 0 ]; then
-        warn "$success_count host(s) reachable, $unreachable_count host(s) unreachable"
-        info "Unreachable hosts may not be created yet - this is normal for initial setup"
-    else
-        success "All $success_count host(s) reachable"
-    fi
-    
-    cd "${REPO_ROOT}"
-    return 0  # Don't fail - unreachable hosts are expected during initial setup
-}
-
-# Detect vault password method
 get_vault_flags() {
     local vault_pass_file="$HOME/.vault_pass"
-    
     if [ -f "$vault_pass_file" ]; then
         echo "--vault-password-file $vault_pass_file"
     else
@@ -78,78 +37,207 @@ get_vault_flags() {
     fi
 }
 
+verify_ansible_connectivity() {
+    local inv="$1"
+    echo ""
+    info "Testing Ansible connectivity to all hosts..."
+    echo ""
+    
+    # Check if inventory exists
+    if [[ ! -d "${REPO_ROOT}/provision/ansible/inventory/${inv}" ]]; then
+        error "Inventory directory not found: inventory/${inv}"
+        return 1
+    fi
+    
+    local vault_flags=$(get_vault_flags)
+    cd "${REPO_ROOT}/provision/ansible"
+    
+    local output exit_code=0
+    output=$(ansible -i "inventory/${inv}" all -m ping $vault_flags 2>&1) || exit_code=$?
+    
+    # Check for common errors
+    if echo "$output" | grep -q "ERROR! Decryption failed"; then
+        error "Vault decryption failed. Check your vault password."
+        cd "${REPO_ROOT}"
+        return 1
+    fi
+    
+    # Check for undefined variable errors (common vault issue)
+    if echo "$output" | grep -q "is undefined"; then
+        local undefined_var=$(echo "$output" | grep -oE "'[a-z_]+' is undefined" | head -1 | grep -oE "'[^']+'" | tr -d "'")
+        echo ""
+        error "Ansible variable not defined: $undefined_var"
+        echo ""
+        warn "This variable should be defined in your vault file."
+        info "Check: inventory/${inv}/group_vars/all/vault.yml"
+        info "Or: roles/secrets/vars/vault.yml"
+        echo ""
+        info "Expected variables for staging environment:"
+        echo "  - network_base_octets_staging (e.g., '10.96.201')"
+        echo "  - network_base_octets_production (e.g., '10.96.200')"
+        echo "  - base_domain (e.g., 'example.com')"
+        echo "  - secrets.postgresql.password"
+        echo "  - secrets.minio.root_user/root_password"
+        echo "  - etc."
+        echo ""
+        cd "${REPO_ROOT}"
+        # Don't return error - let verification continue to check other things
+    elif echo "$output" | grep -q "ERROR!"; then
+        # Show the error but continue
+        echo "$output" | grep -A2 "ERROR!" | head -5
+        warn "Ansible reported errors (see above)"
+    else
+        echo "$output"
+    fi
+    
+    # Count successes and failures (grep -c returns count, but may fail if no matches)
+    local success_count=0
+    local unreachable_count=0
+    success_count=$(echo "$output" | grep -c "SUCCESS" 2>/dev/null || true)
+    unreachable_count=$(echo "$output" | grep -c "UNREACHABLE" 2>/dev/null || true)
+    
+    # Ensure we have integers
+    success_count="${success_count:-0}"
+    unreachable_count="${unreachable_count:-0}"
+    # Remove any whitespace/newlines
+    success_count=$(echo "$success_count" | tr -d '[:space:]')
+    unreachable_count=$(echo "$unreachable_count" | tr -d '[:space:]')
+    
+    echo ""
+    if [[ "$unreachable_count" -gt 0 ]]; then
+        warn "$success_count host(s) reachable, $unreachable_count host(s) unreachable"
+    elif [[ "$success_count" -gt 0 ]]; then
+        success "All $success_count host(s) reachable"
+    else
+        warn "No hosts responded"
+    fi
+    
+    cd "${REPO_ROOT}"
+    return 0
+}
+
 verify_vault_access() {
     local vault_pass_file="$HOME/.vault_pass"
+    local env="${ENV:-staging}"
     
     echo ""
     info "Testing vault access..."
     echo ""
     
+    # First, check if vault symlinks need to be set up
+    check_and_setup_vault_links "$env"
+    
+    # Find the vault file - check inventory location first, then secrets role
+    local vault_file=""
+    local inv_vault="${REPO_ROOT}/provision/ansible/inventory/${env}/group_vars/all/vault.yml"
+    local role_vault="${REPO_ROOT}/provision/ansible/roles/secrets/vars/vault.yml"
+    
+    if [[ -f "$inv_vault" ]] || [[ -L "$inv_vault" ]]; then
+        # Check if symlink is valid
+        if [[ -L "$inv_vault" ]] && [[ ! -e "$inv_vault" ]]; then
+            warn "Vault symlink exists but target is missing"
+            info "Symlink: $inv_vault"
+            info "Expected target: $role_vault"
+            
+            if [[ ! -f "$role_vault" ]]; then
+                error "Missing vault file: $role_vault"
+                info "Create from template:"
+                echo "  cp roles/secrets/vars/vault.example.yml roles/secrets/vars/vault.yml"
+                echo "  ansible-vault encrypt roles/secrets/vars/vault.yml"
+                return 1
+            fi
+        fi
+        vault_file="$inv_vault"
+        info "Using inventory vault: inventory/${env}/group_vars/all/vault.yml"
+    elif [[ -f "$role_vault" ]]; then
+        vault_file="$role_vault"
+        info "Using role vault: roles/secrets/vars/vault.yml"
+    else
+        warn "No vault file found"
+        info "Expected locations:"
+        echo "  - inventory/${env}/group_vars/all/vault.yml (symlink)"
+        echo "  - roles/secrets/vars/vault.yml (actual file)"
+        info ""
+        info "Create vault file from template:"
+        echo "  cd provision/ansible"
+        echo "  cp roles/secrets/vars/vault.example.yml roles/secrets/vars/vault.yml"
+        echo "  ansible-vault encrypt roles/secrets/vars/vault.yml"
+        echo "  bash ../../scripts/vault/setup-vault-links.sh"
+        return 1
+    fi
+    
+    # Check if vault file is encrypted
+    if ! head -1 "$vault_file" | grep -q '^\$ANSIBLE_VAULT'; then
+        warn "Vault file exists but is not encrypted"
+        return 0
+    fi
+    
     if [ -f "$vault_pass_file" ]; then
         success "Vault password file found: $vault_pass_file"
         
         cd "${REPO_ROOT}/provision/ansible"
-        if ansible-vault view roles/secrets/vars/vault.yml --vault-password-file "$vault_pass_file" > /dev/null 2>&1; then
+        local output
+        if output=$(ansible-vault view "$vault_file" --vault-password-file "$vault_pass_file" 2>&1); then
             success "Vault decryption successful"
             cd "${REPO_ROOT}"
             return 0
         else
             error "Vault decryption failed"
+            echo "  ${DIM}$output${NC}"
             cd "${REPO_ROOT}"
             return 1
         fi
     else
         warn "Vault password file not found at $vault_pass_file"
         info "You will be prompted for vault password during operations"
+        info "Tip: Create it with: echo 'your-password' > ~/.vault_pass && chmod 600 ~/.vault_pass"
         return 0
     fi
 }
 
-verify_inventory_vars() {
-    local inv="$1"
+# Check and setup vault symlinks if needed
+check_and_setup_vault_links() {
+    local env="$1"
+    local ansible_dir="${REPO_ROOT}/provision/ansible"
+    local role_vault="${ansible_dir}/roles/secrets/vars/vault.yml"
+    local inv_vault_dir="${ansible_dir}/inventory/${env}/group_vars/all"
+    local inv_vault="${inv_vault_dir}/vault.yml"
     
-    echo ""
-    info "Verifying inventory variables for $inv..."
-    echo ""
+    # Check if the role vault exists
+    if [[ ! -f "$role_vault" ]]; then
+        # Can't set up symlinks without the source file
+        return 0
+    fi
     
-    local errors=0
-    # Use correct variable names from inventory
-    local required_vars=(
-        "network_base_octets"
-        "postgres_ip"
-        "milvus_ip"
-        "ingest_ip"
-        "agent_ip"
-        "apps_ip"
-        "minio_ip"
-        "proxy_ip"
-    )
-    
-    # Get vault flags
-    local vault_flags=$(get_vault_flags)
-    
-    cd "${REPO_ROOT}/provision/ansible"
-    
-    for var in "${required_vars[@]}"; do
-        local result
-        result=$(ansible -i "inventory/${inv}" localhost -m debug -a "var=$var" $vault_flags 2>/dev/null) || true
-        if echo "$result" | grep -q "VARIABLE IS NOT DEFINED"; then
-            list_item "error" "Missing variable: $var"
-            errors=$((errors + 1))
+    # Check if inventory vault symlink exists and is valid
+    if [[ -L "$inv_vault" ]]; then
+        # Symlink exists - check if it's valid
+        if [[ -e "$inv_vault" ]]; then
+            # Valid symlink, nothing to do
+            return 0
         else
-            list_item "done" "$var defined"
+            # Broken symlink - recreate it
+            info "Fixing broken vault symlink for ${env}..."
+            rm -f "$inv_vault"
         fi
-    done
+    elif [[ -f "$inv_vault" ]]; then
+        # Regular file exists - don't replace it
+        return 0
+    fi
     
+    # Need to create symlink
+    info "Setting up vault symlink for ${env}..."
+    mkdir -p "$inv_vault_dir"
+    
+    # Create relative symlink
+    cd "$inv_vault_dir"
+    ln -sf "../../../../roles/secrets/vars/vault.yml" "vault.yml"
     cd "${REPO_ROOT}"
     
-    echo ""
-    if [ $errors -gt 0 ]; then
-        error "Found $errors missing variable(s)"
-        return 1
+    if [[ -L "$inv_vault" ]] && [[ -e "$inv_vault" ]]; then
+        success "Vault symlink created for ${env}"
     else
-        success "All required variables defined"
-        return 0
+        warn "Failed to create vault symlink for ${env}"
     fi
 }
 
@@ -160,43 +248,39 @@ verify_service_health() {
     info "Checking service health for $inv..."
     echo ""
     
-    # Get vault flags
-    local vault_flags=$(get_vault_flags)
+    # Use hardcoded network bases instead of ansible vars to avoid vault issues
+    local network_base
+    case "$inv" in
+        production) network_base="10.96.200" ;;
+        staging) network_base="10.96.201" ;;
+        local|docker) 
+            info "For local/docker, use 'make docker-ps' to check service status"
+            return 0
+            ;;
+        *)
+            warn "Unknown environment: $inv"
+            return 1
+            ;;
+    esac
     
-    cd "${REPO_ROOT}/provision/ansible"
-    
-    # Use ansible to evaluate variables (handles Jinja2 templates)
-    # Returns just the IP address value
-    get_var() {
-        local var_name="$1"
-        # Use ansible to evaluate the variable and extract just the value
-        ansible -i "inventory/${inv}" localhost -m debug -a "var=$var_name" $vault_flags 2>/dev/null | \
-            grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo ""
-    }
-    
-    # Get IPs from inventory (using correct variable names)
-    local postgres_ip=$(get_var "postgres_ip")
-    local milvus_ip=$(get_var "milvus_ip")
-    local minio_ip=$(get_var "minio_ip")
-    local ingest_ip=$(get_var "ingest_ip")
-    local agent_ip=$(get_var "agent_ip")
-    
-    cd "${REPO_ROOT}"
+    # Standard IP assignments (based on network layout)
+    # These are the common IP endings for each service
+    local proxy_ip="${network_base}.200"
+    local agent_ip="${network_base}.202"
+    local postgres_ip="${network_base}.203"
+    local milvus_ip="${network_base}.204"
+    local minio_ip="${network_base}.205"
+    local ingest_ip="${network_base}.206"
+    local litellm_ip="${network_base}.207"
+    local authz_ip="${network_base}.210"
     
     local running=0
     local not_running=0
     
-    # Helper function to check service
     check_service() {
         local name="$1"
         local ip="$2"
         local check_cmd="$3"
-        
-        if [ -z "$ip" ]; then
-            echo -e "  $name: ${YELLOW}⚠ IP not configured${NC}"
-            not_running=$((not_running + 1))
-            return 0
-        fi
         
         echo -n "  $name ($ip): "
         if eval "$check_cmd" > /dev/null 2>&1; then
@@ -209,42 +293,47 @@ verify_service_health() {
         return 0
     }
     
-    # Check each service (use || true to prevent set -e from exiting)
-    # Ports: PostgreSQL 5432, Milvus 9091 (health), MinIO 9000, Ingest API 8002, Search API 8003, Agent API 8000
-    check_service "PostgreSQL" "$postgres_ip" "ssh -o ConnectTimeout=5 -o BatchMode=yes root@$postgres_ip 'systemctl is-active postgresql'" || true
-    check_service "Milvus" "$milvus_ip" "curl -sf --connect-timeout 5 'http://$milvus_ip:9091/healthz'" || true
-    check_service "MinIO" "$minio_ip" "curl -sf --connect-timeout 5 'http://$minio_ip:9000/minio/health/live'" || true
-    check_service "Ingest API" "$ingest_ip" "curl -sf --connect-timeout 5 'http://$ingest_ip:8002/health'" || true
-    check_service "Search API" "$milvus_ip" "curl -sf --connect-timeout 5 'http://$milvus_ip:8003/health'" || true
-    check_service "Agent API" "$agent_ip" "curl -sf --connect-timeout 5 'http://$agent_ip:8000/health'" || true
+    # Quick connectivity check first
+    echo -n "  Network ($proxy_ip): "
+    if ping -c 1 -W 2 "$proxy_ip" > /dev/null 2>&1; then
+        echo -e "${GREEN}✓ Reachable${NC}"
+    else
+        echo -e "${RED}✗ Not reachable${NC}"
+        warn "Cannot reach $inv network. Check VPN or network connectivity."
+        return 1
+    fi
+    
+    echo ""
+    
+    # Check services via HTTP health endpoints (doesn't require SSH)
+    check_service "Proxy/Nginx" "$proxy_ip" "curl -sf --connect-timeout 3 -k 'https://$proxy_ip/health' || curl -sf --connect-timeout 3 'http://$proxy_ip:80'" || true
+    check_service "AuthZ API" "$authz_ip" "curl -sf --connect-timeout 3 'http://$authz_ip:8010/health'" || true
+    check_service "Ingest API" "$ingest_ip" "curl -sf --connect-timeout 3 'http://$ingest_ip:8002/health'" || true
+    check_service "Search API" "$milvus_ip" "curl -sf --connect-timeout 3 'http://$milvus_ip:8003/health'" || true
+    check_service "Agent API" "$agent_ip" "curl -sf --connect-timeout 3 'http://$agent_ip:8000/health'" || true
+    check_service "LiteLLM" "$litellm_ip" "curl -sf --connect-timeout 3 'http://$litellm_ip:4000/health'" || true
+    check_service "Milvus" "$milvus_ip" "curl -sf --connect-timeout 3 'http://$milvus_ip:9091/healthz'" || true
+    check_service "MinIO" "$minio_ip" "curl -sf --connect-timeout 3 'http://$minio_ip:9000/minio/health/live'" || true
     
     echo ""
     if [ "$not_running" -gt 0 ]; then
         info "$running service(s) running, $not_running service(s) not responding"
-        info "Services may not be deployed yet - this is normal for initial setup"
     else
         success "All $running service(s) running"
     fi
     
-    return 0  # Don't fail - services may not be deployed yet
+    return 0
 }
 
 verify_all_configuration() {
-    # Select environment if not already selected
-    if [ -z "$SELECTED_ENV" ]; then
-        SELECTED_ENV=$(select_environment)
-    fi
-    
-    local inv="$SELECTED_ENV"
-    
-    header "Full Configuration Verification ($inv)" 70
+    header "Full Configuration Verification ($ENV)" 70
     
     local errors=0
     
     echo ""
-    echo -e "${BLUE}[1/4] Ansible Connectivity${NC}"
+    echo -e "${BLUE}[1/4] Vault Links${NC}"
     separator
-    verify_ansible_connectivity "$inv" || ((errors++))
+    verify_vault_links || ((errors++))
     
     echo ""
     echo -e "${BLUE}[2/4] Vault Access${NC}"
@@ -252,14 +341,14 @@ verify_all_configuration() {
     verify_vault_access || ((errors++))
     
     echo ""
-    echo -e "${BLUE}[3/4] Inventory Variables${NC}"
+    echo -e "${BLUE}[3/4] Ansible Connectivity${NC}"
     separator
-    verify_inventory_vars "$inv" || ((errors++))
+    verify_ansible_connectivity "$ENV" || ((errors++))
     
     echo ""
     echo -e "${BLUE}[4/4] Service Health${NC}"
     separator
-    verify_service_health "$inv"
+    verify_service_health "$ENV"
     
     echo ""
     separator 70
@@ -271,7 +360,72 @@ verify_all_configuration() {
     separator 70
 }
 
-# Model Configuration Menu
+# Verify vault links are set up for both staging and production
+verify_vault_links() {
+    echo ""
+    info "Checking vault symlinks..."
+    echo ""
+    
+    local ansible_dir="${REPO_ROOT}/provision/ansible"
+    local role_vault="${ansible_dir}/roles/secrets/vars/vault.yml"
+    local issues=0
+    
+    # Check if the role vault exists
+    if [[ ! -f "$role_vault" ]]; then
+        error "Main vault file missing: roles/secrets/vars/vault.yml"
+        info "Create from template:"
+        echo "  cd provision/ansible"
+        echo "  cp roles/secrets/vars/vault.example.yml roles/secrets/vars/vault.yml"
+        echo "  ansible-vault encrypt roles/secrets/vars/vault.yml"
+        return 1
+    fi
+    
+    success "Main vault file exists: roles/secrets/vars/vault.yml"
+    
+    # Check symlinks for both environments
+    for env in staging production; do
+        local inv_vault="${ansible_dir}/inventory/${env}/group_vars/all/vault.yml"
+        
+        if [[ -L "$inv_vault" ]]; then
+            if [[ -e "$inv_vault" ]]; then
+                echo -e "  ${GREEN}✓${NC} ${env}: symlink OK"
+            else
+                echo -e "  ${RED}✗${NC} ${env}: broken symlink"
+                info "Fixing symlink for ${env}..."
+                check_and_setup_vault_links "$env"
+                ((issues++))
+            fi
+        elif [[ -f "$inv_vault" ]]; then
+            echo -e "  ${YELLOW}○${NC} ${env}: regular file (not symlinked)"
+        else
+            echo -e "  ${RED}✗${NC} ${env}: missing vault symlink"
+            info "Creating symlink for ${env}..."
+            check_and_setup_vault_links "$env"
+            
+            # Verify it was created
+            if [[ -L "$inv_vault" ]] && [[ -e "$inv_vault" ]]; then
+                echo -e "  ${GREEN}✓${NC} ${env}: symlink created"
+            else
+                ((issues++))
+            fi
+        fi
+    done
+    
+    echo ""
+    
+    if [[ $issues -eq 0 ]]; then
+        success "Vault links verified"
+        return 0
+    else
+        warn "Some vault links had issues"
+        return 1
+    fi
+}
+
+# ========================================================================
+# Model Configuration (Proxmox only)
+# ========================================================================
+
 model_configuration() {
     while true; do
         echo ""
@@ -279,138 +433,98 @@ model_configuration() {
             "Download/Manage LLM Models" \
             "Update Model Config (analyze downloaded models)" \
             "Configure vLLM Model Routing (GPU assignments)" \
-            "Back to Main Menu"
+            "Back"
         
+        local choice=""
         read -p "$(echo -e "${BOLD}Select option [1-4]:${NC} ")" choice
         
-        case $choice in
+        case "${choice:-}" in
             1)
-                # Download/Manage Models submenu
                 while true; do
                     echo ""
                     menu "Download/Manage LLM Models" \
                         "Download Models from Registry" \
-                        "Cleanup Orphaned Models (not in registry)" \
-                        "Remove Duplicate Models (save disk space)" \
-                        "Back to Model Configuration"
+                        "Cleanup Orphaned Models" \
+                        "Remove Duplicate Models" \
+                        "Back"
                     
+                    local subchoice=""
                     read -p "$(echo -e "${BOLD}Select option [1-4]:${NC} ")" subchoice
                     
-                    case $subchoice in
+                    case "${subchoice:-}" in
                         1)
                             header "Download LLM Models" 70
-                            echo ""
-                            info "This will download models from model_registry.yml to Proxmox host"
-                            echo ""
-                            
                             if ! check_proxmox; then
                                 error "This operation requires Proxmox host"
                                 pause
                                 continue
                             fi
-                            
                             if confirm "Download models from registry?"; then
-                                bash "${REPO_ROOT}/provision/pct/host/setup-llm-models.sh" || {
-                                    error "Model download failed"
-                                }
+                                bash "${REPO_ROOT}/provision/pct/host/setup-llm-models.sh" || error "Failed"
                             fi
                             pause
                             ;;
                         2)
                             header "Cleanup Orphaned Models" 70
-                            echo ""
-                            info "This will remove models NOT in registry (with confirmation)"
-                            echo ""
-                            
                             if ! check_proxmox; then
                                 error "This operation requires Proxmox host"
                                 pause
                                 continue
                             fi
-                            
-                            if confirm "Run cleanup to remove orphaned models?"; then
-                                bash "${REPO_ROOT}/provision/pct/host/setup-llm-models.sh" --cleanup || {
-                                    error "Model cleanup failed"
-                                }
+                            if confirm "Remove orphaned models?"; then
+                                bash "${REPO_ROOT}/provision/pct/host/setup-llm-models.sh" --cleanup || error "Failed"
                             fi
                             pause
                             ;;
                         3)
                             header "Remove Duplicate Models" 70
-                            echo ""
-                            info "This will find and remove duplicate models stored in multiple locations"
-                            info "Keeps the standard hub/ version and removes old root copies"
-                            echo ""
-                            warn "This can free up significant disk space!"
-                            echo ""
-                            
                             if ! check_proxmox; then
                                 error "This operation requires Proxmox host"
                                 pause
                                 continue
                             fi
-                            
-                            if confirm "Run deduplication to remove duplicate models?"; then
-                                bash "${REPO_ROOT}/provision/pct/host/setup-llm-models.sh" --deduplicate || {
-                                    error "Model deduplication failed"
-                                }
+                            if confirm "Remove duplicate models?"; then
+                                bash "${REPO_ROOT}/provision/pct/host/setup-llm-models.sh" --deduplicate || error "Failed"
                             fi
                             pause
                             ;;
-                        4)
+                        4|b|B|"")
                             break
-                            ;;
-                        *)
-                            error "Invalid selection. Please enter 1-4."
                             ;;
                     esac
                 done
                 ;;
             2)
                 header "Update Model Configuration" 70
-                echo ""
-                info "This will analyze downloaded models and update model_config.yml"
-                echo ""
-                
                 if confirm "Run model configuration update?"; then
-                    bash "${REPO_ROOT}/provision/pct/host/update-model-config.sh" || {
-                        error "Model configuration update failed"
-                    }
+                    bash "${REPO_ROOT}/provision/pct/host/update-model-config.sh" || error "Failed"
                 fi
                 pause
                 ;;
             3)
                 header "Configure vLLM Model Routing" 70
-                echo ""
-                info "This will configure which models run on which GPUs"
-                echo ""
-                
                 if ! check_proxmox; then
                     error "This operation requires Proxmox host"
                     pause
                     continue
                 fi
-                
                 if confirm "Run interactive model routing configuration?"; then
-                    bash "${REPO_ROOT}/provision/pct/host/configure-vllm-model-routing.sh" --interactive || {
-                        error "Model routing configuration failed"
-                    }
+                    bash "${REPO_ROOT}/provision/pct/host/configure-vllm-model-routing.sh" --interactive || error "Failed"
                 fi
                 pause
                 ;;
-            4)
+            4|b|B|"")
                 return 0
-                ;;
-            *)
-                error "Invalid selection. Please enter 1-4."
                 ;;
         esac
     done
 }
 
-# Container Configuration Menu
+# ========================================================================
+# Container Configuration (Proxmox only)
+# ========================================================================
+
 container_configuration() {
-    # Check if on Proxmox
     if ! check_proxmox; then
         error "Container configuration requires Proxmox host"
         pause
@@ -424,201 +538,256 @@ container_configuration() {
             "Install NVIDIA Drivers in Container" \
             "Configure GPU Passthrough for Container" \
             "Configure GPU Allocation (All Containers)" \
-            "Configure All GPUs for Container" \
             "Setup ZFS Storage" \
-            "Add Data Mounts to Containers" \
-            "Back to Main Menu"
+            "Back"
         
-        read -p "$(echo -e "${BOLD}Select option [1-8]:${NC} ")" choice
+        local choice=""
+        read -p "$(echo -e "${BOLD}Select option [1-6]:${NC} ")" choice
         
-        case $choice in
+        case "${choice:-}" in
             1)
                 header "Check Container Memory" 70
-                echo ""
-                ENV=$(select_environment)
-                echo ""
-                
-                bash "${REPO_ROOT}/provision/pct/host/check-container-memory.sh" "$ENV" || {
-                    error "Memory check failed"
-                }
+                bash "${REPO_ROOT}/provision/pct/host/check-container-memory.sh" "$ENV" || error "Failed"
                 pause
                 ;;
             2)
                 header "Install NVIDIA Drivers" 70
-                echo ""
-                info "This will install NVIDIA drivers in a specific container"
-                echo ""
+                local container_id=""
                 read -p "$(echo -e "${BOLD}Enter container ID:${NC} ")" container_id
-                
-                if [[ ! "$container_id" =~ ^[0-9]+$ ]]; then
-                    error "Invalid container ID. Must be numeric."
-                    pause
+                if [[ ! "${container_id:-}" =~ ^[0-9]+$ ]]; then
+                    error "Invalid container ID"
                     continue
                 fi
-                
-                echo ""
                 if confirm "Install NVIDIA drivers in container $container_id?"; then
-                    bash "${REPO_ROOT}/provision/pct/host/install-nvidia-drivers.sh" "$container_id" || {
-                        error "Driver installation failed"
-                    }
+                    bash "${REPO_ROOT}/provision/pct/host/install-nvidia-drivers.sh" "$container_id" || error "Failed"
                 fi
                 pause
                 ;;
             3)
                 header "Configure GPU Passthrough" 70
-                echo ""
-                info "This will configure GPU passthrough for a specific container"
-                echo ""
+                local container_id="" gpus=""
                 read -p "$(echo -e "${BOLD}Enter container ID:${NC} ")" container_id
-                read -p "$(echo -e "${BOLD}Enter GPU(s) (e.g., 0 or 0,1,2 or 0-2):${NC} ")" gpus
-                
-                echo ""
+                read -p "$(echo -e "${BOLD}Enter GPU(s) (e.g., 0 or 0,1,2):${NC} ")" gpus
                 if confirm "Configure GPU(s) $gpus for container $container_id?"; then
-                    bash "${REPO_ROOT}/provision/pct/host/configure-gpu-passthrough.sh" "$container_id" "$gpus" || {
-                        error "GPU passthrough configuration failed"
-                    }
+                    bash "${REPO_ROOT}/provision/pct/host/configure-gpu-passthrough.sh" "$container_id" "$gpus" || error "Failed"
                 fi
                 pause
                 ;;
             4)
                 header "Configure GPU Allocation" 70
-                echo ""
-                info "This will configure GPU allocation for ingest and vLLM containers"
-                echo ""
-                
                 if confirm "Run interactive GPU allocation?"; then
-                    bash "${REPO_ROOT}/provision/pct/host/configure-gpu-allocation.sh" --interactive || {
-                        error "GPU allocation configuration failed"
-                    }
+                    bash "${REPO_ROOT}/provision/pct/host/configure-gpu-allocation.sh" --interactive || error "Failed"
                 fi
                 pause
                 ;;
             5)
-                header "Configure All GPUs for Container" 70
-                echo ""
-                info "This will pass ALL GPUs to a container and install drivers"
-                echo ""
-                read -p "$(echo -e "${BOLD}Enter container ID:${NC} ")" container_id
-                
-                echo ""
-                if confirm "Configure all GPUs for container $container_id?"; then
-                    bash "${REPO_ROOT}/provision/pct/host/configure-container-gpus.sh" "$container_id" || {
-                        error "GPU configuration failed"
-                    }
-                fi
-                pause
-                ;;
-            6)
                 header "Setup ZFS Storage" 70
-                echo ""
-                info "This will setup ZFS datasets for persistent data"
-                echo ""
-                
                 if confirm "Run ZFS storage setup?"; then
-                    bash "${REPO_ROOT}/provision/pct/host/setup-zfs-storage.sh" || {
-                        error "ZFS storage setup failed"
-                    }
+                    bash "${REPO_ROOT}/provision/pct/host/setup-zfs-storage.sh" || error "Failed"
                 fi
                 pause
                 ;;
-            7)
-                header "Add Data Mounts" 70
-                echo ""
-                ENV=$(select_environment)
-                echo ""
-                
-                if confirm "Add data mounts for $ENV environment?"; then
-                    bash "${REPO_ROOT}/provision/pct/host/add-data-mounts.sh" "$ENV" || {
-                        error "Data mount configuration failed"
-                    }
-                fi
-                pause
-                ;;
-            8)
+            6|b|B|"")
                 return 0
-                ;;
-            *)
-                error "Invalid selection. Please enter 1-8."
                 ;;
         esac
     done
 }
 
-# Secrets Configuration Menu
+# ========================================================================
+# App Configuration (works for both Docker and Proxmox)
+# ========================================================================
+
+app_configuration() {
+    # Check if we're on Proxmox without local app repos
+    local AI_PORTAL_DIR="${AI_PORTAL_DIR:-$(cd "${REPO_ROOT}/../ai-portal" 2>/dev/null && pwd || echo "")}"
+    local has_local_repos=true
+    
+    if [[ -z "$AI_PORTAL_DIR" ]] || [[ ! -d "$AI_PORTAL_DIR" ]]; then
+        has_local_repos=false
+    fi
+    
+    while true; do
+        echo ""
+        
+        if [[ "$has_local_repos" == "false" ]]; then
+            warn "ai-portal directory not found locally"
+            info "On Proxmox, app configuration must be run from the apps container"
+            echo ""
+            echo "To configure apps, SSH to the apps container and run:"
+            echo "  ${CYAN}cd /srv/apps/ai-portal && npx tsx scripts/activate-user.ts${NC}"
+            echo "  ${CYAN}cd /srv/apps/ai-portal && npx tsx scripts/fix-builtin-apps.ts${NC}"
+            echo ""
+            echo "Or set AI_PORTAL_DIR environment variable if ai-portal is elsewhere."
+            echo ""
+            
+            menu "App Configuration (Limited - No Local Repos)" \
+                "Register AuthZ Clients (works without local repos)" \
+                "Back"
+            
+            local choice=""
+            read -p "$(echo -e "${BOLD}Select option [1-2]:${NC} ")" choice
+            
+            case "${choice:-}" in
+                1)
+                    header "Register AuthZ Clients" 70
+                    if confirm "Register AuthZ clients?"; then
+                        # Register clients even without local repos
+                        bash "${REPO_ROOT}/scripts/setup/configure-apps.sh" --authz 2>&1 || warn "Some steps may have failed (expected without local repos)"
+                    fi
+                    pause
+                    ;;
+                2|b|B|"")
+                    return 0
+                    ;;
+            esac
+        else
+            menu "App Configuration" \
+                "Run All App Setup (recommended)" \
+                "Activate Admin User" \
+                "Fix Built-in Apps (Video, Chat, Documents)" \
+                "Register AuthZ Clients" \
+                "Back"
+            
+            local choice=""
+            read -p "$(echo -e "${BOLD}Select option [1-5]:${NC} ")" choice
+            
+            case "${choice:-}" in
+                1)
+                    header "Full App Configuration" 70
+                    info "This will:"
+                    echo "  1. Activate the admin user"
+                    echo "  2. Fix built-in apps"
+                    echo "  3. Register AuthZ clients"
+                    echo ""
+                    if confirm "Run full app configuration?"; then
+                        bash "${REPO_ROOT}/scripts/setup/configure-apps.sh" --all || error "Failed"
+                    fi
+                    pause
+                    ;;
+                2)
+                    header "Activate Admin User" 70
+                    if confirm "Activate admin user?"; then
+                        bash "${REPO_ROOT}/scripts/setup/configure-apps.sh" --admin || error "Failed"
+                    fi
+                    pause
+                    ;;
+                3)
+                    header "Fix Built-in Apps" 70
+                    if confirm "Fix built-in apps?"; then
+                        bash "${REPO_ROOT}/scripts/setup/configure-apps.sh" --apps || error "Failed"
+                    fi
+                    pause
+                    ;;
+                4)
+                    header "Register AuthZ Clients" 70
+                    if confirm "Register AuthZ clients?"; then
+                        bash "${REPO_ROOT}/scripts/setup/configure-apps.sh" --authz || error "Failed"
+                    fi
+                    pause
+                    ;;
+                5|b|B|"")
+                    return 0
+                    ;;
+            esac
+        fi
+    done
+}
+
+# ========================================================================
+# Secrets Configuration (Proxmox only)
+# ========================================================================
+
 secrets_configuration() {
     while true; do
         echo ""
-        menu "Secrets & Configuration" \
+        menu "Secrets & Keys" \
             "Generate TOKEN_SERVICE Keys (agent-server)" \
             "Edit Ansible Vault (secrets)" \
             "View Vault Variables (masked)" \
-            "Back to Main Menu"
+            "Back"
         
+        local choice=""
         read -p "$(echo -e "${BOLD}Select option [1-4]:${NC} ")" choice
         
-        case $choice in
+        case "${choice:-}" in
             1)
-                bash "${REPO_ROOT}/scripts/generate/generate-token-service-keys.sh" || {
-                    error "TOKEN_SERVICE key generation failed"
-                }
+                bash "${REPO_ROOT}/scripts/generate/generate-token-service-keys.sh" || error "Failed"
                 pause
                 ;;
             2)
                 header "Edit Ansible Vault" 70
-                echo ""
-                info "Opening encrypted vault for editing"
-                info "You will need the vault password"
-                echo ""
-                
                 cd "${REPO_ROOT}/provision/ansible"
-                ansible-vault edit roles/secrets/vars/vault.yml || {
-                    error "Failed to edit vault"
-                }
+                ansible-vault edit roles/secrets/vars/vault.yml || error "Failed to edit vault"
                 cd "${REPO_ROOT}"
-                
                 pause
                 ;;
             3)
                 header "View Vault Variables" 70
-                echo ""
-                info "Showing vault structure (sensitive values masked)"
-                echo ""
-                
                 cd "${REPO_ROOT}/provision/ansible"
-                if ansible-vault view roles/secrets/vars/vault.yml | grep -E "^[a-z_]+:" | sed 's/:.*$/: <masked>/'; then
-                    :
-                else
-                    error "Failed to view vault"
-                fi
+                ansible-vault view roles/secrets/vars/vault.yml | grep -E "^[a-z_]+:" | sed 's/:.*$/: <masked>/' || error "Failed"
                 cd "${REPO_ROOT}"
-                
                 pause
                 ;;
-            4)
+            4|b|B|"")
                 return 0
-                ;;
-            *)
-                error "Invalid selection. Please enter 1-4."
                 ;;
         esac
     done
 }
 
-# Main menu
-main_menu() {
+# ========================================================================
+# Docker Configuration Menu
+# ========================================================================
+
+docker_menu() {
     while true; do
-        echo ""
-        menu "Busibox Configuration" \
-            "Verify Configuration (recommended first step)" \
-            "Model Configuration" \
-            "Container Configuration" \
-            "Secrets & Configuration" \
-            "Change Environment" \
-            "Exit"
+        clear
+        box "Configuration - Local Docker" 70
+        status_bar "$ENV" "$BACKEND" "$(get_install_status)" 70
         
+        echo ""
+        menu "Docker Configuration" \
+            "App Configuration (admin, OAuth clients)" \
+            "Back to Main Menu"
+        
+        local choice=""
+        read -p "$(echo -e "${BOLD}Select option [1-2]:${NC} ")" choice
+        
+        case "${choice:-}" in
+            1)
+                app_configuration
+                ;;
+            2|b|B|"")
+                return 0
+                ;;
+        esac
+    done
+}
+
+# ========================================================================
+# Proxmox Configuration Menu
+# ========================================================================
+
+proxmox_menu() {
+    while true; do
+        clear
+        box "Configuration - $ENV (Proxmox)" 70
+        status_bar "$ENV" "$BACKEND" "$(get_install_status)" 70
+        
+        echo ""
+        menu "Proxmox Configuration" \
+            "Verify Configuration (connectivity, vault, services)" \
+            "Model Configuration (LLM models, routing)" \
+            "Container Configuration (GPU, storage)" \
+            "App Configuration (admin, OAuth clients)" \
+            "Secrets & Keys (TOKEN_SERVICE, vault)" \
+            "Back to Main Menu"
+        
+        local choice=""
         read -p "$(echo -e "${BOLD}Select option [1-6]:${NC} ")" choice
         
-        case $choice in
+        case "${choice:-}" in
             1)
                 verify_all_configuration
                 pause
@@ -630,33 +799,42 @@ main_menu() {
                 container_configuration
                 ;;
             4)
-                secrets_configuration
+                app_configuration
                 ;;
             5)
-                SELECTED_ENV=""
-                SELECTED_ENV=$(select_environment)
-                success "Changed to: $SELECTED_ENV"
-                pause
+                secrets_configuration
                 ;;
-            6)
-                echo ""
-                info "Exiting..."
-                exit 0
-                ;;
-            *)
-                error "Invalid selection. Please enter 1-6."
+            6|b|B|"")
+                return 0
                 ;;
         esac
     done
 }
 
-# Select environment first
-SELECTED_ENV=$(select_environment)
-success "Selected environment: $SELECTED_ENV"
-echo ""
+# ========================================================================
+# Main
+# ========================================================================
 
-# Run main menu
-main_menu
+main() {
+    # Check if environment is set
+    if [[ -z "$ENV" ]]; then
+        error "No environment selected. Run 'make' to select an environment first."
+        exit 1
+    fi
+    
+    # Show appropriate menu based on backend
+    case "$BACKEND" in
+        docker)
+            docker_menu
+            ;;
+        proxmox)
+            proxmox_menu
+            ;;
+        *)
+            error "Unknown backend: $BACKEND"
+            exit 1
+            ;;
+    esac
+}
 
-exit 0
-
+main

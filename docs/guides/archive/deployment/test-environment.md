@@ -29,7 +29,7 @@ Edit `roles/secrets/vars/vault.yml`:
 ```yaml
 # Network Configuration (YOUR network)
 network_base_octets_production: "10.96.200"
-network_base_octets_test: "10.96.201"
+network_base_octets_staging: "10.96.201"
 
 # Domain Configuration (YOUR domain)
 base_domain: "maigentpartners.com"  # Change to your domain

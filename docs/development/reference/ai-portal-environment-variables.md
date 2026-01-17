@@ -2,7 +2,7 @@
 title: AI Portal Environment Variables Reference
 category: reference
 created: 2025-01-13
-updated: 2025-01-13
+updated: 2026-01-15
 status: active
 ---
 
@@ -39,12 +39,44 @@ Complete reference for all environment variables used by the AI Portal applicati
 
 ## Authentication
 
+> **Note**: As of 2026-01-15, Busibox uses a Zero Trust architecture where AuthZ issues all session JWTs directly. The `busibox-session` cookie contains the session JWT. See `docs/architecture/03-authentication.md` for details.
+
+### `AUTHZ_BASE_URL`
+- **Type:** `string`
+- **Format:** URL
+- **Required:** Yes
+- **Secret:** No
+- **Description:** Base URL for AuthZ service (Zero Trust authentication)
+- **Ansible:** `http://{{ authz_ip }}:8010` or via nginx proxy
+- **Example:** `https://localhost/api/authz` (via proxy) or `http://10.96.200.210:8010` (direct)
+
+### `AUTHZ_CLIENT_ID`
+- **Type:** `string`
+- **Required:** Yes
+- **Secret:** No
+- **Description:** OAuth client ID for ai-portal to authenticate with AuthZ
+- **Default:** `ai-portal`
+
+### `AUTHZ_CLIENT_SECRET`
+- **Type:** `string`
+- **Required:** Yes
+- **Secret:** Yes
+- **Description:** OAuth client secret for ai-portal
+- **Ansible:** `secrets.authz_client_secret`
+
+### `AUTHZ_ADMIN_TOKEN`
+- **Type:** `string`
+- **Required:** Yes
+- **Secret:** Yes
+- **Description:** Admin token for AuthZ management operations
+- **Ansible:** `secrets.authz_admin_token`
+
 ### `BETTER_AUTH_SECRET`
 - **Type:** `string`
 - **Length:** ≥32 bytes
-- **Required:** Yes
+- **Required:** Yes (legacy - used for backward compatibility)
 - **Secret:** Yes
-- **Description:** Secret key for Better Auth session encryption
+- **Description:** Secret key for Better Auth session encryption (legacy sessions)
 - **Ansible:** `secrets.better_auth_secret`
 - **Generation:** `openssl rand -base64 32`
 

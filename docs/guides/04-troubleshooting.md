@@ -1,3 +1,11 @@
+---
+title: "Troubleshooting"
+category: "user"
+order: 3
+description: "Common issues and solutions when working with Busibox"
+published: true
+---
+
 # Troubleshooting Guide
 
 **Created**: 2025-12-09  

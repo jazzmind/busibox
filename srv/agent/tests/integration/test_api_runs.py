@@ -249,8 +249,9 @@ async def test_list_runs_filter_by_agent(client: AsyncClient, test_session, test
     test_session.add(run1)
 
     # Create another agent and run
+    import uuid
     other_agent = AgentDefinition(
-        name="other-agent",
+        name=f"other-agent-{uuid.uuid4().hex[:8]}",
         display_name="Other Agent",
         model="chat",
         instructions="Other instructions",

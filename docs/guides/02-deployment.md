@@ -1,3 +1,11 @@
+---
+title: "Deployment Guide"
+category: "developer"
+order: 3
+description: "Step-by-step deployment instructions for Busibox services and infrastructure"
+published: true
+---
+
 # Deployment Guide
 
 **Created**: 2025-12-09  

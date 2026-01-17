@@ -12,7 +12,7 @@ class AgentDefinitionCreate(BaseModel):
     model: str
     instructions: str
     tools: Dict[str, Any] = Field(default_factory=dict)
-    workflow: Optional[Dict[str, Any]] = None
+    workflows: Optional[Dict[str, Any]] = None
     scopes: List[str] = Field(default_factory=list)
     is_active: bool = True
 

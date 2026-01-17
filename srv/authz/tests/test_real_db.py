@@ -14,17 +14,21 @@ import os
 from datetime import datetime, timedelta
 
 # Test database configuration
+# Tests use ISOLATED test databases (test_authz, test_files, test_agent_server)
+# owned by busibox_test_user - completely separate from production data
+# For Proxmox: defaults point to staging test database
+# For Docker: TEST_DB_* env vars are set by run-local-tests.sh
 TEST_DB_HOST = os.getenv("TEST_DB_HOST", "10.96.201.203")
 TEST_DB_PORT = int(os.getenv("TEST_DB_PORT", "5432"))
-TEST_DB_NAME = os.getenv("TEST_DB_NAME", "busibox")
-TEST_DB_USER = os.getenv("TEST_DB_USER", "busibox_user")
-TEST_DB_PASSWORD = os.getenv("TEST_DB_PASSWORD", "")  # Get from vault
+TEST_DB_NAME = os.getenv("TEST_DB_NAME", "test_authz")
+TEST_DB_USER = os.getenv("TEST_DB_USER", "busibox_test_user")
+TEST_DB_PASSWORD = os.getenv("TEST_DB_PASSWORD", "")  # Must be explicitly set
 
 # Test authz service
 TEST_AUTHZ_URL = os.getenv("TEST_AUTHZ_URL", "http://10.96.201.210:8010")
 
 
-@pytest.fixture
+@pytest.fixture(scope="function")
 async def db_pool():
     """Create a connection pool to the test database."""
     if not TEST_DB_PASSWORD:
@@ -43,7 +47,7 @@ async def db_pool():
     await pool.close()
 
 
-@pytest.fixture
+@pytest.fixture(scope="function")
 async def clean_test_data(db_pool):
     """Clean up test data before and after tests."""
     async with db_pool.acquire() as conn:

@@ -59,12 +59,21 @@ ALTER TABLE ingestion_files
     ALTER COLUMN owner_id SET NOT NULL;
 
 -- Add constraint: group documents must have group_id
-ALTER TABLE ingestion_files 
-    ADD CONSTRAINT IF NOT EXISTS check_group_visibility 
-    CHECK (
-        (visibility = 'group' AND group_id IS NOT NULL) OR 
-        (visibility = 'personal' AND group_id IS NULL)
-    );
+-- Use DO block to check if constraint exists before adding
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint 
+        WHERE conname = 'check_group_visibility'
+    ) THEN
+        ALTER TABLE ingestion_files 
+            ADD CONSTRAINT check_group_visibility 
+            CHECK (
+                (visibility = 'group' AND group_id IS NOT NULL) OR 
+                (visibility = 'personal' AND group_id IS NULL)
+            );
+    END IF;
+END $$;
 
 -- Create indexes for performance
 CREATE INDEX IF NOT EXISTS idx_ingestion_files_owner ON ingestion_files(owner_id);

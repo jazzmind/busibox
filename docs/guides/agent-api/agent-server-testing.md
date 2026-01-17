@@ -323,8 +323,8 @@ make install-dev
 # Check conftest.py for TEST_DATABASE_URL
 
 # For PostgreSQL tests (integration):
-createdb agent_server_test
-DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_server_test pytest
+createdb test_agent_server
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/test_agent_server pytest
 ```
 
 ### Tests fail with auth errors

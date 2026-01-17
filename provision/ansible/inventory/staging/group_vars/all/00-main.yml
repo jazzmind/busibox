@@ -1,0 +1,189 @@
+---
+# Global Variables for Busibox Application Deployment - STAGING
+# Created: 2025-10-15
+# Updated: 2025-10-23
+# Purpose: Centralized configuration for STAGING environment
+#
+# This file contains ONLY staging-specific configuration.
+# Secrets are stored in roles/secrets/vars/vault.yml (encrypted)
+#
+# NOTE: "Staging" is the pre-production environment for testing deployments.
+#       "Test databases" (*_test suffix) are for running automated tests (pytest).
+#       These are separate concepts - staging has its own databases AND test databases.
+
+# ============================================================================
+# Environment Configuration
+# ============================================================================
+busibox_env: staging
+enable_pytest_databases: true  # Create *_test databases for running automated tests
+node_env: development  # For Node.js applications
+
+# ============================================================================
+# Network Configuration - Test
+# ============================================================================
+# Base IP from vault (deployment-specific)
+network_base_octets: "{{ network_base_octets_staging }}"
+internal_network: "{{ network_base_octets }}.0/21"
+internal_gateway: "{{ network_base_octets }}.1"
+
+# Container IP Addresses (calculated from base)
+# Infrastructure containers: .200-.209
+proxy_ip: "{{ network_base_octets }}.200"
+apps_ip: "{{ network_base_octets }}.201"
+agent_ip: "{{ network_base_octets }}.202"
+postgres_ip: "{{ network_base_octets }}.203"
+milvus_ip: "{{ network_base_octets }}.204"
+search_api_ip: "{{ milvus_ip }}"  # Search API runs on milvus-lxc container (port 8003)
+minio_ip: "{{ network_base_octets }}.205"
+ingest_ip: "{{ network_base_octets }}.206"
+
+# LLM Service IPs: .207-.209 (to allow room for more infrastructure)
+litellm_ip: "{{ network_base_octets }}.207"
+# vLLM IP Configuration - Test environment can use production vLLM by default
+# Set use_production_vllm: true to use production vLLM (default, saves GPU memory)
+# Set use_production_vllm: false to use test vLLM container (requires manual deployment)
+use_production_vllm: true
+vllm_ip: "{{ (use_production_vllm | default(true)) | ternary(network_base_octets_production + '.208', network_base_octets + '.208') }}"
+ollama_ip: "{{ network_base_octets }}.209"
+
+# Authz Service IP
+authz_ip: "{{ network_base_octets }}.210"
+
+# ============================================================================
+# Domain Configuration - Staging
+# ============================================================================
+# Base domain from vault (deployment-specific)
+env_suffix: staging
+domain: "ai.{{ base_domain }}"
+full_domain: "{{ env_suffix }}.{{ domain }}"
+www_domain: "www.{{ full_domain }}"
+env_subdomain_suffix: "-staging"  # Suffix for staging subdomains (e.g., "agents-staging")
+
+# SSL Certificate Mode
+# Options: "letsencrypt", "provisioned", "selfsigned"
+ssl_mode: provisioned  # Use self-signed for testing
+# ssl_email comes from vault
+
+# ============================================================================
+# Service Endpoints
+# ============================================================================
+postgres_host: "{{ postgres_ip }}"
+postgres_port: 5432
+postgres_db: busibox
+postgres_user: busibox_user
+
+# Files/Ingestion database
+files_db: files
+files_user: "{{ postgres_user }}"
+files_password: "{{ secrets.postgresql.password }}"
+
+milvus_host: "{{ milvus_ip }}"
+milvus_port: 19530
+
+minio_host: "{{ minio_ip }}"
+minio_port: 9000
+minio_console_port: 9001
+minio_bucket: documents
+minio_root_user: "{{ secrets.minio.root_user }}"
+minio_root_password: "{{ secrets.minio.root_password }}"
+
+redis_host: "{{ ingest_ip }}"
+redis_port: 6379
+
+agent_api_host: "{{ agent_ip }}"
+agent_api_port: 8000
+
+# LLM Service Endpoints
+litellm_host: "{{ litellm_ip }}"
+litellm_port: 4000
+
+# LiteLLM Settings - Enable tool/function calling support
+litellm_drop_params: false  # CRITICAL: Must be false to pass tools to vLLM
+litellm_add_function_to_prompt: true  # Add function definitions to prompt for models that need it
+
+# LLM Cleanup - DISABLED for test (causes timeouts, not needed for RAG/role testing)
+# Test environment focuses on search and permissions, not text quality
+# Production has LLM cleanup enabled for better extraction quality
+llm_cleanup_enabled: false
+
+ollama_host: "{{ ollama_ip }}"
+ollama_port: 11434
+
+vllm_host: "0.0.0.0"  # Listen on all interfaces for IP aliasing support
+# Note: vLLM ports are now configured via model_config.yml
+# Port-based roles (vllm_8000, vllm_8001, etc.) read assignments from model_config.yml
+# When use_production_vllm is true, test services connect to production vLLM (10.96.200.208)
+# When use_production_vllm is false, test services connect to test vLLM (10.96.201.208)
+
+# ============================================================================
+# GPU-Heavy Features - Test Environment
+# ============================================================================
+# Test shares the same physical GPU with production, so GPU memory is limited.
+# These settings prevent test from competing with production for GPU resources.
+
+# Marker PDF extraction - DISABLED for test (requires GPU/auth not available)
+# Test environment uses pdfplumber fallback instead of Marker
+# Production has Marker service with GPU support
+marker_enabled: false  # Disabled - test doesn't have GPU/auth for Marker
+marker_use_gpu: false
+marker_gpu_device: cpu
+marker_service_url: ""  # Empty - don't call production Marker (auth issues)
+
+# ColPali - DISABLED for test (requires GPU/ONNX not available)
+# Test environment doesn't have GPU for ColPali visual embeddings
+# Production has ColPali service with GPU support
+colpali_enabled: false  # Disabled - test doesn't have GPU for visual embeddings
+
+# ============================================================================
+# LLM Model Configuration
+# ============================================================================
+# HuggingFace Authentication (for gated models like PaliGemma)
+# Token stored in vault at secrets.huggingface.token
+huggingface_token: "{{ secrets.huggingface.token }}"
+
+# Ollama Models (TEST - lightweight models)
+ollama_initial_models:
+  - name: "gemma:2b"
+    description: "Lightweight test model"
+
+# vLLM Model Configuration (TEST)
+# Note: vLLM configuration is now managed via model_config.yml
+# Port-based roles (vllm_8000, vllm_8001, etc.) read model assignments from model_config.yml
+# GPU assignments, ports, and tensor parallelism are configured via configure-vllm-model-routing.sh
+
+# LiteLLM Database Configuration
+litellm_enable_database: true
+
+# ============================================================================
+# Deployment Configuration
+# ============================================================================
+deploywatch_check_interval: 300  # Check more frequently in test (5 minutes)
+deploywatch_apps_dir: /srv/deploywatch/apps
+
+# Application Defaults
+default_process_manager: systemd
+default_node_version: "20"
+
+# ============================================================================
+# NGINX Configuration
+# ============================================================================
+nginx_worker_processes: auto
+nginx_worker_connections: 512  # Lower for test
+nginx_client_max_body_size: 50M  # Lower for test
+nginx_proxy_timeout: 60s
+
+# ============================================================================
+# Logging & Security
+# ============================================================================
+log_level: debug  # More verbose logging for test
+structured_logging: true
+hsts_max_age: 31536000  # 1 year (shorter for test)
+
+# ============================================================================
+# Application Definitions
+# ============================================================================
+# Applications are now defined in group_vars/apps.yml (centralized)
+# This allows sharing app definitions between test and production environments
+# while keeping environment-specific values (IPs, domains, NODE_ENV) here.
+#
+# See: provision/ansible/group_vars/apps.yml

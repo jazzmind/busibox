@@ -33,11 +33,13 @@ import hashlib
 from datetime import datetime, timedelta
 
 # Test database configuration
+# Tests use ISOLATED test databases (test_authz, test_files, test_agent_server)
+# owned by busibox_test_user - completely separate from production data
 TEST_DB_HOST = os.getenv("TEST_DB_HOST", "10.96.201.203")
 TEST_DB_PORT = int(os.getenv("TEST_DB_PORT", "5432"))
-TEST_DB_NAME = os.getenv("TEST_DB_NAME", "busibox")
-TEST_DB_USER = os.getenv("TEST_DB_USER", "busibox_user")
-TEST_DB_PASSWORD = os.getenv("TEST_DB_PASSWORD", "")
+TEST_DB_NAME = os.getenv("TEST_DB_NAME", "test_authz")
+TEST_DB_USER = os.getenv("TEST_DB_USER", "busibox_test_user")
+TEST_DB_PASSWORD = os.getenv("TEST_DB_PASSWORD", "testpassword")
 
 # Test authz service
 TEST_AUTHZ_URL = os.getenv("TEST_AUTHZ_URL", "http://10.96.201.210:8010")
@@ -88,14 +90,24 @@ async def db_pool():
 
 @pytest.fixture
 def admin_headers():
-    """Headers for admin-authenticated requests."""
+    """Headers for admin-authenticated requests.
+    
+    Includes X-Test-Mode: true to route requests to the test database.
+    """
     skip_if_no_credentials()
-    return {"Authorization": f"Bearer {ADMIN_TOKEN}"}
+    return {
+        "Authorization": f"Bearer {ADMIN_TOKEN}",
+        "X-Test-Mode": "true",  # Route to test database
+    }
 
 
 @pytest.fixture
-async def test_role(db_pool):
-    """Create a test role and clean it up after the test."""
+async def test_role(db_pool, clean_test_data):
+    """Create a test role and clean it up after the test.
+    
+    Depends on clean_test_data to ensure old test data is cleaned up
+    before we create new test data.
+    """
     role_id = uuid.uuid4()
     role_name = f"TestRole_{role_id}"
     
@@ -119,8 +131,12 @@ async def test_role(db_pool):
 
 
 @pytest.fixture
-async def test_user(db_pool):
-    """Create a test user and clean it up after the test."""
+async def test_user(db_pool, clean_test_data):
+    """Create a test user and clean it up after the test.
+    
+    Depends on clean_test_data to ensure old test data is cleaned up
+    before we create new test data.
+    """
     user_id = uuid.uuid4()
     email = f"test_{user_id}@test.example.com"
     
@@ -162,9 +178,13 @@ async def clean_test_data(db_pool):
             await conn.execute(
                 "DELETE FROM authz_roles WHERE name LIKE 'TestRole_%'"
             )
-            # Clean up test email domains
+            # Clean up test email domains (except test.example.com and busibox.local which are required)
             await conn.execute(
-                "DELETE FROM authz_email_domain_config WHERE domain LIKE 'test.%'"
+                """
+                DELETE FROM authz_email_domain_config 
+                WHERE domain LIKE 'test.%' 
+                AND domain NOT IN ('test.example.com', 'busibox.local')
+                """
             )
     
     await cleanup()
@@ -1798,7 +1818,7 @@ class TestOAuthTokenExchange:
             assert len(jwks["keys"]) >= 1
             jwk = jwks["keys"][0]
             
-            # Exchange for access token
+            # Exchange for access token (with test mode header to use test database)
             skip_if_no_oauth_credentials()
             exchange_resp = await client.post(
                 f"{TEST_AUTHZ_URL}/oauth/token",
@@ -1810,6 +1830,7 @@ class TestOAuthTokenExchange:
                     "requested_subject": str(user_id),
                     "requested_purpose": "integration-test",
                 },
+                headers={"X-Test-Mode": "true"},
                 timeout=30.0,
             )
             
@@ -2207,6 +2228,7 @@ class TestAdminRoleEndpoints:
         """Test deleting a role."""
         # Create a role first
         role_id = str(uuid.uuid4())
+        role_name = f"TestRole_delete_{role_id[:8]}"
         async with db_pool.acquire() as conn:
             await conn.execute(
                 """
@@ -2214,7 +2236,7 @@ class TestAdminRoleEndpoints:
                 VALUES ($1, $2, $3)
                 """,
                 uuid.UUID(role_id),
-                "role-to-delete",
+                role_name,
                 "Will be deleted",
             )
         
@@ -2465,7 +2487,7 @@ class TestOAuthFormEncoding:
             resp = await client.post(
                 f"{TEST_AUTHZ_URL}/oauth/token",
                 data=form_data,
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                headers={"Content-Type": "application/x-www-form-urlencoded", "X-Test-Mode": "true"},
                 timeout=30.0,
             )
             

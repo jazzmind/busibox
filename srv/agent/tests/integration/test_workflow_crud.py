@@ -150,9 +150,14 @@ async def test_delete_unused_workflow_returns_204(
     
     assert response.status_code == 204
     
-    # Verify workflow is soft-deleted
-    workflow = await db_session.get(WorkflowDefinition, workflow_id)
-    assert workflow.is_active is False
+    # Verify workflow is soft-deleted (expire cache first to get fresh data)
+    db_session.expire_all()  # sync method - no await
+    from sqlalchemy import select
+    stmt = select(WorkflowDefinition).where(WorkflowDefinition.id == workflow_id)
+    result = await db_session.execute(stmt)
+    workflow = result.scalar_one_or_none()
+    assert workflow is not None, "Workflow should still exist in database"
+    assert workflow.is_active is False, "Workflow should be soft-deleted"
 
 
 

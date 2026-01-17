@@ -1,0 +1,196 @@
+---
+# Docs API - Lightweight documentation service
+
+- name: Install rsync for synchronize module
+  apt:
+    name: rsync
+    state: present
+    update_cache: yes
+  tags: [docs]
+
+- name: Ensure docs group exists
+  group:
+    name: "{{ docs_group }}"
+    state: present
+  tags: [docs]
+
+- name: Ensure docs user exists
+  user:
+    name: "{{ docs_user }}"
+    group: "{{ docs_group }}"
+    create_home: false
+    shell: /usr/sbin/nologin
+    state: present
+  tags: [docs]
+
+- name: Create docs directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ docs_user }}"
+    group: "{{ docs_group }}"
+    mode: "0755"
+  loop:
+    - "{{ docs_base_dir }}"
+    - "{{ docs_app_dir }}"
+    - "{{ docs_base_dir }}/docs"
+    - "{{ docs_base_dir }}/openapi"
+  tags: [docs]
+
+# =============================================================================
+# Source Code Deployment
+# =============================================================================
+
+- name: Clean Python cache before source sync
+  shell: find {{ docs_app_dir }}/src -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+  changed_when: false
+  tags: [docs]
+
+- name: Sync docs API source (removes stale files)
+  synchronize:
+    src: "{{ docs_src_dir }}/src/"
+    dest: "{{ docs_app_dir }}/src/"
+    delete: yes
+    rsync_opts:
+      - "--exclude=__pycache__"
+      - "--exclude=*.pyc"
+  register: docs_source_sync
+  notify: Restart docs-api service
+  tags: [docs]
+
+- name: Set ownership on synced source
+  file:
+    path: "{{ docs_app_dir }}/src"
+    owner: "{{ docs_user }}"
+    group: "{{ docs_group }}"
+    recurse: yes
+  tags: [docs]
+
+- name: Copy requirements.txt
+  copy:
+    src: "{{ docs_src_dir }}/requirements.txt"
+    dest: "{{ docs_app_dir }}/requirements.txt"
+    owner: "{{ docs_user }}"
+    group: "{{ docs_group }}"
+    mode: "0644"
+  notify: Restart docs-api service
+  tags: [docs]
+
+# =============================================================================
+# Documentation Content
+# =============================================================================
+
+- name: Sync documentation markdown files
+  synchronize:
+    src: "{{ docs_content_dir }}/"
+    dest: "{{ docs_base_dir }}/docs/"
+    delete: yes
+    rsync_opts:
+      - "--exclude=archive"
+      - "--exclude=.DS_Store"
+  register: docs_content_sync
+  tags: [docs]
+
+- name: Set ownership on docs content
+  file:
+    path: "{{ docs_base_dir }}/docs"
+    owner: "{{ docs_user }}"
+    group: "{{ docs_group }}"
+    recurse: yes
+  tags: [docs]
+
+- name: Sync OpenAPI specifications
+  synchronize:
+    src: "{{ docs_openapi_dir }}/"
+    dest: "{{ docs_base_dir }}/openapi/"
+    delete: yes
+    rsync_opts:
+      - "--exclude=.DS_Store"
+  register: openapi_sync
+  tags: [docs]
+
+- name: Set ownership on openapi content
+  file:
+    path: "{{ docs_base_dir }}/openapi"
+    owner: "{{ docs_user }}"
+    group: "{{ docs_group }}"
+    recurse: yes
+  tags: [docs]
+
+# =============================================================================
+# Python Environment
+# =============================================================================
+
+- name: Ensure Python venv deps are installed
+  apt:
+    name:
+      - python3-venv
+      - python3-pip
+    state: present
+    update_cache: false
+  tags: [docs]
+
+- name: Create virtualenv
+  command: python3 -m venv "{{ docs_venv_dir }}"
+  args:
+    creates: "{{ docs_venv_dir }}/bin/activate"
+  tags: [docs]
+
+- name: Install docs dependencies
+  pip:
+    requirements: "{{ docs_app_dir }}/requirements.txt"
+    virtualenv: "{{ docs_venv_dir }}"
+  register: docs_deps_install
+  notify: Restart docs-api service
+  tags: [docs]
+
+# =============================================================================
+# Systemd Service
+# =============================================================================
+
+- name: Install systemd service
+  template:
+    src: docs-api.service.j2
+    dest: /etc/systemd/system/{{ docs_service_name }}.service
+    mode: "0644"
+  notify: Restart docs-api service
+  tags: [docs]
+
+- name: Reload systemd
+  systemd:
+    daemon_reload: true
+  tags: [docs]
+
+- name: Enable docs-api service
+  systemd:
+    name: "{{ docs_service_name }}"
+    enabled: true
+  tags: [docs]
+
+- name: Restart docs-api service (always restart on deploy)
+  systemd:
+    name: "{{ docs_service_name }}"
+    state: restarted
+  tags: [docs]
+
+- name: Verify docs-api service is running
+  systemd:
+    name: "{{ docs_service_name }}"
+  register: docs_service_status
+  tags: [docs]
+
+- name: Check docs-api service health
+  uri:
+    url: "http://localhost:{{ docs_service_port }}/health/live"
+    method: GET
+    status_code: 200
+  delegate_to: "{{ inventory_hostname }}"
+  register: docs_health_check
+  failed_when: false
+  tags: [docs]
+
+- name: Warn if docs-api service is not healthy
+  debug:
+    msg: "Warning: Docs API service may not be responding correctly. Check logs with: journalctl -u {{ docs_service_name }} -n 50"
+  when: docs_health_check.status != 200
+  tags: [docs]

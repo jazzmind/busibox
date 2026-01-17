@@ -34,7 +34,7 @@ class AgentDefinition(Base):
     model: Mapped[str] = mapped_column(String(255))
     instructions: Mapped[str] = mapped_column(Text)
     tools: Mapped[dict] = mapped_column(JSON, default=dict)
-    workflow: Mapped[Optional[dict]] = mapped_column(JSON, default=None)
+    workflows: Mapped[Optional[dict]] = mapped_column(JSON, default=None)
     scopes: Mapped[list] = mapped_column(JSON, default=list)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_builtin: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -69,6 +69,37 @@ class ToolDefinition(Base):
     
     def __repr__(self) -> str:
         return f"<ToolDefinition(id={self.id}, name={self.name}, is_builtin={self.is_builtin}, version={self.version})>"
+
+
+class ToolConfig(Base):
+    """
+    Runtime configuration for tools (e.g., API keys, provider settings).
+    
+    Configuration hierarchy (highest priority first):
+    1. User-level: scope='user', user_id=<user_id>, agent_id=NULL
+    2. Agent-level: scope='agent', user_id=NULL, agent_id=<agent_id>
+    3. System-level: scope='system', user_id=NULL, agent_id=NULL
+    
+    When looking up config, check user first, then agent, then system.
+    """
+    __tablename__ = "tool_configs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tool_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True, comment="Tool UUID (can be built-in)")
+    tool_name: Mapped[str] = mapped_column(String(120), index=True, comment="Tool name for lookup")
+    scope: Mapped[str] = mapped_column(String(20), default="user", comment="Config scope: system, agent, or user")
+    user_id: Mapped[Optional[str]] = mapped_column(String(255), index=True, comment="User ID for user-scoped config")
+    agent_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), index=True, comment="Agent ID for agent-scoped config")
+    config: Mapped[dict] = mapped_column(JSON, default=dict, comment="Provider configuration (enabled, api_keys, etc.)")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+    __table_args__ = (
+        Index('ix_tool_config_scope', 'tool_id', 'scope', 'user_id', 'agent_id', unique=True),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ToolConfig(tool_id={self.tool_id}, scope={self.scope}, user_id={self.user_id}, agent_id={self.agent_id})>"
 
 
 class WorkflowDefinition(Base):
@@ -289,6 +320,10 @@ class Conversation(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     user_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    source: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True, index=True,
+        comment="App/client that created this conversation (e.g., 'ai-portal', 'agent-manager')"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
@@ -300,6 +335,7 @@ class Conversation(Base):
     __table_args__ = (
         Index('idx_conversations_user_id', 'user_id'),
         Index('idx_conversations_created_at', 'created_at'),
+        Index('idx_conversations_source', 'source'),
     )
 
     def __repr__(self) -> str:

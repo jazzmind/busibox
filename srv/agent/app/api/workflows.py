@@ -130,7 +130,7 @@ async def update_workflow(
     
     # Increment version and update timestamp
     workflow.version += 1
-    workflow.updated_at = datetime.now(timezone.utc)
+    workflow.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     
     await session.commit()
     await session.refresh(workflow)

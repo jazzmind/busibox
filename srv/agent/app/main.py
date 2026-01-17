@@ -1,4 +1,3 @@
-import asyncio
 import logging
 
 from fastapi import FastAPI
@@ -6,10 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import agents, auth, chat, conversations, dispatcher, evals, health, insights, runs, scores, streams, tools, workflows
 from app.config.settings import get_settings
-from app.db.session import engine
-from app.models.base import Base
-from app.services.agent_registry import agent_registry
 from app.db.session import SessionLocal
+from app.services.agent_registry import agent_registry
 from app.utils.logging import setup_logging, setup_tracing, instrument_fastapi
 from app.api.insights import init_insights_service
 
@@ -37,8 +34,9 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup_event() -> None:
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # Note: Schema migrations are handled by Alembic (runs before uvicorn starts)
+    # We only use create_all for tables not managed by migrations (if any)
+    # Skip create_all since Alembic manages all tables
     async with SessionLocal() as session:
         await agent_registry.refresh(session)
     logger.info("Agent registry initialized")

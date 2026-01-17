@@ -3,13 +3,12 @@ Enhanced structured logging with structlog for dispatcher and CRUD operations.
 
 Provides:
 - Structured logging with consistent field names
-- JSON output for log aggregation
+- Integration with standard logging (no double-JSON encoding)
 - Context-aware logging for dispatcher decisions
 - Integration with existing OpenTelemetry tracing
 """
 
 import logging
-import sys
 from typing import Any
 
 import structlog
@@ -38,16 +37,14 @@ def add_trace_context(logger: Any, method_name: str, event_dict: dict) -> dict:
 
 def configure_structlog() -> None:
     """
-    Configure structlog for structured JSON logging.
+    Configure structlog to work with stdlib logging.
     
-    Sets up processors for:
-    - Adding timestamps
-    - Adding log levels
-    - Adding trace context
-    - JSON rendering
+    Uses ProcessorFormatter to let the root logger handle JSON rendering,
+    avoiding double-JSON encoding when python-json-logger is also configured.
     """
     structlog.configure(
         processors=[
+            structlog.contextvars.merge_contextvars,
             structlog.stdlib.filter_by_level,
             structlog.stdlib.add_logger_name,
             structlog.stdlib.add_log_level,
@@ -57,7 +54,8 @@ def configure_structlog() -> None:
             structlog.processors.format_exc_info,
             add_trace_context,
             structlog.processors.UnicodeDecoder(),
-            structlog.processors.JSONRenderer(),
+            # Use ProcessorFormatter.wrap_for_formatter to pass events to stdlib
+            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
         ],
         context_class=dict,
         logger_factory=structlog.stdlib.LoggerFactory(),

@@ -59,12 +59,36 @@ def load_env_files(service_dir: Optional[Path] = None) -> bool:
     env_local = service_dir / ".env.local"
     env_file = service_dir / ".env"
     
+    # Also check the root busibox directory for env files
+    # Walk up to find busibox root (contains provision/, srv/, etc.)
+    root_env_local = None
+    root_env_file = None
+    for parent in service_dir.parents:
+        if (parent / "provision").exists() and (parent / "srv").exists():
+            root_env_local = parent / ".env.local"
+            root_env_file = parent / ".env.test"  # Prefer .env.test for testing
+            if not root_env_file.exists():
+                root_env_file = parent / ".env"
+            break
+    
     loaded = False
+    
+    # Load service-level env first (highest priority for service-specific settings)
     if env_local.exists():
-        load_dotenv(env_local, override=True)
+        # override=False means env vars set by the test script take precedence
+        # This allows run-local-tests.sh to override .env.local settings
+        load_dotenv(env_local, override=False)
         loaded = True
     elif env_file.exists():
-        load_dotenv(env_file, override=True)
+        load_dotenv(env_file, override=False)
+        loaded = True
+    
+    # Load root-level env as fallback (for shared settings like LITELLM_API_KEY)
+    if root_env_local and root_env_local.exists():
+        load_dotenv(root_env_local, override=False)
+        loaded = True
+    elif root_env_file and root_env_file.exists():
+        load_dotenv(root_env_file, override=False)
         loaded = True
     
     return loaded

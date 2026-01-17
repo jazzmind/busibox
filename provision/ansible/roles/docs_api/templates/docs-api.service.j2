@@ -1,0 +1,21 @@
+[Unit]
+Description=Busibox Docs API
+After=network.target
+
+[Service]
+Type=simple
+User={{ docs_user }}
+Group={{ docs_group }}
+WorkingDirectory={{ docs_app_dir }}
+Environment="PATH={{ docs_venv_dir }}/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="DOCS_PATH={{ docs_base_dir }}/docs"
+Environment="OPENAPI_PATH={{ docs_base_dir }}/openapi"
+Environment="SERVICE_PORT={{ docs_service_port }}"
+ExecStart={{ docs_venv_dir }}/bin/python -m uvicorn api.main:app --host 0.0.0.0 --port {{ docs_service_port }}
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

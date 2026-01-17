@@ -71,13 +71,34 @@ class Settings(BaseSettings):
     auth_client_secret: str = Field("test-client-secret", description="Client secret for token exchange")
 
     # Database configuration
+    # Default credentials match docker-compose.local.yml (busibox_user:devpassword)
     database_url: str = Field(
-        "postgresql+asyncpg://agent_server:agent_server@localhost:5432/agent_server",
+        "postgresql+asyncpg://busibox_user:devpassword@localhost:5432/agent_server",
         description="SQLAlchemy connection URL",
+    )
+    
+    # Test mode configuration
+    # When enabled, requests with X-Test-Mode: true header will use test database
+    test_mode_enabled: bool = Field(
+        False,
+        description="Enable test mode support (routes test requests to test database)",
+    )
+    test_database_url: str = Field(
+        "postgresql+asyncpg://busibox_test_user:testpassword@localhost:5432/test_agent_server",
+        description="SQLAlchemy connection URL for test database",
     )
 
     # Redis/background tasks
     redis_url: str = Field("redis://localhost:6379/0", description="Redis URL for queues/locks")
+
+    # Web Search Provider Configuration
+    search_duckduckgo_enabled: bool = Field(True, description="Enable DuckDuckGo search (free)")
+    search_tavily_enabled: bool = Field(False, description="Enable Tavily search")
+    tavily_api_key: Optional[str] = Field(None, description="Tavily API key")
+    search_perplexity_enabled: bool = Field(False, description="Enable Perplexity search")
+    perplexity_api_key: Optional[str] = Field(None, description="Perplexity API key")
+    search_brave_enabled: bool = Field(False, description="Enable Brave search")
+    brave_api_key: Optional[str] = Field(None, description="Brave API key")
 
     # CORS
     cors_origins: List[str] = Field(default_factory=lambda: ["*"])
