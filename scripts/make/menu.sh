@@ -911,7 +911,10 @@ handle_services() {
             # Proxmox service management menu
             while true; do
                 clear
-                banner "Service Management (Proxmox)"
+                echo ""
+                echo "══════════════════════════════════════════════════════════════════════"
+                echo "Service Management (Proxmox)"
+                echo "══════════════════════════════════════════════════════════════════════"
                 
                 echo ""
                 echo -e "  ${BOLD}Available Services:${NC}"
