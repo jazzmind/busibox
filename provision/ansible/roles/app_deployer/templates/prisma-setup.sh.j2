@@ -33,21 +33,52 @@ DB_HOST=$(echo "$DATABASE_URL" | sed -E 's/.*@([^:\/]+).*/\1/')
 echo "Database host: $DB_HOST"
 
 # Check if migrations directory exists and has migrations
-if [ -d "prisma/migrations" ] && [ "$(ls -A prisma/migrations 2>/dev/null)" ]; then
-  echo "Found migrations directory, attempting to deploy migrations..."
+MIGRATIONS_DIR="prisma/migrations"
+if [ -d "$MIGRATIONS_DIR" ] && [ -n "$(find "$MIGRATIONS_DIR" -maxdepth 2 -type d -name '[0-9]*_*' 2>/dev/null)" ]; then
+  echo "Found migration files in $MIGRATIONS_DIR"
   
-  if npx prisma migrate deploy 2>&1; then
-    echo "✓ Migrations deployed successfully"
-  else
-    echo "✗ Migration deployment failed"
-    echo "Attempting db push as fallback..."
+  # Check if _prisma_migrations table exists (indicates migrations have been run before)
+  if npx prisma migrate status 2>&1 | grep -q "Database schema is up to date"; then
+    echo "✓ Database migrations are up to date"
+  elif npx prisma migrate status 2>&1 | grep -q "Your database is not managed by Prisma Migrate"; then
+    echo "⚠ Database exists but is not managed by Prisma Migrate"
+    echo "This typically happens when switching from 'db push' to migrations"
+    echo "Attempting to baseline and deploy migrations..."
     
-    if npx prisma db push 2>&1; then
-      echo "✓ Database schema pushed successfully"
+    # Baseline the current state - mark all existing migrations as applied
+    if npx prisma migrate resolve --applied "$(find "$MIGRATIONS_DIR" -maxdepth 2 -type d -name '[0-9]*_*' | head -n 1 | xargs basename)" 2>&1; then
+      echo "✓ Database baselined successfully"
+      
+      # Now deploy any new migrations
+      if npx prisma migrate deploy 2>&1; then
+        echo "✓ New migrations deployed successfully"
+      else
+        echo "⚠ Migration deployment had issues, falling back to db push"
+        if npx prisma db push 2>&1; then
+          echo "✓ Database schema pushed successfully"
+        else
+          echo "✗ Failed to update database schema"
+          exit 1
+        fi
+      fi
     else
-      echo "⚠ Schema push failed, trying with --accept-data-loss..."
-      if npx prisma db push --accept-data-loss 2>&1; then
-        echo "✓ Database schema pushed with data loss accepted"
+      echo "⚠ Could not baseline migrations, using db push instead"
+      if npx prisma db push 2>&1; then
+        echo "✓ Database schema pushed successfully"
+      else
+        echo "✗ Failed to push database schema"
+        exit 1
+      fi
+    fi
+  else
+    # Normal case: database is managed by Prisma Migrate, just deploy
+    echo "Deploying migrations..."
+    if npx prisma migrate deploy 2>&1; then
+      echo "✓ Migrations deployed successfully"
+    else
+      echo "✗ Migration deployment failed, trying db push as fallback..."
+      if npx prisma db push 2>&1; then
+        echo "✓ Database schema pushed successfully"
       else
         echo "✗ Failed to push database schema"
         exit 1
@@ -55,18 +86,13 @@ if [ -d "prisma/migrations" ] && [ "$(ls -A prisma/migrations 2>/dev/null)" ]; t
     fi
   fi
 else
-  echo "No migrations found, using db push to create schema..."
+  echo "No migration files found, using db push to create/update schema..."
   
   if npx prisma db push 2>&1; then
     echo "✓ Database schema created successfully"
   else
-    echo "⚠ Schema push failed, trying with --accept-data-loss..."
-    if npx prisma db push --accept-data-loss 2>&1; then
-      echo "✓ Database schema pushed with data loss accepted"
-    else
-      echo "✗ Failed to create database schema"
-      exit 1
-    fi
+    echo "✗ Failed to create database schema"
+    exit 1
   fi
 fi
 
