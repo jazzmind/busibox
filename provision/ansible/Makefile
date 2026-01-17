@@ -1,4 +1,4 @@
-.PHONY: ping all files pg milvus nginx search search-api agent ingest ingest-api ingest-worker ingest-update-tests docs apps openwebui deploy-apps deploy-ai-portal deploy-agent-client deploy-doc-intel deploy-foundation deploy-project-analysis deploy-innovation verify verify-health verify-smoke test test-menu test-ingest test-ingest-all test-ingest-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-authz test-apps test-security test-security-auth test-security-injection test-security-fuzz test-all configure generate-token-keys bootstrap-test-creds signal-bot tailscale test-signal-bot
+.PHONY: ping all files pg milvus nginx search search-api agent ingest ingest-api ingest-worker ingest-update-tests docs apps openwebui deploy-apps deploy-ai-portal deploy-agent-client deploy-doc-intel deploy-foundation deploy-project-analysis deploy-innovation verify verify-health verify-smoke service-start service-stop service-restart service-status service-logs service-health test test-menu test-ingest test-ingest-all test-ingest-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-authz test-apps test-security test-security-auth test-security-injection test-security-fuzz test-all configure generate-token-keys bootstrap-test-creds signal-bot tailscale test-signal-bot
 # Default to production inventory (can override with: make all INV=inventory/staging)
 INV=inventory/production
 
@@ -170,7 +170,7 @@ verify-health:
 	@echo "✓ Docs API is healthy (or not deployed yet)"
 	@echo ""
 	@echo "=== PostgreSQL ==="
-	@psql -h 10.96.200.203 -U busibox_user -d busibox -c "SELECT version();" || (echo "PostgreSQL health check FAILED" && exit 1)
+	@ssh root@10.96.200.203 'su - postgres -c "psql -c \"SELECT version();\"' > /dev/null || (echo "PostgreSQL health check FAILED" && exit 1)
 	@echo "✓ PostgreSQL is healthy"
 	@echo ""
 	@echo "=== Milvus ==="
@@ -186,14 +186,131 @@ verify-smoke:
 	@echo "Running smoke tests..."
 	@echo ""
 	@echo "=== Database Schema ==="
-	@psql -h 10.96.200.203 -U busibox_user -d busibox -c "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename;" || (echo "Schema verification FAILED" && exit 1)
+	@ssh root@10.96.200.203 'su - postgres -c "psql -d busibox -c \"SELECT tablename FROM pg_tables WHERE schemaname = '"'"'public'"'"' ORDER BY tablename;\""' || (echo "Schema verification FAILED" && exit 1)
 	@echo "✓ Database schema verified"
 	@echo ""
 	@echo "=== Migrations ==="
-	@psql -h 10.96.200.203 -U busibox_user -d busibox -c "SELECT version, name, applied_at FROM schema_migrations ORDER BY version;" || (echo "Migration verification FAILED" && exit 1)
+	@ssh root@10.96.200.203 'su - postgres -c "psql -d busibox -c \"SELECT version, name, applied_at FROM schema_migrations ORDER BY version;\""' || (echo "Migration verification FAILED" && exit 1)
 	@echo "✓ Database migrations verified"
 	@echo ""
 
+# ============================================================================
+# Service Management
+# ============================================================================
+# Manage services on remote containers (similar to docker commands but uses systemctl)
+# Usage:
+#   make service-start SERVICE=authz              # Start service
+#   make service-stop SERVICE=authz               # Stop service
+#   make service-restart SERVICE=authz            # Restart service
+#   make service-status SERVICE=authz             # Show status
+#   make service-logs SERVICE=authz               # Show logs
+#   make service-health SERVICE=authz             # Check health endpoint
+#
+# Service mapping (automatically determines container IP based on service name)
+
+# Map service names to container IPs and service names
+SERVICE_MAP := \
+  authz=authz@$(AUTHZ_IP) \
+  ingest-api=ingest-api@$(INGEST_IP) \
+  ingest-worker=ingest-worker@$(INGEST_IP) \
+  search-api=search-api@$(MILVUS_IP) \
+  agent-api=agent@$(AGENT_IP) \
+  milvus=milvus@$(MILVUS_IP) \
+  nginx=nginx@$(APPS_IP) \
+  postgresql=postgresql@10.96.200.203 \
+  redis=redis@$(INGEST_IP)
+
+service-start:
+ifndef SERVICE
+	@echo "Error: SERVICE is required"
+	@echo "Usage: make service-start SERVICE=<service>"
+	@echo ""
+	@echo "Available services: authz, ingest-api, ingest-worker, search-api, agent-api, milvus, nginx, postgresql, redis"
+	@exit 1
+endif
+	$(eval SVC_INFO := $(filter $(SERVICE)=%,$(SERVICE_MAP)))
+	$(eval SVC_NAME := $(word 2,$(subst @, ,$(subst =, ,$(SVC_INFO)))))
+	$(eval SVC_IP := $(word 3,$(subst @, ,$(subst =, ,$(SVC_INFO)))))
+	@echo "Starting $(SVC_NAME) on $(SVC_IP)..."
+	@ssh root@$(SVC_IP) 'systemctl start $(SVC_NAME)'
+	@echo "✓ Service started"
+
+service-stop:
+ifndef SERVICE
+	@echo "Error: SERVICE is required"
+	@echo "Usage: make service-stop SERVICE=<service>"
+	@exit 1
+endif
+	$(eval SVC_INFO := $(filter $(SERVICE)=%,$(SERVICE_MAP)))
+	$(eval SVC_NAME := $(word 2,$(subst @, ,$(subst =, ,$(SVC_INFO)))))
+	$(eval SVC_IP := $(word 3,$(subst @, ,$(subst =, ,$(SVC_INFO)))))
+	@echo "Stopping $(SVC_NAME) on $(SVC_IP)..."
+	@ssh root@$(SVC_IP) 'systemctl stop $(SVC_NAME)'
+	@echo "✓ Service stopped"
+
+service-restart:
+ifndef SERVICE
+	@echo "Error: SERVICE is required"
+	@echo "Usage: make service-restart SERVICE=<service>"
+	@exit 1
+endif
+	$(eval SVC_INFO := $(filter $(SERVICE)=%,$(SERVICE_MAP)))
+	$(eval SVC_NAME := $(word 2,$(subst @, ,$(subst =, ,$(SVC_INFO)))))
+	$(eval SVC_IP := $(word 3,$(subst @, ,$(subst =, ,$(SVC_INFO)))))
+	@echo "Restarting $(SVC_NAME) on $(SVC_IP)..."
+	@ssh root@$(SVC_IP) 'systemctl restart $(SVC_NAME)'
+	@echo "✓ Service restarted"
+
+service-status:
+ifndef SERVICE
+	@echo "Error: SERVICE is required"
+	@echo "Usage: make service-status SERVICE=<service>"
+	@exit 1
+endif
+	$(eval SVC_INFO := $(filter $(SERVICE)=%,$(SERVICE_MAP)))
+	$(eval SVC_NAME := $(word 2,$(subst @, ,$(subst =, ,$(SVC_INFO)))))
+	$(eval SVC_IP := $(word 3,$(subst @, ,$(subst =, ,$(SVC_INFO)))))
+	@echo "Status for $(SVC_NAME) on $(SVC_IP):"
+	@ssh root@$(SVC_IP) 'systemctl status $(SVC_NAME) --no-pager'
+
+service-logs:
+ifndef SERVICE
+	@echo "Error: SERVICE is required"
+	@echo "Usage: make service-logs SERVICE=<service> [LINES=50]"
+	@exit 1
+endif
+	$(eval SVC_INFO := $(filter $(SERVICE)=%,$(SERVICE_MAP)))
+	$(eval SVC_NAME := $(word 2,$(subst @, ,$(subst =, ,$(SVC_INFO)))))
+	$(eval SVC_IP := $(word 3,$(subst @, ,$(subst =, ,$(SVC_INFO)))))
+	$(eval LOG_LINES := $(if $(LINES),$(LINES),50))
+	@echo "Logs for $(SVC_NAME) on $(SVC_IP) (last $(LOG_LINES) lines):"
+	@ssh root@$(SVC_IP) 'journalctl -u $(SVC_NAME) -n $(LOG_LINES) --no-pager'
+
+service-health:
+ifndef SERVICE
+	@echo "Error: SERVICE is required"
+	@echo "Usage: make service-health SERVICE=<service>"
+	@exit 1
+endif
+	$(eval SVC_INFO := $(filter $(SERVICE)=%,$(SERVICE_MAP)))
+	$(eval SVC_IP := $(word 3,$(subst @, ,$(subst =, ,$(SVC_INFO)))))
+	@if [ "$(SERVICE)" = "authz" ]; then \
+		curl -f -s http://$(SVC_IP):8010/health/live && echo "✓ $(SERVICE) is healthy"; \
+	elif [ "$(SERVICE)" = "ingest-api" ]; then \
+		curl -f -s http://$(SVC_IP):8000/health && echo "✓ $(SERVICE) is healthy"; \
+	elif [ "$(SERVICE)" = "search-api" ]; then \
+		curl -f -s http://$(SVC_IP):8003/health && echo "✓ $(SERVICE) is healthy"; \
+	elif [ "$(SERVICE)" = "agent-api" ]; then \
+		curl -f -s http://$(SVC_IP):8000/health && echo "✓ $(SERVICE) is healthy"; \
+	elif [ "$(SERVICE)" = "milvus" ]; then \
+		curl -f -s http://$(SVC_IP):9091/healthz && echo "✓ $(SERVICE) is healthy"; \
+	else \
+		echo "Health check not available for $(SERVICE)"; \
+	fi
+
+# ============================================================================
+# Testing
+# ============================================================================
 # Test targets - run tests on remote containers
 # Note: Interactive test menu is now in scripts/test.sh (run via 'make test' from repo root)
 

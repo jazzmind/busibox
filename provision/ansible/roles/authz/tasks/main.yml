@@ -257,19 +257,29 @@
     state: restarted
   tags: [authz]
 
+- name: Wait for authz service to start
+  wait_for:
+    timeout: 10
+  delegate_to: localhost
+  tags: [authz]
+
 - name: Verify authz service is running
   systemd:
     name: "{{ authz_service_name }}"
   register: authz_service_status
   tags: [authz]
 
-- name: Check authz service health
+- name: Check authz service health (with retry)
   uri:
     url: "http://localhost:{{ authz_service_port }}/health/live"
     method: GET
     status_code: 200
+    timeout: 3
   delegate_to: "{{ inventory_hostname }}"
   register: authz_health_check
+  until: authz_health_check.status == 200
+  retries: 5
+  delay: 2
   failed_when: false
   tags: [authz]
 
