@@ -170,7 +170,7 @@ verify-health:
 	@echo "✓ Docs API is healthy (or not deployed yet)"
 	@echo ""
 	@echo "=== PostgreSQL ==="
-	@ssh root@10.96.200.203 'su - postgres -c "psql -c \"SELECT version();\"' > /dev/null || (echo "PostgreSQL health check FAILED" && exit 1)
+	@ssh root@10.96.200.203 'su - postgres -c "psql -c \"SELECT version();\""' > /dev/null || (echo "PostgreSQL health check FAILED" && exit 1)
 	@echo "✓ PostgreSQL is healthy"
 	@echo ""
 	@echo "=== Milvus ==="
