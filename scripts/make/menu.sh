@@ -917,24 +917,40 @@ handle_services() {
                 echo "══════════════════════════════════════════════════════════════════════"
                 
                 echo ""
-                echo -e "  ${BOLD}Available Services:${NC}"
+                echo -e "  ${BOLD}Service Status:${NC}"
                 echo ""
+                
+                # Helper function to check service status
+                check_service_status() {
+                    local service_name="$1"
+                    local display_name="$2"
+                    local ip="$3"
+                    local systemd_name="${4:-$service_name}"
+                    
+                    # Query systemd status via SSH
+                    if ssh -o ConnectTimeout=2 -o StrictHostKeyChecking=no "root@${ip}" "systemctl is-active ${systemd_name}" &>/dev/null; then
+                        echo -e "      ${GREEN}✓${NC} ${display_name}"
+                    else
+                        echo -e "      ${RED}✗${NC} ${display_name} ${DIM}(stopped or not deployed)${NC}"
+                    fi
+                }
+                
                 echo "    Core Services:"
-                echo "      - authz         (Authentication & Authorization)"
-                echo "      - postgresql    (Database)"
-                echo "      - redis         (Cache & Queue)"
+                check_service_status "authz" "authz (Authentication & Authorization)" "10.96.200.200"
+                check_service_status "postgresql" "postgresql (Database)" "10.96.200.203"
+                check_service_status "redis" "redis (Cache & Queue)" "10.96.200.206" "redis-server"
                 echo ""
                 echo "    Vector/Storage:"
-                echo "      - milvus        (Vector Database)"
+                check_service_status "milvus" "milvus (Vector Database)" "10.96.200.204" "milvus-standalone"
                 echo ""
                 echo "    API Services:"
-                echo "      - ingest-api    (Document Ingestion API)"
-                echo "      - ingest-worker (Background Worker)"
-                echo "      - search-api    (Semantic Search API)"
-                echo "      - agent-api     (AI Agent API)"
+                check_service_status "ingest-api" "ingest-api (Document Ingestion API)" "10.96.200.206"
+                check_service_status "ingest-worker" "ingest-worker (Background Worker)" "10.96.200.206"
+                check_service_status "search-api" "search-api (Semantic Search API)" "10.96.200.204"
+                check_service_status "agent-api" "agent-api (AI Agent API)" "10.96.200.202" "agent-api"
                 echo ""
                 echo "    Frontend:"
-                echo "      - nginx         (Reverse Proxy)"
+                check_service_status "nginx" "nginx (Reverse Proxy)" "10.96.200.207"
                 echo ""
                 
                 echo -e "  ${BOLD}Actions:${NC}"

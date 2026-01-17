@@ -162,24 +162,42 @@ verify-health:
 	@echo "Running health checks on all services..."
 	@echo ""
 	@echo "=== Agent API ==="
-	@curl -f -s http://10.96.200.202:8000/health > /dev/null || (echo "Agent API health check FAILED (may not be deployed yet)" && exit 0)
-	@echo "✓ Agent API is healthy (or not deployed yet)"
+	@if curl -f -s http://10.96.200.202:8000/health > /dev/null 2>&1; then \
+		echo "✓ Agent API is healthy"; \
+	else \
+		echo "⚠ Agent API is not responding (may not be deployed yet)"; \
+	fi
 	@echo ""
 	@echo "=== Docs API ==="
-	@curl -f -s http://$(APPS_IP):8004/health/live > /dev/null || (echo "Docs API health check FAILED (may not be deployed yet)" && exit 0)
-	@echo "✓ Docs API is healthy (or not deployed yet)"
+	@if curl -f -s http://$(APPS_IP):8004/health/live > /dev/null 2>&1; then \
+		echo "✓ Docs API is healthy"; \
+	else \
+		echo "⚠ Docs API is not responding (may not be deployed yet)"; \
+	fi
 	@echo ""
 	@echo "=== PostgreSQL ==="
-	@ssh root@10.96.200.203 'su - postgres -c "psql -c \"SELECT version();\""' > /dev/null || (echo "PostgreSQL health check FAILED" && exit 1)
-	@echo "✓ PostgreSQL is healthy"
+	@if ssh root@10.96.200.203 'su - postgres -c "psql -c \"SELECT version();\""' > /dev/null 2>&1; then \
+		echo "✓ PostgreSQL is healthy"; \
+	else \
+		echo "✗ PostgreSQL health check FAILED"; \
+		exit 1; \
+	fi
 	@echo ""
 	@echo "=== Milvus ==="
-	@curl -f -s http://10.96.200.204:9091/healthz > /dev/null || (echo "Milvus health check FAILED" && exit 1)
-	@echo "✓ Milvus is healthy"
+	@if curl -f -s http://10.96.200.204:9091/healthz > /dev/null 2>&1; then \
+		echo "✓ Milvus is healthy"; \
+	else \
+		echo "✗ Milvus health check FAILED"; \
+		exit 1; \
+	fi
 	@echo ""
 	@echo "=== MinIO ==="
-	@curl -f -s http://10.96.200.205:9000/minio/health/live > /dev/null || (echo "MinIO health check FAILED" && exit 1)
-	@echo "✓ MinIO is healthy"
+	@if curl -f -s http://10.96.200.205:9000/minio/health/live > /dev/null 2>&1; then \
+		echo "✓ MinIO is healthy"; \
+	else \
+		echo "✗ MinIO health check FAILED"; \
+		exit 1; \
+	fi
 	@echo ""
 
 verify-smoke:
