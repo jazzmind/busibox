@@ -908,9 +908,145 @@ handle_services() {
             ;;
             
         proxmox)
-            echo ""
-            info "For Proxmox, use the Deploy menu to manage services via Ansible"
-            pause
+            # Proxmox service management menu
+            while true; do
+                clear
+                banner "Service Management (Proxmox)"
+                
+                echo ""
+                echo -e "  ${BOLD}Available Services:${NC}"
+                echo ""
+                echo "    Core Services:"
+                echo "      - authz         (Authentication & Authorization)"
+                echo "      - postgresql    (Database)"
+                echo "      - redis         (Cache & Queue)"
+                echo ""
+                echo "    Vector/Storage:"
+                echo "      - milvus        (Vector Database)"
+                echo ""
+                echo "    API Services:"
+                echo "      - ingest-api    (Document Ingestion API)"
+                echo "      - ingest-worker (Background Worker)"
+                echo "      - search-api    (Semantic Search API)"
+                echo "      - agent-api     (AI Agent API)"
+                echo ""
+                echo "    Frontend:"
+                echo "      - nginx         (Reverse Proxy)"
+                echo ""
+                
+                echo -e "  ${BOLD}Actions:${NC}"
+                echo ""
+                echo -e "    ${CYAN}1)${NC} Start Service"
+                echo -e "    ${CYAN}2)${NC} Stop Service"
+                echo -e "    ${CYAN}3)${NC} Restart Service"
+                echo -e "    ${CYAN}4)${NC} Service Status"
+                echo -e "    ${CYAN}5)${NC} View Service Logs"
+                echo -e "    ${CYAN}6)${NC} Check Service Health"
+                echo -e "    ${CYAN}7)${NC} Restart All Services"
+                echo -e "    ${CYAN}8)${NC} Status of All Services"
+                echo -e "    ${CYAN}9)${NC} Back to Main Menu"
+                echo ""
+                
+                read -p "$(echo -e "  ${BOLD}Select option [1-9]:${NC} ")" choice
+                
+                case "$choice" in
+                    1)
+                        echo ""
+                        read -p "$(echo -e "  ${BOLD}Enter service name:${NC} ")" service
+                        if [[ -n "$service" ]]; then
+                            info "Starting $service..."
+                            save_last_command "make service-start SERVICE=$service INV=${DEPLOY_ENV}"
+                            (cd "$REPO_ROOT/provision/ansible" && make service-start SERVICE="$service" INV="${DEPLOY_ENV}")
+                            pause
+                        fi
+                        ;;
+                    2)
+                        echo ""
+                        read -p "$(echo -e "  ${BOLD}Enter service name:${NC} ")" service
+                        if [[ -n "$service" ]]; then
+                            if confirm "Stop $service?"; then
+                                info "Stopping $service..."
+                                save_last_command "make service-stop SERVICE=$service INV=${DEPLOY_ENV}"
+                                (cd "$REPO_ROOT/provision/ansible" && make service-stop SERVICE="$service" INV="${DEPLOY_ENV}")
+                            fi
+                            pause
+                        fi
+                        ;;
+                    3)
+                        echo ""
+                        read -p "$(echo -e "  ${BOLD}Enter service name:${NC} ")" service
+                        if [[ -n "$service" ]]; then
+                            info "Restarting $service..."
+                            save_last_command "make service-restart SERVICE=$service INV=${DEPLOY_ENV}"
+                            (cd "$REPO_ROOT/provision/ansible" && make service-restart SERVICE="$service" INV="${DEPLOY_ENV}")
+                            pause
+                        fi
+                        ;;
+                    4)
+                        echo ""
+                        read -p "$(echo -e "  ${BOLD}Enter service name:${NC} ")" service
+                        if [[ -n "$service" ]]; then
+                            info "Checking status of $service..."
+                            (cd "$REPO_ROOT/provision/ansible" && make service-status SERVICE="$service" INV="${DEPLOY_ENV}")
+                            pause
+                        fi
+                        ;;
+                    5)
+                        echo ""
+                        read -p "$(echo -e "  ${BOLD}Enter service name:${NC} ")" service
+                        if [[ -n "$service" ]]; then
+                            read -p "$(echo -e "  ${BOLD}Number of lines [50]:${NC} ")" lines
+                            lines="${lines:-50}"
+                            info "Viewing logs for $service..."
+                            (cd "$REPO_ROOT/provision/ansible" && make service-logs SERVICE="$service" LINES="$lines" INV="${DEPLOY_ENV}")
+                            pause
+                        fi
+                        ;;
+                    6)
+                        echo ""
+                        read -p "$(echo -e "  ${BOLD}Enter service name:${NC} ")" service
+                        if [[ -n "$service" ]]; then
+                            info "Checking health of $service..."
+                            (cd "$REPO_ROOT/provision/ansible" && make service-health SERVICE="$service" INV="${DEPLOY_ENV}")
+                            pause
+                        fi
+                        ;;
+                    7)
+                        echo ""
+                        if confirm "Restart all services? This will cause brief downtime."; then
+                            info "Restarting all services..."
+                            save_last_command "make service-restart-all INV=${DEPLOY_ENV}"
+                            # Restart services in order: core -> APIs -> frontend
+                            local services="postgresql redis authz milvus ingest-worker ingest-api search-api agent-api nginx"
+                            for svc in $services; do
+                                info "Restarting $svc..."
+                                (cd "$REPO_ROOT/provision/ansible" && make service-restart SERVICE="$svc" INV="${DEPLOY_ENV}" 2>&1 || echo "  (service may not be deployed)")
+                            done
+                            success "All services restarted"
+                        fi
+                        pause
+                        ;;
+                    8)
+                        echo ""
+                        info "Checking status of all services..."
+                        echo ""
+                        local services="postgresql redis authz milvus ingest-api ingest-worker search-api agent-api nginx"
+                        for svc in $services; do
+                            echo -e "${BOLD}$svc:${NC}"
+                            (cd "$REPO_ROOT/provision/ansible" && make service-status SERVICE="$svc" INV="${DEPLOY_ENV}" 2>&1 || echo "  (not deployed or unreachable)")
+                            echo ""
+                        done
+                        pause
+                        ;;
+                    9|b|B|"")
+                        return 0
+                        ;;
+                    *)
+                        error "Invalid option"
+                        pause
+                        ;;
+                esac
+            done
             ;;
     esac
 }
