@@ -10,7 +10,7 @@
 #   Target: vLLM container (colpali service on port 8002)
 #
 # Usage:
-#   bash scripts/test-colpali.sh [test|production]
+#   bash scripts/test-colpali.sh [staging|production]
 #
 # Environment:
 #   TEST: 10.96.201.208:8002
@@ -403,7 +403,7 @@ if [[ "${1:-}" == "-h" ]] || [[ "${1:-}" == "--help" ]]; then
 ColPali Service Test Script
 
 Usage:
-  $0 [test|production] [options]
+  $0 [staging|production] [options]
 
 Arguments:
   test|production    Environment to test (default: test)

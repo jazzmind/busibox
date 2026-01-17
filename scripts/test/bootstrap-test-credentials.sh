@@ -22,7 +22,7 @@ set -euo pipefail
 #   different client_ids for audit trail purposes.
 #
 # USAGE:
-#   bash scripts/test/bootstrap-test-credentials.sh [docker|test|production] [--force|-f]
+#   bash scripts/test/bootstrap-test-credentials.sh [docker|staging|production] [--force|-f]
 #
 # OPTIONS:
 #   --force, -f    Delete existing test users and create fresh credentials
@@ -95,7 +95,7 @@ elif [ "$ENV" = "production" ]; then
     USE_DOCKER=false
     echo -e "${YELLOW}Environment: PRODUCTION (Proxmox)${NC}"
 else
-    echo -e "${RED}Error: Invalid environment '$ENV'. Use 'docker', 'test', or 'production'${NC}"
+    echo -e "${RED}Error: Invalid environment '$ENV'. Use 'docker', 'staging', or 'production'${NC}"
     exit 1
 fi
 

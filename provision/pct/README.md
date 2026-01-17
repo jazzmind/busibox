@@ -87,19 +87,19 @@ Each container can be created independently for debugging or updates:
 
 ```bash
 # Core services
-bash provision/pct/containers/create-core-services.sh [test|production]
+bash provision/pct/containers/create-core-services.sh [staging|production]
 
 # Data services
-bash provision/pct/containers/create-data-services.sh [test|production]
+bash provision/pct/containers/create-data-services.sh [staging|production]
 
 # Worker services
-bash provision/pct/containers/create-worker-services.sh [test|production]
+bash provision/pct/containers/create-worker-services.sh [staging|production]
 
 # vLLM (all GPUs)
-bash provision/pct/containers/create-vllm.sh [test|production]
+bash provision/pct/containers/create-vllm.sh [staging|production]
 
 # Ollama (optional, single GPU)
-bash provision/pct/containers/create-ollama.sh [test|production] [GPU_NUM]
+bash provision/pct/containers/create-ollama.sh [staging|production] [GPU_NUM]
 ```
 
 ## Container IDs and IPs

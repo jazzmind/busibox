@@ -32,10 +32,10 @@ The Busibox MCP Server is a **Model Context Protocol server** that makes the Bus
 - Deploy apps (ai-portal, agent-client, doc-intel, etc.)
 - Run tests (test-ingest, test-search, test-agent, etc.)
 - Run verification (verify, verify-health, verify-smoke)
-- All with proper environment handling (test vs production)
+- All with proper environment handling (staging vs production)
 
 ### Container & Service Information
-- Complete container inventory with IPs for test and production
+- Complete container inventory with IPs for staging and production
 - Service port mappings
 - Quick endpoint lookups
 - SSH connection info
@@ -128,7 +128,7 @@ In Claude or Cursor, just ask naturally:
 |------|-------------|
 | `git_pull_busibox` | Pull latest code on Proxmox (supports branch selection, reset --hard) |
 | `git_status` | Check git status on Proxmox |
-| `run_make_target` | Run any make target with environment (test/production) |
+| `run_make_target` | Run any make target with environment (staging/production) |
 | `list_make_targets` | List available make targets by category |
 
 ### Container & Service Info
@@ -216,7 +216,7 @@ AI uses:
 ### Run Tests
 
 ```
-User: "Run the ingest tests with coverage on test environment"
+User: "Run the ingest tests with coverage on staging environment"
 
 AI uses:
 1. run_make_target(target: "test-ingest-coverage", environment: "test")

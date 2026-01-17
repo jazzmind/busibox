@@ -10,15 +10,15 @@
 # Dependencies: pct, provision/pct/lib/functions.sh, provision/pct/containers/*.sh
 #
 # Usage:
-#   bash provision/pct/create_lxc_base.sh [test|production] [--with-ollama]
+#   bash provision/pct/create_lxc_base.sh [staging|production] [--with-ollama]
 #
 # Arguments:
-#   MODE          - test or production (default: production)
+#   MODE          - staging or production (default: production)
 #   --with-ollama - Include optional Ollama container (default: not created)
 #
 # Examples:
 #   bash provision/pct/create_lxc_base.sh production           # Production without Ollama
-#   bash provision/pct/create_lxc_base.sh test --with-ollama   # Test with Ollama
+#   bash provision/pct/create_lxc_base.sh staging --with-ollama   # Staging with Ollama
 #
 # Containers Created (in order):
 #   1. Core Services:    proxy, apps, agent
@@ -50,16 +50,16 @@ while [[ $# -gt 0 ]]; do
       ;;
     *)
       echo "Unknown option: $1"
-      echo "Usage: $0 [test|production] [--with-ollama]"
+      echo "Usage: $0 [staging|production] [--with-ollama]"
       exit 1
       ;;
   esac
 done
 
 # Source configuration to display settings
-if [[ "$MODE" == "test" ]]; then
+if [[ "$MODE" == "staging" ]]; then
   echo "=========================================="
-  echo "Busibox Infrastructure - TEST Mode"
+  echo "Busibox Infrastructure - STAGING Mode"
   echo "=========================================="
   source "${PCT_DIR}/test-vars.env"
   print_test_config
@@ -138,8 +138,8 @@ echo ""
 echo "Mode: ${MODE^^}"
 echo ""
 
-if [[ "$MODE" == "test" ]]; then
-  echo "Test Containers Created:"
+if [[ "$MODE" == "staging" ]]; then
+  echo "Staging Containers Created:"
   echo "  Core Services:"
   echo "    - TEST-proxy-lxc  ($CT_PROXY_TEST @ $IP_PROXY_TEST)"
   echo "    - TEST-apps-lxc   ($CT_APPS_TEST @ $IP_APPS_TEST)"

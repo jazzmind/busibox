@@ -40,7 +40,7 @@ log_info "Deploying LLM stack to ${MODE} environment..."
 echo ""
 
 # Source the appropriate vars
-if [[ "$MODE" == "test" ]]; then
+if [[ "$MODE" == "staging" ]]; then
     VARS_FILE="${SCRIPT_DIR}/provision/pct/test-vars.env"
     INVENTORY="test"
 else
@@ -59,7 +59,7 @@ source "$VARS_FILE"
 log_info "Step 1: Creating LXC containers..."
 cd "${SCRIPT_DIR}/provision/pct"
 
-if [[ "$MODE" == "test" ]]; then
+if [[ "$MODE" == "staging" ]]; then
     bash create_lxc_base.sh test
 else
     bash create_lxc_base.sh prod
@@ -72,7 +72,7 @@ echo ""
 log_info "Step 2: Configuring shared model storage..."
 
 # Set container IDs based on mode
-if [[ "$MODE" == "test" ]]; then
+if [[ "$MODE" == "staging" ]]; then
     OLLAMA_CTID="${CT_OLLAMA_TEST}"
     VLLM_CTID="${CT_VLLM_TEST}"
 else
@@ -134,7 +134,7 @@ echo ""
 # Step 5: Test the services
 log_info "Step 5: Testing deployed services..."
 
-if [[ "$MODE" == "test" ]]; then
+if [[ "$MODE" == "staging" ]]; then
     OLLAMA_IP="${IP_OLLAMA_TEST}"
     VLLM_IP="${IP_VLLM_TEST}"
     LITELLM_IP="${IP_LITELLM_TEST}"

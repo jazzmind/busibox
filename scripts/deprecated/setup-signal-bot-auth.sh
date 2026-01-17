@@ -15,7 +15,7 @@ set -euo pipefail
 #   - Verifies token exchange works
 #
 # USAGE:
-#   bash scripts/setup/setup-signal-bot-auth.sh [test|production]
+#   bash scripts/setup/setup-signal-bot-auth.sh [staging|production]
 #
 # PREREQUISITES:
 #   - Authz service deployed and running

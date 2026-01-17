@@ -38,7 +38,7 @@ print_usage() {
     echo "Usage: $0 [options]"
     echo ""
     echo "Options:"
-    echo "  --env=ENV        Target environment (local|test|production) [default: test]"
+    echo "  --env=ENV        Target environment (local|staging|production) [default: test]"
     echo "  --marker=MARKER  Run only tests with specific marker (auth|injection|fuzz|rate_limit|idor)"
     echo "  --slow           Include slow tests"
     echo "  --coverage       Generate coverage report"
@@ -102,7 +102,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Validate environment
-if [[ ! "$ENV" =~ ^(local|test|production)$ ]]; then
+if [[ ! "$ENV" =~ ^(local|staging|production)$ ]]; then
     echo -e "${RED}Invalid environment: $ENV${NC}"
     echo "Valid options: local, test, production"
     exit 1

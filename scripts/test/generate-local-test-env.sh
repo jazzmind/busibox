@@ -49,8 +49,8 @@ if [[ -z "$SERVICE" ]]; then
 fi
 
 # Validate environment
-if [[ "$ENV" != "test" && "$ENV" != "production" ]]; then
-    error "Invalid environment: $ENV. Use 'test' or 'production'"
+if [[ "$ENV" != "staging" && "$ENV" != "production" ]]; then
+    error "Invalid environment: $ENV. Use 'staging' or 'production'"
     exit 1
 fi
 

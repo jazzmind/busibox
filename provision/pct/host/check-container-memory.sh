@@ -6,7 +6,7 @@
 # PURPOSE: Verify container memory allocation matches CPU offload requirements
 #
 # USAGE:
-#   bash check-container-memory.sh [test|production]
+#   bash check-container-memory.sh [staging|production]
 #
 # WHAT IT DOES:
 #   1. Checks vLLM container memory allocation
@@ -33,7 +33,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PCT_DIR="$(dirname "$SCRIPT_DIR")"
 
 # Source configuration
-if [[ "$MODE" == "test" ]]; then
+if [[ "$MODE" == "staging" ]]; then
   source "${PCT_DIR}/test-vars.env"
   CT_VLLM="$CT_VLLM_TEST"
 else

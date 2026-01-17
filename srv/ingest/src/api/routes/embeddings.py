@@ -55,6 +55,10 @@ class EmbeddingResponse(BaseModel):
 config = Config().to_dict()
 embedder = Embedder(config)
 
+# Warm up the model at import time to avoid cold-start latency
+# This downloads/loads the model during app startup instead of first request
+embedder.warmup()
+
 
 @router.post("", response_model=EmbeddingResponse)
 async def create_embeddings(

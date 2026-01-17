@@ -222,7 +222,7 @@ const CONTAINERS: ContainerConfig[] = [
       { port: 8002, service: 'ColPali visual' },
     ],
     services: ['vllm', 'vllm-embedding', 'colpali'],
-    notes: 'GPU-capable local model serving; test env uses production vLLM by default',
+    notes: 'GPU-capable local model serving; staging env uses production vLLM by default',
   },
   {
     id: 209,
@@ -711,10 +711,10 @@ function getContainer(nameOrId: string): ContainerConfig | null {
 /**
  * Get container IP address by name (supports both prod and test)
  */
-function getContainerIP(containerName: string, environment: 'production' | 'test' = 'production'): string | null {
+function getContainerIP(containerName: string, environment: 'production' | 'staging' = 'production'): string | null {
   const container = getContainer(containerName);
   if (!container) return null;
-  return environment === 'test' ? container.testIp : container.ip;
+  return environment === 'staging' ? container.testIp : container.ip;
 }
 
 /**
@@ -1081,7 +1081,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
             byCategory,
             usage: {
               production: 'make <target>',
-              test: 'make <target> INV=inventory/test',
+              staging: 'make <target> INV=inventory/staging',
             },
           }, null, 2),
         },
@@ -1180,7 +1180,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {
             environment: {
               type: 'string',
-              enum: ['test', 'production'],
+              enum: ['staging', 'production'],
               description: 'Target environment',
             },
           },
@@ -1195,7 +1195,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {
             command: {
               type: 'string',
-              description: 'Command to execute on Proxmox host (e.g., "make test", "pct status 200", "cd /root/busibox/provision/ansible && ansible-playbook -i inventory/test/hosts.yml site.yml --tags milvus")',
+              description: 'Command to execute on Proxmox host (e.g., "make staging", "pct status 200", "cd /root/busibox/provision/ansible && ansible-playbook -i inventory/staging/hosts.yml site.yml --tags milvus")',
             },
             working_directory: {
               type: 'string',
@@ -1281,8 +1281,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             environment: {
               type: 'string',
-              enum: ['production', 'test'],
-              description: 'Target environment (production or test). Test uses INV=inventory/test',
+              enum: ['production', 'staging'],
+              description: 'Target environment (production or staging). Staging uses INV=inventory/staging',
             },
             extra_args: {
               type: 'string',
@@ -1324,7 +1324,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             environment: {
               type: 'string',
-              enum: ['production', 'test'],
+              enum: ['production', 'staging'],
               description: 'Environment to get info for (default: production)',
             },
           },
@@ -1344,7 +1344,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             environment: {
               type: 'string',
-              enum: ['production', 'test'],
+              enum: ['production', 'staging'],
               description: 'Environment (default: production)',
             },
           },
@@ -1982,7 +1982,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     case 'run_make_target': {
       const { target, environment, extra_args = '', timeout = 600000 } = args as {
         target: string;
-        environment: 'production' | 'test';
+        environment: 'production' | 'staging';
         extra_args?: string;
         timeout?: number;
       };
@@ -2007,7 +2007,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       try {
-        const invFlag = environment === 'test' ? 'INV=inventory/test' : '';
+        const invFlag = environment === 'staging' ? 'INV=inventory/staging' : '';
         const extraFlag = extra_args ? `EXTRA_ARGS="${extra_args}"` : '';
         const makeCommand = `make ${target} ${invFlag} ${extraFlag}`.trim();
         
@@ -2089,7 +2089,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 targets: byCategory,
                 usage: {
                   production: 'make <target>',
-                  test: 'make <target> INV=inventory/test',
+                  staging: 'make <target> INV=inventory/staging',
                 },
               },
               null,
@@ -2104,7 +2104,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     case 'get_container_info': {
       const { container, environment = 'production' } = args as {
         container: string;
-        environment?: 'production' | 'test';
+        environment?: 'production' | 'staging';
       };
 
       const containerConfig = getContainer(container);
@@ -2128,7 +2128,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      const isTest = environment === 'test';
+      const isStaging = environment === 'staging';
       
       return {
         content: [
@@ -2136,14 +2136,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             type: 'text',
             text: JSON.stringify(
               {
-                name: isTest ? `TEST-${containerConfig.name}` : containerConfig.name,
-                id: isTest ? containerConfig.testId : containerConfig.id,
-                ip: isTest ? containerConfig.testIp : containerConfig.ip,
+                name: isStaging ? `TEST-${containerConfig.name}` : containerConfig.name,
+                id: isStaging ? containerConfig.testId : containerConfig.id,
+                ip: isStaging ? containerConfig.testIp : containerConfig.ip,
                 purpose: containerConfig.purpose,
                 ports: containerConfig.ports,
                 services: containerConfig.services,
                 notes: containerConfig.notes,
-                ssh_command: `ssh root@${isTest ? containerConfig.testIp : containerConfig.ip}`,
+                ssh_command: `ssh root@${isStaging ? containerConfig.testIp : containerConfig.ip}`,
                 environment,
               },
               null,
@@ -2158,10 +2158,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     case 'get_service_endpoints': {
       const { service, environment = 'production' } = args as {
         service?: string;
-        environment?: 'production' | 'test';
+        environment?: 'production' | 'staging';
       };
 
-      const isTest = environment === 'test';
+      const isStaging = environment === 'staging';
       
       // Find all containers that provide the requested service
       let endpoints: Array<{
@@ -2173,8 +2173,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }> = [];
 
       for (const container of CONTAINERS) {
-        const ip = isTest ? container.testIp : container.ip;
-        const containerName = isTest ? `TEST-${container.name}` : container.name;
+        const ip = isStaging ? container.testIp : container.ip;
+        const containerName = isStaging ? `TEST-${container.name}` : container.name;
         
         for (const portInfo of container.ports) {
           if (!service || 
@@ -2729,7 +2729,7 @@ server.setRequestHandler(ListPromptsRequestSchema, async () => {
     prompts: [
       {
         name: 'deploy_service',
-        description: 'Guide for deploying a service to test or production',
+        description: 'Guide for deploying a service to staging or production',
         arguments: [
           {
             name: 'service',
@@ -2738,7 +2738,7 @@ server.setRequestHandler(ListPromptsRequestSchema, async () => {
           },
           {
             name: 'environment',
-            description: 'Target environment (test or production)',
+            description: 'Target environment (staging or production)',
             required: true,
           },
         ],
@@ -2843,7 +2843,7 @@ server.setRequestHandler(ListPromptsRequestSchema, async () => {
           },
           {
             name: 'environment',
-            description: 'Target environment (test or production)',
+            description: 'Target environment (staging or production)',
             required: true,
           },
         ],
@@ -2854,7 +2854,7 @@ server.setRequestHandler(ListPromptsRequestSchema, async () => {
         arguments: [
           {
             name: 'environment',
-            description: 'Target environment (test or production)',
+            description: 'Target environment (staging or production)',
             required: true,
           },
           {
@@ -2904,7 +2904,7 @@ server.setRequestHandler(GetPromptRequestSchema, async (request) => {
    Or manually via \`execute_proxmox_command\`:
    \`\`\`bash
    cd /root/busibox/provision/ansible
-   make ${service} ${environment === 'test' ? 'INV=inventory/test' : ''}
+   make ${service} ${environment === 'staging' ? 'INV=inventory/staging' : ''}
    \`\`\`
 
 3. **Validate deployment**:
@@ -2916,7 +2916,7 @@ server.setRequestHandler(GetPromptRequestSchema, async (request) => {
    - Production: https://${service}.busibox.com
 
 **Quick Container Reference**:
-${CONTAINERS.map(c => `- ${c.name}: ${environment === 'test' ? c.testIp : c.ip}`).join('\n')}`,
+${CONTAINERS.map(c => `- ${c.name}: ${environment === 'staging' ? c.testIp : c.ip}`).join('\n')}`,
             },
           },
         ],
@@ -3015,10 +3015,10 @@ cd provision/ansible
 mkdir -p roles/${service_name}/{tasks,templates,files,handlers,vars}
 \`\`\`
 
-**5. Update Inventory** in both test and production.
+**5. Update Inventory** in both staging and production.
 
 **6. Deploy and Test**:
-Use \`run_make_target\` with environment: "test" first.
+Use \`run_make_target\` with environment: "staging" first.
 
 **Reference Documentation**:
 - Use \`get_doc\` tool with path "architecture/01-containers.md"
@@ -3116,7 +3116,7 @@ Use \`kebab-case\` for all documentation files.
 
 **Example**: Run \`run_make_target\` with:
 - target: "test-${service}"
-- environment: "test"
+- environment: "staging"
 
 Or use \`list_make_targets\` with category: "testing" to see all options.`,
             },
@@ -3127,7 +3127,7 @@ Or use \`list_make_targets\` with category: "testing" to see all options.`,
 
     case 'deploy_app': {
       const { app_name, environment } = args as { app_name: string; environment: string };
-      const inv = environment === 'test' ? 'INV=inventory/test' : '';
+      const inv = environment === 'staging' ? 'INV=inventory/staging' : '';
       
       return {
         messages: [
@@ -3163,7 +3163,7 @@ Use \`get_container_service_status\` with:
 - service: "${app_name}"
 
 **Container Info**:
-- Apps container IP: ${environment === 'test' ? '10.96.201.201' : '10.96.200.201'}`,
+- Apps container IP: ${environment === 'staging' ? '10.96.201.201' : '10.96.200.201'}`,
             },
           },
         ],
@@ -3209,11 +3209,11 @@ Use \`run_make_target\` with:
 **Quick Commands** (via \`execute_proxmox_command\`):
 \`\`\`bash
 # One-liner update and deploy:
-cd /root/busibox && git pull && cd provision/ansible && make ${service} ${environment === 'test' ? 'INV=inventory/test' : ''}
+cd /root/busibox && git pull && cd provision/ansible && make ${service} ${environment === 'staging' ? 'INV=inventory/staging' : ''}
 \`\`\`
 
 **Environment IPs**:
-${environment === 'test' 
+${environment === 'staging' 
   ? CONTAINERS.map(c => `- ${c.name}: ${c.testIp}`).join('\n')
   : CONTAINERS.map(c => `- ${c.name}: ${c.ip}`).join('\n')
 }`,
@@ -3386,7 +3386,7 @@ ${isStaging ? `
 
     case 'deployment_workflow': {
       const { target, service } = args as { target: string; service?: string };
-      const inv = target === 'production' ? '' : 'INV=inventory/test';
+      const inv = target === 'production' ? '' : 'INV=inventory/staging';
       const networkBase = target === 'production' ? '10.96.200' : '10.96.201';
       
       return {
@@ -3451,7 +3451,7 @@ Use MCP tools in this order:
 2. **Deploy**:
    Use \`run_make_target\` with:
    - target: "${service || 'all'}"
-   - environment: "${target === 'production' ? 'production' : 'test'}"
+   - environment: "${target === 'production' ? 'production' : 'staging'}"
 
 3. **Verify**:
    Use \`get_container_service_status\` to check services

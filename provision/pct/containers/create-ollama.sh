@@ -11,10 +11,10 @@
 # Dependencies: pct, nvidia-smi, provision/pct/lib/functions.sh
 #
 # Usage:
-#   bash provision/pct/containers/create-ollama.sh [test|production] [GPU_NUM]
+#   bash provision/pct/containers/create-ollama.sh [staging|production] [GPU_NUM]
 #
 # Arguments:
-#   MODE     - test or production (default: production)
+#   MODE     - staging or production (default: production)
 #   GPU_NUM  - GPU number to use (default: 0)
 #
 # Notes:
@@ -33,7 +33,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PCT_DIR="$(dirname "$SCRIPT_DIR")"
 
 # Source configuration
-if [[ "$MODE" == "test" ]]; then
+if [[ "$MODE == "staging"" ]]; then
   echo "==> Creating Ollama container in TEST mode"
   source "${PCT_DIR}/test-vars.env"
   CTID="$CT_OLLAMA_TEST"

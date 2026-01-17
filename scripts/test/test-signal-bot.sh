@@ -16,7 +16,7 @@ set -euo pipefail
 #   - Send a test message (optional)
 #
 # USAGE:
-#   bash scripts/test/test-signal-bot.sh [test|production]
+#   bash scripts/test/test-signal-bot.sh [staging|production]
 #
 # OPTIONS:
 #   --send-test    Send a test message to verify full integration
