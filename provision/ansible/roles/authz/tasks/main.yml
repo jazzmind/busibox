@@ -33,6 +33,7 @@
   loop:
     - "{{ authz_base_dir }}"
     - "{{ authz_app_dir }}"
+    - /opt/authz
   tags: [authz]
 
 # =============================================================================
@@ -259,6 +260,21 @@
   systemd:
     name: "{{ authz_service_name }}"
     enabled: true
+  tags: [authz]
+
+- name: Write deployment version file
+  copy:
+    content: |
+      {
+        "commit": "{{ lookup('pipe', 'git rev-parse --short HEAD', cwd=playbook_dir + '/../..') }}",
+        "branch": "{{ lookup('pipe', 'git branch --show-current', cwd=playbook_dir + '/../..') }}",
+        "timestamp": "{{ ansible_date_time.iso8601 }}",
+        "deployed_by": "ansible"
+      }
+    dest: /opt/authz/.deploy_version
+    owner: "{{ authz_user }}"
+    group: "{{ authz_group }}"
+    mode: "0644"
   tags: [authz]
 
 - name: Restart authz service (always restart on deploy)

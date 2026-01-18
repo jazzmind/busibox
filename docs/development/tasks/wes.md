@@ -137,3 +137,6 @@ What I'd delagate now:
 - [ ] Another agent needs to be able to analyze the timeseries data based on questions
 - [ ] We also want a charting agent that can take a description of a chart & dataset and generate chartJS code
 Add a tool to the agent that can analyze a P&L statement and return a summary of the financial performance
+
+
+# Projects for Claude Code

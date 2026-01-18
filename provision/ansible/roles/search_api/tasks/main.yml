@@ -20,6 +20,7 @@
     - "{{ search_api_src_path }}"
     - "{{ search_api_log_path }}"
     - /opt/search/models
+    - /opt/search-api
 
 - name: Install system dependencies
   apt:
@@ -180,6 +181,20 @@
     name: search-api
     enabled: yes
     daemon_reload: yes
+
+- name: Write deployment version file
+  copy:
+    content: |
+      {
+        "commit": "{{ lookup('pipe', 'git rev-parse --short HEAD', cwd=playbook_dir + '/../..') }}",
+        "branch": "{{ lookup('pipe', 'git branch --show-current', cwd=playbook_dir + '/../..') }}",
+        "timestamp": "{{ ansible_date_time.iso8601 }}",
+        "deployed_by": "ansible"
+      }
+    dest: /opt/search-api/.deploy_version
+    owner: "{{ search_api_user }}"
+    group: "{{ search_api_user }}"
+    mode: "0644"
 
 - name: Restart search service (always restart on deploy)
   systemd:

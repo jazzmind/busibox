@@ -387,22 +387,26 @@ display_health_check() {
     
     # Dependencies
     echo -e "  ${BOLD}Dependencies:${NC}"
-    for dep_entry in "${DEPS_FOUND[@]}"; do
-        local dep="${dep_entry%%:*}"
-        local rest="${dep_entry#*:}"
-        local version="${rest%%:*}"
-        local type="${rest#*:}"
-        echo -e "    ${GREEN}✓${NC} $dep ($version)"
-    done
-    for dep_entry in "${DEPS_MISSING[@]}"; do
-        local dep="${dep_entry%%:*}"
-        local type="${dep_entry#*:}"
-        if [[ "$type" == "required" ]]; then
-            echo -e "    ${RED}✗${NC} $dep (not installed)"
-        else
-            echo -e "    ${YELLOW}○${NC} $dep (optional, not installed)"
-        fi
-    done
+    if [[ ${#DEPS_FOUND[@]} -gt 0 ]]; then
+        for dep_entry in "${DEPS_FOUND[@]}"; do
+            local dep="${dep_entry%%:*}"
+            local rest="${dep_entry#*:}"
+            local version="${rest%%:*}"
+            local type="${rest#*:}"
+            echo -e "    ${GREEN}✓${NC} $dep ($version)"
+        done
+    fi
+    if [[ ${#DEPS_MISSING[@]} -gt 0 ]]; then
+        for dep_entry in "${DEPS_MISSING[@]}"; do
+            local dep="${dep_entry%%:*}"
+            local type="${dep_entry#*:}"
+            if [[ "$type" == "required" ]]; then
+                echo -e "    ${RED}✗${NC} $dep (not installed)"
+            else
+                echo -e "    ${YELLOW}○${NC} $dep (optional, not installed)"
+            fi
+        done
+    fi
     echo ""
     
     # Configuration
@@ -543,7 +547,31 @@ run_quick_health_check() {
         elif [[ $DOCKER_CONTAINERS_RUNNING -eq 0 ]]; then
             HEALTH_STATUS="$STATUS_CONTAINERS_NOT_RUNNING"
         else
-            HEALTH_STATUS="$STATUS_DEPLOYED"
+            # Check if we have cached status data to determine if services are healthy
+            local cache_dir="${HOME}/.busibox/status-cache"
+            local healthy_count=0
+            local total_count=0
+            
+            if [[ -d "$cache_dir" ]]; then
+                for cache_file in "$cache_dir"/*.json; do
+                    [[ -f "$cache_file" ]] || continue
+                    total_count=$((total_count + 1))
+                    
+                    # Check if service is healthy
+                    local health=$(jq -r '.health // "unknown"' "$cache_file" 2>/dev/null)
+                    if [[ "$health" == "healthy" ]]; then
+                        healthy_count=$((healthy_count + 1))
+                    fi
+                done
+            fi
+            
+            # If we have cache data and most services are healthy, status is healthy
+            # Otherwise, status is deployed (containers running but health unknown)
+            if [[ $total_count -gt 0 && $healthy_count -ge $((total_count * 2 / 3)) ]]; then
+                HEALTH_STATUS="$STATUS_HEALTHY"
+            else
+                HEALTH_STATUS="$STATUS_DEPLOYED"
+            fi
         fi
     elif [[ ${#SERVICES_HEALTHY[@]} -eq 0 ]]; then
         HEALTH_STATUS="$STATUS_CONFIGURED"

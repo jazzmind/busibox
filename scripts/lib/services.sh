@@ -1,0 +1,250 @@
+#!/usr/bin/env bash
+#
+# Busibox Service Registry Library
+#
+# Defines all services with their metadata: container IDs, repos, health endpoints
+# Used by status checking and display systems.
+#
+# Compatible with bash 3.2+ (macOS default)
+#
+# Usage: source "$(dirname "$0")/lib/services.sh"
+
+# Get script directory for sourcing other libraries
+_SERVICES_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# ============================================================================
+# Service Definitions (bash 3.2 compatible - no associative arrays)
+# ============================================================================
+# Format: "container_id:repo:path:health_endpoint:port"
+# - container_id: Base container ID (200 for prod, 300 for staging)
+# - repo: Git repository (busibox, ai-portal, agent-manager, etc.)
+# - path: Path within repo (srv/authz, etc.) - empty for external repos
+# - health_endpoint: Health check path
+# - port: Service port
+
+# Service definitions as simple variables
+_SERVICE_authz="210:busibox:srv/authz:/health/live:8010"
+_SERVICE_postgres="203:busibox::/health:5432"
+_SERVICE_redis="206:busibox::/health:6379"
+_SERVICE_milvus="204:milvus::/healthz:9091"
+_SERVICE_minio="205:minio::/minio/health/live:9000"
+_SERVICE_ingest_api="206:busibox:srv/ingest:/health:8002"
+_SERVICE_search_api="204:busibox:srv/search:/health:8003"
+_SERVICE_agent_api="202:busibox:srv/agent:/health:8000"
+_SERVICE_litellm="207:litellm::/health:4000"
+_SERVICE_nginx="200:busibox:provision/ansible/roles/nginx:/:80"
+_SERVICE_ai_portal="201:ai-portal::/portal/api/health:3000"
+_SERVICE_agent_manager="201:agent-manager::/agents/api/health:3001"
+_SERVICE_docs_api="201:busibox:srv/docs:/health:8004"
+_SERVICE_authz_api="210:busibox:srv/authz:/health/live:8010"
+
+# Service display names
+_NAME_authz="AuthZ"
+_NAME_postgres="PostgreSQL"
+_NAME_redis="Redis"
+_NAME_milvus="Milvus"
+_NAME_minio="MinIO"
+_NAME_ingest_api="Ingest API"
+_NAME_search_api="Search API"
+_NAME_agent_api="Agent API"
+_NAME_litellm="LiteLLM"
+_NAME_nginx="Nginx"
+_NAME_ai_portal="AI Portal"
+_NAME_agent_manager="Agent Manager"
+_NAME_docs_api="Docs API"
+_NAME_authz_api="AuthZ API"
+
+# Service categories
+_CORE_SERVICES="authz postgres milvus minio"
+_API_SERVICES="ingest-api search-api agent-api litellm"
+_APP_SERVICES="nginx ai-portal agent-manager"
+
+# All services combined
+ALL_SERVICES="authz postgres milvus minio ingest-api search-api agent-api litellm nginx ai-portal agent-manager"
+
+# ============================================================================
+# Service Metadata Functions
+# ============================================================================
+
+# Get service definition
+# Usage: _get_service_def "authz"
+_get_service_def() {
+    local service=$1
+    local var_name="_SERVICE_${service//-/_}"
+    eval echo "\$$var_name"
+}
+
+# Get service metadata field
+# Usage: get_service_field "authz" "container_id" "staging"
+get_service_field() {
+    local service=$1
+    local field=$2
+    local env=${3:-production}
+    
+    # Get service definition
+    local service_def=$(_get_service_def "$service")
+    
+    if [[ -z "$service_def" ]]; then
+        return 1
+    fi
+    
+    # Parse definition: "container_id:repo:path:health_endpoint:port"
+    local container_id=$(echo "$service_def" | cut -d: -f1)
+    local repo=$(echo "$service_def" | cut -d: -f2)
+    local path=$(echo "$service_def" | cut -d: -f3)
+    local health_endpoint=$(echo "$service_def" | cut -d: -f4)
+    local port=$(echo "$service_def" | cut -d: -f5)
+    
+    # Adjust container ID for environment
+    if [[ "$env" == "staging" ]]; then
+        container_id=$((container_id + 100))
+    fi
+    
+    case "$field" in
+        container_id) echo "$container_id" ;;
+        repo) echo "$repo" ;;
+        path) echo "$path" ;;
+        health_endpoint) echo "$health_endpoint" ;;
+        port) echo "$port" ;;
+        *) return 1 ;;
+    esac
+}
+
+# Get container ID for service in environment
+# Usage: get_service_container_id "authz" "staging"
+get_service_container_id() {
+    local service=$1
+    local env=${2:-production}
+    get_service_field "$service" "container_id" "$env"
+}
+
+# Get git repository for service
+# Usage: get_service_repo "authz"
+get_service_repo() {
+    local service=$1
+    get_service_field "$service" "repo"
+}
+
+# Get path within repo for service
+# Usage: get_service_path "authz"
+get_service_path() {
+    local service=$1
+    get_service_field "$service" "path"
+}
+
+# Get health check endpoint for service
+# Usage: get_service_health_endpoint "authz"
+get_service_health_endpoint() {
+    local service=$1
+    get_service_field "$service" "health_endpoint"
+}
+
+# Get service port
+# Usage: get_service_port "authz"
+get_service_port() {
+    local service=$1
+    get_service_field "$service" "port"
+}
+
+# Get service display name
+# Usage: get_service_display_name "authz"
+get_service_display_name() {
+    local service=$1
+    local var_name="_NAME_${service//-/_}"
+    local name=$(eval echo "\$$var_name")
+    echo "${name:-$service}"
+}
+
+# Get container IP for service
+# Usage: get_service_ip "authz" "staging" "proxmox"
+get_service_ip() {
+    local service=$1
+    local env=${2:-production}
+    local backend=${3:-proxmox}
+    
+    if [[ "$backend" == "docker" ]]; then
+        # Docker uses localhost
+        echo "localhost"
+        return 0
+    fi
+    
+    # Proxmox uses container IPs
+    local container_id=$(get_service_container_id "$service" "$env")
+    
+    if [[ "$env" == "staging" ]]; then
+        echo "10.96.201.$((container_id - 100))"
+    else
+        echo "10.96.200.$container_id"
+    fi
+}
+
+# Get full health check URL for service
+# Usage: get_service_health_url "authz" "staging" "proxmox"
+get_service_health_url() {
+    local service=$1
+    local env=${2:-production}
+    local backend=${3:-proxmox}
+    
+    local ip=$(get_service_ip "$service" "$env" "$backend")
+    local port=$(get_service_port "$service")
+    local endpoint=$(get_service_health_endpoint "$service")
+    
+    echo "http://${ip}:${port}${endpoint}"
+}
+
+# Check if service is in a category
+# Usage: is_core_service "authz"
+is_core_service() {
+    local service=$1
+    echo "$_CORE_SERVICES" | grep -q "\<$service\>"
+}
+
+is_api_service() {
+    local service=$1
+    echo "$_API_SERVICES" | grep -q "\<$service\>"
+}
+
+is_app_service() {
+    local service=$1
+    echo "$_APP_SERVICES" | grep -q "\<$service\>"
+}
+
+# Get service category
+# Usage: get_service_category "authz"
+get_service_category() {
+    local service=$1
+    
+    if is_core_service "$service"; then
+        echo "core"
+    elif is_api_service "$service"; then
+        echo "api"
+    elif is_app_service "$service"; then
+        echo "app"
+    else
+        echo "unknown"
+    fi
+}
+
+# Get all services in a category
+# Usage: get_services_in_category "core"
+get_services_in_category() {
+    local category=$1
+    
+    case "$category" in
+        core)
+            echo "$_CORE_SERVICES"
+            ;;
+        api)
+            echo "$_API_SERVICES"
+            ;;
+        app)
+            echo "$_APP_SERVICES"
+            ;;
+        all)
+            echo "$ALL_SERVICES"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}

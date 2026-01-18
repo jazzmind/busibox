@@ -17,9 +17,12 @@
 
 - name: Create ingest API directory
   file:
-    path: /srv/ingest-api
+    path: "{{ item }}"
     state: directory
     mode: "0755"
+  loop:
+    - /srv/ingest-api
+    - /opt/ingest-api
 
 - name: Create Python virtual environment
   shell: python3 -m venv /srv/ingest-api/venv
@@ -69,6 +72,18 @@
     name: ingest-api
     enabled: yes
     daemon_reload: yes
+
+- name: Write deployment version file
+  copy:
+    content: |
+      {
+        "commit": "{{ lookup('pipe', 'git rev-parse --short HEAD', cwd=playbook_dir + '/../..') }}",
+        "branch": "{{ lookup('pipe', 'git branch --show-current', cwd=playbook_dir + '/../..') }}",
+        "timestamp": "{{ ansible_date_time.iso8601 }}",
+        "deployed_by": "ansible"
+      }
+    dest: /opt/ingest-api/.deploy_version
+    mode: "0644"
 
 - name: Restart ingest API service (always restart on deploy)
   systemd:

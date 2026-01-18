@@ -37,6 +37,9 @@
 #   # Full Docker mode (everything containerized)
 #   docker compose --profile full -f docker-compose.local.yml up -d
 #
+#   # Rebuild with version labels (for status tracking)
+#   bash scripts/docker-rebuild-with-version.sh
+#
 #   # View logs
 #   make docker-logs
 #
@@ -45,6 +48,10 @@
 #
 # Configuration:
 #   Copy .env.local.example to .env.local and configure your settings.
+#
+# Version Tracking:
+#   To enable version tracking in the status display, rebuild containers with:
+#   GIT_COMMIT=$(git rev-parse --short HEAD) to set version labels.
 #
 # =============================================================================
 
@@ -287,8 +294,12 @@ services:
     build:
       context: ./srv
       dockerfile: authz/Dockerfile
+      labels:
+        - "version=${GIT_COMMIT:-unknown}"
     container_name: local-authz-api
     hostname: authz-api
+    labels:
+      - "version=${GIT_COMMIT:-unknown}"
     # Hot-reload: mount source code and use --reload flag
     volumes:
       - ./srv/authz/src:/app/src:ro
@@ -336,8 +347,12 @@ services:
     build:
       context: ./srv
       dockerfile: ingest/Dockerfile
+      labels:
+        - "version=${GIT_COMMIT:-unknown}"
     container_name: local-ingest-api
     hostname: ingest-api
+    labels:
+      - "version=${GIT_COMMIT:-unknown}"
     # Hot-reload: mount source code and use --reload flag
     volumes:
       - ./srv/ingest/src:/app/src:ro
@@ -497,8 +512,12 @@ services:
     build:
       context: ./srv
       dockerfile: search/Dockerfile
+      labels:
+        - "version=${GIT_COMMIT:-unknown}"
     container_name: local-search-api
     hostname: search-api
+    labels:
+      - "version=${GIT_COMMIT:-unknown}"
     # Hot-reload: mount source code and use --reload flag
     volumes:
       - ./srv/search/src:/app/src:ro
@@ -570,8 +589,12 @@ services:
     build:
       context: ./srv
       dockerfile: agent/Dockerfile
+      labels:
+        - "version=${GIT_COMMIT:-unknown}"
     container_name: local-agent-api
     hostname: agent-api
+    labels:
+      - "version=${GIT_COMMIT:-unknown}"
     # Hot-reload: mount source code and use --reload flag
     # Note: migrations still run on startup, but code changes hot-reload
     volumes:
@@ -638,8 +661,12 @@ services:
     build:
       context: ./srv
       dockerfile: docs/Dockerfile
+      labels:
+        - "version=${GIT_COMMIT:-unknown}"
     container_name: local-docs-api
     hostname: docs-api
+    labels:
+      - "version=${GIT_COMMIT:-unknown}"
     # Hot-reload: mount source code and use --reload flag
     volumes:
       - ./srv/docs/src:/app/src:ro
