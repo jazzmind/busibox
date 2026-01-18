@@ -74,7 +74,7 @@
   become_user: postgres
   postgresql_user:
     name: "{{ postgres_user }}"
-    password: "{{ postgres_password | default('busibox_password_change_me') }}"
+    password: "{{ secrets.postgresql.password | default(postgres_password) | default('busibox_password_change_me') }}"
     role_attr_flags: "LOGIN,CREATEDB"
     state: present
 
