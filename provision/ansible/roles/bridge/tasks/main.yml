@@ -1,7 +1,8 @@
 ---
-# Signal Bot Installation and Configuration
-# Created: 2026-01-13
-# Purpose: Deploy Signal bot and signal-cli-rest-api
+# Bridge Service Installation and Configuration
+# Created: 2026-01-18
+# Purpose: Deploy multi-channel communication bridge (Signal, Email, WhatsApp, Webhooks)
+# Note: This service is under development and deployment is optional/non-blocking
 
 - name: Install Docker (for signal-cli-rest-api)
   ansible.builtin.apt:
@@ -52,7 +53,7 @@
   retries: 30
   delay: 2
 
-# Signal Bot Python Service
+# Bridge Service Python Application
 - name: Install Python dependencies
   ansible.builtin.apt:
     name:
@@ -61,89 +62,89 @@
       - python3-venv
     state: present
 
-- name: Create signal bot user
+- name: Create bridge user
   ansible.builtin.user:
-    name: "{{ signal_bot_user }}"
+    name: "{{ bridge_user }}"
     system: true
     shell: /usr/sbin/nologin
-    home: "{{ signal_bot_dir }}"
+    home: "{{ bridge_dir }}"
     create_home: false
 
-- name: Create signal bot directory
+- name: Create bridge directory
   ansible.builtin.file:
-    path: "{{ signal_bot_dir }}"
+    path: "{{ bridge_dir }}"
     state: directory
-    owner: "{{ signal_bot_user }}"
-    group: "{{ signal_bot_group }}"
+    owner: "{{ bridge_user }}"
+    group: "{{ bridge_group }}"
     mode: "0755"
 
-- name: Create signal bot app directory
+- name: Create bridge app directory
   ansible.builtin.file:
-    path: "{{ signal_bot_dir }}/app"
+    path: "{{ bridge_dir }}/app"
     state: directory
-    owner: "{{ signal_bot_user }}"
-    group: "{{ signal_bot_group }}"
+    owner: "{{ bridge_user }}"
+    group: "{{ bridge_group }}"
     mode: "0755"
 
-- name: Copy signal bot source code
+- name: Copy bridge source code
   ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../../srv/signal-bot/app/"
-    dest: "{{ signal_bot_dir }}/app/"
-    owner: "{{ signal_bot_user }}"
-    group: "{{ signal_bot_group }}"
+    src: "{{ playbook_dir }}/../../srv/bridge/app/"
+    dest: "{{ bridge_dir }}/app/"
+    owner: "{{ bridge_user }}"
+    group: "{{ bridge_group }}"
     mode: "0644"
-  notify: restart signal-bot
+  notify: restart bridge
 
 - name: Copy requirements.txt
   ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../../srv/signal-bot/requirements.txt"
-    dest: "{{ signal_bot_dir }}/requirements.txt"
-    owner: "{{ signal_bot_user }}"
-    group: "{{ signal_bot_group }}"
+    src: "{{ playbook_dir }}/../../srv/bridge/requirements.txt"
+    dest: "{{ bridge_dir }}/requirements.txt"
+    owner: "{{ bridge_user }}"
+    group: "{{ bridge_group }}"
     mode: "0644"
 
 - name: Create Python virtual environment
   ansible.builtin.command:
-    cmd: python3 -m venv {{ signal_bot_venv }}
-    creates: "{{ signal_bot_venv }}/bin/python"
+    cmd: python3 -m venv {{ bridge_venv }}
+    creates: "{{ bridge_venv }}/bin/python"
 
 - name: Install Python dependencies in venv
   ansible.builtin.pip:
-    requirements: "{{ signal_bot_dir }}/requirements.txt"
-    virtualenv: "{{ signal_bot_venv }}"
+    requirements: "{{ bridge_dir }}/requirements.txt"
+    virtualenv: "{{ bridge_venv }}"
     state: present
 
 - name: Set venv ownership
   ansible.builtin.file:
-    path: "{{ signal_bot_venv }}"
-    owner: "{{ signal_bot_user }}"
-    group: "{{ signal_bot_group }}"
+    path: "{{ bridge_venv }}"
+    owner: "{{ bridge_user }}"
+    group: "{{ bridge_group }}"
     recurse: true
 
-- name: Create signal bot environment file
+- name: Create bridge environment file
   ansible.builtin.template:
-    src: signal-bot.env.j2
-    dest: "{{ signal_bot_dir }}/.env"
-    owner: "{{ signal_bot_user }}"
-    group: "{{ signal_bot_group }}"
+    src: bridge.env.j2
+    dest: "{{ bridge_dir }}/.env"
+    owner: "{{ bridge_user }}"
+    group: "{{ bridge_group }}"
     mode: "0600"
-  notify: restart signal-bot
+  notify: restart bridge
 
-- name: Create signal bot systemd service
+- name: Create bridge systemd service
   ansible.builtin.template:
-    src: signal-bot.service.j2
-    dest: /etc/systemd/system/{{ signal_bot_service_name }}.service
+    src: bridge.service.j2
+    dest: /etc/systemd/system/{{ bridge_service_name }}.service
     mode: "0644"
-  notify: restart signal-bot
+  notify: restart bridge
 
-- name: Enable and start signal bot service
+- name: Enable and start bridge service
   ansible.builtin.systemd:
-    name: "{{ signal_bot_service_name }}"
-    enabled: "{{ signal_bot_enabled }}"
-    state: "{{ 'started' if signal_bot_enabled else 'stopped' }}"
+    name: "{{ bridge_service_name }}"
+    enabled: "{{ bridge_enabled }}"
+    state: "{{ 'started' if bridge_enabled else 'stopped' }}"
     daemon_reload: true
 
-- name: Create registration helper script
+- name: Create registration helper script (Signal)
   ansible.builtin.template:
     src: register-signal.sh.j2
     dest: /usr/local/bin/register-signal
@@ -151,15 +152,15 @@
 
 - name: Create status script
   ansible.builtin.copy:
-    dest: /usr/local/bin/signal-bot-status
+    dest: /usr/local/bin/bridge-status
     mode: "0755"
     content: |
       #!/bin/bash
       echo "=== Signal CLI REST API ==="
       curl -s http://localhost:{{ signal_cli_port }}/v1/about | jq .
       echo ""
-      echo "=== Signal Bot Service ==="
-      systemctl status {{ signal_bot_service_name }} --no-pager
+      echo "=== Bridge Service ==="
+      systemctl status {{ bridge_service_name }} --no-pager
       echo ""
       echo "=== Recent Logs ==="
-      journalctl -u {{ signal_bot_service_name }} -n 20 --no-pager
+      journalctl -u {{ bridge_service_name }} -n 20 --no-pager
