@@ -516,3 +516,192 @@ clear_and_header() {
     clear
     box "$title" "$width"
 }
+
+# ============================================================================
+# Status Dashboard Functions
+# ============================================================================
+
+# Get script directory for sourcing dependencies
+_UI_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Source status library if not already loaded
+if ! type get_service_status_from_cache &>/dev/null; then
+    source "${_UI_SCRIPT_DIR}/status.sh" 2>/dev/null || true
+fi
+
+# Get status symbol for service state
+# Usage: get_status_symbol "up"
+get_status_symbol() {
+    local status=$1
+    
+    case "$status" in
+        up) echo -e "${GREEN}●${NC}" ;;
+        down) echo -e "${DIM}○${NC}" ;;
+        checking) echo -e "${DIM}◷${NC}" ;;
+        unknown) echo -e "${DIM}○${NC}" ;;
+        *) echo -e "${DIM}○${NC}" ;;
+    esac
+}
+
+# Get health status indicator
+# Usage: get_health_indicator "healthy"
+get_health_indicator() {
+    local health=$1
+    
+    case "$health" in
+        healthy) echo -e "${GREEN}✓ up${NC}" ;;
+        degraded) echo -e "${YELLOW}⚠ slow${NC}" ;;
+        down) echo -e "${RED}✗ down${NC}" ;;
+        checking) echo -e "${DIM}checking...${NC}" ;;
+        unknown) echo -e "${DIM}- unknown${NC}" ;;
+        *) echo -e "${DIM}- unknown${NC}" ;;
+    esac
+}
+
+# Get sync state indicator
+# Usage: get_sync_indicator "synced" "a1b2c3d"
+get_sync_indicator() {
+    local sync_state=$1
+    local version=$2
+    
+    case "$sync_state" in
+        synced) echo -e "${GREEN}✓ synced${NC}" ;;
+        behind) echo -e "${YELLOW}⚠ behind${NC}" ;;
+        checking) echo -e "${DIM}checking...${NC}" ;;
+        unknown) echo -e "${DIM}- unknown${NC}" ;;
+        *) echo -e "${DIM}- unknown${NC}" ;;
+    esac
+}
+
+# Format response time with color coding
+# Usage: format_response_time 45
+format_response_time() {
+    local ms=$1
+    
+    if [[ "$ms" == "0" || "$ms" == "checking" ]]; then
+        echo -e "${DIM}-${NC}"
+    elif [[ $ms -lt 100 ]]; then
+        echo -e "${GREEN}${ms}ms${NC}"
+    elif [[ $ms -lt 500 ]]; then
+        echo -e "${YELLOW}${ms}ms${NC}"
+    else
+        echo -e "${RED}${ms}ms${NC}"
+    fi
+}
+
+# Render single service line
+# Usage: render_service_line "authz" "staging"
+render_service_line() {
+    local service=$1
+    local env=$2
+    
+    # Get cached status
+    local status_json
+    status_json=$(get_service_status_from_cache "$service" "$env" 2>/dev/null)
+    
+    # Parse JSON (using jq if available, otherwise basic parsing)
+    local status health version sync_state response_time
+    if command -v jq &>/dev/null; then
+        status=$(echo "$status_json" | jq -r '.status // "checking"')
+        health=$(echo "$status_json" | jq -r '.health // "checking"')
+        version=$(echo "$status_json" | jq -r '.version // "checking"')
+        sync_state=$(echo "$status_json" | jq -r '.sync_state // "checking"')
+        response_time=$(echo "$status_json" | jq -r '.response_time_ms // 0')
+    else
+        # Fallback parsing
+        status="checking"
+        health="checking"
+        version="checking"
+        sync_state="checking"
+        response_time=0
+    fi
+    
+    # Get display components
+    local display_name=$(get_service_display_name "$service")
+    local status_symbol=$(get_status_symbol "$status")
+    local health_indicator=$(get_health_indicator "$health")
+    local sync_indicator=$(get_sync_indicator "$sync_state" "$version")
+    local time_display=$(format_response_time "$response_time")
+    
+    # Format version (truncate if too long)
+    local version_display="$version"
+    if [[ ${#version} -gt 7 ]]; then
+        version_display="${version:0:7}"
+    fi
+    
+    # Render line with proper spacing
+    # Format: "  ● ServiceName    ✓ up   │ a1b2c3d  ✓ synced  │ 45ms"
+    printf "  %s %-15s %s │ %-7s  %s │ %s\n" \
+        "$status_symbol" \
+        "$display_name" \
+        "$health_indicator" \
+        "$version_display" \
+        "$sync_indicator" \
+        "$time_display"
+}
+
+# Render service category group
+# Usage: render_service_category "Core Services" "core" "staging"
+render_service_category() {
+    local category_title=$1
+    local category=$2
+    local env=$3
+    
+    echo ""
+    echo -e "${BOLD}$category_title${NC}"
+    echo -e "${DIM}$(printf '─%.0s' $(seq 1 ${#category_title}))${NC}"
+    
+    # Get services in category
+    local services=$(get_services_in_category "$category")
+    
+    # Render each service
+    for service in $services; do
+        render_service_line "$service" "$env"
+    done
+}
+
+# Main status dashboard renderer (non-blocking)
+# Usage: render_status_dashboard "staging" "proxmox"
+render_status_dashboard() {
+    local env=$1
+    local backend=$2
+    
+    # Check if status library is available
+    if ! type get_service_status_from_cache &>/dev/null; then
+        echo ""
+        echo -e "${DIM}  (Status dashboard unavailable)${NC}"
+        return 0
+    fi
+    
+    # Get cache age for display
+    local cache_age="unknown"
+    local cache_file=$(get_cache_file "authz" "$env" 2>/dev/null)
+    if [[ -f "$cache_file" ]]; then
+        local cache_mtime
+        if [[ "$(uname)" == "Darwin" ]]; then
+            cache_mtime=$(stat -f %m "$cache_file" 2>/dev/null || echo 0)
+        else
+            cache_mtime=$(stat -c %Y "$cache_file" 2>/dev/null || echo 0)
+        fi
+        local now=$(date +%s)
+        cache_age=$((now - cache_mtime))
+        
+        if [[ $cache_age -lt 60 ]]; then
+            cache_age="${cache_age}s ago"
+        elif [[ $cache_age -lt 3600 ]]; then
+            cache_age="$((cache_age / 60))m ago"
+        else
+            cache_age="$((cache_age / 3600))h ago"
+        fi
+    fi
+    
+    echo ""
+    echo -e "${DIM}Environment: ${CYAN}$env${NC} ${DIM}($backend)${NC}$(printf '%*s' 20 '')${DIM}Last check: $cache_age  ${CYAN}[Press 's' to refresh]${NC}"
+    
+    # Render each category
+    render_service_category "Core Services" "core" "$env"
+    render_service_category "API Services" "api" "$env"
+    render_service_category "App Services" "app" "$env"
+    
+    echo ""
+}

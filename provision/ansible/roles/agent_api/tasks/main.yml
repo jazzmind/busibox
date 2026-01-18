@@ -42,6 +42,7 @@
   loop:
     - /srv/agent
     - "{{ agent_api_log_path }}"
+    - /opt/agent-api
 
 - name: Copy agent service source code
   synchronize:
@@ -328,6 +329,20 @@
     name: agent-api
     enabled: yes
     daemon_reload: yes
+
+- name: Write deployment version file
+  copy:
+    content: |
+      {
+        "commit": "{{ lookup('pipe', 'git rev-parse --short HEAD', cwd=playbook_dir + '/../..') }}",
+        "branch": "{{ lookup('pipe', 'git branch --show-current', cwd=playbook_dir + '/../..') }}",
+        "timestamp": "{{ ansible_date_time.iso8601 }}",
+        "deployed_by": "ansible"
+      }
+    dest: /opt/agent-api/.deploy_version
+    owner: "{{ agent_api_user }}"
+    group: "{{ agent_api_user }}"
+    mode: "0644"
 
 - name: Restart agent service (always restart on deploy)
   systemd:

@@ -20,6 +20,8 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 source "${REPO_ROOT}/scripts/lib/ui.sh"
 source "${REPO_ROOT}/scripts/lib/state.sh"
 source "${REPO_ROOT}/scripts/lib/health.sh"
+source "${REPO_ROOT}/scripts/lib/services.sh"
+source "${REPO_ROOT}/scripts/lib/status.sh"
 
 # Parse command line arguments
 ENV_ARG="${1:-}"
@@ -162,6 +164,25 @@ run_and_display_health_check() {
     pause
 }
 
+# Handle status refresh (triggered by 's' key)
+handle_status_refresh() {
+    local env backend
+    
+    env=$(get_environment)
+    backend=$(get_backend "$env")
+    
+    # Clear old cache
+    rm -rf ~/.busibox/status-cache/* 2>/dev/null
+    
+    # Kick off background refresh (synchronously for immediate feedback)
+    refresh_all_services_async "$env" "$backend"
+    
+    # Wait for checks to complete
+    sleep 3
+    
+    # Menu will automatically redisplay with fresh data
+}
+
 # Show the main menu and get user selection
 # Returns: menu choice via stdout
 show_main_menu() {
@@ -177,6 +198,9 @@ show_main_menu() {
     {
         clear
         box "Busibox Control Panel" 70
+        
+        # NEW: Render status dashboard (reads from cache, never blocks)
+        render_status_dashboard "$env" "$backend"
         
         # Status bar
         status_bar "$env" "$backend" "$status" 70
@@ -234,7 +258,7 @@ handle_menu_selection() {
             run_quick_health_check "$env" "$backend"
             ;;
         status)
-            run_and_display_health_check
+            handle_status_refresh
             ;;
         rerun)
             handle_rerun
@@ -2413,6 +2437,12 @@ main() {
     env=$(get_environment)
     backend=$(get_backend "$env")
     
+    # Initialize cache directory
+    init_cache_dir
+    
+    # Kick off background status refresh (non-blocking)
+    refresh_all_services_async "$env" "$backend" &
+    
     # Run quick initial health check with progress indicator
     echo -ne "  ${DIM}Checking system status...${NC} "
     run_quick_health_check "$env" "$backend"
@@ -2425,6 +2455,9 @@ main() {
         selection=$(show_main_menu)
         
         handle_menu_selection "$selection"
+        
+        # Optional: Kick off background refresh for next menu display
+        refresh_all_services_async "$env" "$backend" &
     done
 }
 
