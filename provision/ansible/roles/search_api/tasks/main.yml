@@ -212,7 +212,7 @@
     set +a
     export PYTHONPATH=/opt/search/src
     cd /opt/search
-    venv/bin/python -m pytest tests/test_pvt.py -v --tb=short -x 2>&1
+    venv/bin/python -m pytest tests/integration/test_pvt.py -v --tb=short -x 2>&1
   args:
     executable: /bin/bash
   register: search_pvt_result

@@ -400,7 +400,7 @@
     set +a
     export PYTHONPATH=/srv/ingest/src
     cd /srv/ingest
-    venv/bin/python -m pytest tests/test_pvt.py -v --tb=short -x 2>&1
+    venv/bin/python -m pytest tests/integration/test_pvt.py -v --tb=short -x 2>&1
   args:
     executable: /bin/bash
   register: ingest_pvt_result

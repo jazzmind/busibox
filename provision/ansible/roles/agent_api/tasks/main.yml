@@ -296,7 +296,7 @@
     . /srv/agent/.env
     set +a
     cd /srv/agent
-    .venv/bin/python -m pytest tests/test_pvt.py -v --tb=short -x 2>&1
+    .venv/bin/python -m pytest tests/integration/test_pvt.py -v --tb=short -x 2>&1
   args:
     executable: /bin/bash
   register: agent_pvt_result

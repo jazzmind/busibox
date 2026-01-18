@@ -328,7 +328,7 @@
     set +a
     export PYTHONPATH={{ authz_app_dir }}/src
     cd {{ authz_app_dir }}
-    {{ authz_venv_dir }}/bin/python -m pytest tests/test_pvt.py -v --tb=short -x 2>&1
+    {{ authz_venv_dir }}/bin/python -m pytest tests/integration/test_pvt.py -v --tb=short -x 2>&1
   args:
     executable: /bin/bash
   register: authz_pvt_result
