@@ -344,6 +344,32 @@
   delay: 5
   register: health_check
   until: health_check is success
+  failed_when: false
+
+- name: Check agent service status if health check failed
+  shell: systemctl status agent-api --no-pager
+  register: service_status
+  when: health_check is failed
+
+- name: Show agent service logs if startup failed
+  shell: journalctl -u agent-api -n 50 --no-pager
+  register: service_logs
+  when: health_check is failed
+
+- name: Display service status and logs if failed
+  debug:
+    msg: 
+      - "=== Service Status ==="
+      - "{{ service_status.stdout_lines | default([]) }}"
+      - ""
+      - "=== Recent Logs ==="
+      - "{{ service_logs.stdout_lines | default([]) }}"
+  when: health_check is failed
+
+- name: Fail if agent service did not start
+  fail:
+    msg: "Agent service failed to start. Check logs above."
+  when: health_check is failed
 
 # Post-Deployment Validation Tests (PVT)
 - name: Run PVT tests
