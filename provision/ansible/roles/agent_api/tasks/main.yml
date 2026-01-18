@@ -201,8 +201,8 @@
 
 - name: Transfer ownership of existing tables to agent user
   shell: |
-    psql -d agent_server -c "
-    DO \$\$
+    su - postgres -c "psql -d agent_server -c \"
+    DO \\\$\\\$
     DECLARE
       r RECORD;
     BEGIN
@@ -214,11 +214,9 @@
       LOOP
         EXECUTE 'ALTER SEQUENCE ' || quote_ident(r.sequence_name) || ' OWNER TO {{ postgres_user }}';
       END LOOP;
-    END \$\$;
-    "
-  become_user: postgres
+    END \\\$\\\$;
+    \""
   delegate_to: "{{ groups['pg'][0] }}"
-  when: ansible_play_name is defined
   tags: [agent, agent_api]
 
 - name: Check if alembic version table exists
