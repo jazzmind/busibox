@@ -20,8 +20,19 @@ def upgrade() -> None:
     """
     Rename workflow column to workflows for consistency with the model
     """
-    # Rename workflow to workflows in agent_definitions
-    op.alter_column('agent_definitions', 'workflow', new_column_name='workflows')
+    # Check if 'workflow' column exists before renaming
+    # This makes the migration idempotent
+    conn = op.get_bind()
+    result = conn.execute(sa.text("""
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_name='agent_definitions' 
+        AND column_name='workflow'
+    """))
+    
+    if result.fetchone():
+        # Only rename if 'workflow' exists
+        op.alter_column('agent_definitions', 'workflow', new_column_name='workflows')
 
 
 def downgrade() -> None:
