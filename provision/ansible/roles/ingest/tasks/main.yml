@@ -393,6 +393,20 @@
   tags: [ingest, ingest_configure, ingest_tests, ingest_deploy, ingest_update_tests]
 
 # Post-Deployment Validation Tests (PVT)
+# Wait for service to be fully started before running tests
+- name: Wait for ingest API service to be ready
+  uri:
+    url: "http://localhost:{{ ingest_api_port | default('8002') }}/health"
+    method: GET
+    status_code: [200, 503]  # Accept degraded (503) as long as it responds
+  register: health_check
+  until: health_check.status in [200, 503]
+  retries: 30
+  delay: 2
+  failed_when: false
+  when: run_pvt_tests | default(true)
+  tags: [ingest, pvt]
+
 - name: Run PVT tests
   shell: |
     set -a
@@ -400,7 +414,7 @@
     set +a
     export PYTHONPATH=/srv/ingest/src
     cd /srv/ingest
-    venv/bin/python -m pytest tests/integration/test_pvt.py -v --tb=short -x 2>&1
+    venv/bin/python -m pytest tests/integration/test_pvt.py -v --tb=short 2>&1
   args:
     executable: /bin/bash
   register: ingest_pvt_result

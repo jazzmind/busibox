@@ -163,6 +163,42 @@
   delegate_to: "{{ groups['pg'][0] }}"
   tags: [agent, agent_api]
 
+- name: Grant database privileges to agent user
+  postgresql_privs:
+    database: agent_server
+    state: present
+    privs: ALL
+    type: database
+    role: "{{ postgres_user }}"
+  become_user: postgres
+  delegate_to: "{{ groups['pg'][0] }}"
+  tags: [agent, agent_api]
+
+- name: Grant schema privileges to agent user
+  postgresql_privs:
+    database: agent_server
+    state: present
+    privs: ALL
+    type: schema
+    objs: public
+    role: "{{ postgres_user }}"
+  become_user: postgres
+  delegate_to: "{{ groups['pg'][0] }}"
+  tags: [agent, agent_api]
+
+- name: Grant table privileges to agent user
+  postgresql_privs:
+    database: agent_server
+    state: present
+    privs: ALL
+    type: table
+    objs: ALL_IN_SCHEMA
+    schema: public
+    role: "{{ postgres_user }}"
+  become_user: postgres
+  delegate_to: "{{ groups['pg'][0] }}"
+  tags: [agent, agent_api]
+
 - name: Check if alembic version table exists
   shell: |
     cd /srv/agent
@@ -296,7 +332,7 @@
     . /srv/agent/.env
     set +a
     cd /srv/agent
-    .venv/bin/python -m pytest tests/integration/test_pvt.py -v --tb=short -x 2>&1
+    .venv/bin/python -m pytest tests/integration/test_pvt.py -v --tb=short 2>&1
   args:
     executable: /bin/bash
   register: agent_pvt_result
