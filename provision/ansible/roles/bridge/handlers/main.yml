@@ -1,0 +1,7 @@
+---
+# Bridge Service Handlers
+- name: restart bridge
+  ansible.builtin.systemd:
+    name: "{{ bridge_service_name }}"
+    state: restarted
+    daemon_reload: true

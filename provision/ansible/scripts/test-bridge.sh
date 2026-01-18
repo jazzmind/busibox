@@ -2,22 +2,22 @@
 set -euo pipefail
 
 #==============================================================================
-# Test Signal Bot Integration
+# Test Bridge Service Integration
 #
 # EXECUTION CONTEXT: 
-#   - Agent container (where signal-bot runs)
+#   - Bridge container (where bridge service runs)
 #   - Or any machine with access to signal-cli-rest-api
 #
 # DESCRIPTION:
-#   Tests the Signal bot integration:
-#   - Check signal-cli-rest-api health
+#   Tests the Bridge service integration:
+#   - Check signal-cli-rest-api health (Signal channel)
 #   - Check Signal registration status
 #   - Check Agent API connectivity
 #   - Send a test message (optional)
 #
 # USAGE:
-#   From ansible dir: bash scripts/test-signal-bot.sh [staging|production]
-#   This script is typically run on the agent container via SSH from Ansible
+#   From ansible dir: bash scripts/test-bridge.sh [staging|production]
+#   This script is typically run on the bridge container via SSH from Ansible
 #
 # OPTIONS:
 #   --send-test    Send a test message to verify full integration
@@ -43,30 +43,33 @@ for arg in "$@"; do
 done
 
 echo -e "${BLUE}========================================${NC}"
-echo -e "${BLUE}Signal Bot Integration Tests${NC}"
+echo -e "${BLUE}Bridge Service Integration Tests${NC}"
 echo -e "${BLUE}========================================${NC}"
 echo ""
 
 # Environment-specific configuration
 if [ "$ENV" = "test" ]; then
+    BRIDGE_HOST="10.96.201.211"  # TEST-bridge-lxc (when deployed)
     AGENT_HOST="10.96.201.202"
     SIGNAL_CLI_PORT=8080
     AGENT_API_PORT=8000
     echo -e "${GREEN}Environment: TEST${NC}"
 elif [ "$ENV" = "production" ]; then
+    BRIDGE_HOST="10.96.200.211"  # bridge-lxc (when deployed)
     AGENT_HOST="10.96.200.202"
     SIGNAL_CLI_PORT=8080
     AGENT_API_PORT=8000
     echo -e "${YELLOW}Environment: PRODUCTION${NC}"
 else
-    # Running locally on agent container
-    AGENT_HOST="localhost"
+    # Running locally on bridge container
+    BRIDGE_HOST="localhost"
+    AGENT_HOST="10.96.201.202"  # Default to test agent
     SIGNAL_CLI_PORT=8080
     AGENT_API_PORT=8000
-    echo -e "${BLUE}Environment: LOCAL (on agent container)${NC}"
+    echo -e "${BLUE}Environment: LOCAL (on bridge container)${NC}"
 fi
 
-SIGNAL_CLI_URL="http://${AGENT_HOST}:${SIGNAL_CLI_PORT}"
+SIGNAL_CLI_URL="http://${BRIDGE_HOST}:${SIGNAL_CLI_PORT}"
 AGENT_API_URL="http://${AGENT_HOST}:${AGENT_API_PORT}"
 
 TESTS_PASSED=0
@@ -137,23 +140,23 @@ else
 fi
 
 #==============================================================================
-# Test 4: Signal Bot Service Status
+# Test 4: Bridge Service Status
 #==============================================================================
 
 echo ""
-echo -e "${BLUE}Test 4: Signal Bot Service Status${NC}"
+echo -e "${BLUE}Test 4: Bridge Service Status${NC}"
 
-if [ "$AGENT_HOST" = "localhost" ]; then
-    # Running on agent container - check systemd
-    if systemctl is-active --quiet signal-bot 2>/dev/null; then
-        test_pass "Signal bot service is running"
+if [ "$BRIDGE_HOST" = "localhost" ]; then
+    # Running on bridge container - check systemd
+    if systemctl is-active --quiet bridge 2>/dev/null; then
+        test_pass "Bridge service is running"
     else
-        STATUS=$(systemctl is-active signal-bot 2>/dev/null || echo "not found")
-        test_fail "Signal bot service is ${STATUS}"
+        STATUS=$(systemctl is-active bridge 2>/dev/null || echo "not found")
+        test_fail "Bridge service is ${STATUS}"
     fi
 else
     # Remote check - try to SSH
-    test_warn "Skipping service check (run on agent container)"
+    test_warn "Skipping service check (run on bridge container)"
 fi
 
 #==============================================================================
@@ -163,7 +166,7 @@ fi
 echo ""
 echo -e "${BLUE}Test 5: Docker Container (signal-cli-rest-api)${NC}"
 
-if [ "$AGENT_HOST" = "localhost" ]; then
+if [ "$BRIDGE_HOST" = "localhost" ]; then
     if docker ps | grep -q signal-cli-rest-api 2>/dev/null; then
         test_pass "signal-cli-rest-api container is running"
     else
@@ -171,7 +174,7 @@ if [ "$AGENT_HOST" = "localhost" ]; then
         echo -e "  ${YELLOW}Check: docker ps -a${NC}"
     fi
 else
-    test_warn "Skipping Docker check (run on agent container)"
+    test_warn "Skipping Docker check (run on bridge container)"
 fi
 
 #==============================================================================
@@ -190,7 +193,7 @@ if [ "$SEND_TEST" = true ]; then
         echo -e "  ${YELLOW}To send a test message, run:${NC}"
         echo -e "  curl -X POST '${SIGNAL_CLI_URL}/v2/send' \\"
         echo -e "    -H 'Content-Type: application/json' \\"
-        echo -e "    -d '{\"number\": \"${PHONE}\", \"recipients\": [\"YOUR_PHONE\"], \"message\": \"Test from Signal bot!\"}'"
+        echo -e "    -d '{\"number\": \"${PHONE}\", \"recipients\": [\"YOUR_PHONE\"], \"message\": \"Test from Bridge service!\"}'"
         test_warn "Manual test message step (not automated)"
     else
         test_fail "No phone number registered for sending test"

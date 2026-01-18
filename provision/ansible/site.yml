@@ -23,8 +23,14 @@
   roles:
     - role: agent_api
       tags: [agent, agent_api]
-    - role: signal_bot
-      tags: [signal-bot, signal_bot]
+
+- hosts: bridge
+  roles:
+    - role: bridge
+      tags: [bridge]
+      # Bridge service is optional and non-blocking
+      # Handles multi-channel communication: Signal, Email, WhatsApp, Webhooks
+  ignore_errors: true  # Don't fail deployment if bridge host doesn't exist
 
 - hosts: files
   roles:

@@ -16,7 +16,7 @@ The reason for having copies here:
 | `bootstrap-test-credentials.sh` | Creates test users and OAuth clients | `make bootstrap-test-creds` |
 | `generate-token-service-keys.sh` | Generates Ed25519 keys for token service | `make generate-token-keys` |
 | `generate_jwk_keys.py` | Python key generator (used by above) | generate-token-service-keys.sh |
-| `test-signal-bot.sh` | Tests Signal bot integration | `make test-signal-bot` |
+| `test-bridge.sh` | Tests Bridge service integration | `make test-bridge` |
 | `view-app-logs.sh` | View application logs on containers | Copied to containers via `apps` role |
 | `tail-app-logs.sh` | Tail application logs on containers | Copied to containers via `apps` role |
 

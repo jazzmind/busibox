@@ -1,4 +1,4 @@
-.PHONY: ping all files pg milvus nginx search search-api agent ingest ingest-api ingest-worker ingest-update-tests docs apps openwebui deploy-apps deploy-ai-portal deploy-agent-client deploy-doc-intel deploy-foundation deploy-project-analysis deploy-innovation verify verify-health verify-smoke service-start service-stop service-restart service-status service-logs service-health test test-menu test-ingest test-ingest-all test-ingest-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-authz test-apps test-security test-security-auth test-security-injection test-security-fuzz test-all configure generate-token-keys bootstrap-test-creds signal-bot tailscale test-signal-bot
+.PHONY: ping all files pg milvus nginx search search-api agent ingest ingest-api ingest-worker ingest-update-tests docs apps openwebui deploy-apps deploy-ai-portal deploy-agent-client deploy-doc-intel deploy-foundation deploy-project-analysis deploy-innovation verify verify-health verify-smoke service-start service-stop service-restart service-status service-logs service-health test test-menu test-ingest test-ingest-all test-ingest-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-authz test-apps test-security test-security-auth test-security-injection test-security-fuzz test-all configure generate-token-keys bootstrap-test-creds bridge tailscale test-bridge
 # Default to production inventory (can override with: make all INV=inventory/staging)
 INV=inventory/production
 
@@ -99,18 +99,23 @@ apps:
 openwebui:
 	ansible-playbook -i $(INV) -l openwebui site.yml $(VAULT_FLAGS)
 
-# Signal Bot (for Signal messenger integration)
-signal-bot:
-	ansible-playbook -i $(INV) -l agent site.yml --tags signal-bot $(VAULT_FLAGS)
+# Bridge Service (multi-channel communication: Signal, Email, WhatsApp, Webhooks)
+# Note: This is optional and non-blocking - won't fail if bridge host doesn't exist
+bridge:
+	ansible-playbook -i $(INV) -l bridge site.yml --tags bridge $(VAULT_FLAGS) || true
 
 # Tailscale VPN (for secure remote access)
 tailscale:
 	ansible-playbook -i $(INV) -l proxy site.yml --tags tailscale $(VAULT_FLAGS)
 
-# Test Signal bot integration
-test-signal-bot:
-	@echo "Testing Signal bot integration on agent container ($(AGENT_IP))..."
-	@ssh root@$(AGENT_IP) 'bash -s' < scripts/test-signal-bot.sh
+# Test Bridge service integration
+test-bridge:
+	@echo "Testing Bridge service integration..."
+	@if [ -n "$(BRIDGE_IP)" ]; then \
+		ssh root@$(BRIDGE_IP) 'bash -s' < scripts/test-bridge.sh; \
+	else \
+		echo "Bridge host not configured (BRIDGE_IP not set). Skipping test."; \
+	fi
 
 # T029: Deploy applications (runs app_deployer + secrets roles)
 deploy-apps:
