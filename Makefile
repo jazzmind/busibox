@@ -286,12 +286,16 @@ ifdef NO_CACHE
 else
 	GIT_COMMIT=$(GIT_COMMIT) docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) build $(SERVICE)
 endif
+	@echo "Recreating container to apply new image..."
+	GIT_COMMIT=$(GIT_COMMIT) docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) up -d $(SERVICE)
 else
 ifdef NO_CACHE
 	GIT_COMMIT=$(GIT_COMMIT) docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) build --no-cache
 else
 	GIT_COMMIT=$(GIT_COMMIT) docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) build
 endif
+	@echo "Recreating containers to apply new images..."
+	GIT_COMMIT=$(GIT_COMMIT) docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) up -d
 endif
 
 # View Docker logs

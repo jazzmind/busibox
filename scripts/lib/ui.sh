@@ -290,13 +290,14 @@ quick_menu() {
     if [[ ${#display_cmd} -gt 50 ]]; then
         display_cmd="${display_cmd:0:47}..."
     fi
-    
-    echo -e "    ${CYAN}[r]${NC} Re-run: ${DIM}$display_cmd${NC}"
+    local display_ago=""
     if [[ -n "$last_ago" ]]; then
-        echo -e "        ${DIM}($last_ago)${NC}"
-    fi
-    echo -e "    ${CYAN}[s]${NC} Quick status check"
-    echo ""
+        display_ago=" ${DIM}($last_ago)${NC}"
+    fi   
+    echo -e "    ${CYAN}[r]${NC} Re-run: ${DIM}$display_cmd$display_ago"
+
+    # echo -e "    ${CYAN}[s]${NC} Quick status check"
+    # echo ""
 }
 
 # Backend selection for staging/production environments
@@ -649,15 +650,14 @@ render_service_line() {
         version_info="${version_display} → ${current_display}"
     fi
     
-    # Render line with proper spacing
-    # Format: "  ● ServiceName    ✓ up   │ a1b2c3d → b2c3d4e  ✓ synced  │ 45ms"
-    printf "  %s %-15s %s │ %-18s %s │ %s\n" \
+    # Render line with proper spacing using tabs
+    # Format: "  ● ServiceName    ✓ up    │ a1b2c3d → b2c3d4e    ✓ synced"
+    printf "  %s %-15s\t%s\t\t│ %-18s\t%s\n" \
         "$status_symbol" \
         "$display_name" \
         "$health_indicator" \
         "$version_info" \
-        "$sync_indicator" \
-        "$time_display"
+        "$sync_indicator"
 }
 
 # Render service category group
@@ -670,6 +670,13 @@ render_service_category() {
     echo ""
     echo -e "${BOLD}$category_title${NC}"
     echo -e "${DIM}$(printf '─%.0s' $(seq 1 ${#category_title}))${NC}"
+    
+    # Add column headers (aligned with data rows that have status symbol)
+    printf "    ${DIM}%-15s\t%-8s\t│ %-18s\t%-10s${NC}\n" \
+        "Service" \
+        "Status" \
+        "Version" \
+        "Sync"
     
     # Get services in category
     local services=$(get_services_in_category "$category")

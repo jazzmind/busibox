@@ -11,6 +11,11 @@
 # Get script directory for sourcing other libraries
 _STATUS_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Set REPO_ROOT if not already set
+if [[ -z "${REPO_ROOT:-}" ]]; then
+    REPO_ROOT="$(cd "${_STATUS_SCRIPT_DIR}/../.." && pwd)"
+fi
+
 # Source dependencies
 if ! type get_service_container_id &>/dev/null; then
     source "${_STATUS_SCRIPT_DIR}/services.sh"
@@ -248,7 +253,7 @@ check_service_health() {
 
 # Get deployed version from container
 # Usage: get_deployed_version "authz" "staging" "proxmox"
-# Returns: git hash or "unknown"
+# Returns: git hash, image tag, or "unknown"
 get_deployed_version() {
     local service=$1
     local env=$2
@@ -256,6 +261,52 @@ get_deployed_version() {
     
     case "$backend" in
         docker)
+            # Handle external services (return both package version and config version)
+            case "$service" in
+                milvus)
+                    local pkg_ver=$(docker inspect local-milvus --format '{{.Config.Image}}' 2>/dev/null | sed 's/.*://' || echo "unknown")
+                    local cfg_ver=$(docker inspect local-milvus --format '{{.Config.Labels.config_version}}' 2>/dev/null || echo "unknown")
+                    [[ "$cfg_ver" == "<no value>" ]] && cfg_ver="unknown"
+                    echo "${pkg_ver}@${cfg_ver}"
+                    return
+                    ;;
+                minio)
+                    local pkg_ver=$(docker inspect local-minio --format '{{.Config.Image}}' 2>/dev/null | sed 's/.*://' || echo "unknown")
+                    local cfg_ver=$(docker inspect local-minio --format '{{.Config.Labels.config_version}}' 2>/dev/null || echo "unknown")
+                    [[ "$cfg_ver" == "<no value>" ]] && cfg_ver="unknown"
+                    echo "${pkg_ver}@${cfg_ver}"
+                    return
+                    ;;
+                litellm)
+                    local pkg_ver=$(docker inspect local-litellm --format '{{.Config.Image}}' 2>/dev/null | sed 's/.*://' || echo "unknown")
+                    local cfg_ver=$(docker inspect local-litellm --format '{{.Config.Labels.config_version}}' 2>/dev/null || echo "unknown")
+                    [[ "$cfg_ver" == "<no value>" ]] && cfg_ver="unknown"
+                    echo "${pkg_ver}@${cfg_ver}"
+                    return
+                    ;;
+                postgres)
+                    local pkg_ver=$(docker inspect local-postgres --format '{{.Config.Image}}' 2>/dev/null | sed 's/.*://' || echo "unknown")
+                    local cfg_ver=$(docker inspect local-postgres --format '{{.Config.Labels.config_version}}' 2>/dev/null || echo "unknown")
+                    [[ "$cfg_ver" == "<no value>" ]] && cfg_ver="unknown"
+                    echo "${pkg_ver}@${cfg_ver}"
+                    return
+                    ;;
+                redis)
+                    local pkg_ver=$(docker inspect local-redis --format '{{.Config.Image}}' 2>/dev/null | sed 's/.*://' || echo "unknown")
+                    local cfg_ver=$(docker inspect local-redis --format '{{.Config.Labels.config_version}}' 2>/dev/null || echo "unknown")
+                    [[ "$cfg_ver" == "<no value>" ]] && cfg_ver="unknown"
+                    echo "${pkg_ver}@${cfg_ver}"
+                    return
+                    ;;
+                nginx)
+                    local pkg_ver=$(docker inspect local-nginx --format '{{.Config.Image}}' 2>/dev/null | sed 's/.*://' || echo "unknown")
+                    local cfg_ver=$(docker inspect local-nginx --format '{{.Config.Labels.config_version}}' 2>/dev/null || echo "unknown")
+                    [[ "$cfg_ver" == "<no value>" ]] && cfg_ver="unknown"
+                    echo "${pkg_ver}@${cfg_ver}"
+                    return
+                    ;;
+            esac
+            
             # Handle host-based services (not in Docker)
             case "$service" in
                 ai-portal)
@@ -353,6 +404,46 @@ get_deployed_version() {
 get_current_version() {
     local service=$1
     
+    # For external services, get expected version from docker-compose.yml (package@config)
+    case "$service" in
+        milvus)
+            local pkg_ver=$(grep -A 1 "milvus:" "${REPO_ROOT}/docker-compose.local.yml" | grep "image:" | sed 's/.*milvus://' || echo "unknown")
+            local cfg_ver=$(cd "${REPO_ROOT}" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+            echo "${pkg_ver}@${cfg_ver}"
+            return
+            ;;
+        minio)
+            local pkg_ver=$(grep "image: minio/minio:latest" "${REPO_ROOT}/docker-compose.local.yml" | head -1 | sed 's/.*://' || echo "unknown")
+            local cfg_ver=$(cd "${REPO_ROOT}" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+            echo "${pkg_ver}@${cfg_ver}"
+            return
+            ;;
+        litellm)
+            local pkg_ver=$(grep "image: ghcr.io/berriai/litellm:" "${REPO_ROOT}/docker-compose.local.yml" | sed 's/.*://' || echo "unknown")
+            local cfg_ver=$(cd "${REPO_ROOT}" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+            echo "${pkg_ver}@${cfg_ver}"
+            return
+            ;;
+        postgres)
+            local pkg_ver=$(grep "image: postgres:" "${REPO_ROOT}/docker-compose.local.yml" | head -1 | sed 's/.*://' || echo "unknown")
+            local cfg_ver=$(cd "${REPO_ROOT}" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+            echo "${pkg_ver}@${cfg_ver}"
+            return
+            ;;
+        redis)
+            local pkg_ver=$(grep "image: redis:" "${REPO_ROOT}/docker-compose.local.yml" | sed 's/.*://' || echo "unknown")
+            local cfg_ver=$(cd "${REPO_ROOT}" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+            echo "${pkg_ver}@${cfg_ver}"
+            return
+            ;;
+        nginx)
+            local pkg_ver=$(grep "image: nginx:" "${REPO_ROOT}/docker-compose.local.yml" | head -1 | sed 's/.*://' || echo "unknown")
+            local cfg_ver=$(cd "${REPO_ROOT}" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+            echo "${pkg_ver}@${cfg_ver}"
+            return
+            ;;
+    esac
+    
     # Get repo and path
     local repo=$(get_service_repo "$service")
     local path=$(get_service_path "$service")
@@ -384,7 +475,7 @@ get_current_version() {
 }
 
 # Compare deployed vs current version
-# Usage: compare_versions "a1b2c3d" "a1b2c3d"
+# Usage: compare_versions "a1b2c3d" "a1b2c3d" OR "v2.6.5@a1b2c3d" "v2.6.5@b2c3d4e"
 # Returns: "synced", "behind", "local", or "unknown"
 compare_versions() {
     local deployed=$1
@@ -398,7 +489,22 @@ compare_versions() {
     elif [[ "$deployed" == "$current" ]]; then
         echo "synced"
     else
-        echo "behind"
+        # For external services with package@config format, check if either part differs
+        if [[ "$deployed" == *"@"* && "$current" == *"@"* ]]; then
+            local dep_pkg="${deployed%%@*}"
+            local dep_cfg="${deployed##*@}"
+            local cur_pkg="${current%%@*}"
+            local cur_cfg="${current##*@}"
+            
+            # If either package or config is behind, show as behind
+            if [[ "$dep_pkg" != "$cur_pkg" || "$dep_cfg" != "$cur_cfg" ]]; then
+                echo "behind"
+            else
+                echo "synced"
+            fi
+        else
+            echo "behind"
+        fi
     fi
 }
 

@@ -65,6 +65,8 @@ services:
     image: postgres:16-alpine
     container_name: local-postgres
     hostname: postgres
+    labels:
+      - "config_version=${GIT_COMMIT:-unknown}"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
@@ -87,6 +89,8 @@ services:
     image: redis:7-alpine
     container_name: local-redis
     hostname: redis
+    labels:
+      - "config_version=${GIT_COMMIT:-unknown}"
     ports:
       - "6379:6379"
     volumes:
@@ -104,6 +108,8 @@ services:
     image: minio/minio:latest
     container_name: local-minio
     hostname: minio
+    labels:
+      - "config_version=${GIT_COMMIT:-unknown}"
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
@@ -184,6 +190,8 @@ services:
     image: milvusdb/milvus:v2.6.5
     container_name: local-milvus
     hostname: milvus
+    labels:
+      - "config_version=${GIT_COMMIT:-unknown}"
     command: ["milvus", "run", "standalone"]
     security_opt:
       - seccomp:unconfined
@@ -264,6 +272,8 @@ services:
     image: ghcr.io/berriai/litellm:main-latest
     container_name: local-litellm
     hostname: litellm
+    labels:
+      - "config_version=${GIT_COMMIT:-unknown}"
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-local-dev-key}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
@@ -812,6 +822,8 @@ services:
     image: nginx:alpine
     container_name: local-nginx
     hostname: nginx
+    labels:
+      - "config_version=${GIT_COMMIT:-unknown}"
     ports:
       - "80:80"
       - "443:443"
