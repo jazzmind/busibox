@@ -1307,25 +1307,33 @@ main() {
     info "Deploy services using Ansible"
     echo ""
     
-    # Use environment from state (set by main menu)
-    ENV=$(get_environment)
-    local BACKEND=$(get_backend "$ENV")
-    
-    if [[ -z "$ENV" ]]; then
-        # Fallback: select environment if not set in state
-        ENV=$(select_environment)
+    # Use environment from state (set by main menu) or from BUSIBOX_ENV variable
+    if [[ -n "${BUSIBOX_ENV:-}" ]]; then
+        # Environment passed from parent menu - use directly without prompting
+        ENV="$BUSIBOX_ENV"
+        local BACKEND=$(get_backend "$ENV")
+        info "Using environment: $ENV ($BACKEND)"
     else
-        info "Using environment from state: $ENV ($BACKEND)"
-        echo ""
-        echo -e "  ${DIM}Press Enter to continue, or 'c' to change${NC}"
-        local change_choice=""
-        read -t 3 -n 1 change_choice 2>/dev/null || true
-        if [[ "${change_choice:-}" == "c" ]]; then
+        # Use environment from state (set by main menu)
+        ENV=$(get_environment)
+        local BACKEND=$(get_backend "$ENV")
+        
+        if [[ -z "$ENV" ]]; then
+            # Fallback: select environment if not set in state
             ENV=$(select_environment)
+        else
+            info "Using environment from state: $ENV ($BACKEND)"
+            echo ""
+            echo -e "  ${DIM}Press Enter to continue, or 'c' to change${NC}"
+            local change_choice=""
+            read -t 3 -n 1 change_choice 2>/dev/null || true
+            if [[ "${change_choice:-}" == "c" ]]; then
+                ENV=$(select_environment)
+            fi
         fi
+        
+        success "Selected environment: $ENV"
     fi
-    
-    success "Selected environment: $ENV"
     
     # Handle Docker environment separately
     if [[ "$ENV" == "docker" ]]; then

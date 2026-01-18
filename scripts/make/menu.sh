@@ -776,7 +776,8 @@ handle_deploy() {
             
         proxmox)
             # Use existing deploy script for Ansible deployments
-            if bash "${SCRIPT_DIR}/deploy.sh"; then
+            # Pass environment directly to avoid re-prompting
+            if BUSIBOX_ENV="$env" bash "${SCRIPT_DIR}/deploy.sh"; then
                 # After successful deployment, set status to deployed
                 set_install_status "deployed"
                 echo ""
@@ -1513,6 +1514,7 @@ run_docker_test() {
 handle_test() {
     # Main test menu loop
     while true; do
+        clear
         local choice
         choice=$(show_test_main_menu)
         
