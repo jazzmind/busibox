@@ -295,7 +295,32 @@
   delegate_to: "{{ app_to_deploy.container_ip }}"
   environment: "{{ app_to_deploy.env | default({}) | combine({'NODE_ENV': 'production'}) }}"
   register: build_result
-  failed_when: build_result.rc != 0
+  failed_when: false  # Don't fail immediately, handle error below
+
+- name: Strip ANSI codes and display build errors
+  set_fact:
+    build_stderr_clean: "{{ build_result.stderr | regex_replace('\\x1b\\[[0-9;]*[mGKHF]', '') }}"
+    build_stdout_clean: "{{ build_result.stdout | regex_replace('\\x1b\\[[0-9;]*[mGKHF]', '') }}"
+  when: build_result.rc != 0
+
+- name: Display clean build error
+  debug:
+    msg: |
+      ==================== BUILD FAILED ====================
+      Exit Code: {{ build_result.rc }}
+      
+      STDOUT:
+      {{ build_stdout_clean }}
+      
+      STDERR:
+      {{ build_stderr_clean }}
+      ======================================================
+  when: build_result.rc != 0
+
+- name: Fail if build failed
+  fail:
+    msg: "Build failed with exit code {{ build_result.rc }}. See error output above."
+  when: build_result.rc != 0
 
 - name: Write deployment version info
   shell: |
