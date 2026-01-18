@@ -779,7 +779,14 @@ handle_deploy() {
             if bash "${SCRIPT_DIR}/deploy.sh"; then
                 # After successful deployment, set status to deployed
                 set_install_status "deployed"
+                echo ""
+                success "Deployment completed successfully"
+            else
+                echo ""
+                error "Deployment failed. Check errors above for details."
             fi
+            echo ""
+            pause
             ;;
     esac
 }
