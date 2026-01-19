@@ -68,8 +68,12 @@ initialize_environment() {
     if [[ -n "$ENV_ARG" ]]; then
         # Normalize environment name
         case "$ENV_ARG" in
-            local|docker)
-                env="local"
+            dev|development|local|docker)
+                env="development"
+                backend="docker"
+                ;;
+            demo)
+                env="demo"
                 backend="docker"
                 ;;
             staging)
@@ -103,7 +107,7 @@ initialize_environment() {
                 ;;
             *)
                 error "Unknown environment: $ENV_ARG"
-                error "Valid options: local, staging, production"
+                error "Valid options: development, demo, staging, production"
                 exit 1
                 ;;
         esac
@@ -353,19 +357,21 @@ handle_start_docker() {
 
 # Handle starting Busibox containers
 handle_start_busibox() {
+    local env backend
+    env=$(get_environment)
+    backend=$(get_backend "$env")
+    
     echo ""
-    info "Starting Busibox services..."
+    info "Starting Busibox services (ENV=$env)..."
     echo ""
     
     # Use docker-start (--no-build) to start existing containers quickly
     # If images don't exist, use docker-up which will build them
-    save_last_command "make docker-start"
-    (cd "$REPO_ROOT" && make docker-start)
+    # Pass ENV to select the correct compose overlay
+    save_last_command "make docker-start ENV=$env"
+    (cd "$REPO_ROOT" && make docker-start ENV="$env")
     
     # Re-run health check to update status
-    local env backend
-    env=$(get_environment)
-    backend=$(get_backend "$env")
     run_quick_health_check "$env" "$backend"
     
     if [[ "$HEALTH_STATUS" == "deployed" || "$HEALTH_STATUS" == "healthy" ]]; then
@@ -767,7 +773,7 @@ handle_deploy() {
         docker)
             while true; do
                 clear
-                box "Build/Deploy" 70
+                box "Build/Deploy ($env)" 70
                 echo ""
                 
                 menu "Docker Build & Deploy Options" \
@@ -784,9 +790,9 @@ handle_deploy() {
                 case "${choice:-}" in
                     1)
                         echo ""
-                        info "Starting all Docker services..."
-                        save_last_command "make docker-up"
-                        (cd "$REPO_ROOT" && make docker-up)
+                        info "Starting all Docker services (ENV=$env)..."
+                        save_last_command "make docker-up ENV=$env"
+                        (cd "$REPO_ROOT" && make docker-up ENV="$env")
                         set_install_status "deployed"
                         pause
                         ;;
@@ -799,17 +805,17 @@ handle_deploy() {
                         ;;
                     3)
                         echo ""
-                        info "Restarting all Docker services..."
-                        save_last_command "make docker-restart"
-                        (cd "$REPO_ROOT" && make docker-down && make docker-up)
+                        info "Restarting all Docker services (ENV=$env)..."
+                        save_last_command "make docker-restart ENV=$env"
+                        (cd "$REPO_ROOT" && make docker-down && make docker-up ENV="$env")
                         set_install_status "deployed"
                         pause
                         ;;
                     4)
                         echo ""
                         if confirm "Build all Docker images (this may take a while)?"; then
-                            save_last_command "make docker-build"
-                            (cd "$REPO_ROOT" && make docker-build)
+                            save_last_command "make docker-build ENV=$env"
+                            (cd "$REPO_ROOT" && make docker-build ENV="$env")
                             # Don't set status - let health check determine it
                             # Refresh status cache after build
                             refresh_all_services_async "$env" "$backend" &
@@ -846,6 +852,9 @@ handle_deploy() {
 
 # Select a specific service to build
 deploy_select_service() {
+    local current_env
+    current_env=$(get_environment)
+    
     echo ""
     menu "Select Service to Build" \
         "authz-api" \
@@ -856,10 +865,12 @@ deploy_select_service() {
         "docs-api" \
         "litellm" \
         "nginx" \
+        "ai-portal" \
+        "agent-manager" \
         "Back"
     
     local choice=""
-    read -p "$(echo -e "${BOLD}Select service [1-9]:${NC} ")" choice
+    read -p "$(echo -e "${BOLD}Select service [1-11]:${NC} ")" choice
     
     local svc=""
     case "${choice:-}" in
@@ -871,14 +882,16 @@ deploy_select_service() {
         6) svc="docs-api" ;;
         7) svc="litellm" ;;
         8) svc="nginx" ;;
-        9|b|B|"") return 0 ;;
+        9) svc="ai-portal" ;;
+        10) svc="agent-manager" ;;
+        11|b|B|"") return 0 ;;
     esac
     
     if [[ -n "$svc" ]]; then
         echo ""
-        if confirm "Build $svc?"; then
-            save_last_command "make docker-build SERVICE=$svc"
-            (cd "$REPO_ROOT" && make docker-build SERVICE="$svc")
+        if confirm "Build $svc (ENV=$current_env)?"; then
+            save_last_command "make docker-build SERVICE=$svc ENV=$current_env"
+            (cd "$REPO_ROOT" && make docker-build SERVICE="$svc" ENV="$current_env")
         fi
         pause
     fi
@@ -1163,12 +1176,16 @@ service_action_menu() {
     
     local selected_key="${option_keys[$((${action:-1}-1))]}"
     
+    # Get current environment for make commands
+    local current_env
+    current_env=$(get_environment)
+    
     case "$selected_key" in
         start)
             echo ""
             if [[ -z "$services" ]]; then
-                save_last_command "make docker-up"
-                (cd "$REPO_ROOT" && make docker-up)
+                save_last_command "make docker-up ENV=$current_env"
+                (cd "$REPO_ROOT" && make docker-up ENV="$current_env")
             else
                 (cd "$REPO_ROOT" && docker compose -f docker-compose.local.yml --env-file .env.local up -d $services)
             fi
@@ -1178,8 +1195,8 @@ service_action_menu() {
         restart)
             echo ""
             if [[ -z "$services" ]]; then
-                save_last_command "make docker-restart"
-                (cd "$REPO_ROOT" && make docker-restart)
+                save_last_command "make docker-restart ENV=$current_env"
+                (cd "$REPO_ROOT" && make docker-restart ENV="$current_env")
             else
                 (cd "$REPO_ROOT" && docker compose -f docker-compose.local.yml --env-file .env.local restart $services)
             fi
@@ -2375,14 +2392,18 @@ show_help() {
     echo ""
     
     echo -e "${BOLD}Environments${NC}"
-    echo "  - Local:      Docker on your machine (development)"
-    echo "  - Staging:    10.96.201.x network (pre-production)"
-    echo "  - Production: 10.96.200.x network (live)"
+    echo "  - Development: Docker dev mode (volume mounts, npm-linked busibox-app)"
+    echo "  - Demo:        Docker prod mode (apps from GitHub, for presentations)"
+    echo "  - Staging:     10.96.201.x network (Docker or Proxmox)"
+    echo "  - Production:  10.96.200.x network (Docker or Proxmox)"
     echo ""
     
     echo -e "${BOLD}Backends${NC}"
     echo "  - Docker:  Runs services in Docker containers"
     echo "  - Proxmox: Runs services in LXC containers with GPU support"
+    echo ""
+    echo "  Development and Demo are always Docker."
+    echo "  Staging and Production can use either Docker or Proxmox."
     echo ""
     
     separator 70
@@ -2391,15 +2412,17 @@ show_help() {
     echo ""
     echo "  ${CYAN}Build:${NC}"
     echo "    make docker-build              # Build all images"
-    echo "    make docker-build SERVICE=X   # Build specific service"
+    echo "    make docker-build SERVICE=X    # Build specific service"
+    echo "    make docker-build ENV=demo     # Build with prod overlay"
     echo ""
     echo "  ${CYAN}Services:${NC}"
-    echo "    make docker-up                 # Start all services"
+    echo "    make docker-up                 # Start all (development mode)"
+    echo "    make docker-up ENV=demo        # Start all (demo/prod mode)"
     echo "    make docker-down               # Stop all services"
     echo "    make docker-restart            # Restart all services"
     echo "    make docker-ps                 # Show service status"
     echo "    make docker-logs               # View all logs"
-    echo "    make docker-logs SERVICE=X    # View specific logs"
+    echo "    make docker-logs SERVICE=X     # View specific logs"
     echo ""
     echo "  ${CYAN}Testing:${NC}"
     echo "    make test-docker SERVICE=all   # Run all tests"

@@ -1,14 +1,19 @@
 """
 Admin endpoints for RBAC management.
 
-Protected by:
-- OAuth client credentials (client_id/client_secret in body), OR
-- Shared admin token (AUTHZ_ADMIN_TOKEN in Authorization: Bearer)
+Protected by (in order of precedence):
+- Access token (JWT) with authz.roles.* scopes (audience: authz-api)
+- OAuth client credentials (service account) with allowed_scopes
+- Admin token (deprecated)
 
 These endpoints allow ai-portal (or other admin tools) to manage:
 - Roles (CRUD)
 - User-role bindings
 - External identity mappings (future)
+
+Required scopes:
+- authz.roles.read: List, get roles
+- authz.roles.write: Create, update, delete roles
 
 Test Mode:
 - Supports X-Test-Mode: true header to route to test database
@@ -24,7 +29,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from config import Config
-from oauth.client_auth import verify_client_secret
+from oauth.jwt_auth import require_auth, AuthContext
 
 router = APIRouter()
 config = Config()
@@ -118,38 +123,24 @@ class UserRoleBindingResponse(BaseModel):
 # ============================================================================
 
 
-async def _require_admin_auth(request: Request) -> None:
+async def _require_admin_auth(request: Request, scopes: Optional[List[str]] = None) -> AuthContext:
     """
-    Require either OAuth client credentials or admin token.
-    Raises HTTPException if unauthorized.
+    Require authentication for role management endpoints.
+    
+    Supports:
+    - Access token (JWT) with audience=authz-api and required scopes
+    - OAuth client credentials (service account) with allowed_scopes
+    - Admin token (deprecated)
+    
+    Args:
+        request: FastAPI request
+        scopes: Required scopes (at least one must be present)
+        
+    Returns:
+        AuthContext with actor info and available scopes
     """
-    # Try admin token first (simplest for manual operations)
-    auth_header = request.headers.get("authorization", "")
-    if auth_header.lower().startswith("bearer "):
-        token = auth_header[7:]
-        if config.admin_token and token == config.admin_token:
-            return
-
-    # Try OAuth client credentials in body
-    try:
-        body = await request.json()
-        client_id = body.get("client_id")
-        client_secret = body.get("client_secret")
-
-        if client_id and client_secret:
-            db = _get_pg(request)
-            await db.connect()
-            client = await db.get_oauth_client(client_id)
-            if client and client.get("is_active"):
-                if verify_client_secret(client_secret, client["client_secret_hash"]):
-                    return
-    except Exception:
-        pass
-
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Unauthorized: valid admin token or OAuth client credentials required",
-    )
+    db = _get_pg(request)
+    return await require_auth(request, db, scopes)
 
 
 # ============================================================================
@@ -169,7 +160,7 @@ async def create_role(request: Request):
     - description: string (optional)
     - scopes: array of OAuth2 scopes (optional)
     """
-    await _require_admin_auth(request)
+    await _require_admin_auth(request, scopes=["authz.roles.write"])
 
     body = await request.json()
     try:
@@ -198,7 +189,7 @@ async def list_roles(request: Request):
 
     Requires admin authentication.
     """
-    await _require_admin_auth(request)
+    await _require_admin_auth(request, scopes=["authz.roles.read"])
 
     db = _get_pg(request)
     await db.connect()
@@ -224,7 +215,7 @@ async def get_role(request: Request, role_id: str):
 
     Requires admin authentication.
     """
-    await _require_admin_auth(request)
+    await _require_admin_auth(request, scopes=["authz.roles.read"])
 
     try:
         UUID(role_id)
@@ -260,7 +251,7 @@ async def update_role(request: Request, role_id: str):
     - description: string (optional)
     - scopes: array of OAuth2 scopes (optional)
     """
-    await _require_admin_auth(request)
+    await _require_admin_auth(request, scopes=["authz.roles.write"])
 
     try:
         UUID(role_id)
@@ -302,7 +293,7 @@ async def delete_role(request: Request, role_id: str):
 
     Requires admin authentication.
     """
-    await _require_admin_auth(request)
+    await _require_admin_auth(request, scopes=["authz.roles.write"])
 
     try:
         UUID(role_id)
@@ -335,7 +326,7 @@ async def add_user_role(request: Request):
     - user_id: string (UUID)
     - role_id: string (UUID)
     """
-    await _require_admin_auth(request)
+    await _require_admin_auth(request, scopes=["authz.users.write"])
 
     body = await request.json()
     try:
@@ -371,7 +362,7 @@ async def remove_user_role(request: Request):
     - user_id: string (UUID)
     - role_id: string (UUID)
     """
-    await _require_admin_auth(request)
+    await _require_admin_auth(request, scopes=["authz.users.write"])
 
     body = await request.json()
     try:
@@ -411,7 +402,7 @@ async def get_user(request: Request, user_id: str):
 
     Requires admin authentication.
     """
-    await _require_admin_auth(request)
+    await _require_admin_auth(request, scopes=["authz.users.read"])
 
     try:
         UUID(user_id)
@@ -454,7 +445,7 @@ async def get_user_roles(request: Request, user_id: str):
 
     Requires admin authentication.
     """
-    await _require_admin_auth(request)
+    await _require_admin_auth(request, scopes=["authz.users.read"])
 
     try:
         UUID(user_id)
@@ -564,7 +555,7 @@ async def create_oauth_client(
 @router.get("/admin/oauth-clients")
 async def list_oauth_clients(request: Request) -> List[OAuthClientResponse]:
     """List all OAuth clients."""
-    await _require_admin_auth(request)
+    await _require_admin_auth(request, scopes=["authz.roles.read"])
 
     db = _get_pg(request)
     await db.connect()

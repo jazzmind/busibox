@@ -1,14 +1,20 @@
 """
 Admin User Management endpoints.
 
-Protected by:
-- OAuth client credentials (client_id/client_secret in body), OR
-- Shared admin token (AUTHZ_ADMIN_TOKEN in Authorization: Bearer)
+Protected by (in order of precedence):
+- Access token (JWT) with authz.users.* scopes (audience: authz-api)
+- OAuth client credentials (service account) with allowed_scopes
+- Admin token (deprecated)
 
 These endpoints allow ai-portal (or other admin tools) to manage users:
 - Create, list, get, update, delete users
 - Activate, deactivate, reactivate users
 - Manage user roles
+
+Required scopes:
+- authz.users.read: List, get users
+- authz.users.write: Create, update, activate, deactivate users
+- authz.users.delete: Delete users
 
 Test Mode:
 - Supports X-Test-Mode: true header to route to test database
@@ -24,7 +30,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field, EmailStr
 
 from config import Config
-from oauth.client_auth import verify_client_secret
+from oauth.jwt_auth import require_auth, AuthContext
 
 router = APIRouter()
 config = Config()
@@ -119,38 +125,24 @@ class UserRoleAssignment(BaseModel):
 # ============================================================================
 
 
-async def _require_admin_auth(request: Request) -> None:
+async def _require_admin_auth(request: Request, scopes: Optional[List[str]] = None) -> AuthContext:
     """
-    Require either OAuth client credentials or admin token.
-    Raises HTTPException if unauthorized.
+    Require authentication for user management endpoints.
+    
+    Supports:
+    - Access token (JWT) with audience=authz-api and required scopes
+    - OAuth client credentials (service account) with allowed_scopes
+    - Admin token (deprecated)
+    
+    Args:
+        request: FastAPI request
+        scopes: Required scopes (at least one must be present)
+        
+    Returns:
+        AuthContext with actor info and available scopes
     """
-    # Try admin token first (simplest for manual operations)
-    auth_header = request.headers.get("authorization", "")
-    if auth_header.lower().startswith("bearer "):
-        token = auth_header[7:]
-        if config.admin_token and token == config.admin_token:
-            return
-
-    # Try OAuth client credentials in body
-    try:
-        body = await request.json()
-        client_id = body.get("client_id")
-        client_secret = body.get("client_secret")
-
-        if client_id and client_secret:
-            db = _get_pg(request)
-            await db.connect()
-            client = await db.get_oauth_client(client_id)
-            if client and client.get("is_active"):
-                if verify_client_secret(client_secret, client["client_secret_hash"]):
-                    return
-    except Exception:
-        pass
-
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Unauthorized: valid admin token or OAuth client credentials required",
-    )
+    db = _get_pg(request)
+    return await require_auth(request, db, scopes)
 
 
 def _format_user(user: dict) -> dict:
@@ -203,7 +195,7 @@ async def create_user(request: Request):
     Headers:
     - X-Test-Mode: true (optional) - route to test database
     """
-    await _require_admin_auth(request)
+    await _require_admin_auth(request, scopes=["authz.users.write"])
 
     body = await request.json()
     try:
@@ -276,7 +268,7 @@ async def list_users(request: Request):
     Headers:
     - X-Test-Mode: true (optional) - route to test database
     """
-    await _require_admin_auth(request)
+    await _require_admin_auth(request, scopes=["authz.users.read"])
 
     params = request.query_params
     page = int(params.get("page", "1"))
@@ -313,7 +305,7 @@ async def get_user_by_email(request: Request, email: str):
     Requires admin authentication.
     Returns 404 if user not found.
     """
-    await _require_admin_auth(request)
+    await _require_admin_auth(request, scopes=["authz.users.read"])
 
     db = _get_pg(request)
     await db.connect()
@@ -332,7 +324,7 @@ async def get_user(request: Request, user_id: str):
 
     Requires admin authentication.
     """
-    await _require_admin_auth(request)
+    await _require_admin_auth(request, scopes=["authz.users.read"])
 
     try:
         UUID(user_id)
@@ -363,7 +355,7 @@ async def update_user(request: Request, user_id: str):
     - last_login_at: ISO timestamp (optional)
     - pending_expires_at: ISO timestamp (optional)
     """
-    await _require_admin_auth(request)
+    await _require_admin_auth(request, scopes=["authz.users.write"])
 
     try:
         UUID(user_id)
@@ -416,7 +408,7 @@ async def delete_user(request: Request, user_id: str):
 
     Requires admin authentication.
     """
-    await _require_admin_auth(request)
+    await _require_admin_auth(request, scopes=["authz.users.delete"])
 
     try:
         UUID(user_id)
@@ -445,7 +437,7 @@ async def activate_user(request: Request, user_id: str):
 
     Requires admin authentication.
     """
-    await _require_admin_auth(request)
+    await _require_admin_auth(request, scopes=["authz.users.write"])
 
     try:
         UUID(user_id)
@@ -477,7 +469,7 @@ async def deactivate_user(request: Request, user_id: str):
 
     Requires admin authentication.
     """
-    await _require_admin_auth(request)
+    await _require_admin_auth(request, scopes=["authz.users.write"])
 
     try:
         UUID(user_id)
@@ -510,7 +502,7 @@ async def reactivate_user(request: Request, user_id: str):
 
     Requires admin authentication.
     """
-    await _require_admin_auth(request)
+    await _require_admin_auth(request, scopes=["authz.users.write"])
 
     try:
         UUID(user_id)
@@ -545,7 +537,7 @@ async def add_user_role(request: Request, user_id: str, role_id: str):
 
     Requires admin authentication.
     """
-    await _require_admin_auth(request)
+    await _require_admin_auth(request, scopes=["authz.users.write"])
 
     try:
         UUID(user_id)
@@ -583,7 +575,7 @@ async def remove_user_role(request: Request, user_id: str, role_id: str):
 
     Requires admin authentication.
     """
-    await _require_admin_auth(request)
+    await _require_admin_auth(request, scopes=["authz.users.write"])
 
     try:
         UUID(user_id)
@@ -613,7 +605,7 @@ async def list_email_domains(request: Request):
 
     Requires admin authentication.
     """
-    await _require_admin_auth(request)
+    await _require_admin_auth(request, scopes=["authz.users.read"])
 
     db = _get_pg(request)
     await db.connect()
@@ -642,7 +634,7 @@ async def add_email_domain(request: Request):
     - domain: string (required)
     - is_allowed: boolean (required)
     """
-    await _require_admin_auth(request)
+    await _require_admin_auth(request, scopes=["authz.users.write"])
 
     body = await request.json()
     domain = body.get("domain")
@@ -673,7 +665,7 @@ async def remove_email_domain(request: Request, domain: str):
 
     Requires admin authentication.
     """
-    await _require_admin_auth(request)
+    await _require_admin_auth(request, scopes=["authz.users.write"])
 
     db = _get_pg(request)
     await db.connect()

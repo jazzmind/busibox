@@ -29,14 +29,21 @@ BUSIBOX_STATE_FILE="${BUSIBOX_STATE_FILE:-$(_get_repo_root "$(pwd)")/.busibox-st
 # ============================================================================
 # The state file uses simple KEY=VALUE format:
 #
-# ENVIRONMENT=local|staging|production
-# BACKEND_LOCAL=docker
+# ENVIRONMENT=development|demo|staging|production
+# BACKEND_DEVELOPMENT=docker (always)
+# BACKEND_DEMO=docker (always)
 # BACKEND_STAGING=docker|proxmox
 # BACKEND_PRODUCTION=docker|proxmox
 # INSTALL_STATUS=not_installed|installed|configured|deployed|healthy
 # LAST_COMMAND="make test-docker SERVICE=agent"
 # LAST_COMMAND_TIME="2026-01-16T10:30:00"
 # SERVICES_DEPLOYED="authz,postgres,milvus,agent"
+#
+# Environment behavior:
+#   development - Docker with dev overlay (volume mounts, npm link busibox-app)
+#   demo        - Docker with prod overlay (for demos, uses GitHub/npm packages)
+#   staging     - Docker or Proxmox (10.96.201.x network)
+#   production  - Docker or Proxmox (10.96.200.x network)
 # ============================================================================
 
 # Initialize state file if it doesn't exist
@@ -46,11 +53,13 @@ init_state() {
 # Busibox State File
 # This file is auto-generated. Do not edit manually unless you know what you're doing.
 
-# Current environment: local, staging, production
+# Current environment: development, demo, staging, production
 ENVIRONMENT=
 
 # Backend type per environment: docker or proxmox
-BACKEND_LOCAL=docker
+# development and demo are always docker
+BACKEND_DEVELOPMENT=docker
+BACKEND_DEMO=docker
 BACKEND_STAGING=
 BACKEND_PRODUCTION=
 

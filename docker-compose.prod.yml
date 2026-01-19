@@ -1,0 +1,131 @@
+# =============================================================================
+# Busibox Production Mode - Next.js Applications
+# =============================================================================
+#
+# Production overlay for Next.js apps with:
+#   - Apps cloned from GitHub at build time
+#   - Published @jazzmind/busibox-app from npm registry
+#   - Production builds with turbopack
+#
+# Usage:
+#   docker compose -f docker-compose.local.yml -f docker-compose.prod.yml up
+#   Or: make docker-up-prod
+#
+# Configuration:
+#   Set these in .env.local to control which version to build:
+#     AI_PORTAL_GITHUB_REF=main          # Branch name
+#     AI_PORTAL_GITHUB_REF=v1.2.3        # Release tag
+#     AGENT_MANAGER_GITHUB_REF=main      # Branch name
+#
+# =============================================================================
+
+services:
+  # AI Portal - Main Frontend (Production Mode)
+  ai-portal:
+    build:
+      context: .
+      dockerfile: provision/docker/ai-portal.Dockerfile.prod
+      args:
+        GITHUB_AUTH_TOKEN: ${GITHUB_AUTH_TOKEN:-}
+        GITHUB_REF: ${AI_PORTAL_GITHUB_REF:-main}
+    container_name: local-ai-portal
+    hostname: ai-portal
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      # Database
+      DATABASE_URL: postgresql://${POSTGRES_USER:-busibox_user}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/ai_portal
+      # Auth - use https://localhost for SSL
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-dev-secret-change-in-production}
+      BETTER_AUTH_URL: https://localhost/portal
+      # Email (optional - uses console logging in dev)
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      EMAIL_FROM: ${EMAIL_FROM:-noreply@localhost}
+      # Admin
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@localhost}
+      ALLOWED_EMAIL_DOMAINS: ${ALLOWED_EMAIL_DOMAINS:-*}
+      # AuthZ - use internal container URLs
+      AUTHZ_BASE_URL: http://authz-api:8010
+      AUTHZ_ADMIN_TOKEN: ${AUTHZ_ADMIN_TOKEN:-local-admin-token}
+      # LiteLLM
+      LITELLM_BASE_URL: http://litellm:4000/v1
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-local-dev-key}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # SSO
+      SSO_JWT_SECRET: ${SSO_JWT_SECRET:-dev-sso-secret}
+      # Service URLs (for SSO redirect via nginx proxy)
+      NEXT_PUBLIC_AGENT_MANAGER_URL: https://localhost/agents
+      NEXT_PUBLIC_APP_URL: https://localhost/portal
+      # Base path for nginx subpath routing
+      NEXT_PUBLIC_BASE_PATH: /portal
+      # Backend service URLs (for server-side API calls)
+      INGEST_API_HOST: ingest-api
+      INGEST_API_PORT: "8002"
+      SEARCH_API_HOST: search-api
+      SEARCH_API_PORT: "8003"
+      AGENT_API_HOST: agent-api
+      AGENT_API_PORT: "8000"
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      authz-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    networks:
+      - busibox-net
+
+  # Agent Manager - Agent Management UI (Production Mode)
+  agent-manager:
+    build:
+      context: .
+      dockerfile: provision/docker/agent-manager.Dockerfile.prod
+      args:
+        GITHUB_AUTH_TOKEN: ${GITHUB_AUTH_TOKEN:-}
+        GITHUB_REF: ${AGENT_MANAGER_GITHUB_REF:-main}
+    container_name: local-agent-manager
+    hostname: agent-manager
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      # API URLs - use nginx proxy paths for CORS compliance
+      NEXT_PUBLIC_AGENT_API_URL: https://localhost/api/agent
+      NEXT_PUBLIC_INGEST_API_URL: https://localhost/api/ingest
+      NEXT_PUBLIC_SEARCH_API_URL: https://localhost/api/search
+      # AI Portal (SSO) via nginx
+      NEXT_PUBLIC_AI_PORTAL_URL: https://localhost/portal
+      # AuthZ - internal container URL
+      AUTHZ_BASE_URL: http://authz-api:8010
+      # Base path for nginx subpath routing
+      NEXT_PUBLIC_BASE_PATH: /agents
+      NEXT_PUBLIC_APP_URL: https://localhost/agents
+      # Backend service URLs (for server-side API calls)
+      AGENT_API_HOST: agent-api
+      AGENT_API_PORT: "8000"
+    ports:
+      - "3001:3001"
+    depends_on:
+      authz-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    networks:
+      - busibox-net
+
+# Use the same network as the base compose
+networks:
+  busibox-net:
+    external: true
+    name: busibox-local

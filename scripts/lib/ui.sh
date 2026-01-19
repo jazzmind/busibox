@@ -125,26 +125,34 @@ confirm() {
 
 # Environment selection
 # Usage: ENV=$(select_environment)
-# Returns: "local", "staging", or "production"
+# Returns: "development", "demo", "staging", or "production"
+#
+# Environments:
+#   development - Docker with dev mode (volume mounts, npm link busibox-app)
+#   demo        - Docker with prod mode (for demos/presentations)
+#   staging     - Docker or Proxmox (10.96.201.x network)
+#   production  - Docker or Proxmox (10.96.200.x network)
 select_environment() {
     {
         echo ""
         box "Environment Selection"
         echo ""
-        echo -e "  ${CYAN}1)${NC} Local              ${DIM}(Docker on localhost)${NC}"
-        echo -e "  ${CYAN}2)${NC} Staging            ${DIM}(10.96.201.x network)${NC}"
-        echo -e "  ${CYAN}3)${NC} Production         ${DIM}(10.96.200.x network)${NC}"
+        echo -e "  ${CYAN}1)${NC} Development        ${DIM}(Docker dev mode - volume mounts, hot reload)${NC}"
+        echo -e "  ${CYAN}2)${NC} Demo               ${DIM}(Docker prod mode - for presentations)${NC}"
+        echo -e "  ${CYAN}3)${NC} Staging            ${DIM}(10.96.201.x network - Docker or Proxmox)${NC}"
+        echo -e "  ${CYAN}4)${NC} Production         ${DIM}(10.96.200.x network - Docker or Proxmox)${NC}"
         echo ""
     } >&2
     
     while true; do
-        echo -ne "${BOLD}Select environment [1-3]:${NC} " >&2
+        echo -ne "${BOLD}Select environment [1-4]:${NC} " >&2
         read choice < /dev/tty
         case $choice in
-            1) echo "local"; return 0 ;;
-            2) echo "staging"; return 0 ;;
-            3) echo "production"; return 0 ;;
-            *) error "Invalid selection. Please enter 1, 2, or 3." ;;
+            1) echo "development"; return 0 ;;
+            2) echo "demo"; return 0 ;;
+            3) echo "staging"; return 0 ;;
+            4) echo "production"; return 0 ;;
+            *) error "Invalid selection. Please enter 1, 2, 3, or 4." ;;
         esac
     done
 }
@@ -324,6 +332,12 @@ select_backend() {
 
 # Enhanced environment selection with backend
 # Returns: "env:backend" (e.g., "staging:docker")
+#
+# Environments and their backends:
+#   development - Always Docker (dev overlay with volume mounts)
+#   demo        - Always Docker (prod overlay for demos)
+#   staging     - Docker or Proxmox (asks user)
+#   production  - Docker or Proxmox (asks user)
 select_environment_with_backend() {
     local env backend
     
@@ -331,20 +345,22 @@ select_environment_with_backend() {
         echo ""
         box "Environment Selection"
         echo ""
-        echo -e "  ${CYAN}1)${NC} Local              ${DIM}(Docker on localhost)${NC}"
-        echo -e "  ${CYAN}2)${NC} Staging            ${DIM}(10.96.201.x network)${NC}"
-        echo -e "  ${CYAN}3)${NC} Production         ${DIM}(10.96.200.x network)${NC}"
+        echo -e "  ${CYAN}1)${NC} Development        ${DIM}(Docker dev mode - volume mounts, hot reload)${NC}"
+        echo -e "  ${CYAN}2)${NC} Demo               ${DIM}(Docker prod mode - for presentations)${NC}"
+        echo -e "  ${CYAN}3)${NC} Staging            ${DIM}(10.96.201.x network - Docker or Proxmox)${NC}"
+        echo -e "  ${CYAN}4)${NC} Production         ${DIM}(10.96.200.x network - Docker or Proxmox)${NC}"
         echo ""
     } >&2
     
     while true; do
-        echo -ne "${BOLD}Select environment [1-3]:${NC} " >&2
+        echo -ne "${BOLD}Select environment [1-4]:${NC} " >&2
         read choice < /dev/tty
         case $choice in
-            1) echo "local:docker"; return 0 ;;
-            2) env="staging"; break ;;
-            3) env="production"; break ;;
-            *) error "Invalid selection. Please enter 1, 2, or 3." >&2 ;;
+            1) echo "development:docker"; return 0 ;;
+            2) echo "demo:docker"; return 0 ;;
+            3) env="staging"; break ;;
+            4) env="production"; break ;;
+            *) error "Invalid selection. Please enter 1, 2, 3, or 4." >&2 ;;
         esac
     done
     
@@ -355,6 +371,9 @@ select_environment_with_backend() {
 # Enhanced environment selection with auto-detection
 # Tries to auto-detect backend before asking user
 # Returns: "env:backend" (e.g., "staging:proxmox")
+#
+# development and demo are always Docker (no backend selection needed)
+# staging and production will try to auto-detect, then ask if needed
 select_environment_with_backend_autodetect() {
     local env backend detected
     
@@ -362,20 +381,22 @@ select_environment_with_backend_autodetect() {
         echo ""
         box "Environment Selection"
         echo ""
-        echo -e "  ${CYAN}1)${NC} Local              ${DIM}(Docker on localhost)${NC}"
-        echo -e "  ${CYAN}2)${NC} Staging            ${DIM}(10.96.201.x network)${NC}"
-        echo -e "  ${CYAN}3)${NC} Production         ${DIM}(10.96.200.x network)${NC}"
+        echo -e "  ${CYAN}1)${NC} Development        ${DIM}(Docker dev mode - volume mounts, hot reload)${NC}"
+        echo -e "  ${CYAN}2)${NC} Demo               ${DIM}(Docker prod mode - for presentations)${NC}"
+        echo -e "  ${CYAN}3)${NC} Staging            ${DIM}(10.96.201.x network - Docker or Proxmox)${NC}"
+        echo -e "  ${CYAN}4)${NC} Production         ${DIM}(10.96.200.x network - Docker or Proxmox)${NC}"
         echo ""
     } >&2
     
     while true; do
-        echo -ne "${BOLD}Select environment [1-3]:${NC} " >&2
+        echo -ne "${BOLD}Select environment [1-4]:${NC} " >&2
         read choice < /dev/tty
         case $choice in
-            1) echo "local:docker"; return 0 ;;
-            2) env="staging"; break ;;
-            3) env="production"; break ;;
-            *) error "Invalid selection. Please enter 1, 2, or 3." >&2 ;;
+            1) echo "development:docker"; return 0 ;;
+            2) echo "demo:docker"; return 0 ;;
+            3) env="staging"; break ;;
+            4) env="production"; break ;;
+            *) error "Invalid selection. Please enter 1, 2, 3, or 4." >&2 ;;
         esac
     done
     

@@ -12,9 +12,10 @@ Session tokens are RS256-signed JWTs that can be:
 2. Used as subject_token for OAuth2 token exchange (RFC 8693)
 3. Revoked via JTI tracking in authz_sessions table
 
-Most endpoints require either:
-- OAuth client credentials (client_id/client_secret), OR
-- Admin token (for management operations)
+Authentication is required via one of:
+- Access token (JWT) with appropriate authz.* scopes
+- OAuth client credentials (client_id/client_secret)
+- Admin token (deprecated - use JWT or service account instead)
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ from pydantic import BaseModel, Field
 from config import Config
 from oauth.client_auth import verify_client_secret
 from oauth.keys import load_private_key
+from oauth.jwt_auth import require_auth, AuthContext
 
 router = APIRouter()
 config = Config()
@@ -182,38 +184,24 @@ class PasskeyAuthenticate(BaseModel):
 # ============================================================================
 
 
-async def _require_client_auth(request: Request) -> None:
+async def _require_client_auth(request: Request, scopes: Optional[List[str]] = None) -> AuthContext:
     """
-    Require OAuth client credentials or admin token.
-    Used for endpoints that sync from ai-portal or other trusted services.
+    Require authentication for authz endpoints.
+    
+    Supports:
+    - Access token (JWT) with audience=authz-api and required scopes
+    - OAuth client credentials (service account) with allowed_scopes
+    - Admin token (deprecated)
+    
+    Args:
+        request: FastAPI request
+        scopes: Optional list of required scopes (at least one must be present)
+        
+    Returns:
+        AuthContext with actor info and available scopes
     """
-    # Try admin token first
-    auth_header = request.headers.get("authorization", "")
-    if auth_header.lower().startswith("bearer "):
-        token = auth_header[7:]
-        if config.admin_token and token == config.admin_token:
-            return
-
-    # Try OAuth client credentials in body
-    try:
-        body = await request.json()
-        client_id = body.get("client_id")
-        client_secret = body.get("client_secret")
-
-        if client_id and client_secret:
-            db = _get_pg(request)
-            await db.connect()
-            client = await db.get_oauth_client(client_id)
-            if client and client.get("is_active"):
-                if verify_client_secret(client_secret, client["client_secret_hash"]):
-                    return
-    except Exception:
-        pass
-
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Unauthorized: valid admin token or OAuth client credentials required",
-    )
+    db = _get_pg(request)
+    return await require_auth(request, db, scopes)
 
 
 def _format_datetime(dt) -> str:

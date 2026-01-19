@@ -71,11 +71,11 @@ fi
 
 # Validate service
 case "$SERVICE" in
-    authz|ingest|search|agent|all)
+    authz|ingest|search|agent|ai-portal|agent-manager|apps|all)
         ;;
     *)
         error "Unknown service: $SERVICE"
-        echo "Valid services: authz, ingest, search, agent, all"
+        echo "Valid services: authz, ingest, search, agent, ai-portal, agent-manager, apps, all"
         exit 1
         ;;
 esac
@@ -532,10 +532,91 @@ run_docker_container_tests() {
     fi
 }
 
+# Run tests for Node.js apps (ai-portal, agent-manager) inside Docker containers
+run_nodejs_app_tests() {
+    local app="$1"
+    
+    # Map app name to container and source directory
+    local container_name=""
+    local app_dir=""
+    case "$app" in
+        ai-portal)
+            container_name="local-ai-portal"
+            app_dir="${REPO_ROOT}/../ai-portal"
+            ;;
+        agent-manager)
+            container_name="local-agent-manager"
+            app_dir="${REPO_ROOT}/../agent-manager"
+            ;;
+        *)
+            error "Unknown Node.js app: $app"
+            return 1
+            ;;
+    esac
+    
+    info "Testing: $app (Node.js/vitest)"
+    echo ""
+    
+    # Check if container is running
+    if ! docker ps --format '{{.Names}}' | grep -q "^${container_name}$"; then
+        error "Container not running: $container_name"
+        info "Start Docker services first: make docker-up"
+        return 1
+    fi
+    
+    # Check if source directory exists
+    if [[ ! -d "$app_dir" ]]; then
+        error "App directory not found: $app_dir"
+        info "Expected sibling directory to busibox"
+        return 1
+    fi
+    
+    info "Running tests inside container: $container_name"
+    echo ""
+    
+    # Build the vitest command
+    # Note: Don't pass PYTEST_ARGS if it contains pytest-specific flags like -m
+    local vitest_cmd="npm run test"
+    local vitest_args="${VITEST_ARGS:-}"
+    
+    # Check if user passed Node.js/vitest-compatible args (not pytest args)
+    if [[ -n "$vitest_args" ]]; then
+        vitest_cmd="npm run test -- $vitest_args"
+    fi
+    
+    info "Running: $vitest_cmd"
+    echo ""
+    
+    # Run tests inside the container
+    # The container already has the source mounted and dependencies installed
+    if docker exec \
+        -e NODE_ENV=test \
+        -e AUTHZ_BASE_URL=http://authz-api:8010 \
+        -e AUTHZ_JWKS_URL=http://authz-api:8010/.well-known/jwks.json \
+        -e AUTHZ_ISSUER=busibox-authz \
+        -e AUTHZ_ADMIN_TOKEN=local-admin-token \
+        -e DATABASE_URL="postgresql://busibox_user:devpassword@postgres:5432/busibox" \
+        -e INGEST_API_HOST=ingest-api \
+        -e INGEST_API_PORT=8002 \
+        -e SEARCH_API_HOST=search-api \
+        -e SEARCH_API_PORT=8003 \
+        -e AGENT_API_HOST=agent-api \
+        -e AGENT_API_PORT=8000 \
+        "$container_name" \
+        sh -c "cd /app && $vitest_cmd"; then
+        success "$app tests passed!"
+        return 0
+    else
+        error "$app tests failed!"
+        return 1
+    fi
+}
+
 # Run tests for selected service(s)
 FAILED_SERVICES=""
 
 if [[ "$SERVICE" == "all" ]]; then
+    # Run Python service tests
     for svc in authz ingest search agent; do
         echo ""
         separator 70
@@ -543,6 +624,28 @@ if [[ "$SERVICE" == "all" ]]; then
             FAILED_SERVICES="$FAILED_SERVICES $svc"
         fi
     done
+    # Run Node.js app tests
+    for app in ai-portal agent-manager; do
+        echo ""
+        separator 70
+        if ! run_nodejs_app_tests "$app"; then
+            FAILED_SERVICES="$FAILED_SERVICES $app"
+        fi
+    done
+elif [[ "$SERVICE" == "apps" ]]; then
+    # Run only Node.js app tests
+    for app in ai-portal agent-manager; do
+        echo ""
+        separator 70
+        if ! run_nodejs_app_tests "$app"; then
+            FAILED_SERVICES="$FAILED_SERVICES $app"
+        fi
+    done
+elif [[ "$SERVICE" == "ai-portal" ]] || [[ "$SERVICE" == "agent-manager" ]]; then
+    # Run specific Node.js app test
+    if ! run_nodejs_app_tests "$SERVICE"; then
+        FAILED_SERVICES="$SERVICE"
+    fi
 else
     if ! run_service_tests "$SERVICE"; then
         FAILED_SERVICES="$SERVICE"
