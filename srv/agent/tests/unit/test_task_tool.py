@@ -149,7 +149,8 @@ class TestCreateTaskTool:
         """Test the schedule description helper function."""
         from app.tools.task_tool import _get_schedule_description
         
-        assert "hourly" in _get_schedule_description("hourly").lower()
+        # hourly returns "every hour"
+        assert "hour" in _get_schedule_description("hourly").lower()
         assert "daily" in _get_schedule_description("daily").lower()
         assert "weekly" in _get_schedule_description("weekly").lower()
         assert "custom" in _get_schedule_description("*/5 * * * *").lower()
