@@ -41,11 +41,14 @@
       - libtesseract-dev  # Tesseract development libraries
     state: present
 
-- name: Create ingest worker directory
+- name: Create ingest worker directories
   file:
-    path: /srv/ingest
+    path: "{{ item }}"
     state: directory
     mode: "0755"
+  loop:
+    - /srv/ingest
+    - /opt/ingest-worker
 
 - name: Create Python virtual environment
   shell: python3 -m venv /srv/ingest/venv

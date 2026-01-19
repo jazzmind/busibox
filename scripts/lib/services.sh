@@ -179,6 +179,8 @@ get_service_ip() {
     local container_id=$(get_service_container_id "$service" "$env")
     
     if [[ "$env" == "staging" ]]; then
+        # Staging: Container IDs are production + 100 (e.g., 201 -> 301)
+        # IP last octet is container_id - 100 (e.g., 301 -> .201)
         echo "10.96.201.$((container_id - 100))"
     else
         echo "10.96.200.$container_id"

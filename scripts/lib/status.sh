@@ -507,13 +507,14 @@ get_deployed_version() {
                     fi
                     ;;
                     
-                # Next.js apps - read from .version file created by deploywatch
+                # Next.js apps - read from .deployed-version file created by deploywatch
                 ai-portal|agent-manager)
                     # Apps are deployed to /srv/apps/{service-name}
                     local app_path="/srv/apps/${service}"
+                    # Read .deployed-version and extract commit hash (first 7 chars)
                     version=$(timeout $SSH_TIMEOUT ssh -o ConnectTimeout=$SSH_TIMEOUT -o StrictHostKeyChecking=no \
                         "root@${container_ip}" \
-                        "cat ${app_path}/.version 2>/dev/null" 2>/dev/null)
+                        "cat ${app_path}/.deployed-version 2>/dev/null | jq -r '.commit // empty' 2>/dev/null | cut -c1-7" 2>/dev/null)
                     ;;
                     
                 *)

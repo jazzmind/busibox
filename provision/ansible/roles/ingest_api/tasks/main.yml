@@ -15,7 +15,7 @@
   include_tasks: ../../ingest/tasks/migrations.yml
   tags: [ingest_api, ingest_migrations]
 
-- name: Create ingest API directory
+- name: Create ingest API directories
   file:
     path: "{{ item }}"
     state: directory
