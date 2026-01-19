@@ -6,6 +6,15 @@ Provides centralized audit logging for all services:
 - List/filter audit logs
 - Get user audit trail
 
+Protected by (in order of precedence):
+- Access token (JWT) with authz.audit.* scopes (audience: authz-api)
+- OAuth client credentials (service account) with allowed_scopes
+- Admin token (deprecated)
+
+Required scopes:
+- authz.audit.write: Create audit entries
+- authz.audit.read: List/query audit logs
+
 Also includes legacy /authz/audit endpoint for backwards compatibility.
 """
 
@@ -21,6 +30,7 @@ from pydantic import BaseModel, Field
 
 from config import Config
 from oauth.client_auth import verify_client_secret
+from oauth.jwt_auth import require_auth, AuthContext
 
 router = APIRouter()
 config = Config()
@@ -81,37 +91,24 @@ class AuditLogCreate(BaseModel):
 # ============================================================================
 
 
-async def _require_client_auth(request: Request) -> None:
+async def _require_client_auth(request: Request, scopes: Optional[List[str]] = None) -> AuthContext:
     """
-    Require OAuth client credentials or admin token.
+    Require authentication for audit endpoints.
+    
+    Supports:
+    - Access token (JWT) with audience=authz-api and required scopes
+    - OAuth client credentials (service account) with allowed_scopes
+    - Admin token (deprecated)
+    
+    Args:
+        request: FastAPI request
+        scopes: Required scopes (at least one must be present)
+        
+    Returns:
+        AuthContext with actor info and available scopes
     """
-    # Try admin token first
-    auth_header = request.headers.get("authorization", "")
-    if auth_header.lower().startswith("bearer "):
-        token = auth_header[7:]
-        if config.admin_token and token == config.admin_token:
-            return
-
-    # Try OAuth client credentials in body
-    try:
-        body = await request.json()
-        client_id = body.get("client_id")
-        client_secret = body.get("client_secret")
-
-        if client_id and client_secret:
-            db = _get_pg(request)
-            await db.connect()
-            client = await db.get_oauth_client(client_id)
-            if client and client.get("is_active"):
-                if verify_client_secret(client_secret, client["client_secret_hash"]):
-                    return
-    except Exception:
-        pass
-
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Unauthorized: valid admin token or OAuth client credentials required",
-    )
+    db = _get_pg(request)
+    return await require_auth(request, db, scopes)
 
 
 async def _check_client_auth_from_body(request: Request, body: dict) -> bool:
@@ -161,21 +158,17 @@ def _is_security_event(action: str) -> bool:
     return action in security_actions
 
 
-async def _require_read_auth(request: Request) -> None:
+async def _require_read_auth(request: Request) -> AuthContext:
     """
     Require authentication for read-only operations.
-    Accepts admin token in Authorization header.
+    
+    Supports:
+    - Access token (JWT) with audience=authz-api and authz.audit.read scope
+    - OAuth client credentials (service account) with allowed_scopes
+    - Admin token (deprecated)
     """
-    auth_header = request.headers.get("authorization", "")
-    if auth_header.lower().startswith("bearer "):
-        token = auth_header[7:]
-        if config.admin_token and token == config.admin_token:
-            return
-
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Unauthorized: valid admin token required",
-    )
+    db = _get_pg(request)
+    return await require_auth(request, db, scopes=["authz.audit.read"])
 
 
 def _format_datetime(dt) -> str:
@@ -243,25 +236,9 @@ async def create_audit_log(request: Request):
     is_security_event = _is_security_event(action)
     
     if not is_security_event:
-        # For non-security events, require authentication
-        # Check admin token first
-        auth_header = request.headers.get("authorization", "")
-        is_authenticated = False
-        
-        if auth_header.lower().startswith("bearer "):
-            token = auth_header[7:]
-            if config.admin_token and token == config.admin_token:
-                is_authenticated = True
-        
-        # If not authenticated via admin token, check OAuth client credentials in body
-        if not is_authenticated:
-            is_authenticated = await _check_client_auth_from_body(request, body)
-        
-        if not is_authenticated:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Unauthorized: valid admin token or OAuth client credentials required",
-            )
+        # For non-security events, require authentication with authz.audit.write scope
+        db = _get_pg(request)
+        await require_auth(request, db, scopes=["authz.audit.write"])
     
     # Validate the body
     try:

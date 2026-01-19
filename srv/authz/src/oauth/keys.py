@@ -76,3 +76,8 @@ def load_private_key(private_key_pem: bytes, passphrase: Optional[str]):
     password = passphrase.encode("utf-8") if passphrase else None
     return serialization.load_pem_private_key(private_key_pem, password=password)
 
+
+def load_public_key(public_key_pem: bytes):
+    """Load a public key from PEM format."""
+    return serialization.load_pem_public_key(public_key_pem)
+

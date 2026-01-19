@@ -122,11 +122,11 @@ async def _ensure_bootstrap() -> None:
         )
         logger.info("Generated initial authz signing key", kid=sk.kid, alg=sk.alg)
 
-    # 2) bootstrap client (optional)
+    # 2) bootstrap client (optional) - used for login flows
+    from oauth.client_auth import hash_client_secret, verify_client_secret
+    
     if config.bootstrap_client_id and config.bootstrap_client_secret:
         existing = await _pg.get_oauth_client(config.bootstrap_client_id)
-        from oauth.client_auth import hash_client_secret, verify_client_secret
-
         desired_hash = hash_client_secret(config.bootstrap_client_secret)
         if not existing:
             await _pg.upsert_oauth_client(
@@ -148,7 +148,33 @@ async def _ensure_bootstrap() -> None:
             )
             logger.info("Updated bootstrap OAuth client secret", client_id=config.bootstrap_client_id)
     
-    # 3) bootstrap essential roles
+    # 3) system service account (optional) - used for background operations
+    if config.system_client_id and config.system_client_secret:
+        existing = await _pg.get_oauth_client(config.system_client_id)
+        desired_hash = hash_client_secret(config.system_client_secret)
+        # System account can only talk to authz-api with limited scopes
+        system_audiences = ["authz-api"]
+        if not existing:
+            await _pg.upsert_oauth_client(
+                client_id=config.system_client_id,
+                client_secret_hash=desired_hash,
+                allowed_audiences=system_audiences,
+                allowed_scopes=config.system_client_allowed_scopes,
+                is_active=True,
+            )
+            logger.info("Bootstrapped system service account", client_id=config.system_client_id)
+        elif not verify_client_secret(config.system_client_secret, existing.get("client_secret_hash", "")):
+            # Client exists but secret has changed - update it
+            await _pg.upsert_oauth_client(
+                client_id=config.system_client_id,
+                client_secret_hash=desired_hash,
+                allowed_audiences=system_audiences,
+                allowed_scopes=config.system_client_allowed_scopes,
+                is_active=True,
+            )
+            logger.info("Updated system service account secret", client_id=config.system_client_id)
+    
+    # 4) bootstrap essential roles
     await _ensure_bootstrap_roles()
 
 

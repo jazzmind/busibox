@@ -20,6 +20,19 @@ Busibox implements a Zero Trust authentication architecture where:
 2. **Cryptographic verification** - Session JWTs are RS256-signed; downstream services verify signatures, no DB lookups required
 3. **Subject token exchange** - User operations use session JWTs as `subject_token`; no client credentials needed
 4. **Explicit delegation** - Background tasks require user-authorized delegation tokens
+5. **No static admin tokens** - All operations use JWT-based auth; service accounts for server-to-server calls
+
+### Authentication Methods by Context
+
+| Context | Authentication Method | Example |
+|---------|----------------------|---------|
+| **User login** | OAuth client credentials | Magic link, TOTP, passkey verification |
+| **User operations** | Session JWT (subject_token exchange) | Uploading files, searching, chat |
+| **Admin operations** | Admin user's JWT with admin scopes | Managing users, roles, apps |
+| **Server background tasks** | Service account (client_credentials) | Audit logging during login, cleanup jobs |
+| **Service-to-service** | Service account (client_credentials) | Ingest calling keystore |
+
+> **Note**: Static admin tokens (`AUTHZ_ADMIN_TOKEN`) are deprecated and being removed. Use JWT-based authentication with appropriate scopes instead.
 
 ### Authentication Flow
 
@@ -185,12 +198,52 @@ Only Finance Admin has write/delete scopes → they can MODIFY those documents.
 | `AUTHZ_KEY_ENCRYPTION_PASSPHRASE` | - | Encrypt private keys at rest |
 | `AUTHZ_BOOTSTRAP_CLIENT_ID` | - | Bootstrap OAuth client on startup |
 | `AUTHZ_BOOTSTRAP_CLIENT_SECRET` | - | Bootstrap client secret |
-| `AUTHZ_BOOTSTRAP_ALLOWED_AUDIENCES` | `ingest-api,search-api,agent-api` | Allowed audiences for bootstrap client |
-| `AUTHZ_ADMIN_TOKEN` | - | Admin token for management endpoints |
+| `AUTHZ_BOOTSTRAP_ALLOWED_AUDIENCES` | `ingest-api,search-api,agent-api,authz-api` | Allowed audiences for bootstrap client |
 | `POSTGRES_HOST` | - | PostgreSQL host |
 | `POSTGRES_DB` | `busibox` | Database name |
 | `POSTGRES_USER` | `busibox_user` | Database user |
 | `POSTGRES_PASSWORD` | - | Database password |
+
+### Service Accounts
+
+Instead of using static admin tokens, services authenticate using OAuth client credentials (service accounts). This provides:
+
+1. **Scoped access** - Each service account has specific allowed scopes
+2. **Revocation** - Service accounts can be disabled without redeploying
+3. **Audit trail** - All operations are logged with the service account identity
+4. **Rotation** - Secrets can be rotated independently
+
+**Standard Service Accounts:**
+
+| Client ID | Purpose | Scopes |
+|-----------|---------|--------|
+| `ai-portal` | Frontend authentication flows | `authz.auth.*` |
+| `ai-portal-system` | Background operations (audit, cleanup) | `authz.audit.write`, `authz.users.read` |
+| `ingest-api` | Ingest service operations | `authz.keystore.*` |
+| `search-api` | Search service operations | (none - read-only JWT validation) |
+| `agent-api` | Agent service operations | (none - read-only JWT validation) |
+
+### AuthZ Admin Scopes
+
+For operations that require elevated privileges (user management, role management, etc.), the following scopes are used:
+
+| Scope | Permission |
+|-------|------------|
+| `authz.users.read` | Read user information |
+| `authz.users.write` | Create/update users |
+| `authz.users.delete` | Delete users |
+| `authz.roles.read` | Read role information |
+| `authz.roles.write` | Create/update roles |
+| `authz.audit.read` | Read audit logs |
+| `authz.audit.write` | Write audit events |
+| `authz.bindings.read` | Read role-resource bindings |
+| `authz.bindings.write` | Create/update bindings |
+| `authz.keystore.read` | Read encryption keys |
+| `authz.keystore.write` | Create/rotate encryption keys |
+
+**User-initiated admin operations** (e.g., admin panel in ai-portal) use the logged-in admin user's session JWT, exchanged for an `authz-api` access token with the required scopes.
+
+**Server-initiated operations** (e.g., audit logging during login) use the service account's client credentials.
 
 ---
 

@@ -49,11 +49,12 @@ class Config:
         self.key_encryption_passphrase: Optional[str] = os.getenv("AUTHZ_KEY_ENCRYPTION_PASSPHRASE")
 
         # Optional: bootstrap an OAuth client (e.g. ai-portal) on startup.
+        # This client is used for login flows (magic link, TOTP, passkey auth).
         self.bootstrap_client_id: Optional[str] = os.getenv("AUTHZ_BOOTSTRAP_CLIENT_ID")
         self.bootstrap_client_secret: Optional[str] = os.getenv("AUTHZ_BOOTSTRAP_CLIENT_SECRET")
         self.bootstrap_client_allowed_audiences: List[str] = [
             s.strip()
-            for s in (os.getenv("AUTHZ_BOOTSTRAP_ALLOWED_AUDIENCES", "ingest-api,search-api,agent-api").split(","))
+            for s in (os.getenv("AUTHZ_BOOTSTRAP_ALLOWED_AUDIENCES", "ingest-api,search-api,agent-api,authz-api").split(","))
             if s.strip()
         ]
         self.bootstrap_client_allowed_scopes: List[str] = [
@@ -61,8 +62,20 @@ class Config:
             for s in (os.getenv("AUTHZ_BOOTSTRAP_ALLOWED_SCOPES", "").split(","))
             if s.strip()
         ]
+        
+        # Optional: bootstrap a system service account for background operations.
+        # This client is used for audit logging during login, cleanup jobs, etc.
+        # Has limited scopes compared to admin users.
+        self.system_client_id: Optional[str] = os.getenv("AUTHZ_SYSTEM_CLIENT_ID")
+        self.system_client_secret: Optional[str] = os.getenv("AUTHZ_SYSTEM_CLIENT_SECRET")
+        self.system_client_allowed_scopes: List[str] = [
+            s.strip()
+            for s in (os.getenv("AUTHZ_SYSTEM_CLIENT_SCOPES", "authz.audit.write,authz.users.read").split(","))
+            if s.strip()
+        ]
 
         # Optional: shared bootstrap admin token for internal management endpoints.
+        # DEPRECATED: Use JWT-based auth with admin scopes instead.
         self.admin_token: Optional[str] = os.getenv("AUTHZ_ADMIN_TOKEN")
         
         # Master key for envelope encryption keystore.
@@ -87,6 +100,9 @@ class Config:
             "bootstrap_client_secret": self.bootstrap_client_secret,
             "bootstrap_client_allowed_audiences": self.bootstrap_client_allowed_audiences,
             "bootstrap_client_allowed_scopes": self.bootstrap_client_allowed_scopes,
+            "system_client_id": self.system_client_id,
+            "system_client_secret": self.system_client_secret,
+            "system_client_allowed_scopes": self.system_client_allowed_scopes,
             "admin_token": self.admin_token,
             "master_key": self.master_key,
             "test_mode_enabled": self.test_mode_enabled,

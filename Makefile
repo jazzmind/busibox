@@ -1,5 +1,5 @@
 .PHONY: menu help setup configure deploy test test-local test-docker test-security mcp \
-        docker-up docker-start docker-down docker-restart docker-build docker-logs docker-ps docker-clean \
+        docker-up docker-up-prod docker-start docker-down docker-restart docker-build docker-logs docker-ps docker-clean \
         vault-generate-env vault-migrate vault-sync ssl-check \
         demo demo-warmup demo-clean demo-status
 
@@ -9,8 +9,12 @@
 # ============================================================================
 # VARIABLES
 # ============================================================================
-# Environment: local, staging, production
-ENV ?=
+# Environment: development, demo, staging, production
+#   development - Docker dev mode (volume mounts, npm-linked busibox-app)
+#   demo        - Docker prod mode (for demos/presentations)
+#   staging     - Docker or Proxmox (10.96.201.x network)
+#   production  - Docker or Proxmox (10.96.200.x network)
+ENV ?= development
 
 # Service for targeted operations
 SERVICE ?=
@@ -32,8 +36,18 @@ FAST ?=
 WORKER ?=
 
 # Docker compose configuration
+# Base: infrastructure and Python APIs
+# Overlay selection based on environment:
+#   development -> COMPOSE_DEV (volume mounts, npm link)
+#   demo/staging/production -> COMPOSE_PROD (built from GitHub)
 COMPOSE_FILE := docker-compose.local.yml
+COMPOSE_DEV := docker-compose.dev.yml
+COMPOSE_PROD := docker-compose.prod.yml
 ENV_FILE := .env.local
+
+# Automatically select overlay based on environment
+# development uses dev overlay, everything else uses prod overlay
+COMPOSE_OVERLAY = $(if $(filter development,$(ENV)),$(COMPOSE_DEV),$(COMPOSE_PROD))
 
 # ============================================================================
 # MAIN MENU (Default)
@@ -59,10 +73,11 @@ help:
 	@echo "                         QUICK START"
 	@echo "═══════════════════════════════════════════════════════════════════════"
 	@echo ""
-	@echo "  make                     # Interactive menu (recommended)"
-	@echo "  make ENV=local           # Start menu with local environment"
-	@echo "  make ENV=staging         # Start menu with staging environment"
-	@echo "  make ENV=production      # Start menu with production environment"
+	@echo "  make                         # Interactive menu (recommended)"
+	@echo "  make ENV=development         # Start menu with development environment"
+	@echo "  make ENV=demo                # Start menu with demo environment"
+	@echo "  make ENV=staging             # Start menu with staging environment"
+	@echo "  make ENV=production          # Start menu with production environment"
 	@echo ""
 	@echo "═══════════════════════════════════════════════════════════════════════"
 	@echo "                    DIRECT COMMANDS"
@@ -78,19 +93,25 @@ help:
 	@echo "                    DOCKER DEVELOPMENT"
 	@echo "═══════════════════════════════════════════════════════════════════════"
 	@echo ""
-	@echo "  make docker-build                        # Build all images"
-	@echo "  make docker-build SERVICE=authz-api      # Build specific service"
-	@echo "  make docker-build NO_CACHE=1             # Rebuild without cache"
+	@echo "  Environment-based mode selection (ENV variable):"
+	@echo "    make docker-up                         # Start (default: development)"
+	@echo "    make docker-up ENV=development         # Dev mode (volume mounts, npm link)"
+	@echo "    make docker-up ENV=demo                # Demo mode (prod-like, from GitHub)"
+	@echo "    make docker-up SERVICE=ai-portal       # Start specific service"
 	@echo ""
-	@echo "  make docker-up                           # Start all services"
-	@echo "  make docker-up SERVICE=authz-api         # Start specific service"
-	@echo "  make docker-down                         # Stop all services"
-	@echo "  make docker-restart                      # Restart all services"
+	@echo "  Building:"
+	@echo "    make docker-build                      # Build for current ENV"
+	@echo "    make docker-build ENV=demo             # Build prod-like images"
+	@echo "    make docker-build SERVICE=authz-api    # Build specific service"
+	@echo "    make docker-build NO_CACHE=1           # Rebuild without cache"
 	@echo ""
-	@echo "  make docker-ps                           # Show status"
-	@echo "  make docker-logs                         # View all logs"
-	@echo "  make docker-logs SERVICE=authz-api       # View specific logs"
-	@echo "  make docker-clean                        # Remove containers & data"
+	@echo "  Other:"
+	@echo "    make docker-down                       # Stop all services"
+	@echo "    make docker-restart                    # Restart all services"
+	@echo "    make docker-ps                         # Show status"
+	@echo "    make docker-logs                       # View all logs"
+	@echo "    make docker-logs SERVICE=authz-api     # View specific logs"
+	@echo "    make docker-clean                      # Remove containers & data"
 	@echo ""
 	@echo "═══════════════════════════════════════════════════════════════════════"
 	@echo "                    VAULT & ENV MANAGEMENT"
@@ -107,6 +128,8 @@ help:
 	@echo "  Docker (local development):"
 	@echo "    make test-docker SERVICE=authz         # Run authz tests"
 	@echo "    make test-docker SERVICE=agent         # Run agent tests"
+	@echo "    make test-docker SERVICE=ai-portal     # Run ai-portal tests"
+	@echo "    make test-docker SERVICE=apps          # Run all Node.js app tests"
 	@echo "    make test-docker SERVICE=all           # Run all tests"
 	@echo "    make test-docker SERVICE=agent ARGS='-k test_weather'"
 	@echo ""
@@ -126,11 +149,13 @@ help:
 	@echo "                      ENVIRONMENTS"
 	@echo "═══════════════════════════════════════════════════════════════════════"
 	@echo ""
-	@echo "  local       - Docker on localhost (development)"
-	@echo "  staging     - 10.96.201.x network (pre-production)"
-	@echo "  production  - 10.96.200.x network (live)"
+	@echo "  development - Docker dev mode (volume mounts, npm-linked busibox-app)"
+	@echo "  demo        - Docker prod mode (apps from GitHub, for presentations)"
+	@echo "  staging     - 10.96.201.x network (Docker or Proxmox)"
+	@echo "  production  - 10.96.200.x network (Docker or Proxmox)"
 	@echo ""
-	@echo "  Staging/Production can use either Docker or Proxmox backends."
+	@echo "  development and demo are always Docker-only."
+	@echo "  staging and production can use either Docker or Proxmox backends."
 	@echo "  The interactive menu will ask for your preference."
 	@echo ""
 
@@ -211,11 +236,17 @@ ifndef SERVICE
 	@echo ""
 	@echo "Usage: make test-docker SERVICE=<service>"
 	@echo ""
-	@echo "Services: authz, ingest, search, agent, all"
+	@echo "Services:"
+	@echo "  Python APIs: authz, ingest, search, agent"
+	@echo "  Node.js apps: ai-portal, agent-manager, apps (both)"
+	@echo "  All: all"
 	@echo ""
 	@echo "Examples:"
+	@echo "  make test-docker SERVICE=authz"
 	@echo "  make test-docker SERVICE=agent"
-	@echo "  make test-docker SERVICE=all"
+	@echo "  make test-docker SERVICE=ai-portal"
+	@echo "  make test-docker SERVICE=apps          # Both Node.js apps"
+	@echo "  make test-docker SERVICE=all           # Everything"
 	@echo "  make test-docker SERVICE=agent ARGS='-k test_weather'"
 	@echo "  make test-docker SERVICE=agent FAST=0  # Include slow tests"
 	@echo ""
@@ -247,36 +278,50 @@ _ensure-env:
 		fi; \
 	fi
 
-# Start Docker services (may rebuild if files changed)
+# Start Docker services based on environment
+# ENV=development -> dev overlay (volume mounts, npm-linked busibox-app)
+# ENV=demo/staging/production -> prod overlay (apps built from GitHub)
 docker-up: _ensure-env
+	@echo "Starting Docker services (ENV=$(ENV), overlay=$(notdir $(COMPOSE_OVERLAY)))..."
 ifdef SERVICE
-	docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) up -d $(SERVICE)
+	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) up -d $(SERVICE)
 else
-	docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) up -d
+	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) up -d
 endif
 	@echo ""
-	@echo "Services started. Use 'make docker-ps' to check status."
+ifeq ($(ENV),development)
+	@echo "Development mode started. Use 'make docker-ps' to check status."
+	@echo "Next.js apps are volume-mounted with busibox-app npm-linked."
+else
+	@echo "$(ENV) mode started. Use 'make docker-ps' to check status."
+	@echo "Next.js apps built from GitHub with npm-published busibox-app."
+endif
+
+# Legacy alias for explicit prod mode
+docker-up-prod: _ensure-env
+	$(MAKE) docker-up ENV=demo
 
 # Start Docker services without rebuilding (fast start)
 docker-start: _ensure-env
 ifdef SERVICE
-	docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) up -d --no-build $(SERVICE)
+	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) up -d --no-build $(SERVICE)
 else
-	docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) up -d --no-build
+	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) up -d --no-build
 endif
 	@echo ""
-	@echo "Services started. Use 'make docker-ps' to check status."
+	@echo "Services started ($(ENV) mode). Use 'make docker-ps' to check status."
 
-# Stop Docker services
+# Stop Docker services (works for both dev and prod mode)
 docker-down:
-	docker compose -f $(COMPOSE_FILE) down
+	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_DEV) down 2>/dev/null || true
+	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_PROD) down 2>/dev/null || true
 
 # Restart Docker services
 docker-restart:
 ifdef SERVICE
-	docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) restart $(SERVICE)
+	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) restart $(SERVICE)
 else
-	docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) restart
+	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) restart
 endif
 
 # Check/generate SSL certificates
@@ -286,46 +331,54 @@ ssl-check:
 		bash scripts/setup/generate-local-ssl.sh; \
 	fi
 
-# Build Docker images
+# Build Docker images based on environment
+# ENV=development -> dev overlay, ENV=demo/staging/production -> prod overlay
 docker-build: ssl-check _ensure-env
 	$(eval GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown"))
-	@echo "Building with version: $(GIT_COMMIT)"
+	@echo "Building with version: $(GIT_COMMIT) (ENV=$(ENV), overlay=$(notdir $(COMPOSE_OVERLAY)))"
 ifdef SERVICE
 ifdef NO_CACHE
-	GIT_COMMIT=$(GIT_COMMIT) docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) build --no-cache $(SERVICE)
+	GIT_COMMIT=$(GIT_COMMIT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) build --no-cache $(SERVICE)
 else
-	GIT_COMMIT=$(GIT_COMMIT) docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) build $(SERVICE)
+	GIT_COMMIT=$(GIT_COMMIT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) build $(SERVICE)
 endif
 	@echo "Recreating container to apply new image..."
-	GIT_COMMIT=$(GIT_COMMIT) docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) up -d $(SERVICE)
+	GIT_COMMIT=$(GIT_COMMIT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) up -d $(SERVICE)
 else
 ifdef NO_CACHE
-	GIT_COMMIT=$(GIT_COMMIT) docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) build --no-cache
+	GIT_COMMIT=$(GIT_COMMIT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) build --no-cache
 else
-	GIT_COMMIT=$(GIT_COMMIT) docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) build
+	GIT_COMMIT=$(GIT_COMMIT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) build
 endif
 	@echo "Recreating containers to apply new images..."
-	GIT_COMMIT=$(GIT_COMMIT) docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE) up -d
+	GIT_COMMIT=$(GIT_COMMIT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) up -d
 endif
 
-# View Docker logs
+# View Docker logs (uses environment-based overlay)
 docker-logs:
 ifdef SERVICE
-	docker compose -f $(COMPOSE_FILE) logs -f $(SERVICE)
+	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) logs -f $(SERVICE) 2>/dev/null || \
+	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_DEV) logs -f $(SERVICE) 2>/dev/null || \
+	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_PROD) logs -f $(SERVICE)
 else
-	docker compose -f $(COMPOSE_FILE) logs -f
+	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) logs -f 2>/dev/null || \
+	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_DEV) logs -f 2>/dev/null || \
+	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_PROD) logs -f
 endif
 
-# Show Docker service status
+# Show Docker service status (uses environment-based overlay)
 docker-ps:
-	docker compose -f $(COMPOSE_FILE) ps
+	@docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) ps 2>/dev/null || \
+	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_DEV) ps 2>/dev/null || \
+	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_PROD) ps
 
 # Clean Docker environment
 docker-clean:
 	@echo "WARNING: This will remove all containers and volumes!"
 	@read -p "Are you sure? (y/N) " confirm; \
 	if [ "$$confirm" = "y" ] || [ "$$confirm" = "Y" ]; then \
-		docker compose -f $(COMPOSE_FILE) down -v --remove-orphans; \
+		docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_DEV) down -v --remove-orphans 2>/dev/null || true; \
+		docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_PROD) down -v --remove-orphans 2>/dev/null || true; \
 		echo "Cleanup complete."; \
 	else \
 		echo "Cancelled."; \

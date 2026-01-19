@@ -1,44 +1,39 @@
 # =============================================================================
-# Busibox Local Development Environment
+# Busibox Local Development Environment - Base Infrastructure
 # =============================================================================
 #
-# A local Docker environment for backend services. Next.js frontends run
-# locally with `npm run dev` for faster iteration (hot-reload, debugging).
+# Base compose file with infrastructure and Python API services.
+# Next.js apps (ai-portal, agent-manager) are defined in overlay files.
 #
-# HYBRID MODE (default) - Recommended for development:
-#   - Backend services (APIs, databases) run in Docker
-#   - Frontend apps run locally with `npm run dev`
-#   - Nginx proxies to host.docker.internal for frontends
+# MODES:
+#   DEV MODE (default) - For active development:
+#     docker compose -f docker-compose.local.yml -f docker-compose.dev.yml up
+#     - Next.js apps volume-mounted from local filesystem
+#     - busibox-app npm-linked for live editing
+#     - Turbopack hot-reload
 #
-# FULL DOCKER MODE - For testing the complete stack:
-#   - Use `--profile full` to include frontend containers
-#   - docker compose --profile full -f docker-compose.local.yml up
+#   PROD MODE - For testing production behavior:
+#     docker compose -f docker-compose.local.yml -f docker-compose.prod.yml up
+#     - Next.js apps cloned from GitHub at build time
+#     - Uses published @jazzmind/busibox-app from npm
+#     - Production builds
 #
-# Services (default profile):
+# Services in this file:
 #   - PostgreSQL, MinIO, Milvus, Redis (infrastructure)
-#   - AuthZ, Ingest, Search, Agent APIs (Python services)
+#   - AuthZ, Ingest, Search, Agent, Docs APIs (Python services)
 #   - LiteLLM (LLM gateway)
 #   - Nginx (reverse proxy)
-#
-# Services (full profile adds):
-#   - AI Portal (Next.js) - better to run locally with npm
-#   - Agent Manager (Next.js) - better to run locally with npm
 #
 # HOT-RELOAD SUPPORT:
 #   Python API services support hot-reload. Code changes auto-restart.
 #   Note: Rebuild needed if you change requirements.txt or Dockerfile.
 #
 # Usage:
-#   # Start backend services (hybrid mode - run Next.js locally)
+#   # Development mode (default)
 #   make docker-up
-#   cd ../ai-portal && npm run dev      # in another terminal
-#   cd ../agent-manager && npm run dev  # in another terminal
 #
-#   # Full Docker mode (everything containerized)
-#   docker compose --profile full -f docker-compose.local.yml up -d
-#
-#   # Rebuild with version labels (for status tracking)
-#   bash scripts/docker-rebuild-with-version.sh
+#   # Production mode (test prod behavior locally)
+#   make docker-up-prod
 #
 #   # View logs
 #   make docker-logs
@@ -47,11 +42,7 @@
 #   make docker-down
 #
 # Configuration:
-#   Copy .env.local.example to .env.local and configure your settings.
-#
-# Version Tracking:
-#   To enable version tracking in the status display, rebuild containers with:
-#   GIT_COMMIT=$(git rev-parse --short HEAD) to set version labels.
+#   Copy env.local.example to .env.local and configure your settings.
 #
 # =============================================================================
 
@@ -699,118 +690,16 @@ services:
     networks:
       - busibox-net
 
-  # ===========================================================================
+# ===========================================================================
   # NEXT.JS APPLICATIONS
   # ===========================================================================
-
-  # AI Portal - Main Frontend
-  # Runs in Docker with volume-mounted code for hot-reload
-  # Auto-restarts on crash
-  ai-portal:
-    build:
-      context: ../ai-portal
-      dockerfile: Dockerfile.local
-      args:
-        GITHUB_AUTH_TOKEN: ${GITHUB_AUTH_TOKEN:-}
-    container_name: local-ai-portal
-    hostname: ai-portal
-    restart: unless-stopped
-    environment:
-      NODE_ENV: development
-      PORT: 3000
-      # Database
-      DATABASE_URL: postgresql://${POSTGRES_USER:-busibox_user}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/ai_portal
-      # Auth - use https://localhost for SSL
-      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-dev-secret-change-in-production}
-      BETTER_AUTH_URL: https://localhost/portal
-      # Email (optional - uses console logging in dev)
-      RESEND_API_KEY: ${RESEND_API_KEY:-}
-      EMAIL_FROM: ${EMAIL_FROM:-noreply@localhost}
-      # Admin
-      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@localhost}
-      ALLOWED_EMAIL_DOMAINS: ${ALLOWED_EMAIL_DOMAINS:-*}
-      # AuthZ - use internal container URLs
-      AUTHZ_BASE_URL: http://authz-api:8010
-      AUTHZ_ADMIN_TOKEN: ${AUTHZ_ADMIN_TOKEN:-local-admin-token}
-      AUTHZ_CLIENT_ID: ${AUTHZ_BOOTSTRAP_CLIENT_ID:-ai-portal}
-      AUTHZ_CLIENT_SECRET: ${AUTHZ_BOOTSTRAP_CLIENT_SECRET:-ai-portal-secret}
-      # LiteLLM
-      LITELLM_BASE_URL: http://litellm:4000/v1
-      LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-local-dev-key}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      # SSO
-      SSO_JWT_SECRET: ${SSO_JWT_SECRET:-dev-sso-secret}
-      # Service URLs (for SSO redirect via nginx proxy)
-      NEXT_PUBLIC_AGENT_MANAGER_URL: https://localhost/agents
-      NEXT_PUBLIC_APP_URL: https://localhost/portal
-      # Base path for nginx subpath routing
-      NEXT_PUBLIC_BASE_PATH: /portal
-    ports:
-      - "3000:3000"
-    volumes:
-      - ../ai-portal:/app
-      - /app/node_modules
-      - /app/.next
-    depends_on:
-      postgres:
-        condition: service_healthy
-      authz-api:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
-      interval: 30s
-      timeout: 10s
-      start_period: 60s
-      retries: 3
-    networks:
-      - busibox-net
-
-  # Agent Manager - Agent Management UI
-  # Runs in Docker with volume-mounted code for hot-reload
-  # Auto-restarts on crash
-  agent-manager:
-    build:
-      context: ../agent-manager
-      dockerfile: Dockerfile.local
-      args:
-        GITHUB_AUTH_TOKEN: ${GITHUB_AUTH_TOKEN:-}
-    container_name: local-agent-manager
-    hostname: agent-manager
-    restart: unless-stopped
-    environment:
-      NODE_ENV: development
-      PORT: 3001
-      # API URLs - use nginx proxy paths for CORS compliance
-      NEXT_PUBLIC_AGENT_API_URL: https://localhost/api/agent
-      NEXT_PUBLIC_INGEST_API_URL: https://localhost/api/ingest
-      NEXT_PUBLIC_SEARCH_API_URL: https://localhost/api/search
-      # AI Portal (SSO) via nginx
-      NEXT_PUBLIC_AI_PORTAL_URL: https://localhost/portal
-      # AuthZ - internal container URL
-      AUTHZ_BASE_URL: http://authz-api:8010
-      AUTHZ_CLIENT_ID: ${AGENT_MANAGER_CLIENT_ID:-agent-manager}
-      AUTHZ_CLIENT_SECRET: ${AGENT_MANAGER_CLIENT_SECRET:-agent-manager-secret}
-      # Base path for nginx subpath routing
-      NEXT_PUBLIC_BASE_PATH: /agents
-      NEXT_PUBLIC_APP_URL: https://localhost/agents
-    ports:
-      - "3001:3001"
-    volumes:
-      - ../agent-manager:/app
-      - /app/node_modules
-      - /app/.next
-    depends_on:
-      authz-api:
-        condition: service_healthy
-      # agent-api excluded - has schema issue
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/"]
-      interval: 30s
-      timeout: 10s
-      start_period: 60s
-      retries: 3
-    networks:
-      - busibox-net
+  # Next.js apps (ai-portal, agent-manager) are defined in overlay files:
+  #   - docker-compose.dev.yml  - Development mode with volume mounts
+  #   - docker-compose.prod.yml - Production mode built from GitHub
+  #
+  # Use: docker compose -f docker-compose.local.yml -f docker-compose.dev.yml up
+  # Or:  make docker-up (uses dev mode by default)
+  # ===========================================================================
 
 # ===========================================================================
   # NGINX REVERSE PROXY
