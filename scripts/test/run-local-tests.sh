@@ -506,6 +506,7 @@ run_docker_container_tests() {
         -e TEST_DB_USER=busibox_test_user \
         -e TEST_DB_PASSWORD=testpassword \
         -e TEST_AUTHZ_URL=http://authz-api:8010 \
+        -e AUTHZ_JWKS_URL=http://authz-api:8010/.well-known/jwks.json \
         -e TEST_USER_ID="$test_user_id" \
         -e AUTHZ_BOOTSTRAP_CLIENT_ID=ai-portal \
         -e AUTHZ_BOOTSTRAP_CLIENT_SECRET=ai-portal-secret \
