@@ -581,8 +581,18 @@ get_current_version() {
             ;;
     esac
     
-    # Handle apps with dashes in their names (ai-portal, agent-manager)
+    # Handle services with dashes in their names
     case "$service" in
+        # Ingest services come from busibox repo
+        ingest-api|ingest-worker)
+            if [[ -d "${REPO_ROOT}/.git" ]]; then
+                (cd "${REPO_ROOT}" && git rev-parse --short HEAD 2>/dev/null) || echo "unknown"
+            else
+                echo "unknown"
+            fi
+            return
+            ;;
+        # Apps come from their own repos
         ai-portal)
             if [[ -d "${REPO_ROOT}/../ai-portal/.git" ]]; then
                 (cd "${REPO_ROOT}/../ai-portal" && git rev-parse --short HEAD 2>/dev/null) || echo "unknown"
