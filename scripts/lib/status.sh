@@ -571,7 +571,7 @@ get_deployed_version() {
                     if [[ -z "$version" || "$version" == "unknown" ]]; then
                         version=$(timeout $SSH_TIMEOUT ssh -o ConnectTimeout=$SSH_TIMEOUT -o StrictHostKeyChecking=no \
                             "root@${container_ip}" \
-                            "docker exec minio-minio-1 minio --version 2>/dev/null | grep -oE 'RELEASE\.[0-9T-]+' | head -1" 2>/dev/null)
+                            "docker exec minio-minio-1 minio --version 2>/dev/null | grep -oE 'RELEASE\.[0-9TZ-]+(-cpuv[0-9]+)?' | head -1" 2>/dev/null)
                     fi
                     ;;
                     

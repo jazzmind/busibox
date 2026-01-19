@@ -199,7 +199,7 @@
   tags: [minio, minio_configure]
 
 - name: Get actual installed MinIO version
-  shell: "docker exec minio-minio-1 minio --version 2>/dev/null | grep -oE 'RELEASE\\.[0-9T-]+' | head -1"
+  shell: "docker exec minio-minio-1 minio --version 2>/dev/null | grep -oE 'RELEASE\\.[0-9TZ-]+(-cpuv[0-9]+)?' | head -1"
   register: minio_installed_version
   changed_when: false
   failed_when: false
