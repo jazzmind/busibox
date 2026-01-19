@@ -447,21 +447,29 @@ get_deployed_version() {
             
             # Different version detection strategies based on service type
             case "$service" in
-                # Python API services - read .deploy_version file
+                # Python API services - try .deploy_version, fallback to git in /srv
                 authz|ingest-api|ingest-worker|search-api|agent-api|docs-api)
-                    local service_path
+                    local service_path deploy_path
                     case "$service" in
-                        authz) service_path="authz" ;;
-                        ingest-api) service_path="ingest-api" ;;
-                        ingest-worker) service_path="ingest-worker" ;;
-                        search-api) service_path="search-api" ;;
-                        agent-api) service_path="agent-api" ;;
-                        docs-api) service_path="docs-api" ;;
+                        authz) service_path="authz"; deploy_path="/srv/authz" ;;
+                        ingest-api) service_path="ingest"; deploy_path="/srv/ingest" ;;
+                        ingest-worker) service_path="ingest"; deploy_path="/srv/ingest" ;;
+                        search-api) service_path="search"; deploy_path="/srv/search" ;;
+                        agent-api) service_path="agent"; deploy_path="/srv/agent" ;;
+                        docs-api) service_path="docs"; deploy_path="/srv/docs" ;;
                     esac
                     
+                    # Try .deploy_version first (if it exists)
                     version=$(timeout $SSH_TIMEOUT ssh -o ConnectTimeout=$SSH_TIMEOUT -o StrictHostKeyChecking=no \
                         "root@${container_ip}" \
                         "cat /opt/${service_path}/.deploy_version 2>/dev/null" 2>/dev/null | jq -r '.commit // empty' 2>/dev/null)
+                    
+                    # Fallback: try git in deploy path
+                    if [[ -z "$version" ]]; then
+                        version=$(timeout $SSH_TIMEOUT ssh -o ConnectTimeout=$SSH_TIMEOUT -o StrictHostKeyChecking=no \
+                            "root@${container_ip}" \
+                            "cd ${deploy_path} && git rev-parse --short HEAD 2>/dev/null" 2>/dev/null)
+                    fi
                     ;;
                     
                 # PostgreSQL - check installed version and format as package@config
@@ -491,10 +499,13 @@ get_deployed_version() {
                     ;;
                     
                 litellm)
-                    # LiteLLM uses "main-latest" or similar tags
-                    version=$(timeout $SSH_TIMEOUT ssh -o ConnectTimeout=$SSH_TIMEOUT -o StrictHostKeyChecking=no \
-                        "root@${container_ip}" \
-                        "docker inspect litellm --format '{{.Config.Image}}' 2>/dev/null | sed 's/.*://'" 2>/dev/null)
+                    # LiteLLM runs in Docker - use pct exec to check image
+                    local container_id=$(get_service_container "$service")
+                    if [[ -n "$container_id" ]]; then
+                        version=$(timeout $SSH_TIMEOUT ssh -o ConnectTimeout=$SSH_TIMEOUT -o StrictHostKeyChecking=no \
+                            root@proxmox.local \
+                            "pct exec ${container_id} -- docker inspect litellm --format '{{.Config.Image}}' 2>/dev/null | sed 's/.*://'" 2>/dev/null)
+                    fi
                     ;;
                     
                 # Nginx - check version and format as "alpine" to match docker image naming
@@ -508,13 +519,22 @@ get_deployed_version() {
                     fi
                     ;;
                     
-                # Next.js apps - read from .version file created by deploywatch
+                # Next.js apps - try .version file, fallback to git
                 ai-portal|agent-manager)
                     # Apps are deployed to /srv/apps/{service-name}
                     local app_path="/srv/apps/${service}"
+                    
+                    # Try .version file first
                     version=$(timeout $SSH_TIMEOUT ssh -o ConnectTimeout=$SSH_TIMEOUT -o StrictHostKeyChecking=no \
                         "root@${container_ip}" \
                         "cat ${app_path}/.version 2>/dev/null" 2>/dev/null)
+                    
+                    # Fallback: try git
+                    if [[ -z "$version" ]]; then
+                        version=$(timeout $SSH_TIMEOUT ssh -o ConnectTimeout=$SSH_TIMEOUT -o StrictHostKeyChecking=no \
+                            "root@${container_ip}" \
+                            "cd ${app_path} && git rev-parse --short HEAD 2>/dev/null" 2>/dev/null)
+                    fi
                     ;;
                     
                 *)
