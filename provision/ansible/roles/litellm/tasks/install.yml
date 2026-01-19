@@ -92,6 +92,23 @@
   become_user: "{{ litellm_user }}"
   tags: [litellm_install]
 
+- name: Fix database permissions for LiteLLM (if tables exist with wrong owner)
+  shell: |
+    # Extract database connection details from URL
+    DB_URL="{{ litellm_database_url }}"
+    DB_NAME=$(echo "$DB_URL" | sed -n 's|.*@[^/]*/\([^?]*\).*|\1|p')
+    DB_USER=$(echo "$DB_URL" | sed -n 's|.*://\([^:]*\):.*|\1|p')
+    
+    # Grant all permissions on existing LiteLLM tables to the configured user
+    psql "$DB_URL" -c "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO ${DB_USER};" 2>/dev/null || true
+    psql "$DB_URL" -c "GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO ${DB_USER};" 2>/dev/null || true
+    psql "$DB_URL" -c "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO ${DB_USER};" 2>/dev/null || true
+  args:
+    executable: /bin/bash
+  when: litellm_enable_database
+  failed_when: false
+  tags: [litellm_install]
+
 - name: Generate Prisma binaries for LiteLLM database support
   shell: |
     set -e
@@ -110,7 +127,7 @@
     
     # Push schema to database
     echo "Running prisma db push..."
-    prisma db push --accept-data-loss
+    prisma db push --accept-data-loss --skip-generate
   args:
     executable: /bin/bash
   become: yes
