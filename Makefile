@@ -1,5 +1,6 @@
 .PHONY: menu help setup configure deploy test test-local test-docker test-security mcp \
-        docker-up docker-start docker-down docker-restart docker-build docker-logs docker-ps docker-clean ssl-check
+        docker-up docker-start docker-down docker-restart docker-build docker-logs docker-ps docker-clean \
+        vault-generate-env vault-migrate vault-sync ssl-check
 
 # Default target - interactive menu with health check
 .DEFAULT_GOAL := menu
@@ -89,6 +90,14 @@ help:
 	@echo "  make docker-logs                         # View all logs"
 	@echo "  make docker-logs SERVICE=authz-api       # View specific logs"
 	@echo "  make docker-clean                        # Remove containers & data"
+	@echo ""
+	@echo "═══════════════════════════════════════════════════════════════════════"
+	@echo "                    VAULT & ENV MANAGEMENT"
+	@echo "═══════════════════════════════════════════════════════════════════════"
+	@echo ""
+	@echo "  make vault-generate-env                  # Generate .env.local from vault"
+	@echo "  make vault-migrate                       # Migrate .env.local to vault (one-time)"
+	@echo "  make vault-sync                          # Sync vault with vault.example.yml"
 	@echo ""
 	@echo "═══════════════════════════════════════════════════════════════════════"
 	@echo "                         TESTING"
@@ -320,6 +329,21 @@ docker-clean:
 	else \
 		echo "Cancelled."; \
 	fi
+
+# ============================================================================
+# VAULT & ENV MANAGEMENT
+# ============================================================================
+# Generate .env.local from Ansible vault (single source of truth)
+vault-generate-env:
+	@bash scripts/vault/generate-env-from-vault.sh
+
+# Migrate existing .env.local to Ansible vault (one-time operation)
+vault-migrate:
+	@bash scripts/vault/migrate-env-to-vault.sh
+
+# Sync vault structure with vault.example.yml
+vault-sync:
+	@bash scripts/vault/sync-vault.sh
 
 # Backward compatibility
 docker-test: test-docker

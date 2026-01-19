@@ -235,17 +235,22 @@ try:
     # Map current values to example structure
     for key in example_flat.keys():
         if key in current_flat:
-            # Direct match
+            # Direct match - use current value
             new_flat[key] = current_flat[key]
             mapped_keys.add(key)
         else:
-            # Keep placeholder from example
+            # No match - keep placeholder from example
             new_flat[key] = example_flat[key]
     
     # Find secrets that don't map to new structure
+    # Only include keys that are NOT prefixes of any mapped key
     for key in current_flat.keys():
         if key not in mapped_keys:
-            removed_secrets[key] = current_flat[key]
+            # Check if this key is a prefix of any mapped key
+            # (i.e., it's an intermediate node, not a leaf)
+            is_prefix = any(mapped.startswith(key + '.') for mapped in mapped_keys)
+            if not is_prefix:
+                removed_secrets[key] = current_flat[key]
     
     # Unflatten and save
     new_data = unflatten_dict(new_flat)
@@ -258,6 +263,10 @@ try:
         removed_data = unflatten_dict(removed_secrets)
         with open('$TEMP_DIR/removed.yml', 'w') as f:
             yaml.dump(removed_data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+        # Also save the list of removed keys for better reporting
+        with open('$TEMP_DIR/removed_keys.txt', 'w') as f:
+            for key in sorted(removed_secrets.keys()):
+                f.write(f'{key}\n')
     
     # Report missing secrets (placeholders that weren't filled)
     missing = []
@@ -343,12 +352,17 @@ main() {
     
     # Check for removed secrets
     if [[ -f "$TEMP_DIR/removed.yml" ]]; then
-        local removed_count=$(grep -c '^  [a-z_]' "$TEMP_DIR/removed.yml" 2>/dev/null || echo "0")
         echo ""
-        warn "${removed_count} secret(s) don't map to new structure"
+        warn "Secret(s) removed from new structure (saved to vault.removed.*.yml)"
         echo ""
         echo "Removed secrets:"
-        grep '^  [a-z_]' "$TEMP_DIR/removed.yml" | sed 's/:.*$//' | sed 's/^/    - /'
+        # Show the flattened keys that were actually removed
+        if [[ -f "$TEMP_DIR/removed_keys.txt" ]]; then
+            cat "$TEMP_DIR/removed_keys.txt" | sed 's/^/    - /'
+        else
+            # Fallback to YAML structure
+            grep '^  [a-z_]' "$TEMP_DIR/removed.yml" | sed 's/:.*$//' | sed 's/^/    - /'
+        fi
     fi
     
     # Check for missing secrets
