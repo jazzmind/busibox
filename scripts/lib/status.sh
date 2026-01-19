@@ -521,21 +521,27 @@ get_deployed_version() {
             
             # Different version detection strategies based on service type
             case "$service" in
-                # Python API services - read .deploy_version file
+                # Python API services - read .deploy_version file from multiple possible locations
                 authz|ingest-api|ingest-worker|search-api|agent-api|docs-api)
-                    local service_path
+                    # Try multiple paths - different deployments use different locations
+                    local version_paths
                     case "$service" in
-                        authz) service_path="authz" ;;
-                        ingest-api) service_path="ingest-api" ;;
-                        ingest-worker) service_path="ingest-worker" ;;
-                        search-api) service_path="search-api" ;;
-                        agent-api) service_path="agent-api" ;;
-                        docs-api) service_path="docs-api" ;;
+                        authz) version_paths="/opt/authz/.deploy_version /srv/authz/.deploy_version" ;;
+                        ingest-api|ingest-worker) version_paths="/srv/ingest/.deploy_version /srv/ingest-api/.deploy_version /opt/ingest-api/.deploy_version" ;;
+                        search-api) version_paths="/opt/search-api/.deploy_version /srv/search-api/.deploy_version" ;;
+                        agent-api) version_paths="/opt/agent-api/.deploy_version /srv/agent-api/.deploy_version" ;;
+                        docs-api) version_paths="/opt/docs-api/.deploy_version /srv/docs-api/.deploy_version" ;;
                     esac
                     
-                    version=$(timeout $SSH_TIMEOUT ssh -o ConnectTimeout=$SSH_TIMEOUT -o StrictHostKeyChecking=no \
-                        "root@${container_ip}" \
-                        "cat /opt/${service_path}/.deploy_version 2>/dev/null" 2>/dev/null | jq -r '.commit // empty' 2>/dev/null)
+                    # Try each path until one works
+                    for path in $version_paths; do
+                        version=$(timeout $SSH_TIMEOUT ssh -o ConnectTimeout=$SSH_TIMEOUT -o StrictHostKeyChecking=no \
+                            "root@${container_ip}" \
+                            "cat ${path} 2>/dev/null" 2>/dev/null | jq -r '.commit // empty' 2>/dev/null | cut -c1-7)
+                        if [[ -n "$version" ]]; then
+                            break
+                        fi
+                    done
                     ;;
                     
                 # PostgreSQL - check installed version and format as package@config
