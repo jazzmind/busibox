@@ -274,6 +274,30 @@
     name: ingest-worker
     enabled: yes
 
+- name: Write deployment version file for ingest worker
+  copy:
+    content: |
+      {
+        "commit": "{{ lookup('pipe', 'git rev-parse --short HEAD', cwd=playbook_dir + '/../..') }}",
+        "branch": "{{ lookup('pipe', 'git branch --show-current', cwd=playbook_dir + '/../..') }}",
+        "timestamp": "{{ ansible_date_time.iso8601 }}",
+        "deployed_by": "ansible"
+      }
+    dest: /opt/ingest-worker/.deploy_version
+    mode: "0644"
+
+- name: Write deployment version file to /srv (backup location)
+  copy:
+    content: |
+      {
+        "commit": "{{ lookup('pipe', 'git rev-parse --short HEAD', cwd=playbook_dir + '/../..') }}",
+        "branch": "{{ lookup('pipe', 'git branch --show-current', cwd=playbook_dir + '/../..') }}",
+        "timestamp": "{{ ansible_date_time.iso8601 }}",
+        "deployed_by": "ansible"
+      }
+    dest: /srv/ingest/.deploy_version
+    mode: "0644"
+
 - name: Restart ingest worker service (always restart on deploy)
   systemd:
     name: ingest-worker
