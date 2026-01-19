@@ -16,12 +16,11 @@ class TestTaskInsightsCollection:
     
     def test_task_insights_collection_name(self):
         """Test task insights uses separate collection."""
-        from app.services.insights_service import TASK_INSIGHTS_COLLECTION
+        from app.services.insights_service import TASK_INSIGHTS_COLLECTION, COLLECTION_NAME
         
         assert TASK_INSIGHTS_COLLECTION == "task_insights"
-        # Should be different from regular insights
-        from app.services.insights_service import INSIGHTS_COLLECTION
-        assert TASK_INSIGHTS_COLLECTION != INSIGHTS_COLLECTION
+        # Should be different from regular insights (COLLECTION_NAME = "chat_insights")
+        assert TASK_INSIGHTS_COLLECTION != COLLECTION_NAME
 
 
 @pytest.mark.asyncio
