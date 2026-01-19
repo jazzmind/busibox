@@ -80,6 +80,8 @@ TOOL_SCOPES: Dict[str, List[str]] = {
     "ingest_document": ["ingest.write"],
     "get_weather": [],  # No auth needed
     "rag_query": ["rag.read"],
+    "create_task": ["task.write"],  # Create tasks
+    "send_notification": [],  # No special auth needed (uses configured providers)
 }
 
 
@@ -158,6 +160,16 @@ def _register_builtin_tools():
     ToolRegistry.register("web_search", search_web, WebSearchOutput)
     ToolRegistry.register("web_scraper", scrape_webpage, WebScraperOutput)
     ToolRegistry.register("get_weather", get_weather, WeatherOutput)
+    
+    # Register task and notification tools
+    try:
+        from app.tools.task_tool import create_task, TaskCreationOutput
+        from app.tools.notification_tool import send_notification, NotificationOutput
+        
+        ToolRegistry.register("create_task", create_task, TaskCreationOutput)
+        ToolRegistry.register("send_notification", send_notification, NotificationOutput)
+    except ImportError as e:
+        logger.warning(f"Could not register task/notification tools: {e}")
 
 
 # Initialize tool registry on module load

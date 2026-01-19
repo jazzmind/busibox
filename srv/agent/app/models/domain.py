@@ -392,3 +392,153 @@ class ChatSettings(Base):
 
     def __repr__(self) -> str:
         return f"<ChatSettings(id={self.id}, user_id={self.user_id})>"
+
+
+class AgentTask(Base):
+    """
+    Event-driven agent task with pre-authorized execution.
+    
+    Tasks can be triggered by:
+    - Cron schedules (hourly, daily, custom cron expressions)
+    - Webhooks (incoming events from external services)
+    - One-time datetime triggers
+    
+    Each task has a delegation token for autonomous execution on behalf of the user.
+    """
+    __tablename__ = "agent_tasks"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    user_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    
+    # Target agent or workflow
+    agent_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent_definitions.id", ondelete="CASCADE"), index=True
+    )
+    
+    # Task prompt/input
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    input_config: Mapped[dict] = mapped_column(JSON, default=dict, comment="Additional input parameters")
+    
+    # Trigger configuration
+    trigger_type: Mapped[str] = mapped_column(
+        String(50), nullable=False, index=True,
+        comment="Trigger type: cron, webhook, one_time"
+    )
+    trigger_config: Mapped[dict] = mapped_column(
+        JSON, default=dict,
+        comment="Trigger-specific config: {cron: '0 * * * *'} or {webhook_secret: '...'}"
+    )
+    
+    # Pre-authorized delegation token for autonomous execution
+    delegation_token: Mapped[Optional[str]] = mapped_column(Text, comment="Encrypted delegation token")
+    delegation_scopes: Mapped[list] = mapped_column(JSON, default=list, comment="Scopes granted to the task")
+    delegation_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    
+    # Notification configuration
+    notification_config: Mapped[dict] = mapped_column(
+        JSON, default=dict,
+        comment="Notification settings: {channel: 'email', recipient: '...', include_summary: true}"
+    )
+    
+    # Task insights/memory configuration
+    insights_config: Mapped[dict] = mapped_column(
+        JSON, default=dict,
+        comment="Insights settings: {enabled: true, max_insights: 50, purge_after_days: 30}"
+    )
+    
+    # Execution state
+    status: Mapped[str] = mapped_column(
+        String(50), default="active", index=True,
+        comment="Status: active, paused, completed, failed, expired"
+    )
+    scheduler_job_id: Mapped[Optional[str]] = mapped_column(
+        String(255), comment="APScheduler job ID for cron tasks"
+    )
+    webhook_secret: Mapped[Optional[str]] = mapped_column(
+        String(255), comment="Secret for webhook validation"
+    )
+    
+    # Execution tracking
+    last_run_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    last_run_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("run_records.id", ondelete="SET NULL")
+    )
+    next_run_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    run_count: Mapped[int] = mapped_column(Integer, default=0)
+    error_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[Optional[str]] = mapped_column(Text)
+    
+    # Metadata
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+    
+    # Relationships
+    agent: Mapped["AgentDefinition"] = relationship("AgentDefinition", lazy="selectin")
+    last_run: Mapped[Optional["RunRecord"]] = relationship("RunRecord", lazy="selectin")
+    executions: Mapped[list["TaskExecution"]] = relationship(
+        "TaskExecution", back_populates="task", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        Index('idx_agent_tasks_user_id', 'user_id'),
+        Index('idx_agent_tasks_agent_id', 'agent_id'),
+        Index('idx_agent_tasks_status', 'status'),
+        Index('idx_agent_tasks_trigger_type', 'trigger_type'),
+        Index('idx_agent_tasks_next_run_at', 'next_run_at'),
+    )
+
+    def __repr__(self) -> str:
+        return f"<AgentTask(id={self.id}, name={self.name}, user_id={self.user_id}, status={self.status})>"
+
+
+class TaskExecution(Base):
+    """Track individual task execution runs"""
+    __tablename__ = "task_executions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    task_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent_tasks.id", ondelete="CASCADE"), index=True
+    )
+    run_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("run_records.id", ondelete="SET NULL"), index=True
+    )
+    
+    # Execution details
+    trigger_source: Mapped[str] = mapped_column(String(50), comment="cron, webhook, manual")
+    status: Mapped[str] = mapped_column(String(50), default="pending", index=True)
+    # Status: pending, running, completed, failed, timeout
+    
+    # Input/Output
+    input_data: Mapped[dict] = mapped_column(JSON, default=dict)
+    output_data: Mapped[Optional[dict]] = mapped_column(JSON)
+    output_summary: Mapped[Optional[str]] = mapped_column(Text, comment="Summary for notifications")
+    
+    # Notification tracking
+    notification_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+    notification_error: Mapped[Optional[str]] = mapped_column(Text)
+    
+    # Timing
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    duration_seconds: Mapped[Optional[float]] = mapped_column(Float)
+    
+    # Error tracking
+    error: Mapped[Optional[str]] = mapped_column(Text)
+    
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+    
+    # Relationships
+    task: Mapped["AgentTask"] = relationship("AgentTask", back_populates="executions")
+    run: Mapped[Optional["RunRecord"]] = relationship("RunRecord", lazy="selectin")
+
+    __table_args__ = (
+        Index('idx_task_executions_task_id', 'task_id'),
+        Index('idx_task_executions_status', 'status'),
+        Index('idx_task_executions_created_at', 'created_at'),
+    )
+
+    def __repr__(self) -> str:
+        return f"<TaskExecution(id={self.id}, task_id={self.task_id}, status={self.status})>"
