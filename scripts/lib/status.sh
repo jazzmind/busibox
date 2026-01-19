@@ -219,6 +219,14 @@ check_service_status() {
                         echo "down"
                     fi
                     ;;
+                ingest-worker)
+                    # Ingest worker uses systemd
+                    if timeout $SSH_TIMEOUT ssh -o ConnectTimeout=$SSH_TIMEOUT -o StrictHostKeyChecking=no "root@${container_ip}" "systemctl is-active ingest-worker" 2>/dev/null | grep -q "^active$"; then
+                        echo "up"
+                    else
+                        echo "down"
+                    fi
+                    ;;
                 *)
                     # Default: check systemd with service name (replace hyphens with underscores)
                     local service_name="${service//-/_}"
@@ -432,6 +440,7 @@ get_deployed_version() {
             case "$service" in
                 authz) service_path="authz" ;;
                 ingest-api) service_path="ingest-api" ;;
+                ingest-worker) service_path="ingest-worker" ;;
                 search-api) service_path="search-api" ;;
                 agent-api) service_path="agent-api" ;;
                 docs-api) service_path="docs-api" ;;

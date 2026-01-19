@@ -591,6 +591,189 @@ format_response_time() {
     fi
 }
 
+# Render consolidated ingest line (API + Worker)
+# Usage: render_consolidated_ingest_line "staging"
+render_consolidated_ingest_line() {
+    local env=$1
+    
+    # Get status for both API and Worker
+    local api_status_json worker_status_json
+    api_status_json=$(get_service_status_from_cache "ingest-api" "$env" 2>/dev/null)
+    worker_status_json=$(get_service_status_from_cache "ingest-worker" "$env" 2>/dev/null)
+    
+    # Parse statuses
+    local api_status worker_status api_version api_current api_sync
+    if command -v jq &>/dev/null; then
+        api_status=$(echo "$api_status_json" | jq -r '.status // "unknown"')
+        worker_status=$(echo "$worker_status_json" | jq -r '.status // "unknown"')
+        api_version=$(echo "$api_status_json" | jq -r '.version // "unknown"')
+        api_current=$(echo "$api_status_json" | jq -r '.current_version // "unknown"')
+        api_sync=$(echo "$api_status_json" | jq -r '.sync_state // "unknown"')
+    else
+        api_status="unknown"
+        worker_status="unknown"
+        api_version="unknown"
+        api_current="unknown"
+        api_sync="unknown"
+    fi
+    
+    # Determine combined status
+    local combined_status combined_symbol status_text
+    if [[ "$api_status" == "up" && "$worker_status" == "up" ]]; then
+        combined_status="up"
+        combined_symbol="${GREEN}●${NC}"
+        status_text="${GREEN}✓ up${NC}"
+    elif [[ "$api_status" == "down" && "$worker_status" == "down" ]]; then
+        combined_status="down"
+        combined_symbol="${RED}○${NC}"
+        status_text="${RED}✗ down (both)${NC}"
+    elif [[ "$api_status" == "down" ]]; then
+        combined_status="degraded"
+        combined_symbol="${YELLOW}◐${NC}"
+        status_text="${YELLOW}⚠ down (api)${NC}"
+    elif [[ "$worker_status" == "down" ]]; then
+        combined_status="degraded"
+        combined_symbol="${YELLOW}◐${NC}"
+        status_text="${YELLOW}⚠ down (worker)${NC}"
+    else
+        combined_status="unknown"
+        combined_symbol="${DIM}○${NC}"
+        status_text="${DIM}- unknown${NC}"
+    fi
+    
+    # Format version info
+    local version_display="$api_version"
+    if [[ ${#api_version} -gt 7 ]]; then
+        version_display="${api_version:0:7}"
+    fi
+    
+    local current_display="$api_current"
+    if [[ ${#api_current} -gt 7 ]]; then
+        current_display="${api_current:0:7}"
+    fi
+    
+    local version_info
+    if [[ "$api_version" == "$api_current" ]]; then
+        version_info="${version_display}"
+    else
+        version_info="${version_display} → ${current_display}"
+    fi
+    
+    # Sync indicator
+    local sync_indicator=$(get_sync_indicator "$api_sync" "$api_version")
+    
+    # Render line
+    printf "  %s %-15s\t%s\t│ %-18s\t%s\n" \
+        "$combined_symbol" \
+        "Ingest API & Worker" \
+        "$status_text" \
+        "$version_info" \
+        "$sync_indicator"
+}
+
+# Render consolidated litellm line (LiteLLM + vLLM if available)
+# Usage: render_consolidated_litellm_line "staging"
+render_consolidated_litellm_line() {
+    local env=$1
+    
+    # Get status for LiteLLM and vLLM
+    local litellm_status_json vllm_status_json
+    litellm_status_json=$(get_service_status_from_cache "litellm" "$env" 2>/dev/null)
+    vllm_status_json=$(get_service_status_from_cache "vllm" "$env" 2>/dev/null)
+    
+    # Parse statuses
+    local litellm_status vllm_status litellm_version litellm_current litellm_sync
+    if command -v jq &>/dev/null; then
+        litellm_status=$(echo "$litellm_status_json" | jq -r '.status // "unknown"')
+        vllm_status=$(echo "$vllm_status_json" | jq -r '.status // "unknown"')
+        litellm_version=$(echo "$litellm_status_json" | jq -r '.version // "unknown"')
+        litellm_current=$(echo "$litellm_status_json" | jq -r '.current_version // "unknown"')
+        litellm_sync=$(echo "$litellm_status_json" | jq -r '.sync_state // "unknown"')
+    else
+        litellm_status="unknown"
+        vllm_status="unknown"
+        litellm_version="unknown"
+        litellm_current="unknown"
+        litellm_sync="unknown"
+    fi
+    
+    # Determine combined status and label
+    local combined_status combined_symbol status_text service_label
+    
+    # Check if vLLM is actually deployed/used (not just unknown)
+    local vllm_used=false
+    if [[ "$vllm_status" == "up" || "$vllm_status" == "down" ]]; then
+        vllm_used=true
+    fi
+    
+    if [[ "$vllm_used" == "true" ]]; then
+        service_label="LiteLLM & vLLM"
+        if [[ "$litellm_status" == "up" && "$vllm_status" == "up" ]]; then
+            combined_status="up"
+            combined_symbol="${GREEN}●${NC}"
+            status_text="${GREEN}✓ up${NC}"
+        elif [[ "$litellm_status" == "down" && "$vllm_status" == "down" ]]; then
+            combined_status="down"
+            combined_symbol="${RED}○${NC}"
+            status_text="${RED}✗ down (both)${NC}"
+        elif [[ "$litellm_status" == "down" ]]; then
+            combined_status="degraded"
+            combined_symbol="${YELLOW}◐${NC}"
+            status_text="${YELLOW}⚠ down (litellm)${NC}"
+        elif [[ "$vllm_status" == "down" ]]; then
+            combined_status="degraded"
+            combined_symbol="${YELLOW}◐${NC}"
+            status_text="${YELLOW}⚠ down (vllm)${NC}"
+        else
+            combined_status="unknown"
+            combined_symbol="${DIM}○${NC}"
+            status_text="${DIM}- unknown${NC}"
+        fi
+    else
+        # vLLM not used, show just LiteLLM
+        service_label="LiteLLM"
+        if [[ "$litellm_status" == "up" ]]; then
+            combined_symbol="${GREEN}●${NC}"
+            status_text="${GREEN}✓ up${NC}"
+        elif [[ "$litellm_status" == "down" ]]; then
+            combined_symbol="${RED}○${NC}"
+            status_text="${RED}✗ down${NC}"
+        else
+            combined_symbol="${DIM}○${NC}"
+            status_text="${DIM}- unknown${NC}"
+        fi
+    fi
+    
+    # Format version info
+    local version_display="$litellm_version"
+    if [[ ${#litellm_version} -gt 7 ]]; then
+        version_display="${litellm_version:0:7}"
+    fi
+    
+    local current_display="$litellm_current"
+    if [[ ${#litellm_current} -gt 7 ]]; then
+        current_display="${litellm_current:0:7}"
+    fi
+    
+    local version_info
+    if [[ "$litellm_version" == "$litellm_current" ]]; then
+        version_info="${version_display}"
+    else
+        version_info="${version_display} → ${current_display}"
+    fi
+    
+    # Sync indicator
+    local sync_indicator=$(get_sync_indicator "$litellm_sync" "$litellm_version")
+    
+    # Render line
+    printf "  %s %-15s\t%s\t│ %-18s\t%s\n" \
+        "$combined_symbol" \
+        "$service_label" \
+        "$status_text" \
+        "$version_info" \
+        "$sync_indicator"
+}
+
 # Render single service line
 # Usage: render_service_line "authz" "staging"
 render_service_line() {
@@ -661,29 +844,40 @@ render_service_line() {
 }
 
 # Render service category group
-# Usage: render_service_category "Core Services" "core" "staging"
+# Usage: render_service_category "Core Services" "core" "staging" [show_header]
 render_service_category() {
     local category_title=$1
     local category=$2
     local env=$3
+    local show_header=${4:-true}
     
     echo ""
     echo -e "${BOLD}$category_title${NC}"
     echo -e "${DIM}$(printf '─%.0s' $(seq 1 ${#category_title}))${NC}"
     
-    # Add column headers (aligned with data rows that have status symbol)
-    printf "    ${DIM}%-15s\t%-8s\t│ %-18s\t%-10s${NC}\n" \
-        "Service" \
-        "Status" \
-        "Version" \
-        "Sync"
+    # Add column headers only if requested (only for first category)
+    if [[ "$show_header" == "true" ]]; then
+        printf "    ${DIM}%-15s\t%-8s\t│ %-18s\t%-10s${NC}\n" \
+            "Service" \
+            "Status" \
+            "Version" \
+            "Sync"
+    fi
     
     # Get services in category
     local services=$(get_services_in_category "$category")
     
-    # Render each service
+    # Render each service (with special handling for consolidated services)
     for service in $services; do
-        render_service_line "$service" "$env"
+        # Special handling for ingest - consolidate API + Worker
+        if [[ "$service" == "ingest" ]]; then
+            render_consolidated_ingest_line "$env"
+        # Special handling for litellm - consolidate LiteLLM + vLLM
+        elif [[ "$service" == "litellm" ]]; then
+            render_consolidated_litellm_line "$env"
+        else
+            render_service_line "$service" "$env"
+        fi
     done
 }
 
@@ -725,10 +919,10 @@ render_status_dashboard() {
     echo ""
     echo -e "${DIM}Environment: ${CYAN}$env${NC} ${DIM}($backend)${NC}$(printf '%*s' 20 '')${DIM}Last check: $cache_age  ${CYAN}[Press 's' to refresh]${NC}"
     
-    # Render each category
-    render_service_category "Core Services" "core" "$env"
-    render_service_category "API Services" "api" "$env"
-    render_service_category "App Services" "app" "$env"
+    # Render each category (only show header for first category)
+    render_service_category "Core Services" "core" "$env" "true"
+    render_service_category "API Services" "api" "$env" "false"
+    render_service_category "Apps" "app" "$env" "false"
     
     echo ""
 }
