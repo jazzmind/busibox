@@ -702,10 +702,10 @@ secrets_configuration() {
     while true; do
         echo ""
         menu "Secrets & Keys" \
-            "Generate TOKEN_SERVICE Keys (agent-server)" \
             "Edit Ansible Vault (secrets)" \
             "View Vault Variables (masked)" \
             "Sync Vault with Example (update structure)" \
+            "Generate .env.local from Vault" \
             "Back"
         
         local choice=""
@@ -713,25 +713,25 @@ secrets_configuration() {
         
         case "${choice:-}" in
             1)
-                bash "${REPO_ROOT}/scripts/generate/generate-token-service-keys.sh" || error "Failed"
-                pause
-                ;;
-            2)
                 header "Edit Ansible Vault" 70
                 cd "${REPO_ROOT}/provision/ansible"
                 ansible-vault edit roles/secrets/vars/vault.yml || error "Failed to edit vault"
                 cd "${REPO_ROOT}"
                 pause
                 ;;
-            3)
+            2)
                 header "View Vault Variables" 70
                 cd "${REPO_ROOT}/provision/ansible"
                 ansible-vault view roles/secrets/vars/vault.yml | grep -E "^[a-z_]+:" | sed 's/:.*$/: <masked>/' || error "Failed"
                 cd "${REPO_ROOT}"
                 pause
                 ;;
-            4)
+            3)
                 bash "${REPO_ROOT}/scripts/vault/sync-vault.sh" || error "Failed"
+                pause
+                ;;
+            4)
+                bash "${REPO_ROOT}/scripts/vault/generate-env-from-vault.sh" || error "Failed"
                 pause
                 ;;
             5|b|B|"")
@@ -757,10 +757,11 @@ docker_menu() {
             "Edit Ansible Vault (secrets)" \
             "View Vault Variables (masked)" \
             "Sync Vault with Example (update structure)" \
+            "Generate .env.local from Vault" \
             "Back to Main Menu"
         
         local choice=""
-        read -p "$(echo -e "${BOLD}Select option [1-5]:${NC} ")" choice
+        read -p "$(echo -e "${BOLD}Select option [1-6]:${NC} ")" choice
         
         case "${choice:-}" in
             1)
@@ -784,7 +785,11 @@ docker_menu() {
                 bash "${REPO_ROOT}/scripts/vault/sync-vault.sh" || error "Failed"
                 pause
                 ;;
-            5|b|B|"")
+            5)
+                bash "${REPO_ROOT}/scripts/vault/generate-env-from-vault.sh" || error "Failed"
+                pause
+                ;;
+            6|b|B|"")
                 return 0
                 ;;
         esac
@@ -807,7 +812,7 @@ proxmox_menu() {
             "Model Configuration (LLM models, routing)" \
             "Container Configuration (GPU, storage)" \
             "App Configuration (admin, OAuth clients)" \
-            "Secrets & Keys (TOKEN_SERVICE, vault)" \
+            "Secrets & Keys (vault, secrets)" \
             "Back to Main Menu"
         
         local choice=""

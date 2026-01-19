@@ -166,18 +166,23 @@ except Exception as e:
 
 # Create new vault with example structure + current values
 create_synced_vault() {
-    info "Creating synced vault..."
+    info "Creating synced vault (preserving comments)..."
     
+    # First, use comment-preserving script to merge values while keeping structure
+    python3 "${REPO_ROOT}/scripts/vault/preserve_comments.py" \
+        "$TEMP_DIR/current.yml" \
+        "$EXAMPLE_FILE" \
+        > "$TEMP_DIR/new.yml"
+    
+    if [[ ! -s "$TEMP_DIR/new.yml" ]]; then
+        error "Failed to create synced vault"
+        return 1
+    fi
+    
+    # Now analyze what was removed and what's missing using Python
     python3 -c "
 import yaml
 import sys
-import re
-from collections import OrderedDict
-
-def preserve_yaml_comments(example_file):
-    \"\"\"Read example file preserving comments\"\"\"
-    with open(example_file, 'r') as f:
-        return f.read()
 
 def flatten_dict(d, parent_key='', sep='.'):
     items = []
@@ -189,28 +194,6 @@ def flatten_dict(d, parent_key='', sep='.'):
             items.append((new_key, v))
     return dict(items)
 
-def unflatten_dict(d, sep='.'):
-    result = {}
-    for key, value in d.items():
-        parts = key.split(sep)
-        current = result
-        for part in parts[:-1]:
-            if part not in current:
-                current[part] = {}
-            current = current[part]
-        current[parts[-1]] = value
-    return result
-
-def get_nested(d, path):
-    keys = path.split('.')
-    value = d
-    for key in keys:
-        if isinstance(value, dict) and key in value:
-            value = value[key]
-        else:
-            return None
-    return value
-
 try:
     # Load files
     with open('$EXAMPLE_FILE', 'r') as f:
@@ -219,56 +202,58 @@ try:
     with open('$TEMP_DIR/current.yml', 'r') as f:
         current_data = yaml.safe_load(f)
     
-    if not example_data or not current_data:
+    with open('$TEMP_DIR/new.yml', 'r') as f:
+        new_data = yaml.safe_load(f)
+    
+    if not example_data or not current_data or not new_data:
         print('Error: Empty vault files', file=sys.stderr)
         sys.exit(1)
     
-    # Flatten both structures
+    # Flatten structures
     example_flat = flatten_dict(example_data)
     current_flat = flatten_dict(current_data)
+    new_flat = flatten_dict(new_data)
     
-    # Create new structure based on example
-    new_flat = {}
+    # Find mapped keys
     mapped_keys = set()
-    removed_secrets = {}
-    
-    # Map current values to example structure
     for key in example_flat.keys():
         if key in current_flat:
-            # Direct match - use current value
-            new_flat[key] = current_flat[key]
             mapped_keys.add(key)
-        else:
-            # No match - keep placeholder from example
-            new_flat[key] = example_flat[key]
     
-    # Find secrets that don't map to new structure
-    # Only include keys that are NOT prefixes of any mapped key
+    # Find removed secrets (in current but not in example)
+    removed_secrets = {}
     for key in current_flat.keys():
-        if key not in mapped_keys:
-            # Check if this key is a prefix of any mapped key
-            # (i.e., it's an intermediate node, not a leaf)
-            is_prefix = any(mapped.startswith(key + '.') for mapped in mapped_keys)
+        if key not in example_flat:
+            # Check if this key is a prefix of any example key
+            # (i.e., it's an intermediate node, not a removed leaf)
+            is_prefix = any(example_key.startswith(key + '.') for example_key in example_flat.keys())
             if not is_prefix:
                 removed_secrets[key] = current_flat[key]
     
-    # Unflatten and save
-    new_data = unflatten_dict(new_flat)
-    
-    with open('$TEMP_DIR/new.yml', 'w') as f:
-        yaml.dump(new_data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
-    
     # Save removed secrets if any
     if removed_secrets:
+        def unflatten_dict(d, sep='.'):
+            result = {}
+            for key, value in d.items():
+                parts = key.split(sep)
+                current = result
+                for part in parts[:-1]:
+                    if part not in current:
+                        current[part] = {}
+                    current = current[part]
+                current[parts[-1]] = value
+            return result
+        
         removed_data = unflatten_dict(removed_secrets)
         with open('$TEMP_DIR/removed.yml', 'w') as f:
             yaml.dump(removed_data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
-        # Also save the list of removed keys for better reporting
+        
+        # Save list of removed keys
         with open('$TEMP_DIR/removed_keys.txt', 'w') as f:
             for key in sorted(removed_secrets.keys()):
-                f.write(f'{key}\n')
+                f.write(f'{key}\\n')
     
-    # Report missing secrets (placeholders that weren't filled)
+    # Find missing secrets (placeholders in new vault)
     missing = []
     for key, value in new_flat.items():
         if isinstance(value, str) and ('CHANGE_ME' in value or 'your-' in value or value.endswith('-here')):
@@ -277,20 +262,22 @@ try:
     if missing:
         with open('$TEMP_DIR/missing.txt', 'w') as f:
             for key in sorted(missing):
-                f.write(f'{key}\n')
+                f.write(f'{key}\\n')
     
     sys.exit(0)
     
 except Exception as e:
     print(f'Error: {e}', file=sys.stderr)
+    import traceback
+    traceback.print_exc()
     sys.exit(1)
 "
     
     if [[ $? -eq 0 ]]; then
-        success "Vault structure synced"
+        success "Vault structure synced with comments preserved"
         return 0
     else
-        error "Failed to sync vault structure"
+        error "Failed to analyze vault changes"
         return 1
     fi
 }
@@ -432,15 +419,15 @@ main() {
     
     if [[ -f "$VAULT_REMOVED_BACKUP" ]]; then
         echo "  1. Review removed secrets:"
-        echo "     ${CYAN}cd provision/ansible${NC}"
-        echo "     ${CYAN}ansible-vault view roles/secrets/vars/backups/vault.removed.${TIMESTAMP}.yml${NC}"
+        echo -e "     ${CYAN}cd provision/ansible${NC}"
+        echo -e "     ${CYAN}ansible-vault view roles/secrets/vars/backups/vault.removed.${TIMESTAMP}.yml${NC}"
         echo ""
     fi
     
     if [[ -f "$TEMP_DIR/missing.txt" ]]; then
         echo "  2. Add missing secrets:"
-        echo "     ${CYAN}cd provision/ansible${NC}"
-        echo "     ${CYAN}ansible-vault edit roles/secrets/vars/vault.yml${NC}"
+        echo -e "     ${CYAN}cd provision/ansible${NC}"
+        echo -e "     ${CYAN}ansible-vault edit roles/secrets/vars/vault.yml${NC}"
         echo ""
         echo "  Secrets that need values:"
         cat "$TEMP_DIR/missing.txt" | sed 's/^/     - /'
@@ -448,11 +435,11 @@ main() {
     fi
     
     echo "  3. Test the new vault:"
-    echo "     ${CYAN}make configure${NC} → Verify Configuration"
+    echo -e "     ${CYAN}make configure${NC} → Verify Configuration"
     echo ""
     
     echo "  Backups available at:"
-    echo "     ${DIM}provision/ansible/roles/secrets/vars/backups/${NC}"
+    echo -e "     ${DIM}provision/ansible/roles/secrets/vars/backups/${NC}"
     echo "     - vault.backup.${TIMESTAMP}.yml (your previous vault)"
     if [[ -f "$VAULT_REMOVED_BACKUP" ]]; then
         echo "     - vault.removed.${TIMESTAMP}.yml (unmapped secrets)"
