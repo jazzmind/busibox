@@ -65,8 +65,9 @@ _CORE_SERVICES="authz postgres milvus minio nginx litellm"
 _API_SERVICES="ingest search-api agent-api"
 _APP_SERVICES="ai-portal agent-manager"
 
-# All services combined
-ALL_SERVICES="authz postgres milvus minio nginx litellm ingest search-api agent-api ai-portal agent-manager"
+# All services combined (includes individual services for status checking)
+# Note: "ingest" is used for display, but we check "ingest-api" and "ingest-worker" individually
+ALL_SERVICES="authz postgres milvus minio nginx litellm ingest-api ingest-worker search-api agent-api ai-portal agent-manager"
 
 # ============================================================================
 # Service Metadata Functions
