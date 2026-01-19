@@ -207,7 +207,7 @@ class TaskRead(BaseModel):
     
     # Status
     status: str
-    webhook_secret: Optional[str] = Field(None, exclude=True)  # Hidden from response
+    webhook_secret: Optional[str] = Field(None, description="Webhook secret (only returned on creation)")
     
     # Execution tracking
     last_run_at: Optional[datetime]
