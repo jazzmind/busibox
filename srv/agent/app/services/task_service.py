@@ -628,13 +628,18 @@ def _calculate_next_run(cron_expression: str) -> Optional[datetime]:
         return None
 
 
-def task_to_read(task: AgentTask, base_url: Optional[str] = None) -> TaskRead:
+def task_to_read(
+    task: AgentTask,
+    base_url: Optional[str] = None,
+    include_secret: bool = False,
+) -> TaskRead:
     """
     Convert AgentTask model to TaskRead schema.
     
     Args:
         task: AgentTask model
         base_url: Base URL for webhook URL generation
+        include_secret: Whether to include the webhook secret (only on creation)
         
     Returns:
         TaskRead schema
@@ -668,4 +673,5 @@ def task_to_read(task: AgentTask, base_url: Optional[str] = None) -> TaskRead:
         created_at=task.created_at,
         updated_at=task.updated_at,
         webhook_url=webhook_url,
+        webhook_secret=task.webhook_secret if include_secret else None,
     )

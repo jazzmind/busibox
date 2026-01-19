@@ -85,7 +85,8 @@ async def create_agent_task(
             },
         )
         
-        return task_to_read(task, base_url)
+        # Include webhook_secret on creation so client can store it
+        return task_to_read(task, base_url, include_secret=True)
         
     except ValueError as e:
         logger.warning(f"Invalid task creation request: {e}")
