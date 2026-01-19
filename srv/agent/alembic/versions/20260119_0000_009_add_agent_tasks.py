@@ -1,7 +1,7 @@
 """Add agent_tasks and task_executions tables
 
-Revision ID: 008
-Revises: 007
+Revision ID: 009
+Revises: 008
 Create Date: 2026-01-19 00:00:00
 
 This migration adds support for Agent Tasks - event-driven actions
@@ -15,8 +15,8 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = '008'
-down_revision: Union[str, None] = '007'
+revision: str = '009'
+down_revision: Union[str, None] = '008'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -54,13 +54,13 @@ def upgrade() -> None:
         sa.Column('description', sa.Text(), nullable=True),
         sa.Column('user_id', sa.String(255), nullable=False, index=True),
         
-        # Target agent
+        # Target agent - no FK constraint since built-in agents exist in code, not DB
         sa.Column(
             'agent_id',
             postgresql.UUID(as_uuid=True),
-            sa.ForeignKey('agent_definitions.id', ondelete='CASCADE'),
             nullable=False,
-            index=True
+            index=True,
+            comment='Agent ID (may be built-in from code or from agent_definitions table)'
         ),
         
         # Task prompt/input

@@ -50,6 +50,11 @@ BOOTSTRAP_ALLOWED_SCOPES = ["read", "write", "search.read", "ingest.write", "ing
 # Admin token for test access
 ADMIN_TOKEN = os.getenv("AUTHZ_ADMIN_TOKEN", "local-admin-token")
 
+# Consistent test user credentials - used by all integration tests
+# Using a fixed UUID ensures tests can rely on this user existing
+TEST_AUTH_USER_ID = "00000000-0000-0000-0000-000000000001"
+TEST_AUTH_USER_EMAIL = "test@busibox.local"
+
 
 async def check_schema_exists(conn):
     """Check if the authz schema tables exist."""
@@ -174,6 +179,21 @@ async def create_bootstrap_data(conn):
             print(f"    ✓ Added test email domain: {domain}")
         else:
             print(f"    ✓ Test email domain exists: {domain}")
+    
+    # Create consistent test user for integration tests
+    existing_user = await conn.fetchval(
+        "SELECT user_id FROM authz_users WHERE user_id = $1",
+        TEST_AUTH_USER_ID
+    )
+    if not existing_user:
+        await conn.execute("""
+            INSERT INTO authz_users (user_id, email, created_at)
+            VALUES ($1, $2, NOW())
+            ON CONFLICT (user_id) DO NOTHING
+        """, TEST_AUTH_USER_ID, TEST_AUTH_USER_EMAIL)
+        print(f"    ✓ Created test user: {TEST_AUTH_USER_ID} ({TEST_AUTH_USER_EMAIL})")
+    else:
+        print(f"    ✓ Test user exists: {TEST_AUTH_USER_ID}")
     
     print("  ✓ Bootstrap data created")
 

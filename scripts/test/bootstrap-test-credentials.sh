@@ -155,9 +155,9 @@ else
         echo -e "${GREEN}✓ Deleted ${DELETED} existing test user(s)${NC}"
     fi
     
-    # Generate new user ID
-    TEST_USER_ID=$(python3 -c "import uuid; print(uuid.uuid4())")
-    echo -e "${BLUE}Creating new test user: ${TEST_USER_ID}${NC}"
+    # Use consistent well-known test user ID (matches bootstrap-test-databases.py)
+    TEST_USER_ID="00000000-0000-0000-0000-000000000001"
+    echo -e "${BLUE}Creating test user: ${TEST_USER_ID}${NC}"
     
     # Create user directly in database
     run_db_query "INSERT INTO authz_users (user_id, email, created_at) VALUES ('${TEST_USER_ID}', '${TEST_USER_EMAIL}', NOW());"

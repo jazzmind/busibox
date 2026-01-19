@@ -1,0 +1,28 @@
+[Unit]
+Description=Busibox Voice Agent Service
+After=network.target freeswitch.service
+Wants=freeswitch.service
+
+[Service]
+Type=simple
+User={{ voice_agent_user }}
+Group={{ voice_agent_group }}
+WorkingDirectory={{ voice_agent_home }}
+Environment="PATH={{ voice_agent_home }}/venv/bin:/usr/local/bin:/usr/bin"
+Environment="PYTHONPATH={{ voice_agent_home }}/src"
+EnvironmentFile={{ voice_agent_home }}/.env
+ExecStart={{ voice_agent_home }}/venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port {{ voice_agent_port }}
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=voice-agent
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths={{ voice_agent_home }}/logs /var/log/voice-agent
+
+[Install]
+WantedBy=multi-user.target

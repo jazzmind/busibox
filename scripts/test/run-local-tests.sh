@@ -140,23 +140,26 @@ if [[ "$ENV" == "docker" ]]; then
     export TEST_DB_USER=busibox_user
     export TEST_DB_PASSWORD=devpassword
     
-    # Test user for auth tests - fetch from database or run bootstrap to create
-    TEST_USER_ID=$(docker exec local-postgres psql -U busibox_user -d busibox -t -A -c "SELECT user_id FROM authz_users WHERE email = 'test@busibox.local' LIMIT 1;" 2>/dev/null || echo "")
+    # Use the well-known consistent test user ID
+    # This ID is created by bootstrap-test-databases.py in the test_authz database
+    # via 'make test-db-init'
+    TEST_USER_ID="00000000-0000-0000-0000-000000000001"
+    TEST_USER_EMAIL="test@busibox.local"
     
-    if [[ -z "$TEST_USER_ID" ]]; then
-        info "Test user not found. Running bootstrap to create..."
-        # Run bootstrap script and capture the test user ID
-        BOOTSTRAP_OUTPUT=$(bash "${SCRIPT_DIR}/bootstrap-test-credentials.sh" docker 2>&1)
-        TEST_USER_ID=$(echo "$BOOTSTRAP_OUTPUT" | grep "^TEST_USER_ID=" | cut -d'=' -f2)
-        if [[ -z "$TEST_USER_ID" ]]; then
-            error "Failed to create test user via bootstrap"
-            exit 1
-        fi
-        info "Created test user: ${TEST_USER_ID}"
+    # Verify the test user exists in test_authz database
+    USER_CHECK=$(docker exec local-postgres psql -U busibox_test_user -d test_authz -t -A -c "SELECT user_id FROM authz_users WHERE user_id = '${TEST_USER_ID}' LIMIT 1;" 2>/dev/null || echo "")
+    
+    if [[ -z "$USER_CHECK" ]]; then
+        info "Test user not found in test_authz. Attempting to create..."
+        # Try to create the user directly
+        docker exec local-postgres psql -U busibox_test_user -d test_authz -c "INSERT INTO authz_users (user_id, email, created_at) VALUES ('${TEST_USER_ID}', '${TEST_USER_EMAIL}', NOW()) ON CONFLICT DO NOTHING;" 2>/dev/null || {
+            warn "Could not create test user. Run 'make test-db-init' to bootstrap test databases."
+        }
+        info "Test user: ${TEST_USER_ID}"
     fi
     
     export TEST_USER_ID
-    export TEST_USER_EMAIL=test@busibox.local
+    export TEST_USER_EMAIL
     
     success "Docker environment configured (services on localhost)"
 else
@@ -487,12 +490,17 @@ run_docker_container_tests() {
         agent)  test_db_name="test_agent_server" ;;
     esac
     
-    # Get test user ID from authz database (created by bootstrap)
-    local test_user_id
-    test_user_id=$(docker exec local-postgres psql -U postgres -d authz -t -A -c "SELECT user_id FROM authz_users WHERE email = 'test@busibox.local' LIMIT 1;" 2>/dev/null || echo "")
-    if [[ -z "$test_user_id" ]]; then
-        # Fallback to a well-known test user UUID
-        test_user_id="00000000-0000-0000-0000-000000000001"
+    # Use the well-known consistent test user ID
+    # This ID is created by bootstrap-test-databases.py in the test_authz database
+    local test_user_id="00000000-0000-0000-0000-000000000001"
+    
+    # Verify the test user exists in test_authz (created by make test-db-init)
+    local user_check
+    user_check=$(docker exec local-postgres psql -U busibox_test_user -d test_authz -t -A -c "SELECT user_id FROM authz_users WHERE user_id = '${test_user_id}' LIMIT 1;" 2>/dev/null || echo "")
+    if [[ -z "$user_check" ]]; then
+        warn "Test user not found in test_authz database. Run 'make test-db-init' first."
+        warn "Attempting to create test user..."
+        docker exec local-postgres psql -U busibox_test_user -d test_authz -c "INSERT INTO authz_users (user_id, email, created_at) VALUES ('${test_user_id}', 'test@busibox.local', NOW()) ON CONFLICT DO NOTHING;" 2>/dev/null || true
     fi
     
     # Run tests with proper error handling

@@ -412,9 +412,10 @@ class AgentTask(Base):
     description: Mapped[Optional[str]] = mapped_column(Text)
     user_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     
-    # Target agent or workflow
+    # Target agent or workflow (no FK - agents may be built-in from code or from DB)
     agent_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("agent_definitions.id", ondelete="CASCADE"), index=True
+        UUID(as_uuid=True), index=True,
+        comment="Agent ID (may be built-in from code or from agent_definitions table)"
     )
     
     # Task prompt/input
@@ -475,7 +476,7 @@ class AgentTask(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
     
     # Relationships
-    agent: Mapped["AgentDefinition"] = relationship("AgentDefinition", lazy="selectin")
+    # Note: No relationship to AgentDefinition since agents may be built-in from code
     last_run: Mapped[Optional["RunRecord"]] = relationship("RunRecord", lazy="selectin")
     executions: Mapped[list["TaskExecution"]] = relationship(
         "TaskExecution", back_populates="task", cascade="all, delete-orphan"

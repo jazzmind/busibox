@@ -50,7 +50,7 @@ class NotificationConfig(BaseModel):
     
     enabled: bool = Field(True, description="Whether to send notifications")
     channel: NotificationChannel = Field("email", description="Notification channel")
-    recipient: str = Field(..., description="Email address, webhook URL, or channel ID")
+    recipient: Optional[str] = Field(None, description="Email address, webhook URL, or channel ID (required if enabled)")
     include_summary: bool = Field(True, description="Include result summary in notification")
     include_portal_link: bool = Field(True, description="Include link to portal for details")
     
@@ -67,6 +67,19 @@ class NotificationConfig(BaseModel):
         None,
         description="Slack message format: text, blocks"
     )
+    
+    @field_validator("recipient")
+    @classmethod
+    def validate_recipient(cls, v, info):
+        """Validate that recipient is provided when notifications are enabled."""
+        # We can't access other fields in field_validator directly in Pydantic v2
+        # So we'll do this validation in the model_validator instead
+        return v
+    
+    def model_post_init(self, __context):
+        """Validate recipient is provided when enabled."""
+        if self.enabled and not self.recipient:
+            raise ValueError("recipient is required when notifications are enabled")
 
 
 class InsightsConfig(BaseModel):

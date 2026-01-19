@@ -1,0 +1,92 @@
+---
+# FreeSWITCH Installation Tasks
+
+- name: Add FreeSWITCH GPG key
+  ansible.builtin.apt_key:
+    url: https://freeswitch.signalwire.com/repo/deb/debian-release/signalwire-freeswitch-repo.gpg
+    state: present
+
+- name: Add FreeSWITCH repository
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/usr/share/keyrings/freeswitch-archive-keyring.gpg] https://freeswitch.signalwire.com/repo/deb/debian-release/ bookworm main"
+    state: present
+    filename: freeswitch
+
+- name: Install FreeSWITCH
+  ansible.builtin.apt:
+    name:
+      - freeswitch
+      - freeswitch-mod-commands
+      - freeswitch-mod-console
+      - freeswitch-mod-dptools
+      - freeswitch-mod-event-socket
+      - freeswitch-mod-sofia
+      - freeswitch-mod-dialplan-xml
+      - freeswitch-mod-tone-stream
+      - freeswitch-mod-shout
+      - freeswitch-mod-native-file
+      - freeswitch-mod-sndfile
+      - freeswitch-mod-verto
+      - freeswitch-mod-rtc
+      - freeswitch-mod-av
+    state: present
+    update_cache: yes
+  notify: Restart freeswitch
+
+- name: Create FreeSWITCH configuration directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: freeswitch
+    group: freeswitch
+    mode: '0755'
+  loop:
+    - /etc/freeswitch
+    - /etc/freeswitch/sip_profiles
+    - /etc/freeswitch/sip_profiles/external
+    - /etc/freeswitch/dialplan
+    - /etc/freeswitch/dialplan/public
+
+- name: Template FreeSWITCH vars.xml
+  ansible.builtin.template:
+    src: freeswitch/vars.xml.j2
+    dest: /etc/freeswitch/vars.xml
+    owner: freeswitch
+    group: freeswitch
+    mode: '0644'
+  notify: Restart freeswitch
+
+- name: Template ESL configuration
+  ansible.builtin.template:
+    src: freeswitch/event_socket.conf.xml.j2
+    dest: /etc/freeswitch/autoload_configs/event_socket.conf.xml
+    owner: freeswitch
+    group: freeswitch
+    mode: '0644'
+  notify: Restart freeswitch
+
+- name: Template SIP trunk gateway
+  ansible.builtin.template:
+    src: freeswitch/telnyx_gateway.xml.j2
+    dest: /etc/freeswitch/sip_profiles/external/telnyx.xml
+    owner: freeswitch
+    group: freeswitch
+    mode: '0600'
+  notify: Restart freeswitch
+  when: sip_trunk_username | length > 0
+
+- name: Template outbound dialplan
+  ansible.builtin.template:
+    src: freeswitch/dialplan_outbound.xml.j2
+    dest: /etc/freeswitch/dialplan/public/01_outbound.xml
+    owner: freeswitch
+    group: freeswitch
+    mode: '0644'
+  notify: Restart freeswitch
+
+- name: Enable and start FreeSWITCH service
+  ansible.builtin.systemd:
+    name: freeswitch
+    enabled: yes
+    state: started
+    daemon_reload: yes

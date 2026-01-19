@@ -1,0 +1,99 @@
+---
+# Voice Agent Service - Main Tasks
+
+- name: Install system dependencies
+  ansible.builtin.apt:
+    name:
+      - python3
+      - python3-pip
+      - python3-venv
+      - git
+      - ffmpeg
+      - libsndfile1
+      - build-essential
+      - libffi-dev
+    state: present
+    update_cache: yes
+
+- name: Create voice-agent user
+  ansible.builtin.user:
+    name: "{{ voice_agent_user }}"
+    home: "{{ voice_agent_home }}"
+    shell: /bin/bash
+    system: yes
+    create_home: yes
+
+- name: Create application directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ voice_agent_user }}"
+    group: "{{ voice_agent_group }}"
+    mode: '0755'
+  loop:
+    - "{{ voice_agent_home }}"
+    - "{{ voice_agent_home }}/src"
+    - "{{ voice_agent_home }}/models"
+    - "{{ voice_agent_home }}/logs"
+    - /var/log/voice-agent
+
+- name: Copy voice-agent source code
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../srv/voice-agent/src/"
+    dest: "{{ voice_agent_home }}/src/"
+    owner: "{{ voice_agent_user }}"
+    group: "{{ voice_agent_group }}"
+    mode: '0644'
+  notify: Restart voice-agent
+
+- name: Copy requirements.txt
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../srv/voice-agent/requirements.txt"
+    dest: "{{ voice_agent_home }}/requirements.txt"
+    owner: "{{ voice_agent_user }}"
+    group: "{{ voice_agent_group }}"
+    mode: '0644'
+
+- name: Create Python virtual environment
+  ansible.builtin.command:
+    cmd: python3 -m venv {{ voice_agent_home }}/venv
+    creates: "{{ voice_agent_home }}/venv/bin/python"
+  become_user: "{{ voice_agent_user }}"
+
+- name: Install Python dependencies
+  ansible.builtin.pip:
+    requirements: "{{ voice_agent_home }}/requirements.txt"
+    virtualenv: "{{ voice_agent_home }}/venv"
+  become_user: "{{ voice_agent_user }}"
+
+- name: Template environment file
+  ansible.builtin.template:
+    src: voice-agent.env.j2
+    dest: "{{ voice_agent_home }}/.env"
+    owner: "{{ voice_agent_user }}"
+    group: "{{ voice_agent_group }}"
+    mode: '0600'
+  notify: Restart voice-agent
+
+- name: Template systemd service
+  ansible.builtin.template:
+    src: voice-agent.service.j2
+    dest: /etc/systemd/system/voice-agent.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - Reload systemd
+    - Restart voice-agent
+
+- name: Enable and start voice-agent service
+  ansible.builtin.systemd:
+    name: voice-agent
+    enabled: yes
+    state: started
+    daemon_reload: yes
+
+# FreeSWITCH installation (if on same container)
+- name: Include FreeSWITCH tasks
+  ansible.builtin.include_tasks: freeswitch.yml
+  when: install_freeswitch | default(true)

@@ -1,0 +1,52 @@
+# Voice Agent Service - Requirements
+# Phase 1: Core API + Audio Pipeline
+
+# FastAPI + WebSocket
+fastapi==0.115.4
+uvicorn[standard]==0.32.0
+websockets==12.0
+python-multipart==0.0.20
+
+# Configuration
+python-dotenv==1.0.1
+pydantic==2.10.4
+pydantic-settings==2.6.1
+
+# Database
+asyncpg==0.29.0
+
+# HTTP client for internal services
+httpx==0.27.2
+aiohttp==3.10.10
+
+# Audio processing
+numpy==1.26.4
+scipy==1.14.1
+soundfile==0.12.1
+librosa==0.10.2
+
+# Speech-to-Text (Phase 1)
+faster-whisper==1.0.3
+openai-whisper==20231117
+
+# Voice Activity Detection (Phase 2)
+silero-vad==5.1
+
+# Text-to-Speech (Phase 4)
+piper-tts==1.2.0
+
+# FreeSWITCH ESL Client
+python-ESL==1.7.0
+
+# Async utilities
+aiofiles==24.1.0
+
+# Logging
+structlog==24.4.0
+
+# JWT validation (for auth)
+PyJWT==2.9.0
+cryptography==43.0.3
+
+# Shared busibox utilities
+# busibox-common @ file:../shared  # Uncomment for local dev

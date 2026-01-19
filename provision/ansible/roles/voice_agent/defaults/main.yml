@@ -1,0 +1,58 @@
+---
+# Voice Agent Service Defaults
+
+# Service configuration
+voice_agent_port: 8005
+voice_agent_user: voice-agent
+voice_agent_group: voice-agent
+voice_agent_home: /opt/voice-agent
+
+# FreeSWITCH configuration
+freeswitch_esl_port: 8021
+freeswitch_esl_password: "{{ vault_freeswitch_esl_password | default('ClueCon') }}"
+freeswitch_sip_port: 5060
+freeswitch_rtp_start: 16384
+freeswitch_rtp_end: 32767
+
+# SIP Trunk configuration (Telnyx)
+sip_trunk_provider: telnyx
+sip_trunk_host: sip.telnyx.com
+sip_trunk_username: "{{ vault_sip_trunk_username | default('') }}"
+sip_trunk_password: "{{ vault_sip_trunk_password | default('') }}"
+sip_trunk_caller_id: "{{ vault_sip_trunk_caller_id | default('') }}"
+
+# Audio processing
+whisper_model: base.en
+whisper_device: auto
+whisper_compute_type: int8
+
+# PostgreSQL
+postgres_host: "{{ hostvars['pg-lxc']['ansible_host'] | default('10.96.200.203') }}"
+postgres_port: 5432
+postgres_db: voice_agent
+postgres_user: busibox_user
+postgres_password: "{{ vault_postgres_password }}"
+
+# Test database
+test_mode_enabled: true
+test_db_name: test_voice_agent
+test_db_user: busibox_test_user
+test_db_password: "{{ vault_test_db_password | default('testpassword') }}"
+
+# LiteLLM
+litellm_base_url: "http://{{ hostvars['litellm-lxc']['ansible_host'] | default('10.96.200.207') }}:4000"
+litellm_api_key: "{{ vault_litellm_api_key | default('') }}"
+
+# AuthZ
+authz_url: "http://{{ hostvars['authz-lxc']['ansible_host'] | default('10.96.200.210') }}:8010"
+
+# Ingest API (for transcript storage)
+ingest_api_url: "http://{{ hostvars['ingest-lxc']['ansible_host'] | default('10.96.200.206') }}:8001"
+
+# Call settings
+max_parallel_calls: 3
+backup_call_delay_minutes: 5
+max_call_duration_minutes: 120
+
+# Python version
+python_version: "3.11"
