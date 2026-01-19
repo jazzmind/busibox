@@ -1,0 +1,16 @@
+---
+# Voice Agent Handlers
+
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: yes
+
+- name: Restart voice-agent
+  ansible.builtin.systemd:
+    name: voice-agent
+    state: restarted
+
+- name: Restart freeswitch
+  ansible.builtin.systemd:
+    name: freeswitch
+    state: restarted

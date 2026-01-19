@@ -25,6 +25,7 @@ from app.schemas.task import (
     TriggerConfig,
     get_cron_from_preset,
 )
+from app.services.builtin_agents import get_builtin_agent_definitions
 from app.services.token_service import get_or_exchange_token
 
 logger = logging.getLogger(__name__)
@@ -59,13 +60,20 @@ async def create_task(
     Raises:
         ValueError: If agent not found or validation fails
     """
-    # Verify agent exists
+    # Verify agent exists - check both database and built-in code agents
     agent_result = await session.execute(
         select(AgentDefinition).where(AgentDefinition.id == task_data.agent_id)
     )
     agent = agent_result.scalar_one_or_none()
+    
+    # If not found in database, check built-in agents loaded from code
+    agent_name = agent.name if agent else None
     if not agent:
-        raise ValueError(f"Agent {task_data.agent_id} not found")
+        builtin_agents = get_builtin_agent_definitions()
+        builtin_agent_map = {a.id: a for a in builtin_agents}
+        if task_data.agent_id not in builtin_agent_map:
+            raise ValueError(f"Agent {task_data.agent_id} not found")
+        agent_name = builtin_agent_map[task_data.agent_id].name
     
     # Handle schedule presets
     trigger_config = task_data.trigger_config.model_dump()
@@ -151,7 +159,7 @@ async def create_task(
     
     logger.info(
         f"Created task {task.id} for user {principal.sub}, "
-        f"trigger_type={task.trigger_type}, agent={agent.name}"
+        f"trigger_type={task.trigger_type}, agent={agent_name}"
     )
     
     return task

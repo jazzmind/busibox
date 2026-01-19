@@ -68,7 +68,9 @@ class AuthTestClient:
         self.admin_token = admin_token or os.getenv("AUTHZ_ADMIN_TOKEN", "")
         self.client_id = client_id or os.getenv("AUTHZ_BOOTSTRAP_CLIENT_ID", "ai-portal")
         self.client_secret = client_secret or os.getenv("AUTHZ_BOOTSTRAP_CLIENT_SECRET", "")
-        self.test_user_id = test_user_id or os.getenv("TEST_USER_ID", "")
+        # Default to the well-known test user ID if not provided
+        # This ID is created by bootstrap-test-databases.py
+        self.test_user_id = test_user_id or os.getenv("TEST_USER_ID", "00000000-0000-0000-0000-000000000001")
         
         # Track changes for cleanup
         self._added_roles: Set[str] = set()
