@@ -29,9 +29,11 @@ _SERVICE_redis="206:busibox::/health:6379"
 _SERVICE_milvus="204:milvus::/healthz:9091"
 _SERVICE_minio="205:minio::/minio/health/live:9000"
 _SERVICE_ingest_api="206:busibox:srv/ingest:/health:8002"
+_SERVICE_ingest_worker="206:busibox:srv/ingest::8002"
 _SERVICE_search_api="204:busibox:srv/search:/health:8003"
 _SERVICE_agent_api="202:busibox:srv/agent:/health:8000"
 _SERVICE_litellm="207:litellm::/health:4000"
+_SERVICE_vllm="210:vllm::/health:8000"
 _SERVICE_nginx="200:busibox:provision/ansible/roles/nginx:/:80"
 _SERVICE_ai_portal="201:ai-portal::/portal/api/health:3000"
 _SERVICE_agent_manager="201:agent-manager::/agents/api/health:3001"
@@ -45,22 +47,24 @@ _NAME_redis="Redis"
 _NAME_milvus="Milvus"
 _NAME_minio="MinIO"
 _NAME_ingest_api="Ingest API"
+_NAME_ingest_worker="Ingest Worker"
 _NAME_search_api="Search API"
 _NAME_agent_api="Agent API"
 _NAME_litellm="LiteLLM"
+_NAME_vllm="vLLM"
 _NAME_nginx="Nginx"
 _NAME_ai_portal="AI Portal"
 _NAME_agent_manager="Agent Manager"
 _NAME_docs_api="Docs API"
 _NAME_authz_api="AuthZ API"
 
-# Service categories
-_CORE_SERVICES="authz postgres milvus minio"
-_API_SERVICES="ingest-api search-api agent-api litellm"
-_APP_SERVICES="nginx ai-portal agent-manager"
+# Service categories (reorganized per user request)
+_CORE_SERVICES="authz postgres milvus minio nginx litellm"
+_API_SERVICES="ingest search-api agent-api"
+_APP_SERVICES="ai-portal agent-manager"
 
 # All services combined
-ALL_SERVICES="authz postgres milvus minio ingest-api search-api agent-api litellm nginx ai-portal agent-manager"
+ALL_SERVICES="authz postgres milvus minio nginx litellm ingest search-api agent-api ai-portal agent-manager"
 
 # ============================================================================
 # Service Metadata Functions
