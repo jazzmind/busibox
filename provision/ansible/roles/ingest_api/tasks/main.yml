@@ -85,7 +85,7 @@
     dest: /opt/ingest-api/.deploy_version
     mode: "0644"
 
-- name: Write deployment version file to /srv (backup location)
+- name: Write deployment version file to /srv/ingest (shared location)
   copy:
     content: |
       {
@@ -94,7 +94,7 @@
         "timestamp": "{{ ansible_date_time.iso8601 }}",
         "deployed_by": "ansible"
       }
-    dest: /srv/ingest-api/.deploy_version
+    dest: /srv/ingest/.deploy_version
     mode: "0644"
 
 - name: Restart ingest API service (always restart on deploy)
