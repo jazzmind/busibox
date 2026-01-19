@@ -48,10 +48,10 @@ usage() {
     echo "Examples:"
     if [ "$RUNNING_IN_CONTAINER" = true ]; then
         echo "  $0 ai-portal"
-        echo "  $0 agent-client"
+        echo "  $0 agent-manager"
     else
         echo "  $0 ai-portal production"
-        echo "  $0 agent-client test"
+        echo "  $0 agent-manager test"
     fi
     exit 1
 }

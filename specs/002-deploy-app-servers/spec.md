@@ -61,9 +61,9 @@ As an end user, I need to access applications through friendly URLs with SSL enc
 
 **Acceptance Scenarios**:
 
-1. **Given** NGINX is configured with SSL certificates, **When** a user navigates to agents.ai.jaycashman.com, **Then** they are served the agent-client app over HTTPS with a valid certificate
+1. **Given** NGINX is configured with SSL certificates, **When** a user navigates to agents.ai.jaycashman.com, **Then** they are served the agent-manager app over HTTPS with a valid certificate
 2. **Given** subdomain routing is configured, **When** a user accesses docintel.ai.jaycashman.com, **Then** they are routed to the docintel application
-3. **Given** sub-directory routing is configured, **When** a user accesses ai.jaycashman.com/agents, **Then** they are routed to the agent-client application
+3. **Given** sub-directory routing is configured, **When** a user accesses ai.jaycashman.com/agents, **Then** they are routed to the agent-manager application
 4. **Given** a user accesses an undefined subdomain or path, **When** NGINX receives the request, **Then** the user is shown an appropriate error page or redirected to the main site
 
 ---
@@ -88,18 +88,18 @@ As a user, I need a central landing page with authentication that provides acces
 
 ### User Story 5 - Agent Administration Interface (Priority: P3)
 
-As a system administrator, I need access to the agent-client application to manage agents, workflows, and monitor the agent-server, so that I can configure and troubleshoot the AI services.
+As a system administrator, I need access to the agent-manager application to manage agents, workflows, and monitor the agent-server, so that I can configure and troubleshoot the AI services.
 
 **Why this priority**: The admin interface is important for operations but the agent-server itself (P1) can function without it. This is a quality-of-life feature for administrators rather than a system requirement.
 
-**Independent Test**: Deploy agent-client from GitHub, configure it to connect to the agent-server API, access it via agents.ai.jaycashman.com, and verify you can view agent configurations and system status.
+**Independent Test**: Deploy agent-manager from GitHub, configure it to connect to the agent-server API, access it via agents.ai.jaycashman.com, and verify you can view agent configurations and system status.
 
 **Acceptance Scenarios**:
 
-1. **Given** the agent-client is deployed, **When** an administrator navigates to agents.ai.jaycashman.com, **Then** they can access the agent administration interface
+1. **Given** the agent-manager is deployed, **When** an administrator navigates to agents.ai.jaycashman.com, **Then** they can access the agent administration interface
 2. **Given** an administrator navigates to ai.jaycashman.com/agents, **When** the page loads, **Then** they can access the same agent administration interface
-3. **Given** an authenticated administrator is using the agent-client, **When** they view the dashboard, **Then** they can see the status of all configured agents and workflows
-4. **Given** an administrator needs to troubleshoot, **When** they access the agent-client, **Then** they can view logs, metrics, and recent activity from the agent-server
+3. **Given** an authenticated administrator is using the agent-manager, **When** they view the dashboard, **Then** they can see the status of all configured agents and workflows
+4. **Given** an administrator needs to troubleshoot, **When** they access the agent-manager, **Then** they can view logs, metrics, and recent activity from the agent-server
 
 ---
 
@@ -161,7 +161,7 @@ As a system administrator, I need access to the agent-client application to mana
 
 #### Agent Client Deployment (P3)
 
-- **FR-025**: System MUST deploy the agent-client application from github.com/jazzmind/agent-client to the apps-lxc container
+- **FR-025**: System MUST deploy the agent-manager application from github.com/jazzmind/agent-manager to the apps-lxc container
 - **FR-026**: Agent-client MUST be accessible at agents.ai.jaycashman.com and ai.jaycashman.com/agents
 - **FR-027**: Agent-client MUST connect to the agent-server API endpoint for all agent management operations
 - **FR-028**: Agent-client MUST provide interfaces for viewing agent configurations, workflows, and system status
@@ -201,7 +201,7 @@ As a system administrator, I need access to the agent-client application to mana
 - **SC-008**: Sub-directory routing works correctly with proper URL handling (no broken relative paths or assets)
 - **SC-009**: Users can authenticate once via the main portal and access all applications without re-authenticating during the same session
 - **SC-010**: Main portal is accessible at all three configured URLs (naked domain, www, /home) with identical functionality
-- **SC-011**: Administrators can view agent status and configurations via agent-client interface within 2 seconds of loading the page
+- **SC-011**: Administrators can view agent status and configurations via agent-manager interface within 2 seconds of loading the page
 - **SC-012**: NGINX configuration reloads complete without dropping active user connections (zero connection failures during reload)
 - **SC-013**: Failed application deployments are detected and logged within 30 seconds with clear error messages
 - **SC-014**: System handles 100 concurrent users across all applications without performance degradation

@@ -63,8 +63,8 @@ bash scripts/deploy-app.sh ai-portal production main
 # Deploy doc-intel from dev branch to test
 bash scripts/deploy-app.sh doc-intel test dev
 
-# Deploy agent-client from feature branch to test
-bash scripts/deploy-app.sh agent-client test feature/new-ui
+# Deploy agent-manager from feature branch to test
+bash scripts/deploy-app.sh agent-manager test feature/new-ui
 ```
 
 **What It Does:**
@@ -354,7 +354,7 @@ bash scripts/deploy-app.sh doc-intel test feature/new-processor
 
 ```bash
 # Deploy all apps from main
-for app in ai-portal agent-client doc-intel; do
+for app in ai-portal agent-manager doc-intel; do
   bash scripts/deploy-app.sh $app production main
 done
 ```

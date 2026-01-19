@@ -20,7 +20,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """
-    Add conversation, message, and chat settings tables for agent-client chat interface.
+    Add conversation, message, and chat settings tables for agent-manager chat interface.
     """
     
     # Create conversations table

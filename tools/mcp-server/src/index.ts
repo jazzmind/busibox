@@ -2834,11 +2834,11 @@ server.setRequestHandler(ListPromptsRequestSchema, async () => {
       },
       {
         name: 'deploy_app',
-        description: 'Guide for deploying a specific application (ai-portal, agent-client, etc.)',
+        description: 'Guide for deploying a specific application (ai-portal, agent-manager, etc.)',
         arguments: [
           {
             name: 'app_name',
-            description: 'Application name (ai-portal, agent-client, doc-intel, foundation, project-analysis, innovation)',
+            description: 'Application name (ai-portal, agent-manager, doc-intel, foundation, project-analysis, innovation)',
             required: true,
           },
           {

@@ -102,7 +102,7 @@ Updated existing prompts:
 
 ```bash
 make deploy-ai-portal
-make deploy-agent-client
+make deploy-agent-manager
 make deploy-doc-intel
 make deploy-foundation
 make deploy-project-analysis

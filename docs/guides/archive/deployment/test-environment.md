@@ -270,7 +270,7 @@ applications:
    ssl_mode: provisioned  # Change from selfsigned
    ```
 
-2. **Deploy Additional Apps** (agent-client, doc-intel, innovation):
+2. **Deploy Additional Apps** (agent-manager, doc-intel, innovation):
    - They're already defined in `all.yml`
    - Just run the deployment playbook
 

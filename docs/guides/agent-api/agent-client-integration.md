@@ -4,19 +4,19 @@ category: architecture
 created: 2025-12-12
 updated: 2025-12-12
 status: active
-tags: [agent-client, integration, oauth, nextjs]
+tags: [agent-manager, integration, oauth, nextjs]
 ---
 
 # Agent Client Integration
 
 ## Overview
 
-The agent-client (Next.js) is successfully integrated with the Python agent-server, demonstrating end-to-end functionality from browser to LLM with authentication, role-based access control, and tool calling.
+The agent-manager (Next.js) is successfully integrated with the Python agent-server, demonstrating end-to-end functionality from browser to LLM with authentication, role-based access control, and tool calling.
 
 ## Integration Architecture
 
 ```
-Browser (agent-client)
+Browser (agent-manager)
   ↓
 Next.js API Route (/api/agent/weather)
   ↓
@@ -37,7 +37,7 @@ Open-Meteo API (external)
 
 ### 1. Agent-Client Side
 
-**Location**: `/Users/wessonnenreich/Code/sonnenreich/agent-client/`
+**Location**: `/Users/wessonnenreich/Code/sonnenreich/agent-manager/`
 
 #### API Client Library
 
@@ -390,7 +390,7 @@ DEFAULT_MODEL=research
 ### Manual Test
 
 ```bash
-# From agent-client directory
+# From agent-manager directory
 npm run dev
 # Visit http://localhost:3000/weather
 # Enter: "What is the weather in London?"
@@ -422,7 +422,7 @@ curl -X POST http://10.96.201.202:4111/agents/weather/query \
 
 ```bash
 cd /path/to/busibox/provision/ansible
-make deploy-agent-client
+make deploy-agent-manager
 ```
 
 ### Agent-Server Deployment
@@ -555,7 +555,7 @@ const eventSource = streamRunUpdates(runId, token);
 
 ## References
 
-- **Agent-Client**: `/Users/wessonnenreich/Code/sonnenreich/agent-client/`
+- **Agent-Client**: `/Users/wessonnenreich/Code/sonnenreich/agent-manager/`
 - **Agent-Server**: `/Users/wessonnenreich/Code/sonnenreich/busibox/srv/agent/`
 - **Busibox Ansible**: `/Users/wessonnenreich/Code/sonnenreich/busibox/provision/ansible/`
 - **Model Registry**: `provision/ansible/group_vars/all/model_registry.yml`

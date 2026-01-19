@@ -59,5 +59,5 @@ published: true
 
 ## Rollouts & Updates
 - Re-run `make <role>` to update a single service.
-- Apps deploy via `make deploy-ai-portal`, `make deploy-agent-client` (see CLAUDE.md) from admin workstation.
+- Apps deploy via `make deploy-ai-portal`, `make deploy-agent-manager` (see CLAUDE.md) from admin workstation.
 - Keep proxy rules updated when adding services; only apps are internet-facing.

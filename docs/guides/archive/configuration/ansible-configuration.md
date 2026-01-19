@@ -96,7 +96,7 @@ All applications are defined in `inventory/{env}/group_vars/all.yml` under the `
    - Routes: Domain (production: ai.jaycashman.com, test: test.ai.jaycashman.com)
    - Secrets: database_url, better_auth_secret, resend_api_key, sso_jwt_secret, litellm_api_key
 
-3. **agent-client** (Public Web App)
+3. **agent-manager** (Public Web App)
    - Port: 3001
    - Container: apps-lxc
    - Routes: Subdomain (agents.{domain}) + Path (/agents)
@@ -157,7 +157,7 @@ secrets:
   agent-server:
     jwt_secret: "SHARED_SECRET"
   
-  agent-client:
+  agent-manager:
     jwt_secret: "{{ secrets.agent-server.jwt_secret }}"
   
   doc-intel:

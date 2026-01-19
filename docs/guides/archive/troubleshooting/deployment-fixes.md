@@ -124,7 +124,7 @@ full_domain: "{{ subdomain }}.{{ domain }}"  # → "test.ai.jaycashman.com"
 3. **Verify**:
    ```bash
    # Check systemd services
-   pct exec 301 -- systemctl list-units --type=service --state=running | grep -E '(ai-portal|agent-client|doc-intel|innovation)'
+   pct exec 301 -- systemctl list-units --type=service --state=running | grep -E '(ai-portal|agent-manager|doc-intel|innovation)'
    
    # Test health endpoints
    curl http://10.96.201.201:3000/api/health  # ai-portal

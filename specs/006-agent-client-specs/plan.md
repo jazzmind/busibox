@@ -1,7 +1,7 @@
 # Implementation Plan: Agent-Server API Enhancements
 
-**Branch**: `006-agent-client-specs` | **Date**: 2025-12-11 | **Spec**: [spec.md](./spec.md)
-**Input**: Feature specification from `/specs/006-agent-client-specs/spec.md`
+**Branch**: `006-agent-manager-specs` | **Date**: 2025-12-11 | **Spec**: [spec.md](./spec.md)
+**Input**: Feature specification from `/specs/006-agent-manager-specs/spec.md`
 
 **Note**: This template is filled in by the `/speckit.plan` command. See `.specify/templates/commands/plan.md` for the execution workflow.
 
@@ -100,7 +100,7 @@ Extend the Busibox agent-server with full CRUD operations for tools, workflows, 
 ### Documentation (this feature)
 
 ```
-specs/006-agent-client-specs/
+specs/006-agent-manager-specs/
 ├── plan.md              # This file (/speckit.plan command output)
 ├── research.md          # Phase 0 output (/speckit.plan command) ✅
 ├── data-model.md        # Phase 1 output (/speckit.plan command) ✅

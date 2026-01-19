@@ -249,7 +249,7 @@ journalctl -u ingest-worker -n 100 --no-pager
 - [ ] Test RAG search with simple documents
 - [ ] Test role-based access control
 - [ ] Deploy agent-server with TOKEN_SERVICE keys
-- [ ] Test agent-client with new header
+- [ ] Test agent-manager with new header
 
 ## Lessons Learned
 
@@ -284,7 +284,7 @@ journalctl -u ingest-worker -n 100 --no-pager
 4. **Deploy Agent Components**:
    - Generate TOKEN_SERVICE keys
    - Deploy agent-server
-   - Deploy agent-client
+   - Deploy agent-manager
    - Test authentication flow
 
 5. **Document Results**:

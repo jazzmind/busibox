@@ -514,7 +514,7 @@ After agent-server is deployed and verified:
    make openwebui  # Deploys NGINX on openwebui-lxc container
    ```
 
-3. **Deploy additional applications** (cashman-portal, agent-client):
+3. **Deploy additional applications** (cashman-portal, agent-manager):
    - Uncomment desired apps in `apps.yml`
    - Add required secrets to `vault.yml`
    - Run `make deploy-apps`

@@ -7,12 +7,12 @@ Based on your output, all 4 apps failed to deploy. Let's debug systematically.
 ```bash
 # Check the deploywatch logs for each app
 tail -100 /var/log/deploywatch/ai-portal.log
-tail -100 /var/log/deploywatch/agent-client.log
+tail -100 /var/log/deploywatch/agent-manager.log
 tail -100 /var/log/deploywatch/doc-intel.log
 tail -100 /var/log/deploywatch/innovation.log
 
 # Or check all at once
-for app in ai-portal agent-client doc-intel innovation; do
+for app in ai-portal agent-manager doc-intel innovation; do
   echo "=== $app ==="
   tail -50 /var/log/deploywatch/$app.log
   echo ""
@@ -22,7 +22,7 @@ done
 ## Step 2: Check Service Status
 
 ```bash
-systemctl list-units --type=service --state=running | grep -E '(ai-portal|agent-client|doc-intel|innovation)'
+systemctl list-units --type=service --state=running | grep -E '(ai-portal|agent-manager|doc-intel|innovation)'
 journalctl -u ai-portal.service -n 50 --no-pager
 ```
 
@@ -59,7 +59,7 @@ cat /tmp/ai-portal-manual.log
 ```bash
 # Check if .env files were created
 ls -la /srv/apps/ai-portal/.env
-ls -la /srv/apps/agent-client/.env
+ls -la /srv/apps/agent-manager/.env
 ls -la /srv/apps/doc-intel/.env
 ls -la /srv/apps/innovation/.env
 
@@ -123,11 +123,11 @@ If you want to start fresh:
 
 ```bash
 # Stop all services
-systemctl stop ai-portal.service agent-client.service doc-intel.service innovation.service
+systemctl stop ai-portal.service agent-manager.service doc-intel.service innovation.service
 
 # Remove all app directories
 rm -rf /srv/apps/ai-portal
-rm -rf /srv/apps/agent-client
+rm -rf /srv/apps/agent-manager
 rm -rf /srv/apps/doc-intel
 rm -rf /srv/apps/innovation
 

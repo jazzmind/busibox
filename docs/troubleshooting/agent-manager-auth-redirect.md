@@ -26,7 +26,7 @@ In Next.js, `NEXT_PUBLIC_*` environment variables are **embedded at build time**
 Checked the deployed `.env` file on staging:
 
 ```bash
-ssh root@10.96.201.201 "grep 'NEXT_PUBLIC' /srv/apps/agent-client/.env"
+ssh root@10.96.201.201 "grep 'NEXT_PUBLIC' /srv/apps/agent-manager/.env"
 
 NEXT_PUBLIC_AGENT_API_URL="http://10.96.201.202:8000"
 NEXT_PUBLIC_APP_URL="https://staging.ai.jaycashman.com/agents"

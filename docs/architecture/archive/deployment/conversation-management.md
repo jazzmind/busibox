@@ -12,7 +12,7 @@ tags: [agent-server, conversations, deployment, migration]
 
 This guide covers deploying the conversation management feature to the agent-server in test and production environments.
 
-**Feature**: Conversation and message management for agent-client chat interface  
+**Feature**: Conversation and message management for agent-manager chat interface  
 **Migration**: `003_add_conversations.py`  
 **Endpoints**: 8 new endpoints  
 **Tests**: 27 integration tests
@@ -97,7 +97,7 @@ pytest tests/integration/test_api_conversations.py -v
 #### E. Manual Testing
 
 ```bash
-# Get auth token (from AI Portal or agent-client)
+# Get auth token (from AI Portal or agent-manager)
 export TOKEN="your-jwt-token"
 
 # Test create conversation
@@ -276,7 +276,7 @@ psql -U busibox_user -d busibox
 ### Check API Endpoints
 
 ```bash
-# From agent-client or curl
+# From agent-manager or curl
 curl http://agent-lxc:8000/conversations \
   -H "Authorization: Bearer $TOKEN"
 
@@ -368,14 +368,14 @@ journalctl -u agent-api -f
 ### Update Agent-Client
 
 Once stable in production:
-1. Update agent-client to use conversation endpoints
+1. Update agent-manager to use conversation endpoints
 2. Test end-to-end flow
 3. Monitor for integration issues
 
 ### Documentation Updates
 
 - [ ] Update AI Portal integration docs
-- [ ] Update agent-client integration docs
+- [ ] Update agent-manager integration docs
 - [ ] Create user guide for chat features
 
 ---

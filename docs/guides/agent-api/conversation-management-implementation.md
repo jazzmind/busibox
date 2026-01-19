@@ -9,7 +9,7 @@ tags: [agent-server, conversations, messages, chat-settings]
 
 ## Overview
 
-Successfully implemented conversation and message management endpoints for the agent-server to support the agent-client chat interface. This allows persistent chat sessions, message history, and user preferences.
+Successfully implemented conversation and message management endpoints for the agent-server to support the agent-manager chat interface. This allows persistent chat sessions, message history, and user preferences.
 
 **Date**: 2025-12-12  
 **Status**: ✅ Complete  
@@ -319,7 +319,7 @@ pytest tests/integration/test_api_conversations.py -v
 
 ### Agent-Client
 
-The agent-client can now:
+The agent-manager can now:
 - Create and manage conversations
 - Send and receive messages
 - Store routing decisions and tool call results
@@ -365,7 +365,7 @@ Possible additions:
 - [Deployment Guide](../docs/deployment/conversation-management.md)
 - [Implementation Status](../docs/reference/agent-server-implementation-status.md)
 - [OpenAPI Spec](../openapi/agent-api.yaml)
-- [Server Plan](/Users/wessonnenreich/Code/sonnenreich/agent-client/specs/001-agent-management-rebuild/SERVER_PLAN.md)
+- [Server Plan](/Users/wessonnenreich/Code/sonnenreich/agent-manager/specs/001-agent-management-rebuild/SERVER_PLAN.md)
 
 ---
 

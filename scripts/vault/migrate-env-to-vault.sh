@@ -239,7 +239,7 @@ try:
     # GitHub
     github_token = get_env_value('GITHUB_AUTH_TOKEN')
     if github_token:
-        vault['secrets']['github_token'] = github_token
+        vault['secrets']['github']['personal_access_token'] = github_token
     
     # Save merged vault
     with open('$TEMP_DIR/merged_vault.yml', 'w') as f:

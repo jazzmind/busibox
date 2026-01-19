@@ -267,7 +267,7 @@ The MCP server provides comprehensive testing guidance:
 | Container | ID | IP | Key Services |
 |-----------|----|----|--------------|
 | proxy-lxc | 200 | 10.96.200.200 | nginx |
-| apps-lxc | 201 | 10.96.200.201 | ai-portal, agent-client |
+| apps-lxc | 201 | 10.96.200.201 | ai-portal, agent-manager |
 | agent-lxc | 202 | 10.96.200.202 | agent-api |
 | pg-lxc | 203 | 10.96.200.203 | postgresql |
 | milvus-lxc | 204 | 10.96.200.204 | milvus, search-api |
@@ -288,7 +288,7 @@ Same containers with ID + 100 and IP in 201 subnet.
 `all`, `files`, `pg`, `milvus`, `search`, `search-api`, `agent`, `ingest`, `apps`, `nginx`, `authz`, `litellm`, `vllm`, `colpali`
 
 ### App Deployment
-`deploy-apps`, `deploy-ai-portal`, `deploy-agent-client`, `deploy-doc-intel`, `deploy-foundation`, `deploy-project-analysis`, `deploy-innovation`
+`deploy-apps`, `deploy-ai-portal`, `deploy-agent-manager`, `deploy-doc-intel`, `deploy-foundation`, `deploy-project-analysis`, `deploy-innovation`
 
 ### Testing
 `test-all`, `test-ingest`, `test-search`, `test-agent`, `test-authz`, `test-apps`, `test-extraction-simple`, `test-extraction-llm`, `test-extraction-marker`, `test-extraction-colpali`

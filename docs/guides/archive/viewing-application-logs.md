@@ -28,7 +28,7 @@ The AI Portal provides a web-based interface for viewing application logs.
 **Access:**
 1. Log in to AI Portal as an admin
 2. Navigate to **Admin** → **Apps**
-3. Click on an internal application (e.g., `ai-portal`, `agent-client`)
+3. Click on an internal application (e.g., `ai-portal`, `agent-manager`)
 4. Scroll down to the **Application Logs** section
 
 **Features:**
@@ -62,7 +62,7 @@ bash scripts/view-app-logs.sh ai-portal production
 bash scripts/view-app-logs.sh ai-portal production 50
 
 # View test environment
-bash scripts/view-app-logs.sh agent-client test 100
+bash scripts/view-app-logs.sh agent-manager test 100
 ```
 
 **From apps-lxc Container:**
@@ -82,7 +82,7 @@ From host:    bash scripts/view-app-logs.sh <app-name> [environment] [lines]
 In container: view-app-logs.sh <app-name> [lines]
 
 Arguments:
-  app-name      Name of the application (e.g., ai-portal, agent-client)
+  app-name      Name of the application (e.g., ai-portal, agent-manager)
   environment   Environment to connect to: production or test (host only)
   lines         Number of log lines to display (default: 100)
 ```
@@ -98,7 +98,7 @@ Stream logs as they are generated (like `tail -f`).
 bash scripts/tail-app-logs.sh ai-portal production
 
 # Follow test environment logs
-bash scripts/tail-app-logs.sh agent-client test
+bash scripts/tail-app-logs.sh agent-manager test
 ```
 
 **From apps-lxc Container:**
@@ -168,8 +168,8 @@ Logs are stored in `/var/log/pm2/` on the `apps-lxc` container:
 /var/log/pm2/
 ├── ai-portal-out.log      # Standard output
 ├── ai-portal-error.log    # Standard error
-├── agent-client-out.log
-├── agent-client-error.log
+├── agent-manager-out.log
+├── agent-manager-error.log
 └── ...
 ```
 

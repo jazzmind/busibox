@@ -957,7 +957,7 @@ Planned limits:
 - **Architecture**: `docs/architecture/agent-server-architecture.md`
 - **Deployment**: `docs/deployment/agent-server-deployment.md`
 - **Testing**: `docs/guides/agent-server-testing.md`
-- **Integration**: `docs/architecture/agent-client-integration.md`
+- **Integration**: `docs/architecture/agent-manager-integration.md`
 
 
 

@@ -46,7 +46,7 @@ domain: "ai.{{ base_domain }}"
 full_domain: "{{ domain }}"  # ai.jaycashman.com
 
 applications:
-  - name: agent-client
+  - name: agent-manager
     routes:
       - type: subdomain
         subdomain: agents  # → agents.ai.jaycashman.com
@@ -60,7 +60,7 @@ domain: "ai.{{ base_domain }}"
 full_domain: "{{ env_suffix }}.{{ domain }}"  # test.ai.jaycashman.com
 
 applications:
-  - name: agent-client
+  - name: agent-manager
     routes:
       - type: subdomain
         subdomain: agents-test  # → agents-test.ai.jaycashman.com

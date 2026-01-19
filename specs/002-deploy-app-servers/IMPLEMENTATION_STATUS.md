@@ -244,11 +244,11 @@ Three modes supported:
 ### Phase 7: User Story 5 - Agent Client (P3) ⏸️
 **Tasks**: 9 tasks (T057-T065)  
 **Effort**: Low (configuration-only)  
-**Deliverable**: Deploy agent-client with WebSocket support
+**Deliverable**: Deploy agent-manager with WebSocket support
 
 **What's Needed**:
-- Add agent-client to `apps.yml` (7 lines)
-- Add agent-client secrets to `vault.yml` (3 lines)
+- Add agent-manager to `apps.yml` (7 lines)
+- Add agent-manager secrets to `vault.yml` (3 lines)
 - Configure subdomain + path routes (already templated)
 - Test WebSocket connectivity
 
@@ -409,7 +409,7 @@ specs/002-deploy-app-servers/
 ### Option B: Continue Implementation
 
 - **Phase 6**: Add cashman portal (8 tasks, ~30 minutes)
-- **Phase 7**: Add agent-client (9 tasks, ~30 minutes)
+- **Phase 7**: Add agent-manager (9 tasks, ~30 minutes)
 - **Phase 8**: Integration testing (11 tasks, ~2 hours)
 - **Phase 9**: Polish & monitoring (18 tasks, ~2 hours)
 
@@ -428,7 +428,7 @@ If infrastructure tests pass:
 1. **Testing Required**: All code is implemented but untested on live infrastructure
 2. **Vault Not Encrypted**: `vault.yml` contains example/placeholder secrets (must encrypt for production)
 3. **Let's Encrypt Manual**: Wildcard certificates require manual DNS challenge on first run
-4. **No Applications Deployed**: Infrastructure is ready, but actual apps (cashman, agent-client) are config-only changes away
+4. **No Applications Deployed**: Infrastructure is ready, but actual apps (cashman, agent-manager) are config-only changes away
 
 ---
 

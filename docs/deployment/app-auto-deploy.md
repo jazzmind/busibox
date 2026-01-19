@@ -42,7 +42,7 @@ applications:
 
 Essential services required for system operation:
 - `ai-portal` - Main web interface
-- `agent-client` - Agent management interface
+- `agent-manager` - Agent management interface
 
 These are automatically deployed during:
 - Initial provisioning (`make all`)
@@ -129,7 +129,7 @@ Existing deployments are not affected. The `auto_deploy` flag only controls init
 
 ### New Deployments
 
-1. Core apps (ai-portal, agent-client) deploy automatically
+1. Core apps (ai-portal, agent-manager) deploy automatically
 2. Add-on apps are available for deployment via web UI after infrastructure is ready
 3. All apps receive automated updates via deploywatch once deployed
 

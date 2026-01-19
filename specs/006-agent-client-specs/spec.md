@@ -1,9 +1,9 @@
 # Feature Specification: Agent-Server API Enhancements
 
-**Feature Branch**: `006-agent-client-specs`  
+**Feature Branch**: `006-agent-manager-specs`  
 **Created**: 2025-12-11  
 **Status**: Draft  
-**Input**: User description: "@agent-client/specs/001-agent-management-rebuild/agent-server-requirements.md we need to extend the agent server to meet these requirements. Let's create a new feature branch."
+**Input**: User description: "@agent-manager/specs/001-agent-management-rebuild/agent-server-requirements.md we need to extend the agent server to meet these requirements. Let's create a new feature branch."
 
 ## Clarifications
 
@@ -310,7 +310,7 @@ The following are explicitly **not** included in this feature:
 
 ## Notes
 
-- This specification is based on the detailed requirements document from the agent-client rebuild project
+- This specification is based on the detailed requirements document from the agent-manager rebuild project
 - Implementation is planned in 3 phases: Phase 1 (P1 requirements), Phase 2 (P2 requirements), Phase 3 (P3 requirements)
 - The dispatcher agent is the most complex component and may require iteration to achieve target accuracy
 - Workflow resume capability (FR-034 to FR-038) is marked as SHOULD rather than MUST due to implementation complexity

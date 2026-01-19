@@ -12,7 +12,7 @@
 # 
 # Examples:
 #   bash scripts/tail-app-logs.sh ai-portal production
-#   bash scripts/tail-app-logs.sh agent-client test
+#   bash scripts/tail-app-logs.sh agent-manager test
 #   bash /usr/local/bin/tail-app-logs.sh ai-portal  # From inside container
 
 set -euo pipefail
@@ -48,7 +48,7 @@ usage() {
         echo "  $0 ai-portal"
     else
         echo "  $0 ai-portal production"
-        echo "  $0 agent-client test"
+        echo "  $0 agent-manager test"
     fi
     exit 1
 }
@@ -69,7 +69,7 @@ if [ "$RUNNING_IN_CONTAINER" = true ]; then
         echo -e "${RED}Error: Service '${APP_NAME}' not found${NC}"
         echo ""
         echo -e "${YELLOW}Available services:${NC}"
-        systemctl list-units --type=service --state=running | grep -E '(ai-portal|agent-client|doc-intel|innovation)'
+        systemctl list-units --type=service --state=running | grep -E '(ai-portal|agent-manager|doc-intel|innovation)'
         exit 1
     fi
     

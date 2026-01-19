@@ -1,6 +1,6 @@
 # Research: Agent-Server API Enhancements
 
-**Feature**: 006-agent-client-specs  
+**Feature**: 006-agent-manager-specs  
 **Date**: 2025-12-11  
 **Status**: Complete
 

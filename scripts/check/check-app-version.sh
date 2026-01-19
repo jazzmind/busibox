@@ -30,11 +30,11 @@ if [ -z "$APP_NAME" ]; then
     echo "Examples:"
     echo "  $0 ai-portal production"
     echo "  $0 doc-intel test"
-    echo "  $0 agent-client"
+    echo "  $0 agent-manager"
     echo ""
     echo "Available apps:"
     echo "  - ai-portal"
-    echo "  - agent-client"
+    echo "  - agent-manager"
     echo "  - doc-intel"
     exit 1
 fi
@@ -45,8 +45,8 @@ case "$APP_NAME" in
         DEPLOY_PATH="/srv/apps/ai-portal"
         CONTAINER_IP="10.96.200.201"  # apps-lxc
         ;;
-    agent-client)
-        DEPLOY_PATH="/srv/apps/agent-client"
+    agent-manager)
+        DEPLOY_PATH="/srv/apps/agent-manager"
         CONTAINER_IP="10.96.200.201"  # apps-lxc
         ;;
     doc-intel)

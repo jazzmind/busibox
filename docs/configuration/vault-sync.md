@@ -198,11 +198,11 @@ make configure
 
 ### 2. After Renaming Services
 
-Example: `agent-client` → `agent-manager`
+Example: `agent-manager` → `agent-manager`
 
 The sync tool:
 - Creates new `agent-manager` section with example structure
-- Keeps old `agent-client` secrets in `vault.removed.yml`
+- Keeps old `agent-manager` secrets in `vault.removed.yml`
 - You manually copy values from removed to new structure
 - Delete `vault.removed.yml` when done
 

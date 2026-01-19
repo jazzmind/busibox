@@ -590,8 +590,8 @@ All required variables configured:
 - **Testing**: `docs/guides/agent-server-testing.md`
 - **API Reference**: `docs/reference/agent-server-api.md`
 - **Conversation API**: `docs/reference/conversation-api.md`
-- **Integration**: `docs/architecture/agent-client-integration.md`
-- **Specification**: `specs/006-agent-client-specs/spec.md`
+- **Integration**: `docs/architecture/agent-manager-integration.md`
+- **Specification**: `specs/006-agent-manager-specs/spec.md`
 
 ---
 

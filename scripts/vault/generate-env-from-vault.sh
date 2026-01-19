@@ -250,10 +250,10 @@ try:
     lines.append('# =============================================================================')
     lines.append('# OPTIONAL: GITHUB OAUTH (for deployment management)')
     lines.append('# =============================================================================')
-    if 'github_token' in secrets and secrets['github_token'] != 'CHANGE_ME_GITHUB_PERSONAL_ACCESS_TOKEN':
-        lines.append(f'GITHUB_AUTH_TOKEN={secrets[\"github_token\"]}')
+    if 'github' in secrets and 'personal_access_token' in secrets['github'] and secrets['github']['personal_access_token'] != 'CHANGE_ME_GITHUB_PERSONAL_ACCESS_TOKEN':
+        lines.append(f'GITHUB_AUTH_TOKEN={secrets[\"github\"].get(\"personal_access_token\", \"CHANGE_ME_GITHUB_PERSONAL_ACCESS_TOKEN\")}')
     else:
-        lines.append('# GITHUB_AUTH_TOKEN=your-token-here')
+        lines.append('# GITHUB_AUTH_TOKEN=CHANGE_ME_GITHUB_PERSONAL_ACCESS_TOKEN')
     lines.append('')
     
     # Write to file

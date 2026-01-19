@@ -26,7 +26,7 @@ Successfully refactored the Ansible configuration to create a generic, reusable 
 ### 3. **Complete Application Suite**
 All 5 Node.js applications fully defined and deployable:
 - `ai-portal` (port 3000) - Main web application
-- `agent-client` (port 3001) - Agent user interface
+- `agent-manager` (port 3001) - Agent user interface
 - `doc-intel` (port 3002) - Document intelligence
 - `innovation` (port 3003) - Innovation portal
 - `agent-server` (port 4111) - Internal API server
@@ -54,13 +54,13 @@ domain: "ai.{{ base_domain }}"
 
 **Production Environment:**
 - `ai.jaycashman.com` → ai-portal (main app)
-- `agents.ai.jaycashman.com` → agent-client
+- `agents.ai.jaycashman.com` → agent-manager
 - `docs.ai.jaycashman.com` → doc-intel
 - `innovation.ai.jaycashman.com` → innovation
 
 **Test Environment:**
 - `test.ai.jaycashman.com` → ai-portal
-- `agents.test.ai.jaycashman.com` → agent-client
+- `agents.test.ai.jaycashman.com` → agent-manager
 - `docs.test.ai.jaycashman.com` → doc-intel
 - `innovation.test.ai.jaycashman.com` → innovation
 

@@ -38,7 +38,7 @@ Same pattern, just `.201` instead of `.200` in 3rd octet
 ```
 agent-server:  4111  (internal only)
 ai-portal:     3000  (public)
-agent-client:  3001  (public)
+agent-manager:  3001  (public)
 doc-intel:     3002  (public)
 innovation:    3003  (public)
 ```
@@ -84,7 +84,7 @@ ansible-inventory -i inventory/production --list | grep "_ip"
 ansible -i inventory/production all -m ping
 
 # Check service status
-ansible -i inventory/production apps -a "systemctl list-units --type=service --state=running | grep -E '(ai-portal|agent-client|doc-intel|innovation)'"
+ansible -i inventory/production apps -a "systemctl list-units --type=service --state=running | grep -E '(ai-portal|agent-manager|doc-intel|innovation)'"
 ansible -i inventory/production proxy -a "systemctl status nginx"
 
 # Syntax check

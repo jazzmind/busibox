@@ -268,7 +268,7 @@ applications:
 
 **Core Applications** (`auto_deploy: true`):
 - Automatically deployed during initial provisioning
-- Examples: `ai-portal`, `agent-client`
+- Examples: `ai-portal`, `agent-manager`
 - These are essential services required for system operation
 
 **Add-On Applications** (`auto_deploy: false`):

@@ -57,7 +57,7 @@ check_nginx() {
 echo "=== Direct Service Checks ==="
 check_service "agent-api" "${AGENT_IP}" "8000" "/auth/health"
 check_service "ai-portal" "${APPS_IP}" "3000" "/api/health"
-check_service "agent-client" "${APPS_IP}" "3001" "/api/health"
+check_service "agent-manager" "${APPS_IP}" "3001" "/api/health"
 check_service "doc-intel" "${APPS_IP}" "3002" "/api/health"
 check_service "innovation" "${APPS_IP}" "3003" "/api/health"
 
@@ -65,7 +65,7 @@ echo ""
 echo "=== NGINX Proxy Routes ==="
 check_nginx "https://${PROXY_IP}" "ai-portal (IP access)"
 check_nginx "https://ai.jaycashman.com" "ai-portal (domain)"
-check_nginx "https://agents.ai.jaycashman.com" "agent-client"
+check_nginx "https://agents.ai.jaycashman.com" "agent-manager"
 check_nginx "https://docs.ai.jaycashman.com" "doc-intel"
 check_nginx "https://innovation.ai.jaycashman.com" "innovation"
 
@@ -76,7 +76,7 @@ ssh root@${PROXY_IP} "ls -la /etc/nginx/sites-enabled/ | grep -v 'total\|^\.$\|^
 
 echo ""
 echo "=== Systemd Services on apps-lxc ==="
-ssh root@${APPS_IP} "systemctl list-units --type=service --state=running | grep -E '(ai-portal|agent-client|doc-intel|innovation)'" || echo "Could not get service status"
+ssh root@${APPS_IP} "systemctl list-units --type=service --state=running | grep -E '(ai-portal|agent-manager|doc-intel|innovation)'" || echo "Could not get service status"
 
 echo ""
 echo "=== Service Logs (last 10 lines) ==="

@@ -12,7 +12,7 @@ category: deployment
 ### 1. Agent-Client Renamed to Agent-Manager
 
 **Changed Files:**
-- `provision/ansible/group_vars/all/apps.yml` - Updated app name from `agent-client` to `agent-manager`
+- `provision/ansible/group_vars/all/apps.yml` - Updated app name from `agent-manager` to `agent-manager`
 - `scripts/lib/services.sh` - Already using `agent_manager` (correct)
 - `scripts/lib/status.sh` - Already detecting `agent-manager` correctly
 

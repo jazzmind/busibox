@@ -41,7 +41,7 @@ journalctl -u ai-portal.service -n 100 --no-pager
 
 ```bash
 # List running services
-systemctl list-units --type=service --state=running | grep -E '(ai-portal|agent-client|doc-intel|innovation)'
+systemctl list-units --type=service --state=running | grep -E '(ai-portal|agent-manager|doc-intel|innovation)'
 
 # View logs (real-time)
 journalctl -u <app-name>.service -f
@@ -76,7 +76,7 @@ journalctl -u <app-name>.service > /tmp/app-logs.txt
 ## Common App Names
 
 - `ai-portal` - AI Portal application
-- `agent-client` - Agent Client application
+- `agent-manager` - Agent Client application
 - `agent-server` - Agent Server (if on same container)
 
 ## Container IPs

@@ -69,18 +69,18 @@
 # Deploy GitHub token to ingest container for private repo access
 - name: Deploy GitHub token for testdocs access
   copy:
-    content: "{{ secrets.github_token }}"
+    content: "{{ secrets.github.personal_access_token }}"
     dest: /root/.github_token
     mode: '0600'
   when: 
     - testdocs_enabled | default(true)
-    - secrets.github_token is defined
+    - secrets.github.personal_access_token is defined
   no_log: true
 
 # Construct authenticated repo URL (same pattern as nextjs_app role)
 - name: Set testdocs repo URL with authentication
   set_fact:
-    testdocs_repo_url: "{% if secrets.github_token is defined and secrets.github_token %}https://{{ secrets.github_token }}@github.com/jazzmind/busibox-testdocs.git{% else %}https://github.com/jazzmind/busibox-testdocs.git{% endif %}"
+    testdocs_repo_url: "{% if secrets.github.personal_access_token is defined and secrets.github.personal_access_token %}https://{{ secrets.github.personal_access_token }}@github.com/jazzmind/busibox-testdocs.git{% else %}https://github.com/jazzmind/busibox-testdocs.git{% endif %}"
   no_log: true
   when: testdocs_enabled | default(true)
 

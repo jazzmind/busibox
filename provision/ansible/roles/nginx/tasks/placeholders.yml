@@ -60,7 +60,7 @@
     owner: www-data
     group: www-data
 
-- name: Deploy agent-client placeholder page
+- name: Deploy agent-manager placeholder page
   copy:
     content: |
       <!DOCTYPE html>

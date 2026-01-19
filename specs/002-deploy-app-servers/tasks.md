@@ -155,21 +155,21 @@
 
 ## Phase 7: User Story 5 - Agent Administration Interface (Priority: P3)
 
-**Goal**: Deploy agent-client for agent administration, accessible via subdomain and path routing
+**Goal**: Deploy agent-manager for agent administration, accessible via subdomain and path routing
 
-**Independent Test**: Deploy agent-client from GitHub, configure it to connect to the agent-server API, access it via agents.ai.jaycashman.com, and verify you can view agent configurations and system status
+**Independent Test**: Deploy agent-manager from GitHub, configure it to connect to the agent-server API, access it via agents.ai.jaycashman.com, and verify you can view agent configurations and system status
 
 ### Implementation for User Story 5
 
-- [ ] T057 [P] [US5] Add agent-client definition to `provision/ansible/group_vars/apps.yml` (name: agent-client, github_repo: jazzmind/agent-client, container: apps-lxc, port: 3001, routes: [subdomain: agents, path: /agents], websocket: true per FR-026)
-- [ ] T058 [P] [US5] Add agent-client secrets to `provision/ansible/roles/secrets/vars/vault.yml` (agent_api_key, jwt_secret shared with portal per FR-029)
-- [ ] T059 [P] [US5] Add agent-client environment variables to apps.yml (AGENT_API_URL: http://10.96.200.30:8000 per FR-027)
-- [ ] T060 [US5] Deploy agent-client via deploywatch: run `make deploy-apps`, verify agent-client deployed to /srv/apps/agent-client
-- [ ] T061 [US5] Test agent-client subdomain routing: access agents.ai.jaycashman.com, verify agent-client loads per FR-026
-- [ ] T062 [US5] Test agent-client path routing: access ai.jaycashman.com/agents, verify same agent-client loads
-- [ ] T063 [US5] Test agent-client WebSocket: verify real-time updates work (WebSocket connection upgrade headers in NGINX)
-- [ ] T064 [US5] Test agent-client connectivity to agent-server: verify dashboard shows agent status, can view workflows per FR-028
-- [ ] T065 [US5] Test agent-client authentication: verify portal session recognized or own auth works per FR-029
+- [ ] T057 [P] [US5] Add agent-manager definition to `provision/ansible/group_vars/apps.yml` (name: agent-manager, github_repo: jazzmind/agent-manager, container: apps-lxc, port: 3001, routes: [subdomain: agents, path: /agents], websocket: true per FR-026)
+- [ ] T058 [P] [US5] Add agent-manager secrets to `provision/ansible/roles/secrets/vars/vault.yml` (agent_api_key, jwt_secret shared with portal per FR-029)
+- [ ] T059 [P] [US5] Add agent-manager environment variables to apps.yml (AGENT_API_URL: http://10.96.200.30:8000 per FR-027)
+- [ ] T060 [US5] Deploy agent-manager via deploywatch: run `make deploy-apps`, verify agent-manager deployed to /srv/apps/agent-manager
+- [ ] T061 [US5] Test agent-manager subdomain routing: access agents.ai.jaycashman.com, verify agent-manager loads per FR-026
+- [ ] T062 [US5] Test agent-manager path routing: access ai.jaycashman.com/agents, verify same agent-manager loads
+- [ ] T063 [US5] Test agent-manager WebSocket: verify real-time updates work (WebSocket connection upgrade headers in NGINX)
+- [ ] T064 [US5] Test agent-manager connectivity to agent-server: verify dashboard shows agent status, can view workflows per FR-028
+- [ ] T065 [US5] Test agent-manager authentication: verify portal session recognized or own auth works per FR-029
 
 **Checkpoint**: Agent-client operational, accessible via subdomain and path, connected to agent-server with WebSocket support
 
@@ -185,7 +185,7 @@
 - [ ] T069 [Integration] Test missing secrets: reference non-existent secret, verify validation fails listing missing secrets per clarification
 - [ ] T070 [Integration] Test database migration: deploy app with schema change, verify migration runs and rolls back on failure per FR-036, FR-037
 - [ ] T071 [P] [Integration] Test SSL certificate renewal: trigger certbot renewal (dry-run), verify NGINX reloads gracefully per FR-013b
-- [ ] T072 [P] [Integration] Test cross-app authentication: login to portal, navigate to agent-client, verify no re-authentication required per SC-009
+- [ ] T072 [P] [Integration] Test cross-app authentication: login to portal, navigate to agent-manager, verify no re-authentication required per SC-009
 - [ ] T073 [Integration] Test concurrent users: simulate 100 concurrent users across apps, verify no performance degradation per SC-014
 - [ ] T074 [Integration] Test application crash recovery: kill app process, verify PM2 restarts within 10 seconds per SC-015
 - [ ] T075 [Integration] Update `test-infrastructure.sh` with application deployment tests (all scenarios from quickstart.md)
@@ -358,7 +358,7 @@ With multiple developers:
 3. **After US1 + US2**:
    - Developer A: Continue User Story 3 (NGINX deployment) - T042-T048
    - Developer B: Start User Story 4 (main portal) - T049-T056
-   - Developer C: Start User Story 5 (agent-client) - T057-T065 (requires US1 complete)
+   - Developer C: Start User Story 5 (agent-manager) - T057-T065 (requires US1 complete)
 4. **Final**: Integration and Polish together
 
 ---
@@ -388,7 +388,7 @@ With multiple developers:
 - US2: Add test app via config file, verify deployment
 - US3: Access test app via HTTPS subdomain, verify SSL valid
 - US4: Login to portal, verify app list displayed
-- US5: Access agent-client, verify agent-server connectivity
+- US5: Access agent-manager, verify agent-server connectivity
 
 **Critical Path**: Setup → Foundational → US1/US2 → US3 → US4/US5 → Integration → Polish
 

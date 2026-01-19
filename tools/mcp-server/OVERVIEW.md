@@ -29,7 +29,7 @@ The Busibox MCP Server is a **Model Context Protocol server** that makes the Bus
 
 ### Run Make Targets
 - Deploy services (all, milvus, ingest, search, agent, etc.)
-- Deploy apps (ai-portal, agent-client, doc-intel, etc.)
+- Deploy apps (ai-portal, agent-manager, doc-intel, etc.)
 - Run tests (test-ingest, test-search, test-agent, etc.)
 - Run verification (verify, verify-health, verify-smoke)
 - All with proper environment handling (staging vs production)
@@ -160,7 +160,7 @@ In Claude or Cursor, just ask naturally:
 | Container | ID | IP | Services |
 |-----------|----|----|----------|
 | proxy-lxc | 200 | 10.96.200.200 | nginx |
-| apps-lxc | 201 | 10.96.200.201 | ai-portal, agent-client, etc. |
+| apps-lxc | 201 | 10.96.200.201 | ai-portal, agent-manager, etc. |
 | agent-lxc | 202 | 10.96.200.202 | agent-api |
 | pg-lxc | 203 | 10.96.200.203 | postgresql |
 | milvus-lxc | 204 | 10.96.200.204 | milvus, search-api |
@@ -180,7 +180,7 @@ Same containers with ID + 100 and IP in 201 subnet (e.g., TEST-milvus-lxc: 304, 
 - `all`, `files`, `pg`, `milvus`, `search`, `search-api`, `agent`, `ingest`, `apps`, `nginx`, `authz`, `litellm`, `vllm`, `colpali`
 
 ### App Deployment
-- `deploy-apps`, `deploy-ai-portal`, `deploy-agent-client`, `deploy-doc-intel`, `deploy-foundation`, `deploy-project-analysis`, `deploy-innovation`
+- `deploy-apps`, `deploy-ai-portal`, `deploy-agent-manager`, `deploy-doc-intel`, `deploy-foundation`, `deploy-project-analysis`, `deploy-innovation`
 
 ### Testing
 - `test-all`, `test-ingest`, `test-search`, `test-agent`, `test-authz`, `test-apps`

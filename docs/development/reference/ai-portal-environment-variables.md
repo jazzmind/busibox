@@ -96,7 +96,7 @@ Complete reference for all environment variables used by the AI Portal applicati
 - **Secret:** Yes
 - **Description:** JWT secret for SSO token validation
 - **Ansible:** `secrets.jwt_secret`
-- **Shared with:** agent-client, agent-server
+- **Shared with:** agent-manager, agent-server
 
 ### `SSO_TOKEN_EXPIRY`
 - **Type:** `number`

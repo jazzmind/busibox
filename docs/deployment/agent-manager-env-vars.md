@@ -63,13 +63,13 @@ optional_secrets:
 
 ## Secret Key Renaming
 
-The vault secret key was renamed from `agent-client` to `agent-manager` for consistency:
+The vault secret key was renamed from `agent-manager` to `agent-manager` for consistency:
 
 ### Before:
 ```yaml
-agent-client:
+agent-manager:
   database_url: "..."
-  admin_client_id: "agent-client-app"
+  admin_client_id: "agent-manager-app"
 ```
 
 ### After:
@@ -106,7 +106,7 @@ In production/staging, proper TLS certificates are used, so this is not needed.
 
 ### For Existing Deployments
 
-If you have an existing vault file with `agent-client`, you need to:
+If you have an existing vault file with `agent-manager`, you need to:
 
 1. **Decrypt the vault:**
    ```bash
@@ -117,7 +117,7 @@ If you have an existing vault file with `agent-client`, you need to:
 2. **Rename the secret section:**
    ```yaml
    # Change this:
-   agent-client:
+   agent-manager:
      # ... secrets ...
    
    # To this:
@@ -130,7 +130,7 @@ If you have an existing vault file with `agent-client`, you need to:
    agent-manager:
      # ... existing secrets ...
      litellm_api_key: "{{ secrets.litellm_api_key }}"
-     admin_client_id: "agent-manager"  # Update from "agent-client-app"
+     admin_client_id: "agent-manager"  # Update from "agent-manager-app"
      
      # Optional (only if using email):
      # resend_api_key: "your-resend-key"
@@ -181,8 +181,8 @@ SSO_TOKEN_EXPIRY="900"
    - Added comments to clarify OAuth credential mapping
 
 2. **`provision/ansible/roles/secrets/vars/vault.example.yml`**
-   - Renamed `agent-client` → `agent-manager`
-   - Updated `admin_client_id` from `"agent-client-app"` to `"agent-manager"`
+   - Renamed `agent-manager` → `agent-manager`
+   - Updated `admin_client_id` from `"agent-manager-app"` to `"agent-manager"`
    - Added `litellm_api_key` secret
    - Added commented optional secrets for email and authz admin token
    - Added documentation comments

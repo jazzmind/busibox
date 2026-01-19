@@ -1,6 +1,6 @@
 # Quickstart: Agent-Server API Enhancements
 
-**Feature**: 006-agent-client-specs  
+**Feature**: 006-agent-manager-specs  
 **Date**: 2025-12-11  
 **Audience**: Developers implementing or testing the agent-server enhancements
 
@@ -216,7 +216,7 @@ curl -X GET http://localhost:8000/runs/{new_run_id} \
 # From development machine
 git add .
 git commit -m "feat: implement agent-server enhancements"
-git push origin 006-agent-client-specs
+git push origin 006-agent-manager-specs
 ```
 
 ### 2. Deploy via Ansible
@@ -271,7 +271,7 @@ bash scripts/test-agent-enhancements.sh test
 ```bash
 # From development machine
 git checkout main
-git merge 006-agent-client-specs
+git merge 006-agent-manager-specs
 git push origin main
 ```
 

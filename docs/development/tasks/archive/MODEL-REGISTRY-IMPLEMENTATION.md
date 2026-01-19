@@ -2,7 +2,7 @@
 
 ## Overview
 
-Implement model purpose registry across all services (busibox, ai-portal, agent-server, agent-client) to:
+Implement model purpose registry across all services (busibox, ai-portal, agent-server, agent-manager) to:
 - Abstract model purposes from actual model names
 - Enable easy model swapping via configuration
 - Centralize model management at Ansible level

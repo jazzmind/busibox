@@ -28,7 +28,7 @@ The `check_service_status()` function in `scripts/lib/status.sh` was only checki
 
 1. **Milvus** runs in Docker container `milvus-standalone` (not systemd)
 2. **MinIO** runs in Docker container `minio-minio-1` (not systemd)
-3. **Agent Manager** systemd service is still named `agent-client.service` (legacy name)
+3. **Agent Manager** systemd service is still named `agent-manager.service` (legacy name)
 
 ## Verification
 
@@ -47,7 +47,7 @@ minio-minio-1   Up 47 hours
 
 # Agent Manager service
 ssh root@10.96.201.201 "systemctl list-units --type=service | grep agent"
-agent-client.service  loaded active running  agent-client Application
+agent-manager.service  loaded active running  agent-manager Application
 ```
 
 ## Solution
@@ -69,10 +69,10 @@ docker ps --filter 'name=minio' --filter 'status=running'
 ### 3. Check Both Names for Agent Manager
 
 ```bash
-systemctl is-active agent-manager 2>/dev/null || systemctl is-active agent-client 2>/dev/null
+systemctl is-active agent-manager 2>/dev/null || systemctl is-active agent-manager 2>/dev/null
 ```
 
-This handles the legacy `agent-client` service name that's still deployed on staging.
+This handles the legacy `agent-manager` service name that's still deployed on staging.
 
 ## Changes Made
 
@@ -82,7 +82,7 @@ This handles the legacy `agent-client` service name that's still deployed on sta
 
 **Logic:**
 - Services like `milvus`, `minio` → Check Docker containers
-- Service `agent-manager` → Check systemd with fallback to `agent-client`
+- Service `agent-manager` → Check systemd with fallback to `agent-manager`
 - Service `postgres` → Check systemd `postgresql` service
 - Other services → Check systemd with default name mapping
 
@@ -103,15 +103,15 @@ App Services
 
 ## Future Considerations
 
-### Rename agent-client Service
+### Rename agent-manager Service
 
 When redeploying apps to staging, the systemd service should be renamed:
 
 ```bash
 # On TEST-apps-lxc (10.96.201.201)
-systemctl stop agent-client
-systemctl disable agent-client
-rm /etc/systemd/system/agent-client.service
+systemctl stop agent-manager
+systemctl disable agent-manager
+rm /etc/systemd/system/agent-manager.service
 systemctl daemon-reload
 
 # Then redeploy via Ansible (will create agent-manager.service)

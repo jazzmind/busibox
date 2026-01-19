@@ -17,7 +17,7 @@ The `provision/ansible/Makefile` has been significantly enhanced with new target
 #### New Deployment Targets
 - `deploy-apps` - Deploy all applications
 - `deploy-ai-portal` - Deploy AI Portal specifically
-- `deploy-agent-client` - Deploy Agent Client
+- `deploy-agent-manager` - Deploy Agent Client
 - `deploy-doc-intel` - Deploy Doc Intel
 - `deploy-foundation` - Deploy Foundation
 - `deploy-project-analysis` - Deploy Project Analysis

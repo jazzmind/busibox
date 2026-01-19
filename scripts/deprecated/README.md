@@ -13,7 +13,7 @@ If you need to restore a script, move it back to the appropriate `scripts/` subd
 - `check-ingest-status.sh` - Unused ingest status check
 - `clear-failed-jobs.sh` - Unused job cleanup
 - `deploy-llm-stack.sh` - Unused LLM stack deploy
-- `diagnose-agent-client.sh` - Unused diagnostics
+- `diagnose-agent-manager.sh` - Unused diagnostics
 - `diagnose-agent-server.sh` - Unused diagnostics
 - `diagnose-chunks.sh` - Unused diagnostics
 - `diagnose-ingestion.sh` - Unused diagnostics

@@ -1,6 +1,6 @@
 # Tasks: Agent-Server API Enhancements
 
-**Input**: Design documents from `/specs/006-agent-client-specs/`
+**Input**: Design documents from `/specs/006-agent-manager-specs/`
 **Prerequisites**: plan.md ✅, spec.md ✅, research.md ✅, data-model.md ✅, contracts/openapi.yaml ✅
 
 **Tests**: Tests are included based on success criteria in spec.md (SC-002: 95%+ routing accuracy, SC-006: 100% security validation)

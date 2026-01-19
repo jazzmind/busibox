@@ -165,7 +165,7 @@ bash scripts/view-app-logs.sh ai-portal production 100
 bash scripts/tail-app-logs.sh ai-portal production
 
 # View test environment
-bash scripts/view-app-logs.sh agent-client test 50
+bash scripts/view-app-logs.sh agent-manager test 50
 ```
 
 ### From apps-lxc Container
@@ -322,7 +322,7 @@ pm2 logs <app-name>
 
 **Common Apps:**
 - ai-portal
-- agent-client
+- agent-manager
 - agent-server (if same container)
 
 ## Notes

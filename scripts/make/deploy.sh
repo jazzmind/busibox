@@ -780,7 +780,7 @@ deploy_apps_menu() {
         echo -e "  ${CYAN}1)${NC} Deploy All Apps (latest release)"
         echo -e "  ${CYAN}2)${NC} Update Nginx Routing"
         echo -e "  ${CYAN}3)${NC} Deploy AI Portal"
-        echo -e "  ${CYAN}4)${NC} Deploy Agent Manager (agent-client)"
+        echo -e "  ${CYAN}4)${NC} Deploy Agent Manager (agent-manager)"
         echo -e "  ${CYAN}5)${NC} Deploy Doc Intelligence (doc-intel)"
         echo -e "  ${CYAN}6)${NC} Deploy Foundation Manager"
         echo -e "  ${CYAN}7)${NC} Deploy Project Analysis"
@@ -810,7 +810,7 @@ deploy_apps_menu() {
                 pause
                 ;;
             4)
-                deploy_single_app "agent-client" "Agent Manager" "$env"
+                deploy_single_app "agent-manager" "Agent Manager" "$env"
                 pause
                 ;;
             5)

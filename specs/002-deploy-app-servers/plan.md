@@ -153,7 +153,7 @@ srv/
 ├── ingest/                         # [EXISTING] Ingest worker (deployed from GitHub)
 └── apps/                           # [NEW] Application deployment directory
     ├── cashman/                    # [DEPLOYED] Main portal
-    ├── agent-client/               # [DEPLOYED] Agent admin interface
+    ├── agent-manager/               # [DEPLOYED] Agent admin interface
     └── [future apps]/              # [EXTENSIBLE] Additional applications
 
 test-infrastructure.sh              # [UPDATED] Add application deployment tests

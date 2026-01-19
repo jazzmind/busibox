@@ -246,7 +246,7 @@ After deployment, verify:
 
 After ai-portal is deployed:
 
-1. **Deploy other apps**: agent-client, doc-intel, innovation
+1. **Deploy other apps**: agent-manager, doc-intel, innovation
 2. **Test integration**: Verify apps can communicate
 3. **Monitor logs**: Check for runtime errors
 4. **Performance test**: Verify response times

@@ -102,7 +102,7 @@ Agent tasks:
 3 - make sure all authz tests pass
 4 - make sure all ai-portal tests pass
 5 - make sure agent-api is working and all tests pass
-6 - start rebuilding agent-client (rename to agent-manager) using busibox-app libs and components
+6 - start rebuilding agent-manager (rename to agent-manager) using busibox-app libs and components
 7 - make sure agent-manager runs and can talk to agent-api
 
 

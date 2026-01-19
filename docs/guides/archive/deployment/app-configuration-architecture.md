@@ -212,7 +212,7 @@ make production
 
 **Current Allocations:**
 - 3000: ai-portal
-- 3001: agent-client
+- 3001: agent-manager
 - 3002: doc-intel
 - 3003: foundation
 - 3004: project-analysis

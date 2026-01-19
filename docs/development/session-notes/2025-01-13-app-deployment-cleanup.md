@@ -63,7 +63,7 @@ Cleaned up the Ansible application deployment configuration to remove `innovatio
 3. **Testing**: Easier to test deployment system with optional apps
 4. **Resource Management**: Save resources by not running unused apps
 
-### Why Keep agent-client and doc-intel?
+### Why Keep agent-manager and doc-intel?
 
 1. **Core Functionality**: These are fundamental to the platform
 2. **Default Install**: Every environment should have these
@@ -84,7 +84,7 @@ Cleaned up the Ansible application deployment configuration to remove `innovatio
 │  - Admin interface                                      │
 │  - Routes: /, /home, /portal                           │
 ├─────────────────────────────────────────────────────────┤
-│ Port 3001: agent-client                                │
+│ Port 3001: agent-manager                                │
 │  - AI agent interface                                   │
 │  - Routes: /agents, agents.domain.com                  │
 ├─────────────────────────────────────────────────────────┤
@@ -116,7 +116,7 @@ Future deployments can include:
 
 ### Reserved Ports (Ansible)
 - **3000**: ai-portal
-- **3001**: agent-client
+- **3001**: agent-manager
 - **3002**: doc-intel
 
 ### Available Ports (Manual Deployment)
@@ -147,7 +147,7 @@ If you have `innovation` or `project-analysis` already deployed:
 1. Deploy infrastructure with Ansible:
    ```bash
    cd provision/ansible
-   make apps  # Deploys ai-portal, agent-client, doc-intel
+   make apps  # Deploys ai-portal, agent-manager, doc-intel
    ```
 
 2. Seed AI Portal database:
@@ -258,7 +258,7 @@ After deploying these changes:
 
 - [ ] Deploy to test environment: `INV=test make apps`
 - [ ] Verify ai-portal accessible at domain root
-- [ ] Verify agent-client at `/agents`
+- [ ] Verify agent-manager at `/agents`
 - [ ] Verify doc-intel at `/docs`
 - [ ] Check PM2 process list (should only show 3 apps)
 - [ ] Verify nginx routing for default apps
@@ -284,7 +284,7 @@ Related documentation:
 
 ### AI Portal Repository
 **Commit**: `96dd0ac`
-- Updated seed.ts with agent-client and doc-intel
+- Updated seed.ts with agent-manager and doc-intel
 - Refactored to use loop for role permissions
 - Updated audit log details
 

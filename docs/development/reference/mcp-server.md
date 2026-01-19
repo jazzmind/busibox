@@ -249,7 +249,7 @@ The Busibox Makefile has been significantly enhanced. This section documents the
 | Target | Description | Example |
 |--------|-------------|---------|
 | `deploy-ai-portal` | Deploy AI Portal | `make deploy-ai-portal` |
-| `deploy-agent-client` | Deploy Agent Client | `make deploy-agent-client` |
+| `deploy-agent-manager` | Deploy Agent Client | `make deploy-agent-manager` |
 | `deploy-doc-intel` | Deploy Doc Intel | `make deploy-doc-intel` |
 | `deploy-foundation` | Deploy Foundation | `make deploy-foundation` |
 | `deploy-project-analysis` | Deploy Project Analysis | `make deploy-project-analysis` |

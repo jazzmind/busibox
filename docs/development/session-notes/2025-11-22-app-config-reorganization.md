@@ -236,7 +236,7 @@ Updated port allocation in `apps.yml`:
 | Port | Application | Type |
 |------|-------------|------|
 | 3000 | ai-portal | Public web app |
-| 3001 | agent-client | Public web app |
+| 3001 | agent-manager | Public web app |
 | 3002 | doc-intel | Public web app |
 | 3003 | foundation | Public web app (NEW) |
 | 3004 | project-analysis | Public web app (NEW) |

@@ -76,15 +76,15 @@
 
 - name: Deploy GitHub token for private repository access
   copy:
-    content: "{{ secrets.github_token }}"
+    content: "{{ secrets.github.personal_access_token }}"
     dest: "~/.github_token"
     mode: "0600"
     owner: root
     group: root
   no_log: true
   when: 
-    - secrets.github_token is defined
-    - secrets.github_token | length > 0
+    - secrets.github.personal_access_token is defined
+    - secrets.github.personal_access_token | length > 0
   tags:
     - always  # Always run for any app deployment
 

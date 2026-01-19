@@ -52,7 +52,7 @@
   set_fact:
     subdomain_placeholders:
       - subdomain: "agents-{{ env_suffix }}"
-        app_name: "agent-client"
+        app_name: "agent-manager"
         placeholder_file: "agents.html"
       - subdomain: "docs-{{ env_suffix }}"
         app_name: "doc-intel"
@@ -66,7 +66,7 @@
   set_fact:
     subdomain_placeholders:
       - subdomain: "agents"
-        app_name: "agent-client"
+        app_name: "agent-manager"
         placeholder_file: "agents.html"
       - subdomain: "docs"
         app_name: "doc-intel"

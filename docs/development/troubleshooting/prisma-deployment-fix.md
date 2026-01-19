@@ -78,7 +78,7 @@ fi
 
 ## Impact
 
-This fix allows all Prisma-based applications (like agent-client) to deploy successfully via Ansible.
+This fix allows all Prisma-based applications (like agent-manager) to deploy successfully via Ansible.
 
 ## Testing
 
@@ -86,13 +86,13 @@ After applying this fix, the deployment should complete successfully:
 
 ```bash
 cd /root/busibox/provision/ansible
-make deploy-agent-client INV=inventory/test
+make deploy-agent-manager INV=inventory/test
 ```
 
 Expected output:
 ```
 ========================================
-DATABASE SETUP FOR agent-client
+DATABASE SETUP FOR agent-manager
 ========================================
 Loading environment variables from .env
 Database host: 10.96.201.203
@@ -105,7 +105,7 @@ DATABASE SETUP COMPLETE
 
 ## Related
 
-- **Application**: agent-client
+- **Application**: agent-manager
 - **Ansible Role**: app_deployer
 - **Task**: Create database and run migrations (Prisma apps)
 - **Template**: prisma-setup.sh.j2

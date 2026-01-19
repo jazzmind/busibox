@@ -216,7 +216,7 @@ make apps                # Deploy all apps
 
 # Deploy individual applications
 make deploy-ai-portal    # Deploy AI Portal
-make deploy-agent-client # Deploy Agent Client
+make deploy-agent-manager # Deploy Agent Client
 make deploy-doc-intel    # Deploy Doc Intel
 make deploy-foundation   # Deploy Foundation
 make deploy-project-analysis

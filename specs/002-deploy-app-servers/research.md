@@ -126,7 +126,7 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/ai.jaycashman.com/privkey.pem;
 
     location / {
-        proxy_pass http://10.96.200.201:3001;  # agent-client on apps-lxc
+        proxy_pass http://10.96.200.201:3001;  # agent-manager on apps-lxc
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -153,7 +153,7 @@ server {
 
     # Agent client (sub-path)
     location /agents {
-        proxy_pass http://10.96.200.201:3001;  # agent-client on apps-lxc
+        proxy_pass http://10.96.200.201:3001;  # agent-manager on apps-lxc
         proxy_set_header Host $host;
         # ... same proxy headers
     }
@@ -229,12 +229,12 @@ applications:
       - oauth_client_id
       - oauth_client_secret
     
-  - name: agent-client
-    github_repo: jazzmind/agent-client
+  - name: agent-manager
+    github_repo: jazzmind/agent-manager
     container: apps-lxc
     container_ip: 10.96.200.201
     port: 3001
-    deploy_path: /srv/apps/agent-client
+    deploy_path: /srv/apps/agent-manager
     health_endpoint: /health
     routes:
       - type: subdomain
@@ -387,7 +387,7 @@ echo "=== Deploywatch cycle completed at $(date) ==="
 
 ### 6. Session Management Across Applications
 
-**Question**: How to share authentication state between main portal (cashman) and sub-applications (agent-client)?
+**Question**: How to share authentication state between main portal (cashman) and sub-applications (agent-manager)?
 
 **Decision**: JWT tokens in HTTP-only cookies, validated by applications or NGINX auth_request module
 

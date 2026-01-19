@@ -1,4 +1,4 @@
-.PHONY: ping all files pg milvus nginx search search-api agent ingest ingest-api ingest-worker ingest-update-tests docs apps openwebui deploy-apps deploy-ai-portal deploy-agent-client deploy-doc-intel deploy-foundation deploy-project-analysis deploy-innovation verify verify-health verify-smoke service-start service-stop service-restart service-status service-logs service-health test test-menu test-ingest test-ingest-all test-ingest-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-authz test-apps test-security test-security-auth test-security-injection test-security-fuzz test-all configure generate-token-keys bootstrap-test-creds bridge tailscale test-bridge
+.PHONY: ping all files pg milvus nginx search search-api agent ingest ingest-api ingest-worker ingest-update-tests docs apps openwebui deploy-apps deploy-ai-portal deploy-agent-manager deploy-doc-intel deploy-foundation deploy-project-analysis deploy-innovation verify verify-health verify-smoke service-start service-stop service-restart service-status service-logs service-health test test-menu test-ingest test-ingest-all test-ingest-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-authz test-apps test-security test-security-auth test-security-injection test-security-fuzz test-all configure generate-token-keys bootstrap-test-creds bridge tailscale test-bridge
 # Default to production inventory (can override with: make all INV=inventory/staging)
 INV=inventory/production
 
@@ -125,8 +125,8 @@ deploy-apps:
 deploy-ai-portal:
 	ansible-playbook -i $(INV) -l apps --tags app_deployer,secrets site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=ai-portal"
 
-deploy-agent-client:
-	ansible-playbook -i $(INV) -l apps --tags app_deployer,secrets site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=agent-client"
+deploy-agent-manager:
+	ansible-playbook -i $(INV) -l apps --tags app_deployer,secrets site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=agent-manager"
 
 deploy-doc-intel:
 	ansible-playbook -i $(INV) -l apps --tags app_deployer,secrets site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=doc-intel"

@@ -3,7 +3,7 @@
 
 - name: Construct GitHub repository URL with authentication
   set_fact:
-    git_repo_url: "{% if secrets.github_token is defined and secrets.github_token %}https://{{ secrets.github_token }}@github.com/{{ app_git_repo }}.git{% else %}https://github.com/{{ app_git_repo }}.git{% endif %}"
+    git_repo_url: "{% if secrets.github.personal_access_token is defined and secrets.github.personal_access_token %}https://{{ secrets.github.personal_access_token }}@github.com/{{ app_git_repo }}.git{% else %}https://github.com/{{ app_git_repo }}.git{% endif %}"
   no_log: true  # Don't log the token
   tags: [nextjs_deploy]
 

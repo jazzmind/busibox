@@ -60,7 +60,7 @@ ansible-playbook -i inventory/test site.yml --ask-vault-pass --tags app_deployer
 An application is considered "deployed" if `package.json` exists in the deploy path:
 
 - `/srv/apps/ai-portal/package.json` → Already deployed ✅
-- `/srv/apps/agent-client/` (empty) → Needs deployment ⚠️
+- `/srv/apps/agent-manager/` (empty) → Needs deployment ⚠️
 
 ## Deployment Process
 
@@ -126,13 +126,13 @@ After deployment, check status:
 ```bash
 # Service status
 systemctl status ai-portal.service
-systemctl status agent-client.service
+systemctl status agent-manager.service
 systemctl status doc-intel.service
 systemctl status innovation.service
 
 # Health checks
 curl http://localhost:3000/api/health  # ai-portal
-curl http://localhost:3001/api/health  # agent-client
+curl http://localhost:3001/api/health  # agent-manager
 curl http://localhost:3002/api/health  # doc-intel
 curl http://localhost:3003/api/health  # innovation
 ```
@@ -175,7 +175,7 @@ The deployment task checks `inventory_hostname` to ensure it only runs on the co
 
 ## Next Steps After Deployment
 
-1. **Verify applications are running**: `systemctl list-units --type=service --state=running | grep -E '(ai-portal|agent-client|doc-intel|innovation)'`
+1. **Verify applications are running**: `systemctl list-units --type=service --state=running | grep -E '(ai-portal|agent-manager|doc-intel|innovation)'`
 2. **Configure NGINX proxy**: 
    ```bash
    ansible-playbook -i inventory/test site.yml --ask-vault-pass --tags proxy

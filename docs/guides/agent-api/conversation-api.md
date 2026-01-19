@@ -10,7 +10,7 @@ tags: [agent-server, api, conversations, messages, chat]
 
 ## Overview
 
-The Agent Server provides conversation and message management endpoints to support persistent chat sessions in the agent-client interface. This allows users to maintain conversation history, manage chat settings, and track message metadata including routing decisions and tool calls.
+The Agent Server provides conversation and message management endpoints to support persistent chat sessions in the agent-manager interface. This allows users to maintain conversation history, manage chat settings, and track message metadata including routing decisions and tool calls.
 
 **Base URL**: `http://agent-lxc:8000` (production) or `http://localhost:8000` (local development)
 
@@ -508,7 +508,7 @@ make test-integration
 - [Agent Server API](./agent-server-api.md) - Complete API reference
 - [Agent Server Implementation Status](./agent-server-implementation-status.md) - Feature status
 - [OpenAPI Specification](../../openapi/agent-api.yaml) - Full OpenAPI spec
-- [Agent Client Specs](/Users/wessonnenreich/Code/sonnenreich/agent-client/specs/001-agent-management-rebuild/) - Client requirements
+- [Agent Client Specs](/Users/wessonnenreich/Code/sonnenreich/agent-manager/specs/001-agent-management-rebuild/) - Client requirements
 
 ---
 
