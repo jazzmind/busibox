@@ -621,24 +621,24 @@ render_consolidated_ingest_line() {
     local combined_status combined_symbol status_text
     if [[ "$api_status" == "up" && "$worker_status" == "up" ]]; then
         combined_status="up"
-        combined_symbol="${GREEN}●${NC}"
-        status_text="${GREEN}✓ up${NC}"
+        combined_symbol=$(echo -e "${GREEN}●${NC}")
+        status_text=$(echo -e "${GREEN}✓ up${NC}")
     elif [[ "$api_status" == "down" && "$worker_status" == "down" ]]; then
         combined_status="down"
-        combined_symbol="${RED}○${NC}"
-        status_text="${RED}✗ down (both)${NC}"
+        combined_symbol=$(echo -e "${RED}○${NC}")
+        status_text=$(echo -e "${RED}✗ down (both)${NC}")
     elif [[ "$api_status" == "down" ]]; then
         combined_status="degraded"
-        combined_symbol="${YELLOW}◐${NC}"
-        status_text="${YELLOW}⚠ down (api)${NC}"
+        combined_symbol=$(echo -e "${YELLOW}◐${NC}")
+        status_text=$(echo -e "${YELLOW}⚠ down (api)${NC}")
     elif [[ "$worker_status" == "down" ]]; then
         combined_status="degraded"
-        combined_symbol="${YELLOW}◐${NC}"
-        status_text="${YELLOW}⚠ down (worker)${NC}"
+        combined_symbol=$(echo -e "${YELLOW}◐${NC}")
+        status_text=$(echo -e "${YELLOW}⚠ down (worker)${NC}")
     else
         combined_status="unknown"
-        combined_symbol="${DIM}○${NC}"
-        status_text="${DIM}- unknown${NC}"
+        combined_symbol=$(echo -e "${DIM}○${NC}")
+        status_text=$(echo -e "${DIM}- unknown${NC}")
     fi
     
     # Format version info
@@ -662,8 +662,8 @@ render_consolidated_ingest_line() {
     # Sync indicator
     local sync_indicator=$(get_sync_indicator "$api_sync" "$api_version")
     
-    # Render line
-    printf "  %s %-15s\t%s\t│ %-18s\t%s\n" \
+    # Render line with proper spacing using tabs (matching render_service_line format)
+    printf "  %s %-15s\t%s\t\t│ %-18s\t%s\n" \
         "$combined_symbol" \
         "Ingest API & Worker" \
         "$status_text" \
@@ -710,37 +710,37 @@ render_consolidated_litellm_line() {
         service_label="LiteLLM & vLLM"
         if [[ "$litellm_status" == "up" && "$vllm_status" == "up" ]]; then
             combined_status="up"
-            combined_symbol="${GREEN}●${NC}"
-            status_text="${GREEN}✓ up${NC}"
+            combined_symbol=$(echo -e "${GREEN}●${NC}")
+            status_text=$(echo -e "${GREEN}✓ up${NC}")
         elif [[ "$litellm_status" == "down" && "$vllm_status" == "down" ]]; then
             combined_status="down"
-            combined_symbol="${RED}○${NC}"
-            status_text="${RED}✗ down (both)${NC}"
+            combined_symbol=$(echo -e "${RED}○${NC}")
+            status_text=$(echo -e "${RED}✗ down (both)${NC}")
         elif [[ "$litellm_status" == "down" ]]; then
             combined_status="degraded"
-            combined_symbol="${YELLOW}◐${NC}"
-            status_text="${YELLOW}⚠ down (litellm)${NC}"
+            combined_symbol=$(echo -e "${YELLOW}◐${NC}")
+            status_text=$(echo -e "${YELLOW}⚠ down (litellm)${NC}")
         elif [[ "$vllm_status" == "down" ]]; then
             combined_status="degraded"
-            combined_symbol="${YELLOW}◐${NC}"
-            status_text="${YELLOW}⚠ down (vllm)${NC}"
+            combined_symbol=$(echo -e "${YELLOW}◐${NC}")
+            status_text=$(echo -e "${YELLOW}⚠ down (vllm)${NC}")
         else
             combined_status="unknown"
-            combined_symbol="${DIM}○${NC}"
-            status_text="${DIM}- unknown${NC}"
+            combined_symbol=$(echo -e "${DIM}○${NC}")
+            status_text=$(echo -e "${DIM}- unknown${NC}")
         fi
     else
         # vLLM not used, show just LiteLLM
         service_label="LiteLLM"
         if [[ "$litellm_status" == "up" ]]; then
-            combined_symbol="${GREEN}●${NC}"
-            status_text="${GREEN}✓ up${NC}"
+            combined_symbol=$(echo -e "${GREEN}●${NC}")
+            status_text=$(echo -e "${GREEN}✓ up${NC}")
         elif [[ "$litellm_status" == "down" ]]; then
-            combined_symbol="${RED}○${NC}"
-            status_text="${RED}✗ down${NC}"
+            combined_symbol=$(echo -e "${RED}○${NC}")
+            status_text=$(echo -e "${RED}✗ down${NC}")
         else
-            combined_symbol="${DIM}○${NC}"
-            status_text="${DIM}- unknown${NC}"
+            combined_symbol=$(echo -e "${DIM}○${NC}")
+            status_text=$(echo -e "${DIM}- unknown${NC}")
         fi
     fi
     
@@ -765,8 +765,8 @@ render_consolidated_litellm_line() {
     # Sync indicator
     local sync_indicator=$(get_sync_indicator "$litellm_sync" "$litellm_version")
     
-    # Render line
-    printf "  %s %-15s\t%s\t│ %-18s\t%s\n" \
+    # Render line with proper spacing using tabs (matching render_service_line format)
+    printf "  %s %-15s\t%s\t\t│ %-18s\t%s\n" \
         "$combined_symbol" \
         "$service_label" \
         "$status_text" \
@@ -853,7 +853,16 @@ render_service_category() {
     
     echo ""
     echo -e "${BOLD}$category_title${NC}"
-    echo -e "${DIM}$(printf '─%.0s' $(seq 1 ${#category_title}))${NC}"
+    # Calculate underline length based on visible text only (strip ANSI codes and extra text)
+    # For "Core Services", use 13 chars; for others use their actual length
+    local underline_length
+    case "$category" in
+        core) underline_length=13 ;;  # "Core Services"
+        api) underline_length=12 ;;   # "API Services"
+        app) underline_length=4 ;;    # "Apps"
+        *) underline_length=20 ;;     # Default fallback
+    esac
+    echo -e "${DIM}$(printf '─%.0s' $(seq 1 $underline_length))${NC}"
     
     # Add column headers only if requested (only for first category)
     if [[ "$show_header" == "true" ]]; then
@@ -915,12 +924,9 @@ render_status_dashboard() {
             cache_age="$((cache_age / 3600))h ago"
         fi
     fi
-    
-    echo ""
-    echo -e "${DIM}Environment: ${CYAN}$env${NC} ${DIM}($backend)${NC}$(printf '%*s' 20 '')${DIM}Last check: $cache_age  ${CYAN}[Press 's' to refresh]${NC}"
-    
+       
     # Render each category (only show header for first category)
-    render_service_category "Core Services" "core" "$env" "true"
+    render_service_category "Core Services $(printf '%*s' 10 '')${DIM}Last check: $cache_age  ${CYAN}[Press 's' to refresh]${NC}" "core" "$env" "true"
     render_service_category "API Services" "api" "$env" "false"
     render_service_category "Apps" "app" "$env" "false"
     
