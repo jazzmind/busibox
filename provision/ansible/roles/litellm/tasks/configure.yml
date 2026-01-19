@@ -133,6 +133,27 @@
   meta: flush_handlers
   tags: [litellm_configure]
 
+- name: Create /opt/litellm directory for version tracking
+  file:
+    path: /opt/litellm
+    state: directory
+    mode: '0755'
+  tags: [litellm_configure]
+
+- name: Write deployment version file for LiteLLM
+  copy:
+    content: |
+      {
+        "commit": "{{ lookup('pipe', 'git rev-parse --short HEAD', cwd=playbook_dir + '/../..') }}",
+        "branch": "{{ lookup('pipe', 'git branch --show-current', cwd=playbook_dir + '/../..') }}",
+        "timestamp": "{{ ansible_date_time.iso8601 }}",
+        "deployed_by": "ansible",
+        "litellm_version": "{{ litellm_version | default('latest') }}"
+      }
+    dest: /opt/litellm/.deploy_version
+    mode: "0644"
+  tags: [litellm_configure]
+
 # Operational Tools (always deployed)
 - name: Deploy venv rebuild script
   copy:
