@@ -1,21 +1,28 @@
 """
 Chat Insights Service for Agent API
 
-Manages the chat_insights collection in Milvus for storing and retrieving
-conversation insights with vector embeddings for RAG.
+Manages insights collections in Milvus for storing and retrieving
+conversation and task insights with vector embeddings for RAG.
 
 Migrated from search-api to agent-api as insights are agent memories/context.
+
+Supports:
+- Chat/conversation insights (original functionality)
+- Task insights/memories (new for agent tasks)
 """
 
 import logging
+import time
+import uuid
 from typing import List, Dict, Optional, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from pymilvus import Collection, connections, FieldSchema, CollectionSchema, DataType, utility
 import httpx
 
 logger = logging.getLogger(__name__)
 
 COLLECTION_NAME = "chat_insights"
+TASK_INSIGHTS_COLLECTION = "task_insights"
 
 
 class ChatInsight:
@@ -443,3 +450,383 @@ class InsightsService:
         except Exception as e:
             logger.error(f"Insights service health check failed: {e}")
             return False
+
+    # =========================================================================
+    # Task Insights - Memories for Agent Tasks
+    # =========================================================================
+    
+    def initialize_task_insights_collection(self):
+        """
+        Initialize the task_insights collection in Milvus.
+        
+        Task insights store execution results/memories for agent tasks,
+        enabling tasks to avoid duplicates and maintain context.
+        """
+        self.connect()
+        
+        # Check if collection exists
+        if utility.has_collection(TASK_INSIGHTS_COLLECTION, using="insights"):
+            logger.info(f"Collection {TASK_INSIGHTS_COLLECTION} already exists")
+            return
+        
+        # Create collection with schema
+        fields = [
+            FieldSchema(
+                name="id",
+                dtype=DataType.VARCHAR,
+                is_primary=True,
+                max_length=100,
+                description="Insight ID",
+            ),
+            FieldSchema(
+                name="taskId",
+                dtype=DataType.VARCHAR,
+                max_length=100,
+                description="Task ID this insight belongs to",
+            ),
+            FieldSchema(
+                name="userId",
+                dtype=DataType.VARCHAR,
+                max_length=100,
+                description="User ID who owns this task",
+            ),
+            FieldSchema(
+                name="content",
+                dtype=DataType.VARCHAR,
+                max_length=10000,
+                description="The insight/result content",
+            ),
+            FieldSchema(
+                name="embedding",
+                dtype=DataType.FLOAT_VECTOR,
+                dim=1024,  # bge-large-en-v1.5 embedding dimension
+                description="Vector embedding of the insight",
+            ),
+            FieldSchema(
+                name="executionId",
+                dtype=DataType.VARCHAR,
+                max_length=100,
+                description="Task execution ID that generated this insight",
+            ),
+            FieldSchema(
+                name="createdAt",
+                dtype=DataType.INT64,
+                description="Unix timestamp when insight was created",
+            ),
+        ]
+        
+        schema = CollectionSchema(
+            fields=fields,
+            description="Task insights/memories with embeddings for deduplication and context",
+        )
+        
+        collection = Collection(
+            name=TASK_INSIGHTS_COLLECTION,
+            schema=schema,
+            using="insights",
+        )
+        
+        # Create HNSW index on embedding field
+        index_params = {
+            "index_type": "HNSW",
+            "metric_type": "L2",
+            "params": {
+                "M": 16,
+                "efConstruction": 200,
+            },
+        }
+        
+        collection.create_index(
+            field_name="embedding",
+            index_params=index_params,
+        )
+        
+        # Load collection into memory
+        collection.load()
+        
+        logger.info(f"Collection {TASK_INSIGHTS_COLLECTION} created and loaded")
+    
+    def _get_task_insights_collection(self) -> Collection:
+        """Get or create task insights collection."""
+        self.connect()
+        
+        if not utility.has_collection(TASK_INSIGHTS_COLLECTION, using="insights"):
+            self.initialize_task_insights_collection()
+        
+        return Collection(TASK_INSIGHTS_COLLECTION, using="insights")
+    
+    async def insert_task_insight(
+        self,
+        task_id: str,
+        user_id: str,
+        content: str,
+        execution_id: str,
+        authorization: Optional[str] = None,
+    ) -> str:
+        """
+        Insert a task insight/memory into Milvus.
+        
+        Args:
+            task_id: Task UUID
+            user_id: User ID
+            content: Insight content (e.g., summary of results)
+            execution_id: Execution UUID that generated this insight
+            authorization: Bearer token for embedding generation
+            
+        Returns:
+            Insight ID
+        """
+        collection = self._get_task_insights_collection()
+        
+        # Generate embedding for the content
+        embedding = await self.generate_embedding(content, user_id, authorization)
+        
+        # Generate unique ID
+        insight_id = str(uuid.uuid4())
+        created_at = int(time.time())
+        
+        # Insert into collection
+        data = [
+            [insight_id],  # id
+            [task_id],  # taskId
+            [user_id],  # userId
+            [content[:10000]],  # content (truncate if needed)
+            [embedding],  # embedding
+            [execution_id],  # executionId
+            [created_at],  # createdAt
+        ]
+        
+        collection.insert(data)
+        
+        logger.info(
+            f"Inserted task insight: task_id={task_id}, insight_id={insight_id}"
+        )
+        
+        return insight_id
+    
+    async def search_task_insights(
+        self,
+        task_id: str,
+        query: str,
+        user_id: str,
+        authorization: Optional[str] = None,
+        limit: int = 10,
+        score_threshold: float = 1.0,
+    ) -> List[Dict[str, Any]]:
+        """
+        Search for relevant task insights.
+        
+        Args:
+            task_id: Task UUID to search within
+            query: Search query text
+            user_id: User ID for authorization
+            authorization: Bearer token for embedding generation
+            limit: Maximum number of results
+            score_threshold: Maximum L2 distance (lower is better)
+            
+        Returns:
+            List of relevant insights with scores
+        """
+        collection = self._get_task_insights_collection()
+        
+        # Generate embedding for query
+        query_embedding = await self.generate_embedding(query, user_id, authorization)
+        
+        # Search with task filter
+        search_params = {
+            "metric_type": "L2",
+            "params": {"nprobe": 10},
+        }
+        
+        results = collection.search(
+            data=[query_embedding],
+            anns_field="embedding",
+            param=search_params,
+            limit=limit,
+            expr=f'taskId == "{task_id}" && userId == "{user_id}"',
+            output_fields=["id", "taskId", "userId", "content", "executionId", "createdAt"],
+        )
+        
+        insights = []
+        for hits in results:
+            for hit in hits:
+                score = hit.distance
+                
+                # Filter by score threshold
+                if score > score_threshold:
+                    continue
+                
+                entity = hit.entity
+                insights.append({
+                    "id": entity.get("id"),
+                    "taskId": entity.get("taskId"),
+                    "userId": entity.get("userId"),
+                    "content": entity.get("content"),
+                    "executionId": entity.get("executionId"),
+                    "createdAt": datetime.fromtimestamp(
+                        entity.get("createdAt", 0)
+                    ).isoformat() if entity.get("createdAt") else None,
+                    "score": score,
+                })
+        
+        return insights
+    
+    def get_task_insights(
+        self,
+        task_id: str,
+        user_id: str,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """
+        Get all insights for a task (no semantic search).
+        
+        Args:
+            task_id: Task UUID
+            user_id: User ID for authorization
+            limit: Maximum number of results
+            
+        Returns:
+            List of insights ordered by creation time (newest first)
+        """
+        collection = self._get_task_insights_collection()
+        
+        results = collection.query(
+            expr=f'taskId == "{task_id}" && userId == "{user_id}"',
+            output_fields=["id", "taskId", "userId", "content", "executionId", "createdAt"],
+            limit=limit,
+        )
+        
+        # Sort by createdAt descending
+        results.sort(key=lambda x: x.get("createdAt", 0), reverse=True)
+        
+        insights = []
+        for r in results:
+            insights.append({
+                "id": r.get("id"),
+                "taskId": r.get("taskId"),
+                "userId": r.get("userId"),
+                "content": r.get("content"),
+                "executionId": r.get("executionId"),
+                "createdAt": datetime.fromtimestamp(
+                    r.get("createdAt", 0)
+                ).isoformat() if r.get("createdAt") else None,
+            })
+        
+        return insights
+    
+    def get_task_insight_count(self, task_id: str, user_id: str) -> int:
+        """Get insight count for a task."""
+        collection = self._get_task_insights_collection()
+        
+        results = collection.query(
+            expr=f'taskId == "{task_id}" && userId == "{user_id}"',
+            output_fields=["id"],
+        )
+        
+        return len(results)
+    
+    def delete_task_insights(self, task_id: str, user_id: str):
+        """
+        Delete all insights for a task.
+        
+        Args:
+            task_id: Task UUID
+            user_id: User ID for authorization
+        """
+        collection = self._get_task_insights_collection()
+        
+        expr = f'taskId == "{task_id}" && userId == "{user_id}"'
+        collection.delete(expr)
+        
+        logger.info(f"Deleted task insights: task_id={task_id}, user_id={user_id}")
+    
+    def purge_old_task_insights(
+        self,
+        task_id: str,
+        user_id: str,
+        keep_count: int = 50,
+    ) -> int:
+        """
+        Purge old insights for a task, keeping only the most recent.
+        
+        Args:
+            task_id: Task UUID
+            user_id: User ID for authorization
+            keep_count: Number of recent insights to keep
+            
+        Returns:
+            Number of insights deleted
+        """
+        collection = self._get_task_insights_collection()
+        
+        # Get all insights for the task
+        results = collection.query(
+            expr=f'taskId == "{task_id}" && userId == "{user_id}"',
+            output_fields=["id", "createdAt"],
+        )
+        
+        if len(results) <= keep_count:
+            return 0  # Nothing to purge
+        
+        # Sort by createdAt ascending (oldest first)
+        results.sort(key=lambda x: x.get("createdAt", 0))
+        
+        # Get IDs to delete (oldest ones beyond keep_count)
+        delete_count = len(results) - keep_count
+        ids_to_delete = [r["id"] for r in results[:delete_count]]
+        
+        # Delete by IDs
+        for insight_id in ids_to_delete:
+            collection.delete(f'id == "{insight_id}"')
+        
+        logger.info(
+            f"Purged {delete_count} old insights for task {task_id}, keeping {keep_count}"
+        )
+        
+        return delete_count
+    
+    async def build_task_context(
+        self,
+        task_id: str,
+        user_id: str,
+        query: str,
+        authorization: Optional[str] = None,
+        context_limit: int = 10,
+    ) -> str:
+        """
+        Build context string from task insights for agent execution.
+        
+        This retrieves relevant prior results to include in the agent's
+        context, helping it avoid duplicates and maintain continuity.
+        
+        Args:
+            task_id: Task UUID
+            user_id: User ID
+            query: The task query/prompt for semantic search
+            authorization: Bearer token for embedding generation
+            context_limit: Max insights to include
+            
+        Returns:
+            Formatted context string
+        """
+        insights = await self.search_task_insights(
+            task_id=task_id,
+            query=query,
+            user_id=user_id,
+            authorization=authorization,
+            limit=context_limit,
+        )
+        
+        if not insights:
+            return ""
+        
+        context_parts = [
+            "## Prior Task Results (avoid duplicating this information):\n"
+        ]
+        
+        for i, insight in enumerate(insights, 1):
+            created_at = insight.get("createdAt", "Unknown time")
+            content = insight.get("content", "")
+            context_parts.append(f"\n### Result {i} ({created_at}):\n{content}\n")
+        
+        return "\n".join(context_parts)
