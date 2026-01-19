@@ -203,8 +203,24 @@ check_service_status() {
                         echo "down"
                     fi
                     ;;
+                ai-portal)
+                    # AI Portal runs as systemd service
+                    if timeout $SSH_TIMEOUT ssh -o ConnectTimeout=$SSH_TIMEOUT -o StrictHostKeyChecking=no "root@${container_ip}" "systemctl is-active ai-portal" 2>/dev/null | grep -q "^active$"; then
+                        echo "up"
+                    else
+                        echo "down"
+                    fi
+                    ;;
+                ingest-api|search-api|agent-api|docs-api)
+                    # API services use systemd with the exact service name
+                    if timeout $SSH_TIMEOUT ssh -o ConnectTimeout=$SSH_TIMEOUT -o StrictHostKeyChecking=no "root@${container_ip}" "systemctl is-active ${service}" 2>/dev/null | grep -q "^active$"; then
+                        echo "up"
+                    else
+                        echo "down"
+                    fi
+                    ;;
                 *)
-                    # Default: check systemd with service name matching our service key
+                    # Default: check systemd with service name (replace hyphens with underscores)
                     local service_name="${service//-/_}"
                     if timeout $SSH_TIMEOUT ssh -o ConnectTimeout=$SSH_TIMEOUT -o StrictHostKeyChecking=no "root@${container_ip}" "systemctl is-active ${service_name}" 2>/dev/null | grep -q "^active$"; then
                         echo "up"
@@ -411,9 +427,22 @@ get_deployed_version() {
             local container_ip=$(get_service_ip "$service" "$env" "$backend")
             local version
             
+            # Map service names to actual service paths
+            local service_path
+            case "$service" in
+                authz) service_path="authz" ;;
+                ingest-api) service_path="ingest-api" ;;
+                search-api) service_path="search-api" ;;
+                agent-api) service_path="agent-api" ;;
+                docs-api) service_path="docs-api" ;;
+                ai-portal) service_path="ai-portal" ;;
+                agent-manager) service_path="agent-manager" ;;
+                *) service_path="$service" ;;
+            esac
+            
             version=$(timeout $SSH_TIMEOUT ssh -o ConnectTimeout=$SSH_TIMEOUT -o StrictHostKeyChecking=no \
                 "root@${container_ip}" \
-                "cat /opt/${service}/.deploy_version 2>/dev/null" 2>/dev/null | jq -r '.commit // empty' 2>/dev/null)
+                "cat /opt/${service_path}/.deploy_version 2>/dev/null" 2>/dev/null | jq -r '.commit // empty' 2>/dev/null)
             
             if [[ -n "$version" ]]; then
                 echo "$version"

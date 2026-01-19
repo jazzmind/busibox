@@ -827,12 +827,13 @@ deploy_select_service() {
         "ingest-worker" \
         "search-api" \
         "agent-api" \
+        "docs-api" \
         "litellm" \
         "nginx" \
         "Back"
     
     local choice=""
-    read -p "$(echo -e "${BOLD}Select service [1-8]:${NC} ")" choice
+    read -p "$(echo -e "${BOLD}Select service [1-9]:${NC} ")" choice
     
     local svc=""
     case "${choice:-}" in
@@ -841,9 +842,10 @@ deploy_select_service() {
         3) svc="ingest-worker" ;;
         4) svc="search-api" ;;
         5) svc="agent-api" ;;
-        6) svc="litellm" ;;
-        7) svc="nginx" ;;
-        8|b|B|"") return 0 ;;
+        6) svc="docs-api" ;;
+        7) svc="litellm" ;;
+        8) svc="nginx" ;;
+        9|b|B|"") return 0 ;;
     esac
     
     if [[ -n "$svc" ]]; then
@@ -1222,6 +1224,7 @@ service_select_specific() {
         "agent-api"
         "litellm"
         "nginx"
+        "docs"
     )
     
     echo ""
@@ -1237,10 +1240,11 @@ service_select_specific() {
         "agent-api" \
         "litellm" \
         "nginx" \
+        "docs" \
         "Back"
     
     local choice=""
-    read -p "$(echo -e "${BOLD}Select service [1-12]:${NC} ")" choice
+    read -p "$(echo -e "${BOLD}Select service [1-13]:${NC} ")" choice
     
     case "${choice:-}" in
         1) service_action_menu_with_logs "postgres" "postgres" ;;
@@ -1254,7 +1258,8 @@ service_select_specific() {
         9) service_action_menu_with_logs "agent-api" "agent-api" ;;
         10) service_action_menu_with_logs "litellm" "litellm" ;;
         11) service_action_menu_with_logs "nginx" "nginx" ;;
-        12|b|B|"") return 0 ;;
+        12) service_action_menu_with_logs "docs" "docs" ;;
+        13|b|B|"") return 0 ;;
     esac
 }
 

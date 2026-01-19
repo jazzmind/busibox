@@ -781,15 +781,10 @@ deploy_apps_menu() {
         echo -e "  ${CYAN}2)${NC} Update Nginx Routing"
         echo -e "  ${CYAN}3)${NC} Deploy AI Portal"
         echo -e "  ${CYAN}4)${NC} Deploy Agent Manager (agent-manager)"
-        echo -e "  ${CYAN}5)${NC} Deploy Doc Intelligence (doc-intel)"
-        echo -e "  ${CYAN}6)${NC} Deploy Foundation Manager"
-        echo -e "  ${CYAN}7)${NC} Deploy Project Analysis"
-        echo -e "  ${CYAN}8)${NC} Deploy Innovation Manager"
-        echo -e "  ${CYAN}9)${NC} Deploy OpenWebUI"
-        echo -e "  ${CYAN}10)${NC} Back"
+        echo -e "  ${CYAN}5)${NC} Back"
         echo ""
         
-        read -p "Select option [1-10]: " choice
+        read -p "Select option [1-5]: " choice
         echo ""
         
         case "$choice" in
@@ -814,28 +809,6 @@ deploy_apps_menu() {
                 pause
                 ;;
             5)
-                deploy_single_app "doc-intel" "Doc Intelligence" "$env"
-                pause
-                ;;
-            6)
-                deploy_single_app "foundation" "Foundation Manager" "$env"
-                pause
-                ;;
-            7)
-                deploy_single_app "project-analysis" "Project Analysis" "$env"
-                pause
-                ;;
-            8)
-                deploy_single_app "innovation" "Innovation Manager" "$env"
-                pause
-                ;;
-            9)
-                if confirm "Deploy OpenWebUI to $env?"; then
-                    deploy_service "openwebui" "$env"
-                fi
-                pause
-                ;;
-            10)
                 return 0
                 ;;
             *)
