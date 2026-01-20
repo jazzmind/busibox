@@ -6,6 +6,7 @@ These endpoints manage:
 - Magic links (create, validate, use)
 - TOTP codes (create, verify)
 - Passkeys (WebAuthn - challenge, register, authenticate)
+- Login initiation (public atomic endpoint)
 
 Session tokens are RS256-signed JWTs that can be:
 1. Validated cryptographically (no DB lookup required for basic validation)
@@ -14,8 +15,15 @@ Session tokens are RS256-signed JWTs that can be:
 
 Authentication is required via one of:
 - Access token (JWT) with appropriate authz.* scopes
-- OAuth client credentials (client_id/client_secret)
-- Admin token (deprecated - use JWT or service account instead)
+- OAuth client credentials (client_id/client_secret for service accounts)
+- Session JWT (for self-service operations like logout, passkey management)
+
+Public endpoints (authentication mechanism itself):
+- POST /auth/login/initiate (email login)
+- POST /auth/magic-links/{token}/use (consume magic link)
+- POST /auth/totp/verify (verify TOTP code)
+- POST /auth/passkeys/challenge (for authentication type)
+- POST /auth/passkeys/authenticate (complete passkey auth)
 """
 
 from __future__ import annotations
@@ -32,7 +40,7 @@ from pydantic import BaseModel, Field
 from config import Config
 from oauth.client_auth import verify_client_secret
 from oauth.keys import load_private_key
-from oauth.jwt_auth import require_auth, AuthContext
+from oauth.jwt_auth import require_auth, require_auth_or_self_service, authenticate_self_service, verify_session_token, AuthContext
 
 router = APIRouter()
 config = Config()
@@ -71,13 +79,24 @@ def _get_pg(request: Request):
 # ============================================================================
 
 
-async def _sign_session_jwt(user_id: str, email: str, session_id: str, db=None) -> tuple[str, int]:
+async def _sign_session_jwt(
+    user_id: str,
+    email: str,
+    session_id: str,
+    roles: List[dict] = None,
+    db=None
+) -> tuple[str, int]:
     """
     Sign a session JWT for a user.
     
     Returns (jwt_string, expires_at_timestamp)
     
-    If db is provided, uses that PostgresService instance. Otherwise uses production.
+    Args:
+        user_id: The user's ID
+        email: The user's email
+        session_id: The session ID (used as JTI for revocation)
+        roles: Optional list of role dicts with 'id' and 'name' keys
+        db: Optional PostgresService instance (defaults to production)
     """
     db = db or pg
     await db.connect()
@@ -103,6 +122,7 @@ async def _sign_session_jwt(user_id: str, email: str, session_id: str, db=None) 
         "jti": str(session_id),  # Use session ID as JTI for revocation tracking
         "typ": "session",
         "email": email,
+        "roles": [{"id": r["id"], "name": r["name"]} for r in (roles or [])],
     }
     
     token = jwt.encode(claims, key_obj, algorithm=alg, headers={"kid": kid, "typ": "JWT"})
@@ -323,12 +343,16 @@ async def validate_session(request: Request, token: str):
     user = session.get("user", {})
     email = user.get("email", "") if user else ""
     
+    # Fetch user roles for session JWT
+    user_roles = await db.get_user_roles(session["user_id"])
+    
     # Sign a fresh session JWT for Zero Trust token exchange
     # This allows opaque session tokens (from better-auth) to be used with Zero Trust
     session_jwt, jwt_expires_at = await _sign_session_jwt(
         user_id=session["user_id"],
         email=email,
         session_id=session["session_id"],
+        roles=user_roles,
         db=db
     )
 
@@ -349,12 +373,44 @@ async def validate_session(request: Request, token: str):
 async def delete_session(request: Request, token: str):
     """
     Delete a session by token (logout).
+    
+    Self-service: Users can delete their own session with session JWT.
+    Admin: Can delete any session with access token + authz.sessions.write scope.
+    
+    The token parameter can be:
+    - The session JWT itself (jti is extracted)
+    - The session_id (jti value)
     """
-    await _require_client_auth(request)
-
     db = _get_pg(request)
     await db.connect()
-    deleted = await db.delete_session(token)
+    
+    # Try to extract session_id from token (if it's a JWT, use jti)
+    session_id = token
+    try:
+        unverified = jwt.decode(token, options={"verify_signature": False})
+        jti = unverified.get("jti")
+        if jti:
+            session_id = jti
+    except (jwt.DecodeError, jwt.InvalidTokenError):
+        pass  # Token is not a JWT, use as-is
+    
+    # Get session to check ownership
+    session = await db.get_session_by_id(session_id)
+    if not session:
+        # Try as legacy token
+        session = await db.get_session(token)
+    
+    if not session:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    
+    # Allow self-service (user deleting own session) or admin with scope
+    await require_auth_or_self_service(
+        request, db,
+        self_service_user_id=session["user_id"],
+        admin_scopes=["authz.sessions.write"],
+    )
+
+    deleted = await db.delete_session_by_id(session["session_id"])
 
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
@@ -382,6 +438,204 @@ async def delete_user_sessions(request: Request, user_id: str):
 
 
 # ============================================================================
+# Login Initiation Endpoint (Public - single atomic login initiation)
+# ============================================================================
+
+
+class LoginInitiateRequest(BaseModel):
+    email: str
+
+
+class LoginInitiateResponse(BaseModel):
+    magic_link_token: str
+    totp_code: str
+    expires_in: int  # seconds until expiry
+
+
+@router.post("/auth/login/initiate")
+async def initiate_login(request: Request):
+    """
+    Initiate login for an email address.
+    
+    This is the ONLY public endpoint for login initiation. It:
+    1. Validates email format
+    2. Checks email domain against allowlist
+    3. Looks up or creates user (PENDING status for new users)
+    4. Creates magic link token
+    5. Creates TOTP code
+    6. Returns tokens for ai-portal to send email
+    
+    NEVER leaks whether an email/user exists - always returns same structure.
+    Rate limiting should be applied at the infrastructure level.
+    
+    Body:
+    - email: string (required)
+    
+    Returns:
+    - magic_link_token: string (for constructing magic link URL)
+    - totp_code: string (6-digit code to include in email)
+    - expires_in: int (seconds until tokens expire)
+    """
+    body = await request.json()
+    try:
+        login_data = LoginInitiateRequest.model_validate(body)
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    
+    email = login_data.email.lower().strip()
+    
+    # Validate email format (basic check)
+    if "@" not in email or "." not in email.split("@")[-1]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid email format"
+        )
+    
+    # Check email domain allowlist
+    if config.email_domain_allowlist:
+        domain = email.split("@")[-1].lower()
+        allowed_domains = [d.strip().lower() for d in config.email_domain_allowlist.split(",") if d.strip()]
+        if allowed_domains and domain not in allowed_domains:
+            # Don't leak which domains are allowed - just reject silently
+            # by returning a fake success response
+            import secrets
+            return {
+                "magic_link_token": secrets.token_urlsafe(32),
+                "totp_code": f"{secrets.randbelow(1000000):06d}",
+                "expires_in": 900,
+            }
+    
+    db = _get_pg(request)
+    await db.connect()
+    
+    # Look up or create user
+    user = await db.get_user_by_email(email)
+    
+    if not user:
+        # Create user in PENDING status
+        user = await db.create_user(email=email, status="PENDING")
+    elif user.get("status") == "DEACTIVATED":
+        # User is deactivated - return fake tokens (don't leak status)
+        import secrets
+        return {
+            "magic_link_token": secrets.token_urlsafe(32),
+            "totp_code": f"{secrets.randbelow(1000000):06d}",
+            "expires_in": 900,
+        }
+    
+    user_id = user["user_id"]
+    
+    # Create magic link (15 minute expiry)
+    magic_link = await db.create_magic_link(
+        user_id=user_id,
+        email=email,
+        expires_in_seconds=900,
+    )
+    
+    # Create TOTP code (15 minute expiry to match magic link)
+    totp = await db.create_totp_code(
+        user_id=user_id,
+        email=email,
+        expires_in_seconds=900,
+    )
+    
+    return {
+        "magic_link_token": magic_link["token"],
+        "totp_code": totp["code"],
+        "expires_in": 900,
+    }
+
+
+# ============================================================================
+# Legacy Login Endpoints (DEPRECATED - use /auth/login/initiate instead)
+# These endpoints are kept for backward compatibility but require authentication
+# ============================================================================
+
+
+@router.get("/auth/admin/users/by-email/{email:path}")
+async def get_user_by_email_admin(request: Request, email: str):
+    """
+    Get a user by email address (admin endpoint).
+    
+    DEPRECATED: Use POST /auth/login/initiate for login flows.
+    This endpoint requires authentication for admin/service use.
+    """
+    await _require_client_auth(request)
+    
+    db = _get_pg(request)
+    await db.connect()
+    user = await db.get_user_by_email(email.lower())
+    
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    
+    return {
+        "user_id": user["user_id"],
+        "email": user["email"],
+        "status": user["status"],
+        "roles": [
+            {"id": r["id"], "name": r["name"]}
+            for r in user.get("roles", [])
+        ],
+    }
+
+
+@router.post("/auth/admin/users")
+async def create_user_admin(request: Request):
+    """
+    Create a new user (admin endpoint).
+    
+    DEPRECATED: Use POST /auth/login/initiate for login flows.
+    This endpoint requires authentication for admin/service use.
+    
+    Body:
+    - email: string (required)
+    - status: string (optional, defaults to "PENDING")
+    """
+    await _require_client_auth(request)
+    
+    body = await request.json()
+    email = body.get("email")
+    
+    if not email:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="email is required")
+    
+    email = email.lower().strip()
+    
+    db = _get_pg(request)
+    await db.connect()
+    
+    # Check if user already exists
+    existing = await db.get_user_by_email(email)
+    if existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User already exists")
+    
+    # Check email domain allowlist
+    if config.email_domain_allowlist:
+        domain = email.split("@")[-1].lower()
+        allowed_domains = [d.strip().lower() for d in config.email_domain_allowlist.split(",") if d.strip()]
+        if allowed_domains and domain not in allowed_domains:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Email domain '{domain}' is not allowed"
+            )
+    
+    # Create user in requested status
+    status_val = body.get("status", "PENDING")
+    user = await db.create_user(
+        email=email,
+        status=status_val,
+    )
+    
+    return {
+        "user_id": user["user_id"],
+        "email": user["email"],
+        "status": user["status"],
+        "roles": [],
+    }
+
+
+# ============================================================================
 # Magic Link Endpoints
 # ============================================================================
 
@@ -389,19 +643,20 @@ async def delete_user_sessions(request: Request, user_id: str):
 @router.post("/auth/magic-links")
 async def create_magic_link(request: Request):
     """
-    Create a magic link for passwordless login.
+    Create a magic link for passwordless login (admin/service endpoint).
+    
+    DEPRECATED: Use POST /auth/login/initiate for login flows.
+    This endpoint requires authentication for admin/service use.
     
     Body:
-    - client_id, client_secret (OAuth client auth)
     - user_id: string (required)
     - email: string (required)
     - expires_in_seconds: int (default: 900 = 15 minutes)
     
     Returns the token to be included in the magic link URL.
-    ai-portal is responsible for sending the email.
     """
     await _require_client_auth(request)
-
+    
     body = await request.json()
     try:
         link_data = MagicLinkCreate.model_validate(body)
@@ -482,9 +737,10 @@ async def use_magic_link(request: Request, token: str):
     - Creates a new session
     
     Returns the user and a signed session JWT.
+    
+    This endpoint is PUBLIC - the magic link token itself is the secret.
+    This IS the authentication mechanism.
     """
-    await _require_client_auth(request)
-
     db = _get_pg(request)
     await db.connect()
     result = await db.use_magic_link(token)
@@ -497,12 +753,14 @@ async def use_magic_link(request: Request, token: str):
 
     user = result["user"]
     session = result["session"]
+    user_roles = user.get("roles", [])
     
-    # Sign a session JWT
+    # Sign a session JWT with roles embedded
     session_jwt, expires_at = await _sign_session_jwt(
         user_id=user["user_id"],
         email=user["email"],
         session_id=session["session_id"],
+        roles=user_roles,
         db=db,
     )
 
@@ -514,7 +772,7 @@ async def use_magic_link(request: Request, token: str):
             "email_verified_at": _format_datetime(user.get("email_verified_at")),
             "roles": [
                 {"id": r["id"], "name": r["name"]}
-                for r in user.get("roles", [])
+                for r in user_roles
             ],
         },
         "session": {
@@ -533,10 +791,12 @@ async def use_magic_link(request: Request, token: str):
 @router.post("/auth/totp")
 async def create_totp_code(request: Request):
     """
-    Create a TOTP code for multi-device login.
+    Create a TOTP code for multi-device login (admin/service endpoint).
+    
+    DEPRECATED: Use POST /auth/login/initiate for login flows.
+    This endpoint requires authentication for admin/service use.
     
     Body:
-    - client_id, client_secret (OAuth client auth)
     - user_id: string (required)
     - email: string (required)
     - expires_in_seconds: int (default: 300 = 5 minutes)
@@ -544,7 +804,7 @@ async def create_totp_code(request: Request):
     Returns the plaintext code (to be sent via email by ai-portal).
     """
     await _require_client_auth(request)
-
+    
     body = await request.json()
     try:
         totp_data = TotpCreate.model_validate(body)
@@ -583,7 +843,6 @@ async def verify_totp_code(request: Request):
     Verify a TOTP code.
     
     Body:
-    - client_id, client_secret (OAuth client auth)
     - email: string (required)
     - code: string (6-digit code, required)
     
@@ -591,9 +850,9 @@ async def verify_totp_code(request: Request):
     - Marks the code as used
     - Creates a new session
     - Returns user and signed session JWT
+    
+    This endpoint is PUBLIC - the TOTP code + email is the authentication.
     """
-    await _require_client_auth(request)
-
     body = await request.json()
     try:
         verify_data = TotpVerify.model_validate(body)
@@ -612,12 +871,14 @@ async def verify_totp_code(request: Request):
 
     user = result["user"]
     session = result["session"]
+    user_roles = user.get("roles", [])
     
-    # Sign a session JWT
+    # Sign a session JWT with roles embedded
     session_jwt, expires_at = await _sign_session_jwt(
         user_id=user["user_id"],
         email=user["email"],
         session_id=session["session_id"],
+        roles=user_roles,
         db=db,
     )
 
@@ -628,7 +889,7 @@ async def verify_totp_code(request: Request):
             "status": user["status"],
             "roles": [
                 {"id": r["id"], "name": r["name"]}
-                for r in user.get("roles", [])
+                for r in user_roles
             ],
         },
         "session": {
@@ -650,24 +911,27 @@ async def create_passkey_challenge(request: Request):
     Create a passkey challenge for WebAuthn registration or authentication.
     
     Body:
-    - client_id, client_secret (OAuth client auth)
     - type: "registration" or "authentication" (required)
     - user_id: string (optional, required for registration)
+    
+    Note: This endpoint is PUBLIC for "authentication" type (passkey login).
+    For "registration" type, authentication is required.
     """
-    await _require_client_auth(request)
-
     body = await request.json()
     try:
         challenge_data = PasskeyChallengeCreate.model_validate(body)
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
 
-    # For registration, user_id is required
-    if challenge_data.type == "registration" and not challenge_data.user_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="user_id is required for registration",
-        )
+    # For registration, require authentication (user must be logged in to register a passkey)
+    # For authentication, this is public (the passkey IS the authentication)
+    if challenge_data.type == "registration":
+        await _require_client_auth(request)
+        if not challenge_data.user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="user_id is required for registration",
+            )
 
     if challenge_data.user_id:
         try:
@@ -699,9 +963,9 @@ async def create_passkey_challenge(request: Request):
 async def get_passkey_challenge(request: Request, challenge: str):
     """
     Get a passkey challenge (to verify it's still valid).
+    
+    This endpoint is PUBLIC - the challenge value itself is the secret.
     """
-    await _require_client_auth(request)
-
     db = _get_pg(request)
     await db.connect()
     result = await db.get_passkey_challenge(challenge)
@@ -787,9 +1051,10 @@ async def register_passkey(request: Request):
 async def list_user_passkeys(request: Request, user_id: str):
     """
     List all passkeys for a user.
+    
+    Self-service: Users can list their own passkeys with session JWT.
+    Admin: Can list any user's passkeys with access token + authz.passkeys.read scope.
     """
-    await _require_client_auth(request)
-
     try:
         UUID(user_id)
     except ValueError as e:
@@ -797,6 +1062,14 @@ async def list_user_passkeys(request: Request, user_id: str):
 
     db = _get_pg(request)
     await db.connect()
+    
+    # Allow self-service (user listing own passkeys) or admin with scope
+    await require_auth_or_self_service(
+        request, db,
+        self_service_user_id=user_id,
+        admin_scopes=["authz.passkeys.read"],
+    )
+
     passkeys = await db.list_user_passkeys(user_id)
 
     return {
@@ -820,9 +1093,10 @@ async def list_user_passkeys(request: Request, user_id: str):
 async def delete_passkey(request: Request, passkey_id: str):
     """
     Delete a passkey.
+    
+    Self-service: Users can delete their own passkeys with session JWT.
+    Admin: Can delete any user's passkeys with access token + authz.passkeys.write scope.
     """
-    await _require_client_auth(request)
-
     try:
         UUID(passkey_id)
     except ValueError as e:
@@ -830,6 +1104,19 @@ async def delete_passkey(request: Request, passkey_id: str):
 
     db = _get_pg(request)
     await db.connect()
+    
+    # Get the passkey to check ownership
+    passkey = await db.get_passkey(passkey_id)
+    if not passkey:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Passkey not found")
+    
+    # Allow self-service (user deleting own passkey) or admin with scope
+    await require_auth_or_self_service(
+        request, db,
+        self_service_user_id=passkey["user_id"],
+        admin_scopes=["authz.passkeys.write"],
+    )
+
     deleted = await db.delete_passkey(passkey_id)
 
     if not deleted:
@@ -856,12 +1143,11 @@ async def authenticate_with_passkey(request: Request):
     4. Returns user and signed session JWT
     
     Body:
-    - client_id, client_secret (OAuth client auth)
     - credential_id: string (required)
     - new_counter: int (required)
+    
+    This endpoint is PUBLIC - the passkey signature IS the authentication.
     """
-    await _require_client_auth(request)
-
     body = await request.json()
     try:
         auth_data = PasskeyAuthenticate.model_validate(body)
@@ -883,12 +1169,14 @@ async def authenticate_with_passkey(request: Request):
 
     user = result["user"]
     session = result["session"]
+    user_roles = user.get("roles", [])
     
-    # Sign a session JWT
+    # Sign a session JWT with roles embedded
     session_jwt, expires_at = await _sign_session_jwt(
         user_id=user["user_id"],
         email=user["email"],
         session_id=session["session_id"],
+        roles=user_roles,
         db=db,
     )
 
@@ -899,7 +1187,7 @@ async def authenticate_with_passkey(request: Request):
             "status": user["status"],
             "roles": [
                 {"id": r["id"], "name": r["name"]}
-                for r in user.get("roles", [])
+                for r in user_roles
             ],
         },
         "session": {
@@ -907,6 +1195,41 @@ async def authenticate_with_passkey(request: Request):
             "expires_at": _format_datetime_from_timestamp(expires_at),
             "token_type": "Bearer",
         },
+    }
+
+
+@router.get("/auth/passkeys/by-credential/{credential_id}")
+async def get_passkey_by_credential_for_auth(request: Request, credential_id: str):
+    """
+    Get a passkey by credential ID for authentication purposes.
+    
+    This endpoint is PUBLIC - needed during passkey authentication flow
+    to look up the public key for signature verification.
+    
+    The credential_id is unique and acts as the secret identifier.
+    No sensitive data is exposed - only what's needed for WebAuthn verification.
+    """
+    db = _get_pg(request)
+    await db.connect()
+    passkey = await db.get_passkey_by_credential_id(credential_id)
+
+    if not passkey:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Passkey not found")
+
+    return {
+        "passkey_id": passkey["passkey_id"],
+        "user_id": passkey["user_id"],
+        "credential_id": passkey["credential_id"],
+        "credential_public_key": passkey["credential_public_key"],
+        "counter": passkey["counter"],
+        "device_type": passkey["device_type"],
+        "backed_up": passkey["backed_up"],
+        "transports": passkey.get("transports") or [],
+        "aaguid": passkey.get("aaguid"),
+        "name": passkey["name"],
+        "last_used_at": passkey.get("last_used_at").isoformat() if passkey.get("last_used_at") else None,
+        "created_at": passkey["created_at"].isoformat() if passkey.get("created_at") else "",
+        "updated_at": passkey.get("updated_at").isoformat() if passkey.get("updated_at") else "",
     }
 
 

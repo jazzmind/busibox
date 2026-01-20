@@ -1225,6 +1225,15 @@ class PostgresService:
             )
             return result != "DELETE 0"
 
+    async def delete_session_by_id(self, session_id: str) -> bool:
+        """Delete a session by session_id (for self-service logout)."""
+        async with self.acquire(None, None) as conn:
+            result = await conn.execute(
+                "DELETE FROM authz_sessions WHERE session_id = $1",
+                session_id,
+            )
+            return result != "DELETE 0"
+
     async def delete_user_sessions(self, user_id: str) -> int:
         """Delete all sessions for a user."""
         uid = validate_uuid(user_id, "user_id")
@@ -1586,6 +1595,23 @@ class PostgresService:
             )
             return dict(row) if row else None
 
+    async def get_passkey(self, passkey_id: str) -> dict | None:
+        """Get a passkey by passkey ID (for ownership checks)."""
+        pid = validate_uuid(passkey_id, "passkey_id")
+        
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id::text as passkey_id, user_id::text, credential_id, 
+                       credential_public_key, counter, device_type, backed_up,
+                       transports, aaguid, name, last_used_at, created_at, updated_at
+                FROM authz_passkeys
+                WHERE id = $1
+                """,
+                pid,
+            )
+            return dict(row) if row else None
+
     async def list_user_passkeys(self, user_id: str) -> List[dict]:
         """List all passkeys for a user."""
         uid = validate_uuid(user_id, "user_id")
@@ -1643,11 +1669,14 @@ class PostgresService:
             return None
         
         # Verify counter to prevent replay attacks
-        if new_counter <= passkey["counter"]:
+        # Note: Some authenticators (like iCloud Keychain) always return counter 0.
+        # We only reject if the stored counter is non-zero and new_counter <= stored.
+        stored_counter = passkey["counter"] or 0
+        if stored_counter > 0 and new_counter <= stored_counter:
             logger.warning(
                 "Passkey counter replay detected",
                 credential_id=credential_id,
-                expected_counter=passkey["counter"],
+                expected_counter=stored_counter,
                 received_counter=new_counter,
             )
             return None
@@ -1657,12 +1686,15 @@ class PostgresService:
         
         user_id = passkey["user_id"]
         
-        # Update user last login
+        # Update user: activate if pending, update last login
         async with self.acquire(None, None) as conn:
             await conn.execute(
                 """
                 UPDATE authz_users
-                SET last_login_at = now(), updated_at = now()
+                SET status = CASE WHEN status = 'PENDING' THEN 'ACTIVE' ELSE status END,
+                    last_login_at = now(),
+                    pending_expires_at = NULL,
+                    updated_at = now()
                 WHERE user_id = $1
                 """,
                 uuid.UUID(user_id),
