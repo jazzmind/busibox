@@ -1437,11 +1437,12 @@ handle_migration() {
         "Migrate All Services" \
         "Cleanup Source (remove migrated tables from busibox)" \
         "Check Embedding Model Migration" \
-        "Migrate Embeddings (Milvus)" \
+        "Migrate Embeddings (Milvus documents)" \
+        "Reset Chat Insights Collection" \
         "Back to Main Menu"
     
     echo ""
-    read -p "$(echo -e "${BOLD}Select option [1-9]:${NC} ")" migration_choice
+    read -p "$(echo -e "${BOLD}Select option [1-10]:${NC} ")" migration_choice
     
     # For Docker execution, we need to copy the script into the container or cat it
     local docker_script_path="/tmp/migrate_db.py"
@@ -1528,14 +1529,27 @@ handle_migration() {
             info "against the current Milvus collection dimensions."
             echo ""
             
-            local milvus_ip
-            if [[ "$env" == "staging" ]] || [[ "$env" == "test" ]]; then
-                milvus_ip="10.96.201.204"
-            else
-                milvus_ip="10.96.200.204"
-            fi
+            # Determine environment and backend
+            local milvus_host ingest_host deploy_backend
+            deploy_backend="${backend:-docker}"
             
-            MILVUS_IP="$milvus_ip" bash "${REPO_ROOT}/provision/ansible/scripts/check-embedding-migration.sh" --check || true
+            if [[ "$deploy_backend" == "docker" ]] || [[ "$env" == "development" ]] || [[ "$env" == "local" ]] || [[ "$env" == "demo" ]]; then
+                # Docker environment - use container names with local- prefix
+                milvus_host="docker:local-milvus"
+                ingest_host="docker:local-ingest-api"
+                info "Using Docker environment"
+            elif [[ "$env" == "staging" ]] || [[ "$env" == "test" ]]; then
+                milvus_host="10.96.201.204"
+                ingest_host="10.96.201.206"
+                info "Using staging/test environment"
+            else
+                milvus_host="10.96.200.204"
+                ingest_host="10.96.200.206"
+                info "Using production environment"
+            fi
+            echo ""
+            
+            MILVUS_IP="$milvus_host" INGEST_IP="$ingest_host" bash "${REPO_ROOT}/provision/ansible/scripts/check-embedding-migration.sh" --check || true
             pause
             ;;
         8)
@@ -1548,20 +1562,138 @@ handle_migration() {
             warn "You will need to re-ingest all documents after migration."
             echo ""
             
-            local milvus_ip
-            if [[ "$env" == "staging" ]] || [[ "$env" == "test" ]]; then
-                milvus_ip="10.96.201.204"
+            # Determine environment and backend
+            local milvus_host ingest_host deploy_backend
+            deploy_backend="${backend:-docker}"
+            
+            if [[ "$deploy_backend" == "docker" ]] || [[ "$env" == "development" ]] || [[ "$env" == "local" ]] || [[ "$env" == "demo" ]]; then
+                # Docker environment - use container names with local- prefix
+                milvus_host="docker:local-milvus"
+                ingest_host="docker:local-ingest-api"
+                info "Using Docker environment"
+            elif [[ "$env" == "staging" ]] || [[ "$env" == "test" ]]; then
+                milvus_host="10.96.201.204"
+                ingest_host="10.96.201.206"
+                info "Using staging/test environment"
             else
-                milvus_ip="10.96.200.204"
+                milvus_host="10.96.200.204"
+                ingest_host="10.96.200.206"
+                info "Using production environment"
             fi
+            echo ""
             
             if confirm "Are you sure you want to migrate embeddings?"; then
                 echo ""
-                MILVUS_IP="$milvus_ip" bash "${REPO_ROOT}/provision/ansible/scripts/check-embedding-migration.sh" --migrate || true
+                MILVUS_IP="$milvus_host" INGEST_IP="$ingest_host" bash "${REPO_ROOT}/provision/ansible/scripts/check-embedding-migration.sh" --migrate || true
             fi
             pause
             ;;
         9)
+            # Reset Chat Insights Collection
+            echo ""
+            header "Reset Chat Insights Collection" 70
+            echo ""
+            warn "This will DROP the 'chat_insights' Milvus collection!"
+            warn "All existing insights will be deleted."
+            warn "Insights will be regenerated when users click 'Generate' in the UI."
+            echo ""
+            
+            # Determine environment and backend
+            local milvus_host deploy_backend
+            deploy_backend="${backend:-docker}"
+            
+            if [[ "$deploy_backend" == "docker" ]] || [[ "$env" == "development" ]] || [[ "$env" == "local" ]] || [[ "$env" == "demo" ]]; then
+                # Docker environment
+                milvus_host="docker:local-milvus"
+                info "Using Docker environment"
+            elif [[ "$env" == "staging" ]] || [[ "$env" == "test" ]]; then
+                milvus_host="10.96.201.204"
+                info "Using staging/test environment"
+            else
+                milvus_host="10.96.200.204"
+                info "Using production environment"
+            fi
+            echo ""
+            
+            if confirm "Are you sure you want to reset the chat_insights collection?"; then
+                echo ""
+                info "Dropping and recreating chat_insights collection..."
+                
+                if [[ "$milvus_host" == docker:* ]]; then
+                    # Docker environment - run Python in agent-api container
+                    local container_name="${milvus_host#docker:}"
+                    container_name="${container_name/milvus/agent-api}"
+                    
+                    info "Running in container: $container_name"
+                    
+                    docker exec "$container_name" python -c "
+from pymilvus import connections, utility
+
+# Connect to Milvus
+connections.connect('default', host='milvus', port=19530)
+
+# Drop chat_insights collection if it exists
+if utility.has_collection('chat_insights'):
+    utility.drop_collection('chat_insights')
+    print('Dropped collection: chat_insights')
+else:
+    print('Collection chat_insights does not exist')
+
+# Drop task_insights collection if it exists  
+if utility.has_collection('task_insights'):
+    utility.drop_collection('task_insights')
+    print('Dropped collection: task_insights')
+else:
+    print('Collection task_insights does not exist')
+
+print('Collections will be recreated on next agent-api restart')
+connections.disconnect('default')
+" || {
+                        error "Failed to drop collections"
+                        pause
+                        return 1
+                    }
+                    
+                    echo ""
+                    success "Collections dropped. Restarting agent-api..."
+                    docker restart local-agent-api || true
+                    sleep 3
+                    success "Done! Collections will be recreated with new schema."
+                else
+                    # Proxmox environment - SSH to milvus host
+                    info "Connecting to $milvus_host..."
+                    ssh "root@$milvus_host" "cd /root/busibox && python3 -c \"
+from pymilvus import connections, utility
+
+connections.connect('default', host='localhost', port=19530)
+
+if utility.has_collection('chat_insights'):
+    utility.drop_collection('chat_insights')
+    print('Dropped collection: chat_insights')
+else:
+    print('Collection chat_insights does not exist')
+
+if utility.has_collection('task_insights'):
+    utility.drop_collection('task_insights')
+    print('Dropped collection: task_insights')
+else:
+    print('Collection task_insights does not exist')
+
+print('Collections will be recreated on next agent service restart')
+connections.disconnect('default')
+\"" || {
+                        error "Failed to drop collections"
+                        pause
+                        return 1
+                    }
+                    
+                    echo ""
+                    success "Collections dropped. Restart agent service to recreate with new schema."
+                fi
+            fi
+            pause
+            ;;
+        10)
             return 0
             ;;
         *)

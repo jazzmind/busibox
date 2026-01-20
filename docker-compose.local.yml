@@ -405,8 +405,10 @@ services:
       MARKER_USE_GPU: ${MARKER_USE_GPU:-false}
       COLPALI_ENABLED: ${COLPALI_ENABLED:-false}
       LLM_CLEANUP_ENABLED: ${LLM_CLEANUP_ENABLED:-true}
-      # FastEmbed model - use small model for faster local dev (384-d, ~134MB vs 1024-d, ~1.3GB)
-      FASTEMBED_MODEL: ${FASTEMBED_MODEL:-BAAI/bge-small-en-v1.5}
+      # FastEmbed model - use bge-large for consistency with production
+      # Override with FASTEMBED_MODEL=BAAI/bge-small-en-v1.5 for faster dev (384-d, ~134MB vs 1024-d, ~1.3GB)
+      FASTEMBED_MODEL: ${FASTEMBED_MODEL:-BAAI/bge-large-en-v1.5}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-1024}
     ports:
       - "8002:8002"
     depends_on:
@@ -479,8 +481,10 @@ services:
       LLM_CLEANUP_ENABLED: ${LLM_CLEANUP_ENABLED:-true}
       # Test documents
       TEST_DOC_REPO_PATH: /testdocs
-      # FastEmbed model - use small model for faster local dev (384-d, ~134MB vs 1024-d, ~1.3GB)
-      FASTEMBED_MODEL: ${FASTEMBED_MODEL:-BAAI/bge-small-en-v1.5}
+      # FastEmbed model - use bge-large for consistency with production
+      # Override with FASTEMBED_MODEL=BAAI/bge-small-en-v1.5 for faster dev (384-d, ~134MB vs 1024-d, ~1.3GB)
+      FASTEMBED_MODEL: ${FASTEMBED_MODEL:-BAAI/bge-large-en-v1.5}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-1024}
       # Worker ID (for debugging)
       WORKER_ID: local-worker-1
     depends_on:

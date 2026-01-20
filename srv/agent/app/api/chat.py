@@ -76,12 +76,15 @@ async def _generate_insights_background(
                 f"Failed to get ingest-api token for background insights, embeddings will use fallback (user_id={user_id})"
             )
         
-        await generate_and_store_insights(
+        new_count, existing_count = await generate_and_store_insights(
             conversation=conversation,
             messages=messages,
             insights_service=insights_service,
             embedding_service_url=str(settings.ingest_api_url),
             authorization=auth_header
+        )
+        logger.info(
+            f"Background insights: {new_count} new, {existing_count} existing for conversation {conversation.id}"
         )
     except Exception as e:
         logger.error(
@@ -875,7 +878,7 @@ async def generate_conversation_insights(
                 f"Failed to get ingest-api token, embeddings will use fallback (user_id={principal.sub})"
             )
         
-        insight_count = await generate_and_store_insights(
+        new_count, existing_count = await generate_and_store_insights(
             conversation=conversation,
             messages=messages,
             insights_service=insights_service,
@@ -883,19 +886,24 @@ async def generate_conversation_insights(
             authorization=auth_header
         )
         
+        total_count = new_count + existing_count
+        
         logger.info(
-            f"Manually generated {insight_count} insights for conversation {conversation_id}",
+            f"Manually generated {new_count} new insights for conversation {conversation_id} ({existing_count} already existed)",
             extra={
                 "user_sub": principal.sub,
                 "conversation_id": str(conversation_id),
-                "insight_count": insight_count
+                "new_insight_count": new_count,
+                "existing_insight_count": existing_count
             }
         )
         
         return {
             "conversation_id": str(conversation_id),
-            "insights_generated": insight_count,
-            "message": f"Generated {insight_count} insights from conversation"
+            "insights_generated": new_count,
+            "existing_insights": existing_count,
+            "total_insights": total_count,
+            "message": f"Generated {new_count} new insights from conversation ({existing_count} already existed)"
         }
         
     except HTTPException:
