@@ -1,7 +1,7 @@
 # Authentication & Authorization
 
 **Created**: 2025-12-09  
-**Last Updated**: 2026-01-15  
+**Last Updated**: 2026-01-20  
 **Status**: Active  
 **Category**: Architecture  
 **Related Docs**:  
@@ -310,6 +310,107 @@ Response:
 - AuthZ verifies the session JWT signature cryptographically
 - User's roles and scopes are looked up in the database
 - Issued token is bound to the requested audience
+
+### App-Scoped Token Exchange (External Apps)
+
+For granting users access to external apps (like agent-manager), ai-portal exchanges the user's session JWT for an app-scoped access token. AuthZ verifies the user has access to the app via RBAC bindings before issuing the token.
+
+```http
+POST /oauth/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=urn:ietf:params:oauth:grant-type:token-exchange&
+subject_token=<session-jwt>&
+subject_token_type=urn:ietf:params:oauth:token-type:jwt&
+audience=Agent%20Manager&
+resource_id=<app-uuid>
+```
+
+Response:
+```json
+{
+  "access_token": "<app-scoped-jwt>",
+  "token_type": "Bearer",
+  "expires_in": 900,
+  "scope": "agent.read agent.write search.read"
+}
+```
+
+**Key points:**
+- `resource_id` is the app's UUID from ai-portal's App table
+- AuthZ checks user has access to the app via RBAC bindings: `user → role → app binding`
+- If user doesn't have access, returns 403 `user_does_not_have_app_access`
+- Issued token includes `app_id` claim for the app to verify
+- Token contains only roles that grant access to the specific app
+- External app validates token via JWKS: `GET /.well-known/jwks.json`
+
+**Flow:**
+```mermaid
+sequenceDiagram
+    participant Browser
+    participant AIPortal
+    participant AuthZ
+    participant AgentManager
+
+    Browser->>AIPortal: Click "Agent Manager" app
+    AIPortal->>AuthZ: Token exchange with resource_id=<app-uuid>
+    Note right of AuthZ: Verify user has app binding
+    AuthZ-->>AIPortal: App-scoped RS256 JWT
+    AIPortal->>Browser: Redirect to agent-manager?token=<jwt>
+    Browser->>AgentManager: /api/sso?token=<jwt>
+    AgentManager->>AuthZ: Fetch JWKS
+    AuthZ-->>AgentManager: Public keys
+    Note right of AgentManager: Verify JWT signature
+    AgentManager->>Browser: Set session, redirect to dashboard
+```
+
+**App-Scoped Token Claims:**
+```json
+{
+  "iss": "authz-api",
+  "sub": "<user-uuid>",
+  "aud": "Agent Manager",
+  "exp": 1703123456,
+  "iat": 1703122556,
+  "jti": "<unique-token-id>",
+  "typ": "access",
+  "scope": "agent.read agent.write search.read",
+  "roles": [
+    { "id": "<role-uuid>", "name": "Admin" }
+  ],
+  "app_id": "<app-uuid>"
+}
+```
+
+### Chained Token Exchange (App to Downstream Service)
+
+External apps can exchange their app-scoped token for downstream service tokens. This allows apps to call backend services (agent-api, search-api, etc.) on behalf of the user:
+
+```http
+POST /oauth/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=urn:ietf:params:oauth:grant-type:token-exchange&
+subject_token=<app-scoped-jwt>&
+subject_token_type=urn:ietf:params:oauth:token-type:jwt&
+audience=agent-api
+```
+
+Response:
+```json
+{
+  "access_token": "<agent-api-jwt>",
+  "token_type": "Bearer",
+  "expires_in": 900,
+  "scope": "agents:read agents:write"
+}
+```
+
+**Key points:**
+- The app-scoped token (with `typ: "access"` and `app_id` claim) is used as subject_token
+- AuthZ verifies the token signature and extracts the user identity
+- The user's roles and scopes are looked up fresh from the database
+- Issued token is bound to the requested downstream audience (e.g., `agent-api`)
 
 ### Client Credentials Grant (Service-to-Service)
 

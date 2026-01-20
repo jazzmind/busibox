@@ -217,7 +217,7 @@ async def _verify_subject_token(subject_token: str) -> Tuple[str, str, str]:
     
     try:
         # Decode and verify the JWT
-        # First decode without verification to get the header
+        # First decode without verification to get the header and claims
         unverified = jwt.decode(subject_token, options={"verify_signature": False})
         token_kid = jwt.get_unverified_header(subject_token).get("kid")
         
@@ -229,19 +229,35 @@ async def _verify_subject_token(subject_token: str) -> Tuple[str, str, str]:
                 detail="invalid_subject_token_key"
             )
         
-        # Now verify the signature
+        # Determine expected audience based on token type
+        # - Session tokens have audience "ai-portal" and typ "session"
+        # - Delegation tokens have audience "ai-portal" and typ "delegation"  
+        # - App-scoped tokens have app_id claim and typ "access" - audience is the app name
+        token_type = unverified.get("typ")
+        app_id = unverified.get("app_id")
+        
+        if token_type == "access" and app_id:
+            # App-scoped access token - accept any audience (it's the app name)
+            # The app_id claim proves this is an app-scoped token
+            expected_audience = unverified.get("aud")
+            logger.info("Verifying app-scoped token", app_id=app_id, audience=expected_audience)
+        else:
+            # Session or delegation token - must have ai-portal audience
+            expected_audience = "ai-portal"
+        
+        # Now verify the signature with the correct audience
         claims = jwt.decode(
             subject_token,
             public_key,
             algorithms=[alg],
             issuer=config.issuer,
-            audience="ai-portal",  # Session tokens are issued for ai-portal
+            audience=expected_audience,
             options={"require": ["exp", "iat", "sub", "jti", "typ"]}
         )
         
-        # Verify token type is session or delegation
+        # Verify token type is session, delegation, or access (app-scoped)
         token_type = claims.get("typ")
-        if token_type not in ("session", "delegation"):
+        if token_type not in ("session", "delegation", "access"):
             logger.warning("Invalid subject token type", typ=token_type)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -253,6 +269,7 @@ async def _verify_subject_token(subject_token: str) -> Tuple[str, str, str]:
         jti = claims["jti"]
         
         # Check if token has been revoked (jti = session_id or delegation_id)
+        # Note: access tokens don't have revocation tracking (they're short-lived)
         if token_type == "session":
             session = await _pg.get_session_by_id(jti)
             if not session:
@@ -269,12 +286,14 @@ async def _verify_subject_token(subject_token: str) -> Tuple[str, str, str]:
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="delegation_revoked"
                 )
+        # access tokens are short-lived and don't need revocation check
         
         logger.info(
             "Subject token verified",
             user_id=user_id,
             token_type=token_type,
             jti=jti,
+            app_id=claims.get("app_id"),
         )
         
         return user_id, email, jti
