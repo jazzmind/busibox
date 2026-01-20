@@ -212,6 +212,53 @@ class ModelRegistry:
             model=model,
             config=self.models[purpose]
         )
+    
+    def get_embedding_config(self, purpose: str = "embedding") -> Dict:
+        """
+        Get embedding model configuration including dimension.
+        
+        Args:
+            purpose: Embedding purpose (default: "embedding")
+            
+        Returns:
+            Dict with model, model_name, dimension, and optional matryoshka info
+            
+        Raises:
+            ValueError: If purpose is unknown
+        """
+        config = self.get_config(purpose)
+        
+        # Ensure dimension is present (fallback for old configs)
+        if "dimension" not in config:
+            # Default dimensions for known models
+            model_name = config.get("model_name", config.get("model", ""))
+            if "large" in model_name.lower():
+                config["dimension"] = 1024
+            elif "base" in model_name.lower():
+                config["dimension"] = 768
+            elif "small" in model_name.lower():
+                config["dimension"] = 384
+            else:
+                config["dimension"] = 1024  # Safe default
+            logger.warning(
+                "Embedding dimension not in config, using inferred value",
+                model=model_name,
+                dimension=config["dimension"]
+            )
+        
+        return config
+    
+    def get_embedding_dimension(self, purpose: str = "embedding") -> int:
+        """
+        Get embedding dimension for a purpose.
+        
+        Args:
+            purpose: Embedding purpose (default: "embedding")
+            
+        Returns:
+            Embedding dimension (e.g., 1024 for bge-large)
+        """
+        return self.get_embedding_config(purpose).get("dimension", 1024)
 
 
 # Global registry instance

@@ -27,8 +27,9 @@ MODEL_DIMENSIONS = {
     "bge-large-en-v1.5": 1024,
 }
 
-# Default model for local development (faster download)
-DEFAULT_MODEL = "BAAI/bge-small-en-v1.5"
+# Default model - use production model (bge-large-en-v1.5, 1024-d)
+# For dev with faster downloads, set FASTEMBED_MODEL=BAAI/bge-small-en-v1.5
+DEFAULT_MODEL = "BAAI/bge-large-en-v1.5"
 
 
 class Embedder:

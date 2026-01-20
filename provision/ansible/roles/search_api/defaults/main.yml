@@ -19,8 +19,8 @@ postgres_user: app_user
 # postgres_password is defined in inventory group_vars
 
 # Embedding service (local FastEmbed on ingest-lxc)
+# Note: embedding_model and dimension are derived from model_registry.yml in the template
 embedding_service_url: "http://{{ hostvars[groups['ingest'][0]]['ansible_host'] }}:8002"
-embedding_model: bge-large-en-v1.5
 
 # Reranking settings
 # Local reranker model (for RerankingService)

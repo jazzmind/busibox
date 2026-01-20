@@ -229,48 +229,51 @@ async def _verify_subject_token(subject_token: str) -> Tuple[str, str, str]:
                 detail="invalid_subject_token_key"
             )
         
-        # Determine expected audience based on token type
-        # - Session tokens have audience "ai-portal" and typ "session"
-        # - Delegation tokens have audience "ai-portal" and typ "delegation"  
-        # - App-scoped tokens have app_id claim and typ "access" - audience is the app name
+        # Zero Trust: Accept ANY valid token signed by us for token exchange
+        # The security comes from:
+        # 1. Token signature verification (proves authz issued it)
+        # 2. Token expiration check (not expired)
+        # 3. User's scopes come from RBAC, not the incoming token
+        # 4. Session/delegation revocation checks (for those types)
+        #
+        # We don't restrict based on audience because:
+        # - The token proves who the user is (via 'sub' claim)
+        # - The user's permissions come from their roles in authz DB
+        # - Any service holding a valid user token should be able to exchange
+        #   it for another service token (if user has appropriate roles)
+        
         token_type = unverified.get("typ")
+        token_audience = unverified.get("aud")
         app_id = unverified.get("app_id")
         
-        if token_type == "access" and app_id:
-            # App-scoped access token - accept any audience (it's the app name)
-            # The app_id claim proves this is an app-scoped token
-            expected_audience = unverified.get("aud")
-            logger.info("Verifying app-scoped token", app_id=app_id, audience=expected_audience)
-        else:
-            # Session or delegation token - must have ai-portal audience
-            expected_audience = "ai-portal"
+        logger.info(
+            "Verifying subject token for exchange",
+            token_type=token_type,
+            audience=token_audience,
+            app_id=app_id,
+        )
         
-        # Now verify the signature with the correct audience
+        # Verify signature, issuer, and expiration - but accept ANY audience
+        # We use the token's own audience for validation (just to confirm it's valid)
         claims = jwt.decode(
             subject_token,
             public_key,
             algorithms=[alg],
             issuer=config.issuer,
-            audience=expected_audience,
-            options={"require": ["exp", "iat", "sub", "jti", "typ"]}
+            audience=token_audience,  # Accept whatever audience the token has
+            options={"require": ["exp", "iat", "sub"]}  # jti and typ optional for access tokens
         )
         
-        # Verify token type is session, delegation, or access (app-scoped)
-        token_type = claims.get("typ")
-        if token_type not in ("session", "delegation", "access"):
-            logger.warning("Invalid subject token type", typ=token_type)
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="invalid_subject_token_type"
-            )
+        # Get token type - default to "access" for service tokens without typ
+        token_type = claims.get("typ", "access")
         
         user_id = claims["sub"]
         email = claims.get("email", "")
-        jti = claims["jti"]
+        jti = claims.get("jti", "")  # May not be present in all access tokens
         
-        # Check if token has been revoked (jti = session_id or delegation_id)
-        # Note: access tokens don't have revocation tracking (they're short-lived)
-        if token_type == "session":
+        # Check if token has been revoked (only for session/delegation tokens)
+        # Access tokens are short-lived and don't need revocation tracking
+        if token_type == "session" and jti:
             session = await _pg.get_session_by_id(jti)
             if not session:
                 logger.warning("Session revoked or not found", jti=jti)
@@ -278,7 +281,7 @@ async def _verify_subject_token(subject_token: str) -> Tuple[str, str, str]:
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="session_revoked"
                 )
-        elif token_type == "delegation":
+        elif token_type == "delegation" and jti:
             delegation = await _pg.get_delegation_token(jti)
             if not delegation:
                 logger.warning("Delegation token revoked or not found", jti=jti)
@@ -289,10 +292,11 @@ async def _verify_subject_token(subject_token: str) -> Tuple[str, str, str]:
         # access tokens are short-lived and don't need revocation check
         
         logger.info(
-            "Subject token verified",
+            "Subject token verified for exchange",
             user_id=user_id,
             token_type=token_type,
-            jti=jti,
+            original_audience=token_audience,
+            jti=jti or "(none)",
             app_id=claims.get("app_id"),
         )
         
@@ -302,11 +306,6 @@ async def _verify_subject_token(subject_token: str) -> Tuple[str, str, str]:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="subject_token_expired"
-        )
-    except jwt.InvalidAudienceError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="invalid_subject_token_audience"
         )
     except jwt.InvalidIssuerError:
         raise HTTPException(

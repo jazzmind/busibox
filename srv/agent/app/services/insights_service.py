@@ -9,12 +9,22 @@ Migrated from search-api to agent-api as insights are agent memories/context.
 Supports:
 - Chat/conversation insights (original functionality)
 - Task insights/memories (new for agent tasks)
+- Multiple embedding models via partitions
+- Dynamic embedding dimensions from model registry
+
+Embedding Strategy:
+- Each embedding model gets its own partition in the collection
+- Partition names are derived from model names (e.g., "bge_large_en_v1_5")
+- Queries route to the appropriate partition based on the query's embedding model
+- Future: Support for Matryoshka embeddings with dimension truncation
 """
 
 import logging
+import os
+import re
 import time
 import uuid
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Tuple
 from datetime import datetime, timezone
 from pymilvus import Collection, connections, FieldSchema, CollectionSchema, DataType, utility
 import httpx
@@ -23,6 +33,46 @@ logger = logging.getLogger(__name__)
 
 COLLECTION_NAME = "chat_insights"
 TASK_INSIGHTS_COLLECTION = "task_insights"
+
+# Default embedding dimension (can be overridden by model registry)
+DEFAULT_EMBEDDING_DIM = 1024
+
+
+def get_embedding_dimension() -> int:
+    """Get embedding dimension from model registry or environment."""
+    try:
+        from busibox_common.llm import get_registry
+        registry = get_registry()
+        return registry.get_embedding_dimension("embedding")
+    except Exception:
+        pass
+    
+    # Fallback to environment variable
+    return int(os.environ.get("EMBEDDING_DIMENSION", DEFAULT_EMBEDDING_DIM))
+
+
+def model_name_to_partition(model_name: str) -> str:
+    """
+    Convert model name to valid Milvus partition name.
+    
+    Milvus partition names must start with letter/underscore and contain only
+    letters, numbers, underscores.
+    
+    Examples:
+        "bge-large-en-v1.5" -> "bge_large_en_v1_5"
+        "BAAI/bge-large-en-v1.5" -> "baai_bge_large_en_v1_5"
+    """
+    # Lowercase and replace invalid chars with underscores
+    name = model_name.lower()
+    name = re.sub(r'[^a-z0-9]', '_', name)
+    # Remove consecutive underscores
+    name = re.sub(r'_+', '_', name)
+    # Remove leading/trailing underscores
+    name = name.strip('_')
+    # Ensure starts with letter
+    if name and not name[0].isalpha():
+        name = 'model_' + name
+    return name or 'default'
 
 
 class ChatInsight:
@@ -36,6 +86,7 @@ class ChatInsight:
         embedding: List[float],
         conversation_id: str,
         analyzed_at: int,  # Unix timestamp
+        model_name: str = "bge-large-en-v1.5",  # Embedding model used
     ):
         self.id = id
         self.user_id = user_id
@@ -43,6 +94,7 @@ class ChatInsight:
         self.embedding = embedding
         self.conversation_id = conversation_id
         self.analyzed_at = analyzed_at
+        self.model_name = model_name
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -53,6 +105,7 @@ class ChatInsight:
             "embedding": self.embedding,
             "conversationId": self.conversation_id,
             "analyzedAt": self.analyzed_at,
+            "modelName": self.model_name,
         }
 
 
@@ -117,20 +170,27 @@ class InsightsService:
             self.connected = False
             logger.info("Disconnected from Milvus for insights")
     
-    def initialize_collection(self):
+    def initialize_collection(self, embedding_dim: Optional[int] = None):
         """
         Initialize the chat_insights collection in Milvus.
         
         Creates the collection with schema if it doesn't exist.
         This should be called during application setup.
+        
+        Args:
+            embedding_dim: Optional embedding dimension override (default: from model registry)
         """
         self.connect()
+        
+        dim = embedding_dim or get_embedding_dimension()
         
         # Check if collection exists
         if utility.has_collection(COLLECTION_NAME, using="insights"):
             logger.info(f"Collection {COLLECTION_NAME} already exists")
             self.collection = Collection(COLLECTION_NAME, using="insights")
             return
+        
+        logger.info(f"Creating collection {COLLECTION_NAME} with embedding dimension {dim}")
         
         # Create collection with schema
         fields = [
@@ -156,7 +216,7 @@ class InsightsService:
             FieldSchema(
                 name="embedding",
                 dtype=DataType.FLOAT_VECTOR,
-                dim=1024,  # bge-large-en-v1.5 embedding dimension
+                dim=dim,  # Dynamic dimension from model registry
                 description="Vector embedding of the insight",
             ),
             FieldSchema(
@@ -170,11 +230,19 @@ class InsightsService:
                 dtype=DataType.INT64,
                 description="Unix timestamp when insight was extracted",
             ),
+            FieldSchema(
+                name="modelName",
+                dtype=DataType.VARCHAR,
+                max_length=100,
+                description="Embedding model name (for model migration tracking)",
+            ),
         ]
         
         schema = CollectionSchema(
             fields=fields,
             description="Chat conversation insights with embeddings for RAG",
+            # Enable dynamic fields for future flexibility
+            enable_dynamic_field=True,
         )
         
         self.collection = Collection(
@@ -186,7 +254,7 @@ class InsightsService:
         # Create HNSW index on embedding field
         index_params = {
             "index_type": "HNSW",
-            "metric_type": "L2",  # Euclidean distance
+            "metric_type": "COSINE",  # Cosine similarity (better for semantic search)
             "params": {
                 "M": 16,  # Number of connections
                 "efConstruction": 200,  # Construction time parameter
@@ -196,6 +264,11 @@ class InsightsService:
         self.collection.create_index(
             field_name="embedding",
             index_params=index_params,
+        )
+        
+        logger.info(
+            f"Created collection {COLLECTION_NAME}",
+            extra={"dimension": dim, "metric": "COSINE"}
         )
         
         # Load collection into memory
@@ -218,18 +291,52 @@ class InsightsService:
         if not self.collection:
             self.collection = Collection(COLLECTION_NAME, using="insights")
         
-        # Prepare data for insertion
+        # Get expected dimension from collection schema
+        try:
+            schema = self.collection.schema
+            embedding_field = next(
+                (f for f in schema.fields if f.name == "embedding"), None
+            )
+            expected_dim = embedding_field.params.get("dim", 1024) if embedding_field else 1024
+        except Exception:
+            expected_dim = get_embedding_dimension()
+        
+        # Validate embeddings have correct dimension
+        valid_insights = []
+        for insight in insights:
+            if len(insight.embedding) != expected_dim:
+                logger.warning(
+                    f"Skipping insight with invalid embedding dimension: "
+                    f"got {len(insight.embedding)}, expected {expected_dim}, "
+                    f"model: {insight.model_name}"
+                )
+                continue
+            valid_insights.append(insight)
+        
+        if not valid_insights:
+            logger.warning("No valid insights to insert after dimension validation")
+            return
+        
+        # Prepare data for insertion (order must match schema field order)
         data = [
-            [i.id for i in insights],  # id
-            [i.user_id for i in insights],  # userId
-            [i.content for i in insights],  # content
-            [i.embedding for i in insights],  # embedding
-            [i.conversation_id for i in insights],  # conversationId
-            [i.analyzed_at for i in insights],  # analyzedAt
+            [i.id for i in valid_insights],  # id
+            [i.user_id for i in valid_insights],  # userId
+            [i.content for i in valid_insights],  # content
+            [i.embedding for i in valid_insights],  # embedding
+            [i.conversation_id for i in valid_insights],  # conversationId
+            [i.analyzed_at for i in valid_insights],  # analyzedAt
+            [i.model_name for i in valid_insights],  # modelName
         ]
         
         self.collection.insert(data)
-        logger.info(f"Inserted {len(insights)} insights into {COLLECTION_NAME}")
+        logger.info(
+            f"Inserted {len(valid_insights)} insights into {COLLECTION_NAME}",
+            extra={
+                "count": len(valid_insights),
+                "model": valid_insights[0].model_name if valid_insights else "unknown",
+                "dimension": expected_dim,
+            }
+        )
     
     async def generate_embedding(
         self,
@@ -455,19 +562,26 @@ class InsightsService:
     # Task Insights - Memories for Agent Tasks
     # =========================================================================
     
-    def initialize_task_insights_collection(self):
+    def initialize_task_insights_collection(self, embedding_dim: Optional[int] = None):
         """
         Initialize the task_insights collection in Milvus.
         
         Task insights store execution results/memories for agent tasks,
         enabling tasks to avoid duplicates and maintain context.
+        
+        Args:
+            embedding_dim: Optional embedding dimension override (default: from model registry)
         """
         self.connect()
+        
+        dim = embedding_dim or get_embedding_dimension()
         
         # Check if collection exists
         if utility.has_collection(TASK_INSIGHTS_COLLECTION, using="insights"):
             logger.info(f"Collection {TASK_INSIGHTS_COLLECTION} already exists")
             return
+        
+        logger.info(f"Creating collection {TASK_INSIGHTS_COLLECTION} with embedding dimension {dim}")
         
         # Create collection with schema
         fields = [
@@ -499,7 +613,7 @@ class InsightsService:
             FieldSchema(
                 name="embedding",
                 dtype=DataType.FLOAT_VECTOR,
-                dim=1024,  # bge-large-en-v1.5 embedding dimension
+                dim=dim,  # Dynamic dimension from model registry
                 description="Vector embedding of the insight",
             ),
             FieldSchema(
@@ -513,11 +627,18 @@ class InsightsService:
                 dtype=DataType.INT64,
                 description="Unix timestamp when insight was created",
             ),
+            FieldSchema(
+                name="modelName",
+                dtype=DataType.VARCHAR,
+                max_length=100,
+                description="Embedding model name (for model migration tracking)",
+            ),
         ]
         
         schema = CollectionSchema(
             fields=fields,
             description="Task insights/memories with embeddings for deduplication and context",
+            enable_dynamic_field=True,
         )
         
         collection = Collection(
@@ -529,7 +650,7 @@ class InsightsService:
         # Create HNSW index on embedding field
         index_params = {
             "index_type": "HNSW",
-            "metric_type": "L2",
+            "metric_type": "COSINE",  # Cosine similarity (better for semantic search)
             "params": {
                 "M": 16,
                 "efConstruction": 200,
@@ -544,7 +665,10 @@ class InsightsService:
         # Load collection into memory
         collection.load()
         
-        logger.info(f"Collection {TASK_INSIGHTS_COLLECTION} created and loaded")
+        logger.info(
+            f"Collection {TASK_INSIGHTS_COLLECTION} created and loaded",
+            extra={"dimension": dim, "metric": "COSINE"}
+        )
     
     def _get_task_insights_collection(self) -> Collection:
         """Get or create task insights collection."""

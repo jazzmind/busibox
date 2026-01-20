@@ -98,8 +98,32 @@ available_models:
   "bge-large":
     provider: "fastembed"
     model: "bge-large-en-v1.5"
-    model_name: "BAAI/bge-large-en-v1.5)"
-    description: "Text embedding generation"
+    model_name: "BAAI/bge-large-en-v1.5"
+    description: "Text embedding generation (1024-d, production)"
+    dimension: 1024
+    
+  "bge-base":
+    provider: "fastembed"
+    model: "bge-base-en-v1.5"
+    model_name: "BAAI/bge-base-en-v1.5"
+    description: "Text embedding generation (768-d, balanced)"
+    dimension: 768
+    
+  "bge-small":
+    provider: "fastembed"
+    model: "bge-small-en-v1.5"
+    model_name: "BAAI/bge-small-en-v1.5"
+    description: "Text embedding generation (384-d, fast/dev)"
+    dimension: 384
+    
+  "nomic-embed":
+    provider: "fastembed"
+    model: "nomic-embed-text-v1.5"
+    model_name: "nomic-ai/nomic-embed-text-v1.5"
+    description: "Matryoshka embedding (768-d native, truncatable to 256/512)"
+    dimension: 768
+    matryoshka: true
+    matryoshka_dimensions: [64, 128, 256, 512, 768]
 
   "colpali":
     provider: "colpali"  # Dedicated ColPali service (not vLLM - LoRA not supported)

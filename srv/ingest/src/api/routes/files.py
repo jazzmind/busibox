@@ -8,6 +8,7 @@ Handles:
 - POST /files/{fileId}/search: Search within a single document
 - DELETE /files/{fileId}: Delete file and all associated data
 - POST /files/{fileId}/reprocess: Reprocess document (delete chunks/vectors, re-run ingestion)
+- POST /files/reprocess-all: Bulk reprocess all documents (for embedding model changes)
 - GET /files/{fileId}/export: Export document in various formats (markdown, html, text, docx, pdf)
 """
 
@@ -145,6 +146,214 @@ async def check_file_access(
     # Unknown visibility - deny access
     return False, file_dict, f"Unknown visibility: {visibility}"
 
+
+# =============================================================================
+# Bulk Operations (must be before parameterized routes to avoid {fileId} matching)
+# =============================================================================
+
+class BulkReprocessRequest(BaseModel):
+    """Request body for bulk reprocess endpoint."""
+    start_stage: str = Field(
+        default="embedding",
+        description="Stage to start from: parsing, chunking, cleanup, markdown, embedding, indexing"
+    )
+    user_ids: Optional[List[str]] = Field(
+        default=None,
+        description="Optional list of user IDs to filter by. If not provided, reprocesses all files."
+    )
+    limit: Optional[int] = Field(
+        default=None,
+        description="Maximum number of files to reprocess. If not provided, reprocesses all."
+    )
+
+
+@router.post("/reprocess-all", dependencies=[Depends(require_ingest_write)])
+async def reprocess_all_files(request: Request, body: BulkReprocessRequest = None):
+    """
+    Reprocess all documents - typically used after embedding model change.
+    
+    This is an admin operation that queues reprocessing for all documents.
+    Useful when:
+    - Embedding model has changed (dimension change)
+    - Chunking strategy has been updated globally
+    - Need to regenerate all embeddings
+    
+    Request Body (optional JSON):
+        start_stage: Stage to start from (default: "embedding")
+            - "embedding": Just regenerate embeddings (fastest)
+            - "chunking": Re-chunk and re-embed
+            - "parsing": Full reprocess from scratch
+        user_ids: Optional list of user IDs to filter by
+        limit: Maximum number of files to reprocess
+    
+    Returns:
+        Count of files queued for reprocessing
+    """
+    if body is None:
+        body = BulkReprocessRequest()
+    
+    start_stage = body.start_stage
+    user_ids = body.user_ids
+    limit = body.limit
+    
+    config = Config().to_dict()
+    postgres_service = PostgresService(config, request)
+    
+    await postgres_service.connect()
+    
+    try:
+        async with postgres_service.acquire(request) as conn:
+            # Get all completed files
+            query = """
+                SELECT file_id, user_id, filename, storage_path, mime_type, original_filename
+                FROM ingestion_files
+                WHERE ingestion_status IN ('completed', 'failed')
+            """
+            params = []
+            
+            if user_ids:
+                query += f" AND user_id = ANY($1::uuid[])"
+                params.append(user_ids)
+            
+            query += " ORDER BY created_at DESC"
+            
+            if limit:
+                query += f" LIMIT ${len(params) + 1}"
+                params.append(limit)
+            
+            files = await conn.fetch(query, *params)
+            
+            if not files:
+                return JSONResponse(
+                    status_code=status.HTTP_200_OK,
+                    content={
+                        "message": "No files found to reprocess",
+                        "queued": 0,
+                    }
+                )
+            
+            logger.info(
+                "Starting bulk reprocess",
+                file_count=len(files),
+                start_stage=start_stage,
+                user_filter=user_ids,
+            )
+            
+            # Stages that require deleting chunks
+            stages_needing_chunk_delete = ["parsing", "chunking"]
+            # Stages that require deleting vectors
+            stages_needing_vector_delete = ["parsing", "chunking", "cleanup", "embedding", "indexing"]
+            
+            milvus_service = MilvusService(config)
+            
+            # Queue each file for reprocessing
+            redis_client = redis_async.Redis(
+                host=config.get("redis_host", "redis"),
+                port=config.get("redis_port", 6379),
+                decode_responses=True,
+            )
+            
+            queued_count = 0
+            failed_count = 0
+            
+            try:
+                stream_name = config.get("redis_stream", "jobs:ingestion")
+                
+                for file_row in files:
+                    file_id = str(file_row["file_id"])
+                    user_id = str(file_row["user_id"])
+                    
+                    try:
+                        # Delete vectors if needed
+                        if start_stage in stages_needing_vector_delete:
+                            try:
+                                milvus_service.delete_file_vectors(file_id)
+                            except Exception as milvus_err:
+                                logger.warning(
+                                    "Failed to delete vectors (may not exist)",
+                                    file_id=file_id,
+                                    error=str(milvus_err),
+                                )
+                        
+                        # Delete chunks if needed
+                        if start_stage in stages_needing_chunk_delete:
+                            await conn.execute("""
+                                DELETE FROM document_chunks WHERE file_id = $1
+                            """, file_row["file_id"])
+                        
+                        # Reset ingestion status
+                        await conn.execute("""
+                            UPDATE ingestion_files
+                            SET ingestion_status = 'queued',
+                                stage = 'queued',
+                                progress = 0,
+                                chunks_processed = 0,
+                                total_chunks = 0,
+                                pages_processed = 0,
+                                total_pages = 0,
+                                error_message = NULL,
+                                updated_at = NOW()
+                            WHERE file_id = $1
+                        """, file_row["file_id"])
+                        
+                        # Add job to Redis queue
+                        job_data = {
+                            "job_id": file_id,
+                            "file_id": file_id,
+                            "user_id": user_id,
+                            "storage_path": file_row["storage_path"],
+                            "original_filename": file_row["original_filename"] or file_row["filename"],
+                            "mime_type": file_row["mime_type"],
+                            "reprocess": "true",
+                            "start_stage": start_stage,
+                        }
+                        
+                        await redis_client.xadd(stream_name, job_data)
+                        queued_count += 1
+                        
+                    except Exception as file_err:
+                        logger.error(
+                            "Failed to queue file for reprocess",
+                            file_id=file_id,
+                            error=str(file_err),
+                        )
+                        failed_count += 1
+                
+            finally:
+                await redis_client.aclose()
+            
+            logger.info(
+                "Bulk reprocess completed",
+                queued=queued_count,
+                failed=failed_count,
+                start_stage=start_stage,
+            )
+            
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={
+                    "message": f"Queued {queued_count} files for reprocessing from {start_stage}",
+                    "queued": queued_count,
+                    "failed": failed_count,
+                    "start_stage": start_stage,
+                }
+            )
+    
+    except Exception as e:
+        logger.error(
+            "Failed to bulk reprocess files",
+            error=str(e),
+            exc_info=True,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": "Failed to bulk reprocess files", "details": str(e)}
+        )
+
+
+# =============================================================================
+# Single File Operations
+# =============================================================================
 
 @router.get("/{fileId}", dependencies=[Depends(require_ingest_read)])
 async def get_file_metadata(fileId: str, request: Request):

@@ -40,6 +40,8 @@ def get_config():
         "host": os.getenv("MILVUS_HOST", "localhost"),
         "port": int(os.getenv("MILVUS_PORT", "19530")),
         "collection_name": "documents",
+        # Embedding dimension from model registry (set by Ansible)
+        "embedding_dim": int(os.getenv("EMBEDDING_DIMENSION", "1024")),
     }
 
 
@@ -55,8 +57,18 @@ def connect_milvus(host, port):
         return False
 
 
-def create_collection(collection_name):
-    """Create the documents collection with hybrid search schema."""
+def create_collection(collection_name, config=None):
+    """Create the documents collection with hybrid search schema.
+    
+    Args:
+        collection_name: Name of the collection to create
+        config: Configuration dict with embedding_dim (from get_config())
+    """
+    if config is None:
+        config = get_config()
+    
+    embedding_dim = config.get("embedding_dim", 1024)
+    print(f"Using embedding dimension: {embedding_dim}")
     
     # Check if collection already exists
     if utility.has_collection(collection_name):
@@ -129,10 +141,11 @@ def create_collection(collection_name):
         ),
         
         # Dense semantic embeddings
+        # Dimension comes from EMBEDDING_DIMENSION env var (set by Ansible from model_registry)
         FieldSchema(
             name="text_dense",
             dtype=DataType.FLOAT_VECTOR,
-            dim=1024,  # FastEmbed bge-large-en-v1.5
+            dim=embedding_dim,  # From model registry via env var
             description="Dense text embeddings from Marker/Simple extraction"
         ),
         
@@ -355,6 +368,7 @@ def main():
     print(f"  Host: {config['host']}")
     print(f"  Port: {config['port']}")
     print(f"  Collection Name: {config['collection_name']}")
+    print(f"  Embedding Dimension: {config['embedding_dim']}")
     print(f"  Drop Existing: {drop_existing}")
     print()
     
@@ -370,8 +384,8 @@ def main():
             sys.exit(1)
         print()
     
-    # Create collection
-    collection = create_collection(config["collection_name"])
+    # Create collection (pass config for embedding_dim)
+    collection = create_collection(config["collection_name"], config)
     
     print()
     

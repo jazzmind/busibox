@@ -1,4 +1,60 @@
 # Wes's Tasks
+[ ] Get insights working
+[ ] Get agent tasks working with tool calling
+[ ] Deploy to staging
+[ ] Deploy to production
+[ ] 
+## Active Tasks
+[X] - get agent manager to be able to run the web search tool via the web research agent
+[X] - use this agent via the ai-portal chat
+[X] - fix the document manager
+[X] - get the doc search tool to work
+[ ] - get the doc search agent to work
+[ ] - create an email messenger tool that can send emails
+[ ] - now the ai-portal chat agent should be able to use web search AND doc search together
+[ ] - deploy all this to busibox test
+[X] - create an "agent tasks" capability
+    [X] - first add to agent manager
+    [X] - then we want to have agents, tasks, insights as things accessible from chat
+    [ ] - chat agent should be able to create agent tasks automatically
+    [ ] - test is "send me a videogame news summary via email every hour"
+        [ ] - should use "news agent"
+
+Future features
+[ ] - agents can manage their own insights/memories and consult when running
+[ ] - integration with whatsapp/sms, signal etc. (bridge service)
+[ ] - make demo
+[ ]
+4 - improve existing agents - chat (has websearch, filesearch, upload), web search (focus on deep research), RAG Search Agent
+
+
+
+Agent tasks:
+2 - make sure all busibox-app tests pass
+3 - make sure all authz tests pass
+4 - make sure all ai-portal tests pass
+5 - make sure agent-api is working and all tests pass
+6 - start rebuilding agent-manager (rename to agent-manager) using busibox-app libs and components
+7 - make sure agent-manager runs and can talk to agent-api
+
+
+What I'd delagate now:
+- improving ingestion:
+  [ ] long docs - split them
+  [ ] lots of visuals - how does colpali handle them?
+
+- tool calling model for phi-4
+  [ ] how does it work?
+  
+- improving apps
+  [ ] project analysis - needs to work better
+
+--- 
+1) Get agent client/server working on test environment
+2) Make sure chat works with docs/agent server on test environment
+--- deploy to production ---
+1) Use a tool calling model in addition to Phi-4 to support tool calls
+2) Deep dive on colpali and how it works using diagram pdfs
 Issues:
 1) Thinking needs to work the same way in both fullchat and simplechat:
 - when dispatcher is thinking, the toggle is open and updating
@@ -67,62 +123,6 @@ currently in fullchat the thinking toggle doesnt't appear immediately, is closed
     - Each service group has: Build, Status, Restart, Start, Stop, Logs
   - Fixed service selection menus to include ingest-worker
 
-## Active Tasks
-[X] - get agent manager to be able to run the web search tool via the web research agent
-[X] - use this agent via the ai-portal chat
-[X] - fix the document manager
-[X] - get the doc search tool to work
-[ ] - get the doc search agent to work
-[ ] - create an email messenger tool that can send emails
-[ ] - now the ai-portal chat agent should be able to use web search AND doc search together
-[ ] - deploy all this to busibox test
-[ ] - create an "agent tasks" capability
-    [ ] - first add to agent manager
-    [ ] - then we want to have agents, tasks, insights as things accessible from chat
-    [ ] - chat agent should be able to create agent tasks automatically
-    [ ] - test is "send me a videogame news summary via email every hour"
-        [ ] - should use "news agent"
-
-Future features
-[ ] - agents can manage their own insights/memories and consult when running
-[ ] - integration with whatsapp/sms, signal etc. (bridge service)
-[ ] - make demo
-[ ]
-4 - improve existing agents - chat (has websearch, filesearch, upload), web search (focus on deep research), RAG Search Agent
-
-
-
-
-a) make sure ai-portal chat works with tavily + aws bedrock
-
-
-
-Agent tasks:
-2 - make sure all busibox-app tests pass
-3 - make sure all authz tests pass
-4 - make sure all ai-portal tests pass
-5 - make sure agent-api is working and all tests pass
-6 - start rebuilding agent-manager (rename to agent-manager) using busibox-app libs and components
-7 - make sure agent-manager runs and can talk to agent-api
-
-
-What I'd delagate now:
-- improving ingestion:
-  [ ] long docs - split them
-  [ ] lots of visuals - how does colpali handle them?
-
-- tool calling model for phi-4
-  [ ] how does it work?
-  
-- improving apps
-  [ ] project analysis - needs to work better
-
---- 
-1) Get agent client/server working on test environment
-2) Make sure chat works with docs/agent server on test environment
---- deploy to production ---
-1) Use a tool calling model in addition to Phi-4 to support tool calls
-2) Deep dive on colpali and how it works using diagram pdfs
 
 ## Data Analysis Tasks
 1) Ability to add charts to a report

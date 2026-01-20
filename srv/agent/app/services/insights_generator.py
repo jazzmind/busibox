@@ -6,13 +6,19 @@ Analyzes conversations to extract:
 - User preferences
 - Important decisions
 - Context for future interactions
+
+Embedding Configuration:
+- Embedding model and dimension come from model registry
+- Supports multiple models via partitioned Milvus collections
+- Future: Matryoshka embeddings for dimension flexibility
 """
 
 import asyncio
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
@@ -20,6 +26,44 @@ from app.models.domain import Conversation, Message
 from app.services.insights_service import InsightsService, ChatInsight
 
 logger = logging.getLogger(__name__)
+
+
+def get_embedding_config() -> Tuple[str, int]:
+    """
+    Get embedding model name and dimension from model registry or environment.
+    
+    Returns:
+        Tuple of (model_name, dimension)
+    """
+    # Try to load from model registry
+    try:
+        from busibox_common.llm import get_registry
+        registry = get_registry()
+        config = registry.get_embedding_config("embedding")
+        model_name = config.get("model_name", config.get("model", "bge-large-en-v1.5"))
+        dimension = config.get("dimension", 1024)
+        return model_name, dimension
+    except Exception as e:
+        logger.warning(f"Could not load embedding config from registry: {e}")
+    
+    # Fallback to environment variables
+    model_name = os.environ.get("EMBEDDING_MODEL", "BAAI/bge-large-en-v1.5")
+    
+    # Determine dimension from model name
+    if "large" in model_name.lower():
+        dimension = 1024
+    elif "base" in model_name.lower():
+        dimension = 768
+    elif "small" in model_name.lower():
+        dimension = 384
+    else:
+        dimension = 1024  # Safe default
+    
+    return model_name, dimension
+
+
+# Get embedding config at module load
+EMBEDDING_MODEL, EMBEDDING_DIMENSION = get_embedding_config()
 
 
 class ConversationInsight:
@@ -38,37 +82,71 @@ class ConversationInsight:
         self.importance = importance
 
 
-async def get_embedding(text: str, embedding_service_url: str, authorization: Optional[str] = None) -> List[float]:
+async def get_embedding(
+    text: str, 
+    embedding_service_url: str, 
+    authorization: Optional[str] = None,
+    expected_dim: Optional[int] = None
+) -> Tuple[List[float], str]:
     """
     Get embedding for text from ingest API.
     
+    Uses the OpenAI-compatible /api/embeddings endpoint.
+    
     Args:
         text: Text to embed
-        embedding_service_url: URL of embedding service
+        embedding_service_url: URL of embedding service (e.g., http://ingest-api:8002)
         authorization: Optional authorization header
+        expected_dim: Expected embedding dimension (defaults to EMBEDDING_DIMENSION)
         
     Returns:
-        List of embedding floats
+        Tuple of (embedding vector, model_name)
     """
+    dim = expected_dim or EMBEDDING_DIMENSION
+    
     try:
         headers = {}
         if authorization:
             headers["Authorization"] = authorization
         
+        # Remove trailing slash to avoid double slashes
+        base_url = embedding_service_url.rstrip('/')
+        
         async with httpx.AsyncClient(timeout=30.0) as client:
+            # Use the OpenAI-compatible /api/embeddings endpoint
             response = await client.post(
-                f"{embedding_service_url}/embed",
-                json={"text": text},
+                f"{base_url}/api/embeddings",
+                json={"input": text},  # OpenAI-compatible format
                 headers=headers
             )
             response.raise_for_status()
             data = response.json()
-            return data.get("embedding", [])
+            
+            # Parse OpenAI-compatible response format
+            # Response: {"data": [{"embedding": [...], "index": 0}], "model": "bge-large-en-v1.5", ...}
+            model_name = data.get("model", EMBEDDING_MODEL)
+            embeddings_data = data.get("data", [])
+            
+            if embeddings_data and len(embeddings_data) > 0:
+                embedding = embeddings_data[0].get("embedding", [])
+                actual_dim = len(embedding)
+                
+                # Log if dimension doesn't match expected (but don't fail - use actual)
+                if actual_dim != dim:
+                    logger.info(
+                        f"Embedding dimension {actual_dim} differs from expected {dim}. "
+                        f"Model: {model_name}. Using actual dimension."
+                    )
+                
+                return embedding, model_name
+            
+            logger.warning("No embeddings in response, using zero vector fallback")
+            return [0.0] * dim, EMBEDDING_MODEL
     
     except Exception as e:
         logger.error(f"Failed to get embedding: {e}", exc_info=True)
         # Return zero vector as fallback
-        return [0.0] * 384  # Default embedding dimension
+        return [0.0] * dim, EMBEDDING_MODEL
 
 
 async def analyze_conversation_for_insights(
@@ -217,14 +295,19 @@ async def generate_and_store_insights(
         
         # Get embeddings for insights
         chat_insights = []
+        embedding_model = None
         
         for insight in insights:
-            # Get embedding
-            embedding = await get_embedding(
+            # Get embedding (returns tuple of embedding, model_name)
+            embedding, model_name = await get_embedding(
                 insight.content,
                 embedding_service_url,
                 authorization
             )
+            
+            # Track the model used
+            if embedding_model is None:
+                embedding_model = model_name
             
             if not embedding or len(embedding) == 0:
                 logger.warning(
@@ -233,14 +316,15 @@ async def generate_and_store_insights(
                 )
                 continue
             
-            # Create ChatInsight
+            # Create ChatInsight with model info
             chat_insight = ChatInsight(
                 id=str(uuid.uuid4()),
                 user_id=insight.user_id,
                 content=insight.content,
                 embedding=embedding,
                 conversation_id=insight.conversation_id,
-                analyzed_at=int(datetime.now(timezone.utc).timestamp())
+                analyzed_at=int(datetime.now(timezone.utc).timestamp()),
+                model_name=model_name  # Track which model generated this embedding
             )
             chat_insights.append(chat_insight)
         

@@ -1436,10 +1436,12 @@ handle_migration() {
         "Migrate Ingest Service (busibox -> files)" \
         "Migrate All Services" \
         "Cleanup Source (remove migrated tables from busibox)" \
+        "Check Embedding Model Migration" \
+        "Migrate Embeddings (Milvus)" \
         "Back to Main Menu"
     
     echo ""
-    read -p "$(echo -e "${BOLD}Select option [1-7]:${NC} ")" migration_choice
+    read -p "$(echo -e "${BOLD}Select option [1-9]:${NC} ")" migration_choice
     
     # For Docker execution, we need to copy the script into the container or cat it
     local docker_script_path="/tmp/migrate_db.py"
@@ -1516,6 +1518,50 @@ handle_migration() {
             pause
             ;;
         7)
+            # Check embedding model migration
+            echo ""
+            header "Check Embedding Model Migration" 70
+            echo ""
+            info "Checking if embedding model has changed..."
+            echo ""
+            info "This compares the configured embedding model in model_registry.yml"
+            info "against the current Milvus collection dimensions."
+            echo ""
+            
+            local milvus_ip
+            if [[ "$env" == "staging" ]] || [[ "$env" == "test" ]]; then
+                milvus_ip="10.96.201.204"
+            else
+                milvus_ip="10.96.200.204"
+            fi
+            
+            MILVUS_IP="$milvus_ip" bash "${REPO_ROOT}/provision/ansible/scripts/check-embedding-migration.sh" --check || true
+            pause
+            ;;
+        8)
+            # Migrate embeddings (Milvus)
+            echo ""
+            header "Migrate Embeddings (Milvus)" 70
+            echo ""
+            warn "This will DROP the existing Milvus 'documents' collection!"
+            warn "All existing embeddings will be deleted."
+            warn "You will need to re-ingest all documents after migration."
+            echo ""
+            
+            local milvus_ip
+            if [[ "$env" == "staging" ]] || [[ "$env" == "test" ]]; then
+                milvus_ip="10.96.201.204"
+            else
+                milvus_ip="10.96.200.204"
+            fi
+            
+            if confirm "Are you sure you want to migrate embeddings?"; then
+                echo ""
+                MILVUS_IP="$milvus_ip" bash "${REPO_ROOT}/provision/ansible/scripts/check-embedding-migration.sh" --migrate || true
+            fi
+            pause
+            ;;
+        9)
             return 0
             ;;
         *)

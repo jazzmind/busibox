@@ -268,6 +268,38 @@ async def delete_user_insights(
         )
 
 
+@router.get("/stats/me", response_model=InsightStatsResponse)
+async def get_my_stats(
+    principal: Principal = Depends(get_principal),
+    service: InsightsService = Depends(get_insights_service),
+):
+    """
+    Get statistics for the authenticated user's insights.
+    
+    Requires authentication. Returns stats for the current user.
+    """
+    user_id = principal.sub
+    
+    try:
+        count = service.get_user_insight_count(user_id)
+        stats = service.get_collection_stats()
+        
+        return InsightStatsResponse(
+            userId=user_id,
+            count=count,
+            collectionName=stats.get("collectionName", "chat_insights"),
+        )
+    
+    except Exception as e:
+        logger.error(
+            f"Failed to get user stats: user_id={user_id}, error={e}"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get user stats: {str(e)}",
+        )
+
+
 @router.get("/stats/{user_id}", response_model=InsightStatsResponse)
 async def get_user_stats(
     user_id: str,

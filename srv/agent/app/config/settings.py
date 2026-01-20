@@ -67,8 +67,14 @@ class Settings(BaseSettings):
         "http://10.96.200.210:8010/oauth/token",
         description="Token endpoint for OAuth2 token exchange",
     )
-    auth_client_id: str = Field("test-client-id", description="Client ID for token exchange")
-    auth_client_secret: str = Field("test-client-secret", description="Client secret for token exchange")
+    auth_client_id: str = Field(
+        "agent-api",
+        description="Client ID for token exchange (from AUTH_CLIENT_ID env var)"
+    )
+    auth_client_secret: str = Field(
+        "",
+        description="Client secret for token exchange (from AUTH_CLIENT_SECRET env var)"
+    )
 
     # Database configuration
     # Default credentials match docker-compose.local.yml (busibox_user:devpassword)

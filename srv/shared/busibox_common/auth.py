@@ -495,6 +495,125 @@ class TokenExchangeClient:
 TokenExchangeService = TokenExchangeClient
 
 
+# ============================================================================
+# Zero Trust Token Exchange (Preferred Method)
+# ============================================================================
+
+# Cache for Zero Trust tokens: key = "zt:{user_id}:{audience}"
+_zero_trust_cache: TTLCache = TTLCache(maxsize=1000, ttl=840)  # 14 min TTL
+
+
+async def exchange_token_zero_trust(
+    subject_token: str,
+    target_audience: str,
+    user_id: str,
+    scopes: str = "",
+    authz_url: Optional[str] = None,
+    use_cache: bool = True,
+) -> Optional[str]:
+    """
+    Exchange a user's token for a downstream service token (Zero Trust).
+    
+    This uses RFC 8693 token exchange with the user's JWT as subject_token.
+    NO client credentials are used - the user's token cryptographically proves identity.
+    
+    The authz service will:
+    1. Verify the subject_token is signed by authz and not expired
+    2. Look up the user's roles and aggregate their scopes
+    3. Issue a new token with the requested audience
+    
+    Args:
+        subject_token: The user's current JWT token (any audience accepted)
+        target_audience: Target service audience (e.g., "ingest-api", "search-api")
+        user_id: User ID for logging and caching
+        scopes: Requested scopes (optional, scopes come from RBAC)
+        authz_url: Token endpoint URL (defaults to env var AUTHZ_TOKEN_URL)
+        use_cache: Whether to cache tokens (default True)
+        
+    Returns:
+        Access token string, or None if exchange fails
+    """
+    # Check cache first
+    if use_cache:
+        cache_key = f"zt:{user_id}:{target_audience}"
+        cached_token = _zero_trust_cache.get(cache_key)
+        if cached_token:
+            logger.debug(
+                "Using cached Zero Trust token",
+                user_id=user_id,
+                target_audience=target_audience,
+            )
+            return cached_token
+    
+    # Get authz URL
+    token_url = authz_url or os.environ.get(
+        "AUTHZ_TOKEN_URL",
+        os.environ.get("AUTH_TOKEN_URL", "http://authz-api:8010/oauth/token")
+    )
+    
+    try:
+        logger.info(
+            "Zero Trust token exchange",
+            user_id=user_id,
+            target_audience=target_audience,
+        )
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                token_url,
+                data={
+                    "grant_type": TOKEN_EXCHANGE_GRANT,
+                    "subject_token": subject_token,
+                    "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+                    "audience": target_audience,
+                    "scope": scopes,
+                },
+            )
+            
+            if response.status_code != 200:
+                logger.error(
+                    "Zero Trust token exchange failed",
+                    status_code=response.status_code,
+                    response=response.text[:200],
+                    user_id=user_id,
+                    target_audience=target_audience,
+                )
+                return None
+            
+            data = response.json()
+            access_token = data.get("access_token")
+            
+            if access_token:
+                logger.info(
+                    "Zero Trust token exchange successful",
+                    user_id=user_id,
+                    target_audience=target_audience,
+                    expires_in=data.get("expires_in"),
+                )
+                
+                # Cache the token
+                if use_cache:
+                    cache_key = f"zt:{user_id}:{target_audience}"
+                    _zero_trust_cache[cache_key] = access_token
+            
+            return access_token
+    
+    except Exception as e:
+        logger.error(
+            "Zero Trust token exchange error",
+            error=str(e),
+            user_id=user_id,
+            target_audience=target_audience,
+            exc_info=True,
+        )
+        return None
+
+
+def clear_zero_trust_cache():
+    """Clear the Zero Trust token cache (useful for testing)."""
+    _zero_trust_cache.clear()
+
+
 def clear_token_cache():
     """Clear the token exchange cache (useful for testing)."""
     _token_cache.clear()

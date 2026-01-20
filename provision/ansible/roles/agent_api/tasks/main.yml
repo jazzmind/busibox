@@ -171,6 +171,26 @@
     mode: "0600"
   notify: Restart agent-api
 
+# Deploy model registry for embedding config (same as ingest)
+- name: Create config directory for model registry
+  file:
+    path: /etc/ingest
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+  tags: [agent, model_registry]
+
+- name: Deploy model registry configuration
+  template:
+    src: "{{ playbook_dir }}/roles/ingest/templates/model_registry.json.j2"
+    dest: "{{ model_registry_path | default('/etc/ingest/model_registry.json') }}"
+    mode: '0644'
+    owner: root
+    group: root
+  notify: Restart agent-api
+  tags: [agent, model_registry]
+
 - name: Make migration script executable
   file:
     path: /srv/agent/scripts/run-migrations.sh

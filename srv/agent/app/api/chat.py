@@ -34,6 +34,7 @@ from app.services.chat_executor import execute_chat, execute_chat_stream
 from app.services.insights_generator import generate_and_store_insights, should_generate_insights
 from app.api.insights import get_insights_service
 from app.config.settings import get_settings
+from app.auth.token_exchange import exchange_token_zero_trust
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,8 @@ settings = get_settings()
 async def _generate_insights_background(
     conversation: Conversation,
     messages: List[Message],
-    user_id: str
+    user_id: str,
+    user_token: Optional[str] = None
 ) -> None:
     """
     Background task to generate insights from conversation.
@@ -53,16 +55,33 @@ async def _generate_insights_background(
         conversation: Conversation object
         messages: List of messages
         user_id: User ID for authorization
+        user_token: User's auth token for Zero Trust exchange
     """
     try:
         insights_service = get_insights_service()
+        
+        # Zero Trust: Exchange user's token for ingest-api audience
+        ingest_token = None
+        if user_token:
+            ingest_token = await exchange_token_zero_trust(
+                subject_token=user_token,
+                target_audience="ingest-api",
+                user_id=user_id
+            )
+        
+        auth_header = f"Bearer {ingest_token}" if ingest_token else None
+        
+        if not auth_header:
+            logger.warning(
+                f"Failed to get ingest-api token for background insights, embeddings will use fallback (user_id={user_id})"
+            )
         
         await generate_and_store_insights(
             conversation=conversation,
             messages=messages,
             insights_service=insights_service,
             embedding_service_url=str(settings.ingest_api_url),
-            authorization=None  # TODO: Pass user token if needed
+            authorization=auth_header
         )
     except Exception as e:
         logger.error(
@@ -355,7 +374,8 @@ async def send_chat_message(
                     _generate_insights_background(
                         conversation,
                         history_messages + [user_message, assistant_message],
-                        principal.sub
+                        principal.sub,
+                        principal.token  # Zero Trust: pass user's token
                     )
                 )
                 logger.info(
@@ -839,12 +859,28 @@ async def generate_conversation_insights(
         # Generate insights
         insights_service = get_insights_service()
         
+        # Zero Trust: Exchange user's token for ingest-api audience
+        ingest_token = None
+        if principal.token:
+            ingest_token = await exchange_token_zero_trust(
+                subject_token=principal.token,
+                target_audience="ingest-api",
+                user_id=principal.sub
+            )
+        
+        auth_header = f"Bearer {ingest_token}" if ingest_token else None
+        
+        if not auth_header:
+            logger.warning(
+                f"Failed to get ingest-api token, embeddings will use fallback (user_id={principal.sub})"
+            )
+        
         insight_count = await generate_and_store_insights(
             conversation=conversation,
             messages=messages,
             insights_service=insights_service,
             embedding_service_url=str(settings.ingest_api_url),
-            authorization=None
+            authorization=auth_header
         )
         
         logger.info(
