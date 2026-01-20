@@ -6,8 +6,10 @@ Migrated from search-api to agent-api as insights are agent memories, not search
 """
 
 import logging
-from fastapi import APIRouter, HTTPException, Depends, Request
+from datetime import datetime
 from typing import Optional
+
+from fastapi import APIRouter, HTTPException, Depends, Request, Query
 
 from app.schemas.insights import (
     InsertInsightsRequest,
@@ -15,6 +17,9 @@ from app.schemas.insights import (
     InsightSearchResponse,
     InsightSearchResult,
     InsightStatsResponse,
+    InsightListResponse,
+    InsightUpdateRequest,
+    ChatInsightFrontend,
 )
 from app.services.insights_service import InsightsService, ChatInsight as ServiceChatInsight
 from app.auth.dependencies import get_principal
@@ -163,15 +168,21 @@ async def search_insights(
             score_threshold=search_request.score_threshold,
         )
         
-        # Convert service results to API results
+        # Convert service results to frontend-compatible format
         api_results = [
             InsightSearchResult(
-                id=r.id,
-                userId=r.user_id,
-                content=r.content,
-                conversationId=r.conversation_id,
-                analyzedAt=r.analyzed_at.isoformat(),
-                score=r.score,
+                insight=ChatInsightFrontend(
+                    id=r.id,
+                    content=r.content,
+                    category=r.category,  # Category from Milvus
+                    importance=1.0 - min(r.score, 1.0),  # Convert L2 distance to importance (lower distance = higher importance)
+                    source="conversation",
+                    conversationId=r.conversation_id,
+                    createdAt=r.analyzed_at.isoformat() if hasattr(r.analyzed_at, 'isoformat') else str(r.analyzed_at),
+                    metadata={},
+                ),
+                score=1.0 - min(r.score, 1.0),  # Convert L2 distance to similarity score
+                distance=r.score,  # L2 distance directly
             )
             for r in results
         ]
@@ -268,6 +279,69 @@ async def delete_user_insights(
         )
 
 
+@router.get("/list", response_model=InsightListResponse)
+async def list_my_insights(
+    principal: Principal = Depends(get_principal),
+    service: InsightsService = Depends(get_insights_service),
+    category: Optional[str] = Query(None, description="Filter by category: preference, fact, goal, context, other"),
+    offset: int = Query(0, ge=0, description="Number of results to skip"),
+    limit: int = Query(50, ge=1, le=100, description="Maximum results to return"),
+):
+    """
+    List all insights for the authenticated user.
+    
+    Supports pagination and optional category filtering.
+    Returns insights in frontend-compatible format.
+    """
+    user_id = principal.sub
+    
+    try:
+        # Get paginated insights
+        results, total = service.list_user_insights(
+            user_id=user_id,
+            category=category,
+            offset=offset,
+            limit=limit,
+        )
+        
+        # Get category counts
+        category_counts = service.get_category_counts(user_id)
+        
+        # Convert to frontend format
+        api_results = [
+            InsightSearchResult(
+                insight=ChatInsightFrontend(
+                    id=r.get("id", ""),
+                    content=r.get("content", ""),
+                    category=r.get("category", "other"),
+                    importance=0.5,  # Default importance
+                    source="conversation",
+                    conversationId=r.get("conversationId", ""),
+                    createdAt=datetime.fromtimestamp(r.get("analyzedAt", 0)).isoformat() if r.get("analyzedAt") else "",
+                    metadata={},
+                ),
+                score=1.0,  # No search score for list
+                distance=0.0,
+            )
+            for r in results
+        ]
+        
+        return InsightListResponse(
+            results=api_results,
+            total=total,
+            offset=offset,
+            limit=limit,
+            by_category=category_counts,
+        )
+    
+    except Exception as e:
+        logger.error(f"Failed to list insights: user_id={user_id}, error={e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to list insights: {str(e)}",
+        )
+
+
 @router.get("/stats/me", response_model=InsightStatsResponse)
 async def get_my_stats(
     principal: Principal = Depends(get_principal),
@@ -277,14 +351,20 @@ async def get_my_stats(
     Get statistics for the authenticated user's insights.
     
     Requires authentication. Returns stats for the current user.
+    Returns format compatible with frontend: { total, by_category }.
     """
     user_id = principal.sub
     
     try:
         count = service.get_user_insight_count(user_id)
         stats = service.get_collection_stats()
+        category_counts = service.get_category_counts(user_id)
         
         return InsightStatsResponse(
+            # Frontend expected format
+            total=count,
+            by_category=category_counts,
+            # Legacy fields
             userId=user_id,
             count=count,
             collectionName=stats.get("collectionName", "chat_insights"),
@@ -310,6 +390,7 @@ async def get_user_stats(
     Get statistics for user insights.
     
     Requires authentication. Users can only view their own stats.
+    Returns format compatible with frontend: { total, by_category }.
     """
     # Verify user can only view their own stats
     if user_id != principal.sub:
@@ -323,6 +404,10 @@ async def get_user_stats(
         stats = service.get_collection_stats()
         
         return InsightStatsResponse(
+            # Frontend expected format
+            total=count,
+            by_category={},  # TODO: Implement category grouping if needed
+            # Legacy fields
             userId=user_id,
             count=count,
             collectionName=stats.get("collectionName", "chat_insights"),
@@ -335,6 +420,91 @@ async def get_user_stats(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to get user stats: {str(e)}",
+        )
+
+
+@router.patch("/{insight_id}")
+async def update_insight(
+    insight_id: str,
+    update_request: InsightUpdateRequest,
+    principal: Principal = Depends(get_principal),
+    service: InsightsService = Depends(get_insights_service),
+):
+    """
+    Update an insight's content or category.
+    
+    Requires authentication. User can only update their own insights.
+    """
+    user_id = principal.sub
+    
+    try:
+        # Update the insight
+        updated = service.update_insight(
+            insight_id=insight_id,
+            user_id=user_id,
+            content=update_request.content,
+            category=update_request.category,
+        )
+        
+        if not updated:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Insight not found or not owned by user",
+            )
+        
+        logger.info(f"Updated insight: id={insight_id}, user_id={user_id}")
+        
+        return {
+            "message": "Insight updated",
+            "id": insight_id,
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update insight: id={insight_id}, error={e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update insight: {str(e)}",
+        )
+
+
+@router.delete("/{insight_id}")
+async def delete_insight(
+    insight_id: str,
+    principal: Principal = Depends(get_principal),
+    service: InsightsService = Depends(get_insights_service),
+):
+    """
+    Delete an insight by ID.
+    
+    Requires authentication. User can only delete their own insights.
+    """
+    user_id = principal.sub
+    
+    try:
+        deleted = service.delete_insight(insight_id=insight_id, user_id=user_id)
+        
+        if not deleted:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Insight not found or not owned by user",
+            )
+        
+        logger.info(f"Deleted insight: id={insight_id}, user_id={user_id}")
+        
+        return {
+            "message": "Insight deleted",
+            "id": insight_id,
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete insight: id={insight_id}, error={e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete insight: {str(e)}",
         )
 
 

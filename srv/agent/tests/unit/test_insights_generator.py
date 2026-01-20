@@ -35,7 +35,11 @@ async def test_get_embedding_success():
     # Mock HTTP client - patch where the module is used
     with patch('app.services.insights_generator.httpx.AsyncClient') as mock_client_class:
         mock_response = MagicMock()
-        mock_response.json.return_value = {"embedding": [0.1, 0.2, 0.3]}
+        # Use OpenAI-compatible response format
+        mock_response.json.return_value = {
+            "data": [{"embedding": [0.1, 0.2, 0.3], "index": 0}],
+            "model": "bge-large-en-v1.5"
+        }
         mock_response.raise_for_status = MagicMock()
         
         mock_client = AsyncMock()
@@ -45,13 +49,14 @@ async def test_get_embedding_success():
         mock_client_class.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_class.return_value.__aexit__ = AsyncMock(return_value=None)
         
-        embedding = await get_embedding(
+        embedding, model_name = await get_embedding(
             "test text",
             "http://localhost:8002",
             "Bearer token"
         )
         
         assert embedding == [0.1, 0.2, 0.3]
+        assert model_name == "bge-large-en-v1.5"
 
 
 @pytest.mark.asyncio
@@ -66,16 +71,17 @@ async def test_get_embedding_failure():
         mock_client_class.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_class.return_value.__aexit__ = AsyncMock(return_value=None)
         
-        embedding = await get_embedding(
+        embedding, model_name = await get_embedding(
             "test text",
             "http://localhost:8002",
             None
         )
         
-        # Should return zero vector
+        # Should return zero vector and default model name
         assert embedding is not None
-        assert len(embedding) == 384
+        assert len(embedding) == 1024  # Default dimension from EMBEDDING_DIMENSION
         assert all(x == 0.0 for x in embedding)
+        assert model_name is not None
 
 
 @pytest.mark.asyncio
@@ -235,12 +241,13 @@ async def test_analyze_conversation_limits_insights():
 @patch('app.services.insights_generator.get_embedding')
 async def test_generate_and_store_insights_success(mock_get_embedding):
     """Test successful insights generation and storage."""
-    # Mock embedding generation
-    mock_get_embedding.return_value = [0.1] * 384
+    # Mock embedding generation - returns tuple of (embedding, model_name)
+    mock_get_embedding.return_value = ([0.1] * 384, "bge-large-en-v1.5")
     
     # Mock insights service
     mock_insights_service = MagicMock()
     mock_insights_service.insert_insights = MagicMock()
+    mock_insights_service.get_conversation_insights = MagicMock(return_value=[])  # No existing insights
     
     # Create conversation and messages
     conversation = Conversation(
@@ -265,7 +272,7 @@ async def test_generate_and_store_insights_success(mock_get_embedding):
         ),
     ]
     
-    count = await generate_and_store_insights(
+    new_count, existing_count = await generate_and_store_insights(
         conversation,
         messages,
         mock_insights_service,
@@ -273,8 +280,9 @@ async def test_generate_and_store_insights_success(mock_get_embedding):
         None
     )
     
-    # Should have generated insights
-    assert count > 0
+    # Should have generated new insights
+    assert new_count > 0
+    assert existing_count == 0
     
     # Should have called insert_insights
     mock_insights_service.insert_insights.assert_called_once()
@@ -284,6 +292,7 @@ async def test_generate_and_store_insights_success(mock_get_embedding):
 async def test_generate_and_store_insights_no_insights():
     """Test when no insights are extracted."""
     mock_insights_service = MagicMock()
+    mock_insights_service.get_conversation_insights = MagicMock(return_value=[])  # No existing insights
     
     conversation = Conversation(
         title="Test",
@@ -302,7 +311,7 @@ async def test_generate_and_store_insights_no_insights():
         ),
     ]
     
-    count = await generate_and_store_insights(
+    new_count, existing_count = await generate_and_store_insights(
         conversation,
         messages,
         mock_insights_service,
@@ -310,7 +319,53 @@ async def test_generate_and_store_insights_no_insights():
         None
     )
     
-    assert count == 0
+    assert new_count == 0
+    assert existing_count == 0
+
+
+@pytest.mark.asyncio
+@patch('app.services.insights_generator.get_embedding')
+async def test_generate_and_store_insights_with_existing(mock_get_embedding):
+    """Test that existing insights are not duplicated."""
+    # Mock embedding generation - returns tuple of (embedding, model_name)
+    mock_get_embedding.return_value = ([0.1] * 384, "bge-large-en-v1.5")
+    
+    # Mock insights service with existing insights
+    existing_insights = [
+        {"id": "1", "content": "I prefer using Python for all my data analysis work because it's powerful", "category": "preference"}
+    ]
+    mock_insights_service = MagicMock()
+    mock_insights_service.insert_insights = MagicMock()
+    mock_insights_service.get_conversation_insights = MagicMock(return_value=existing_insights)
+    
+    conversation = Conversation(
+        title="Test Conversation",
+        user_id="user-123",
+        created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        updated_at=datetime.now(timezone.utc).replace(tzinfo=None)
+    )
+    
+    # Same message as existing insight
+    messages = [
+        Message(
+            role="user",
+            content="I prefer using Python for all my data analysis work because it's powerful",
+            conversation_id="conv-123",
+            created_at=datetime.now(timezone.utc).replace(tzinfo=None)
+        ),
+    ]
+    
+    new_count, existing_count = await generate_and_store_insights(
+        conversation,
+        messages,
+        mock_insights_service,
+        "http://localhost:8002",
+        None
+    )
+    
+    # Should not have generated duplicate insights
+    assert new_count == 0
+    assert existing_count == 1
 
 
 def test_should_generate_insights_sufficient_messages():

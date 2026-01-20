@@ -78,6 +78,9 @@ def model_name_to_partition(model_name: str) -> str:
 class ChatInsight:
     """Chat insight entity structure."""
     
+    # Valid categories for insights
+    VALID_CATEGORIES = {"preference", "fact", "goal", "context", "other"}
+    
     def __init__(
         self,
         id: str,
@@ -87,6 +90,7 @@ class ChatInsight:
         conversation_id: str,
         analyzed_at: int,  # Unix timestamp
         model_name: str = "bge-large-en-v1.5",  # Embedding model used
+        category: str = "other",  # Category: preference, fact, goal, context, other
     ):
         self.id = id
         self.user_id = user_id
@@ -95,6 +99,7 @@ class ChatInsight:
         self.conversation_id = conversation_id
         self.analyzed_at = analyzed_at
         self.model_name = model_name
+        self.category = category if category in self.VALID_CATEGORIES else "other"
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -102,6 +107,7 @@ class ChatInsight:
             "id": self.id,
             "userId": self.user_id,
             "content": self.content,
+            "category": self.category,
             "embedding": self.embedding,
             "conversationId": self.conversation_id,
             "analyzedAt": self.analyzed_at,
@@ -120,6 +126,7 @@ class InsightSearchResult:
         conversation_id: str,
         analyzed_at: datetime,
         score: float,
+        category: str = "other",
     ):
         self.id = id
         self.user_id = user_id
@@ -127,6 +134,7 @@ class InsightSearchResult:
         self.conversation_id = conversation_id
         self.analyzed_at = analyzed_at
         self.score = score
+        self.category = category
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -137,6 +145,7 @@ class InsightSearchResult:
             "conversationId": self.conversation_id,
             "analyzedAt": self.analyzed_at.isoformat(),
             "score": self.score,
+            "category": self.category,
         }
 
 
@@ -170,25 +179,46 @@ class InsightsService:
             self.connected = False
             logger.info("Disconnected from Milvus for insights")
     
-    def initialize_collection(self, embedding_dim: Optional[int] = None):
+    def initialize_collection(self, embedding_dim: Optional[int] = None, force_recreate: bool = False):
         """
         Initialize the chat_insights collection in Milvus.
         
         Creates the collection with schema if it doesn't exist.
-        This should be called during application setup.
+        If the collection exists but has an incompatible schema (missing fields),
+        it will be dropped and recreated.
         
         Args:
             embedding_dim: Optional embedding dimension override (default: from model registry)
+            force_recreate: If True, drop and recreate collection even if it exists
         """
         self.connect()
         
         dim = embedding_dim or get_embedding_dimension()
         
+        # Expected fields in the current schema (includes category for filtering)
+        EXPECTED_FIELDS = {"id", "userId", "content", "embedding", "conversationId", "analyzedAt", "modelName", "category"}
+        
         # Check if collection exists
         if utility.has_collection(COLLECTION_NAME, using="insights"):
-            logger.info(f"Collection {COLLECTION_NAME} already exists")
-            self.collection = Collection(COLLECTION_NAME, using="insights")
-            return
+            existing_collection = Collection(COLLECTION_NAME, using="insights")
+            existing_fields = {field.name for field in existing_collection.schema.fields}
+            
+            # Check if schema is compatible
+            missing_fields = EXPECTED_FIELDS - existing_fields
+            
+            if missing_fields and not force_recreate:
+                logger.warning(
+                    f"Collection {COLLECTION_NAME} exists but is missing fields: {missing_fields}. Recreating..."
+                )
+                force_recreate = True
+            
+            if force_recreate:
+                logger.info(f"Dropping collection {COLLECTION_NAME} for recreation")
+                utility.drop_collection(COLLECTION_NAME, using="insights")
+            else:
+                logger.info(f"Collection {COLLECTION_NAME} already exists with compatible schema")
+                self.collection = existing_collection
+                return
         
         logger.info(f"Creating collection {COLLECTION_NAME} with embedding dimension {dim}")
         
@@ -235,6 +265,12 @@ class InsightsService:
                 dtype=DataType.VARCHAR,
                 max_length=100,
                 description="Embedding model name (for model migration tracking)",
+            ),
+            FieldSchema(
+                name="category",
+                dtype=DataType.VARCHAR,
+                max_length=50,
+                description="Insight category: preference, fact, goal, context, other",
             ),
         ]
         
@@ -288,8 +324,24 @@ class InsightsService:
         
         self.connect()
         
+        # Expected fields in the current schema
+        EXPECTED_FIELDS = {"id", "userId", "content", "embedding", "conversationId", "analyzedAt", "modelName"}
+        
         if not self.collection:
             self.collection = Collection(COLLECTION_NAME, using="insights")
+        
+        # Check if collection schema is compatible (has all expected fields)
+        existing_fields = {field.name for field in self.collection.schema.fields}
+        missing_fields = EXPECTED_FIELDS - existing_fields
+        
+        if missing_fields:
+            logger.warning(
+                f"Collection {COLLECTION_NAME} is missing fields: {missing_fields}. Recreating collection..."
+            )
+            # Drop and recreate the collection with correct schema
+            utility.drop_collection(COLLECTION_NAME, using="insights")
+            self.collection = None
+            self.initialize_collection()
         
         # Get expected dimension from collection schema
         try:
@@ -326,9 +378,21 @@ class InsightsService:
             [i.conversation_id for i in valid_insights],  # conversationId
             [i.analyzed_at for i in valid_insights],  # analyzedAt
             [i.model_name for i in valid_insights],  # modelName
+            [i.category for i in valid_insights],  # category
         ]
         
         self.collection.insert(data)
+        
+        # Flush to ensure data is persisted and queryable
+        self.collection.flush()
+        
+        # Ensure collection is loaded for queries
+        try:
+            self.collection.load()
+        except Exception as e:
+            # Collection might already be loaded
+            logger.debug(f"Collection load (may already be loaded): {e}")
+        
         logger.info(
             f"Inserted {len(valid_insights)} insights into {COLLECTION_NAME}",
             extra={
@@ -418,7 +482,7 @@ class InsightsService:
             param=search_params,
             limit=limit,
             expr=f'userId == "{user_id}"',
-            output_fields=["id", "userId", "content", "conversationId", "analyzedAt"],
+            output_fields=["id", "userId", "content", "conversationId", "analyzedAt", "category"],
         )
         
         # Parse and filter results
@@ -439,6 +503,7 @@ class InsightsService:
                 content = entity.get("content")
                 conversation_id = entity.get("conversationId", "")
                 analyzed_at = entity.get("analyzedAt", 0)
+                category = entity.get("category", "other")
                 
                 # Filter by userId (double-check in case expr didn't work)
                 if result_user_id != user_id:
@@ -455,10 +520,60 @@ class InsightsService:
                         conversation_id=str(conversation_id),
                         analyzed_at=datetime.fromtimestamp(analyzed_at) if analyzed_at else datetime.now(),
                         score=score,
+                        category=str(category) if category else "other",
                     )
                 )
         
         return insights
+    
+    def get_conversation_insights(self, conversation_id: str, user_id: str) -> List[Dict[str, Any]]:
+        """
+        Get all insights for a specific conversation.
+        
+        Args:
+            conversation_id: Conversation ID
+            user_id: User ID (for authorization)
+            
+        Returns:
+            List of insight dictionaries with id, content, category, etc.
+        """
+        self.connect()
+        
+        # Ensure collection exists (create if not)
+        if not utility.has_collection(COLLECTION_NAME, using="insights"):
+            logger.info(f"Collection {COLLECTION_NAME} does not exist, creating...")
+            self.initialize_collection()
+        
+        if not self.collection:
+            self.collection = Collection(COLLECTION_NAME, using="insights")
+        
+        # Ensure collection is loaded for queries
+        try:
+            self.collection.load()
+        except Exception as e:
+            logger.debug(f"Collection load (may already be loaded): {e}")
+        
+        # Get available fields from schema to handle missing 'category' field gracefully
+        available_fields = {field.name for field in self.collection.schema.fields}
+        output_fields = ["id", "userId", "content", "conversationId", "analyzedAt", "modelName"]
+        if "category" in available_fields:
+            output_fields.append("category")
+        
+        expr = f'conversationId == "{conversation_id}" && userId == "{user_id}"'
+        try:
+            results = self.collection.query(
+                expr=expr,
+                output_fields=output_fields,
+            )
+            # Convert Milvus query result to plain list of dicts to avoid iteration bugs
+            plain_results = [dict(r) for r in results] if results else []
+        except Exception as e:
+            logger.warning(f"Error querying conversation insights: {e}")
+            return []
+        
+        logger.info(f"Found {len(plain_results)} existing insights for conversation {conversation_id}")
+        
+        return plain_results
     
     def delete_conversation_insights(self, conversation_id: str, user_id: str):
         """
@@ -509,15 +624,262 @@ class InsightsService:
         """
         self.connect()
         
+        # Ensure collection exists (create if not)
+        if not utility.has_collection(COLLECTION_NAME, using="insights"):
+            logger.info(f"Collection {COLLECTION_NAME} does not exist, creating...")
+            self.initialize_collection()
+        
         if not self.collection:
             self.collection = Collection(COLLECTION_NAME, using="insights")
+        
+        # Ensure collection is loaded for queries
+        try:
+            self.collection.load()
+        except Exception as e:
+            # Collection might already be loaded
+            logger.debug(f"Collection load (may already be loaded): {e}")
         
         results = self.collection.query(
             expr=f'userId == "{user_id}"',
             output_fields=["id"],
         )
         
+        logger.info(f"User {user_id} has {len(results)} insights")
+        
         return len(results)
+    
+    def list_user_insights(
+        self,
+        user_id: str,
+        category: Optional[str] = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """
+        List insights for a user with pagination and optional category filter.
+        
+        Args:
+            user_id: User ID
+            category: Optional category filter (preference, fact, goal, context, other)
+            offset: Number of results to skip
+            limit: Maximum number of results to return
+            
+        Returns:
+            Tuple of (list of insights, total count)
+        """
+        self.connect()
+        
+        # Ensure collection exists (create if not)
+        if not utility.has_collection(COLLECTION_NAME, using="insights"):
+            logger.info(f"Collection {COLLECTION_NAME} does not exist, creating...")
+            self.initialize_collection()
+        
+        if not self.collection:
+            self.collection = Collection(COLLECTION_NAME, using="insights")
+        
+        # Ensure collection is loaded for queries
+        try:
+            self.collection.load()
+        except Exception as e:
+            logger.debug(f"Collection load (may already be loaded): {e}")
+        
+        # Get available fields from schema
+        available_fields = {field.name for field in self.collection.schema.fields}
+        has_category = "category" in available_fields
+        
+        # Build filter expression
+        expr_parts = [f'userId == "{user_id}"']
+        if category and category in ChatInsight.VALID_CATEGORIES and has_category:
+            expr_parts.append(f'category == "{category}"')
+        expr = " && ".join(expr_parts)
+        
+        # Build output fields based on available schema
+        output_fields = ["id", "userId", "content", "conversationId", "analyzedAt", "modelName"]
+        if has_category:
+            output_fields.append("category")
+        
+        # Query all matching insights (Milvus doesn't support offset/limit well on query)
+        try:
+            results = self.collection.query(
+                expr=expr,
+                output_fields=output_fields,
+            )
+        except Exception as e:
+            logger.warning(f"Error querying insights: {e}")
+            return [], 0
+        
+        total_count = len(results)
+        
+        # Sort by analyzedAt descending (newest first) and apply pagination
+        results.sort(key=lambda x: x.get("analyzedAt", 0), reverse=True)
+        paginated_results = results[offset:offset + limit]
+        
+        logger.info(f"Listed {len(paginated_results)} insights for user {user_id} (total: {total_count}, category: {category})")
+        
+        return paginated_results, total_count
+    
+    def get_category_counts(self, user_id: str) -> Dict[str, int]:
+        """
+        Get insight counts by category for a user.
+        
+        Args:
+            user_id: User ID
+            
+        Returns:
+            Dictionary mapping category to count
+        """
+        self.connect()
+        
+        # Ensure collection exists (create if not)
+        if not utility.has_collection(COLLECTION_NAME, using="insights"):
+            logger.info(f"Collection {COLLECTION_NAME} does not exist, creating...")
+            self.initialize_collection()
+        
+        if not self.collection:
+            self.collection = Collection(COLLECTION_NAME, using="insights")
+        
+        # Check if category field exists
+        available_fields = {field.name for field in self.collection.schema.fields}
+        if "category" not in available_fields:
+            # No category field - return empty
+            return {}
+        
+        # Ensure collection is loaded for queries
+        try:
+            self.collection.load()
+        except Exception as e:
+            logger.debug(f"Collection load (may already be loaded): {e}")
+        
+        # Query all insights for user with category field
+        results = self.collection.query(
+            expr=f'userId == "{user_id}"',
+            output_fields=["category"],
+        )
+        
+        # Count by category
+        counts: Dict[str, int] = {}
+        for r in results:
+            cat = r.get("category", "other")
+            counts[cat] = counts.get(cat, 0) + 1
+        
+        return counts
+    
+    def update_insight(
+        self,
+        insight_id: str,
+        user_id: str,
+        content: Optional[str] = None,
+        category: Optional[str] = None,
+    ) -> bool:
+        """
+        Update an insight's content or category.
+        
+        Note: Milvus doesn't support direct updates, so we delete and re-insert.
+        Embedding is regenerated if content changes.
+        
+        Args:
+            insight_id: Insight ID
+            user_id: User ID (for authorization)
+            content: New content (optional)
+            category: New category (optional)
+            
+        Returns:
+            True if updated, False if not found
+        """
+        self.connect()
+        
+        if not utility.has_collection(COLLECTION_NAME, using="insights"):
+            return False
+        
+        if not self.collection:
+            self.collection = Collection(COLLECTION_NAME, using="insights")
+        
+        try:
+            self.collection.load()
+        except Exception:
+            pass
+        
+        # Get existing insight
+        results = self.collection.query(
+            expr=f'id == "{insight_id}" && userId == "{user_id}"',
+            output_fields=["id", "userId", "content", "conversationId", "analyzedAt", "modelName", "category", "embedding"],
+        )
+        
+        if not results:
+            return False
+        
+        existing = results[0]
+        
+        # Prepare updated values
+        new_content = content if content is not None else existing.get("content", "")
+        new_category = category if category is not None else existing.get("category", "other")
+        
+        # Validate category
+        if new_category not in ChatInsight.VALID_CATEGORIES:
+            new_category = "other"
+        
+        # Delete old record
+        self.collection.delete(expr=f'id == "{insight_id}"')
+        
+        # Re-insert with updated values (keep same embedding if content unchanged)
+        embedding = existing.get("embedding", [])
+        
+        data = [
+            [existing.get("id")],
+            [existing.get("userId")],
+            [new_content],
+            [embedding],
+            [existing.get("conversationId", "")],
+            [existing.get("analyzedAt", 0)],
+            [existing.get("modelName", "")],
+            [new_category],
+        ]
+        
+        self.collection.insert(data)
+        self.collection.flush()
+        
+        logger.info(f"Updated insight: id={insight_id}, user_id={user_id}")
+        return True
+    
+    def delete_insight(self, insight_id: str, user_id: str) -> bool:
+        """
+        Delete a single insight by ID.
+        
+        Args:
+            insight_id: Insight ID
+            user_id: User ID (for authorization)
+            
+        Returns:
+            True if deleted, False if not found
+        """
+        self.connect()
+        
+        if not utility.has_collection(COLLECTION_NAME, using="insights"):
+            return False
+        
+        if not self.collection:
+            self.collection = Collection(COLLECTION_NAME, using="insights")
+        
+        try:
+            self.collection.load()
+        except Exception:
+            pass
+        
+        # Check if insight exists and belongs to user
+        results = self.collection.query(
+            expr=f'id == "{insight_id}" && userId == "{user_id}"',
+            output_fields=["id"],
+        )
+        
+        if not results:
+            return False
+        
+        # Delete
+        self.collection.delete(expr=f'id == "{insight_id}"')
+        self.collection.flush()
+        
+        logger.info(f"Deleted insight: id={insight_id}, user_id={user_id}")
+        return True
     
     def flush_collection(self):
         """
@@ -562,24 +924,47 @@ class InsightsService:
     # Task Insights - Memories for Agent Tasks
     # =========================================================================
     
-    def initialize_task_insights_collection(self, embedding_dim: Optional[int] = None):
+    def initialize_task_insights_collection(self, embedding_dim: Optional[int] = None, force_recreate: bool = False):
         """
         Initialize the task_insights collection in Milvus.
         
         Task insights store execution results/memories for agent tasks,
         enabling tasks to avoid duplicates and maintain context.
         
+        If the collection exists but has an incompatible schema (missing fields),
+        it will be dropped and recreated.
+        
         Args:
             embedding_dim: Optional embedding dimension override (default: from model registry)
+            force_recreate: If True, drop and recreate collection even if it exists
         """
         self.connect()
         
         dim = embedding_dim or get_embedding_dimension()
         
+        # Expected fields in the current schema
+        EXPECTED_FIELDS = {"id", "taskId", "userId", "content", "embedding", "executionId", "createdAt", "modelName"}
+        
         # Check if collection exists
         if utility.has_collection(TASK_INSIGHTS_COLLECTION, using="insights"):
-            logger.info(f"Collection {TASK_INSIGHTS_COLLECTION} already exists")
-            return
+            existing_collection = Collection(TASK_INSIGHTS_COLLECTION, using="insights")
+            existing_fields = {field.name for field in existing_collection.schema.fields}
+            
+            # Check if schema is compatible
+            missing_fields = EXPECTED_FIELDS - existing_fields
+            
+            if missing_fields and not force_recreate:
+                logger.warning(
+                    f"Collection {TASK_INSIGHTS_COLLECTION} exists but is missing fields: {missing_fields}. Recreating..."
+                )
+                force_recreate = True
+            
+            if force_recreate:
+                logger.info(f"Dropping collection {TASK_INSIGHTS_COLLECTION} for recreation")
+                utility.drop_collection(TASK_INSIGHTS_COLLECTION, using="insights")
+            else:
+                logger.info(f"Collection {TASK_INSIGHTS_COLLECTION} already exists with compatible schema")
+                return
         
         logger.info(f"Creating collection {TASK_INSIGHTS_COLLECTION} with embedding dimension {dim}")
         

@@ -27,7 +27,8 @@ Future features
 [ ]
 4 - improve existing agents - chat (has websearch, filesearch, upload), web search (focus on deep research), RAG Search Agent
 
-
+- model registry overrides in env/dockercompose/ansible, or dynamically set during make install, or menu
+- a "warmup" screen for ai-portal when models need to be cached/downloaded.
 
 Agent tasks:
 2 - make sure all busibox-app tests pass

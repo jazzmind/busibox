@@ -11,7 +11,11 @@
 #   --force   : Force migration even if not detected as needed
 #
 # Environment:
-#   MILVUS_IP : Milvus server IP (default: 10.96.200.204)
+#   MILVUS_IP : Milvus server IP or "docker:container_name" for Docker environments
+#               Examples: "10.96.200.204" (proxmox), "docker:milvus" (docker)
+#               Default: 10.96.200.204 (production)
+#   INGEST_IP : Ingest API server IP or "docker:container_name" for Docker environments
+#               Examples: "10.96.200.206" (proxmox), "docker:ingest-api" (docker)
 #
 # Exit codes:
 #   0 - No migration needed (or migration completed successfully)
@@ -117,33 +121,96 @@ echo -e "Configured model: ${GREEN}$CONFIGURED_MODEL${NC}"
 echo -e "Configured dimension: ${GREEN}$CONFIGURED_DIM${NC}"
 echo ""
 
-# Determine Milvus IP
-if [ -n "$MILVUS_IP" ]; then
+# Determine deployment mode and hosts
+# MILVUS_IP can be:
+#   - "docker:container_name" for docker environments
+#   - IP address for proxmox environments
+USE_DOCKER=false
+if [[ "$MILVUS_IP" == docker:* ]]; then
+    USE_DOCKER=true
+    MILVUS_CONTAINER="${MILVUS_IP#docker:}"
+    INGEST_CONTAINER="${INGEST_IP#docker:}"
+    echo -e "Mode: ${BLUE}Docker${NC}"
+    echo -e "Milvus container: ${BLUE}$MILVUS_CONTAINER${NC}"
+    echo -e "Ingest container: ${BLUE}$INGEST_CONTAINER${NC}"
+elif [ -n "$MILVUS_IP" ]; then
     MILVUS_HOST="$MILVUS_IP"
+    echo -e "Mode: ${BLUE}Proxmox/SSH${NC}"
+    echo -e "Milvus host: ${BLUE}$MILVUS_HOST${NC}"
 else
     # Default to production
     MILVUS_HOST="10.96.200.204"
+    echo -e "Mode: ${BLUE}Proxmox/SSH${NC} (default production)"
+    echo -e "Milvus host: ${BLUE}$MILVUS_HOST${NC}"
 fi
-
-echo -e "Checking Milvus at: ${BLUE}$MILVUS_HOST${NC}"
 echo ""
 
-# Check if we can connect to Milvus
-if ! ssh -o ConnectTimeout=5 -o BatchMode=yes root@$MILVUS_HOST "echo ok" &>/dev/null; then
-    echo -e "${YELLOW}WARNING: Cannot SSH to Milvus host ($MILVUS_HOST)${NC}"
-    echo "Make sure:"
-    echo "  1. Milvus container is running"
-    echo "  2. SSH access is configured"
-    echo "  3. MILVUS_IP environment variable is set correctly"
-    exit 2
+# Helper function to run Python with pymilvus
+# In Docker: runs on ingest-api container (which has pymilvus) connecting to milvus container
+# In Proxmox: runs on milvus host with milvus-tools python
+run_python_milvus() {
+    local python_code="$1"
+    local milvus_host_for_code="$2"  # The host to connect to from within the code
+    
+    if [ "$USE_DOCKER" = true ]; then
+        # Run on ingest-api container, connect to milvus container by name
+        docker exec "$INGEST_CONTAINER" python3 -c "$python_code" 2>/dev/null
+    else
+        # On proxmox, use the milvus-tools python on the milvus host
+        ssh -o ConnectTimeout=5 -o BatchMode=yes root@$MILVUS_HOST "/opt/milvus-tools/bin/python -c \"$python_code\"" 2>/dev/null
+    fi
+}
+
+# Check connectivity
+echo "Checking connectivity..."
+if [ "$USE_DOCKER" = true ]; then
+    # Check ingest-api container (we run pymilvus commands there)
+    if ! docker ps --format '{{.Names}}' | grep -q "^${INGEST_CONTAINER}$"; then
+        echo -e "${YELLOW}WARNING: Docker container '$INGEST_CONTAINER' is not running${NC}"
+        echo "Make sure:"
+        echo "  1. Docker containers are running (make docker-up)"
+        echo "  2. Container name is correct"
+        echo ""
+        echo "Running containers:"
+        docker ps --format '  {{.Names}}'
+        exit 2
+    fi
+    echo -e "${GREEN}✓${NC} Docker container '$INGEST_CONTAINER' is running"
+    
+    # Also verify milvus container is running
+    if ! docker ps --format '{{.Names}}' | grep -q "^${MILVUS_CONTAINER}$"; then
+        echo -e "${YELLOW}WARNING: Docker container '$MILVUS_CONTAINER' is not running${NC}"
+        exit 2
+    fi
+    echo -e "${GREEN}✓${NC} Docker container '$MILVUS_CONTAINER' is running"
+else
+    if ! ssh -o ConnectTimeout=5 -o BatchMode=yes root@$MILVUS_HOST "echo ok" &>/dev/null; then
+        echo -e "${YELLOW}WARNING: Cannot SSH to Milvus host ($MILVUS_HOST)${NC}"
+        echo "Make sure:"
+        echo "  1. Milvus container is running"
+        echo "  2. SSH access is configured"
+        echo "  3. MILVUS_IP environment variable is set correctly"
+        exit 2
+    fi
+    echo -e "${GREEN}✓${NC} SSH connection successful"
 fi
+echo ""
 
 # Check Milvus collection schema
 echo "Querying Milvus for current embedding dimension..."
-MILVUS_DIM=$(ssh root@$MILVUS_HOST "/opt/milvus-tools/bin/python -c \"
+
+# Build the Python code for querying Milvus
+# Note: In Docker, ingest-api connects to 'milvus' container; in Proxmox, connect to localhost
+if [ "$USE_DOCKER" = true ]; then
+    MILVUS_CONNECT_HOST="$MILVUS_CONTAINER"
+else
+    MILVUS_CONNECT_HOST="localhost"
+fi
+
+MILVUS_QUERY_CODE="
 from pymilvus import connections, Collection, utility
 try:
-    connections.connect('default', host='localhost', port=19530)
+    connections.connect('default', host='$MILVUS_CONNECT_HOST', port=19530)
     if utility.has_collection('documents'):
         col = Collection('documents')
         for field in col.schema.fields:
@@ -156,13 +223,18 @@ try:
         print('no_collection')
 except Exception as e:
     print(f'error: {e}')
-\"" 2>/dev/null || echo "ssh_error")
+"
 
-if [[ "$MILVUS_DIM" == ssh_error* ]] || [[ "$MILVUS_DIM" == error* ]]; then
+MILVUS_DIM=$(run_python_milvus "$MILVUS_QUERY_CODE" || echo "connection_error")
+
+if [[ "$MILVUS_DIM" == ssh_error* ]] || [[ "$MILVUS_DIM" == error* ]] || [[ "$MILVUS_DIM" == connection_error* ]] || [ -z "$MILVUS_DIM" ]; then
     echo -e "${YELLOW}WARNING: Could not query Milvus${NC}"
     echo "Error: $MILVUS_DIM"
     echo ""
     echo "Make sure Milvus is running and the pymilvus tools are installed."
+    if [ "$USE_DOCKER" = true ]; then
+        echo "For Docker, verify pymilvus is installed in the ingest-api container."
+    fi
     exit 2
 fi
 
@@ -227,11 +299,55 @@ else
         echo "Step 1: Dropping and recreating collection with new dimension..."
         echo ""
         
-        # Set the EMBEDDING_DIMENSION env var for the script
-        ssh root@$MILVUS_HOST "EMBEDDING_DIMENSION=$CONFIGURED_DIM /opt/milvus-tools/bin/python /root/hybrid_schema.py --drop" || {
-            echo -e "${RED}ERROR: Failed to recreate collection${NC}"
-            exit 2
-        }
+        # Drop and recreate the collection
+        if [ "$USE_DOCKER" = true ]; then
+            # For Docker: run the migration Python code on ingest-api container (has pymilvus)
+            MIGRATE_CODE="
+from pymilvus import connections, Collection, utility, FieldSchema, CollectionSchema, DataType
+import os
+
+dim = int(os.environ.get('EMBEDDING_DIMENSION', 1024))
+milvus_host = os.environ.get('MILVUS_HOST', 'milvus')
+connections.connect('default', host=milvus_host, port=19530)
+
+# Drop existing collection
+if utility.has_collection('documents'):
+    utility.drop_collection('documents')
+    print(f'Dropped existing documents collection')
+
+# Create new collection with correct dimension
+fields = [
+    FieldSchema(name='id', dtype=DataType.VARCHAR, is_primary=True, max_length=100),
+    FieldSchema(name='file_id', dtype=DataType.VARCHAR, max_length=100),
+    FieldSchema(name='chunk_index', dtype=DataType.INT64),
+    FieldSchema(name='text_dense', dtype=DataType.FLOAT_VECTOR, dim=dim),
+    FieldSchema(name='text_sparse', dtype=DataType.SPARSE_FLOAT_VECTOR),
+]
+schema = CollectionSchema(fields=fields, description='Document embeddings', enable_dynamic_field=True)
+col = Collection(name='documents', schema=schema)
+
+# Create index
+index_params = {
+    'metric_type': 'COSINE',
+    'index_type': 'HNSW',
+    'params': {'M': 16, 'efConstruction': 256}
+}
+col.create_index(field_name='text_dense', index_params=index_params)
+col.create_index(field_name='text_sparse', index_params={'index_type': 'SPARSE_INVERTED_INDEX', 'metric_type': 'IP'})
+
+print(f'Created documents collection with dimension {dim}')
+"
+            docker exec -e EMBEDDING_DIMENSION="$CONFIGURED_DIM" -e MILVUS_HOST="$MILVUS_CONTAINER" "$INGEST_CONTAINER" python3 -c "$MIGRATE_CODE" || {
+                echo -e "${RED}ERROR: Failed to recreate collection${NC}"
+                exit 2
+            }
+        else
+            # For Proxmox: use the hybrid_schema.py script
+            ssh root@$MILVUS_HOST "EMBEDDING_DIMENSION=$CONFIGURED_DIM /opt/milvus-tools/bin/python /root/hybrid_schema.py --drop" || {
+                echo -e "${RED}ERROR: Failed to recreate collection${NC}"
+                exit 2
+            }
+        fi
         
         echo ""
         echo -e "${GREEN}✓ Collection recreated with dimension $CONFIGURED_DIM${NC}"
@@ -241,27 +357,36 @@ else
         echo -e "${YELLOW}Step 2: Triggering re-embedding of all documents...${NC}"
         echo ""
         
-        # Determine ingest IP
-        if [ -n "$INGEST_IP" ]; then
-            INGEST_HOST="$INGEST_IP"
+        # Determine ingest host/container
+        if [ "$USE_DOCKER" = true ]; then
+            # For Docker: call the API via localhost (ingest-api exposes port 8002)
+            INGEST_API_URL="http://localhost:8002/api/files/reprocess-all"
+            echo "Calling ingest API at: $INGEST_API_URL"
+            echo ""
+            
+            REEMBED_RESULT=$(curl -s -X POST \
+                -H 'Content-Type: application/json' \
+                -d '{"start_stage": "embedding"}' \
+                "$INGEST_API_URL" 2>/dev/null || echo '{"error": "curl_failed"}')
         else
-            # Default based on Milvus IP network
-            if [[ "$MILVUS_HOST" == 10.96.201.* ]]; then
+            # For Proxmox: determine ingest IP
+            if [ -n "$INGEST_IP" ] && [[ "$INGEST_IP" != docker:* ]]; then
+                INGEST_HOST="$INGEST_IP"
+            elif [[ "$MILVUS_HOST" == 10.96.201.* ]]; then
                 INGEST_HOST="10.96.201.206"  # Staging
             else
                 INGEST_HOST="10.96.200.206"  # Production
             fi
+            
+            INGEST_API_URL="http://$INGEST_HOST:8002/api/files/reprocess-all"
+            echo "Calling ingest API at: $INGEST_API_URL"
+            echo ""
+            
+            REEMBED_RESULT=$(ssh root@$MILVUS_HOST "curl -s -X POST \
+                -H 'Content-Type: application/json' \
+                -d '{\"start_stage\": \"embedding\"}' \
+                '$INGEST_API_URL'" 2>/dev/null || echo '{"error": "curl_failed"}')
         fi
-        
-        echo "Calling ingest API at: $INGEST_HOST"
-        echo ""
-        
-        # Call the bulk reprocess endpoint
-        # Note: This endpoint may require authentication in production
-        REEMBED_RESULT=$(ssh root@$MILVUS_HOST "curl -s -X POST \
-            -H 'Content-Type: application/json' \
-            -d '{\"start_stage\": \"embedding\"}' \
-            'http://$INGEST_HOST:8002/api/files/reprocess-all'" 2>/dev/null || echo '{"error": "curl_failed"}')
         
         # Check if the call succeeded
         if echo "$REEMBED_RESULT" | grep -q '"queued"'; then
@@ -269,8 +394,13 @@ else
             echo -e "${GREEN}✓ Queued $QUEUED_COUNT documents for re-embedding${NC}"
             echo ""
             echo "Re-embedding is now running in the background."
-            echo "Monitor progress with:"
-            echo "  ssh root@$INGEST_HOST 'journalctl -u ingest-worker -f'"
+            if [ "$USE_DOCKER" = true ]; then
+                echo "Monitor progress with:"
+                echo "  docker logs -f ingest-worker"
+            else
+                echo "Monitor progress with:"
+                echo "  ssh root@$INGEST_HOST 'journalctl -u ingest-worker -f'"
+            fi
             echo ""
         elif echo "$REEMBED_RESULT" | grep -q '"count": 0\|"queued": 0'; then
             echo -e "${YELLOW}No documents found to re-embed${NC}"
@@ -289,7 +419,7 @@ else
             echo "    curl -X POST -H 'Authorization: Bearer <token>' \\"
             echo "      -H 'Content-Type: application/json' \\"
             echo "      -d '{\"start_stage\": \"embedding\"}' \\"
-            echo "      'http://$INGEST_HOST:8002/api/files/reprocess-all'"
+            echo "      '$INGEST_API_URL'"
             echo ""
         else
             echo -e "${YELLOW}WARNING: Could not trigger automatic re-embedding${NC}"
@@ -298,7 +428,7 @@ else
             echo "Please trigger re-embedding manually:"
             echo "  curl -X POST -H 'Content-Type: application/json' \\"
             echo "    -d '{\"start_stage\": \"embedding\"}' \\"
-            echo "    'http://$INGEST_HOST:8002/api/files/reprocess-all'"
+            echo "    '$INGEST_API_URL'"
             echo ""
         fi
         
