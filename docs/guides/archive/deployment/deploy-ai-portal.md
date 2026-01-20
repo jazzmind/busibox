@@ -112,10 +112,10 @@ Test that the application is accessible:
 
 ```bash
 # Test main domain
-curl -k https://test.ai.jaycashman.com
+curl -k https://test.ai.localhost
 
 # Or in browser:
-# https://test.ai.jaycashman.com
+# https://test.ai.localhost
 ```
 
 You should see the actual ai-portal interface, not the placeholder page.
@@ -236,7 +236,7 @@ After deployment, verify:
 
 - [ ] PM2 shows ai-portal as "online"
 - [ ] Health endpoint returns 200: `http://10.96.201.201:3000/api/health`
-- [ ] Application accessible: `https://test.ai.jaycashman.com`
+- [ ] Application accessible: `https://test.ai.localhost`
 - [ ] No NGINX errors in logs: `ssh root@10.96.201.200 tail /var/log/nginx/error.log`
 - [ ] Application logs show no errors: `pm2 logs ai-portal`
 - [ ] Can log in to application

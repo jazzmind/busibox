@@ -72,7 +72,7 @@ None
           LITELLM_BASE_URL: "http://10.96.201.207:4000/v1"
           LITELLM_API_KEY: "sk-litellm-master-key"
           BETTER_AUTH_SECRET: "{{ vault_better_auth_secret }}"
-          BETTER_AUTH_URL: "https://test.ai.jaycashman.com"
+          BETTER_AUTH_URL: "https://test.ai.localhost"
 ```
 
 ## Tags

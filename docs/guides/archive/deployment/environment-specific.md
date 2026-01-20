@@ -107,12 +107,12 @@ See [Interactive Commands Guide](../guides/interactive-commands.md) for more det
 
 ## Multiple Deployments Example
 
-### Customer 1 (Cashman)
+### Customer 1 (busibox)
 ```bash
-/deployments/cashman/
+/deployments/busibox/
 └── provision/ansible/roles/secrets/vars/vault.yml
     network_base_octets_production: "10.96.200"
-    base_domain: "jaycashman.com"
+    base_domain: "localhost"
 ```
 
 ### Customer 2 (ACME Corp)
@@ -137,7 +137,7 @@ See [Interactive Commands Guide](../guides/interactive-commands.md) for more det
 vault.yml (deployment-specific)
     ↓
 network_base_octets_production: "10.96.200"
-base_domain: "jaycashman.com"
+base_domain: "localhost"
     ↓
 inventory/production/group_vars/all.yml
     ↓
@@ -146,7 +146,7 @@ domain: "ai.{{ base_domain }}"
     ↓
 proxy_ip: "{{ network_base_octets }}.200"
     ↓
-RESULT: 10.96.200.200, ai.jaycashman.com
+RESULT: 10.96.200.200, ai.localhost
 ```
 
 ## What Goes Where?

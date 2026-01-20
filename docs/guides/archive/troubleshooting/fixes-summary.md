@@ -3,11 +3,11 @@
 ## Issues Resolved
 
 ### 1. Subdomain Routing Issue
-**Problem**: Wildcard DNS `*.ai.jaycashman.com` doesn't cover sub-subdomains like `agents.test.ai.jaycashman.com`
+**Problem**: Wildcard DNS `*.ai.localhost` doesn't cover sub-subdomains like `agents.test.ai.localhost`
 
 **Solution**: Changed subdomain pattern for test environment:
-- ❌ Old: `agents.test.ai.jaycashman.com` (requires `*.*.ai.jaycashman.com`)
-- ✅ New: `agents-test.ai.jaycashman.com` (covered by `*.ai.jaycashman.com`)
+- ❌ Old: `agents.test.ai.localhost` (requires `*.*.ai.localhost`)
+- ✅ New: `agents-test.ai.localhost` (covered by `*.ai.localhost`)
 
 **Files Changed**:
 - `provision/ansible/inventory/test/group_vars/all/00-main.yml`
@@ -17,7 +17,7 @@
 **Problem**: Provisioned SSL certificates from vault were not being deployed correctly
 
 **Solution**:
-- Fixed `provisioned.yml` to use `full_domain` (test.ai.jaycashman.com) instead of just `domain` (ai.jaycashman.com)
+- Fixed `provisioned.yml` to use `full_domain` (test.ai.localhost) instead of just `domain` (ai.localhost)
 - Added proper chain file handling (checks if chain exists and has content)
 - Creates fullchain certificate only when chain is provided
 - Better error messages and summary output
@@ -50,10 +50,10 @@ sudo nano /etc/hosts
 
 Add these lines:
 ```
-10.96.201.200 test.ai.jaycashman.com
-10.96.201.200 agents-test.ai.jaycashman.com
-10.96.201.200 docs-test.ai.jaycashman.com
-10.96.201.200 innovation-test.ai.jaycashman.com
+10.96.201.200 test.ai.localhost
+10.96.201.200 agents-test.ai.localhost
+10.96.201.200 docs-test.ai.localhost
+10.96.201.200 innovation-test.ai.localhost
 ```
 
 ### 2. Upload SSL Certificate (if using provisioned mode)
@@ -78,34 +78,34 @@ ansible-playbook -i inventory/test/hosts.yml site.yml --tags nginx --ask-vault-p
 ### 4. Test Routes in Browser
 
 **Main Domain (AI Portal)**:
-- https://test.ai.jaycashman.com
+- https://test.ai.localhost
 
 **Path-based routing**:
-- https://test.ai.jaycashman.com/agents (Agent Client)
-- https://test.ai.jaycashman.com/docs (Doc Intel)
-- https://test.ai.jaycashman.com/innovation (Innovation)
+- https://test.ai.localhost/agents (Agent Client)
+- https://test.ai.localhost/docs (Doc Intel)
+- https://test.ai.localhost/innovation (Innovation)
 
 **Subdomain routing**:
-- https://agents-test.ai.jaycashman.com
-- https://docs-test.ai.jaycashman.com
-- https://innovation-test.ai.jaycashman.com
+- https://agents-test.ai.localhost
+- https://docs-test.ai.localhost
+- https://innovation-test.ai.localhost
 
 Accept the self-signed certificate warning (for test) or it should work directly (if using provisioned certs).
 
 ### 5. Test with curl
 ```bash
 # Main domain
-curl -k https://test.ai.jaycashman.com
+curl -k https://test.ai.localhost
 
 # Path-based routing
-curl -k https://test.ai.jaycashman.com/agents
-curl -k https://test.ai.jaycashman.com/docs
-curl -k https://test.ai.jaycashman.com/innovation
+curl -k https://test.ai.localhost/agents
+curl -k https://test.ai.localhost/docs
+curl -k https://test.ai.localhost/innovation
 
 # Subdomain routing
-curl -k https://agents-test.ai.jaycashman.com
-curl -k https://docs-test.ai.jaycashman.com
-curl -k https://innovation-test.ai.jaycashman.com
+curl -k https://agents-test.ai.localhost
+curl -k https://docs-test.ai.localhost
+curl -k https://innovation-test.ai.localhost
 ```
 
 Each route should show a unique placeholder page with:

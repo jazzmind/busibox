@@ -54,8 +54,8 @@ Serve application at one or more domain names:
 routes:
   - type: domain
     domains:
-      - ai.jaycashman.com
-      - www.ai.jaycashman.com
+      - ai.localhost
+      - www.ai.localhost
 ```
 
 #### 2. Subdomain Routing
@@ -65,7 +65,7 @@ Serve application at a subdomain:
 ```yaml
 routes:
   - type: subdomain
-    subdomain: agents  # → agents.ai.jaycashman.com
+    subdomain: agents  # → agents.ai.localhost
     websocket: true    # Optional: enable WebSocket support
 ```
 
@@ -76,8 +76,8 @@ Serve application at a URL path:
 ```yaml
 routes:
   - type: path
-    domain: ai.jaycashman.com
-    path: /agents  # → ai.jaycashman.com/agents
+    domain: ai.localhost
+    path: /agents  # → ai.localhost/agents
     strip_path: false  # Optional: remove path prefix before proxying
 ```
 
@@ -90,7 +90,7 @@ routes:
   - type: subdomain
     subdomain: agents
   - type: path
-    domain: ai.jaycashman.com
+    domain: ai.localhost
     path: /agents
 ```
 
@@ -227,12 +227,12 @@ applications:
 ### Public Web Application (Main Portal)
 
 ```yaml
-  - name: cashman-portal
-    github_repo: jazzmind/cashman
+  - name: busibox-portal
+    github_repo: jazzmind/busibox
     container: apps-lxc
     container_ip: "{{ apps_ip }}"
     port: 3000
-    deploy_path: /srv/apps/cashman
+    deploy_path: /srv/apps/busibox
     health_endpoint: /api/health
     build_command: "npm run build"
     routes:
@@ -249,7 +249,7 @@ applications:
       - database_url
     env:
       NODE_ENV: production
-      JWT_ISSUER: cashman-portal
+      JWT_ISSUER: busibox-portal
 ```
 
 ## Adding a New Application

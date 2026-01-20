@@ -64,7 +64,7 @@ Under the path: secrets.ssl_certificates
 IMPORTANT:
 - Script stores certificates generically (no domain in vault)
 - Domain names come from inventory (base_domain variable)
-- Works with wildcard certificates (*.ai.jaycashman.com)
+- Works with wildcard certificates (*.ai.localhost)
 - Same certificates used for all environments (test/production)
 
 This file is encrypted with ansible-vault and should NOT be committed unencrypted.

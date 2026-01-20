@@ -92,8 +92,8 @@ network_base_octets_production: "10.96.200"
 network_base_octets_staging: "10.96.201"
 
 # Domain Configuration (Deployment-Specific)
-base_domain: "jaycashman.com"
-ssl_email: "admin@jaycashman.com"
+base_domain: "localhost"
+ssl_email: "admin@localhost"
 
 # Secrets (Deployment-Specific)
 secrets:

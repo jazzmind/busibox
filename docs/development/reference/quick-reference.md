@@ -22,16 +22,16 @@ Same pattern, just `.201` instead of `.200` in 3rd octet
 ## Domains
 
 ### Production
-- Main: `ai.jaycashman.com`
-- Agents: `agents.ai.jaycashman.com`
-- Docs: `docs.ai.jaycashman.com`
-- Innovation: `innovation.ai.jaycashman.com`
+- Main: `ai.localhost`
+- Agents: `agents.ai.localhost`
+- Docs: `docs.ai.localhost`
+- Innovation: `innovation.ai.localhost`
 
 ### Test
-- Main: `test.ai.jaycashman.com`
-- Agents: `agents.test.ai.jaycashman.com`
-- Docs: `docs.test.ai.jaycashman.com`
-- Innovation: `innovation.test.ai.jaycashman.com`
+- Main: `test.ai.localhost`
+- Agents: `agents.test.ai.localhost`
+- Docs: `docs.test.ai.localhost`
+- Innovation: `innovation.test.ai.localhost`
 
 ## Applications & Ports
 
@@ -122,7 +122,7 @@ network_base_octets: "10.96.201"  # Test
 ### Change Domain
 ```yaml
 # inventory/{env}/group_vars/all.yml
-base_domain: jaycashman.com
+base_domain: localhost
 domain: "ai.{{ base_domain }}"
 ```
 

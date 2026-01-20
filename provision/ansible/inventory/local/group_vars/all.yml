@@ -44,7 +44,7 @@ postgres_port: 5432
 # ============================================================================
 postgres_user: postgres
 postgres_password: devpassword
-postgres_db: cashman
+postgres_db: busibox
 
 # ============================================================================
 # MinIO Configuration

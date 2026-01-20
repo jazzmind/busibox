@@ -130,7 +130,7 @@ Three modes supported:
 
 1. **Let's Encrypt** (`ssl_mode: letsencrypt`)
    - ✅ Certbot installation with DNS plugin (Cloudflare support)
-   - ✅ Wildcard certificate support (`*.ai.jaycashman.com`)
+   - ✅ Wildcard certificate support (`*.ai.localhost`)
    - ✅ Auto-renewal via systemd timer
    - ✅ NGINX reload hook on renewal
    - ✅ Expiration monitoring script (7-day alert threshold)
@@ -154,8 +154,8 @@ Three modes supported:
   - OCSP stapling
   - Request logging with timing
 - ✅ HTTP to HTTPS redirect (301) with ACME challenge support
-- ✅ **Subdomain routing**: `agents.ai.jaycashman.com`
-- ✅ **Path routing**: `ai.jaycashman.com/agents`
+- ✅ **Subdomain routing**: `agents.ai.localhost`
+- ✅ **Path routing**: `ai.localhost/agents`
 - ✅ **WebSocket support**: Upgrade headers, 24-hour timeout
 - ✅ **Graceful reload**: `systemctl reload nginx` (no dropped connections)
 
@@ -231,11 +231,11 @@ Three modes supported:
 ### Phase 6: User Story 4 - Main Portal (P2) ⏸️
 **Tasks**: 8 tasks (T049-T056)  
 **Effort**: Low (configuration-only, no new code)  
-**Deliverable**: Deploy cashman portal with authentication
+**Deliverable**: Deploy busibox portal with authentication
 
 **What's Needed**:
-- Add cashman portal to `apps.yml` (5 lines)
-- Add cashman secrets to `vault.yml` (5 lines)
+- Add busibox portal to `apps.yml` (5 lines)
+- Add busibox secrets to `vault.yml` (5 lines)
 - Configure NGINX routes (already templated)
 - Test deployment and authentication
 
@@ -404,11 +404,11 @@ specs/002-deploy-app-servers/
 4. **Verify infrastructure**:
    - Agent-server health: `curl http://10.96.200.30:8000/health`
    - NGINX config: `ssh openwebui-lxc; nginx -t`
-   - SSL redirect: `curl -I http://ai.jaycashman.com`
+   - SSL redirect: `curl -I http://ai.localhost`
 
 ### Option B: Continue Implementation
 
-- **Phase 6**: Add cashman portal (8 tasks, ~30 minutes)
+- **Phase 6**: Add busibox portal (8 tasks, ~30 minutes)
 - **Phase 7**: Add agent-manager (9 tasks, ~30 minutes)
 - **Phase 8**: Integration testing (11 tasks, ~2 hours)
 - **Phase 9**: Polish & monitoring (18 tasks, ~2 hours)
@@ -428,7 +428,7 @@ If infrastructure tests pass:
 1. **Testing Required**: All code is implemented but untested on live infrastructure
 2. **Vault Not Encrypted**: `vault.yml` contains example/placeholder secrets (must encrypt for production)
 3. **Let's Encrypt Manual**: Wildcard certificates require manual DNS challenge on first run
-4. **No Applications Deployed**: Infrastructure is ready, but actual apps (cashman, agent-manager) are config-only changes away
+4. **No Applications Deployed**: Infrastructure is ready, but actual apps (busibox, agent-manager) are config-only changes away
 
 ---
 
