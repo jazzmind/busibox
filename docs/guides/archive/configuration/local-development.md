@@ -1,6 +1,6 @@
 # Local Development Environment
 
-This guide shows how to run the entire Cashman infrastructure locally on macOS using Docker + Ansible.
+This guide shows how to run the entire busibox infrastructure locally on macOS using Docker + Ansible.
 
 ## Why This Approach?
 
@@ -75,7 +75,7 @@ secrets:
   github_token: ghp_your_github_token_here
   
   ai-portal:
-    database_url: "postgresql://postgres:devpassword@172.20.0.10:5432/cashman"
+    database_url: "postgresql://postgres:devpassword@172.20.0.10:5432/busibox"
     better_auth_secret: "local-dev-secret-change-me"
     better_auth_url: "http://local.ai.localhost:3000"
     resend_api_key: "re_your_resend_key"

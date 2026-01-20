@@ -10,7 +10,7 @@ This feature implements the deployment and orchestration layer for application s
 1. **Agent-server deployment** from GitHub releases using the existing deploywatch mechanism
 2. **Centralized application configuration** with secure secrets management
 3. **NGINX reverse proxy** for SSL-terminated HTTP/HTTPS traffic routing (subdomain and path-based)
-4. **Main portal deployment** (cashman) for authentication and application access
+4. **Main portal deployment** (busibox) for authentication and application access
 5. **Agent-client deployment** for agent administration
 
 The technical approach leverages existing infrastructure components (deploywatch, Ansible, LXC containers) and adds configuration management, NGINX routing, and application-specific deployment roles.
@@ -152,7 +152,7 @@ srv/
 ├── agent/                          # [EXISTING] Agent-server (deployed from GitHub)
 ├── ingest/                         # [EXISTING] Ingest worker (deployed from GitHub)
 └── apps/                           # [NEW] Application deployment directory
-    ├── cashman/                    # [DEPLOYED] Main portal
+    ├── busibox/                    # [DEPLOYED] Main portal
     ├── agent-manager/               # [DEPLOYED] Agent admin interface
     └── [future apps]/              # [EXTENSIBLE] Additional applications
 

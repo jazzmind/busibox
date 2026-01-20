@@ -43,22 +43,22 @@ The `route_key` is a `vars` variable, not a filter.
 
 ### 4. ⚠️ Domain Configuration Issue (Requires Manual Fix)
 
-**Problem**: Domain showing as `test.ai.ai.jaycashman.com` (double "ai")
+**Problem**: Domain showing as `test.ai.ai.localhost` (double "ai")
 
 **Root Cause**: Vault has incorrect `base_domain` value
 
 **Expected**:
 ```
-base_domain: "jaycashman.com"
-domain: "ai.jaycashman.com"  (calculated)
-full_domain: "test.ai.jaycashman.com"  (calculated)
+base_domain: "localhost"
+domain: "ai.localhost"  (calculated)
+full_domain: "test.ai.localhost"  (calculated)
 ```
 
 **Current (incorrect)**:
 ```
-base_domain: "ai.jaycashman.com"  ← WRONG
-domain: "ai.ai.jaycashman.com"  (calculated incorrectly)
-full_domain: "test.ai.ai.jaycashman.com"  (calculated incorrectly)
+base_domain: "ai.localhost"  ← WRONG
+domain: "ai.ai.localhost"  (calculated incorrectly)
+full_domain: "test.ai.ai.localhost"  (calculated incorrectly)
 ```
 
 **Fix Required** (On Proxmox Host):
@@ -70,12 +70,12 @@ nano roles/secrets/vars/vault.yml
 
 Change:
 ```yaml
-base_domain: "ai.jaycashman.com"
+base_domain: "ai.localhost"
 ```
 
 To:
 ```yaml
-base_domain: "jaycashman.com"
+base_domain: "localhost"
 ```
 
 Then re-run:
@@ -87,19 +87,19 @@ ansible-playbook -i inventory/test/hosts.yml site.yml --limit apps --tags nextjs
 
 ```yaml
 # In vault.yml
-base_domain: "jaycashman.com"
+base_domain: "localhost"
 
 # In inventory/test/group_vars/all/00-main.yml
 subdomain: test
-domain: "ai.{{ base_domain }}"          # → "ai.jaycashman.com"
-full_domain: "{{ subdomain }}.{{ domain }}"  # → "test.ai.jaycashman.com"
+domain: "ai.{{ base_domain }}"          # → "ai.localhost"
+full_domain: "{{ subdomain }}.{{ domain }}"  # → "test.ai.localhost"
 ```
 
 **Result**:
-- Production: `ai.jaycashman.com`
-- Test: `test.ai.jaycashman.com`
-- Agents (prod): `agents.ai.jaycashman.com`
-- Agents (test): `agents.test.ai.jaycashman.com`
+- Production: `ai.localhost`
+- Test: `test.ai.localhost`
+- Agents (prod): `agents.ai.localhost`
+- Agents (test): `agents.test.ai.localhost`
 
 ## Deployment Status
 

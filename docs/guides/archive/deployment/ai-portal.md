@@ -11,7 +11,7 @@ This guide covers deploying the ai-portal Next.js application to the Busibox inf
                        │ HTTPS (443)
                        ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  Proxy Container (300) - test.ai.jaycashman.com            │
+│  Proxy Container (300) - test.ai.localhost            │
 │  - Nginx reverse proxy                                      │
 │  - SSL termination                                          │
 │  - Rate limiting                                            │
@@ -101,7 +101,7 @@ You have two options for SSL certificates:
 
 ```bash
 cd /root/busibox
-bash scripts/upload-ssl-cert.sh test.ai.jaycashman.com \
+bash scripts/upload-ssl-cert.sh test.ai.localhost \
   /path/to/certificate.crt \
   /path/to/private.key \
   /path/to/chain.crt
@@ -219,7 +219,7 @@ pct exec 300 -- systemctl status nginx
 pct exec 300 -- nginx -t
 
 # Check certificate
-pct exec 300 -- openssl x509 -in /etc/ssl/busibox/ai.jaycashman.com.crt -noout -dates
+pct exec 300 -- openssl x509 -in /etc/ssl/busibox/ai.localhost.crt -noout -dates
 ```
 
 ## Verification
@@ -237,14 +237,14 @@ Expected: `200 OK`
 
 ```bash
 # From Proxmox host or external machine
-curl -v https://test.ai.jaycashman.com/api/health
+curl -v https://test.ai.localhost/api/health
 ```
 
 Expected: `200 OK` with valid SSL certificate
 
 ### 3. Chat Functionality
 
-1. Open browser: `https://test.ai.jaycashman.com`
+1. Open browser: `https://test.ai.localhost`
 2. Log in with magic link (email to allowed domain)
 3. Navigate to Chat
 4. Send a test message
@@ -279,7 +279,7 @@ pct exec 301 -- su - appuser -c "pm2 restart ai-portal"
 
 ```bash
 # Check certificate details
-pct exec 300 -- openssl x509 -in /etc/ssl/busibox/ai.jaycashman.com.crt -noout -text
+pct exec 300 -- openssl x509 -in /etc/ssl/busibox/ai.localhost.crt -noout -text
 
 # Check Nginx error logs
 pct exec 300 -- tail -f /var/log/nginx/error.log
@@ -343,7 +343,7 @@ ansible-playbook -i inventory/test/hosts.yml site.yml --limit apps --tags nextjs
 1. Upload new certificate:
 
 ```bash
-bash scripts/upload-ssl-cert.sh test.ai.jaycashman.com \
+bash scripts/upload-ssl-cert.sh test.ai.localhost \
   /path/to/new-certificate.crt \
   /path/to/new-private.key \
   /path/to/new-chain.crt

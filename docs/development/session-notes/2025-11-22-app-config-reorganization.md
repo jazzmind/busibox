@@ -49,14 +49,14 @@ Reorganized application deployment configuration to eliminate duplication betwee
 ```yaml
 node_env: production
 env_subdomain_suffix: ""
-full_domain: "ai.jaycashman.com"
+full_domain: "ai.localhost"
 ```
 
 **Test Values:**
 ```yaml
 node_env: development
 env_subdomain_suffix: "-test"
-full_domain: "test.ai.jaycashman.com"
+full_domain: "test.ai.localhost"
 ```
 
 ### 3. Dual Deployment Mode Support
@@ -127,7 +127,7 @@ full_domain: "test.ai.jaycashman.com"
 **Description:** Cashman Family Foundation donation analysis and AI insights
 
 **Routes:**
-- Subdomain: `foundation.ai.jaycashman.com` (prod), `foundation-test.test.ai.jaycashman.com` (test)
+- Subdomain: `foundation.ai.localhost` (prod), `foundation-test.test.ai.localhost` (test)
 - Path: `/foundation` on main domain
 
 **Features:**
@@ -148,7 +148,7 @@ full_domain: "test.ai.jaycashman.com"
 **Description:** Project data visualization and analysis with AI
 
 **Routes:**
-- Subdomain: `projects.ai.jaycashman.com` (prod), `projects-test.test.ai.jaycashman.com` (test)
+- Subdomain: `projects.ai.localhost` (prod), `projects-test.test.ai.localhost` (test)
 - Path: `/projects` on main domain
 
 **Features:**
@@ -270,15 +270,15 @@ ansible-playbook -i inventory/production/hosts.yml site.yml --tags app_deployer 
 
 - [ ] Test environment deployment
   - [ ] All existing apps still work
-  - [ ] foundation app accessible at `foundation-test.test.ai.jaycashman.com`
-  - [ ] project-analysis app accessible at `projects-test.test.ai.jaycashman.com`
+  - [ ] foundation app accessible at `foundation-test.test.ai.localhost`
+  - [ ] project-analysis app accessible at `projects-test.test.ai.localhost`
   - [ ] Health checks pass for all apps
   - [ ] NGINX routing works correctly
 
 - [ ] Production environment deployment
   - [ ] All existing apps still work
-  - [ ] foundation app accessible at `foundation.ai.jaycashman.com`
-  - [ ] project-analysis app accessible at `projects.ai.jaycashman.com`
+  - [ ] foundation app accessible at `foundation.ai.localhost`
+  - [ ] project-analysis app accessible at `projects.ai.localhost`
   - [ ] Health checks pass for all apps
   - [ ] NGINX routing works correctly
 

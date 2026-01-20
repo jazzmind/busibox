@@ -8,7 +8,7 @@
 
 ### 1. SSL Certificate Automation with Let's Encrypt
 
-**Question**: How to automate SSL certificate generation and renewal for wildcard domains (*.ai.jaycashman.com)?
+**Question**: How to automate SSL certificate generation and renewal for wildcard domains (*.ai.localhost)?
 
 **Decision**: Use certbot with DNS-01 challenge for wildcard certificates
 
@@ -29,8 +29,8 @@ apt-get install python3-certbot-dns-cloudflare
 # Obtain wildcard certificate
 certbot certonly --dns-cloudflare \
   --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini \
-  -d ai.jaycashman.com \
-  -d *.ai.jaycashman.com
+  -d ai.localhost \
+  -d *.ai.localhost
 
 # Auto-renewal (certbot installs systemd timer by default)
 systemctl status certbot.timer
@@ -43,7 +43,7 @@ systemctl status certbot.timer
 
 **Configuration**:
 - DNS credentials stored in Ansible vault (`/etc/letsencrypt/cloudflare.ini` deployed via secrets role)
-- NGINX configured to use Let's Encrypt cert paths: `/etc/letsencrypt/live/ai.jaycashman.com/`
+- NGINX configured to use Let's Encrypt cert paths: `/etc/letsencrypt/live/ai.localhost/`
 - Renewal hook to reload NGINX: `--deploy-hook "systemctl reload nginx"`
 
 ---
@@ -70,7 +70,7 @@ systemctl status certbot.timer
        database_url: "postgresql://user:pass@10.96.200.203/busibox"
        minio_access_key: "AKIAIOSFODNN7EXAMPLE"
        minio_secret_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-     cashman_portal:
+     busibox_portal:
        session_secret: "randomly-generated-secret-key"
        oauth_client_id: "github-oauth-app-id"
        oauth_client_secret: "github-oauth-app-secret"
@@ -105,7 +105,7 @@ systemctl status certbot.timer
 
 ### 3. NGINX Routing Patterns
 
-**Question**: How to implement both subdomain-based (agents.ai.jaycashman.com) and path-based (ai.jaycashman.com/agents) routing in NGINX?
+**Question**: How to implement both subdomain-based (agents.ai.localhost) and path-based (ai.localhost/agents) routing in NGINX?
 
 **Decision**: Hybrid approach with server blocks for subdomains and location blocks for paths
 
@@ -116,14 +116,14 @@ systemctl status certbot.timer
 
 **Implementation Pattern**:
 
-**Subdomain Routing** (agents.ai.jaycashman.com):
+**Subdomain Routing** (agents.ai.localhost):
 ```nginx
 server {
     listen 443 ssl http2;
-    server_name agents.ai.jaycashman.com;
+    server_name agents.ai.localhost;
 
-    ssl_certificate /etc/letsencrypt/live/ai.jaycashman.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/ai.jaycashman.com/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/ai.localhost/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/ai.localhost/privkey.pem;
 
     location / {
         proxy_pass http://10.96.200.201:3001;  # agent-manager on apps-lxc
@@ -135,18 +135,18 @@ server {
 }
 ```
 
-**Path Routing** (ai.jaycashman.com/agents):
+**Path Routing** (ai.localhost/agents):
 ```nginx
 server {
     listen 443 ssl http2;
-    server_name ai.jaycashman.com www.ai.jaycashman.com;
+    server_name ai.localhost www.ai.localhost;
 
-    ssl_certificate /etc/letsencrypt/live/ai.jaycashman.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/ai.jaycashman.com/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/ai.localhost/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/ai.localhost/privkey.pem;
 
     # Main portal (root path)
     location / {
-        proxy_pass http://10.96.200.201:3000;  # cashman portal on apps-lxc
+        proxy_pass http://10.96.200.201:3000;  # busibox portal on apps-lxc
         proxy_set_header Host $host;
         # ... same proxy headers
     }
@@ -176,7 +176,7 @@ server {
 ```nginx
 server {
     listen 80;
-    server_name ai.jaycashman.com *.ai.jaycashman.com;
+    server_name ai.localhost *.ai.localhost;
     return 301 https://$host$request_uri;
 }
 ```
@@ -211,18 +211,18 @@ applications:
       - minio_access_key
       - minio_secret_key
     
-  - name: cashman-portal
-    github_repo: jazzmind/cashman
+  - name: busibox-portal
+    github_repo: jazzmind/busibox
     container: apps-lxc
     container_ip: 10.96.200.201
     port: 3000
-    deploy_path: /srv/apps/cashman
+    deploy_path: /srv/apps/busibox
     health_endpoint: /api/health
     routes:
       - type: domain
-        domains: [ai.jaycashman.com, www.ai.jaycashman.com]
+        domains: [ai.localhost, www.ai.localhost]
       - type: path
-        domain: ai.jaycashman.com
+        domain: ai.localhost
         path: /home
     secrets:
       - session_secret
@@ -240,7 +240,7 @@ applications:
       - type: subdomain
         subdomain: agents
       - type: path
-        domain: ai.jaycashman.com
+        domain: ai.localhost
         path: /agents
     env:
       AGENT_API_URL: http://10.96.200.202:8000
@@ -387,15 +387,15 @@ echo "=== Deploywatch cycle completed at $(date) ==="
 
 ### 6. Session Management Across Applications
 
-**Question**: How to share authentication state between main portal (cashman) and sub-applications (agent-manager)?
+**Question**: How to share authentication state between main portal (busibox) and sub-applications (agent-manager)?
 
 **Decision**: JWT tokens in HTTP-only cookies, validated by applications or NGINX auth_request module
 
 **Approach**:
 
 **Option A: Application-level JWT validation** (recommended for initial implementation)
-1. Main portal (cashman) issues JWT on successful login
-2. JWT stored in HTTP-only cookie with domain=`.ai.jaycashman.com` (wildcard subdomain)
+1. Main portal (busibox) issues JWT on successful login
+2. JWT stored in HTTP-only cookie with domain=`.ai.localhost` (wildcard subdomain)
 3. All applications validate JWT on each request
 4. Shared secret for JWT signing stored in vault.yml
 
@@ -406,7 +406,7 @@ echo "=== Deploywatch cycle completed at $(date) ==="
   "email": "user@example.com",
   "roles": ["admin", "user"],
   "exp": 1234567890,
-  "iss": "cashman-portal"
+  "iss": "busibox-portal"
 }
 ```
 
@@ -478,7 +478,7 @@ location /agents {
 - jq (JSON processing in bash scripts)
 
 **Configuration Prerequisites**:
-- DNS records: `ai.jaycashman.com` and `*.ai.jaycashman.com` → NGINX IP (10.96.200.200)
+- DNS records: `ai.localhost` and `*.ai.localhost` → NGINX IP (10.96.200.200)
 - DNS provider API credentials (for Let's Encrypt DNS-01 challenge)
 - Ansible vault password (for secrets encryption)
 

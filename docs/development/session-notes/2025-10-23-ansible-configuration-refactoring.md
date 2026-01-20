@@ -39,13 +39,13 @@ All 5 Node.js applications fully defined and deployable:
 ```yaml
 proxy_ip: 10.96.200.200
 apps_ip: 10.96.200.201
-domain: "ai.jaycashman.com"
+domain: "ai.localhost"
 ```
 
 **After (Dynamic):**
 ```yaml
 network_base_octets: "10.96.200"
-base_domain: jaycashman.com
+base_domain: localhost
 proxy_ip: "{{ network_base_octets }}.200"
 domain: "ai.{{ base_domain }}"
 ```
@@ -53,16 +53,16 @@ domain: "ai.{{ base_domain }}"
 ### Application Routing
 
 **Production Environment:**
-- `ai.jaycashman.com` → ai-portal (main app)
-- `agents.ai.jaycashman.com` → agent-manager
-- `docs.ai.jaycashman.com` → doc-intel
-- `innovation.ai.jaycashman.com` → innovation
+- `ai.localhost` → ai-portal (main app)
+- `agents.ai.localhost` → agent-manager
+- `docs.ai.localhost` → doc-intel
+- `innovation.ai.localhost` → innovation
 
 **Test Environment:**
-- `test.ai.jaycashman.com` → ai-portal
-- `agents.test.ai.jaycashman.com` → agent-manager
-- `docs.test.ai.jaycashman.com` → doc-intel
-- `innovation.test.ai.jaycashman.com` → innovation
+- `test.ai.localhost` → ai-portal
+- `agents.test.ai.localhost` → agent-manager
+- `docs.test.ai.localhost` → doc-intel
+- `innovation.test.ai.localhost` → innovation
 
 ## Files Created/Modified
 
@@ -113,8 +113,8 @@ ansible-playbook --syntax-check -i inventory/test site.yml
 ansible-playbook -i inventory/test site.yml --ask-vault-pass
 
 # Verify applications
-curl https://test.ai.jaycashman.com
-curl https://agents.test.ai.jaycashman.com
+curl https://test.ai.localhost
+curl https://agents.test.ai.localhost
 ```
 
 ## Next Steps Completed

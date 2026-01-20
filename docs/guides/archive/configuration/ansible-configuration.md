@@ -65,17 +65,17 @@ Same offset pattern as production:
 
 ### Production
 ```yaml
-base_domain: jaycashman.com
-domain: "ai.{{ base_domain }}"              # ai.jaycashman.com
-www_domain: "www.{{ domain }}"              # www.ai.jaycashman.com
+base_domain: localhost
+domain: "ai.{{ base_domain }}"              # ai.localhost
+www_domain: "www.{{ domain }}"              # www.ai.localhost
 ```
 
 ### Test
 ```yaml
-base_domain: jaycashman.com
+base_domain: localhost
 subdomain: test
-domain: "ai.{{ base_domain }}"              # ai.jaycashman.com
-full_domain: "{{ subdomain }}.{{ domain }}" # test.ai.jaycashman.com
+domain: "ai.{{ base_domain }}"              # ai.localhost
+full_domain: "{{ subdomain }}.{{ domain }}" # test.ai.localhost
 ```
 
 ## Application Definitions
@@ -93,7 +93,7 @@ All applications are defined in `inventory/{env}/group_vars/all.yml` under the `
 2. **ai-portal** (Public Web App)
    - Port: 3000
    - Container: apps-lxc
-   - Routes: Domain (production: ai.jaycashman.com, test: test.ai.jaycashman.com)
+   - Routes: Domain (production: ai.localhost, test: test.ai.localhost)
    - Secrets: database_url, better_auth_secret, resend_api_key, sso_jwt_secret, litellm_api_key
 
 3. **agent-manager** (Public Web App)
@@ -169,7 +169,7 @@ secrets:
 | Setting | Production | Test |
 |---------|-----------|------|
 | Network Base | 10.96.200 | 10.96.201 |
-| Domain | ai.jaycashman.com | test.ai.jaycashman.com |
+| Domain | ai.localhost | test.ai.localhost |
 | SSL Mode | provisioned | selfsigned |
 | NODE_ENV | production | development |
 | Log Level | info | debug |

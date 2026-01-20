@@ -129,7 +129,7 @@ env:
 - `litellm_ip` - Calculated as `{{ network_base_octets }}.207`
 
 ### Domain Variables
-- `base_domain` - From vault (deployment-specific, e.g., "jaycashman.com")
+- `base_domain` - From vault (deployment-specific, e.g., "localhost")
 - `domain` - Calculated as `ai.{{ base_domain }}`
 - `full_domain` - Production: `{{ domain }}`, Test: `test.{{ domain }}`
 - `www_domain` - Calculated as `www.{{ full_domain }}`
@@ -233,8 +233,8 @@ routes:
 ```
 
 **Result:**
-- Production: `ai.jaycashman.com`, `www.ai.jaycashman.com`
-- Test: `test.ai.jaycashman.com`, `www.test.ai.jaycashman.com`
+- Production: `ai.localhost`, `www.ai.localhost`
+- Test: `test.ai.localhost`, `www.test.ai.localhost`
 
 ### Subdomain Routing
 Creates subdomain for application:
@@ -246,8 +246,8 @@ routes:
 ```
 
 **Result:**
-- Production: `foundation.ai.jaycashman.com`
-- Test: `foundation-test.test.ai.jaycashman.com`
+- Production: `foundation.ai.localhost`
+- Test: `foundation-test.test.ai.localhost`
 
 ### Path Routing
 Routes URL path to application:
@@ -261,8 +261,8 @@ routes:
 ```
 
 **Result:**
-- Production: `ai.jaycashman.com/foundation`
-- Test: `test.ai.jaycashman.com/foundation`
+- Production: `ai.localhost/foundation`
+- Test: `test.ai.localhost/foundation`
 
 ## Deployment Mode Support
 

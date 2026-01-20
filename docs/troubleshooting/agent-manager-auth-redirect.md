@@ -9,7 +9,7 @@ category: troubleshooting
 
 ## Problem
 
-Agent-manager on Proxmox/staging was redirecting authentication to `localhost:3000` instead of `staging.ai.jaycashman.com`, causing auth to fail.
+Agent-manager on Proxmox/staging was redirecting authentication to `localhost:3000` instead of `staging.ai.localhost`, causing auth to fail.
 
 ## Root Cause
 
@@ -29,7 +29,7 @@ Checked the deployed `.env` file on staging:
 ssh root@10.96.201.201 "grep 'NEXT_PUBLIC' /srv/apps/agent-manager/.env"
 
 NEXT_PUBLIC_AGENT_API_URL="http://10.96.201.202:8000"
-NEXT_PUBLIC_APP_URL="https://staging.ai.jaycashman.com/agents"
+NEXT_PUBLIC_APP_URL="https://staging.ai.localhost/agents"
 NEXT_PUBLIC_BASE_PATH="/agents"
 # ❌ NEXT_PUBLIC_AI_PORTAL_URL was missing!
 ```
@@ -67,7 +67,7 @@ After redeploying agent-manager with the updated configuration:
 
 1. The `.env` file will include `NEXT_PUBLIC_AI_PORTAL_URL`
 2. The build will embed the correct domain
-3. Auth redirects will go to `https://staging.ai.jaycashman.com` instead of `localhost:3000`
+3. Auth redirects will go to `https://staging.ai.localhost` instead of `localhost:3000`
 
 ### To Deploy the Fix
 

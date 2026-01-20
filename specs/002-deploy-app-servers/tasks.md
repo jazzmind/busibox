@@ -39,7 +39,7 @@
 
 ### Configuration Schema & Validation
 
-- [x] T006 [Foundational] Create `provision/ansible/group_vars/all.yml` with global variables (domain: ai.jaycashman.com, SSL email, network config)
+- [x] T006 [Foundational] Create `provision/ansible/group_vars/all.yml` with global variables (domain: ai.localhost, SSL email, network config)
 - [x] T007 [Foundational] Create `provision/ansible/group_vars/apps.yml` schema template with application definition fields (name, github_repo, container, port, deploy_path, health_endpoint, routes[], secrets[], env{})
 - [x] T008 [Foundational] Implement configuration validation script in `provision/ansible/roles/app_deployer/tasks/validate.yml` (check required fields, duplicate route detection, secret existence validation per FR-006a)
 
@@ -106,13 +106,13 @@
 
 **Goal**: Configure NGINX reverse proxy with SSL for subdomain and path-based routing to applications
 
-**Independent Test**: Configure NGINX for one subdomain (e.g., agents.ai.jaycashman.com), deploy an app, access it via browser, and verify SSL certificate is valid and traffic routes correctly
+**Independent Test**: Configure NGINX for one subdomain (e.g., agents.ai.localhost), deploy an app, access it via browser, and verify SSL certificate is valid and traffic routes correctly
 
 ### Implementation for User Story 3
 
 - [x] T032 [P] [US3] Implement NGINX installation in `provision/ansible/roles/nginx/tasks/main.yml` (apt install nginx, systemd enable per FR-012)
 - [x] T033 [P] [US3] Implement SSL certificate mode detection in `provision/ansible/roles/nginx/tasks/main.yml` (check ssl_mode variable: letsencrypt, provisioned, selfsigned per FR-013a)
-- [x] T034 [US3] Implement Let's Encrypt certificate acquisition in `provision/ansible/roles/nginx/tasks/letsencrypt.yml` (install certbot, DNS plugin, obtain wildcard cert for *.ai.jaycashman.com per FR-013b)
+- [x] T034 [US3] Implement Let's Encrypt certificate acquisition in `provision/ansible/roles/nginx/tasks/letsencrypt.yml` (install certbot, DNS plugin, obtain wildcard cert for *.ai.localhost per FR-013b)
 - [x] T035 [US3] Implement certbot auto-renewal configuration in `provision/ansible/roles/nginx/tasks/letsencrypt.yml` (systemd timer, reload hook, alert 7 days before expiry per FR-013b)
 - [x] T036 [US3] Implement pre-provisioned certificate deployment in `provision/ansible/roles/nginx/tasks/provisioned.yml` (copy cert files from secrets vault)
 - [x] T037 [US3] Implement self-signed certificate generation in `provision/ansible/roles/nginx/tasks/selfsigned.yml` (openssl generate for development)
@@ -134,20 +134,20 @@
 
 ## Phase 6: User Story 4 - Main Portal and Authentication (Priority: P2)
 
-**Goal**: Deploy cashman portal at root domain with authentication, accessible via multiple URLs
+**Goal**: Deploy busibox portal at root domain with authentication, accessible via multiple URLs
 
-**Independent Test**: Deploy the cashman portal, log in as a test user, verify the home page displays available applications, and confirm that authentication state persists when navigating to other applications
+**Independent Test**: Deploy the busibox portal, log in as a test user, verify the home page displays available applications, and confirm that authentication state persists when navigating to other applications
 
 ### Implementation for User Story 4
 
-- [ ] T049 [P] [US4] Add cashman portal definition to `provision/ansible/group_vars/apps.yml` (name: cashman-portal, github_repo: jazzmind/cashman, container: apps-lxc, port: 3000, routes: [domain: ai.jaycashman.com/www.ai.jaycashman.com, path: /home] per FR-020)
-- [ ] T050 [P] [US4] Add cashman secrets to `provision/ansible/roles/secrets/vars/vault.yml` (session_secret, oauth_client_id, oauth_client_secret, database_url, jwt_secret per FR-021, FR-023)
-- [ ] T051 [US4] Configure cashman NGINX routes in apps.yml (multiple domains + path routing per FR-020)
-- [ ] T052 [US4] Deploy cashman portal via deploywatch: run `make deploy-apps`, verify cashman deployed to /srv/apps/cashman
-- [ ] T053 [US4] Test cashman domain routing: access ai.jaycashman.com, www.ai.jaycashman.com, ai.jaycashman.com/home - verify all serve same portal
-- [ ] T054 [US4] Test cashman authentication: verify login screen appears, test login flow, verify session persists
-- [ ] T055 [US4] Verify JWT cookie configuration: check cookie domain=.ai.jaycashman.com, httpOnly=true, secure=true for cross-app auth per FR-023
-- [ ] T056 [US4] Test cashman logout: verify session termination, redirect to login per FR-024
+- [ ] T049 [P] [US4] Add busibox portal definition to `provision/ansible/group_vars/apps.yml` (name: busibox-portal, github_repo: jazzmind/busibox, container: apps-lxc, port: 3000, routes: [domain: ai.localhost/www.ai.localhost, path: /home] per FR-020)
+- [ ] T050 [P] [US4] Add busibox secrets to `provision/ansible/roles/secrets/vars/vault.yml` (session_secret, oauth_client_id, oauth_client_secret, database_url, jwt_secret per FR-021, FR-023)
+- [ ] T051 [US4] Configure busibox NGINX routes in apps.yml (multiple domains + path routing per FR-020)
+- [ ] T052 [US4] Deploy busibox portal via deploywatch: run `make deploy-apps`, verify busibox deployed to /srv/apps/busibox
+- [ ] T053 [US4] Test busibox domain routing: access ai.localhost, www.ai.localhost, ai.localhost/home - verify all serve same portal
+- [ ] T054 [US4] Test busibox authentication: verify login screen appears, test login flow, verify session persists
+- [ ] T055 [US4] Verify JWT cookie configuration: check cookie domain=.ai.localhost, httpOnly=true, secure=true for cross-app auth per FR-023
+- [ ] T056 [US4] Test busibox logout: verify session termination, redirect to login per FR-024
 
 **Checkpoint**: Main portal operational at all configured URLs with working authentication and session management
 
@@ -157,7 +157,7 @@
 
 **Goal**: Deploy agent-manager for agent administration, accessible via subdomain and path routing
 
-**Independent Test**: Deploy agent-manager from GitHub, configure it to connect to the agent-server API, access it via agents.ai.jaycashman.com, and verify you can view agent configurations and system status
+**Independent Test**: Deploy agent-manager from GitHub, configure it to connect to the agent-server API, access it via agents.ai.localhost, and verify you can view agent configurations and system status
 
 ### Implementation for User Story 5
 
@@ -165,8 +165,8 @@
 - [ ] T058 [P] [US5] Add agent-manager secrets to `provision/ansible/roles/secrets/vars/vault.yml` (agent_api_key, jwt_secret shared with portal per FR-029)
 - [ ] T059 [P] [US5] Add agent-manager environment variables to apps.yml (AGENT_API_URL: http://10.96.200.30:8000 per FR-027)
 - [ ] T060 [US5] Deploy agent-manager via deploywatch: run `make deploy-apps`, verify agent-manager deployed to /srv/apps/agent-manager
-- [ ] T061 [US5] Test agent-manager subdomain routing: access agents.ai.jaycashman.com, verify agent-manager loads per FR-026
-- [ ] T062 [US5] Test agent-manager path routing: access ai.jaycashman.com/agents, verify same agent-manager loads
+- [ ] T061 [US5] Test agent-manager subdomain routing: access agents.ai.localhost, verify agent-manager loads per FR-026
+- [ ] T062 [US5] Test agent-manager path routing: access ai.localhost/agents, verify same agent-manager loads
 - [ ] T063 [US5] Test agent-manager WebSocket: verify real-time updates work (WebSocket connection upgrade headers in NGINX)
 - [ ] T064 [US5] Test agent-manager connectivity to agent-server: verify dashboard shows agent status, can view workflows per FR-028
 - [ ] T065 [US5] Test agent-manager authentication: verify portal session recognized or own auth works per FR-029

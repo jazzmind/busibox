@@ -44,7 +44,7 @@ Features:
 
 Usage:
 ```bash
-bash scripts/upload-ssl-cert.sh test.ai.jaycashman.com cert.crt cert.key chain.crt
+bash scripts/upload-ssl-cert.sh test.ai.localhost cert.crt cert.key chain.crt
 ```
 
 ### 3. Inventory Configuration
@@ -60,7 +60,7 @@ Test environment configuration for ai-portal deployment:
   - Environment variables
 
 - `provision/ansible/inventory/test/group_vars/proxy.yml`
-  - Domain configuration (test.ai.jaycashman.com)
+  - Domain configuration (test.ai.localhost)
   - SSL mode (provisioned/selfsigned)
   - Application routing rules
   - Nginx security settings
@@ -169,7 +169,7 @@ Apps Container (301) - ai-portal (PM2 cluster)
 
 1. **Upload SSL Certificate:**
    ```bash
-   bash scripts/upload-ssl-cert.sh test.ai.jaycashman.com \
+   bash scripts/upload-ssl-cert.sh test.ai.localhost \
      /path/to/cert.crt \
      /path/to/cert.key \
      /path/to/chain.crt
@@ -188,7 +188,7 @@ Apps Container (301) - ai-portal (PM2 cluster)
 
 4. **Verify:**
    ```bash
-   curl https://test.ai.jaycashman.com/api/health
+   curl https://test.ai.localhost/api/health
    ```
 
 ### Subsequent Updates
@@ -207,7 +207,7 @@ ansible-playbook -i inventory/test/hosts.yml site.yml --limit proxy --tags nginx
 
 **Renew SSL Certificate:**
 ```bash
-bash scripts/upload-ssl-cert.sh test.ai.jaycashman.com new-cert.crt new-key.key new-chain.crt
+bash scripts/upload-ssl-cert.sh test.ai.localhost new-cert.crt new-key.key new-chain.crt
 cd provision/ansible
 ansible-playbook -i inventory/test/hosts.yml site.yml --limit proxy --tags nginx
 ```
@@ -226,19 +226,19 @@ app_env_vars:
   
   # Better Auth
   BETTER_AUTH_SECRET: "{{ vault_better_auth_secret }}"
-  BETTER_AUTH_URL: "https://test.ai.jaycashman.com"
+  BETTER_AUTH_URL: "https://test.ai.localhost"
   
   # Email
   RESEND_API_KEY: "{{ vault_resend_api_key }}"
-  EMAIL_FROM: "AI Portal <noreply@jaycashman.com>"
+  EMAIL_FROM: "AI Portal <noreply@localhost>"
   
   # SSO
   SSO_JWT_SECRET: "{{ vault_sso_jwt_secret }}"
   SSO_TOKEN_EXPIRY: "900"
   
   # Admin
-  ADMIN_EMAIL: "admin@jaycashman.com"
-  ALLOWED_EMAIL_DOMAINS: "jaycashman.com"
+  ADMIN_EMAIL: "admin@localhost"
+  ALLOWED_EMAIL_DOMAINS: "localhost"
   
   # Database
   DATABASE_URL: "postgresql://..."
@@ -250,7 +250,7 @@ Set in `provision/ansible/inventory/test/group_vars/proxy.yml`:
 
 ```yaml
 # Domain
-domain: "ai.jaycashman.com"
+domain: "ai.localhost"
 subdomain: "test"
 
 # SSL
@@ -260,7 +260,7 @@ ssl_mode: "provisioned"  # or "selfsigned" for testing
 applications:
   - name: "ai-portal"
     subdomain: "test"
-    domain: "ai.jaycashman.com"
+    domain: "ai.localhost"
     routes:
       - path: "/"
         backend: "http://10.96.201.201:3000"
@@ -330,7 +330,7 @@ Before marking as complete, test:
 
 4. **Production Deployment:**
    - Create production inventory
-   - Update domain to `ai.jaycashman.com`
+   - Update domain to `ai.localhost`
    - Use production SSL certificate
    - Set production secrets
    - Deploy with production flag
@@ -366,7 +366,7 @@ Components:
 - Comprehensive deployment script
 - Full documentation
 
-Ready for deployment to test.ai.jaycashman.com
+Ready for deployment to test.ai.localhost
 ```
 
 ## Success Criteria

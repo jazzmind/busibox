@@ -28,8 +28,8 @@ Ensure the following from spec 001 are complete:
 **New requirements for spec 002:**
 
 - DNS records configured:
-  - `ai.jaycashman.com` → NGINX IP (10.96.200.200)
-  - `*.ai.jaycashman.com` → NGINX IP (10.96.200.200)
+  - `ai.localhost` → NGINX IP (10.96.200.200)
+  - `*.ai.localhost` → NGINX IP (10.96.200.200)
 - DNS provider API credentials (for Let's Encrypt wildcard cert)
 - Ansible vault password file
 
@@ -58,7 +58,7 @@ applications:
       - type: subdomain
         subdomain: myapp
       - type: path
-        domain: ai.jaycashman.com
+        domain: ai.localhost
         path: /myapp
     env:
       NODE_ENV: "production"
@@ -105,7 +105,7 @@ ssh root@10.96.200.201 "bash /srv/deploywatch/apps/my-new-app.sh"
 
 ```bash
 # Check application health
-curl https://myapp.ai.jaycashman.com/health
+curl https://myapp.ai.localhost/health
 
 # Check deployment log
 ssh root@10.96.200.201 "journalctl -u deploywatch.service -n 50"
@@ -176,7 +176,7 @@ ansible-playbook --vault-password-file=.vault_password ...
 
 ### Subdomain Routing
 
-Application accessible at: `https://subdomain.ai.jaycashman.com`
+Application accessible at: `https://subdomain.ai.localhost`
 
 ```yaml
 routes:
@@ -185,16 +185,16 @@ routes:
     websocket: false  # Set true if app needs WebSocket
 ```
 
-Result: NGINX creates server block for `myapp.ai.jaycashman.com`
+Result: NGINX creates server block for `myapp.ai.localhost`
 
 ### Path Routing
 
-Application accessible at: `https://ai.jaycashman.com/myapp`
+Application accessible at: `https://ai.localhost/myapp`
 
 ```yaml
 routes:
   - type: path
-    domain: ai.jaycashman.com
+    domain: ai.localhost
     path: /myapp
     strip_path: false  # Set true to remove /myapp before proxying
 ```
@@ -206,14 +206,14 @@ If `strip_path: true`, application receives `/some/route`
 
 ### Domain Routing (Root)
 
-Application accessible at: `https://ai.jaycashman.com` (root)
+Application accessible at: `https://ai.localhost` (root)
 
 ```yaml
 routes:
   - type: domain
     domains:
-      - ai.jaycashman.com
-      - www.ai.jaycashman.com
+      - ai.localhost
+      - www.ai.localhost
 ```
 
 ### Multiple Routes (Hybrid)
@@ -225,11 +225,11 @@ routes:
   - type: subdomain
     subdomain: agents
   - type: path
-    domain: ai.jaycashman.com
+    domain: ai.localhost
     path: /agents
 ```
 
-Result: Both `https://agents.ai.jaycashman.com` and `https://ai.jaycashman.com/agents` work
+Result: Both `https://agents.ai.localhost` and `https://ai.localhost/agents` work
 
 ---
 
@@ -253,7 +253,7 @@ Result: Both `https://agents.ai.jaycashman.com` and `https://ai.jaycashman.com/a
      letsencrypt:
        dns_provider: "cloudflare"
        cloudflare_api_token: "your-api-token"
-       email: "admin@jaycashman.com"
+       email: "admin@localhost"
    ```
 
 3. Run NGINX role to deploy credentials and obtain cert:
@@ -304,13 +304,13 @@ Force immediate deployment:
 ssh root@10.96.200.201  # apps-lxc
 
 # Run deploywatch script for specific app
-bash /srv/deploywatch/apps/cashman-portal.sh
+bash /srv/deploywatch/apps/busibox-portal.sh
 
 # Or restart from PM2
-cd /srv/apps/cashman
+cd /srv/apps/busibox
 git pull  # If using git instead of releases
 npm install
-pm2 restart cashman-portal
+pm2 restart busibox-portal
 ```
 
 ### Deployment Verification
@@ -320,13 +320,13 @@ pm2 restart cashman-portal
 ssh root@10.96.200.201 "journalctl -u deploywatch.service -n 100"
 
 # Check application logs
-ssh root@10.96.200.201 "pm2 logs cashman-portal --lines 50"
+ssh root@10.96.200.201 "pm2 logs busibox-portal --lines 50"
 
 # Check current version
-ssh root@10.96.200.201 "cat /srv/apps/cashman/.version"
+ssh root@10.96.200.201 "cat /srv/apps/busibox/.version"
 
 # Check health endpoint
-curl -f https://ai.jaycashman.com/api/health || echo "Health check failed"
+curl -f https://ai.localhost/api/health || echo "Health check failed"
 ```
 
 ---
@@ -343,7 +343,7 @@ curl -f https://ai.jaycashman.com/api/health || echo "Health check failed"
 ssh root@10.96.200.201 "pm2 list"
 
 # Check application logs
-ssh root@10.96.200.201 "pm2 logs cashman-portal --lines 50"
+ssh root@10.96.200.201 "pm2 logs busibox-portal --lines 50"
 
 # Check if port is listening
 ssh root@10.96.200.201 "netstat -tlnp | grep 3000"
@@ -353,8 +353,8 @@ ssh root@10.96.200.200 "tail -f /var/log/nginx/error.log"
 ```
 
 **Solutions**:
-- Restart application: `pm2 restart cashman-portal`
-- Check .env file exists: `ls -la /srv/apps/cashman/.env`
+- Restart application: `pm2 restart busibox-portal`
+- Check .env file exists: `ls -la /srv/apps/busibox/.env`
 - Verify port matches apps.yml configuration
 
 ---
@@ -386,13 +386,13 @@ ssh root@10.96.200.200 "nginx -T | grep ssl_certificate"
 **Diagnosis**:
 ```bash
 # Check .env file exists and has correct permissions
-ssh root@10.96.200.201 "ls -la /srv/apps/cashman/.env"
+ssh root@10.96.200.201 "ls -la /srv/apps/busibox/.env"
 
 # Check .env content (as root)
-ssh root@10.96.200.201 "cat /srv/apps/cashman/.env"
+ssh root@10.96.200.201 "cat /srv/apps/busibox/.env"
 
 # Check PM2 is loading environment file
-ssh root@10.96.200.201 "pm2 show cashman-portal"
+ssh root@10.96.200.201 "pm2 show busibox-portal"
 ```
 
 **Solutions**:
@@ -473,7 +473,7 @@ ssh root@10.96.200.200 "nginx -t && nginx -s reload"
 
 3. Test new route:
    ```bash
-   curl https://newname.ai.jaycashman.com/health
+   curl https://newname.ai.localhost/health
    ```
 
 ### Change Application Port
@@ -518,7 +518,7 @@ ssh root@10.96.200.200 "nginx -t && nginx -s reload"
 
 After deploying a new application:
 
-- [ ] Health endpoint responds: `curl https://myapp.ai.jaycashman.com/health`
+- [ ] Health endpoint responds: `curl https://myapp.ai.localhost/health`
 - [ ] SSL certificate valid (no browser warnings)
 - [ ] Subdomain route works (if configured)
 - [ ] Path route works (if configured)
@@ -538,14 +538,14 @@ test_application_deployment() {
   log_info "Testing application deployment..."
   
   # Health check
-  if curl -sf https://myapp.ai.jaycashman.com/health > /dev/null; then
+  if curl -sf https://myapp.ai.localhost/health > /dev/null; then
     record_test "myapp health" "PASS"
   else
     record_test "myapp health" "FAIL" "Health endpoint not responding"
   fi
   
   # SSL check
-  if curl -sf --head https://myapp.ai.jaycashman.com | grep -q "200 OK"; then
+  if curl -sf --head https://myapp.ai.localhost | grep -q "200 OK"; then
     record_test "myapp SSL" "PASS"
   else
     record_test "myapp SSL" "FAIL" "HTTPS not working"
@@ -590,8 +590,8 @@ nginx -s reload  # Reload config
 certbot certificates
 
 # Check DNS resolution
-dig ai.jaycashman.com
-dig agents.ai.jaycashman.com
+dig ai.localhost
+dig agents.ai.localhost
 ```
 
 ---

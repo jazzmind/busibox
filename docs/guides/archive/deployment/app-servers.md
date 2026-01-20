@@ -181,8 +181,8 @@ The deployment task checks `inventory_hostname` to ensure it only runs on the co
    ansible-playbook -i inventory/test site.yml --ask-vault-pass --tags proxy
    ```
 3. **Test applications**:
-   - AI Portal: https://test.ai.jaycashman.com
-   - Agent Client: https://agents.test.ai.jaycashman.com
-   - Doc Intel: https://docs.test.ai.jaycashman.com
-   - Innovation: https://innovation.test.ai.jaycashman.com
+   - AI Portal: https://test.ai.localhost
+   - Agent Client: https://agents.test.ai.localhost
+   - Doc Intel: https://docs.test.ai.localhost
+   - Innovation: https://innovation.test.ai.localhost
 

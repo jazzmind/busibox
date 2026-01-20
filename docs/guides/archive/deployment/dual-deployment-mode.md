@@ -210,10 +210,10 @@ secrets:
     database_url: "postgresql://busibox_user:password@10.96.200.203/foundation"
     litellm_api_key: "sk-local-key"
     allowed_email_domains: "user1@example.com,user2@example.com"
-    email_from: "foundation@ai.jaycashman.com"
+    email_from: "foundation@ai.localhost"
     smtp_host: "smtp.gmail.com"
     smtp_port: "587"
-    smtp_user: "notifications@jaycashman.com"
+    smtp_user: "notifications@localhost"
     smtp_password: "app-specific-password"
     smtp_secure: "false"
     # Optional fallback
