@@ -7,8 +7,10 @@ static admin tokens, callers authenticate with JWTs that have specific scopes.
 
 Supported authentication methods (in order of precedence):
 1. Access token with required scopes (audience: authz-api)
-2. Service account (client_credentials) with allowed_scopes
-3. Legacy admin token (deprecated, will be removed)
+2. Session JWT for self-service operations (audience: ai-portal, typ: session)
+3. Service account (client_credentials) with allowed_scopes
+
+Note: Legacy admin token support has been removed for security.
 """
 
 from __future__ import annotations
@@ -30,10 +32,11 @@ config = Config()
 @dataclass
 class AuthContext:
     """Authentication context for a request."""
-    auth_type: str  # "jwt", "service_account", or "admin_token"
-    actor_id: str  # User ID (for JWT) or client_id (for service account)
+    auth_type: str  # "jwt", "session", or "service_account"
+    actor_id: str  # User ID (for JWT/session) or client_id (for service account)
     scopes: Set[str]  # Available scopes for this request
-    email: Optional[str] = None  # User email (for JWT only)
+    email: Optional[str] = None  # User email (for JWT/session only)
+    roles: Optional[List[dict]] = None  # User roles (for session JWT only)
     
     def has_scope(self, scope: str) -> bool:
         """Check if this auth context has a specific scope."""
@@ -50,6 +53,16 @@ class AuthContext:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Missing required scope: {scope}",
             )
+    
+    def has_role(self, role_name: str) -> bool:
+        """Check if this auth context has a specific role by name."""
+        if not self.roles:
+            return False
+        return any(r.get("name") == role_name for r in self.roles)
+    
+    def is_admin(self) -> bool:
+        """Check if this auth context has the admin role."""
+        return self.has_role("admin")
 
 
 async def verify_access_token(
@@ -139,6 +152,164 @@ async def verify_access_token(
         )
 
 
+async def verify_session_token(
+    token: str,
+    db,
+) -> Tuple[str, str, List[dict]]:
+    """
+    Verify a session JWT signed by authz.
+    
+    Session JWTs are used for self-service operations where the user
+    is accessing/modifying their own resources.
+    
+    Returns (user_id, email, roles) if valid.
+    Raises HTTPException if invalid.
+    """
+    await db.connect()
+    
+    # Get the active signing key's public key for verification
+    row = await db.get_active_signing_key()
+    if not row:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="no_signing_key_configured"
+        )
+    
+    kid = row["kid"]
+    alg = row["alg"]
+    
+    # Load private key to extract public key
+    private_pem = row["private_key_pem"]
+    private_key = load_private_key(private_pem, config.key_encryption_passphrase)
+    public_key = private_key.public_key()
+    
+    try:
+        # First decode without verification to get the header
+        token_kid = jwt.get_unverified_header(token).get("kid")
+        
+        # Verify the token was signed by our key
+        if token_kid != kid:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="invalid_token_key"
+            )
+        
+        # Verify the signature and claims
+        # Session tokens have audience "ai-portal"
+        claims = jwt.decode(
+            token,
+            public_key,
+            algorithms=[alg],
+            issuer=config.issuer,
+            audience="ai-portal",
+            options={"require": ["exp", "iat", "sub", "jti", "typ"]}
+        )
+        
+        # Verify token type is session
+        token_type = claims.get("typ")
+        if token_type != "session":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="invalid_token_type"
+            )
+        
+        # Check if session has been revoked (jti = session_id)
+        jti = claims["jti"]
+        session = await db.get_session_by_id(jti)
+        if not session:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="session_revoked"
+            )
+        
+        user_id = claims["sub"]
+        email = claims.get("email", "")
+        roles = claims.get("roles", [])
+        
+        return user_id, email, roles
+        
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="token_expired"
+        )
+    except jwt.InvalidAudienceError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid_audience"
+        )
+    except jwt.InvalidIssuerError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid_issuer"
+        )
+    except jwt.DecodeError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"invalid_token: {str(e)}"
+        )
+
+
+async def authenticate_self_service(
+    request: Request,
+    db,
+    required_user_id: Optional[str] = None,
+) -> AuthContext:
+    """
+    Authenticate a request for self-service operations using session JWT.
+    
+    Self-service operations allow users to access/modify their own resources
+    without needing additional scopes or token exchange.
+    
+    Args:
+        request: FastAPI request
+        db: PostgresService instance  
+        required_user_id: Optional user ID to check ownership. If provided,
+                         the session's user must match this ID.
+        
+    Returns:
+        AuthContext with user info from session JWT
+        
+    Raises:
+        HTTPException if authentication fails or ownership check fails
+    """
+    auth_header = request.headers.get("authorization", "")
+    
+    if not auth_header.lower().startswith("bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing session token",
+        )
+    
+    token = auth_header[7:]
+    
+    try:
+        user_id, email, roles = await verify_session_token(token, db)
+        
+        # Check ownership if required
+        if required_user_id and user_id != required_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot access another user's resources",
+            )
+        
+        return AuthContext(
+            auth_type="session",
+            actor_id=user_id,
+            scopes=set(),  # Session tokens don't have scopes
+            email=email,
+            roles=roles,
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid session token: {str(e)}",
+        )
+
+
 async def authenticate_request(
     request: Request,
     db,
@@ -150,7 +321,6 @@ async def authenticate_request(
     Tries authentication methods in order:
     1. Bearer token (JWT access token with audience=authz-api)
     2. Client credentials in request body (service account)
-    3. Legacy admin token (deprecated)
     
     Args:
         request: FastAPI request
@@ -168,15 +338,6 @@ async def authenticate_request(
     # Try Bearer token (JWT)
     if auth_header.lower().startswith("bearer "):
         token = auth_header[7:]
-        
-        # Check if it's the legacy admin token first (for backward compatibility)
-        if config.admin_token and token == config.admin_token:
-            # Admin token has all scopes
-            return AuthContext(
-                auth_type="admin_token",
-                actor_id="system",
-                scopes={"*"},  # Wildcard - admin token can do anything
-            )
         
         # Try to verify as JWT
         try:
@@ -232,19 +393,9 @@ async def authenticate_request(
     except Exception:
         pass
     
-    # Try legacy admin token in header (deprecated)
-    if auth_header.lower().startswith("bearer "):
-        token = auth_header[7:]
-        if config.admin_token and token == config.admin_token:
-            return AuthContext(
-                auth_type="admin_token",
-                actor_id="system",
-                scopes={"*"},
-            )
-    
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Unauthorized: valid access token, service account credentials, or admin token required",
+        detail="Unauthorized: valid access token or service account credentials required",
     )
 
 
@@ -266,3 +417,110 @@ async def require_auth(
             ...
     """
     return await authenticate_request(request, db, scopes)
+
+
+async def require_auth_or_self_service(
+    request: Request,
+    db,
+    self_service_user_id: str,
+    admin_scopes: Optional[List[str]] = None,
+) -> AuthContext:
+    """
+    Authenticate a request, allowing either:
+    1. Access token/service account with required scopes (for admin operations)
+    2. Session JWT where user is accessing their own resources (self-service)
+    
+    This is the main entry point for endpoints that support both admin access
+    and user self-service.
+    
+    Args:
+        request: FastAPI request
+        db: PostgresService instance
+        self_service_user_id: User ID being accessed. If the session JWT's sub
+                             matches this, access is granted without scope checks.
+        admin_scopes: Scopes required for admin access (accessing other users)
+        
+    Returns:
+        AuthContext with actor info
+        
+    Example:
+        @router.get("/passkeys/user/{user_id}")
+        async def list_user_passkeys(request: Request, user_id: str):
+            # User can list their own passkeys (self-service)
+            # OR admin can list any user's passkeys (with scope)
+            auth = await require_auth_or_self_service(
+                request, db, 
+                self_service_user_id=user_id,
+                admin_scopes=["authz.passkeys.read"]
+            )
+            ...
+    """
+    auth_header = request.headers.get("authorization", "")
+    
+    if not auth_header.lower().startswith("bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing authorization token",
+        )
+    
+    token = auth_header[7:]
+    
+    # First, try to verify as session JWT for self-service
+    try:
+        user_id, email, roles = await verify_session_token(token, db)
+        
+        # If this is self-service (user accessing their own resource), allow it
+        if user_id == self_service_user_id:
+            return AuthContext(
+                auth_type="session",
+                actor_id=user_id,
+                scopes=set(),
+                email=email,
+                roles=roles,
+            )
+        
+        # User is trying to access someone else's resource with session token
+        # Check if they have admin role
+        has_admin = any(r.get("name") == "admin" for r in roles)
+        if has_admin:
+            return AuthContext(
+                auth_type="session",
+                actor_id=user_id,
+                scopes=set(),
+                email=email,
+                roles=roles,
+            )
+        
+        # Not self-service and not admin - fall through to try access token
+        
+    except HTTPException:
+        # Not a valid session token - try as access token
+        pass
+    
+    # Try as access token (with scopes check)
+    try:
+        user_id, email, scopes = await verify_access_token(token, db, "authz-api")
+        ctx = AuthContext(
+            auth_type="jwt",
+            actor_id=user_id,
+            scopes=scopes,
+            email=email,
+        )
+        
+        # Check required scopes for admin access
+        if admin_scopes:
+            if not ctx.has_any_scope(admin_scopes):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Insufficient scopes. Required one of: {admin_scopes}",
+                )
+        
+        return ctx
+        
+    except HTTPException:
+        pass
+    
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Unauthorized: valid access token or session token required",
+    )

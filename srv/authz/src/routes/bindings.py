@@ -5,7 +5,9 @@ Provides endpoints for managing role-to-resource bindings.
 This enables a generic authorization model where roles can be
 bound to any type of resource (apps, libraries, etc).
 
-All endpoints require admin authentication.
+Authentication:
+- Admin endpoints require access token with authz.bindings.* scopes
+- Self-service endpoints allow session JWT for users accessing their own resources
 """
 
 from typing import Optional, List
@@ -15,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from services.postgres import PostgresService
 from config import Config
+from oauth.jwt_auth import require_auth, require_auth_or_self_service, AuthContext
 
 router = APIRouter()
 config = Config()
@@ -86,33 +89,20 @@ class RoleWithBinding(BaseModel):
 # Auth Helper
 # -----------------------------------------------------------------------------
 
-async def _require_admin_auth(request: Request) -> str:
+async def _require_bindings_admin(request: Request, scopes: List[str] = None) -> AuthContext:
     """
-    Require admin token authentication.
-    Returns the actor ID (from X-Actor-Id header or 'system').
+    Require authentication for bindings admin operations.
     
-    Raises HTTPException if not authorized.
+    Uses JWT-based authentication with scope checks.
+    Falls back to service account credentials.
+    
+    Returns AuthContext with actor information.
     """
-    admin_token = config.admin_token
-    auth_header = request.headers.get("Authorization", "")
+    db = _get_pg(request)
+    await db.connect()
     
-    if not auth_header.startswith("Bearer "):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing or invalid Authorization header"
-        )
-    
-    token = auth_header.removeprefix("Bearer ").strip()
-    
-    if token != admin_token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid admin token"
-        )
-    
-    # Get actor ID from header for audit purposes
-    actor_id = request.headers.get("X-Actor-Id", "system")
-    return actor_id
+    default_scopes = scopes or ["authz.bindings.read", "authz.bindings.write"]
+    return await require_auth(request, db, default_scopes)
 
 
 def _format_binding(binding: dict) -> dict:
@@ -146,9 +136,9 @@ async def create_binding(request: Request, body: RoleBindingCreate):
     """
     Create a new role-resource binding.
     
-    Requires admin authentication via Bearer token.
+    Requires access token with authz.bindings.write scope.
     """
-    actor_id = await _require_admin_auth(request)
+    auth = await _require_bindings_admin(request, ["authz.bindings.write"])
     
     db = _get_pg(request)
     await db.connect()
@@ -180,7 +170,7 @@ async def create_binding(request: Request, body: RoleBindingCreate):
             resource_type=body.resource_type,
             resource_id=body.resource_id,
             permissions=body.permissions,
-            created_by=actor_id if actor_id != "system" else None,
+            created_by=auth.actor_id if auth.auth_type != "service_account" else None,
         )
         return _format_binding(binding)
     except ValueError as e:
@@ -202,9 +192,9 @@ async def list_bindings(
     """
     List role-resource bindings with optional filters.
     
-    Requires admin authentication via Bearer token.
+    Requires access token with authz.bindings.read scope.
     """
-    await _require_admin_auth(request)
+    await _require_bindings_admin(request, ["authz.bindings.read"])
     
     db = _get_pg(request)
     await db.connect()
@@ -230,9 +220,9 @@ async def get_binding(request: Request, binding_id: str):
     """
     Get a specific role-resource binding by ID.
     
-    Requires admin authentication via Bearer token.
+    Requires access token with authz.bindings.read scope.
     """
-    await _require_admin_auth(request)
+    await _require_bindings_admin(request, ["authz.bindings.read"])
     
     db = _get_pg(request)
     await db.connect()
@@ -257,9 +247,9 @@ async def delete_binding(request: Request, binding_id: str):
     """
     Delete a role-resource binding by ID.
     
-    Requires admin authentication via Bearer token.
+    Requires access token with authz.bindings.write scope.
     """
-    await _require_admin_auth(request)
+    await _require_bindings_admin(request, ["authz.bindings.write"])
     
     db = _get_pg(request)
     await db.connect()
@@ -292,9 +282,9 @@ async def get_role_bindings(
     """
     Get all resource bindings for a specific role.
     
-    Requires admin authentication via Bearer token.
+    Requires access token with authz.bindings.read scope.
     """
-    await _require_admin_auth(request)
+    await _require_bindings_admin(request, ["authz.bindings.read"])
     
     db = _get_pg(request)
     await db.connect()
@@ -326,10 +316,10 @@ async def get_resource_roles(request: Request, resource_type: str, resource_id: 
     """
     Get all roles that have access to a specific resource.
     
-    Requires admin authentication via Bearer token.
+    Requires access token with authz.bindings.read scope.
     Returns role information along with binding details.
     """
-    await _require_admin_auth(request)
+    await _require_bindings_admin(request, ["authz.bindings.read"])
     
     db = _get_pg(request)
     await db.connect()
@@ -351,7 +341,7 @@ async def get_resource_roles(request: Request, resource_type: str, resource_id: 
 
 
 # -----------------------------------------------------------------------------
-# User Access Check Endpoints
+# User Access Check Endpoints (Self-Service Enabled)
 # -----------------------------------------------------------------------------
 
 @router.get("/users/{user_id}/can-access/{resource_type}/{resource_id}")
@@ -359,13 +349,20 @@ async def check_user_access(request: Request, user_id: str, resource_type: str, 
     """
     Check if a user can access a specific resource via any of their roles.
     
-    Requires admin authentication via Bearer token.
+    Supports self-service: users can check their own access with session JWT.
+    Admins can check any user's access with access token + authz.bindings.read scope.
+    
     Returns {"has_access": true/false}.
     """
-    await _require_admin_auth(request)
-    
     db = _get_pg(request)
     await db.connect()
+    
+    # Allow self-service (user checking their own access) or admin with scope
+    await require_auth_or_self_service(
+        request, db,
+        self_service_user_id=user_id,
+        admin_scopes=["authz.bindings.read"],
+    )
     
     try:
         has_access = await db.user_can_access_resource(user_id, resource_type, resource_id)
@@ -382,13 +379,20 @@ async def get_user_resources(request: Request, user_id: str, resource_type: str)
     """
     Get all resource IDs of a given type that a user can access.
     
-    Requires admin authentication via Bearer token.
+    Supports self-service: users can list their own accessible resources with session JWT.
+    Admins can list any user's resources with access token + authz.bindings.read scope.
+    
     Returns {"resource_ids": [...]}.
     """
-    await _require_admin_auth(request)
-    
     db = _get_pg(request)
     await db.connect()
+    
+    # Allow self-service (user listing their own resources) or admin with scope
+    await require_auth_or_self_service(
+        request, db,
+        self_service_user_id=user_id,
+        admin_scopes=["authz.bindings.read"],
+    )
     
     try:
         resource_ids = await db.get_user_accessible_resources(user_id, resource_type)

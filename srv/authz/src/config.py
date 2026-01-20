@@ -83,6 +83,11 @@ class Config:
         # REQUIRED for envelope encryption - must be a high-entropy passphrase.
         # If not set, keystore operations will fail.
         self.master_key: Optional[str] = os.getenv("AUTHZ_MASTER_KEY")
+        
+        # Email domain allowlist (comma-separated).
+        # If set, only emails from these domains can register/login.
+        # Example: "company.com,subsidiary.com"
+        self.email_domain_allowlist: Optional[str] = os.getenv("EMAIL_DOMAIN_ALLOWLIST")
 
     def to_dict(self) -> Dict:
         return {

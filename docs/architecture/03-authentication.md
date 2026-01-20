@@ -26,13 +26,13 @@ Busibox implements a Zero Trust authentication architecture where:
 
 | Context | Authentication Method | Example |
 |---------|----------------------|---------|
-| **User login** | OAuth client credentials | Magic link, TOTP, passkey verification |
+| **User login** | Public auth endpoints | Magic link, TOTP, passkey verification |
 | **User operations** | Session JWT (subject_token exchange) | Uploading files, searching, chat |
-| **Admin operations** | Admin user's JWT with admin scopes | Managing users, roles, apps |
-| **Server background tasks** | Service account (client_credentials) | Audit logging during login, cleanup jobs |
-| **Service-to-service** | Service account (client_credentials) | Ingest calling keystore |
+| **Admin operations** | Admin user's JWT with admin role | Managing users, roles, apps |
+| **Server background tasks** | Service account JWT (client_credentials) | Audit logging, cleanup jobs |
+| **Service-to-service** | Service account JWT (client_credentials) | Ingest calling keystore |
 
-> **Note**: Static admin tokens (`AUTHZ_ADMIN_TOKEN`) are deprecated and being removed. Use JWT-based authentication with appropriate scopes instead.
+> **Important**: There are NO static admin tokens or client credentials for user operations. All authentication uses JWTs - either user session JWTs or service account JWTs. This is a true Zero Trust architecture with no trusted subsystems.
 
 ### Authentication Flow
 
@@ -62,6 +62,38 @@ sequenceDiagram
 3. **No service credentials for user operations** - Client credentials only for true service-to-service (no user context)
 4. **Explicit delegation** - Users must authorize background tasks; delegation tokens are scoped and time-limited
 5. **Revocation support** - JTI tracking allows immediate session/delegation revocation
+
+---
+
+## Implementation Notes
+
+### Zero Trust - No Trusted Subsystems
+
+This is a true Zero Trust architecture. Key points:
+
+1. **No admin tokens**: There is no `AUTHZ_ADMIN_TOKEN` or similar static credential
+2. **No client credentials for user operations**: User-initiated actions always use the user's JWT
+3. **Service accounts for server-to-server**: Background tasks and service-to-service calls use service account JWTs
+4. **Session cookie**: Named `busibox-session`, contains the RS256-signed session JWT
+5. **Authentication endpoints are public**: Magic link, TOTP, and passkey verification endpoints don't require authentication - they ARE the authentication
+
+### How Authentication Works
+
+| Scenario | Authentication Method |
+|----------|----------------------|
+| User login (magic link, TOTP, passkey) | Public authz endpoints - no auth required |
+| User operations (upload, search, chat) | User's session JWT exchanged for access token |
+| Admin operations (manage users/roles) | Admin user's JWT (user with Admin role) |
+| Background tasks (cleanup, audit) | Service account JWT (created via client_credentials) |
+
+### busibox-app Library
+
+The `@jazzmind/busibox-app` library provides:
+
+- `validateSession()` - Validate session JWT locally or against authz
+- `useMagicLink()`, `verifyTotpCode()` - Complete login flows (public endpoints)
+- `exchangeTokenZeroTrust()` - Exchange session JWT for downstream access tokens
+- RBAC functions with optional `accessToken` parameter for authenticated calls
 
 ---
 
