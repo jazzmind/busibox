@@ -482,6 +482,8 @@ class TaskSchedulerService:
                 update_task_execution,
                 update_task_after_execution,
             )
+            from app.services.run_service import create_run
+            from app.schemas.auth import Principal
             from sqlalchemy import select
             
             logger.info(f"Executing scheduled task {task_id}")
@@ -509,25 +511,57 @@ class TaskSchedulerService:
                     )
                     
                     try:
-                        # TODO: Execute the agent with insights context
-                        # This will be implemented when we wire up the task executor
+                        # Create a principal for the task owner using the delegation token
+                        principal = Principal(
+                            sub=task.user_id,
+                            scopes=task.delegation_scopes or [],
+                            token=task.delegation_token,  # Use stored delegation token
+                        )
                         
-                        # For now, mark as completed
+                        # Build the payload from task configuration
+                        payload = {
+                            "prompt": task.prompt,
+                            **(task.input_config or {}),
+                        }
+                        
+                        # Execute the agent
+                        run_record = await create_run(
+                            session=session,
+                            principal=principal,
+                            agent_id=task.agent_id,
+                            payload=payload,
+                            scopes=task.delegation_scopes or [],
+                            purpose="task-execution",
+                            agent_tier="simple",  # Could be configurable per task
+                        )
+                        
+                        # Update execution with run result
+                        output_summary = None
+                        if run_record.output:
+                            if isinstance(run_record.output, dict):
+                                output_summary = run_record.output.get("summary") or str(run_record.output)[:500]
+                            else:
+                                output_summary = str(run_record.output)[:500]
+                        
+                        success = run_record.status == "completed"
+                        
                         await update_task_execution(
                             session=session,
                             execution_id=execution.id,
-                            status="completed",
-                            output_summary="Task execution pending implementation",
+                            run_id=run_record.id,
+                            status=run_record.status,
+                            output_summary=output_summary,
+                            error=run_record.output.get("error") if isinstance(run_record.output, dict) and not success else None,
                         )
                         
                         await update_task_after_execution(
                             session=session,
                             task_id=task_id,
                             execution=execution,
-                            success=True,
+                            success=success,
                         )
                         
-                        logger.info(f"Task {task_id} execution completed")
+                        logger.info(f"Task {task_id} execution completed with run {run_record.id}, status: {run_record.status}")
                         
                     except Exception as e:
                         logger.error(f"Task {task_id} execution failed: {e}", exc_info=True)

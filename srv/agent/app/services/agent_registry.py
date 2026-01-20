@@ -1,7 +1,7 @@
 import asyncio
 import os
 import uuid
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIModel
@@ -9,17 +9,23 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.core import BusiboxDeps
+from app.agents.base_agent import BaseStreamingAgent
 from app.agents.dynamic_loader import load_active_agents, register_agent, TOOL_REGISTRY
 from app.schemas.definitions import AgentDefinitionCreate
+
+# Type alias for agents (can be either PydanticAI Agent or our BaseStreamingAgent)
+AgentInstance = Union[Agent[BusiboxDeps, object], BaseStreamingAgent]
 
 
 class AgentRegistry:
     """
     In-memory registry of hydrated agents. Refreshable on demand.
+    
+    Supports both PydanticAI Agent instances and BaseStreamingAgent instances.
     """
 
     def __init__(self) -> None:
-        self._agents: Dict[uuid.UUID, Agent[BusiboxDeps, object]] = {}
+        self._agents: Dict[uuid.UUID, AgentInstance] = {}
         self._lock = asyncio.Lock()
 
     async def refresh(self, session: AsyncSession) -> None:
@@ -38,12 +44,15 @@ class AgentRegistry:
             self._agents[agent_id] = agent
             return agent_id
 
-    def get(self, agent_id: uuid.UUID) -> Agent[BusiboxDeps, object]:
+    def get(self, agent_id: uuid.UUID) -> AgentInstance:
         """
         Get agent by ID. Checks in order:
         1. In-memory registry (database agents loaded at startup)
         2. Built-in code agents (always use latest from code)
         
+        Returns:
+            Agent instance (PydanticAI Agent or BaseStreamingAgent)
+            
         Raises:
             KeyError: If agent not found
         """
@@ -63,7 +72,7 @@ class AgentRegistry:
         self, 
         agent_id: uuid.UUID, 
         session: Optional[AsyncSession] = None
-    ) -> Agent[BusiboxDeps, object]:
+    ) -> AgentInstance:
         """
         Get agent by ID with on-demand loading from database if not in registry.
         
@@ -77,7 +86,7 @@ class AgentRegistry:
             session: Optional database session for on-demand loading
             
         Returns:
-            Agent instance
+            Agent instance (PydanticAI Agent or BaseStreamingAgent)
             
         Raises:
             KeyError: If agent not found anywhere

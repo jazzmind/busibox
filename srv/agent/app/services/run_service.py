@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import attributes
 
 from app.agents.core import BusiboxDeps
+from app.agents.base_agent import BaseStreamingAgent
 from app.clients.busibox import BusiboxClient
 from app.models.domain import RunRecord
 from app.schemas.auth import Principal
@@ -237,7 +238,7 @@ async def create_run(
             
             # Get agent from registry (with on-demand loading)
             try:
-                agent: Agent[BusiboxDeps, object] = await agent_registry.get_or_load(agent_id, session)
+                agent = await agent_registry.get_or_load(agent_id, session)
                 add_run_event(run_record, "agent_loaded", data={"agent_id": str(agent_id)})
             except (KeyError, ValueError) as e:
                 logger.error(f"Agent {agent_id} not found or inactive: {e}")
@@ -248,8 +249,6 @@ async def create_run(
                 await session.commit()
                 await session.refresh(run_record)
                 return run_record
-            
-            deps = BusiboxDeps(principal=principal, busibox_client=client)
             
             # Execute agent with timeout
             timeout = get_agent_timeout(agent_tier)
@@ -272,15 +271,32 @@ async def create_run(
             span.set_attribute("run.memory_limit_mb", memory_limit)
             
             try:
-                result = await asyncio.wait_for(
-                    agent.run(payload.get("prompt", ""), deps=deps), timeout=timeout
-                )
+                # Handle both PydanticAI Agent and BaseStreamingAgent
+                prompt = payload.get("prompt", "")
+                
+                if isinstance(agent, BaseStreamingAgent):
+                    # BaseStreamingAgent uses context dict
+                    context = {
+                        "principal": principal,
+                        "session": session,
+                        "user_id": principal.sub,
+                        "agent_id": str(agent_id),
+                    }
+                    result = await asyncio.wait_for(
+                        agent.run(prompt, context=context), timeout=timeout
+                    )
+                else:
+                    # PydanticAI Agent uses deps
+                    deps = BusiboxDeps(principal=principal, busibox_client=client)
+                    result = await asyncio.wait_for(
+                        agent.run(prompt, deps=deps), timeout=timeout
+                    )
                 
                 # Success - extract output
                 run_record.status = "succeeded"
                 
                 # Extract output based on result type
-                # PydanticAI returns RunResult with .data or .output attribute
+                # Both PydanticAI and BaseStreamingAgent return objects with .data or .output
                 if hasattr(result, "data"):
                     output_data = result.data
                     if hasattr(output_data, "model_dump"):
@@ -292,8 +308,9 @@ async def create_run(
                     else:
                         run_record.output = {"data": output_data}
                 elif hasattr(result, "output"):
-                    # PydanticAI RunResult has .output attribute with the actual response
                     run_record.output = {"result": result.output}
+                elif isinstance(result, str):
+                    run_record.output = {"result": result}
                 else:
                     run_record.output = {"result": str(result)}
                 

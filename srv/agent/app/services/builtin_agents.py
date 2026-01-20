@@ -11,8 +11,13 @@ import uuid
 from pathlib import Path
 from typing import Dict, List
 
+from typing import Union
 from pydantic_ai import Agent
+from app.agents.base_agent import BaseStreamingAgent
 from app.schemas.definitions import AgentDefinitionRead
+
+# Type alias for agents (can be either PydanticAI Agent or our BaseStreamingAgent)
+AgentInstance = Union[Agent, BaseStreamingAgent]
 
 
 # Mapping of agent file names to their metadata
@@ -63,12 +68,12 @@ BUILTIN_AGENT_METADATA = {
 }
 
 
-def discover_builtin_agents() -> Dict[str, Agent]:
+def discover_builtin_agents() -> Dict[str, AgentInstance]:
     """
     Discover and load all built-in agents from the agents directory.
     
     Returns:
-        Dict mapping agent names to PydanticAI Agent instances
+        Dict mapping agent names to agent instances (PydanticAI Agent or BaseStreamingAgent)
     """
     agents_dir = Path(__file__).parent.parent / "agents"
     discovered_agents = {}
@@ -89,7 +94,8 @@ def discover_builtin_agents() -> Dict[str, Agent]:
             agent_var_name = module_name  # e.g., "chat_agent"
             if hasattr(module, agent_var_name):
                 agent_instance = getattr(module, agent_var_name)
-                if isinstance(agent_instance, Agent):
+                # Accept both PydanticAI Agent and our BaseStreamingAgent
+                if isinstance(agent_instance, (Agent, BaseStreamingAgent)):
                     metadata = BUILTIN_AGENT_METADATA[module_name]
                     discovered_agents[metadata["name"]] = agent_instance
         except Exception as e:
@@ -164,7 +170,7 @@ def get_builtin_agent_definitions() -> List[AgentDefinitionRead]:
     return definitions
 
 
-def get_builtin_agent_by_name(name: str) -> Agent | None:
+def get_builtin_agent_by_name(name: str) -> AgentInstance | None:
     """
     Get a built-in agent instance by name.
     
@@ -172,13 +178,13 @@ def get_builtin_agent_by_name(name: str) -> Agent | None:
         name: Agent name (e.g., "chat", "web-search")
         
     Returns:
-        PydanticAI Agent instance or None if not found
+        Agent instance (PydanticAI Agent or BaseStreamingAgent) or None if not found
     """
     agents = discover_builtin_agents()
     return agents.get(name)
 
 
-def get_builtin_agent_by_id(agent_id: uuid.UUID) -> Agent | None:
+def get_builtin_agent_by_id(agent_id: uuid.UUID) -> AgentInstance | None:
     """
     Get a built-in agent instance by UUID.
     
@@ -186,7 +192,7 @@ def get_builtin_agent_by_id(agent_id: uuid.UUID) -> Agent | None:
         agent_id: Agent UUID
         
     Returns:
-        PydanticAI Agent instance or None if not found
+        Agent instance (PydanticAI Agent or BaseStreamingAgent) or None if not found
     """
     # Find the agent name from the UUID
     for module_name, metadata in BUILTIN_AGENT_METADATA.items():

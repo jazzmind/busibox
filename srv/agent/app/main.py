@@ -8,6 +8,7 @@ from app.api import agents, auth, chat, conversations, dispatcher, evals, health
 from app.config.settings import get_settings
 from app.db.session import SessionLocal
 from app.services.agent_registry import agent_registry
+from app.services.scheduler import task_scheduler, run_scheduler
 from app.utils.logging import setup_logging, setup_tracing, instrument_fastapi
 from app.api.insights import init_insights_service
 
@@ -40,10 +41,18 @@ async def lifespan(app: FastAPI):
     init_insights_service(insights_config)
     logger.info("Insights service initialized")
     
+    # Initialize task scheduler and restore task schedules from database
+    try:
+        await task_scheduler.restore_task_schedules(SessionLocal)
+        logger.info("Task scheduler initialized and schedules restored")
+    except Exception as e:
+        logger.error(f"Failed to initialize task scheduler: {e}", exc_info=True)
+    
     yield
     
-    # Shutdown (if needed in the future)
+    # Shutdown
     logger.info("Application shutting down")
+    run_scheduler.shutdown(wait=False)
 
 
 app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)

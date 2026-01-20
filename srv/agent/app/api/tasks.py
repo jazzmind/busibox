@@ -8,7 +8,7 @@ import logging
 import uuid
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_principal
@@ -320,6 +320,7 @@ async def run_agent_task(
     run_request: Optional[TaskRunRequest] = None,
     principal: Principal = Depends(get_principal),
     session: AsyncSession = Depends(get_session),
+    background_tasks: "BackgroundTasks" = None,
 ) -> TaskRunResponse:
     """
     Manually trigger a task execution.
@@ -331,10 +332,14 @@ async def run_agent_task(
         run_request: Optional input overrides
         principal: Authenticated user
         session: Database session
+        background_tasks: FastAPI background tasks
         
     Returns:
         Execution details with status
     """
+    from app.services.run_service import create_run
+    from app.services.task_service import update_task_execution, update_task_after_execution
+    
     task = await get_task(session, task_id, principal.sub)
     
     if not task:
@@ -370,15 +375,84 @@ async def run_agent_task(
         },
     )
     
-    # TODO: Queue the actual execution (will be implemented with task executor)
-    
-    return TaskRunResponse(
-        execution_id=execution.id,
-        task_id=task_id,
-        run_id=None,  # Will be set when agent run starts
-        status="pending",
-        message="Task execution queued",
-    )
+    # Execute the agent synchronously (using the caller's principal/token)
+    try:
+        # Build the payload from task configuration with optional overrides
+        payload = {
+            "prompt": task.prompt,
+            **(task.input_config or {}),
+            **(input_data or {}),
+        }
+        
+        # Execute the agent using the caller's principal (they have fresh auth)
+        run_record = await create_run(
+            session=session,
+            principal=principal,
+            agent_id=task.agent_id,
+            payload=payload,
+            scopes=task.delegation_scopes or [],
+            purpose="task-manual-execution",
+            agent_tier="simple",
+        )
+        
+        # Update execution with run result
+        output_summary = None
+        if run_record.output:
+            if isinstance(run_record.output, dict):
+                output_summary = run_record.output.get("summary") or str(run_record.output)[:500]
+            else:
+                output_summary = str(run_record.output)[:500]
+        
+        success = run_record.status == "completed"
+        
+        await update_task_execution(
+            session=session,
+            execution_id=execution.id,
+            run_id=run_record.id,
+            status=run_record.status,
+            output_summary=output_summary,
+            error=run_record.output.get("error") if isinstance(run_record.output, dict) and not success else None,
+        )
+        
+        await update_task_after_execution(
+            session=session,
+            task_id=task_id,
+            execution=execution,
+            success=success,
+        )
+        
+        return TaskRunResponse(
+            execution_id=execution.id,
+            task_id=task_id,
+            run_id=run_record.id,
+            status=run_record.status,
+            message=f"Task execution {run_record.status}",
+        )
+        
+    except Exception as e:
+        logger.error(f"Manual task execution failed: {e}", exc_info=True)
+        
+        await update_task_execution(
+            session=session,
+            execution_id=execution.id,
+            status="failed",
+            error=str(e),
+        )
+        
+        await update_task_after_execution(
+            session=session,
+            task_id=task_id,
+            execution=execution,
+            success=False,
+        )
+        
+        return TaskRunResponse(
+            execution_id=execution.id,
+            task_id=task_id,
+            run_id=None,
+            status="failed",
+            message=f"Task execution failed: {str(e)}",
+        )
 
 
 @router.get("/{task_id}/executions", response_model=List[TaskExecutionRead])
