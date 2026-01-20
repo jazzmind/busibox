@@ -19,7 +19,9 @@ from app.models.domain import WorkflowDefinition
 
 @pytest.fixture
 async def custom_workflow_id(db_session: AsyncSession, mock_user_id: str) -> uuid.UUID:
-    """Create a custom workflow for testing."""
+    """Create a custom workflow for testing. Cleans up after test completes."""
+    from sqlalchemy import delete
+    
     unique_name = f"custom_test_workflow_{uuid.uuid4().hex[:8]}"
     workflow = WorkflowDefinition(
         name=unique_name,
@@ -39,21 +41,27 @@ async def custom_workflow_id(db_session: AsyncSession, mock_user_id: str) -> uui
     db_session.add(workflow)
     await db_session.commit()
     await db_session.refresh(workflow)
-    return workflow.id
+    workflow_id = workflow.id
+    
+    yield workflow_id
+    
+    # Cleanup: delete the workflow after test completes
+    await db_session.execute(delete(WorkflowDefinition).where(WorkflowDefinition.id == workflow_id))
+    await db_session.commit()
 
 
 @pytest.mark.asyncio
 async def test_get_workflow_by_id(
     client: AsyncClient,
     custom_workflow_id: uuid.UUID,
-    mock_token: str
+    auth_headers: dict
 ):
     """
     Test: GET /agents/workflows/{workflow_id} returns workflow.
     """
     response = await client.get(
         f"/agents/workflows/{custom_workflow_id}",
-        headers={"Authorization": f"Bearer {mock_token}"},
+        headers=auth_headers,
     )
     
     assert response.status_code == 200
@@ -66,7 +74,7 @@ async def test_get_workflow_by_id(
 async def test_update_workflow_increments_version(
     client: AsyncClient,
     custom_workflow_id: uuid.UUID,
-    mock_token: str
+    auth_headers: dict
 ):
     """
     Test: PUT /agents/workflows/{workflow_id} updates and increments version.
@@ -74,7 +82,7 @@ async def test_update_workflow_increments_version(
     # Get initial version
     response = await client.get(
         f"/agents/workflows/{custom_workflow_id}",
-        headers={"Authorization": f"Bearer {mock_token}"},
+        headers=auth_headers,
     )
     initial_version = response.json()["version"]
     
@@ -84,7 +92,7 @@ async def test_update_workflow_increments_version(
         json={
             "description": "Updated workflow description"
         },
-        headers={"Authorization": f"Bearer {mock_token}"},
+        headers=auth_headers,
     )
     
     assert response.status_code == 200
@@ -98,7 +106,7 @@ async def test_update_workflow_increments_version(
 async def test_update_workflow_validates_steps(
     client: AsyncClient,
     custom_workflow_id: uuid.UUID,
-    mock_token: str
+    auth_headers: dict
 ):
     """
     Test: PUT validates workflow steps before saving.
@@ -111,7 +119,7 @@ async def test_update_workflow_validates_steps(
                 {"id": "step1"}  # Missing type, agent_id/tool_id
             ]
         },
-        headers={"Authorization": f"Bearer {mock_token}"},
+        headers=auth_headers,
     )
     
     assert response.status_code == 400
@@ -122,12 +130,14 @@ async def test_update_workflow_validates_steps(
 async def test_delete_unused_workflow_returns_204(
     client: AsyncClient,
     db_session: AsyncSession,
-    mock_token: str,
+    auth_headers: dict,
     mock_user_id: str
 ):
     """
     Test: DELETE unused workflow returns 204.
     """
+    from sqlalchemy import select, delete
+    
     # Create unused workflow
     unique_name = f"unused_test_workflow_{uuid.uuid4().hex[:8]}"
     workflow = WorkflowDefinition(
@@ -142,22 +152,26 @@ async def test_delete_unused_workflow_returns_204(
     await db_session.refresh(workflow)
     workflow_id = workflow.id
     
-    # Delete workflow
-    response = await client.delete(
-        f"/agents/workflows/{workflow_id}",
-        headers={"Authorization": f"Bearer {mock_token}"},
-    )
-    
-    assert response.status_code == 204
-    
-    # Verify workflow is soft-deleted (expire cache first to get fresh data)
-    db_session.expire_all()  # sync method - no await
-    from sqlalchemy import select
-    stmt = select(WorkflowDefinition).where(WorkflowDefinition.id == workflow_id)
-    result = await db_session.execute(stmt)
-    workflow = result.scalar_one_or_none()
-    assert workflow is not None, "Workflow should still exist in database"
-    assert workflow.is_active is False, "Workflow should be soft-deleted"
+    try:
+        # Delete workflow
+        response = await client.delete(
+            f"/agents/workflows/{workflow_id}",
+            headers=auth_headers,
+        )
+        
+        assert response.status_code == 204
+        
+        # Verify workflow is soft-deleted (expire cache first to get fresh data)
+        db_session.expire_all()  # sync method - no await
+        stmt = select(WorkflowDefinition).where(WorkflowDefinition.id == workflow_id)
+        result = await db_session.execute(stmt)
+        workflow = result.scalar_one_or_none()
+        assert workflow is not None, "Workflow should still exist in database"
+        assert workflow.is_active is False, "Workflow should be soft-deleted"
+    finally:
+        # Cleanup: hard-delete the workflow after test completes (it was soft-deleted)
+        await db_session.execute(delete(WorkflowDefinition).where(WorkflowDefinition.id == workflow_id))
+        await db_session.commit()
 
 
 

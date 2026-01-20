@@ -539,11 +539,11 @@ class TaskSchedulerService:
                         output_summary = None
                         if run_record.output:
                             if isinstance(run_record.output, dict):
-                                output_summary = run_record.output.get("summary") or str(run_record.output)[:500]
+                                output_summary = run_record.output.get("result") or run_record.output.get("summary") or str(run_record.output)[:500]
                             else:
                                 output_summary = str(run_record.output)[:500]
                         
-                        success = run_record.status == "completed"
+                        success = run_record.status in ("succeeded", "completed")
                         
                         await update_task_execution(
                             session=session,
@@ -563,6 +563,18 @@ class TaskSchedulerService:
                         
                         logger.info(f"Task {task_id} execution completed with run {run_record.id}, status: {run_record.status}")
                         
+                        # Send notification if configured
+                        notification_config = task.notification_config or {}
+                        if notification_config.get("enabled") and notification_config.get("recipient"):
+                            await self._send_task_notification(
+                                session=session,
+                                task=task,
+                                execution=execution,
+                                run_record=run_record,
+                                success=success,
+                                output_summary=output_summary,
+                            )
+                        
                     except Exception as e:
                         logger.error(f"Task {task_id} execution failed: {e}", exc_info=True)
                         await update_task_execution(
@@ -577,11 +589,152 @@ class TaskSchedulerService:
                             execution=execution,
                             success=False,
                         )
+                        
+                        # Send failure notification if configured
+                        notification_config = task.notification_config or {}
+                        if notification_config.get("enabled") and notification_config.get("recipient"):
+                            await self._send_task_notification(
+                                session=session,
+                                task=task,
+                                execution=execution,
+                                run_record=None,
+                                success=False,
+                                output_summary=str(e),
+                            )
             
             except Exception as e:
                 logger.error(f"Task {task_id} executor error: {e}", exc_info=True)
         
         return execute
+    
+    async def _send_task_notification(
+        self,
+        session,
+        task,
+        execution,
+        run_record,
+        success: bool,
+        output_summary: str | None,
+    ) -> None:
+        """
+        Send notification for task completion.
+        
+        Creates a notification record and attempts delivery via configured channel.
+        """
+        from app.tools.notification_tool import send_notification
+        from app.models.domain import TaskNotification
+        
+        notification_config = task.notification_config or {}
+        channel = notification_config.get("channel", "email")
+        recipient = notification_config.get("recipient")
+        
+        if not recipient:
+            logger.warning(f"Task {task.id} has notifications enabled but no recipient configured")
+            return
+        
+        # Only send on configured events
+        notify_on_success = notification_config.get("on_success", True)
+        notify_on_failure = notification_config.get("on_failure", True)
+        
+        if success and not notify_on_success:
+            logger.debug(f"Skipping success notification for task {task.id} (disabled)")
+            return
+        if not success and not notify_on_failure:
+            logger.debug(f"Skipping failure notification for task {task.id} (disabled)")
+            return
+        
+        # Build notification content
+        status_emoji = "✅" if success else "❌"
+        status_text = "succeeded" if success else "failed"
+        
+        subject = f"{status_emoji} Task '{task.name}' {status_text}"
+        
+        body_parts = [
+            f"**Task:** {task.name}",
+            f"**Status:** {status_text.upper()}",
+            f"**Executed at:** {execution.started_at.isoformat() if execution.started_at else 'N/A'}",
+        ]
+        
+        if output_summary:
+            # Truncate for notification
+            summary_preview = output_summary[:500] + "..." if len(output_summary) > 500 else output_summary
+            body_parts.append(f"\n**Result:**\n{summary_preview}")
+        
+        if not success and execution.error:
+            body_parts.append(f"\n**Error:**\n{execution.error}")
+        
+        body = "\n".join(body_parts)
+        
+        # Portal link to task execution
+        from app.config.settings import get_settings
+        settings = get_settings()
+        portal_base = settings.portal_base_url or "https://localhost"
+        portal_link = f"{portal_base}/agents/tasks/{task.id}"
+        
+        # Try to create notification record (table may not exist yet)
+        notification = None
+        try:
+            notification = TaskNotification(
+                task_id=task.id,
+                execution_id=execution.id,
+                channel=channel,
+                recipient=recipient,
+                subject=subject,
+                body=body,
+                status="pending",
+            )
+            session.add(notification)
+            await session.flush()
+        except Exception as e:
+            logger.warning(f"Could not create notification record (table may not exist): {e}")
+            await session.rollback()
+            notification = None
+        
+        try:
+            # Send the notification
+            result = await send_notification(
+                channel=channel,
+                recipient=recipient,
+                subject=subject,
+                body=body,
+                portal_link=portal_link,
+                metadata={
+                    "task_id": str(task.id),
+                    "execution_id": str(execution.id),
+                    "run_id": str(run_record.id) if run_record else None,
+                    "success": success,
+                },
+            )
+            
+            # Update notification record if it was created
+            if notification:
+                notification.status = "sent" if result.success else "failed"
+                notification.message_id = result.message_id
+                notification.error = result.error
+                notification.sent_at = datetime.now() if result.success else None
+            
+            # Update execution's notification tracking
+            execution.notification_sent = result.success
+            execution.notification_error = result.error
+            
+            await session.commit()
+            
+            if result.success:
+                logger.info(f"Notification sent for task {task.id} execution {execution.id}")
+            else:
+                logger.error(f"Failed to send notification for task {task.id}: {result.error}")
+                
+        except Exception as e:
+            logger.error(f"Error sending notification for task {task.id}: {e}", exc_info=True)
+            if notification:
+                notification.status = "failed"
+                notification.error = str(e)
+            execution.notification_sent = False
+            execution.notification_error = str(e)
+            try:
+                await session.commit()
+            except Exception:
+                await session.rollback()
     
     def schedule_task(
         self,

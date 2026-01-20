@@ -175,6 +175,9 @@ def _register_builtin_tools():
 # Initialize tool registry on module load
 try:
     _register_builtin_tools()
+    # Log registered tools for debugging
+    registered = list(ToolRegistry._tools.keys())
+    logger.info(f"Tool registry initialized with {len(registered)} tools: {registered}")
 except ImportError as e:
     logger.warning(f"Could not register all builtin tools: {e}")
 
@@ -304,16 +307,39 @@ class BaseStreamingAgent(StreamingAgent):
         Returns:
             A result-like object with .data attribute containing the output
         """
+        # Debug: Log entry into run() method
+        logger.info(
+            f"{self.name}.run() called: query_len={len(query)}, "
+            f"has_deps={deps is not None}, has_context={context is not None}"
+        )
+        if context:
+            logger.info(
+                f"{self.name}.run() context keys: {list(context.keys())}, "
+                f"has_principal={'principal' in context}, "
+                f"has_session={'session' in context}"
+            )
+        
         # Create a simple result collector
         collected_content = []
+        collected_events = []
         
         async def collect_stream(event: StreamEvent):
+            collected_events.append(event)
             if event.type == "content":
                 collected_content.append(event.message)
         
         cancel = asyncio.Event()
         result = await self.run_with_streaming(
             query, collect_stream, cancel, context=context or {}
+        )
+        
+        # Debug: Log collected events summary
+        event_types = {}
+        for e in collected_events:
+            event_types[e.type] = event_types.get(e.type, 0) + 1
+        logger.info(
+            f"{self.name}.run() completed: collected_content_len={len(collected_content)}, "
+            f"event_summary={event_types}, result_len={len(result) if result else 0}"
         )
         
         # Return a result-like object for backward compatibility
@@ -397,26 +423,43 @@ class BaseStreamingAgent(StreamingAgent):
             agent_context.agent_id = context.get("agent_id")
             agent_context.conversation_history = context.get("conversation_history", [])
         
-        # Authentication is always required
-        if not agent_context.principal or not agent_context.principal.token:
-            logger.warning(f"Missing authentication for {self.name}")
-            await stream(error(
-                source=self.name,
-                message="Authentication required. Please sign in."
-            ))
-            return None
+        # Check what scopes this agent's tools require
+        scopes = self.config.get_required_scopes()
+        requires_auth = len(scopes) > 0
         
-        if not agent_context.session:
-            logger.error(f"Missing database session for {self.name}")
-            await stream(error(
-                source=self.name,
-                message="Internal error: missing database session."
-            ))
-            return None
+        logger.info(
+            f"{self.name} context setup: "
+            f"principal={agent_context.principal is not None}, "
+            f"has_token={agent_context.principal.token is not None if agent_context.principal else 'N/A'}, "
+            f"session={agent_context.session is not None}, "
+            f"user_id={agent_context.user_id}, "
+            f"requires_auth={requires_auth}"
+        )
+        
+        # Authentication is only required if the agent's tools need scopes
+        if requires_auth:
+            if not agent_context.principal or not agent_context.principal.token:
+                logger.warning(
+                    f"Missing authentication for {self.name}: "
+                    f"principal={agent_context.principal is not None}, "
+                    f"token={agent_context.principal.token is not None if agent_context.principal else 'no principal'}"
+                )
+                await stream(error(
+                    source=self.name,
+                    message="Authentication required. Please sign in."
+                ))
+                return None
+            
+            if not agent_context.session:
+                logger.error(f"Missing database session for {self.name}")
+                await stream(error(
+                    source=self.name,
+                    message="Internal error: missing database session."
+                ))
+                return None
         
         # Perform token exchange for tools that require scopes
-        scopes = self.config.get_required_scopes()
-        if scopes:
+        if scopes and agent_context.principal and agent_context.session:
             try:
                 # Determine purpose from first scope (e.g., "search.read" -> "search")
                 purpose = scopes[0].split(".")[0] if scopes else "search"
@@ -463,7 +506,22 @@ class BaseStreamingAgent(StreamingAgent):
         """
         # Get initial pipeline steps
         steps = self.pipeline_steps(query, context)
+        
         pending_steps = list(steps)
+        
+        # Debug: Log tool registry state
+        registered_tools = list(ToolRegistry._tools.keys())
+        logger.info(
+            f"{self.name} pipeline: {len(steps)} initial steps, "
+            f"strategy={self.config.tool_strategy.value}, "
+            f"registered_tools={registered_tools}"
+        )
+        if steps:
+            logger.info(f"{self.name} pipeline steps: {[s.tool for s in steps]}")
+            # Verify all required tools are registered
+            for step in steps:
+                if not ToolRegistry.has(step.tool):
+                    logger.error(f"TOOL NOT REGISTERED: {step.tool} - available: {registered_tools}")
         
         while pending_steps:
             if cancel.is_set():
@@ -551,6 +609,8 @@ class BaseStreamingAgent(StreamingAgent):
             # Execute tool
             # Check if tool needs BusiboxDeps context
             tool_scopes = TOOL_SCOPES.get(step.tool, [])
+            logger.info(f"Executing tool {step.tool} with scopes={tool_scopes}, has_deps={context.deps is not None}")
+            
             if tool_scopes and context.deps:
                 # Create mock context for tools that need BusiboxDeps
                 class MockRunContext:
@@ -562,6 +622,13 @@ class BaseStreamingAgent(StreamingAgent):
             else:
                 # Tool doesn't need deps context - call directly
                 result = await tool_func(**step.args)
+            
+            # Log result details for debugging
+            result_count = getattr(result, 'result_count', None)
+            if result_count is not None:
+                logger.info(f"Tool {step.tool} completed with {result_count} results")
+            else:
+                logger.info(f"Tool {step.tool} completed, result type: {type(result).__name__}")
             
             # Store result
             context.tool_results[step.tool] = result

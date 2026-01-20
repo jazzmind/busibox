@@ -10,7 +10,7 @@ Provides:
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,11 +38,26 @@ async def get_workflow(
     Get individual workflow by ID.
     
     Returns:
-        Workflow definition if found and active
+        Workflow definition if found and active (includes built-in workflows)
         
     Raises:
         HTTPException: 404 if workflow not found or inactive
     """
+    from app.services.builtin_workflows import get_builtin_workflow_by_id, is_builtin_workflow
+    
+    # Check if it's a built-in workflow first
+    if is_builtin_workflow(workflow_id):
+        builtin = get_builtin_workflow_by_id(workflow_id)
+        if builtin:
+            logger.info(
+                "builtin_workflow_retrieved",
+                workflow_id=str(workflow_id),
+                workflow_name=builtin.name,
+                user_id=principal.sub
+            )
+            return builtin
+    
+    # Otherwise check database
     workflow = await session.get(WorkflowDefinition, workflow_id)
     
     if not workflow or not workflow.is_active:
@@ -60,7 +75,9 @@ async def get_workflow(
         user_id=principal.sub
     )
     
-    return WorkflowDefinitionRead.model_validate(workflow)
+    result = WorkflowDefinitionRead.model_validate(workflow)
+    result.is_builtin = False
+    return result
 
 
 @router.put("/{workflow_id}", response_model=WorkflowDefinitionRead)
@@ -267,52 +284,122 @@ async def execute_workflow(
     """
     Execute a workflow manually.
     
+    Creates an execution record and starts the workflow in the background.
+    The API returns immediately so the client can redirect to the execution detail page
+    and poll for updates as the workflow progresses.
+    
+    Supports both built-in workflows (defined in code) and database workflows.
+    For built-in workflows, a temporary database record is created for execution tracking.
+    
     Args:
         workflow_id: Workflow UUID
         payload: Execution request with input data and optional guardrails
+        background_tasks: FastAPI background tasks
         principal: Authenticated user
         session: Database session
         
     Returns:
-        Workflow execution record
+        Workflow execution record (with status "pending")
         
     Raises:
         HTTPException: 404 if workflow not found, 400 if execution fails
     """
-    from app.workflows.enhanced_engine import execute_enhanced_workflow
+    from app.workflows.enhanced_engine import create_workflow_execution, run_workflow_execution
+    from app.services.builtin_workflows import get_builtin_workflow_by_id, is_builtin_workflow
     
-    # Verify workflow exists
-    workflow = await session.get(WorkflowDefinition, workflow_id)
+    workflow = None
+    workflow_name = None
+    is_builtin = False
+    
+    # Check if it's a built-in workflow
+    if is_builtin_workflow(workflow_id):
+        builtin = get_builtin_workflow_by_id(workflow_id)
+        if builtin:
+            is_builtin = True
+            workflow_name = builtin.name
+            
+            # Check if a database record already exists for this workflow
+            workflow = await session.get(WorkflowDefinition, workflow_id)
+            
+            if not workflow:
+                # Create a database record for the built-in workflow
+                # This is needed for execution tracking
+                workflow = WorkflowDefinition(
+                    id=workflow_id,
+                    name=builtin.name,
+                    description=builtin.description,
+                    steps=builtin.steps,
+                    trigger=builtin.trigger,
+                    guardrails=builtin.guardrails,
+                    is_active=True,
+                    created_by=None,  # Built-in
+                    version=builtin.version,
+                )
+                session.add(workflow)
+                await session.commit()
+                await session.refresh(workflow)
+                logger.info(
+                    "builtin_workflow_persisted",
+                    workflow_id=str(workflow_id),
+                    workflow_name=builtin.name,
+                )
+            else:
+                # Always update steps from code for built-in workflows
+                # This ensures we use the latest definition from code
+                if workflow.steps != builtin.steps:
+                    workflow.steps = builtin.steps
+                    workflow.description = builtin.description
+                    workflow.guardrails = builtin.guardrails
+                    workflow.version = builtin.version
+                    await session.commit()
+                    await session.refresh(workflow)
+                    logger.info(
+                        "builtin_workflow_updated",
+                        workflow_id=str(workflow_id),
+                        workflow_name=builtin.name,
+                    )
+    
+    # If not built-in, check database
+    if not workflow:
+        workflow = await session.get(WorkflowDefinition, workflow_id)
+    
     if not workflow or not workflow.is_active:
         raise HTTPException(status_code=404, detail="Workflow not found")
     
-    logger.info(
-        "workflow_execution_started",
-        workflow_id=str(workflow_id),
-        workflow_name=workflow.name,
-        user_id=principal.sub
-    )
+    workflow_name = workflow_name or workflow.name
     
     try:
-        # Execute workflow
-        execution = await execute_enhanced_workflow(
+        # Create execution record (returns immediately with status "pending")
+        execution = await create_workflow_execution(
             session=session,
             principal=principal,
             workflow_id=workflow_id,
             input_data=payload.input_data or {},
-            scopes=["agent:read", "agent:write"],  # Default scopes
-            purpose="workflow_execution",
             override_guardrails=payload.guardrails,
         )
         
         logger.info(
-            "workflow_execution_completed",
+            "workflow_execution_created",
             workflow_id=str(workflow_id),
+            workflow_name=workflow_name,
             execution_id=str(execution.id),
-            status=execution.status,
+            is_builtin=is_builtin,
             user_id=principal.sub
         )
         
+        # Schedule workflow to run in background
+        # We need to use asyncio.create_task since FastAPI BackgroundTasks doesn't support async functions well
+        import asyncio
+        asyncio.create_task(
+            run_workflow_execution(
+                execution_id=execution.id,
+                principal=principal,
+                scopes=["agent:read", "agent:write"],
+                purpose="workflow_execution",
+            )
+        )
+        
+        # Return immediately with the execution record
         return WorkflowExecutionResponse.model_validate(execution)
         
     except Exception as e:
@@ -397,6 +484,57 @@ async def get_execution(
     
     if not execution:
         raise HTTPException(status_code=404, detail="Execution not found")
+    
+    return WorkflowExecutionResponse.model_validate(execution)
+
+
+@router.post("/executions/{execution_id}/stop", response_model=WorkflowExecutionResponse)
+async def stop_execution(
+    execution_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+) -> WorkflowExecutionResponse:
+    """
+    Stop a running or pending workflow execution.
+    
+    Args:
+        execution_id: Execution UUID
+        principal: Authenticated user
+        session: Database session
+        
+    Returns:
+        Updated execution record with status "stopped"
+        
+    Raises:
+        HTTPException: 404 if execution not found, 400 if already completed
+    """
+    execution = await session.get(WorkflowExecution, execution_id)
+    
+    if not execution:
+        raise HTTPException(status_code=404, detail="Execution not found")
+    
+    # Only allow stopping pending or running executions
+    if execution.status not in ('pending', 'running', 'awaiting_human'):
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Cannot stop execution with status '{execution.status}'. Only pending, running, or awaiting_human executions can be stopped."
+        )
+    
+    # Update execution status
+    execution.status = "stopped"
+    execution.error = "Stopped by user"
+    execution.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    if execution.started_at:
+        execution.duration_seconds = (execution.completed_at - execution.started_at).total_seconds()
+    
+    await session.commit()
+    await session.refresh(execution)
+    
+    logger.info(
+        "workflow_execution_stopped",
+        execution_id=str(execution_id),
+        user_id=principal.sub
+    )
     
     return WorkflowExecutionResponse.model_validate(execution)
 

@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 
+from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config.settings import get_settings
@@ -47,17 +48,45 @@ def get_session_factory(use_test: bool = False):
     return SessionLocal
 
 
-async def get_session() -> AsyncSession:
+def _should_use_test_db(request: Optional[Request] = None) -> bool:
     """
-    Get a database session.
+    Check if request should use test database.
     
-    Note: This uses the production database. For test mode support, 
-    see get_session_for_test which checks the X-Test-Mode header.
+    Returns True if:
+    - Test mode is enabled in settings
+    - Test database URL is configured
+    - Request has X-Test-Mode: true header
+    """
+    if not settings.test_mode_enabled or not TestSessionLocal:
+        return False
+    
+    if request is None:
+        return False
+    
+    test_mode_header = request.headers.get(TEST_MODE_HEADER, "").lower()
+    return test_mode_header == "true"
+
+
+async def get_session(request: Request = None) -> AsyncSession:
+    """
+    Get a database session, routing to test or production database based on request.
+    
+    If X-Test-Mode: true header is present and test mode is enabled,
+    returns a session connected to the test database. Otherwise returns
+    a session connected to the production database.
+    
+    This is the primary dependency for FastAPI routes.
+    
+    Args:
+        request: The FastAPI Request object (optional, for header checking)
     
     Yields:
-        AsyncSession connected to production database
+        AsyncSession connected to appropriate database
     """
-    async with SessionLocal() as session:
+    use_test = _should_use_test_db(request)
+    factory = TestSessionLocal if use_test else SessionLocal
+    
+    async with factory() as session:
         yield session
 
 

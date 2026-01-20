@@ -21,6 +21,7 @@ class BusiboxClient:
         self,
         query: str,
         top_k: int = 10,
+        limit: Optional[int] = None,  # Alias for top_k
         mode: str = "hybrid",
         file_ids: Optional[List[str]] = None,
         rerank: bool = True,
@@ -44,9 +45,12 @@ class BusiboxClient:
         Returns:
             Search response with results and metadata
         """
+        # Use limit if provided, otherwise use top_k
+        result_limit = limit if limit is not None else top_k
+        
         request_body: Dict[str, Any] = {
             "query": query,
-            "limit": min(top_k, 50),  # Search API uses 'limit' not 'top_k'
+            "limit": min(result_limit, 50),  # Search API uses 'limit', cap at 50
             "mode": mode,
             "rerank": rerank,
         }

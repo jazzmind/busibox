@@ -412,10 +412,15 @@ class AgentTask(Base):
     description: Mapped[Optional[str]] = mapped_column(Text)
     user_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     
-    # Target agent or workflow (no FK - agents may be built-in from code or from DB)
-    agent_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), index=True,
+    # Target agent or workflow (no FK - agents/workflows may be built-in from code or from DB)
+    # Either agent_id or workflow_id should be set, not both
+    agent_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), index=True, nullable=True,
         comment="Agent ID (may be built-in from code or from agent_definitions table)"
+    )
+    workflow_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), index=True, nullable=True,
+        comment="Workflow ID (may be built-in from code or from workflow_definitions table)"
     )
     
     # Task prompt/input
@@ -534,6 +539,9 @@ class TaskExecution(Base):
     # Relationships
     task: Mapped["AgentTask"] = relationship("AgentTask", back_populates="executions")
     run: Mapped[Optional["RunRecord"]] = relationship("RunRecord", lazy="selectin")
+    notifications: Mapped[list["TaskNotification"]] = relationship(
+        "TaskNotification", back_populates="execution", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         Index('idx_task_executions_task_id', 'task_id'),
@@ -543,3 +551,66 @@ class TaskExecution(Base):
 
     def __repr__(self) -> str:
         return f"<TaskExecution(id={self.id}, task_id={self.task_id}, status={self.status})>"
+
+
+class TaskNotification(Base):
+    """
+    Track notification delivery for task executions.
+    
+    Each notification has:
+    - Delivery channel (email, slack, teams, webhook)
+    - Delivery status (pending, sent, failed, delivered, read)
+    - Error tracking if delivery fails
+    """
+    __tablename__ = "task_notifications"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    task_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent_tasks.id", ondelete="CASCADE"), index=True
+    )
+    execution_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("task_executions.id", ondelete="CASCADE"), index=True
+    )
+    
+    # Channel and recipient
+    channel: Mapped[str] = mapped_column(String(50), nullable=False, comment="email, slack, teams, webhook")
+    recipient: Mapped[str] = mapped_column(String(500), nullable=False, comment="Email address or webhook URL")
+    
+    # Content
+    subject: Mapped[str] = mapped_column(String(500), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    
+    # Delivery tracking
+    status: Mapped[str] = mapped_column(
+        String(50), default="pending", index=True,
+        comment="pending, sent, failed, delivered, read, bounced"
+    )
+    message_id: Mapped[Optional[str]] = mapped_column(String(500), comment="External message ID from provider")
+    
+    # Timing
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    delivered_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    read_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    
+    # Error tracking
+    error: Mapped[Optional[str]] = mapped_column(Text)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_retry_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+    
+    # Relationships
+    task: Mapped["AgentTask"] = relationship("AgentTask", lazy="selectin")
+    execution: Mapped["TaskExecution"] = relationship("TaskExecution", lazy="selectin")
+
+    __table_args__ = (
+        Index('idx_task_notifications_task_id', 'task_id'),
+        Index('idx_task_notifications_execution_id', 'execution_id'),
+        Index('idx_task_notifications_status', 'status'),
+        Index('idx_task_notifications_channel', 'channel'),
+        Index('idx_task_notifications_created_at', 'created_at'),
+    )
+
+    def __repr__(self) -> str:
+        return f"<TaskNotification(id={self.id}, task_id={self.task_id}, channel={self.channel}, status={self.status})>"

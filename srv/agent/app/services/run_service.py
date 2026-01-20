@@ -240,6 +240,15 @@ async def create_run(
             try:
                 agent = await agent_registry.get_or_load(agent_id, session)
                 add_run_event(run_record, "agent_loaded", data={"agent_id": str(agent_id)})
+                
+                # Debug logging for agent type
+                agent_type = type(agent).__name__
+                agent_class = agent.__class__.__mro__
+                logger.info(
+                    f"Agent loaded: id={agent_id}, type={agent_type}, "
+                    f"is_BaseStreamingAgent={isinstance(agent, BaseStreamingAgent)}, "
+                    f"class_hierarchy={[c.__name__ for c in agent_class[:3]]}"
+                )
             except (KeyError, ValueError) as e:
                 logger.error(f"Agent {agent_id} not found or inactive: {e}")
                 run_record.status = "failed"
@@ -282,12 +291,24 @@ async def create_run(
                         "user_id": principal.sub,
                         "agent_id": str(agent_id),
                     }
+                    logger.info(
+                        f"Calling BaseStreamingAgent.run() with context: "
+                        f"principal={principal.sub}, has_token={principal.token is not None}, "
+                        f"prompt_length={len(prompt)}"
+                    )
                     result = await asyncio.wait_for(
                         agent.run(prompt, context=context), timeout=timeout
+                    )
+                    logger.info(
+                        f"BaseStreamingAgent.run() completed: "
+                        f"result_type={type(result).__name__}, "
+                        f"has_data={hasattr(result, 'data')}, "
+                        f"has_output={hasattr(result, 'output')}"
                     )
                 else:
                     # PydanticAI Agent uses deps
                     deps = BusiboxDeps(principal=principal, busibox_client=client)
+                    logger.info(f"Calling PydanticAI Agent.run() with deps")
                     result = await asyncio.wait_for(
                         agent.run(prompt, deps=deps), timeout=timeout
                     )

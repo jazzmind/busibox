@@ -127,9 +127,36 @@ async def list_workflows(
     principal: Principal = Depends(get_principal),
     session: AsyncSession = Depends(get_session),
 ) -> List[WorkflowDefinitionRead]:
+    """
+    List all workflows including built-in and database workflows.
+    
+    Returns:
+    - All built-in workflows (defined in code)
+    - All custom workflows from database
+    
+    Built-in workflows are marked with is_builtin=True.
+    """
+    from app.services.builtin_workflows import get_builtin_workflow_definitions
+    
+    # Get built-in workflows
+    builtin_workflows = get_builtin_workflow_definitions()
+    builtin_names = {w.name for w in builtin_workflows}
+    
+    # Get database workflows (excluding any with same name as built-in)
     stmt = select(WorkflowDefinition).where(WorkflowDefinition.is_active.is_(True))
     result = await session.execute(stmt)
-    return [WorkflowDefinitionRead.model_validate(w) for w in result.scalars().all()]
+    db_workflows = [
+        WorkflowDefinitionRead.model_validate(w) 
+        for w in result.scalars().all()
+        if w.name not in builtin_names  # Avoid duplicates
+    ]
+    
+    # Mark database workflows as not built-in
+    for w in db_workflows:
+        w.is_builtin = False
+    
+    # Combine: built-in first, then database workflows
+    return builtin_workflows + db_workflows
 
 
 @router.post("/definitions", response_model=AgentDefinitionRead, status_code=status.HTTP_201_CREATED)

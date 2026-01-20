@@ -616,7 +616,7 @@ services:
       # Database
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-busibox_user}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/agent_server
       # Test Mode Configuration (routes X-Test-Mode: true requests to test database)
-      AGENT_TEST_MODE_ENABLED: "true"
+      TEST_MODE_ENABLED: "true"
       TEST_DATABASE_URL: postgresql+asyncpg://busibox_test_user:testpassword@postgres:5432/test_agent_server
       # Redis
       REDIS_URL: redis://redis:6379/0

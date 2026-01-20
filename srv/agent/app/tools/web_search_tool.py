@@ -2,14 +2,16 @@
 Web search tool supporting multiple providers.
 
 Supports:
-- DuckDuckGo (free, no API key required)
-- Tavily (requires API key)
-- Perplexity (requires API key)
-- Brave Search (requires API key)
+- DuckDuckGo (free, no API key required) - needs keyword optimization
+- Tavily (requires API key) - AI-powered, handles natural language
+- Perplexity (requires API key) - AI-powered, handles natural language
+- Brave Search (requires API key) - traditional search, benefits from keywords
 
 When multiple providers are enabled, searches run in parallel and results are merged.
+Each provider receives an appropriately formatted query.
 """
 import asyncio
+import logging
 import os
 import re
 import urllib.parse
@@ -17,11 +19,34 @@ from typing import List, Optional, Dict, Any
 
 import httpx
 from pydantic import BaseModel, Field
-from pydantic_ai import Tool
+from pydantic_ai import Agent, Tool
+from pydantic_ai.models.openai import OpenAIChatModel
 
 from app.config.settings import get_settings
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
+
+# Provider categories based on query handling capabilities
+AI_POWERED_PROVIDERS = {"tavily", "perplexity"}  # Can handle natural language
+KEYWORD_PROVIDERS = {"duckduckgo", "brave"}  # Need keyword-focused queries
+
+# Query optimization prompt for keyword-based search providers
+QUERY_OPTIMIZATION_PROMPT = """You are a search query optimizer. Convert the user's natural language request into 1-3 concise keyword-based search queries.
+
+Rules:
+- Extract the core topic/keywords the user wants to find
+- Keep each query under 10 words
+- Remove instructional phrases like "find me", "search for", "use X to"
+- If specific sites are mentioned (e.g., "use boardgamegeek.com"), use site: operator
+- For recent/news queries, include time-relevant terms like "2026", "latest", "news"
+- Return ONLY the search queries, one per line
+- No explanations or numbering
+
+Example input: "Use boardgamegeek.com to find the latest board game releases and reviews"
+Example output:
+site:boardgamegeek.com board game releases 2026
+site:boardgamegeek.com board game reviews latest"""
 
 
 class WebSearchResult(BaseModel):
@@ -37,7 +62,8 @@ class WebSearchOutput(BaseModel):
     found: bool = Field(description="Whether results were found")
     result_count: int = Field(description="Total number of results returned across all providers")
     results: List[WebSearchResult] = Field(description="List of search results")
-    query: str = Field(description="The search query used")
+    query: str = Field(description="The original search query")
+    optimized_queries: List[str] = Field(default_factory=list, description="Optimized keyword queries used for search")
     providers_used: List[str] = Field(default_factory=list, description="Providers that returned results")
     results_per_provider: Dict[str, int] = Field(default_factory=dict, description="Number of results from each provider")
     error: Optional[str] = Field(default=None, description="Error message if search failed")
@@ -152,6 +178,91 @@ async def get_provider_config_for_context(
     return default_config
 
 
+# Lazy-initialized query optimizer (created on first use)
+_query_optimizer: Optional[Agent] = None
+
+
+def _get_query_optimizer() -> Agent:
+    """
+    Get or create the query optimizer agent.
+    
+    Uses a fast/cheap model since query optimization is a simple task.
+    The model is configured via FAST_MODEL env var (defaults to 'fast' purpose in LiteLLM).
+    """
+    global _query_optimizer
+    if _query_optimizer is None:
+        settings = get_settings()
+        # Use fast model for simple query optimization task
+        model = OpenAIChatModel(
+            model_name=settings.fast_model,
+            provider="openai",
+        )
+        _query_optimizer = Agent(
+            model=model,
+            system_prompt=QUERY_OPTIMIZATION_PROMPT,
+        )
+        logger.info(f"Query optimizer initialized with fast model: {settings.fast_model}")
+    return _query_optimizer
+
+
+async def optimize_query_for_keywords(query: str) -> List[str]:
+    """
+    Optimize a natural language query for keyword-based search providers.
+    
+    Uses an LLM to convert instructional/conversational queries into
+    concise keyword queries suitable for DuckDuckGo, Brave, etc.
+    
+    Args:
+        query: Natural language query from user
+        
+    Returns:
+        List of 1-3 optimized keyword queries
+    """
+    # Quick check: if query is already short and keyword-like, use as-is
+    if len(query.split()) <= 8 and not any(phrase in query.lower() for phrase in [
+        "find me", "search for", "look for", "use ", "please ", "can you", "i want"
+    ]):
+        logger.debug(f"Query already keyword-like, using as-is: {query}")
+        return [query]
+    
+    try:
+        optimizer = _get_query_optimizer()
+        result = await optimizer.run(query)
+        
+        # Extract output
+        output_text = ""
+        if hasattr(result, 'output') and result.output:
+            output_text = str(result.output)
+        elif hasattr(result, 'data') and result.data:
+            output_text = str(result.data)
+        else:
+            output_text = str(result)
+        
+        # Parse queries (one per line)
+        queries = []
+        for line in output_text.strip().split("\n"):
+            line = line.strip()
+            if line and not line.startswith("#"):
+                # Clean up numbering
+                line = re.sub(r'^[\d]+[.\)]\s*', '', line)
+                line = re.sub(r'^[-*]\s*', '', line)
+                if line:
+                    queries.append(line)
+        
+        if queries:
+            logger.info(f"Optimized query '{query[:50]}...' into {len(queries)} keyword queries: {queries}")
+            return queries[:3]
+        
+        # Fallback: truncate original
+        logger.warning("Query optimization returned no results, using truncated original")
+        return [query[:100]]
+        
+    except Exception as e:
+        logger.error(f"Query optimization failed: {e}")
+        # Fallback: use original truncated
+        return [query[:100]]
+
+
 async def search_duckduckgo(query: str, max_results: int = 5) -> List[WebSearchResult]:
     """Search using DuckDuckGo HTML (free, no API key)."""
     results = []
@@ -219,8 +330,9 @@ async def search_duckduckgo(query: str, max_results: int = 5) -> List[WebSearchR
                     break
                     
     except Exception as e:
-        print(f"DuckDuckGo search error: {e}")
+        logger.error(f"DuckDuckGo search error for query '{query[:50]}...': {e}")
     
+    logger.info(f"DuckDuckGo search for '{query[:50]}...' returned {len(results)} results")
     return results
 
 
@@ -374,15 +486,21 @@ async def search_web(
     query: str, 
     max_results: int = 5,
     providers: Optional[Dict[str, Dict[str, Any]]] = None,
+    optimize_query: bool = True,
 ) -> WebSearchOutput:
     """
     Search the web using multiple providers in parallel.
     
+    Automatically optimizes queries for each provider type:
+    - AI-powered providers (Tavily, Perplexity): receive the original natural language query
+    - Keyword providers (DuckDuckGo, Brave): receive optimized keyword queries
+    
     Args:
-        query: Search query string
+        query: Search query string (can be natural language)
         max_results: Maximum number of results PER PROVIDER (default: 5).
                      When multiple providers are enabled, each returns up to this many results.
         providers: Optional provider configuration override
+        optimize_query: Whether to optimize queries for keyword-based providers (default: True)
         
     Returns:
         WebSearchOutput with merged, deduplicated results from all providers
@@ -390,14 +508,42 @@ async def search_web(
     # Get provider config
     config = providers or get_provider_config()
     
+    # Determine which provider types are enabled
+    has_keyword_providers = (
+        config.get("duckduckgo", {}).get("enabled", True) or
+        (config.get("brave", {}).get("enabled", False) and config.get("brave", {}).get("api_key"))
+    )
+    has_ai_providers = (
+        (config.get("tavily", {}).get("enabled", False) and config.get("tavily", {}).get("api_key")) or
+        (config.get("perplexity", {}).get("enabled", False) and config.get("perplexity", {}).get("api_key"))
+    )
+    
+    # Optimize query for keyword-based providers if needed
+    keyword_queries = [query]  # Default to original
+    if optimize_query and has_keyword_providers:
+        keyword_queries = await optimize_query_for_keywords(query)
+    
+    logger.info(f"search_web: original='{query[:50]}...', keyword_queries={keyword_queries}, has_ai={has_ai_providers}, has_keyword={has_keyword_providers}")
+    
     # Build list of search tasks
     tasks = []
     task_names = []
     
+    # Keyword-based providers get optimized queries
     if config.get("duckduckgo", {}).get("enabled", True):
-        tasks.append(search_duckduckgo(query, max_results))
-        task_names.append("duckduckgo")
+        # Run search for each optimized query
+        for kw_query in keyword_queries:
+            tasks.append(search_duckduckgo(kw_query, max_results))
+            task_names.append("duckduckgo")
     
+    if config.get("brave", {}).get("enabled", False):
+        api_key = config.get("brave", {}).get("api_key", "")
+        if api_key:
+            for kw_query in keyword_queries:
+                tasks.append(search_brave(kw_query, max_results, api_key))
+                task_names.append("brave")
+    
+    # AI-powered providers get the original natural language query
     if config.get("tavily", {}).get("enabled", False):
         api_key = config.get("tavily", {}).get("api_key", "")
         if api_key:
@@ -410,16 +556,14 @@ async def search_web(
             tasks.append(search_perplexity(query, max_results, api_key))
             task_names.append("perplexity")
     
-    if config.get("brave", {}).get("enabled", False):
-        api_key = config.get("brave", {}).get("api_key", "")
-        if api_key:
-            tasks.append(search_brave(query, max_results, api_key))
-            task_names.append("brave")
-    
     if not tasks:
-        # Fallback to DuckDuckGo if nothing enabled
-        tasks.append(search_duckduckgo(query, max_results))
-        task_names.append("duckduckgo")
+        # Fallback to DuckDuckGo with optimized queries if nothing enabled
+        logger.warning(f"No search providers configured, falling back to DuckDuckGo")
+        for kw_query in keyword_queries:
+            tasks.append(search_duckduckgo(kw_query, max_results))
+            task_names.append("duckduckgo")
+    
+    logger.info(f"search_web: Running {len(tasks)} search tasks: {task_names}")
     
     # Run all searches in parallel
     all_results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -432,7 +576,7 @@ async def search_web(
     
     for i, result_set in enumerate(all_results):
         if isinstance(result_set, Exception):
-            print(f"Search provider {task_names[i]} failed: {result_set}")
+            logger.error(f"Search provider {task_names[i]} failed with exception: {result_set}")
             continue
         
         provider_name = task_names[i]
@@ -466,6 +610,7 @@ async def search_web(
             result_count=0,
             results=[],
             query=query,
+            optimized_queries=keyword_queries,
             providers_used=providers_used,
             results_per_provider=results_per_provider,
             error="No results found from any provider.",
@@ -476,6 +621,7 @@ async def search_web(
         result_count=len(final_results),
         results=final_results,
         query=query,
+        optimized_queries=keyword_queries,
         providers_used=providers_used,
         results_per_provider=results_per_provider,
     )

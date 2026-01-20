@@ -29,6 +29,8 @@ Future features
 
 - model registry overrides in env/dockercompose/ansible, or dynamically set during make install, or menu
 - a "warmup" screen for ai-portal when models need to be cached/downloaded.
+- agent task creator tool
+- dispatcher can recommend activation of tools, ask questions with yes/no buttons, option lists to click on. e.g. should I create an agent task for this? Yes / No if yes - activates agent task tool. 
 
 Agent tasks:
 2 - make sure all busibox-app tests pass

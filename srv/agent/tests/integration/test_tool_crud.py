@@ -20,7 +20,9 @@ from app.models.domain import AgentDefinition, ToolDefinition
 
 @pytest.fixture
 async def custom_tool_id(db_session: AsyncSession, mock_user_id: str) -> uuid.UUID:
-    """Create a custom tool for testing."""
+    """Create a custom tool for testing. Cleans up after test completes."""
+    from sqlalchemy import delete
+    
     unique_name = f"custom_test_tool_{uuid.uuid4().hex[:8]}"
     tool = ToolDefinition(
         name=unique_name,
@@ -35,12 +37,20 @@ async def custom_tool_id(db_session: AsyncSession, mock_user_id: str) -> uuid.UU
     db_session.add(tool)
     await db_session.commit()
     await db_session.refresh(tool)
-    return tool.id
+    tool_id = tool.id
+    
+    yield tool_id
+    
+    # Cleanup: delete the tool after test completes
+    await db_session.execute(delete(ToolDefinition).where(ToolDefinition.id == tool_id))
+    await db_session.commit()
 
 
 @pytest.fixture
 async def builtin_tool_id(db_session: AsyncSession) -> uuid.UUID:
-    """Create a built-in tool for testing."""
+    """Create a built-in tool for testing. Cleans up after test completes."""
+    from sqlalchemy import delete
+    
     unique_name = f"builtin_test_tool_{uuid.uuid4().hex[:8]}"
     tool = ToolDefinition(
         name=unique_name,
@@ -55,14 +65,20 @@ async def builtin_tool_id(db_session: AsyncSession) -> uuid.UUID:
     db_session.add(tool)
     await db_session.commit()
     await db_session.refresh(tool)
-    return tool.id
+    tool_id = tool.id
+    
+    yield tool_id
+    
+    # Cleanup: delete the tool after test completes
+    await db_session.execute(delete(ToolDefinition).where(ToolDefinition.id == tool_id))
+    await db_session.commit()
 
 
 @pytest.mark.asyncio
 async def test_get_tool_by_id(
     client: AsyncClient,
     custom_tool_id: uuid.UUID,
-    mock_token: str
+    auth_headers: dict
 ):
     """
     Test: GET /agents/tools/{tool_id} returns tool.
@@ -71,7 +87,7 @@ async def test_get_tool_by_id(
     """
     response = await client.get(
         f"/agents/tools/{custom_tool_id}",
-        headers={"Authorization": f"Bearer {mock_token}"},
+        headers=auth_headers,
     )
     
     assert response.status_code == 200
@@ -85,7 +101,7 @@ async def test_get_tool_by_id(
 async def test_update_tool_increments_version(
     client: AsyncClient,
     custom_tool_id: uuid.UUID,
-    mock_token: str,
+    auth_headers: dict,
     db_session: AsyncSession
 ):
     """
@@ -97,7 +113,7 @@ async def test_update_tool_increments_version(
     # Get initial version
     response = await client.get(
         f"/agents/tools/{custom_tool_id}",
-        headers={"Authorization": f"Bearer {mock_token}"},
+        headers=auth_headers,
     )
     initial_version = response.json()["version"]
     
@@ -108,7 +124,7 @@ async def test_update_tool_increments_version(
             "description": "Updated description",
             "schema": {"input": {"type": "string"}, "output": {"type": "string"}}
         },
-        headers={"Authorization": f"Bearer {mock_token}"},
+        headers=auth_headers,
     )
     
     assert response.status_code == 200
@@ -123,7 +139,7 @@ async def test_update_tool_increments_version(
 async def test_delete_builtin_tool_returns_403(
     client: AsyncClient,
     builtin_tool_id: uuid.UUID,
-    mock_token: str
+    auth_headers: dict
 ):
     """
     Test: DELETE built-in tool returns 403.
@@ -133,7 +149,7 @@ async def test_delete_builtin_tool_returns_403(
     """
     response = await client.delete(
         f"/agents/tools/{builtin_tool_id}",
-        headers={"Authorization": f"Bearer {mock_token}"},
+        headers=auth_headers,
     )
     
     assert response.status_code == 403
@@ -144,7 +160,7 @@ async def test_delete_builtin_tool_returns_403(
 async def test_delete_tool_in_use_returns_409(
     client: AsyncClient,
     custom_tool_id: uuid.UUID,
-    mock_token: str,
+    auth_headers: dict,
     db_session: AsyncSession,
     mock_user_id: str
 ):
@@ -154,8 +170,9 @@ async def test_delete_tool_in_use_returns_409(
     Acceptance Scenario 4: Given my custom tool is used by an active agent, When I try 
     to delete it, Then I receive a 409 Conflict error with details about which agents use it.
     """
+    from sqlalchemy import select, delete
+    
     # Create agent that uses the tool - we need to get the actual tool name
-    from sqlalchemy import select
     stmt = select(ToolDefinition).where(ToolDefinition.id == custom_tool_id)
     result = await db_session.execute(stmt)
     tool = result.scalar_one()
@@ -172,25 +189,32 @@ async def test_delete_tool_in_use_returns_409(
     )
     db_session.add(agent)
     await db_session.commit()
+    await db_session.refresh(agent)
+    agent_id = agent.id
     
-    # Try to delete tool
-    response = await client.delete(
-        f"/agents/tools/{custom_tool_id}",
-        headers={"Authorization": f"Bearer {mock_token}"},
-    )
-    
-    assert response.status_code == 409
-    error_data = response.json()
-    assert error_data["detail"]["error"] == "resource_in_use"
-    assert "agents" in error_data["detail"]
-    assert len(error_data["detail"]["agents"]) > 0
+    try:
+        # Try to delete tool
+        response = await client.delete(
+            f"/agents/tools/{custom_tool_id}",
+            headers=auth_headers,
+        )
+        
+        assert response.status_code == 409
+        error_data = response.json()
+        assert error_data["detail"]["error"] == "resource_in_use"
+        assert "agents" in error_data["detail"]
+        assert len(error_data["detail"]["agents"]) > 0
+    finally:
+        # Cleanup: delete the agent after test completes
+        await db_session.execute(delete(AgentDefinition).where(AgentDefinition.id == agent_id))
+        await db_session.commit()
 
 
 @pytest.mark.asyncio
 async def test_delete_unused_tool_returns_204(
     client: AsyncClient,
     db_session: AsyncSession,
-    mock_token: str,
+    auth_headers: dict,
     mock_user_id: str
 ):
     """
@@ -199,6 +223,8 @@ async def test_delete_unused_tool_returns_204(
     Acceptance Scenario 5: Given I have a custom tool not in use, When I delete it, 
     Then it is soft-deleted (is_active = false) and no longer appears in my tool list.
     """
+    from sqlalchemy import select, delete
+    
     # Create unused tool
     unique_name = f"unused_test_tool_{uuid.uuid4().hex[:8]}"
     tool = ToolDefinition(
@@ -216,37 +242,41 @@ async def test_delete_unused_tool_returns_204(
     await db_session.refresh(tool)
     tool_id = tool.id
     
-    # Delete tool
-    response = await client.delete(
-        f"/agents/tools/{tool_id}",
-        headers={"Authorization": f"Bearer {mock_token}"},
-    )
-    
-    assert response.status_code == 204
-    
-    # Verify tool is soft-deleted (query fresh from DB)
-    db_session.expire_all()  # Expire all cached objects (sync method)
-    from sqlalchemy import select
-    stmt = select(ToolDefinition).where(ToolDefinition.id == tool_id)
-    result = await db_session.execute(stmt)
-    tool = result.scalar_one_or_none()
-    assert tool is not None, "Tool should still exist in database"
-    assert tool.is_active is False, "Tool should be soft-deleted"
-    
-    # Verify tool no longer in list
-    response = await client.get(
-        "/agents/tools",
-        headers={"Authorization": f"Bearer {mock_token}"},
-    )
-    tool_ids = [t["id"] for t in response.json()]
-    assert str(tool_id) not in tool_ids, "Deleted tool should not appear in list"
+    try:
+        # Delete tool
+        response = await client.delete(
+            f"/agents/tools/{tool_id}",
+            headers=auth_headers,
+        )
+        
+        assert response.status_code == 204
+        
+        # Verify tool is soft-deleted (query fresh from DB)
+        db_session.expire_all()  # Expire all cached objects (sync method)
+        stmt = select(ToolDefinition).where(ToolDefinition.id == tool_id)
+        result = await db_session.execute(stmt)
+        tool = result.scalar_one_or_none()
+        assert tool is not None, "Tool should still exist in database"
+        assert tool.is_active is False, "Tool should be soft-deleted"
+        
+        # Verify tool no longer in list
+        response = await client.get(
+            "/agents/tools",
+            headers=auth_headers,
+        )
+        tool_ids = [t["id"] for t in response.json()]
+        assert str(tool_id) not in tool_ids, "Deleted tool should not appear in list"
+    finally:
+        # Cleanup: hard-delete the tool after test completes (it was soft-deleted)
+        await db_session.execute(delete(ToolDefinition).where(ToolDefinition.id == tool_id))
+        await db_session.commit()
 
 
 @pytest.mark.asyncio
 async def test_update_builtin_tool_returns_403(
     client: AsyncClient,
     builtin_tool_id: uuid.UUID,
-    mock_token: str
+    auth_headers: dict
 ):
     """
     Test: Cannot update built-in tools.
@@ -257,7 +287,7 @@ async def test_update_builtin_tool_returns_403(
     response = await client.put(
         f"/agents/tools/{builtin_tool_id}",
         json={"description": "Trying to update built-in tool"},
-        headers={"Authorization": f"Bearer {mock_token}"},
+        headers=auth_headers,
     )
     
     assert response.status_code == 403

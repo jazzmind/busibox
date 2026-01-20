@@ -173,12 +173,37 @@ class UsageLimits:
         )
 
 
+def _resolve_jsonpath(path: str, context: Dict[str, Any]) -> Any:
+    """
+    Resolve a single JSONPath reference (without the $. prefix).
+    
+    Args:
+        path: JSONPath without $. prefix (e.g., "input.query")
+        context: Execution context
+        
+    Returns:
+        Resolved value or None if not found
+    """
+    parts = path.split(".")
+    result = context
+    for part in parts:
+        if isinstance(result, dict):
+            result = result.get(part)
+        else:
+            return None
+    return result
+
+
 def _resolve_value(value: Any, context: Dict[str, Any]) -> Any:
     """
     Resolve a value that may contain JSONPath-like references.
     
+    Handles two cases:
+    1. Entire string is a reference: "$.input.query" -> resolved value
+    2. String contains embedded references: "Query: $.input.query" -> "Query: actual value"
+    
     Args:
-        value: Value to resolve (may be string starting with '$.')
+        value: Value to resolve (may be string with $.references)
         context: Execution context with step outputs
         
     Returns:
@@ -186,19 +211,38 @@ def _resolve_value(value: Any, context: Dict[str, Any]) -> Any:
         
     Examples:
         _resolve_value("$.input.path", {"input": {"path": "/doc.pdf"}}) -> "/doc.pdf"
+        _resolve_value("Query: $.input.query", {"input": {"query": "test"}}) -> "Query: test"
         _resolve_value("literal", {}) -> "literal"
     """
-    if isinstance(value, str) and value.startswith("$."):
-        # Simple JSONPath resolution: $.step_id.field
-        parts = value[2:].split(".")
-        result = context
-        for part in parts:
-            if isinstance(result, dict):
-                result = result.get(part)
-            else:
-                return None
-        return result
-    return value
+    import re
+    
+    if not isinstance(value, str):
+        return value
+    
+    # Case 1: Entire string is a single reference
+    if value.startswith("$.") and " " not in value and "\n" not in value:
+        # Check if it's a pure reference (no other text)
+        path = value[2:]
+        # Verify it looks like a simple path (letters, dots, underscores, numbers)
+        if re.match(r'^[\w.]+$', path):
+            return _resolve_jsonpath(path, context)
+    
+    # Case 2: String contains embedded references - interpolate all $.xxx occurrences
+    # Match $.word.word.word patterns (one or more path segments)
+    pattern = r'\$\.([\w]+(?:\.[\w]+)*)'
+    
+    def replace_ref(match):
+        path = match.group(1)
+        resolved = _resolve_jsonpath(path, context)
+        if resolved is None:
+            return match.group(0)  # Keep original if not found
+        # Convert to string representation for embedding
+        if isinstance(resolved, (dict, list)):
+            import json
+            return json.dumps(resolved, indent=2)
+        return str(resolved)
+    
+    return re.sub(pattern, replace_ref, value)
 
 
 def _resolve_args(args: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
@@ -431,12 +475,8 @@ async def execute_workflow(
             purpose=purpose,
         )
         
-        # Create Busibox client
-        busibox_client = BusiboxClient(
-            search_url="http://search-api:8003",
-            ingest_url="http://ingest-api:8002",
-            bearer_token=token_response.access_token,
-        )
+        # Create Busibox client with exchanged token
+        busibox_client = BusiboxClient(access_token=token_response.access_token)
         
         # Execute steps sequentially
         for step in workflow.steps:
@@ -473,36 +513,58 @@ async def execute_workflow(
                     
                 elif step_type == "agent":
                     # Execute agent
+                    from app.services.builtin_agents import get_builtin_agent_by_name
+                    
                     agent_name = step.get("agent")
                     agent_input = step.get("input", "")
                     resolved_input = _resolve_value(agent_input, context)
                     
                     logger.info(f"Executing agent {agent_name} in step {step_id}")
                     
-                    # Find agent by name (simplified - could be improved)
-                    from sqlalchemy import select
-                    from app.models.domain import AgentDefinition
+                    # First check builtin agents
+                    builtin_agent = get_builtin_agent_by_name(agent_name) if agent_name else None
                     
-                    stmt = select(AgentDefinition).where(
-                        AgentDefinition.name == agent_name,
-                        AgentDefinition.is_active.is_(True),
-                    )
-                    result = await session.execute(stmt)
-                    agent_def = result.scalars().first()
+                    if builtin_agent:
+                        # Execute builtin agent directly
+                        deps = BusiboxDeps(principal=principal, busibox_client=busibox_client)
+                        agent_result = await builtin_agent.run(str(resolved_input), deps=deps)
+                    else:
+                        # Find agent by name in database
+                        from sqlalchemy import select
+                        from app.models.domain import AgentDefinition
+                        
+                        stmt = select(AgentDefinition).where(
+                            AgentDefinition.name == agent_name,
+                            AgentDefinition.is_active.is_(True),
+                        )
+                        result = await session.execute(stmt)
+                        agent_def = result.scalars().first()
+                        
+                        if not agent_def:
+                            raise WorkflowExecutionError(f"Agent {agent_name} not found")
+                        
+                        # Get agent from registry
+                        agent = agent_registry.get(agent_def.id)
+                        
+                        # Execute agent
+                        deps = BusiboxDeps(principal=principal, busibox_client=busibox_client)
+                        agent_result = await agent.run(str(resolved_input), deps=deps)
                     
-                    if not agent_def:
-                        raise WorkflowExecutionError(f"Agent {agent_name} not found")
-                    
-                    # Get agent from registry
-                    agent = agent_registry.get(agent_def.id)
-                    
-                    # Execute agent
-                    deps = BusiboxDeps(principal=principal, busibox_client=busibox_client)
-                    agent_result = await agent.run(str(resolved_input), deps=deps)
-                    
-                    # Extract output
-                    if hasattr(agent_result, "data") and hasattr(agent_result.data, "model_dump"):
-                        output = agent_result.data.model_dump()
+                    # Extract output from agent result
+                    # Handle different result types:
+                    # 1. PydanticAI agents return RunResult with .data that has model_dump()
+                    # 2. BaseStreamingAgent returns AgentResult with .data as string
+                    if hasattr(agent_result, "data"):
+                        if hasattr(agent_result.data, "model_dump"):
+                            output = agent_result.data.model_dump()
+                        elif isinstance(agent_result.data, str):
+                            output = {"result": agent_result.data, "content": agent_result.data}
+                        elif isinstance(agent_result.data, dict):
+                            output = agent_result.data
+                        else:
+                            output = {"result": str(agent_result.data)}
+                    elif hasattr(agent_result, "output"):
+                        output = {"result": agent_result.output} if isinstance(agent_result.output, str) else agent_result.output
                     else:
                         output = {"result": str(agent_result)}
                     

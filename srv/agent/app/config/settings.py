@@ -20,6 +20,10 @@ class Settings(BaseSettings):
         "agent",
         description="Default model purpose for LiteLLM (e.g., agent, fast, frontier, etc.)",
     )
+    fast_model: str = Field(
+        "fast",
+        description="Fast/cheap model for simple tasks like query optimization",
+    )
     litellm_base_url: AnyHttpUrl = Field(
         "http://10.96.200.207:4000/v1",
         description="Base URL for LiteLLM proxy (OpenAI-compatible endpoint)",
@@ -105,6 +109,22 @@ class Settings(BaseSettings):
     perplexity_api_key: Optional[str] = Field(None, description="Perplexity API key")
     search_brave_enabled: bool = Field(False, description="Enable Brave search")
     brave_api_key: Optional[str] = Field(None, description="Brave API key")
+
+    # Portal/UI URLs (for notification links)
+    portal_base_url: str = Field(
+        "https://localhost",
+        description="Base URL for portal links in notifications",
+    )
+    
+    # Email/SMTP configuration
+    smtp_host: Optional[str] = Field(None, description="SMTP server host")
+    smtp_port: int = Field(587, description="SMTP server port")
+    smtp_username: Optional[str] = Field(None, description="SMTP username")
+    smtp_password: Optional[str] = Field(None, description="SMTP password")
+    email_from: str = Field(
+        "noreply@busibox.local",
+        description="Default from address for emails",
+    )
 
     # CORS
     cors_origins: List[str] = Field(default_factory=lambda: ["*"])

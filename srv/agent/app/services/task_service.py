@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import and_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.domain import AgentDefinition, AgentTask, RunRecord, TaskExecution
+from app.models.domain import AgentDefinition, AgentTask, RunRecord, TaskExecution, WorkflowDefinition
 from app.schemas.auth import Principal
 from app.schemas.task import (
     InsightsConfig,
@@ -58,22 +58,51 @@ async def create_task(
         Created AgentTask
         
     Raises:
-        ValueError: If agent not found or validation fails
+        ValueError: If agent/workflow not found or validation fails
     """
-    # Verify agent exists - check both database and built-in code agents
-    agent_result = await session.execute(
-        select(AgentDefinition).where(AgentDefinition.id == task_data.agent_id)
-    )
-    agent = agent_result.scalar_one_or_none()
+    from app.services.builtin_workflows import get_builtin_workflow_definitions, is_builtin_workflow
     
-    # If not found in database, check built-in agents loaded from code
-    agent_name = agent.name if agent else None
-    if not agent:
-        builtin_agents = get_builtin_agent_definitions()
-        builtin_agent_map = {a.id: a for a in builtin_agents}
-        if task_data.agent_id not in builtin_agent_map:
-            raise ValueError(f"Agent {task_data.agent_id} not found")
-        agent_name = builtin_agent_map[task_data.agent_id].name
+    # Validate that either agent_id or workflow_id is provided
+    if not task_data.agent_id and not task_data.workflow_id:
+        raise ValueError("Either agent_id or workflow_id must be provided")
+    if task_data.agent_id and task_data.workflow_id:
+        raise ValueError("Cannot specify both agent_id and workflow_id")
+    
+    target_name = None
+    
+    if task_data.agent_id:
+        # Verify agent exists - check both database and built-in code agents
+        agent_result = await session.execute(
+            select(AgentDefinition).where(AgentDefinition.id == task_data.agent_id)
+        )
+        agent = agent_result.scalar_one_or_none()
+        
+        # If not found in database, check built-in agents loaded from code
+        target_name = agent.name if agent else None
+        if not agent:
+            builtin_agents = get_builtin_agent_definitions()
+            builtin_agent_map = {a.id: a for a in builtin_agents}
+            if task_data.agent_id not in builtin_agent_map:
+                raise ValueError(f"Agent {task_data.agent_id} not found")
+            target_name = builtin_agent_map[task_data.agent_id].name
+    
+    elif task_data.workflow_id:
+        # Verify workflow exists - check both database and built-in workflows
+        workflow_result = await session.execute(
+            select(WorkflowDefinition).where(WorkflowDefinition.id == task_data.workflow_id)
+        )
+        workflow = workflow_result.scalar_one_or_none()
+        
+        target_name = workflow.name if workflow else None
+        if not workflow:
+            # Check built-in workflows
+            if not is_builtin_workflow(task_data.workflow_id):
+                raise ValueError(f"Workflow {task_data.workflow_id} not found")
+            builtin_workflows = get_builtin_workflow_definitions()
+            for bw in builtin_workflows:
+                if bw.id == task_data.workflow_id:
+                    target_name = bw.name
+                    break
     
     # Handle schedule presets
     trigger_config = task_data.trigger_config.model_dump()
@@ -139,6 +168,7 @@ async def create_task(
         description=task_data.description,
         user_id=principal.sub,
         agent_id=task_data.agent_id,
+        workflow_id=task_data.workflow_id,
         prompt=task_data.prompt,
         input_config=task_data.input_config,
         trigger_type=task_data.trigger_type,
@@ -157,9 +187,10 @@ async def create_task(
     await session.commit()
     await session.refresh(task)
     
+    target_type = "agent" if task_data.agent_id else "workflow"
     logger.info(
         f"Created task {task.id} for user {principal.sub}, "
-        f"trigger_type={task.trigger_type}, agent={agent_name}"
+        f"trigger_type={task.trigger_type}, {target_type}={target_name}"
     )
     
     return task
@@ -258,29 +289,38 @@ async def update_task(
     """
     task = await get_task(session, task_id, user_id)
     if not task:
+        logger.warning(f"Task {task_id} not found for user {user_id}")
         return None
     
     # Apply updates
     update_dict = update_data.model_dump(exclude_unset=True)
+    logger.info(f"Updating task {task_id} with fields: {list(update_dict.keys())}, values: {update_dict}")
     
     for field, value in update_dict.items():
-        if value is not None:
+        # Handle nullable fields (agent_id/workflow_id can be set to None)
+        if field in ("agent_id", "workflow_id"):
+            logger.info(f"Setting {field}={value}")
+            setattr(task, field, value)
+        elif value is not None:
             if field == "trigger_config" and isinstance(value, dict):
-                # Merge trigger config
-                current = task.trigger_config or {}
+                # Merge trigger config - create new dict to trigger SQLAlchemy change detection
+                current = dict(task.trigger_config or {})
+                logger.info(f"Merging trigger_config: current={current}, incoming={value}")
                 current.update(value)
-                setattr(task, field, current)
+                task.trigger_config = current  # Assign new dict
+                logger.info(f"trigger_config after merge: {task.trigger_config}")
             elif field == "notification_config" and isinstance(value, dict):
-                # Merge notification config
-                current = task.notification_config or {}
+                # Merge notification config - create new dict to trigger SQLAlchemy change detection
+                current = dict(task.notification_config or {})
                 current.update(value)
-                setattr(task, field, current)
+                task.notification_config = current  # Assign new dict
             elif field == "insights_config" and isinstance(value, dict):
-                # Merge insights config
-                current = task.insights_config or {}
+                # Merge insights config - create new dict to trigger SQLAlchemy change detection
+                current = dict(task.insights_config or {})
                 current.update(value)
-                setattr(task, field, current)
+                task.insights_config = current  # Assign new dict
             else:
+                logger.info(f"Setting {field}={value}")
                 setattr(task, field, value)
     
     # Update next_run_at if trigger config changed
@@ -655,6 +695,7 @@ def task_to_read(
         description=task.description,
         user_id=task.user_id,
         agent_id=task.agent_id,
+        workflow_id=task.workflow_id,
         prompt=task.prompt,
         trigger_type=task.trigger_type,
         trigger_config=task.trigger_config or {},

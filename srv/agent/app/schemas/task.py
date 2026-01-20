@@ -109,7 +109,8 @@ class TaskCreate(BaseModel):
     
     name: str = Field(..., description="Human-readable task name", min_length=1, max_length=255)
     description: Optional[str] = Field(None, description="Task description")
-    agent_id: uuid.UUID = Field(..., description="Target agent to execute")
+    agent_id: Optional[uuid.UUID] = Field(None, description="Target agent to execute (either agent_id or workflow_id required)")
+    workflow_id: Optional[uuid.UUID] = Field(None, description="Target workflow to execute (either agent_id or workflow_id required)")
     prompt: str = Field(..., description="Task prompt/instructions for the agent")
     
     # Trigger configuration
@@ -162,6 +163,10 @@ class TaskUpdate(BaseModel):
     description: Optional[str] = None
     prompt: Optional[str] = None
     
+    # Target agent or workflow update (set one, clear the other)
+    agent_id: Optional[uuid.UUID] = Field(None, description="Target agent to execute")
+    workflow_id: Optional[uuid.UUID] = Field(None, description="Target workflow to execute")
+    
     # Trigger updates
     trigger_config: Optional[TriggerConfig] = None
     
@@ -185,7 +190,8 @@ class TaskRead(BaseModel):
     name: str
     description: Optional[str]
     user_id: str
-    agent_id: uuid.UUID
+    agent_id: Optional[uuid.UUID] = None
+    workflow_id: Optional[uuid.UUID] = None
     prompt: str
     
     # Trigger

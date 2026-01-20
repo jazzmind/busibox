@@ -535,3 +535,75 @@ async def get_task_insights(
         "count": 0,
         "message": "Task insights feature pending implementation",
     }
+
+
+@router.get("/{task_id}/notifications")
+async def get_task_notifications(
+    task_id: uuid.UUID,
+    limit: int = Query(20, ge=1, le=100, description="Max results"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+):
+    """
+    Get notification history for a task.
+    
+    Returns all notifications sent for this task across all executions,
+    including delivery status, timestamps, and any errors.
+    
+    Args:
+        task_id: Task UUID
+        limit: Maximum number of notifications
+        offset: Pagination offset
+        principal: Authenticated user
+        session: Database session
+        
+    Returns:
+        List of notifications with delivery status
+    """
+    from sqlalchemy import select
+    from app.models.domain import TaskNotification
+    
+    # Verify task exists and user has access
+    task = await get_task(session, task_id, principal.sub)
+    
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task {task_id} not found",
+        )
+    
+    # Get notifications
+    stmt = (
+        select(TaskNotification)
+        .where(TaskNotification.task_id == task_id)
+        .order_by(TaskNotification.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    
+    result = await session.execute(stmt)
+    notifications = result.scalars().all()
+    
+    return {
+        "task_id": str(task_id),
+        "notifications": [
+            {
+                "id": str(n.id),
+                "execution_id": str(n.execution_id),
+                "channel": n.channel,
+                "recipient": n.recipient,
+                "subject": n.subject,
+                "status": n.status,
+                "message_id": n.message_id,
+                "sent_at": n.sent_at.isoformat() if n.sent_at else None,
+                "delivered_at": n.delivered_at.isoformat() if n.delivered_at else None,
+                "read_at": n.read_at.isoformat() if n.read_at else None,
+                "error": n.error,
+                "retry_count": n.retry_count,
+                "created_at": n.created_at.isoformat() if n.created_at else None,
+            }
+            for n in notifications
+        ],
+        "count": len(notifications),
+    }

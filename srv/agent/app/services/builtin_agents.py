@@ -34,7 +34,7 @@ AgentInstance = Union[Agent, BaseStreamingAgent]
 #   - template_improvement_agent
 BUILTIN_AGENT_METADATA = {
     "chat_agent": {
-        "name": "chat",
+        "name": "chat-agent",
         "display_name": "Chat Assistant",
         "description": "General purpose chat agent with access to web search, weather, document search, and ingestion tools",
         "model": "chat",
@@ -50,7 +50,7 @@ BUILTIN_AGENT_METADATA = {
         "tools": ["document_search"],
     },
     "web_search_agent": {
-        "name": "web-search",
+        "name": "web-search-agent",
         "display_name": "Web Search Agent",
         "description": "Finds up-to-date information from the internet using web search",
         "model": "agent",
@@ -58,7 +58,7 @@ BUILTIN_AGENT_METADATA = {
         "tools": ["web_search", "web_scraper"],
     },
     "weather_agent": {
-        "name": "weather",
+        "name": "weather-agent",
         "display_name": "Weather Agent",
         "description": "Provides weather information for any location using real-time data",
         "model": "agent",
