@@ -4,12 +4,23 @@
 #
 # Development overlay for Next.js apps with:
 #   - Volume-mounted source code for live editing
-#   - busibox-app npm-linked from local source
-#   - Turbopack hot-reload
+#   - busibox-app mounted at /app/.busibox-app and symlinked into node_modules
+#   - Turbopack hot-reload with full busibox-app support
+#
+# Prerequisites:
+#   - Build busibox-app on host: cd ../busibox-app && npm run build
+#   - Set GITHUB_AUTH_TOKEN in .env.local
 #
 # Usage:
 #   docker compose -f docker-compose.local.yml -f docker-compose.dev.yml up
-#   Or: make docker-up (default)
+#   Or: make docker-up ENV=development
+#
+# How busibox-app linking works:
+#   1. busibox-app is mounted at /app/.busibox-app (inside project for Turbopack)
+#   2. dev-entrypoint.sh creates symlink: node_modules/@jazzmind/busibox-app -> /app/.busibox-app
+#   3. next.config.ts has transpilePackages: ['@jazzmind/busibox-app']
+#
+# See docs/development/docker-dev-mode.md for full documentation.
 #
 # =============================================================================
 
@@ -53,6 +64,8 @@ services:
       # Base path for nginx subpath routing
       NEXT_PUBLIC_BASE_PATH: /portal
       # Backend service URLs (for server-side API calls)
+      # Note: AGENT_API_URL overrides any .env file setting
+      AGENT_API_URL: http://agent-api:8000
       INGEST_API_HOST: ingest-api
       INGEST_API_PORT: "8002"
       SEARCH_API_HOST: search-api
@@ -68,15 +81,16 @@ services:
       - ai-portal-node-modules:/app/node_modules
       # Preserve .next build cache
       - ai-portal-next-cache:/app/.next
-      # Mount busibox-app source for npm link
-      - ../busibox-app:/busibox-app
+      # Mount busibox-app INSIDE /app so outputFileTracingRoot works
+      - ../busibox-app:/app/.busibox-app:ro
     depends_on:
       postgres:
         condition: service_healthy
       authz-api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      # Note: basePath is /portal, so health is at /portal/api/health
+      test: ["CMD", "curl", "-f", "http://localhost:3000/portal/api/health"]
       interval: 30s
       timeout: 10s
       start_period: 120s
@@ -120,13 +134,14 @@ services:
       - agent-manager-node-modules:/app/node_modules
       # Preserve .next build cache
       - agent-manager-next-cache:/app/.next
-      # Mount busibox-app source for npm link
-      - ../busibox-app:/busibox-app
+      # Mount busibox-app INSIDE /app so outputFileTracingRoot works
+      - ../busibox-app:/app/.busibox-app:ro
     depends_on:
       authz-api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/"]
+      # Note: basePath is /agents, so check the base path
+      test: ["CMD", "curl", "-f", "http://localhost:3001/agents"]
       interval: 30s
       timeout: 10s
       start_period: 120s

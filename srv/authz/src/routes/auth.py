@@ -285,9 +285,10 @@ async def validate_session(request: Request, token: str):
     
     The token can be either:
     1. A JWT session token (returned by magic link, TOTP, etc.) - extracts jti to lookup session
-    2. A database session token (legacy) - looks up directly
+    2. A database session token (legacy/better-auth) - looks up directly
     
     Returns the session and user info if valid, 404 if not found/expired.
+    Also returns a session_jwt for use with Zero Trust token exchange.
     """
     await _require_client_auth(request)
 
@@ -295,6 +296,7 @@ async def validate_session(request: Request, token: str):
     await db.connect()
     
     session = None
+    is_jwt_token = False
     
     # Try to decode as JWT first
     try:
@@ -305,6 +307,7 @@ async def validate_session(request: Request, token: str):
         if jti:
             # Look up session by session_id (jti)
             session = await db.get_session_by_id(jti)
+            is_jwt_token = True
     except (jwt.DecodeError, jwt.InvalidTokenError):
         # Not a JWT, try as database token
         pass
@@ -316,10 +319,24 @@ async def validate_session(request: Request, token: str):
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found or expired")
 
+    # Get user info for JWT signing
+    user = session.get("user", {})
+    email = user.get("email", "") if user else ""
+    
+    # Sign a fresh session JWT for Zero Trust token exchange
+    # This allows opaque session tokens (from better-auth) to be used with Zero Trust
+    session_jwt, jwt_expires_at = await _sign_session_jwt(
+        user_id=session["user_id"],
+        email=email,
+        session_id=session["session_id"],
+        db=db
+    )
+
     return {
         "session_id": session["session_id"],
         "user_id": session["user_id"],
-        "token": session.get("token", token),  # Return original token if JWT
+        "token": token if is_jwt_token else session.get("token", token),
+        "session_jwt": session_jwt,  # Fresh JWT for Zero Trust exchange
         "expires_at": _format_datetime(session["expires_at"]),
         "ip_address": session.get("ip_address"),
         "user_agent": session.get("user_agent"),
