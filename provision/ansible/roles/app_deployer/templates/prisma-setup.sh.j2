@@ -32,6 +32,33 @@ fi
 DB_HOST=$(echo "$DATABASE_URL" | sed -E 's/.*@([^:\/]+).*/\1/')
 echo "Database host: $DB_HOST"
 
+# Run pre-migration SQL scripts if they exist
+# These run BEFORE prisma db push to clean up data that might conflict with schema changes
+PRE_MIGRATIONS_DIR="prisma/pre-migrations"
+if [ -d "$PRE_MIGRATIONS_DIR" ]; then
+  SQL_FILES=$(find "$PRE_MIGRATIONS_DIR" -maxdepth 1 -name "*.sql" -type f 2>/dev/null | sort)
+  if [ -n "$SQL_FILES" ]; then
+    echo ""
+    echo "========================================"
+    echo "RUNNING PRE-MIGRATION SQL SCRIPTS"
+    echo "========================================"
+    
+    for sql_file in $SQL_FILES; do
+      echo "Running: $sql_file"
+      if npx prisma db execute --file "$sql_file" 2>&1; then
+        echo "✓ $sql_file executed successfully"
+      else
+        echo "⚠ $sql_file may have already been applied or failed (non-fatal)"
+      fi
+    done
+    
+    echo "========================================"
+    echo "PRE-MIGRATION SCRIPTS COMPLETE"
+    echo "========================================"
+    echo ""
+  fi
+fi
+
 # Check if migrations directory exists and has migrations
 MIGRATIONS_DIR="prisma/migrations"
 if [ -d "$MIGRATIONS_DIR" ] && [ -n "$(find "$MIGRATIONS_DIR" -maxdepth 2 -type d -name '[0-9]*_*' 2>/dev/null)" ]; then
