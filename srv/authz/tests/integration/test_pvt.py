@@ -242,24 +242,22 @@ class TestPVTAudit:
             assert resp.status_code in [401, 403], f"Expected auth required, got {resp.status_code}"
     
     @pytest.mark.asyncio
-    async def test_audit_log_with_client_credentials(self):
-        """Audit log endpoint accepts entries with service account authentication."""
+    async def test_audit_log_security_event(self):
+        """Audit log endpoint accepts security events without authentication."""
         import uuid
-        client_id = require_env("AUTHZ_BOOTSTRAP_CLIENT_ID", AUTHZ_BOOTSTRAP_CLIENT_ID)
-        client_secret = require_env("AUTHZ_BOOTSTRAP_CLIENT_SECRET", AUTHZ_BOOTSTRAP_CLIENT_SECRET)
         
-        test_action = f"pvt.test.{uuid.uuid4().hex[:8]}"
+        # Security events (auth.login.*, auth.logout, etc.) can be logged without auth
+        # This allows logging failed login attempts before authentication succeeds
+        test_action = f"auth.login.pvt_test.{uuid.uuid4().hex[:8]}"
         
         async with httpx.AsyncClient() as client:
-            # Use client credentials in the request body
             resp = await client.post(
                 f"{SERVICE_URL}/audit/log",
                 json={
-                    "client_id": client_id,
-                    "client_secret": client_secret,
                     "actor_id": "00000000-0000-0000-0000-000000000001",
                     "action": test_action,
-                    "resource_type": "pvt_test",
+                    "resource_type": "session",
+                    "event_type": "auth",
                     "details": {"test": True, "source": "pvt"},
                 },
                 timeout=5.0,
