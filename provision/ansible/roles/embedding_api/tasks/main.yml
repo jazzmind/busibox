@@ -55,7 +55,7 @@
 
 - name: Copy embedding source code
   ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../../../srv/embedding/src/"
+    src: "{{ playbook_dir }}/../../srv/embedding/src/"
     dest: "{{ embedding_api_src_path }}/"
     owner: "{{ embedding_api_user }}"
     group: "{{ embedding_api_user }}"
@@ -65,7 +65,7 @@
 
 - name: Copy requirements.txt
   ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../../../srv/embedding/requirements.txt"
+    src: "{{ playbook_dir }}/../../srv/embedding/requirements.txt"
     dest: /opt/embedding/requirements.txt
     owner: "{{ embedding_api_user }}"
     group: "{{ embedding_api_user }}"
