@@ -244,21 +244,17 @@ class TestPVTAudit:
     @pytest.mark.asyncio
     async def test_audit_log_security_event(self):
         """Audit log endpoint accepts security events without authentication."""
-        import uuid
-        
-        # Security events (auth.login.*, auth.logout, etc.) can be logged without auth
+        # Security events like "user.login.failed" can be logged without auth
         # This allows logging failed login attempts before authentication succeeds
-        test_action = f"auth.login.pvt_test.{uuid.uuid4().hex[:8]}"
-        
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 f"{SERVICE_URL}/audit/log",
                 json={
                     "actor_id": "00000000-0000-0000-0000-000000000001",
-                    "action": test_action,
+                    "action": "user.login.failed",  # This is a known security event
                     "resource_type": "session",
                     "event_type": "auth",
-                    "details": {"test": True, "source": "pvt"},
+                    "details": {"test": True, "source": "pvt", "reason": "test_pvt"},
                 },
                 timeout=5.0,
             )
