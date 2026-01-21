@@ -1,8 +1,9 @@
 """
-Integration tests for token exchange to ingest-api.
+Integration tests for Zero Trust token exchange to ingest-api.
 
-Tests that the agent-api can properly exchange tokens to get 
-ingest-api audience tokens for embedding generation and content ingestion.
+Tests that the agent-api can properly exchange tokens using Zero Trust mode
+(passing the user's JWT as subject_token) to get ingest-api audience tokens
+for embedding generation and content ingestion.
 """
 
 import pytest
@@ -10,17 +11,57 @@ import pytest
 from app.auth.tokens import get_service_token
 
 
+async def _get_user_token(test_user_id: str) -> str:
+    """
+    Get a valid user JWT for testing.
+    
+    In Zero Trust mode, we need the user's actual JWT to exchange.
+    This gets a token from AuthZ using the bootstrap client.
+    """
+    import httpx
+    import os
+    
+    authz_url = os.environ.get(
+        "AUTH_TOKEN_URL",
+        os.environ.get("AUTHZ_TOKEN_URL", "http://authz-api:8010/oauth/token")
+    )
+    bootstrap_client_id = os.environ.get("AUTHZ_BOOTSTRAP_CLIENT_ID", "ai-portal")
+    bootstrap_client_secret = os.environ.get("AUTHZ_BOOTSTRAP_CLIENT_SECRET", "")
+    
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.post(
+            authz_url,
+            data={
+                "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                "client_id": bootstrap_client_id,
+                "client_secret": bootstrap_client_secret,
+                "requested_subject": test_user_id,
+                "audience": "agent-api",
+                "scope": "read write",
+            },
+        )
+        
+        if response.status_code != 200:
+            raise ValueError(f"Failed to get user token: {response.status_code} - {response.text}")
+        
+        return response.json()["access_token"]
+
+
 @pytest.mark.asyncio
 async def test_token_exchange_to_ingest_api(test_user_id: str):
     """
-    Test that we can exchange tokens to get an ingest-api token.
+    Test that we can exchange tokens to get an ingest-api token using Zero Trust.
     
     This is critical for:
     - Saving task insights (requires embedding generation)
     - Saving task outputs to document library (requires content ingestion)
     """
-    # Get an ingest-api token for the test user
+    # First get a user JWT (agent-api audience)
+    user_token = await _get_user_token(test_user_id)
+    
+    # Exchange it for an ingest-api token using Zero Trust
     ingest_token = await get_service_token(
+        user_token=user_token,
         user_id=test_user_id,
         target_audience="ingest-api",
     )
@@ -34,9 +75,14 @@ async def test_token_exchange_to_ingest_api(test_user_id: str):
 @pytest.mark.asyncio
 async def test_token_exchange_to_search_api(test_user_id: str):
     """
-    Test that we can exchange tokens to get a search-api token.
+    Test that we can exchange tokens to get a search-api token using Zero Trust.
     """
+    # First get a user JWT
+    user_token = await _get_user_token(test_user_id)
+    
+    # Exchange it for a search-api token
     search_token = await get_service_token(
+        user_token=user_token,
         user_id=test_user_id,
         target_audience="search-api",
     )
@@ -51,18 +97,23 @@ async def test_ingest_api_embedding_endpoint_with_exchanged_token(test_user_id: 
     """
     Test that the exchanged ingest-api token can call the embeddings endpoint.
     
-    This validates the full flow:
-    1. Exchange token to ingest-api audience
-    2. Call ingest-api embeddings endpoint with that token
-    3. Get embeddings back
+    This validates the full Zero Trust flow:
+    1. Get user token for agent-api audience
+    2. Exchange to ingest-api audience using subject_token (no client creds)
+    3. Call ingest-api embeddings endpoint with that token
+    4. Get embeddings back
     """
     import httpx
     from app.config.settings import get_settings
     
     settings = get_settings()
     
-    # Get an ingest-api token
+    # Get a user JWT first
+    user_token = await _get_user_token(test_user_id)
+    
+    # Exchange for ingest-api token
     ingest_token = await get_service_token(
+        user_token=user_token,
         user_id=test_user_id,
         target_audience="ingest-api",
     )
@@ -101,8 +152,12 @@ async def test_ingest_api_content_endpoint_with_exchanged_token(test_user_id: st
     
     settings = get_settings()
     
-    # Get an ingest-api token
+    # Get a user JWT first
+    user_token = await _get_user_token(test_user_id)
+    
+    # Exchange for ingest-api token
     ingest_token = await get_service_token(
+        user_token=user_token,
         user_id=test_user_id,
         target_audience="ingest-api",
     )

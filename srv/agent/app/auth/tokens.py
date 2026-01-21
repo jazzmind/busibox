@@ -3,6 +3,12 @@ JWT Token validation and OAuth2 Token Exchange for Agent Service.
 
 This module provides token validation and exchange functionality for the agent service.
 Uses busibox_common.auth for shared JWT utilities.
+
+Token Exchange Strategy:
+- Uses Zero Trust token exchange (subject_token mode) - NO client credentials
+- The user's JWT is passed as subject_token to AuthZ
+- AuthZ verifies the signature and issues a new audience-bound token
+- This eliminates the need for service-specific OAuth clients
 """
 
 import logging
@@ -12,7 +18,7 @@ from typing import Dict, List
 from busibox_common.auth import (
     create_jwks_client,
     parse_jwt_token,
-    TokenExchangeClient,
+    exchange_token_zero_trust,
 )
 
 from app.config.settings import get_settings
@@ -23,7 +29,6 @@ logger = logging.getLogger(__name__)
 
 # Cached clients (lazy initialization)
 _jwks_client = None
-_token_exchange_client = None
 
 
 def _get_jwks_client():
@@ -32,18 +37,6 @@ def _get_jwks_client():
     if _jwks_client is None:
         _jwks_client = create_jwks_client(str(settings.auth_jwks_url))
     return _jwks_client
-
-
-def _get_token_exchange_client():
-    """Get or create token exchange client."""
-    global _token_exchange_client
-    if _token_exchange_client is None:
-        _token_exchange_client = TokenExchangeClient(
-            token_url=str(settings.auth_token_url),
-            client_id=settings.auth_client_id,
-            client_secret=settings.auth_client_secret,
-        )
-    return _token_exchange_client
 
 
 def _extract_scopes(claims: Dict) -> List[str]:
@@ -108,16 +101,34 @@ async def exchange_token(
     principal: Principal, scopes: List[str], purpose: str
 ) -> TokenExchangeResponse:
     """
-    Exchange a user token for a downstream token using OAuth2 token exchange (RFC 8693 style).
+    Exchange a user token for a downstream token using Zero Trust token exchange.
+    
+    Uses the user's JWT as subject_token - NO client credentials required.
     Tokens are audience-bound to a single downstream service.
+    
+    Args:
+        principal: The authenticated user's principal (must include their JWT token)
+        scopes: Requested scopes for the new token
+        purpose: Purpose description to determine target audience
+        
+    Returns:
+        TokenExchangeResponse with the new audience-bound token
+        
+    Raises:
+        ValueError: If token exchange fails or principal has no token
     """
-    client = _get_token_exchange_client()
+    if not principal.token:
+        raise ValueError("Principal must have a token for Zero Trust exchange")
+    
     audience = _audience_for_purpose(purpose, scopes)
     
-    access_token = await client.get_token_for_service(
-        user_id=principal.sub,
+    # Use Zero Trust exchange - pass user's JWT as subject_token
+    access_token = await exchange_token_zero_trust(
+        subject_token=principal.token,
         target_audience=audience,
-        scope=" ".join(scopes),
+        user_id=principal.sub,
+        scopes=" ".join(scopes),
+        authz_url=str(settings.auth_token_url),
     )
     
     if not access_token:
@@ -161,15 +172,16 @@ def _audience_for_purpose(purpose: str, scopes: List[str]) -> str:
     return "agent-api"
 
 
-async def get_service_token(user_id: str, target_audience: str) -> str:
+async def get_service_token(user_token: str, user_id: str, target_audience: str) -> str:
     """
     Get a token for calling a downstream service on behalf of a user.
     
-    Uses client credentials token exchange to get a token with the correct
-    audience for the target service.
+    Uses Zero Trust token exchange - passes the user's JWT as subject_token.
+    NO client credentials are used.
     
     Args:
-        user_id: The user ID to impersonate
+        user_token: The user's current JWT token
+        user_id: The user ID (for logging/caching)
         target_audience: The target service audience (e.g., "ingest-api")
         
     Returns:
@@ -178,12 +190,12 @@ async def get_service_token(user_id: str, target_audience: str) -> str:
     Raises:
         ValueError: If token exchange fails
     """
-    client = _get_token_exchange_client()
-    
-    access_token = await client.get_token_for_service(
-        user_id=user_id,
+    access_token = await exchange_token_zero_trust(
+        subject_token=user_token,
         target_audience=target_audience,
-        scope="read write",
+        user_id=user_id,
+        scopes="read write",
+        authz_url=str(settings.auth_token_url),
     )
     
     if not access_token:

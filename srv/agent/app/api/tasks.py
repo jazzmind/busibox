@@ -95,11 +95,16 @@ async def _save_task_insight(
             )
             logger.info(f"Purged {purged} old insights for task {task.id}")
         
-        # Get an ingest-api audience token via token exchange
-        # The delegation token has agent-api audience, but we need ingest-api for embeddings
+        # Get an ingest-api audience token via Zero Trust token exchange
+        # The delegation token has agent-api audience, we exchange it for ingest-api
         try:
+            if not task.delegation_token:
+                logger.warning(f"Task {task.id} has no delegation token for insight saving")
+                return None
+                
             from app.auth.tokens import get_service_token
             ingest_token = await get_service_token(
+                user_token=task.delegation_token,
                 user_id=task.user_id,
                 target_audience="ingest-api",
             )
@@ -194,11 +199,16 @@ async def _save_task_output_to_library(
         # Get tags
         tags = output_saving_config.get("tags", [])
         
-        # Get an ingest-api audience token via token exchange
-        # The delegation token has agent-api audience, but we need ingest-api for content ingestion
+        # Get an ingest-api audience token via Zero Trust token exchange
+        # The delegation token has agent-api audience, we exchange it for ingest-api
         try:
+            if not task.delegation_token:
+                logger.warning(f"Task {task.id} has no delegation token for output saving")
+                return None
+                
             from app.auth.tokens import get_service_token
             access_token = await get_service_token(
+                user_token=task.delegation_token,
                 user_id=task.user_id,
                 target_audience="ingest-api",
             )
