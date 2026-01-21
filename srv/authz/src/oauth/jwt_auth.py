@@ -29,6 +29,29 @@ from oauth.keys import load_private_key
 config = Config()
 
 
+def _scope_matches(granted_scope: str, required_scope: str) -> bool:
+    """
+    Check if a granted scope matches a required scope.
+    
+    Supports glob-style wildcards:
+    - "authz.*" matches "authz.users.read", "authz.roles.write", etc.
+    - "authz.users.*" matches "authz.users.read", "authz.users.write"
+    - Exact matches always work: "authz.users.read" matches "authz.users.read"
+    
+    Note: Wildcards only work in granted scopes (from roles), not required scopes.
+    """
+    # Exact match
+    if granted_scope == required_scope:
+        return True
+    
+    # Glob match: "authz.*" matches "authz.users.read"
+    if granted_scope.endswith(".*"):
+        prefix = granted_scope[:-1]  # "authz." from "authz.*"
+        return required_scope.startswith(prefix)
+    
+    return False
+
+
 @dataclass
 class AuthContext:
     """Authentication context for a request."""
@@ -39,12 +62,21 @@ class AuthContext:
     roles: Optional[List[dict]] = None  # User roles (for session JWT only)
     
     def has_scope(self, scope: str) -> bool:
-        """Check if this auth context has a specific scope."""
-        return scope in self.scopes
+        """
+        Check if this auth context has a specific scope.
+        
+        Supports glob-style wildcards in granted scopes:
+        - If granted "authz.*", will match required "authz.users.read"
+        """
+        return any(_scope_matches(granted, scope) for granted in self.scopes)
     
     def has_any_scope(self, scopes: List[str]) -> bool:
-        """Check if this auth context has any of the specified scopes."""
-        return bool(self.scopes & set(scopes))
+        """
+        Check if this auth context has any of the specified scopes.
+        
+        Supports glob-style wildcards in granted scopes.
+        """
+        return any(self.has_scope(required) for required in scopes)
     
     def require_scope(self, scope: str) -> None:
         """Raise HTTPException if scope is not present."""
