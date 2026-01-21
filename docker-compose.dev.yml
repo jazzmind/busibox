@@ -72,6 +72,8 @@ services:
       SEARCH_API_PORT: "8003"
       AGENT_API_HOST: agent-api
       AGENT_API_PORT: "8000"
+      # Docs API - internal container URL for server-side fetching
+      DOCS_API_URL: http://docs-api:8004
     ports:
       - "3000:3000"
     volumes:
@@ -87,6 +89,8 @@ services:
       postgres:
         condition: service_healthy
       authz-api:
+        condition: service_healthy
+      docs-api:
         condition: service_healthy
     healthcheck:
       # Note: basePath is /portal, so health is at /portal/api/health
