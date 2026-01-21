@@ -61,6 +61,7 @@ ssl
 provision/ansible/group_vars/all/model_config.yml
 
 # Busibox state file (user-specific, stores env preferences)
+# Used by both the interactive menu (scripts/make/menu.sh) and Makefile
 .busibox-state
 
 # Demo mode generated files
