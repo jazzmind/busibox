@@ -10,6 +10,10 @@ Group={{ embedding_api_user }}
 WorkingDirectory={{ embedding_api_src_path }}
 EnvironmentFile=/etc/embedding/embedding-api.env
 
+# FastEmbed uses temp directories for model loading
+Environment=TMPDIR=/tmp
+Environment=HOME=/home/{{ embedding_api_user }}
+
 # Use exec form for proper signal handling
 ExecStart={{ embedding_api_venv_path }}/bin/python -m uvicorn main:app --host 0.0.0.0 --port {{ embedding_api_port }} --log-level info
 
@@ -22,12 +26,12 @@ RestartSec=5
 StartLimitIntervalSec=60
 StartLimitBurst=3
 
-# Security hardening
+# Security hardening (relaxed to allow tmp access)
 NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-# Allow write to model cache
-ReadWritePaths=/root/.cache /home/{{ embedding_api_user }}/.cache
+PrivateTmp=false
+
+# Allow write to model cache and temp directories
+ReadWritePaths=/home/{{ embedding_api_user }}/.cache /tmp /var/tmp
 
 # Logging
 StandardOutput=journal
