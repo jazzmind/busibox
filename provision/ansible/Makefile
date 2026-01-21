@@ -211,7 +211,7 @@ apis-agent:
 
 apis-docs:
 	@echo "Deploying Docs API..."
-	ansible-playbook -i $(INV) -l apps site.yml --tags apis_docs $(VAULT_FLAGS)
+	ansible-playbook -i $(INV) -l authz site.yml --tags apis_docs $(VAULT_FLAGS)
 
 apis-bridge:
 	@echo "Deploying Bridge (multi-channel communication)..."
@@ -290,9 +290,9 @@ ingest-update-tests:
 	ansible-playbook -i $(INV) -l ingest site.yml --tags ingest_update_tests $(VAULT_FLAGS)
 	@echo "✓ Test files updated"
 
-# Docs API - Documentation service (runs on apps container)
+# Docs API - Documentation service (runs on authz container)
 docs:
-	ansible-playbook -i $(INV) -l apps site.yml --tags apis_docs $(VAULT_FLAGS)
+	ansible-playbook -i $(INV) -l authz site.yml --tags apis_docs $(VAULT_FLAGS)
 
 apps:
 	ansible-playbook -i $(INV) -l apps site.yml --tags apps $(VAULT_FLAGS)
