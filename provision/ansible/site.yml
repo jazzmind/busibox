@@ -243,6 +243,7 @@
 # =============================================================================
 
 # 3.1 AuthZ (authentication/authorization) - needed by all other APIs
+#     Also hosts Docs API (both are lightweight Python services)
 - hosts: authz
   tags: [apis, apis_authz]
   roles:
@@ -250,6 +251,8 @@
       tags: [apis, apis_authz, authz, node_common]
     - role: authz
       tags: [apis, apis_authz, authz]
+    - role: docs_api
+      tags: [apis, apis_docs, docs, docs_api]
 
 # 3.2 Ingest (file ingestion + embedding)
 - hosts: ingest
@@ -275,13 +278,6 @@
   roles:
     - role: agent_api
       tags: [apis, apis_agent, agent, agent_api]
-
-# 3.5 Docs API (runs on apps container)
-- hosts: apps
-  tags: [apis, apis_docs]
-  roles:
-    - role: docs_api
-      tags: [apis, apis_docs, docs, docs_api]
 
 # 3.6 Bridge Service (optional - multi-channel communication)
 - hosts: bridge
