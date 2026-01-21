@@ -246,4 +246,4 @@ class TestPVTAPI:
             
             # Verify expected built-in agents exist
             agent_names = [a["name"] for a in builtin_agents]
-            assert "chat" in agent_names, f"Expected 'chat' agent not found. Available: {agent_names}"
+            assert "chat-agent" in agent_names, f"Expected 'chat-agent' not found. Available: {agent_names}"
