@@ -454,7 +454,8 @@ deploy_single_app() {
     done
 }
 
-# Core Services submenu (files, database, vectorstore)
+# Core Services submenu (nginx, files, database, vectorstore)
+# Note: Nginx is FIRST to enable web-driven install recovery
 core_services_menu() {
     local env="$1"
     
@@ -462,14 +463,15 @@ core_services_menu() {
         clear
         box "Core Services - $env" 70
         echo ""
-        info "Select core service to deploy"
+        info "Core infrastructure services (deployed first)"
+        info "Order: nginx -> minio -> postgres -> milvus"
         echo ""
         
         echo -e "  ${CYAN}1)${NC} Deploy All Core Services"
-        echo -e "  ${CYAN}2)${NC} Deploy Authz (RLS token service)"
-        echo -e "  ${CYAN}3)${NC} Deploy Files (MinIO)"
-        echo -e "  ${CYAN}4)${NC} Deploy Database (PostgreSQL)"
-        echo -e "  ${CYAN}5)${NC} Deploy Vectorstore (Milvus)"
+        echo -e "  ${CYAN}2)${NC} Deploy Nginx (web proxy)        ${DIM}[1st - enables web install UI]${NC}"
+        echo -e "  ${CYAN}3)${NC} Deploy MinIO (storage)"
+        echo -e "  ${CYAN}4)${NC} Deploy PostgreSQL (database)"
+        echo -e "  ${CYAN}5)${NC} Deploy Milvus (vector database)"
         echo -e "  ${CYAN}6)${NC} Back"
         echo ""
         
@@ -478,38 +480,32 @@ core_services_menu() {
         
         case "$choice" in
             1)
-                if confirm "Deploy ALL core services (files, pg, milvus, authz) to $env?"; then
-                    # Reset failed services list
-                    FAILED_SERVICES=()
-                    # Deploy each service, continue on failure
-                    for svc in files pg milvus authz; do
-                        deploy_service "$svc" "$env" || true
-                    done
-                    show_deployment_summary
+                if confirm "Deploy ALL core services (nginx, files, pg, milvus) to $env?"; then
+                    deploy_service "core" "$env"
                 fi
                 pause
                 ;;
             2)
-                if confirm "Deploy Authz (RLS token service) to $env?"; then
-                    deploy_service "authz" "$env"
+                if confirm "Deploy Nginx (web proxy) to $env?"; then
+                    deploy_service "core-nginx" "$env"
                 fi
                 pause
                 ;;
             3)
-                if confirm "Deploy Files (MinIO) to $env?"; then
-                    deploy_service "files" "$env"
+                if confirm "Deploy MinIO (storage) to $env?"; then
+                    deploy_service "core-storage" "$env"
                 fi
                 pause
                 ;;
             4)
-                if confirm "Deploy Database (PostgreSQL) to $env?"; then
-                    deploy_service "pg" "$env"
+                if confirm "Deploy PostgreSQL (database) to $env?"; then
+                    deploy_service "core-database" "$env"
                 fi
                 pause
                 ;;
             5)
-                if confirm "Deploy Vectorstore (Milvus) to $env?"; then
-                    deploy_service "milvus" "$env"
+                if confirm "Deploy Milvus (vector database) to $env?"; then
+                    deploy_service "core-vectorstore" "$env"
                 fi
                 pause
                 ;;
@@ -548,11 +544,11 @@ llm_services_menu() {
             echo ""
         fi
         
-        info "Select LLM service to deploy"
+        info "GPU inference, embedding, and LLM gateway"
         echo ""
         
         echo -e "  ${CYAN}1)${NC} Deploy All LLM Services"
-        echo -e "  ${CYAN}2)${NC} Deploy vLLM & Models"
+        echo -e "  ${CYAN}2)${NC} Deploy vLLM (GPU inference)"
         echo -e "  ${CYAN}3)${NC} Deploy ColPali (visual embeddings)"
         echo -e "  ${CYAN}4)${NC} Deploy LiteLLM (gateway)"
         if [ "$env" = "staging" ]; then
@@ -592,17 +588,11 @@ llm_services_menu() {
                     if confirm "Deploy LLM services to $env? (vLLM aliased to production)"; then
                         info "Skipping vLLM/ColPali deployment (aliased to production)"
                         echo ""
-                        deploy_service "litellm" "$env"
+                        deploy_service "llm-litellm" "$env"
                     fi
                 else
                     if confirm "Deploy ALL LLM services (vLLM, ColPali, LiteLLM) to $env?"; then
-                        # Reset failed services list
-                        FAILED_SERVICES=()
-                        # Deploy each service, continue on failure
-                        for svc in vllm colpali litellm; do
-                            deploy_service "$svc" "$env" || true
-                        done
-                        show_deployment_summary
+                        deploy_service "llm" "$env"
                     fi
                 fi
                 pause
@@ -623,7 +613,7 @@ llm_services_menu() {
                     pause
                 else
                     if confirm "Deploy ColPali (visual embeddings) to $env?"; then
-                        deploy_service "colpali" "$env"
+                        deploy_service "llm-colpali" "$env"
                     fi
                     pause
                 fi
@@ -646,7 +636,7 @@ llm_services_menu() {
                 fi
                 
                 if confirm "Deploy LiteLLM (gateway) to $env?"; then
-                    deploy_service "litellm" "$env"
+                    deploy_service "llm-litellm" "$env"
                 fi
                 pause
                 ;;
@@ -696,7 +686,8 @@ llm_services_menu() {
     done
 }
 
-# APIs submenu (ingest, search, agent, docs)
+# APIs submenu (authz, ingest, search, agent, docs, bridge)
+# AuthZ is first since all other APIs depend on authentication
 apis_menu() {
     local env="$1"
     
@@ -704,58 +695,67 @@ apis_menu() {
         clear
         box "API Services - $env" 70
         echo ""
-        info "Select API service to deploy"
+        info "Application services that depend on core + llm"
+        info "Order: authz -> ingest -> search -> agent -> docs"
         echo ""
         
         echo -e "  ${CYAN}1)${NC} Deploy All APIs"
-        echo -e "  ${CYAN}2)${NC} Deploy Ingest API"
-        echo -e "  ${CYAN}3)${NC} Deploy Search API"
-        echo -e "  ${CYAN}4)${NC} Deploy Agent API"
-        echo -e "  ${CYAN}5)${NC} Deploy Docs API"
-        echo -e "  ${CYAN}6)${NC} Back"
+        echo -e "  ${CYAN}2)${NC} Deploy AuthZ (authentication)    ${DIM}[1st - required by all APIs]${NC}"
+        echo -e "  ${CYAN}3)${NC} Deploy Ingest (file processing)"
+        echo -e "  ${CYAN}4)${NC} Deploy Search API"
+        echo -e "  ${CYAN}5)${NC} Deploy Agent API"
+        echo -e "  ${CYAN}6)${NC} Deploy Docs API"
+        echo -e "  ${CYAN}7)${NC} Deploy Bridge (optional)"
+        echo -e "  ${CYAN}8)${NC} Back"
         echo ""
         
-        read -p "Select option [1-6]: " choice
+        read -p "Select option [1-8]: " choice
         echo ""
         
         case "$choice" in
             1)
-                if confirm "Deploy ALL APIs (ingest, search, agent, docs) to $env?"; then
-                    # Reset failed services list
-                    FAILED_SERVICES=()
-                    # Deploy each service, continue on failure
-                    for svc in ingest search-api agent docs; do
-                        deploy_service "$svc" "$env" || true
-                    done
-                    show_deployment_summary
+                if confirm "Deploy ALL APIs (authz, ingest, search, agent, docs) to $env?"; then
+                    deploy_service "apis" "$env"
                 fi
                 pause
                 ;;
             2)
-                if confirm "Deploy Ingest API to $env?"; then
-                    deploy_service "ingest" "$env"
+                if confirm "Deploy AuthZ (authentication) to $env?"; then
+                    deploy_service "apis-authz" "$env"
                 fi
                 pause
                 ;;
             3)
-                if confirm "Deploy Search API to $env?"; then
-                    deploy_service "search-api" "$env"
+                if confirm "Deploy Ingest (file processing) to $env?"; then
+                    deploy_service "apis-ingest" "$env"
                 fi
                 pause
                 ;;
             4)
-                if confirm "Deploy Agent API to $env?"; then
-                    deploy_service "agent" "$env"
+                if confirm "Deploy Search API to $env?"; then
+                    deploy_service "apis-search" "$env"
                 fi
                 pause
                 ;;
             5)
-                if confirm "Deploy Docs API to $env?"; then
-                    deploy_service "docs" "$env"
+                if confirm "Deploy Agent API to $env?"; then
+                    deploy_service "apis-agent" "$env"
                 fi
                 pause
                 ;;
             6)
+                if confirm "Deploy Docs API to $env?"; then
+                    deploy_service "apis-docs" "$env"
+                fi
+                pause
+                ;;
+            7)
+                if confirm "Deploy Bridge (multi-channel communication) to $env?"; then
+                    deploy_service "apis-bridge" "$env"
+                fi
+                pause
+                ;;
+            8)
                 return 0
                 ;;
             *)
@@ -766,7 +766,7 @@ apis_menu() {
     done
 }
 
-# Apps deployment submenu
+# Apps deployment submenu (ai-portal, agent-manager)
 deploy_apps_menu() {
     local env="$1"
     
@@ -774,41 +774,34 @@ deploy_apps_menu() {
         clear
         box "Apps Deployment - $env" 70
         echo ""
-        info "Select application to deploy"
+        info "Frontend applications"
         echo ""
         
         echo -e "  ${CYAN}1)${NC} Deploy All Apps (latest release)"
-        echo -e "  ${CYAN}2)${NC} Update Nginx Routing"
-        echo -e "  ${CYAN}3)${NC} Deploy AI Portal"
-        echo -e "  ${CYAN}4)${NC} Deploy Agent Manager (agent-manager)"
-        echo -e "  ${CYAN}5)${NC} Back"
+        echo -e "  ${CYAN}2)${NC} Deploy AI Portal"
+        echo -e "  ${CYAN}3)${NC} Deploy Agent Manager"
+        echo -e "  ${CYAN}4)${NC} Back"
         echo ""
         
-        read -p "Select option [1-5]: " choice
+        read -p "Select option [1-4]: " choice
         echo ""
         
         case "$choice" in
             1)
                 if confirm "Deploy ALL apps (latest release) to $env?"; then
-                    deploy_service "apps" "$env"
+                    deploy_service "apps-frontend" "$env"
                 fi
                 pause
                 ;;
             2)
-                if confirm "Update Nginx routing configuration for $env?"; then
-                    deploy_service "nginx" "$env"
-                fi
-                pause
-                ;;
-            3)
                 deploy_single_app "ai-portal" "AI Portal" "$env"
                 pause
                 ;;
-            4)
+            3)
                 deploy_single_app "agent-manager" "Agent Manager" "$env"
                 pause
                 ;;
-            5)
+            4)
                 return 0
                 ;;
             *)
@@ -846,6 +839,7 @@ verify_deployment() {
 }
 
 # Deployment menu
+# Groups are deployed in order: core -> llm -> apis -> apps
 deployment_menu() {
     local env="$1"
     
@@ -863,11 +857,11 @@ deployment_menu() {
         fi
         
         menu "$menu_title" \
-            "Deploy All Services" \
-            "Deploy Core Services (authz, files, database, vectorstore)" \
+            "Deploy All Services (full deploy)" \
+            "Deploy Core Services (nginx, minio, postgres, milvus)" \
             "Deploy LLM Services (vllm, litellm, colpali)" \
-            "Deploy APIs (ingest, search, agent)" \
-            "Deploy Apps" \
+            "Deploy APIs (authz, ingest, search, agent, docs)" \
+            "Deploy Apps (ai-portal, agent-manager)" \
             "Verify Deployment (Health Checks)" \
             "Back to Main Menu"
         

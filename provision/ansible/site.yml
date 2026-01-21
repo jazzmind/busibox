@@ -1,88 +1,78 @@
-# Deployment order optimized for dependencies:
-# 1. PostgreSQL (database - required by many services)
-# 2. Milvus (vector database - standalone, no dependencies)
-# 3. Agent API (provides webhooks for MinIO, uses PostgreSQL)
-# 4. MinIO (file storage - can configure webhook to agent API)
-# 5. Ingest Worker (needs agent API + MinIO + Milvus + PostgreSQL)
-# 6. Proxy (nginx reverse proxy - must be deployed before apps)
-# 7. Apps (Next.js applications - depend on proxy for routing)
+# =============================================================================
+# Busibox Ansible Deployment Playbook
+# =============================================================================
+#
+# Deployment order organized into 4 groups:
+#   1. CORE: nginx, minio, postgres, milvus (infrastructure)
+#   2. LLM: vllm, litellm, colpali, embedding (AI/ML services)
+#   3. APIs: authz, ingest, search, agent, docs (application services)
+#   4. APPS: ai-portal, agent-manager (frontend applications)
+#
+# Web installs start with nginx first so the install UI can drive the rest.
+#
+# Tag hierarchy:
+#   - Group level: core, llm, apis, apps
+#   - Subgroup level: core_nginx, llm_vllm, apis_authz, etc.
+#   - Service level: nginx, postgres, authz, etc.
+#
+# Usage:
+#   make all                    # Full deploy (all groups in order)
+#   make core                   # Deploy core infrastructure only
+#   make llm                    # Deploy LLM services only
+#   make apis                   # Deploy API services only
+#   make apps                   # Deploy frontend apps only
+#
+# Sequential deploy (equivalent to make all):
+#   make core && make llm && make apis && make apps
+#
+# =============================================================================
 
-- hosts: pg
+# =============================================================================
+# GROUP 1: CORE SERVICES (tag: core)
+# Deploy first - nginx enables web-driven install recovery
+# =============================================================================
+
+# 1.1 Nginx (web proxy) - FIRST so install UI can drive rest of install
+- hosts: proxy
+  tags: [core, core_nginx]
   roles:
-    - role: postgres
-      tags: [postgres]
+    - role: secrets
+      tags: [core, core_nginx, proxy, nginx, secrets]
+    - role: nginx
+      tags: [core, core_nginx, proxy, nginx]
+    - role: tailscale
+      tags: [core, core_nginx, tailscale]
 
-- hosts: milvus
-  roles:
-    - role: milvus
-      tags: [milvus]
-    - role: search_api
-      tags: [search, search_api, search-api]
-
-- hosts: agent
-  roles:
-    - role: agent_api
-      tags: [agent, agent_api]
-
-- hosts: bridge
-  roles:
-    - role: bridge
-      tags: [bridge]
-      # Bridge service is optional and non-blocking
-      # Handles multi-channel communication: Signal, Email, WhatsApp, Webhooks
-  ignore_errors: true  # Don't fail deployment if bridge host doesn't exist
-
+# 1.2 MinIO (object storage)
 - hosts: files
+  tags: [core, core_storage]
   roles:
     - role: minio
-      tags: [files, minio]
+      tags: [core, core_storage, files, minio]
 
-- hosts: ingest
+# 1.3 PostgreSQL (database)
+- hosts: pg
+  tags: [core, core_database]
   roles:
-    - role: node_common
-      tags: [ingest, node_common]
-    - role: ingest
-      tags: [ingest, ingest_api, ingest_worker]
-    - role: embedding_api
-      tags: [ingest, embedding_api, embedding]
+    - role: postgres
+      tags: [core, core_database, postgres]
 
-- hosts: authz
+# 1.4 Milvus (vector database)
+- hosts: milvus
+  tags: [core, core_vectorstore]
   roles:
-    - role: node_common
-      tags: [authz, node_common]
-    - role: authz
-      tags: [authz]
+    - role: milvus
+      tags: [core, core_vectorstore, milvus]
 
-- hosts: proxy
-  roles:
-    - role: secrets
-      tags: [proxy, nginx, secrets]
-    - role: nginx
-      tags: [proxy, nginx]
-    - role: tailscale
-      tags: [tailscale]
+# =============================================================================
+# GROUP 2: LLM SERVICES (tag: llm)
+# GPU inference, embedding, and LLM gateway
+# =============================================================================
 
-- hosts: apps
-  roles:
-    - role: node_common
-      tags: [apps, node_common]
-    - role: secrets
-      tags: [apps, secrets]
-    - role: app_deployer
-      tags: [apps, app_deployer]
-    - role: docs_api
-      tags: [docs, docs_api]
-      # Docs API is a lightweight Python service that serves documentation
-      # It runs on the apps container alongside Next.js apps but with its own role
-
-- hosts: openwebui
-  roles:
-    - role: nginx
-      tags: [openwebui, nginx]
-
-# LLM Services - Deploy backends first, then proxy
-- name: Deploy LLM Inference Backends (can run in parallel)
-  hosts: vllm  # Ollama temporarily disabled
+# 2.1 vLLM (GPU inference backends)
+- name: Deploy LLM Inference Backends
+  hosts: vllm
+  tags: [llm, llm_vllm]
   pre_tasks:
     - name: Install required cleanup tools
       apt:
@@ -92,17 +82,17 @@
         state: present
         update_cache: false
       failed_when: false
-      tags: [vllm]  # Only run for vLLM deployments
+      tags: [llm, llm_vllm, vllm]
     
     - name: Determine which vLLM services to stop
       set_fact:
         vllm_services_to_stop: "{{ ['8000'] if 'vllm_8000' in ansible_run_tags else ['8001'] if 'vllm_8001' in ansible_run_tags else ['8002'] if 'vllm_8002' in ansible_run_tags else ['8003'] if 'vllm_8003' in ansible_run_tags else ['8004'] if 'vllm_8004' in ansible_run_tags else ['8005'] if 'vllm_8005' in ansible_run_tags else ['8000', '8001', '8002', '8003', '8004', '8005'] }}"
-      tags: [vllm, vllm_8000, vllm_8001, vllm_8002, vllm_8003, vllm_8004, vllm_8005]
+      tags: [llm, llm_vllm, vllm, vllm_8000, vllm_8001, vllm_8002, vllm_8003, vllm_8004, vllm_8005]
     
     - name: Display which vLLM services will be redeployed
       debug:
         msg: "Redeploying vLLM services: {{ vllm_services_to_stop }}"
-      tags: [vllm, vllm_8000, vllm_8001, vllm_8002, vllm_8003, vllm_8004, vllm_8005]
+      tags: [llm, llm_vllm, vllm, vllm_8000, vllm_8001, vllm_8002, vllm_8003, vllm_8004, vllm_8005]
     
     - name: Stop selected vLLM services to ensure proper GPU memory release
       systemd:
@@ -110,12 +100,12 @@
         state: stopped
       loop: "{{ vllm_services_to_stop }}"
       failed_when: false
-      tags: [vllm, vllm_8000, vllm_8001, vllm_8002, vllm_8003, vllm_8004, vllm_8005]
+      tags: [llm, llm_vllm, vllm, vllm_8000, vllm_8001, vllm_8002, vllm_8003, vllm_8004, vllm_8005]
     
     - name: Wait for systemd to process stop requests
       pause:
         seconds: 5
-      tags: [vllm, vllm_8000, vllm_8001, vllm_8002, vllm_8003, vllm_8004, vllm_8005]
+      tags: [llm, llm_vllm, vllm, vllm_8000, vllm_8001, vllm_8002, vllm_8003, vllm_8004, vllm_8005]
     
     - name: Force kill any remaining vLLM processes for specific ports
       vars:
@@ -143,7 +133,7 @@
       register: kill_result
       changed_when: false
       failed_when: false
-      tags: [vllm, vllm_8000, vllm_8001, vllm_8002, vllm_8003, vllm_8004, vllm_8005]
+      tags: [llm, llm_vllm, vllm, vllm_8000, vllm_8001, vllm_8002, vllm_8003, vllm_8004, vllm_8005]
     
     - name: Force release GPU memory (vLLM on GPU 1+ only - preserves GPU 0)
       vars:
@@ -180,7 +170,7 @@
       register: gpu_cleanup
       changed_when: false
       failed_when: false
-      tags: [vllm, vllm_8000, vllm_8001, vllm_8002, vllm_8003, vllm_8004, vllm_8005]
+      tags: [llm, llm_vllm, vllm, vllm_8000, vllm_8001, vllm_8002, vllm_8003, vllm_8004, vllm_8005]
     
     - name: Clean shared memory and temp files
       shell: |
@@ -195,55 +185,133 @@
       register: shm_cleanup
       changed_when: false
       failed_when: false
-      tags: [vllm, vllm_8000, vllm_8001, vllm_8002, vllm_8003, vllm_8004, vllm_8005]
+      tags: [llm, llm_vllm, vllm, vllm_8000, vllm_8001, vllm_8002, vllm_8003, vllm_8004, vllm_8005]
     
     - name: Wait for GPU memory to be fully released
       pause:
         seconds: 10
-      tags: [vllm]  # Only run for vLLM deployments
+      tags: [llm, llm_vllm, vllm]
     
     - name: Verify GPU memory is free
       shell: nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits
       register: gpu_memory_check
       changed_when: false
       failed_when: false
-      tags: [vllm]  # Only run for vLLM deployments
+      tags: [llm, llm_vllm, vllm]
     
     - name: Display GPU memory status
       debug:
         msg: "GPU memory usage (MB): {{ gpu_memory_check.stdout_lines }}"
       when: gpu_memory_check.stdout_lines is defined
-      tags: [vllm]  # Only run for vLLM deployments
+      tags: [llm, llm_vllm, vllm]
   roles:
-    # - role: ollama  # Temporarily disabled - using vLLM only
-    #   when: "'ollama' in group_names"
-    #   tags: [llm, ollama]
     # Port-based vLLM roles - each checks model_config.yml for assigned models
     - role: vllm_8000
       when: "'vllm' in group_names"
-      tags: [llm, vllm, vllm_8000]
+      tags: [llm, llm_vllm, vllm, vllm_8000]
     - role: vllm_8001
       when: "'vllm' in group_names"
-      tags: [llm, vllm, vllm_8001]
+      tags: [llm, llm_vllm, vllm, vllm_8001]
     - role: vllm_8002
       when: "'vllm' in group_names"
-      tags: [llm, vllm, vllm_8002]
+      tags: [llm, llm_vllm, vllm, vllm_8002]
     - role: vllm_8003
       when: "'vllm' in group_names"
-      tags: [llm, vllm, vllm_8003]
+      tags: [llm, llm_vllm, vllm, vllm_8003]
     - role: vllm_8004
       when: "'vllm' in group_names"
-      tags: [llm, vllm, vllm_8004]
+      tags: [llm, llm_vllm, vllm, vllm_8004]
     - role: vllm_8005
       when: "'vllm' in group_names"
-      tags: [llm, vllm, vllm_8005]
+      tags: [llm, llm_vllm, vllm, vllm_8005]
     # ColPali has its own service (not vLLM-based)
     - role: colpali
       when: "'vllm' in group_names"
-      tags: [llm, colpali]
+      tags: [llm, llm_colpali, colpali]
 
-- name: Deploy LiteLLM Proxy (depends on backends)
+# 2.2 LiteLLM (LLM gateway/proxy)
+- name: Deploy LiteLLM Proxy
   hosts: litellm
+  tags: [llm, llm_litellm]
   roles:
     - role: litellm
-      tags: [llm, litellm]
+      tags: [llm, llm_litellm, litellm]
+
+# =============================================================================
+# GROUP 3: APIs (tag: apis)
+# Application services that depend on core + llm
+# =============================================================================
+
+# 3.1 AuthZ (authentication/authorization) - needed by all other APIs
+- hosts: authz
+  tags: [apis, apis_authz]
+  roles:
+    - role: node_common
+      tags: [apis, apis_authz, authz, node_common]
+    - role: authz
+      tags: [apis, apis_authz, authz]
+
+# 3.2 Ingest (file ingestion + embedding)
+- hosts: ingest
+  tags: [apis, apis_ingest]
+  roles:
+    - role: node_common
+      tags: [apis, apis_ingest, ingest, node_common]
+    - role: ingest
+      tags: [apis, apis_ingest, ingest, ingest_api, ingest_worker]
+    - role: embedding_api
+      tags: [apis, apis_ingest, ingest, embedding_api, embedding]
+
+# 3.3 Search API
+- hosts: milvus
+  tags: [apis, apis_search]
+  roles:
+    - role: search_api
+      tags: [apis, apis_search, search, search_api, search-api]
+
+# 3.4 Agent API
+- hosts: agent
+  tags: [apis, apis_agent]
+  roles:
+    - role: agent_api
+      tags: [apis, apis_agent, agent, agent_api]
+
+# 3.5 Docs API (runs on apps container)
+- hosts: apps
+  tags: [apis, apis_docs]
+  roles:
+    - role: docs_api
+      tags: [apis, apis_docs, docs, docs_api]
+
+# 3.6 Bridge Service (optional - multi-channel communication)
+- hosts: bridge
+  tags: [apis, apis_bridge]
+  roles:
+    - role: bridge
+      tags: [apis, apis_bridge, bridge]
+      # Bridge service is optional and non-blocking
+      # Handles multi-channel communication: Signal, Email, WhatsApp, Webhooks
+  ignore_errors: true  # Don't fail deployment if bridge host doesn't exist
+
+# =============================================================================
+# GROUP 4: APPS (tag: apps)
+# Frontend applications
+# =============================================================================
+
+# 4.1 Next.js Applications (ai-portal, agent-manager)
+- hosts: apps
+  tags: [apps, apps_frontend]
+  roles:
+    - role: node_common
+      tags: [apps, apps_frontend, node_common]
+    - role: secrets
+      tags: [apps, apps_frontend, secrets]
+    - role: app_deployer
+      tags: [apps, apps_frontend, app_deployer]
+
+# 4.2 OpenWebUI (optional)
+- hosts: openwebui
+  tags: [apps, apps_openwebui]
+  roles:
+    - role: nginx
+      tags: [apps, apps_openwebui, openwebui, nginx]

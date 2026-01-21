@@ -1,6 +1,31 @@
-.PHONY: ping all files pg milvus nginx search search-api agent ingest ingest-api ingest-worker ingest-update-tests docs apps openwebui deploy-apps deploy-ai-portal deploy-agent-manager deploy-doc-intel deploy-foundation deploy-project-analysis deploy-innovation verify verify-health verify-smoke service-start service-stop service-restart service-status service-logs service-health test test-menu test-ingest test-ingest-all test-ingest-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-authz test-apps test-security test-security-auth test-security-injection test-security-fuzz test-all configure generate-token-keys bootstrap-test-creds bridge tailscale test-bridge check-embeddings migrate-embeddings migrate-embeddings-force
-# Default to production inventory (can override with: make all INV=inventory/staging)
-INV=inventory/production
+.PHONY: ping all files pg milvus nginx search search-api agent ingest ingest-api ingest-worker ingest-update-tests docs apps openwebui deploy-apps deploy-ai-portal deploy-agent-manager deploy-doc-intel deploy-foundation deploy-project-analysis deploy-innovation verify verify-health verify-smoke service-start service-stop service-restart service-status service-logs service-health test test-menu test-ingest test-ingest-all test-ingest-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-authz test-apps test-security test-security-auth test-security-injection test-security-fuzz test-all configure generate-token-keys bootstrap-test-creds bridge tailscale test-bridge check-embeddings migrate-embeddings migrate-embeddings-force staging production env core core-nginx core-storage core-database core-vectorstore llm llm-vllm llm-litellm llm-colpali apis apis-authz apis-ingest apis-search apis-agent apis-docs apis-bridge apps-frontend
+
+# ============================================================================
+# ENVIRONMENT SELECTION (persists between runs via .busibox-state)
+# ============================================================================
+# Usage:
+#   make staging      - Switch to staging environment (persisted)
+#   make production   - Switch to production environment (persisted)
+#   make env          - Show current environment
+#   make <target> INV=inventory/staging  - One-time override (not persisted)
+#
+# Environment is shared with the interactive menu (scripts/make/menu.sh)
+# via the .busibox-state file in the repository root.
+
+# Read environment from .busibox-state (shared with menu UI)
+# Format in .busibox-state: ENVIRONMENT=staging or ENVIRONMENT=production
+BUSIBOX_STATE_FILE := $(shell cd .. && pwd)/.busibox-state
+SAVED_ENV := $(shell grep '^ENVIRONMENT=' "$(BUSIBOX_STATE_FILE)" 2>/dev/null | cut -d= -f2)
+
+# Convert saved environment to inventory path
+ifeq ($(SAVED_ENV),staging)
+  INV ?= inventory/staging
+else ifeq ($(SAVED_ENV),production)
+  INV ?= inventory/production
+else
+  # Default to production if no saved environment
+  INV ?= inventory/production
+endif
 
 # Vault password file (optional, can also use --ask-vault-pass)
 # Create with: echo "password" > .vault_pass && chmod 600 .vault_pass
@@ -29,38 +54,211 @@ else
   AUTHZ_IP = 10.96.200.210
 endif
 
+# Environment switching targets (updates .busibox-state shared with menu UI)
+staging:
+	@if [ -f "$(BUSIBOX_STATE_FILE)" ]; then \
+		if grep -q '^ENVIRONMENT=' "$(BUSIBOX_STATE_FILE)"; then \
+			sed -i.bak 's/^ENVIRONMENT=.*/ENVIRONMENT=staging/' "$(BUSIBOX_STATE_FILE)" && rm -f "$(BUSIBOX_STATE_FILE).bak"; \
+		else \
+			echo "ENVIRONMENT=staging" >> "$(BUSIBOX_STATE_FILE)"; \
+		fi; \
+	else \
+		echo "ENVIRONMENT=staging" > "$(BUSIBOX_STATE_FILE)"; \
+	fi
+	@echo "Switched to STAGING environment (10.96.201.x network)"
+	@echo "This setting is now persisted. Run 'make env' to verify."
+
+production:
+	@if [ -f "$(BUSIBOX_STATE_FILE)" ]; then \
+		if grep -q '^ENVIRONMENT=' "$(BUSIBOX_STATE_FILE)"; then \
+			sed -i.bak 's/^ENVIRONMENT=.*/ENVIRONMENT=production/' "$(BUSIBOX_STATE_FILE)" && rm -f "$(BUSIBOX_STATE_FILE).bak"; \
+		else \
+			echo "ENVIRONMENT=production" >> "$(BUSIBOX_STATE_FILE)"; \
+		fi; \
+	else \
+		echo "ENVIRONMENT=production" > "$(BUSIBOX_STATE_FILE)"; \
+	fi
+	@echo "Switched to PRODUCTION environment (10.96.200.x network)"
+	@echo "This setting is now persisted. Run 'make env' to verify."
+
+env:
+	@echo "============================================"
+	@echo "Current Environment Configuration"
+	@echo "============================================"
+	@echo "Inventory: $(INV)"
+	@if [ "$(INV)" = "inventory/staging" ]; then \
+		echo "Network:   STAGING (10.96.201.x)"; \
+		echo ""; \
+		echo "  Ingest:  $(INGEST_IP)"; \
+		echo "  Agent:   $(AGENT_IP)"; \
+		echo "  Apps:    $(APPS_IP)"; \
+		echo "  Milvus:  $(MILVUS_IP)"; \
+		echo "  AuthZ:   $(AUTHZ_IP)"; \
+	else \
+		echo "Network:   PRODUCTION (10.96.200.x)"; \
+		echo ""; \
+		echo "  Ingest:  $(INGEST_IP)"; \
+		echo "  Agent:   $(AGENT_IP)"; \
+		echo "  Apps:    $(APPS_IP)"; \
+		echo "  Milvus:  $(MILVUS_IP)"; \
+		echo "  AuthZ:   $(AUTHZ_IP)"; \
+	fi
+	@echo "============================================"
+	@echo "State file: $(BUSIBOX_STATE_FILE)"
+	@if [ -f "$(BUSIBOX_STATE_FILE)" ]; then \
+		echo "Saved env:  $(SAVED_ENV)"; \
+	else \
+		echo "Saved env:  (none - using default)"; \
+	fi
+
+# ============================================================================
+# FULL DEPLOYMENT
+# ============================================================================
+
 ping:
 	ansible -i $(INV) all -m ping
 
 all:
 	ansible-playbook -i $(INV) site.yml $(VAULT_FLAGS)
 
+# ============================================================================
+# GROUP DEPLOYMENTS
+# ============================================================================
+# Deploy by group - running groups in order is equivalent to 'make all':
+#   make core && make llm && make apis && make apps-frontend
+#
+# Group 1: CORE (nginx, minio, postgres, milvus) - infrastructure
+# Group 2: LLM (vllm, litellm, colpali) - AI/ML services  
+# Group 3: APIs (authz, ingest, search, agent, docs, bridge) - application services
+# Group 4: APPS (ai-portal, agent-manager, openwebui) - frontend applications
+
+# ----------------------------------------------------------------------------
+# Group 1: Core Services (infrastructure)
+# Deploy first - nginx enables web-driven install recovery
+# ----------------------------------------------------------------------------
+
+core:
+	@echo "=============================================="
+	@echo "Deploying CORE services (nginx, minio, pg, milvus)"
+	@echo "=============================================="
+	ansible-playbook -i $(INV) site.yml --tags core $(VAULT_FLAGS)
+
+core-nginx:
+	@echo "Deploying nginx (web proxy)..."
+	ansible-playbook -i $(INV) -l proxy site.yml --tags core_nginx $(VAULT_FLAGS)
+
+core-storage:
+	@echo "Deploying MinIO (object storage)..."
+	ansible-playbook -i $(INV) -l files site.yml --tags core_storage $(VAULT_FLAGS)
+
+core-database:
+	@echo "Deploying PostgreSQL (database)..."
+	ansible-playbook -i $(INV) -l pg site.yml --tags core_database $(VAULT_FLAGS)
+
+core-vectorstore:
+	@echo "Deploying Milvus (vector database)..."
+	ansible-playbook -i $(INV) -l milvus site.yml --tags core_vectorstore $(VAULT_FLAGS)
+
+# ----------------------------------------------------------------------------
+# Group 2: LLM Services (AI/ML)
+# GPU inference, embedding, and LLM gateway
+# ----------------------------------------------------------------------------
+
+llm:
+	@echo "=============================================="
+	@echo "Deploying LLM services (vllm, litellm, colpali)"
+	@echo "=============================================="
+	ansible-playbook -i $(INV) site.yml --tags llm $(VAULT_FLAGS) $(EXTRA_ARGS)
+
+llm-vllm:
+	@echo "Deploying vLLM (GPU inference)..."
+	ansible-playbook -i $(INV) -l vllm site.yml --tags llm_vllm $(VAULT_FLAGS) $(EXTRA_ARGS)
+
+llm-litellm:
+	@echo "Deploying LiteLLM (LLM gateway)..."
+	ansible-playbook -i $(INV) -l litellm site.yml --tags llm_litellm $(VAULT_FLAGS)
+
+llm-colpali:
+	@echo "Deploying ColPali (visual embeddings)..."
+	ansible-playbook -i $(INV) -l vllm site.yml --tags llm_colpali $(VAULT_FLAGS) $(EXTRA_ARGS)
+
+# ----------------------------------------------------------------------------
+# Group 3: APIs (application services)
+# Application services that depend on core + llm
+# ----------------------------------------------------------------------------
+
+apis:
+	@echo "=============================================="
+	@echo "Deploying API services (authz, ingest, search, agent, docs)"
+	@echo "=============================================="
+	ansible-playbook -i $(INV) site.yml --tags apis $(VAULT_FLAGS)
+
+apis-authz:
+	@echo "Deploying AuthZ (authentication)..."
+	ansible-playbook -i $(INV) -l authz site.yml --tags apis_authz $(VAULT_FLAGS)
+
+apis-ingest:
+	@echo "Deploying Ingest (file processing)..."
+	ansible-playbook -i $(INV) -l ingest site.yml --tags apis_ingest $(VAULT_FLAGS)
+
+apis-search:
+	@echo "Deploying Search API..."
+	ansible-playbook -i $(INV) -l milvus site.yml --tags apis_search $(VAULT_FLAGS)
+
+apis-agent:
+	@echo "Deploying Agent API..."
+	ansible-playbook -i $(INV) -l agent site.yml --tags apis_agent $(VAULT_FLAGS)
+
+apis-docs:
+	@echo "Deploying Docs API..."
+	ansible-playbook -i $(INV) -l apps site.yml --tags apis_docs $(VAULT_FLAGS)
+
+apis-bridge:
+	@echo "Deploying Bridge (multi-channel communication)..."
+	ansible-playbook -i $(INV) -l bridge site.yml --tags apis_bridge $(VAULT_FLAGS) || true
+
+# ----------------------------------------------------------------------------
+# Group 4: Apps (frontend applications)
+# Frontend applications (ai-portal, agent-manager)
+# ----------------------------------------------------------------------------
+
+apps-frontend:
+	@echo "=============================================="
+	@echo "Deploying frontend apps (ai-portal, agent-manager)"
+	@echo "=============================================="
+	ansible-playbook -i $(INV) site.yml --tags apps $(VAULT_FLAGS)
+
+# ============================================================================
+# INDIVIDUAL SERVICE TARGETS (backward compatible)
+# ============================================================================
+# These targets use the new group tags internally for consistency
+
 files:
-	ansible-playbook -i $(INV) -l files site.yml $(VAULT_FLAGS)
+	ansible-playbook -i $(INV) -l files site.yml --tags core_storage $(VAULT_FLAGS)
 
 pg:
-	ansible-playbook -i $(INV) -l pg site.yml $(VAULT_FLAGS)
+	ansible-playbook -i $(INV) -l pg site.yml --tags core_database $(VAULT_FLAGS)
 
 authz:
-	ansible-playbook -i $(INV) -l authz site.yml $(VAULT_FLAGS)
+	ansible-playbook -i $(INV) -l authz site.yml --tags apis_authz $(VAULT_FLAGS)
 
 litellm:
-	ansible-playbook -i $(INV) -l litellm site.yml $(VAULT_FLAGS)
+	ansible-playbook -i $(INV) -l litellm site.yml --tags llm_litellm $(VAULT_FLAGS)
 
 vllm:
-	ansible-playbook -i $(INV) -l vllm site.yml --tags vllm $(VAULT_FLAGS) $(EXTRA_ARGS)
+	ansible-playbook -i $(INV) -l vllm site.yml --tags llm_vllm $(VAULT_FLAGS) $(EXTRA_ARGS)
 
 vllm-embedding:
 	ansible-playbook -i $(INV) -l vllm site.yml --tags vllm_embedding $(VAULT_FLAGS) $(EXTRA_ARGS)
 
 colpali:
-	ansible-playbook -i $(INV) -l vllm site.yml --tags colpali $(VAULT_FLAGS) $(EXTRA_ARGS)
+	ansible-playbook -i $(INV) -l vllm site.yml --tags llm_colpali $(VAULT_FLAGS) $(EXTRA_ARGS)
 
 milvus:
-	ansible-playbook -i $(INV) -l milvus site.yml --tags milvus $(VAULT_FLAGS)
+	ansible-playbook -i $(INV) -l milvus site.yml --tags core_vectorstore $(VAULT_FLAGS)
 
 nginx:
-	ansible-playbook -i $(INV) -l proxy site.yml --tags nginx $(VAULT_FLAGS)
+	ansible-playbook -i $(INV) -l proxy site.yml --tags core_nginx $(VAULT_FLAGS)
 
 search: milvus search-api
 	@echo "================================"
@@ -70,13 +268,13 @@ search: milvus search-api
 	@echo "================================"
 
 search-api:
-	ansible-playbook -i $(INV) -l milvus site.yml --tags search-api $(VAULT_FLAGS)
+	ansible-playbook -i $(INV) -l milvus site.yml --tags apis_search $(VAULT_FLAGS)
 
 agent:
-	ansible-playbook -i $(INV) -l agent site.yml $(VAULT_FLAGS)
+	ansible-playbook -i $(INV) -l agent site.yml --tags apis_agent $(VAULT_FLAGS)
 
 ingest:
-	ansible-playbook -i $(INV) -l ingest site.yml $(VAULT_FLAGS)
+	ansible-playbook -i $(INV) -l ingest site.yml --tags apis_ingest $(VAULT_FLAGS)
 
 embedding-api:
 	ansible-playbook -i $(INV) -l ingest site.yml --tags embedding_api $(VAULT_FLAGS)
@@ -94,18 +292,18 @@ ingest-update-tests:
 
 # Docs API - Documentation service (runs on apps container)
 docs:
-	ansible-playbook -i $(INV) -l apps site.yml --tags docs $(VAULT_FLAGS)
+	ansible-playbook -i $(INV) -l apps site.yml --tags apis_docs $(VAULT_FLAGS)
 
 apps:
-	ansible-playbook -i $(INV) -l apps site.yml $(VAULT_FLAGS)
+	ansible-playbook -i $(INV) -l apps site.yml --tags apps $(VAULT_FLAGS)
 
 openwebui:
-	ansible-playbook -i $(INV) -l openwebui site.yml $(VAULT_FLAGS)
+	ansible-playbook -i $(INV) -l openwebui site.yml --tags apps_openwebui $(VAULT_FLAGS)
 
 # Bridge Service (multi-channel communication: Signal, Email, WhatsApp, Webhooks)
 # Note: This is optional and non-blocking - won't fail if bridge host doesn't exist
 bridge:
-	ansible-playbook -i $(INV) -l bridge site.yml --tags bridge $(VAULT_FLAGS) || true
+	ansible-playbook -i $(INV) -l bridge site.yml --tags apis_bridge $(VAULT_FLAGS) || true
 
 # Tailscale VPN (for secure remote access)
 tailscale:

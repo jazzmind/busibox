@@ -14,7 +14,11 @@
 #   demo        - Docker prod mode (for demos/presentations)
 #   staging     - Docker or Proxmox (10.96.201.x network)
 #   production  - Docker or Proxmox (10.96.200.x network)
-ENV ?= development
+#
+# Environment is persisted in .busibox-state (shared with menu and Ansible Makefile)
+# If not set, defaults to development for Docker workflows
+SAVED_ENV := $(shell grep '^ENVIRONMENT=' .busibox-state 2>/dev/null | cut -d= -f2)
+ENV ?= $(if $(SAVED_ENV),$(SAVED_ENV),development)
 
 # Service for targeted operations
 SERVICE ?=
