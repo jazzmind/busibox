@@ -87,7 +87,12 @@ applications:
       INGEST_API_HOST: "{{ ingest_ip }}"
       MILVUS_HOST: "{{ milvus_ip }}"
       AGENT_HOST: "{{ agent_ip }}"
-      # Other service URLs
+      # Agent API Configuration
+      AGENT_API_URL: "http://{{ agent_ip }}:{{ agent_api_port }}"
+      AGENT_API_HOST: "{{ agent_ip }}"
+      AGENT_API_PORT: "{{ agent_api_port }}"
+      NEXT_PUBLIC_AGENT_API_URL: "http://{{ agent_ip }}:{{ agent_api_port }}"
+      # Ingest API
       NEXT_PUBLIC_INGEST_API_URL: "http://{{ ingest_ip }}:8002"
       DEPLOYMENT_MODE: "busibox"
       NEXT_PUBLIC_BASE_PATH: "/portal"
