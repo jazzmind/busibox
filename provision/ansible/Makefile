@@ -820,7 +820,7 @@ pvt-search:
 
 pvt-agent:
 	@echo "Running Agent PVT tests..."
-	@ssh root@$(AGENT_IP) 'cd /srv/agent && source .venv/bin/activate && set -a && source .env && set +a && pytest tests/integration/test_pvt.py -v --tb=short' || (echo "Agent PVT FAILED" && exit 1)
+	@ssh root@$(AGENT_IP) 'cd /srv/agent && source .venv/bin/activate && set -a && source .env && set +a && PYTHONPATH=/srv/agent pytest tests/integration/test_pvt.py -v --tb=short' || (echo "Agent PVT FAILED" && exit 1)
 	@echo "✓ Agent PVT passed"
 	@echo ""
 
