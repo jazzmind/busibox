@@ -186,14 +186,16 @@
   shell: |
     cd {{ app_to_deploy.deploy_path }}
     if [ -f "prisma/schema.prisma" ]; then
+      echo "Running prisma generate..."
       npx prisma generate
-      echo "Prisma client generated"
+      echo "Prisma client generated successfully"
     else
       echo "No Prisma schema found, skipping"
     fi
   delegate_to: "{{ app_to_deploy.container_ip }}"
   register: prisma_result
-  failed_when: false  # Don't fail if Prisma isn't used
+  # Only fail if schema exists but generate failed
+  failed_when: prisma_result.rc != 0 and 'No Prisma schema found' not in prisma_result.stdout
 
 - name: Display database setup output
   debug:
