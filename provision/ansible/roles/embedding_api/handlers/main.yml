@@ -1,0 +1,9 @@
+---
+# Handlers for embedding_api role
+
+- name: Restart embedding-api
+  ansible.builtin.systemd:
+    name: embedding-api
+    state: restarted
+    daemon_reload: true
+  become: true

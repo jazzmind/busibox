@@ -62,7 +62,7 @@ This role installs and configures the Search API, a sophisticated search service
 This role depends on:
 - Milvus running (milvus role)
 - PostgreSQL accessible (postgres role)
-- Embedding service (litellm role)
+- Embedding API service (embedding_api role on ingest-lxc)
 
 ## Example Playbook
 

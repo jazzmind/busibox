@@ -1,0 +1,14 @@
+---
+# Default variables for embedding_api role
+
+embedding_api_port: 8005
+embedding_api_user: embedding
+embedding_api_venv_path: /opt/embedding/venv
+embedding_api_src_path: /opt/embedding/src
+embedding_api_log_path: /var/log/embedding
+
+# FastEmbed model configuration (derived from model_registry.yml in template)
+# Default values if model_registry not available
+embedding_model: "BAAI/bge-large-en-v1.5"
+embedding_dimension: 1024
+embedding_batch_size: 32

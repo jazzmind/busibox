@@ -18,9 +18,10 @@ postgres_db: busibox
 postgres_user: app_user
 # postgres_password is defined in inventory group_vars
 
-# Embedding service (local FastEmbed on ingest-lxc)
+# Embedding service (embedding-api on ingest-lxc)
+# The embedding-api service runs on port 8005 and provides the /embed endpoint
 # Note: embedding_model and dimension are derived from model_registry.yml in the template
-embedding_service_url: "http://{{ hostvars[groups['ingest'][0]]['ansible_host'] }}:8002"
+embedding_service_url: "http://{{ hostvars[groups['ingest'][0]]['ansible_host'] }}:8005"
 
 # Reranking settings
 # Local reranker model (for RerankingService)

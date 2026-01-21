@@ -1,0 +1,125 @@
+---
+# Embedding API deployment tasks
+# Deploys the FastEmbed-based embedding service to the ingest container
+
+- name: Create embedding user
+  ansible.builtin.user:
+    name: "{{ embedding_api_user }}"
+    system: true
+    shell: /usr/sbin/nologin
+    createhome: true
+    home: /home/{{ embedding_api_user }}
+  become: true
+
+- name: Create embedding directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ embedding_api_user }}"
+    group: "{{ embedding_api_user }}"
+    mode: "0755"
+  become: true
+  loop:
+    - /opt/embedding
+    - "{{ embedding_api_src_path }}"
+    - "{{ embedding_api_log_path }}"
+    - /etc/embedding
+    - /home/{{ embedding_api_user }}/.cache
+
+- name: Install system dependencies
+  ansible.builtin.apt:
+    name:
+      - python3
+      - python3-venv
+      - python3-pip
+    state: present
+  become: true
+
+- name: Create Python virtual environment
+  ansible.builtin.command:
+    cmd: python3 -m venv {{ embedding_api_venv_path }}
+    creates: "{{ embedding_api_venv_path }}/bin/python"
+  become: true
+  become_user: "{{ embedding_api_user }}"
+
+- name: Upgrade pip in virtual environment
+  ansible.builtin.pip:
+    name:
+      - pip
+      - setuptools
+      - wheel
+    state: latest
+    virtualenv: "{{ embedding_api_venv_path }}"
+  become: true
+  become_user: "{{ embedding_api_user }}"
+
+- name: Copy embedding source code
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../../srv/embedding/src/"
+    dest: "{{ embedding_api_src_path }}/"
+    owner: "{{ embedding_api_user }}"
+    group: "{{ embedding_api_user }}"
+    mode: "0644"
+  become: true
+  notify: Restart embedding-api
+
+- name: Copy requirements.txt
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../../srv/embedding/requirements.txt"
+    dest: /opt/embedding/requirements.txt
+    owner: "{{ embedding_api_user }}"
+    group: "{{ embedding_api_user }}"
+    mode: "0644"
+  become: true
+  register: requirements_changed
+
+- name: Install Python dependencies
+  ansible.builtin.pip:
+    requirements: /opt/embedding/requirements.txt
+    virtualenv: "{{ embedding_api_venv_path }}"
+  become: true
+  become_user: "{{ embedding_api_user }}"
+  when: requirements_changed.changed or force_reinstall | default(false)
+
+- name: Configure embedding-api environment
+  ansible.builtin.template:
+    src: embedding-api.env.j2
+    dest: /etc/embedding/embedding-api.env
+    owner: "{{ embedding_api_user }}"
+    group: "{{ embedding_api_user }}"
+    mode: "0600"
+  become: true
+  notify: Restart embedding-api
+
+- name: Configure embedding-api systemd service
+  ansible.builtin.template:
+    src: embedding-api.service.j2
+    dest: /etc/systemd/system/embedding-api.service
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  notify: Restart embedding-api
+
+- name: Enable and start embedding-api service
+  ansible.builtin.systemd:
+    name: embedding-api
+    enabled: true
+    state: started
+    daemon_reload: true
+  become: true
+
+- name: Wait for embedding-api to be healthy
+  ansible.builtin.uri:
+    url: "http://localhost:{{ embedding_api_port }}/health"
+    method: GET
+    status_code: 200
+    return_content: true
+  register: health_check
+  retries: 30
+  delay: 5
+  until: health_check.status == 200 and health_check.json.model_loaded | default(false)
+
+- name: Display embedding-api health status
+  ansible.builtin.debug:
+    msg: "Embedding API is healthy: {{ health_check.json }}"

@@ -43,6 +43,8 @@
       tags: [ingest, node_common]
     - role: ingest
       tags: [ingest, ingest_api, ingest_worker]
+    - role: embedding_api
+      tags: [ingest, embedding_api, embedding]
 
 - hosts: authz
   roles:

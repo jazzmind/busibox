@@ -1,0 +1,38 @@
+[Unit]
+Description=Busibox Embedding API
+Documentation=https://github.com/sonnenreich/busibox
+After=network.target
+
+[Service]
+Type=simple
+User={{ embedding_api_user }}
+Group={{ embedding_api_user }}
+WorkingDirectory={{ embedding_api_src_path }}
+EnvironmentFile=/etc/embedding/embedding-api.env
+
+# Use exec form for proper signal handling
+ExecStart={{ embedding_api_venv_path }}/bin/python -m uvicorn main:app --host 0.0.0.0 --port {{ embedding_api_port }} --log-level info
+
+# Graceful shutdown - allow time for requests to complete
+TimeoutStopSec=30
+
+# Restart policy
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+# Allow write to model cache
+ReadWritePaths=/root/.cache /home/{{ embedding_api_user }}/.cache
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=embedding-api
+
+[Install]
+WantedBy=multi-user.target
