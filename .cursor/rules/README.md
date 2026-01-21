@@ -14,10 +14,22 @@ These rules ensure:
 
 Rules are numbered and categorized:
 
-### Organization Rules (001-099)
+### Organization Rules (001-002)
 
 - **001-documentation-organization.md** - Where to place documentation files
 - **002-script-organization.md** - Where to place scripts based on execution context
+
+### Infrastructure Rules (003-004)
+
+- **003-model-registry.md** - LLM model configuration and registry
+- **003-shell-command-practices.md** - Shell command best practices
+- **003-zero-trust-authentication.md** - Zero-trust authentication patterns
+- **004-embedding-configuration.md** - Embedding model configuration
+- **004-shell-troubleshooting.md** - Shell troubleshooting guide
+
+### Database Rules (005-009)
+
+- **005-database-practices.md** - Safe database migration practices (NEVER use --accept-data-loss)
 
 ### Architecture Rules (100-199)
 *Reserved for future architecture and design rules*
