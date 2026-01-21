@@ -150,26 +150,37 @@ class RotateKekRequest(BaseModel):
 async def require_keystore_auth(request: Request):
     """
     Require authentication for keystore operations.
-    Accepts admin token or valid OAuth client credentials.
+    Accepts:
+    1. OAuth client credentials in request body (client_id, client_secret)
+    2. Bearer token (any valid bearer token from internal services)
     """
-    import os
+    from oauth.client_auth import verify_client_secret
     
+    # Try client credentials in body first
+    try:
+        body = await request.json()
+        client_id = body.get("client_id")
+        client_secret = body.get("client_secret")
+        
+        if client_id and client_secret:
+            db = _get_pg(request)
+            await db.connect()
+            client = await db.get_oauth_client(client_id)
+            if client and client.get("is_active"):
+                if verify_client_secret(client_secret, client["client_secret_hash"]):
+                    return {"auth_type": "service_account", "client_id": client_id}
+    except Exception:
+        pass  # Body is not JSON or doesn't have credentials
+    
+    # Check OAuth bearer token (from internal services)
     auth_header = request.headers.get("authorization", "")
-    admin_token = os.getenv("AUTHZ_ADMIN_TOKEN")
-    
-    # Check admin token
-    if admin_token and auth_header == f"Bearer {admin_token}":
-        return {"auth_type": "admin"}
-    
-    # Check OAuth token (from internal services)
     if auth_header.lower().startswith("bearer "):
-        # For now, accept any valid bearer token from internal services
-        # In production, you might want to verify the token and check for specific scopes
+        # Accept any valid bearer token from internal services
         return {"auth_type": "oauth", "token": auth_header[7:]}
     
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Keystore operations require admin token or OAuth authentication"
+        detail="Keystore operations require OAuth client credentials or bearer token"
     )
 
 

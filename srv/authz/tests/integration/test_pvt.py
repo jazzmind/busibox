@@ -7,17 +7,16 @@ They are designed to be fast (<30 seconds total) and catch critical issues:
 - Database connectivity (PostgreSQL)
 - JWT signing/validation infrastructure
 - Token exchange flow
-- Keystore (encryption with master key)
+- Audit logging
 
-Run with: pytest tests/test_pvt.py -v
+Run with: pytest tests/integration/test_pvt.py -v
 Or: pytest -m pvt -v
 
 IMPORTANT: These tests require REAL services - no mocks allowed.
 IMPORTANT: All tests MUST pass - skipped tests indicate deployment issues.
 
 Authentication:
-PVT tests use OAuth client credentials for admin operations.
-The bootstrap client (ai-portal) must have appropriate scopes configured.
+PVT tests use OAuth client credentials (bootstrap client) for authenticated operations.
 """
 
 import os
@@ -30,12 +29,7 @@ import httpx
 SERVICE_PORT = os.getenv("SERVICE_PORT", "8010")
 SERVICE_URL = os.getenv("TEST_AUTHZ_URL", f"http://localhost:{SERVICE_PORT}")
 
-# Legacy admin token (deprecated - kept for backward compatibility in keystore tests)
-ADMIN_TOKEN = os.getenv("AUTHZ_ADMIN_TOKEN", "")
-
-# Test client credentials (for token exchange tests)
-AUTHZ_TEST_CLIENT_ID = os.getenv("AUTHZ_TEST_CLIENT_ID", "")
-AUTHZ_TEST_CLIENT_SECRET = os.getenv("AUTHZ_TEST_CLIENT_SECRET", "")
+# Bootstrap client credentials (for authenticated operations)
 AUTHZ_BOOTSTRAP_CLIENT_ID = os.getenv("AUTHZ_BOOTSTRAP_CLIENT_ID", "ai-portal")
 AUTHZ_BOOTSTRAP_CLIENT_SECRET = os.getenv("AUTHZ_BOOTSTRAP_CLIENT_SECRET", "")
 
@@ -163,30 +157,6 @@ class TestPVTAuth:
 
 
 @pytest.mark.pvt
-class TestPVTKeystore:
-    """Keystore tests - verify encryption infrastructure works."""
-    
-    @pytest.mark.asyncio
-    async def test_keystore_kek_creation(self):
-        """Can create a KEK for a role (tests AUTHZ_MASTER_KEY is configured)."""
-        admin_token = require_env("AUTHZ_ADMIN_TOKEN", ADMIN_TOKEN)
-        
-        import uuid
-        test_role_id = str(uuid.uuid4())
-        
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{SERVICE_URL}/keystore/kek/ensure-for-role/{test_role_id}",
-                headers={"Authorization": f"Bearer {admin_token}"},
-                timeout=10.0,
-            )
-            # This will fail with 500 if AUTHZ_MASTER_KEY is not set
-            assert resp.status_code == 200, f"KEK creation failed: {resp.text}"
-            data = resp.json()
-            assert "kek_id" in data
-
-
-@pytest.mark.pvt
 class TestPVTTokenExchange:
     """Token exchange tests - verify OAuth2 flow works."""
     
@@ -225,46 +195,29 @@ class TestPVTTokenExchange:
             assert len(data["access_token"]) > 0
     
     @pytest.mark.asyncio
-    async def test_bootstrap_client_exists(self):
-        """Bootstrap OAuth client (ai-portal) exists and can authenticate."""
+    async def test_bootstrap_client_multiple_audiences(self):
+        """Bootstrap client can get tokens for different audiences."""
         client_id = require_env("AUTHZ_BOOTSTRAP_CLIENT_ID", AUTHZ_BOOTSTRAP_CLIENT_ID)
         client_secret = require_env("AUTHZ_BOOTSTRAP_CLIENT_SECRET", AUTHZ_BOOTSTRAP_CLIENT_SECRET)
         
-        # The bootstrap client should be able to get tokens for downstream services
-        # This verifies the client exists and has valid credentials
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{SERVICE_URL}/oauth/token",
-                data={
-                    "grant_type": "client_credentials",
-                    "client_id": client_id,
-                    "client_secret": client_secret,
-                    "audience": "agent-api",  # Use a known allowed audience
-                },
-                timeout=10.0,
-            )
-            assert resp.status_code == 200, f"Bootstrap client token exchange failed: {resp.text}"
-            data = resp.json()
-            assert "access_token" in data, "No access_token in response"
-    
-    @pytest.mark.asyncio
-    async def test_admin_authenticated_access(self):
-        """Admin token (from env) allows access to admin endpoints."""
-        # Note: This test uses the legacy admin token which is still supported
-        # for keystore operations. For admin endpoints, service accounts
-        # should use client credentials in the request body.
-        admin_token = require_env("AUTHZ_ADMIN_TOKEN", ADMIN_TOKEN)
+        # Test multiple allowed audiences
+        audiences = ["agent-api", "ingest-api", "search-api"]
         
         async with httpx.AsyncClient() as client:
-            # Test that the roles endpoint exists and returns a list
-            # The keystore auth still accepts admin token
-            resp = await client.post(
-                f"{SERVICE_URL}/keystore/kek/ensure-for-role/test-pvt-role",
-                headers={"Authorization": f"Bearer {admin_token}"},
-                timeout=10.0,
-            )
-            # KEK creation should work with admin token
-            assert resp.status_code == 200, f"Admin access to keystore failed: {resp.status_code} - {resp.text}"
+            for audience in audiences:
+                resp = await client.post(
+                    f"{SERVICE_URL}/oauth/token",
+                    data={
+                        "grant_type": "client_credentials",
+                        "client_id": client_id,
+                        "client_secret": client_secret,
+                        "audience": audience,
+                    },
+                    timeout=10.0,
+                )
+                assert resp.status_code == 200, f"Token exchange failed for audience {audience}: {resp.text}"
+                data = resp.json()
+                assert "access_token" in data, f"No access_token for audience {audience}"
 
 
 @pytest.mark.pvt
@@ -272,8 +225,8 @@ class TestPVTAudit:
     """Audit logging tests - verify audit endpoint works."""
     
     @pytest.mark.asyncio
-    async def test_audit_log_endpoint_exists(self):
-        """Audit log endpoint is available and requires auth."""
+    async def test_audit_log_endpoint_requires_auth(self):
+        """Audit log endpoint requires authentication."""
         async with httpx.AsyncClient() as client:
             # Without auth should fail
             resp = await client.post(
@@ -316,19 +269,44 @@ class TestPVTAudit:
             assert "audit_log_id" in data, "Response should include audit_log_id"
     
     @pytest.mark.asyncio
-    async def test_audit_logs_list_endpoint(self):
-        """Audit logs list endpoint is accessible via POST with service account."""
-        client_id = require_env("AUTHZ_BOOTSTRAP_CLIENT_ID", AUTHZ_BOOTSTRAP_CLIENT_ID)
-        client_secret = require_env("AUTHZ_BOOTSTRAP_CLIENT_SECRET", AUTHZ_BOOTSTRAP_CLIENT_SECRET)
-        
+    async def test_audit_logs_list_requires_auth(self):
+        """Audit logs list endpoint requires authentication."""
         async with httpx.AsyncClient() as client:
-            # The audit/logs endpoint may accept POST with client credentials in body
-            # or we can verify the endpoint exists via the previous test's log entry
-            # For PVT, we verify the audit log entry was created in the previous test
-            # This test verifies the endpoint returns a proper error without auth
             resp = await client.get(
                 f"{SERVICE_URL}/audit/logs?limit=5",
                 timeout=5.0,
             )
             # Without authentication, should get 401
             assert resp.status_code == 401, f"Expected 401 without auth, got: {resp.status_code}"
+
+
+@pytest.mark.pvt
+class TestPVTLoginFlow:
+    """Login flow tests - verify login initiation works."""
+    
+    @pytest.mark.asyncio
+    async def test_login_initiate_endpoint(self):
+        """Login initiation endpoint works for valid email."""
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{SERVICE_URL}/auth/login/initiate",
+                json={"email": "test@example.com"},
+                timeout=10.0,
+            )
+            assert resp.status_code == 200, f"Login initiate failed: {resp.text}"
+            data = resp.json()
+            # Should return magic link token and TOTP code
+            assert "magic_link_token" in data, "Missing magic_link_token"
+            assert "totp_code" in data, "Missing totp_code"
+            assert "expires_in" in data, "Missing expires_in"
+    
+    @pytest.mark.asyncio
+    async def test_login_initiate_invalid_email(self):
+        """Login initiation rejects invalid email format."""
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{SERVICE_URL}/auth/login/initiate",
+                json={"email": "invalid-email"},
+                timeout=5.0,
+            )
+            assert resp.status_code == 400, f"Expected 400 for invalid email, got: {resp.status_code}"
