@@ -113,22 +113,25 @@ class UserContext:
         Supports wildcard matching:
         - Exact match: 'ingest.write' matches 'ingest.write'
         - Wildcard: 'ingest.*' matches 'ingest.write', 'ingest.read', etc.
+        - Nested wildcard: 'authz.*' matches 'authz.users.read', 'authz.roles.write', etc.
         - Full wildcard: '*' matches everything
         """
         # Direct match
         if scope in self.scopes:
             return True
         
-        # Check for wildcard scopes
-        # e.g., 'ingest.*' should match 'ingest.write'
-        scope_prefix = scope.rsplit('.', 1)[0] if '.' in scope else scope
-        wildcard_scope = f"{scope_prefix}.*"
-        if wildcard_scope in self.scopes:
-            return True
-        
         # Check for full wildcard '*'
         if '*' in self.scopes:
             return True
+        
+        # Check for wildcard scopes at each level
+        # e.g., for 'authz.users.read', check 'authz.users.*' and 'authz.*'
+        parts = scope.split('.')
+        for i in range(len(parts) - 1, 0, -1):
+            prefix = '.'.join(parts[:i])
+            wildcard_scope = f"{prefix}.*"
+            if wildcard_scope in self.scopes:
+                return True
         
         return False
     

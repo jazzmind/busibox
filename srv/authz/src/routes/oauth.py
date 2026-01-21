@@ -71,13 +71,28 @@ async def _ensure_bootstrap_roles() -> None:
     """
     Ensure essential roles exist (Admin, User).
     These roles are created if they don't exist.
+    Admin role is also updated if scopes are missing.
+    
+    Scopes use glob-style wildcards (e.g., "authz.*" matches "authz.users.read").
+    See oauth/jwt_auth.py _scope_matches() for wildcard semantics.
     """
     # Define essential roles with their scopes/permissions
+    # Admin gets wildcard access to all service namespaces
+    admin_scopes = [
+        "authz.*",     # All authz admin operations (users, roles, bindings, etc.)
+        "ingest.*",    # All ingest operations  
+        "search.*",    # All search operations
+        "agent.*",     # All agent operations
+        "apps.*",      # All app management
+        "libraries.*", # All library management
+        "admin.*",     # Legacy admin scope
+    ]
+    
     essential_roles = [
         {
             "name": "Admin",
             "description": "Full administrative access",
-            "scopes": ["admin.*", "users.*", "roles.*", "apps.*", "libraries.*", "ingest.*", "search.*", "agent.*"],
+            "scopes": admin_scopes,
         },
         {
             "name": "User", 
@@ -95,6 +110,20 @@ async def _ensure_bootstrap_roles() -> None:
                 scopes=role_def["scopes"],
             )
             logger.info("Bootstrapped role", role_name=role_def["name"], role_id=created.get("id"))
+        elif role_def["name"] == "Admin":
+            # Ensure Admin role has all required scopes (idempotent update)
+            existing_scopes = set(existing.get("scopes") or [])
+            required_scopes = set(role_def["scopes"])
+            if not required_scopes.issubset(existing_scopes):
+                # Update role with missing scopes
+                new_scopes = list(existing_scopes | required_scopes)
+                await _pg.update_role(
+                    role_id=existing["id"],
+                    name=None,  # Don't change name
+                    description=None,  # Don't change description
+                    scopes=new_scopes,
+                )
+                logger.info("Updated Admin role with wildcard scopes", role_id=existing["id"])
 
 
 async def _ensure_bootstrap() -> None:
