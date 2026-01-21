@@ -6,7 +6,7 @@ After=network.target
 Type=simple
 User={{ docs_user }}
 Group={{ docs_group }}
-WorkingDirectory={{ docs_app_dir }}
+WorkingDirectory={{ docs_app_dir }}/src
 Environment="PATH={{ docs_venv_dir }}/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="DOCS_PATH={{ docs_base_dir }}/docs"
 Environment="OPENAPI_PATH={{ docs_base_dir }}/openapi"
