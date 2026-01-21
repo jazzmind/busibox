@@ -58,21 +58,26 @@ WHERE owner_id IS NULL;
 ALTER TABLE ingestion_files 
     ALTER COLUMN owner_id SET NOT NULL;
 
--- Add constraint: group documents must have group_id
+-- Add constraint: validate visibility values
+-- Note: 'shared' visibility is used for role-based access (group_id is optional)
+-- 'personal' visibility is for user-owned private documents
 -- Use DO block to check if constraint exists before adding
 DO $$
 BEGIN
-    IF NOT EXISTS (
+    -- Drop old constraint if it exists with different definition
+    IF EXISTS (
         SELECT 1 FROM pg_constraint 
         WHERE conname = 'check_group_visibility'
     ) THEN
-        ALTER TABLE ingestion_files 
-            ADD CONSTRAINT check_group_visibility 
-            CHECK (
-                (visibility = 'group' AND group_id IS NOT NULL) OR 
-                (visibility = 'personal' AND group_id IS NULL)
-            );
+        ALTER TABLE ingestion_files DROP CONSTRAINT check_group_visibility;
     END IF;
+    
+    -- Add updated constraint that supports 'shared' visibility
+    ALTER TABLE ingestion_files 
+        ADD CONSTRAINT check_group_visibility 
+        CHECK (
+            visibility IN ('personal', 'shared', 'group')
+        );
 END $$;
 
 -- Create indexes for performance
