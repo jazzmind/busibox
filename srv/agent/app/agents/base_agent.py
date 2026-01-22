@@ -202,6 +202,8 @@ class AgentContext:
     # Compressed history (populated after compression)
     compressed_history_summary: Optional[str] = None
     recent_messages: List[Dict[str, Any]] = field(default_factory=list)
+    # Relevant insights from user's past conversations (agent memories)
+    relevant_insights: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class BaseStreamingAgent(StreamingAgent):
@@ -387,8 +389,8 @@ class BaseStreamingAgent(StreamingAgent):
         """
         logger.info(f"{self.name}.run_with_streaming called with query: {query[:50]}...")
         
-        # Setup execution context
-        agent_context = await self._setup_context(context, stream)
+        # Setup execution context (includes fetching relevant insights)
+        agent_context = await self._setup_context(context, stream, query)
         if agent_context is None:
             return "Authentication or session error. Please sign in and try again."
         
@@ -418,14 +420,21 @@ class BaseStreamingAgent(StreamingAgent):
     async def _setup_context(
         self, 
         context: Optional[dict], 
-        stream: StreamCallback
+        stream: StreamCallback,
+        query: Optional[str] = None,
     ) -> Optional[AgentContext]:
         """
-        Setup execution context including authentication and dependencies.
+        Setup execution context including authentication, dependencies, and insights.
         
         Args:
-            context: Raw context dict from dispatcher
+            context: Raw context dict from dispatcher, may include:
+                - principal: Auth principal
+                - session: DB session
+                - user_id: User ID
+                - conversation_history: List of past messages
+                - relevant_insights: List of relevant user insights (fetched by dispatcher)
             stream: Stream callback for error reporting
+            query: User's query (optional, kept for potential future use)
             
         Returns:
             AgentContext if successful, None if auth failed
@@ -546,6 +555,15 @@ class BaseStreamingAgent(StreamingAgent):
         else:
             # No compression, use full history
             agent_context.recent_messages = agent_context.conversation_history
+        
+        # Get relevant insights from context (passed by dispatcher)
+        # The dispatcher fetches these based on the query before calling the agent
+        if context:
+            agent_context.relevant_insights = context.get("relevant_insights", [])
+            if agent_context.relevant_insights:
+                logger.info(
+                    f"{self.name} received {len(agent_context.relevant_insights)} relevant insights from dispatcher"
+                )
         
         return agent_context
     
@@ -770,6 +788,7 @@ class BaseStreamingAgent(StreamingAgent):
         # Log the context being sent for debugging
         logger.info(
             f"{self.name} LLM-driven execution: "
+            f"insights_count={len(context.relevant_insights)}, "
             f"has_summary={context.compressed_history_summary is not None}, "
             f"recent_messages_count={len(context.recent_messages)}, "
             f"prompt_length={len(prompt_with_context)}"
@@ -791,11 +810,26 @@ class BaseStreamingAgent(StreamingAgent):
     
     def _build_llm_driven_prompt(self, query: str, context: AgentContext) -> str:
         """
-        Build a prompt that includes conversation history for LLM-driven execution.
+        Build a prompt that includes conversation history and insights for LLM-driven execution.
         
         This ensures the LLM has full context when deciding which tools to use.
+        Includes:
+        - Relevant insights (memories from past conversations)
+        - Compressed history summary
+        - Recent conversation messages
+        - Current query
         """
         parts = []
+        
+        # Add relevant insights (agent memories) if present
+        if context.relevant_insights:
+            parts.append("## Relevant User Context (from past conversations)")
+            parts.append("These are relevant facts, preferences, and context learned from the user's past conversations:")
+            for insight in context.relevant_insights:
+                category = insight.get("category", "context")
+                content = insight.get("content", "")
+                parts.append(f"- [{category}] {content}")
+            parts.append("")
         
         # Add compressed history summary if present
         if context.compressed_history_summary:
@@ -819,10 +853,11 @@ class BaseStreamingAgent(StreamingAgent):
         parts.append("## Current Query")
         parts.append(query)
         
-        # If there's conversation history, add guidance about using it
-        if context.recent_messages or context.compressed_history_summary:
+        # Add guidance about using context
+        has_context = context.recent_messages or context.compressed_history_summary or context.relevant_insights
+        if has_context:
             parts.append("")
-            parts.append("Please respond to the current query, using the conversation history above for context. If the query references something from the conversation (like 'it', 'that', 'this topic'), use the history to understand what is being referred to.")
+            parts.append("Please respond to the current query using all available context above. Use the user context to personalize your response, the conversation history to understand follow-up references (like 'it', 'that', 'this topic'), and make informed decisions about which tools to use.")
         
         return "\n".join(parts)
     
@@ -916,10 +951,11 @@ class BaseStreamingAgent(StreamingAgent):
         Build context string for synthesis.
         
         Includes:
-        1. Compressed history summary (if compression was performed)
-        2. Recent conversation messages (kept in full)
-        3. Tool results from current execution
+        1. Relevant insights (agent memories from past conversations)
+        2. Compressed history summary (if compression was performed)
+        3. Recent conversation messages (kept in full)
         4. Current user query
+        5. Tool results from current execution
         
         Override in subclasses for custom context building.
         
@@ -932,13 +968,23 @@ class BaseStreamingAgent(StreamingAgent):
         """
         parts = []
         
-        # 1. Add compressed history summary if present
+        # 1. Add relevant insights (user memories) if present
+        if context.relevant_insights:
+            parts.append("## Relevant User Context (from past conversations)")
+            parts.append("These are relevant facts, preferences, and context learned from the user's past conversations:")
+            for insight in context.relevant_insights:
+                category = insight.get("category", "context")
+                content = insight.get("content", "")
+                parts.append(f"- [{category}] {content}")
+            parts.append("")
+        
+        # 2. Add compressed history summary if present
         if context.compressed_history_summary:
             parts.append("## Previous Conversation Summary")
             parts.append(context.compressed_history_summary)
             parts.append("")
         
-        # 2. Add recent conversation history
+        # 3. Add recent conversation history
         if context.recent_messages:
             parts.append("## Recent Conversation")
             for msg in context.recent_messages:
@@ -952,12 +998,12 @@ class BaseStreamingAgent(StreamingAgent):
                     parts.append(f"**{role}**: {msg_content}")
             parts.append("")
         
-        # 3. Add current query
+        # 4. Add current query
         parts.append("## Current Query")
         parts.append(query)
         parts.append("")
         
-        # 4. Add tool results
+        # 5. Add tool results
         if context.tool_results:
             parts.append("## Tool Results")
             for tool_name, result in context.tool_results.items():
@@ -980,7 +1026,7 @@ class BaseStreamingAgent(StreamingAgent):
                     parts.append(f"\n### {tool_name}\n{result}")
             parts.append("")
         
-        parts.append("Please answer the user's question based on the conversation history and any tool results provided. Be conversational and reference previous context when relevant.")
+        parts.append("Please answer the user's question based on all available context (user insights, conversation history, and tool results). Be conversational and reference relevant context when appropriate.")
         return "\n".join(parts)
     
     def _build_fallback_response(self, query: str, context: AgentContext) -> str:
