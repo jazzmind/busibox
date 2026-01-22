@@ -30,10 +30,12 @@ from services.milvus_service import MilvusService
 from services.processing_history_service import ProcessingHistoryService
 from shared.config import Config
 
-# Import singleton postgres service to avoid connection leaks
-from api.main import pg_service as postgres_service
-
 logger = structlog.get_logger()
+
+def _get_postgres_service():
+    """Lazy import to avoid circular import with api.main."""
+    from api.main import pg_service
+    return pg_service
 
 router = APIRouter()
 
@@ -199,6 +201,7 @@ async def reprocess_all_files(request: Request, body: BulkReprocessRequest = Non
     limit = body.limit
     
     # Use the shared singleton - avoid creating new pools
+    postgres_service = _get_postgres_service()
     if not postgres_service.pool:
         await postgres_service.connect()
     
@@ -372,6 +375,7 @@ async def get_file_metadata(fileId: str, request: Request):
     user_id = request.state.user_id
     
     # Use the shared singleton - pool is connected on startup
+    postgres_service = _get_postgres_service()
     if not postgres_service.pool:
         await postgres_service.connect()
     
@@ -667,6 +671,7 @@ async def download_file(fileId: str, request: Request):
     encryption_client = EncryptionClient(config)
     
     # Use the shared singleton - avoid creating new pools
+    postgres_service = _get_postgres_service()
     if not postgres_service.pool:
         await postgres_service.connect()
     
@@ -810,6 +815,7 @@ async def get_presigned_url(fileId: str, request: Request, expiry: int = 3600):
     minio_service = MinIOService(config)
     
     # Use the shared singleton - avoid creating new pools
+    postgres_service = _get_postgres_service()
     if not postgres_service.pool:
         await postgres_service.connect()
     
@@ -928,6 +934,7 @@ async def get_file_chunks(
     user_id = request.state.user_id
     
     # Use the shared singleton - pool is connected on startup
+    postgres_service = _get_postgres_service()
     if not postgres_service.pool:
         await postgres_service.connect()
     
@@ -1029,6 +1036,7 @@ async def get_file_vectors(
     user_id = request.state.user_id
     
     # Use the shared singleton - pool is connected on startup
+    postgres_service = _get_postgres_service()
     if not postgres_service.pool:
         await postgres_service.connect()
     
@@ -1144,6 +1152,7 @@ async def get_file_markdown(
     minio_service = MinIOService(config)
     
     # Use the shared singleton - avoid creating new pools
+    postgres_service = _get_postgres_service()
     if not postgres_service.pool:
         await postgres_service.connect()
     
@@ -1258,6 +1267,7 @@ async def search_within_document(
     milvus_service = MilvusService(config)
     
     # Use the shared singleton - avoid creating new pools
+    postgres_service = _get_postgres_service()
     if not postgres_service.pool:
         await postgres_service.connect()
     
@@ -1392,6 +1402,7 @@ async def delete_file(fileId: str, request: Request):
     encryption_client = EncryptionClient(config)
     
     # Use the shared singleton - avoid creating new pools
+    postgres_service = _get_postgres_service()
     if not postgres_service.pool:
         await postgres_service.connect()
     
@@ -1522,6 +1533,7 @@ async def move_file(fileId: str, request: Request):
         )
 
     # Use the shared singleton - pool is connected on startup
+    postgres_service = _get_postgres_service()
     if not postgres_service.pool:
         await postgres_service.connect()
 
@@ -1627,6 +1639,7 @@ async def reprocess_file(fileId: str, request: Request):
     milvus_service = MilvusService(config)
     
     # Use the shared singleton - avoid creating new pools
+    postgres_service = _get_postgres_service()
     if not postgres_service.pool:
         await postgres_service.connect()
     
@@ -1818,6 +1831,7 @@ async def export_file(
     user_id = request.state.user_id
     
     # Use the shared singleton - avoid creating new pools
+    postgres_service = _get_postgres_service()
     if not postgres_service.pool:
         await postgres_service.connect()
     
