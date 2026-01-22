@@ -54,11 +54,12 @@ def get_ingest_db_url() -> str:
     if url := os.environ.get("INGEST_DB_URL"):
         return url
     
-    host = os.environ.get("INGEST_DB_HOST", "10.96.200.206")
-    port = os.environ.get("INGEST_DB_PORT", "5432")
-    dbname = os.environ.get("INGEST_DB_NAME", "ingest")
-    user = os.environ.get("INGEST_DB_USER", "ingest")
-    password = os.environ.get("INGEST_DB_PASSWORD", "ingest")
+    # Try INGEST_DB_* first, then fall back to POSTGRES_* (used in containers)
+    host = os.environ.get("INGEST_DB_HOST") or os.environ.get("POSTGRES_HOST", "10.96.200.206")
+    port = os.environ.get("INGEST_DB_PORT") or os.environ.get("POSTGRES_PORT", "5432")
+    dbname = os.environ.get("INGEST_DB_NAME") or os.environ.get("POSTGRES_DB", "ingest")
+    user = os.environ.get("INGEST_DB_USER") or os.environ.get("POSTGRES_USER", "ingest")
+    password = os.environ.get("INGEST_DB_PASSWORD") or os.environ.get("POSTGRES_PASSWORD", "ingest")
     
     return f"postgresql://{user}:{password}@{host}:{port}/{dbname}"
 
