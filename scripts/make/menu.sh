@@ -1961,8 +1961,8 @@ asyncio.run(requeue_all())
             echo "  5. Update is_encrypted = true in database"
             echo ""
             
-            # Determine environment
-            local ingest_host deploy_backend
+            # Determine environment and container ID
+            local ingest_host deploy_backend ctid
             deploy_backend="${backend:-docker}"
             
             if [[ "$deploy_backend" == "docker" ]] || [[ "$env" == "development" ]] || [[ "$env" == "local" ]] || [[ "$env" == "demo" ]]; then
@@ -1970,10 +1970,12 @@ asyncio.run(requeue_all())
                 info "Using Docker environment"
             elif [[ "$env" == "staging" ]] || [[ "$env" == "test" ]]; then
                 ingest_host="10.96.201.206"
-                info "Using staging/test environment"
+                ctid="306"  # TEST-ingest-lxc
+                info "Using staging/test environment (container $ctid)"
             else
                 ingest_host="10.96.200.206"
-                info "Using production environment"
+                ctid="206"  # ingest-lxc
+                info "Using production environment (container $ctid)"
             fi
             echo ""
             
@@ -1981,46 +1983,64 @@ asyncio.run(requeue_all())
             
             if [[ ! -f "$encryption_script" ]]; then
                 error "Encryption script not found: $encryption_script"
+                error "Make sure you have pulled the latest code: git pull"
                 pause
                 return 1
             fi
             
+            # Helper function to run encryption on Proxmox container
+            run_encryption_proxmox() {
+                local dry_run_flag="${1:-}"
+                local container_id="$ctid"
+                
+                # Create scripts directory if it doesn't exist
+                pct exec "$container_id" -- mkdir -p /srv/ingest/scripts 2>/dev/null || true
+                
+                # Copy script to container
+                info "Copying encryption script to container $container_id..."
+                pct push "$container_id" "$encryption_script" "/srv/ingest/scripts/encrypt-existing-files.py" || {
+                    error "Failed to copy script to container"
+                    return 1
+                }
+                
+                # Run the script
+                info "Running encryption script${dry_run_flag:+ (dry-run)}..."
+                pct exec "$container_id" -- bash -c "set -a && source /srv/ingest/.env && set +a && /srv/ingest/venv/bin/python /srv/ingest/scripts/encrypt-existing-files.py ${dry_run_flag} --verbose" || {
+                    error "Script execution failed"
+                    return 1
+                }
+                return 0
+            }
+            
+            # Helper function to run encryption on Docker
+            run_encryption_docker() {
+                local dry_run_flag="${1:-}"
+                local container_name="${ingest_host#docker:}"
+                
+                # Copy script to container
+                info "Copying encryption script to container..."
+                docker cp "$encryption_script" "$container_name:/tmp/encrypt-existing-files.py" || {
+                    error "Failed to copy script to container"
+                    return 1
+                }
+                
+                # Run in container with proper environment
+                info "Running encryption script${dry_run_flag:+ (dry-run)}..."
+                docker exec "$container_name" bash -c "set -a && source /app/.env 2>/dev/null || true && /app/venv/bin/python /tmp/encrypt-existing-files.py ${dry_run_flag} --verbose" || {
+                    error "Script execution failed"
+                    return 1
+                }
+                return 0
+            }
+            
             # First do a dry run
             if confirm "Run a dry-run first to see what would be encrypted?"; then
                 echo ""
-                info "Running dry-run..."
-                echo ""
                 
                 if [[ "$ingest_host" == docker:* ]]; then
-                    # Docker environment
-                    local container_name="${ingest_host#docker:}"
-                    
-                    # Copy script to container
-                    docker cp "$encryption_script" "$container_name:/tmp/encrypt-existing-files.py" 2>/dev/null || {
-                        error "Failed to copy script to container"
-                        pause
-                        return 1
-                    }
-                    
-                    # Run in container with proper environment
-                    docker exec "$container_name" bash -c 'set -a && source /app/.env 2>/dev/null || true && /app/venv/bin/python /tmp/encrypt-existing-files.py --dry-run --verbose' || true
+                    run_encryption_docker "--dry-run" || true
                 else
-                    # Proxmox environment - run on ingest container via pct
-                    local ctid
-                    if [[ "$env" == "staging" ]] || [[ "$env" == "test" ]]; then
-                        ctid="306"  # TEST-ingest-lxc
-                    else
-                        ctid="206"  # ingest-lxc
-                    fi
-                    
-                    # Copy script to container
-                    pct push "$ctid" "$encryption_script" "/srv/ingest/scripts/encrypt-existing-files.py" 2>/dev/null || {
-                        error "Failed to copy script to container"
-                        pause
-                        return 1
-                    }
-                    
-                    pct exec "$ctid" -- bash -c 'set -a && source /srv/ingest/.env && set +a && /srv/ingest/venv/bin/python /srv/ingest/scripts/encrypt-existing-files.py --dry-run --verbose' || true
+                    run_encryption_proxmox "--dry-run" || true
                 fi
                 
                 echo ""
@@ -2033,24 +2053,14 @@ asyncio.run(requeue_all())
                 
                 if confirm "Are you SURE you want to proceed?"; then
                     echo ""
-                    info "Running encryption migration..."
-                    echo ""
                     
                     if [[ "$ingest_host" == docker:* ]]; then
-                        local container_name="${ingest_host#docker:}"
-                        docker exec "$container_name" bash -c 'set -a && source /app/.env 2>/dev/null || true && /app/venv/bin/python /tmp/encrypt-existing-files.py --verbose' || true
+                        run_encryption_docker "" && success "Encryption migration complete!" || error "Encryption migration failed"
                     else
-                        local ctid
-                        if [[ "$env" == "staging" ]] || [[ "$env" == "test" ]]; then
-                            ctid="306"
-                        else
-                            ctid="206"
-                        fi
-                        pct exec "$ctid" -- bash -c 'set -a && source /srv/ingest/.env && set +a && /srv/ingest/venv/bin/python /srv/ingest/scripts/encrypt-existing-files.py --verbose' || true
+                        run_encryption_proxmox "" && success "Encryption migration complete!" || error "Encryption migration failed"
                     fi
                     
                     echo ""
-                    success "Encryption migration complete!"
                 fi
             fi
             pause
