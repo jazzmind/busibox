@@ -34,6 +34,21 @@ Future features
 - tasks can be initiated by a document ingest. So we need an event to be emitted that the task manager listens to (webhook?) that gives library folder, keywords and tags for docs. Tasks will trigger based on matching keywords, tags, folders, etc.
 - eliminate client token exchange from authz - there are still vestiges.
 
+2) We need to tune the chat agent's thinking to first check if there are relevant docs via document search - retrieve highly relevant docs and evaluate. Web search when getting more info is needed or requested, scrape results to determine if the information is helpful.
+
+3) for these more complex flows we should use a multi-response approach. E.g. if the question involves cross referencing our docs against the web the first response should be something like "I found some relevant documents... summarizing then will search the web for more info." 
+Then "Here's a quick summary of what I found... <summary> - now looking online."
+Then "Here's a summary of what I found online <summary> - now putitng it all together"
+Then final summary. This way we are streaming responses constantly vs. waiting a long time for a response to come in.
+
+Give me today's videogame news. I like games like Hades so focus there.
+
+
+https://default7ca128af4479416c8a939d9f1b1566.8e.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/625fc04d453b42838b559c4b2d2d2f02/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=zT-zQEpXGI8r1e-Bq4pOMWgpzp1SDYZde_U7SztY8EQ
+
+
+https://default5766860777be4cbb8cbc64fa20281d.ac.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/237403867199487ea71a7dacedd6b1de/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=MIJbAHxThi3QLwWmP-zFuHuxwEP_qvGJrfHKGg92dyU
+
 Agent tasks:
 2 - make sure all busibox-app tests pass
 3 - make sure all authz tests pass

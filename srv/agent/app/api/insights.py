@@ -164,10 +164,16 @@ async def search_insights(
     
     Filters results by user_id to ensure users only see their own insights.
     Requires authentication via Bearer token.
+    
+    If user_id is not provided in the request, it defaults to the authenticated user.
     """
     user_id = principal.sub
-    # Verify user_id matches authenticated user
-    if search_request.user_id != user_id:
+    
+    # Use authenticated user's ID if not provided in request
+    search_user_id = search_request.user_id or user_id
+    
+    # Verify user_id matches authenticated user (can only search own insights)
+    if search_user_id != user_id:
         raise HTTPException(
             status_code=403,
             detail="Cannot search insights for other users",
@@ -181,7 +187,7 @@ async def search_insights(
         
         results = await service.search_insights(
             query=search_request.query,
-            user_id=search_request.user_id,
+            user_id=search_user_id,  # Use resolved user_id
             authorization=authorization,
             limit=search_request.limit,
             score_threshold=search_request.score_threshold,
