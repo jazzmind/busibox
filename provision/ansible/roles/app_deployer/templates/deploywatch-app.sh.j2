@@ -445,7 +445,6 @@ build_application() {
     log_info "Running build command: {{ app.build_command }}"
     if {{ app.build_command }}; then
         log_success "Build completed successfully"
-        return 0
     else
         log_error "Build failed"
         return 1
@@ -456,7 +455,6 @@ build_application() {
         log_info "Running npm build (build script detected in package.json)"
         if npm run build 2>&1 | sed 's/^/[build] /' >&2; then
             log_success "Build completed successfully"
-            return 0
         else
             log_error "Build failed"
             return 1
@@ -466,6 +464,24 @@ build_application() {
         return 0
     fi
 {% endif %}
+
+    # Copy static files for Next.js standalone mode
+    # See: https://nextjs.org/docs/pages/api-reference/config/next-config-js/output#automatically-copying-traced-files
+    if [[ -d ".next/standalone" ]] && [[ -d ".next/static" ]]; then
+        log_info "Copying static files for Next.js standalone mode"
+        mkdir -p .next/standalone/.next
+        cp -r .next/static .next/standalone/.next/
+        log_success "Static files copied to standalone directory"
+    fi
+    
+    # Also copy public folder if it exists (for favicon, images, etc.)
+    if [[ -d ".next/standalone" ]] && [[ -d "public" ]]; then
+        log_info "Copying public folder for Next.js standalone mode"
+        cp -r public .next/standalone/
+        log_success "Public folder copied to standalone directory"
+    fi
+    
+    return 0
 }
 
 # Create systemd service file if using systemd
