@@ -80,16 +80,21 @@ class AuthTestClient:
         # Cache for role IDs
         self._role_cache: Dict[str, str] = {}
     
-    def _require_config(self):
-        """Verify required configuration is present."""
+    def _require_config(self, require_admin: bool = False):
+        """
+        Verify required configuration is present.
+        
+        Args:
+            require_admin: If True, also require AUTHZ_ADMIN_TOKEN (for user management operations)
+        """
         if not self.authz_url:
             pytest.fail("AUTHZ_JWKS_URL not configured")
-        if not self.admin_token:
-            pytest.fail("AUTHZ_ADMIN_TOKEN not configured")
         if not self.client_secret:
             pytest.fail("AUTHZ_BOOTSTRAP_CLIENT_SECRET not configured")
         if not self.test_user_id:
             pytest.fail("TEST_USER_ID not configured")
+        if require_admin and not self.admin_token:
+            pytest.fail("AUTHZ_ADMIN_TOKEN not configured (required for user management operations)")
     
     def _admin_headers(self) -> Dict[str, str]:
         """Get headers for admin API calls. Includes X-Test-Mode header."""
@@ -108,8 +113,10 @@ class AuthTestClient:
         
         Checks if the configured TEST_USER_ID exists. If not, tries to create
         a test user. This handles cases where the bootstrap script hasn't been run.
+        
+        NOTE: Requires AUTHZ_ADMIN_TOKEN to be configured.
         """
-        self._require_config()
+        self._require_config(require_admin=True)
         
         with httpx.Client() as client:
             # Check if user with TEST_USER_ID exists
@@ -244,11 +251,13 @@ class AuthTestClient:
             
         Returns:
             Role ID or None if not found
+            
+        NOTE: Requires AUTHZ_ADMIN_TOKEN to be configured.
         """
         if role_name in self._role_cache:
             return self._role_cache[role_name]
         
-        self._require_config()
+        self._require_config(require_admin=True)
         
         with httpx.Client() as client:
             resp = client.get(
@@ -279,8 +288,10 @@ class AuthTestClient:
             
         Returns:
             Role ID
+            
+        NOTE: Requires AUTHZ_ADMIN_TOKEN to be configured.
         """
-        self._require_config()
+        self._require_config(require_admin=True)
         
         # Check if role already exists
         existing_id = self.get_role_id(role_name)
@@ -319,8 +330,10 @@ class AuthTestClient:
         
         Args:
             role_id: ID of the role to delete
+            
+        NOTE: Requires AUTHZ_ADMIN_TOKEN to be configured.
         """
-        self._require_config()
+        self._require_config(require_admin=True)
         
         with httpx.Client() as client:
             resp = client.delete(
@@ -347,8 +360,10 @@ class AuthTestClient:
             
         Returns:
             Role ID
+            
+        NOTE: Requires AUTHZ_ADMIN_TOKEN to be configured.
         """
-        self._require_config()
+        self._require_config(require_admin=True)
         
         # Get or create the role
         role_id = self.get_role_id(role_name)
@@ -377,8 +392,10 @@ class AuthTestClient:
         
         Args:
             role_name: Name of the role to remove
+            
+        NOTE: Requires AUTHZ_ADMIN_TOKEN to be configured.
         """
-        self._require_config()
+        self._require_config(require_admin=True)
         
         role_id = self.get_role_id(role_name)
         if not role_id:
