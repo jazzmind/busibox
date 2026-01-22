@@ -39,16 +39,43 @@ def is_encrypted(content: bytes) -> bool:
     - Rest: ciphertext with GCM tag
     
     This is a heuristic check - encrypted content won't have common
-    file signatures (PDF, DOCX, etc.)
+    file signatures (PDF, DOCX, etc.) and will be mostly non-ASCII bytes.
+    
+    Plain text files (markdown, txt, code) are mostly ASCII and should
+    NOT be flagged as encrypted.
     """
     if len(content) < 28:  # Minimum: 12 byte nonce + 16 byte tag
         return False
     
+    # Check for known file signatures
     for sig in FILE_SIGNATURES:
         if content.startswith(sig):
             return False
     
-    # If no known signature and content is mostly non-ASCII, likely encrypted
+    # Check if content is mostly ASCII/UTF-8 text (plain text is not encrypted)
+    # Sample the first 1KB for efficiency
+    sample = content[:1024]
+    try:
+        # Try to decode as UTF-8 - if it decodes cleanly, it's likely text
+        decoded = sample.decode('utf-8')
+        # Count printable ASCII characters (including common text chars)
+        printable_count = sum(1 for c in decoded if c.isprintable() or c in '\n\r\t')
+        # If more than 90% is printable text, it's not encrypted
+        if printable_count / len(decoded) > 0.9:
+            return False
+    except UnicodeDecodeError:
+        # If UTF-8 decoding fails, check for high-entropy binary data
+        pass
+    
+    # Count non-ASCII bytes in sample - encrypted data is mostly non-ASCII
+    non_ascii_count = sum(1 for b in sample if b > 127)
+    
+    # If less than 30% is non-ASCII, probably not encrypted
+    # (Real AES-GCM ciphertext has ~50% non-ASCII due to random bytes)
+    if len(sample) > 0 and non_ascii_count / len(sample) < 0.3:
+        return False
+    
+    # Content has no known signature AND is mostly non-ASCII - likely encrypted
     return True
 
 
