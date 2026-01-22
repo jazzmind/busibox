@@ -322,6 +322,10 @@
   register: clear_alembic
   changed_when: true
 
+- name: Debug alembic current output
+  debug:
+    msg: "Alembic current: '{{ alembic_current.stdout }}' | Tables count: {{ tables_count.stdout }}"
+
 - name: Stamp database with current version if ALL tables exist but no migration history
   shell: |
     cd /srv/agent
@@ -331,9 +335,9 @@
   become_user: "{{ agent_api_user }}"
   environment:
     DATABASE_URL: "{{ secrets['agent-server'].database_url }}"
-  when: tables_count.stdout|int == 3 and (alembic_current.stdout == '' or 'No revision' in alembic_current.stdout)
+  when: tables_count.stdout|int == 3 and (alembic_current.stdout == '' or 'No revision' in alembic_current.stdout or alembic_current.rc != 0)
   register: stamp_result
-  failed_when: false
+  changed_when: stamp_result.rc == 0
 
 - name: Grant database permissions for migrations
   shell: |
