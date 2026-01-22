@@ -263,9 +263,7 @@ async def create_delegation_token(
             if response.status_code != 200:
                 error_detail = response.text[:200]
                 logger.error(
-                    "Delegation token creation failed",
-                    status_code=response.status_code,
-                    response=error_detail,
+                    f"Delegation token creation failed: status_code={response.status_code}, response={error_detail}"
                 )
                 raise ValueError(f"Delegation token creation failed: {error_detail}")
             
@@ -280,11 +278,8 @@ async def create_delegation_token(
             expires_at = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
             
             logger.info(
-                "Delegation token created",
-                name=name,
-                jti=data.get("jti"),
-                expires_in=data.get("expires_in"),
-                scopes=scopes,
+                f"Delegation token created: name={name}, jti={data.get('jti')}, "
+                f"expires_in={data.get('expires_in')}, scopes={scopes}"
             )
             
             return TokenExchangeResponse(
@@ -295,5 +290,5 @@ async def create_delegation_token(
             )
             
     except httpx.RequestError as e:
-        logger.error("Delegation token request error", error=str(e))
+        logger.error(f"Delegation token request error: {e}")
         raise ValueError(f"Delegation token request failed: {e}") from e
