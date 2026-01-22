@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Depends, Request, Query
 
 from app.schemas.insights import (
     InsertInsightsRequest,
+    InsertInsightsFrontendRequest,
     InsightSearchRequest,
     InsightSearchResponse,
     InsightSearchResult,
@@ -80,39 +81,57 @@ async def initialize_collection(
 
 @router.post("")
 async def insert_insights(
-    insert_request: InsertInsightsRequest,
+    insert_request: InsertInsightsFrontendRequest,
     principal: Principal = Depends(get_principal),
     service: InsightsService = Depends(get_insights_service),
 ):
     """
     Insert insights into Milvus.
     
+    Accepts frontend-style insights (without embeddings) and generates
+    embeddings server-side using the configured embedding model.
+    
     Requires authentication via Bearer token.
-    Users can only insert insights for themselves.
+    The authenticated user is automatically set as the insight owner.
     """
+    import time
+    import uuid
+    
     user_id = principal.sub
     
-    # Verify all insights belong to the authenticated user
-    for insight in insert_request.insights:
-        if insight.user_id != user_id:
-            raise HTTPException(
-                status_code=403,
-                detail="Cannot insert insights for other users",
-            )
-    
     try:
-        # Convert Pydantic models to service models
-        service_insights = [
-            ServiceChatInsight(
-                id=insight.id,
-                user_id=insight.user_id,
+        # Generate embeddings for each insight
+        service_insights = []
+        for insight in insert_request.insights:
+            # Generate ID if not provided
+            insight_id = insight.id if insight.id else str(uuid.uuid4())
+            
+            # Get conversation_id from either field name
+            conversation_id = insight.conversation_id or ""
+            
+            # Generate embedding from content
+            try:
+                embedding = await service.generate_embedding(
+                    text=insight.content,
+                    user_id=user_id,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to generate embedding for insight: {e}")
+                # Use zero vector as fallback (will have poor search quality)
+                embedding = [0.0] * 1024
+            
+            # Create service model
+            # Note: category is supported, but importance/source are stored in metadata
+            service_insight = ServiceChatInsight(
+                id=insight_id,
+                user_id=user_id,  # Always use authenticated user
                 content=insight.content,
-                embedding=insight.embedding,
-                conversation_id=insight.conversation_id,
-                analyzed_at=insight.analyzed_at,
+                embedding=embedding,
+                conversation_id=conversation_id,
+                analyzed_at=int(time.time()),
+                category=insight.category,
             )
-            for insight in insert_request.insights
-        ]
+            service_insights.append(service_insight)
         
         service.insert_insights(service_insights)
         

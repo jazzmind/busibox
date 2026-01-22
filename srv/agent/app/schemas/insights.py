@@ -5,12 +5,12 @@ Insights are agent memories/context extracted from conversations and stored
 in Milvus for vector similarity search.
 """
 
-from typing import List
+from typing import List, Optional
 from pydantic import BaseModel, Field
 
 
 class ChatInsight(BaseModel):
-    """Chat insight entity."""
+    """Chat insight entity (with pre-computed embedding)."""
     
     id: str = Field(..., description="Insight ID")
     user_id: str = Field(..., description="User ID who owns this insight", alias="userId")
@@ -23,28 +23,10 @@ class ChatInsight(BaseModel):
         populate_by_name = True
 
 
-class InsertInsightsRequest(BaseModel):
-    """Request to insert insights."""
-    
-    insights: List[ChatInsight] = Field(..., description="List of insights to insert", min_items=1)
-
-
-class InsightSearchRequest(BaseModel):
-    """Request to search insights."""
-    
-    query: str = Field(..., description="Search query", min_length=1, max_length=500)
-    user_id: str = Field(..., description="User ID to filter results", alias="userId")
-    limit: int = Field(3, description="Maximum number of results", ge=1, le=20)
-    score_threshold: float = Field(0.7, description="Maximum L2 distance threshold", ge=0.0, le=2.0, alias="scoreThreshold")
-    
-    class Config:
-        populate_by_name = True
-
-
 class ChatInsightFrontend(BaseModel):
-    """Chat insight in frontend-expected format."""
+    """Chat insight in frontend-expected format (no embedding required)."""
     
-    id: str = Field(default="", description="Insight ID")
+    id: str = Field(default="", description="Insight ID (auto-generated if not provided)")
     content: str = Field(..., description="The insight text")
     category: str = Field(default="other", description="Category: preference, fact, goal, context, other")
     importance: float = Field(default=0.5, description="Importance score 0-1")
@@ -52,6 +34,30 @@ class ChatInsightFrontend(BaseModel):
     conversation_id: str = Field(default="", description="Conversation ID", alias="conversationId")
     created_at: str = Field(default="", description="ISO timestamp", alias="createdAt")
     metadata: dict = Field(default_factory=dict, description="Additional metadata")
+    
+    class Config:
+        populate_by_name = True
+
+
+class InsertInsightsRequest(BaseModel):
+    """Request to insert insights (requires pre-computed embeddings)."""
+    
+    insights: List[ChatInsight] = Field(..., description="List of insights to insert", min_items=1)
+
+
+class InsertInsightsFrontendRequest(BaseModel):
+    """Request to insert insights from frontend (embeddings generated server-side)."""
+    
+    insights: List[ChatInsightFrontend] = Field(..., description="List of insights to insert", min_items=1)
+
+
+class InsightSearchRequest(BaseModel):
+    """Request to search insights."""
+    
+    query: str = Field(..., description="Search query", min_length=1, max_length=500)
+    user_id: Optional[str] = Field(None, description="User ID to filter results (auto-set from auth)", alias="userId")
+    limit: int = Field(3, description="Maximum number of results", ge=1, le=20)
+    score_threshold: float = Field(0.7, description="Maximum L2 distance threshold", ge=0.0, le=2.0, alias="scoreThreshold")
     
     class Config:
         populate_by_name = True
@@ -109,5 +115,5 @@ class InsightListResponse(BaseModel):
 class InsightUpdateRequest(BaseModel):
     """Request to update an insight."""
     
-    content: str = Field(None, description="New insight content")
-    category: str = Field(None, description="New category: preference, fact, goal, context, other")
+    content: Optional[str] = Field(None, description="New insight content")
+    category: Optional[str] = Field(None, description="New category: preference, fact, goal, context, other")
