@@ -342,6 +342,7 @@ async def upload_file(
             role_ids=parsed_role_ids if visibility == "shared" else None,
             request=request,
             library_id=resolved_library_id,
+            is_encrypted=is_encrypted,  # Track encryption status
         )
         
         # Skip processing queue for video and image files (they're stored but not processed)

@@ -367,6 +367,7 @@ class PostgresService:
         role_ids: Optional[List[str]] = None,
         request=None,
         library_id: Optional[str] = None,
+        is_encrypted: bool = False,
     ) -> str:
         """
         Create file record in ingestion_files table with role-based access control.
@@ -385,6 +386,7 @@ class PostgresService:
             role_ids: List of role IDs (required if visibility='shared')
             request: Optional FastAPI Request for RLS context
             library_id: Optional library ID to associate the file with
+            is_encrypted: Whether the file content is encrypted at rest
         
         Returns:
             file_id
@@ -408,8 +410,8 @@ class PostgresService:
                     INSERT INTO ingestion_files (
                         file_id, user_id, owner_id, filename, original_filename,
                         mime_type, size_bytes, storage_path, content_hash,
-                        metadata, permissions, visibility, library_id
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                        metadata, permissions, visibility, library_id, is_encrypted
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
                 """,
                     uuid.UUID(file_id),
                     uuid.UUID(user_id),
@@ -424,6 +426,7 @@ class PostgresService:
                     json.dumps({"visibility": visibility}),
                     visibility,
                     lib_uuid,  # library_id
+                    is_encrypted,  # encryption status
                 )
                 
                 # Create initial status record
