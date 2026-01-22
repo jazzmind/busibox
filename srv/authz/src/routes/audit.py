@@ -143,6 +143,9 @@ def _is_security_event(action: str) -> bool:
     - Failed authentication attempts (for security monitoring)
     - Pre-authentication events like sending magic links/TOTP codes
       (which happen before the user is authenticated)
+    - OAuth token events (token generation, validation, rejection)
+      These are security-relevant and logged by the app after successful auth
+    - User login/logout events (logged immediately after auth state changes)
     """
     security_actions = [
         # Failed auth attempts
@@ -154,6 +157,15 @@ def _is_security_event(action: str) -> bool:
         # Pre-authentication events (user not yet authenticated)
         "magic_link.sent",
         "totp.code_sent",
+        # OAuth token events (logged by apps after successful auth)
+        "oauth.token_generated",
+        "oauth.token_validated",
+        # User login/logout events
+        "user.login",
+        "user.logout",
+        "passkey.login",
+        "magic_link.used",
+        "totp.code_used",
     ]
     return action in security_actions
 

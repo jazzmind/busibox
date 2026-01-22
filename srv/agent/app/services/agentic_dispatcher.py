@@ -323,6 +323,56 @@ Choose the most appropriate single agent for the query.""",
                     ("chat", "Chat Assistant", "chat"),
                 ]
             
+            # Step 1.5: Fetch relevant insights (agent memories) for the query
+            relevant_insights = []
+            if user_id:
+                try:
+                    from app.api.insights import get_insights_service
+                    
+                    insights_service = get_insights_service()
+                    
+                    # Search for insights relevant to the current query
+                    # Using threshold of 0.8 (L2 distance) to only include highly relevant memories
+                    search_results = await insights_service.search_insights(
+                        query=query,
+                        user_id=user_id,
+                        authorization=principal.token if principal else None,
+                        limit=5,  # Include up to 5 relevant insights
+                        score_threshold=0.8,  # Only highly relevant (lower L2 distance = more similar)
+                    )
+                    
+                    # Convert to simple dicts for context
+                    relevant_insights = [
+                        {
+                            "content": insight.content,
+                            "category": insight.category,
+                            "score": insight.score,
+                        }
+                        for insight in search_results
+                    ]
+                    
+                    if relevant_insights:
+                        logger.info(
+                            f"Dispatcher found {len(relevant_insights)} relevant insights for query",
+                            extra={
+                                "user_id": user_id,
+                                "insight_count": len(relevant_insights),
+                                "query_preview": query[:50],
+                            }
+                        )
+                        
+                        # Stream a thought about found insights
+                        yield thought(
+                            source="dispatcher",
+                            message=f"Found {len(relevant_insights)} relevant memories from past conversations.",
+                            data={"insight_count": len(relevant_insights)}
+                        )
+                        
+                except Exception as e:
+                    # Don't fail if insights service is unavailable
+                    logger.warning(f"Failed to fetch insights (non-critical): {e}")
+                    relevant_insights = []
+            
             # Step 2: Determine which agent to use
             # If only one agent is available, use it directly (no routing needed)
             single_agent_mode = len(resolved_agents) == 1
@@ -400,6 +450,7 @@ Choose the most appropriate single agent for the query.""",
                                 "principal": principal,
                                 "user_id": user_id,
                                 "session": session,  # Pass DB session for token exchange
+                                "relevant_insights": relevant_insights,  # Agent memories from dispatcher
                             }
                         )
                         logger.info(f"Agent {agent.name} completed with result length: {len(result) if result else 0}")
