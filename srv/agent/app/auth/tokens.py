@@ -195,7 +195,7 @@ async def get_service_token(user_token: str, user_id: str, target_audience: str)
     Raises:
         ValueError: If token exchange fails
     """
-    access_token = await exchange_token_zero_trust(
+    result = await exchange_token_zero_trust(
         subject_token=user_token,
         target_audience=target_audience,
         user_id=user_id,
@@ -203,10 +203,10 @@ async def get_service_token(user_token: str, user_id: str, target_audience: str)
         authz_url=str(settings.auth_token_url),
     )
     
-    if not access_token:
+    if not result:
         raise ValueError(f"Token exchange failed for audience {target_audience}")
     
-    return access_token
+    return result.access_token
 
 
 async def create_delegation_token(

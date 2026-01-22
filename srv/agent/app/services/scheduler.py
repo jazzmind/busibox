@@ -833,7 +833,22 @@ class TaskSchedulerService:
         if output_summary:
             # Format the output for better readability (parse dicts, extract result content)
             formatted_output = _format_output_for_notification(output_summary)
-            summary_preview = formatted_output[:500] + "..." if len(formatted_output) > 500 else formatted_output
+            
+            # Use LLM summarization for long outputs
+            if len(formatted_output) > 500:
+                try:
+                    from app.services.output_summarizer import summarize_task_output
+                    summary_preview = await summarize_task_output(
+                        output=formatted_output,
+                        task_name=task.name,
+                        max_length=500,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to summarize output, using truncation: {e}")
+                    summary_preview = formatted_output[:500] + "..."
+            else:
+                summary_preview = formatted_output
+            
             body_parts.append(f"\n**Result:**\n{summary_preview}")
         
         if not success and execution.error:
