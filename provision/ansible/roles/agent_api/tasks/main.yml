@@ -283,42 +283,47 @@
   delegate_to: "{{ groups['pg'][0] }}"
   tags: [agent, agent_api]
 
-- name: Check if alembic version table exists
+- name: Check if alembic_version table exists
   shell: |
-    cd /srv/agent
-    . .venv/bin/activate
-    alembic current
-  become: yes
-  become_user: "{{ agent_api_user }}"
-  environment:
-    DATABASE_URL: "{{ secrets['agent-server'].database_url }}"
-  register: alembic_current
-  failed_when: false
+    su - postgres -c "psql -d agent_server -tAc \"
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables 
+        WHERE table_schema = 'public' 
+        AND table_name = 'alembic_version'
+      );
+    \""
+  delegate_to: "{{ groups['pg'][0] }}"
+  register: alembic_table_exists
   changed_when: false
 
-- name: Count all agent tables in database
+- name: Get current alembic version from database
+  shell: |
+    su - postgres -c "psql -d agent_server -tAc \"SELECT version_num FROM alembic_version;\""
+  delegate_to: "{{ groups['pg'][0] }}"
+  register: alembic_version_num
+  failed_when: false
+  changed_when: false
+  when: alembic_table_exists.stdout == 't'
+
+- name: Count all agent tables in database (excluding alembic_version)
   shell: |
     su - postgres -c "psql -d agent_server -tAc \"
       SELECT COUNT(*) FROM information_schema.tables 
       WHERE table_schema = 'public' 
-      AND table_name NOT IN ('alembic_version');
+      AND table_name != 'alembic_version';
     \""
   delegate_to: "{{ groups['pg'][0] }}"
   register: tables_count
   changed_when: false
 
-- name: Debug table count and alembic status
+- name: Debug migration state
   debug:
-    msg: "Tables in DB: {{ tables_count.stdout|int }}, Alembic current: '{{ alembic_current.stdout }}'"
+    msg: |
+      Tables in DB: {{ tables_count.stdout|int }}
+      Alembic table exists: {{ alembic_table_exists.stdout }}
+      Current version: {{ alembic_version_num.stdout if alembic_table_exists.stdout == 't' else 'N/A' }}
 
-- name: Check if alembic version table exists
-  shell: |
-    su - postgres -c "psql -d agent_server -tAc \"SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'alembic_version');\""
-  delegate_to: "{{ groups['pg'][0] }}"
-  register: alembic_version_exists
-  changed_when: false
-
-- name: Backup all tables before dropping (if tables exist but no alembic version)
+- name: Backup all tables before stamping (if tables exist but no valid alembic version)
   shell: |
     TIMESTAMP=$(date +%Y%m%d_%H%M%S)
     BACKUP_DIR="/var/backups/postgres/agent_prestamp_${TIMESTAMP}"
@@ -335,17 +340,11 @@
     echo "Backup saved to: $BACKUP_DIR"
     ls -lh "$BACKUP_DIR" 2>/dev/null || echo "No tables to backup"
   delegate_to: "{{ groups['pg'][0] }}"
-  when: tables_count.stdout|int > 0 and (alembic_current.stdout == '' or 'No revision' in alembic_current.stdout or alembic_current.rc != 0)
+  when: >
+    tables_count.stdout|int > 0 and 
+    (alembic_table_exists.stdout != 't' or alembic_version_num.stdout == '')
   register: backup_before_stamp
   changed_when: false
-
-- name: Drop alembic_version if tables exist but no valid migration history
-  shell: |
-    su - postgres -c "psql -d agent_server -c 'DROP TABLE IF EXISTS alembic_version CASCADE;'"
-  delegate_to: "{{ groups['pg'][0] }}"
-  when: tables_count.stdout|int > 0 and (alembic_current.stdout == '' or 'No revision' in alembic_current.stdout or alembic_current.rc != 0)
-  register: clear_alembic_version
-  changed_when: true
 
 - name: Grant database permissions for migrations
   shell: |
@@ -363,17 +362,19 @@
   failed_when: false
   changed_when: false
 
-- name: Stamp database to head if tables exist but no valid migration history
+- name: Stamp database to head if tables exist but no valid alembic version
   shell: |
     cd /srv/agent
     . .venv/bin/activate
-    echo "Stamping database to head (tables exist but no alembic version)"
+    echo "Stamping database to head (tables exist but alembic version missing/empty)"
     alembic stamp head
   become: yes
   become_user: "{{ agent_api_user }}"
   environment:
     DATABASE_URL: "{{ secrets['agent-server'].database_url }}"
-  when: tables_count.stdout|int > 0 and (alembic_current.stdout == '' or 'No revision' in alembic_current.stdout or alembic_current.rc != 0)
+  when: >
+    tables_count.stdout|int > 0 and 
+    (alembic_table_exists.stdout != 't' or alembic_version_num.stdout == '')
   register: stamp_result
   changed_when: true
 
