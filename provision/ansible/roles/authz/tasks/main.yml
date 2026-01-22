@@ -212,6 +212,12 @@
   notify: Restart authz service
   tags: [authz]
 
+- name: Install authz test dependencies
+  pip:
+    requirements: "{{ authz_app_dir }}/requirements.test.txt"
+    virtualenv: "{{ authz_venv_dir }}"
+  tags: [authz]
+
 - name: Render env file
   template:
     src: authz.env.j2
