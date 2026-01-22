@@ -1405,6 +1405,233 @@ view_service_logs() {
     fi
 }
 
+# Run encryption migration (helper function for both Docker and Proxmox)
+# Usage: _run_encryption_migration <env> <backend>
+_run_encryption_migration() {
+    local env="$1"
+    local backend="$2"
+    
+    echo ""
+    header "Encrypt Existing Files" 70
+    echo ""
+    info "This will encrypt all existing unencrypted files in MinIO storage"
+    info "using the authz keystore envelope encryption system."
+    echo ""
+    echo "What this does:"
+    echo "  1. Query files where is_encrypted = false"
+    echo "  2. Download each file from MinIO"
+    echo "  3. Encrypt via authz keystore API"
+    echo "  4. Re-upload encrypted content to MinIO"
+    echo "  5. Update is_encrypted = true in database"
+    echo ""
+    
+    # Determine environment and container ID
+    local ingest_host ctid
+    
+    if [[ "$backend" == "docker" ]] || [[ "$env" == "development" ]] || [[ "$env" == "local" ]] || [[ "$env" == "demo" ]]; then
+        ingest_host="docker:local-ingest-api"
+        info "Using Docker environment"
+    elif [[ "$env" == "staging" ]] || [[ "$env" == "test" ]]; then
+        ingest_host="10.96.201.206"
+        ctid="306"  # TEST-ingest-lxc
+        info "Using staging/test environment (container $ctid)"
+    else
+        ingest_host="10.96.200.206"
+        ctid="206"  # ingest-lxc
+        info "Using production environment (container $ctid)"
+    fi
+    echo ""
+    
+    local encryption_script="${REPO_ROOT}/scripts/migrations/encrypt-existing-files.py"
+    
+    if [[ ! -f "$encryption_script" ]]; then
+        error "Encryption script not found: $encryption_script"
+        error "Make sure you have pulled the latest code: git pull"
+        return 1
+    fi
+    
+    # Helper function to run encryption on Proxmox container
+    _run_encryption_on_proxmox() {
+        local dry_run_flag="${1:-}"
+        local container_id="$ctid"
+        
+        # Create scripts directory if it doesn't exist
+        pct exec "$container_id" -- mkdir -p /srv/ingest/scripts 2>/dev/null || true
+        
+        # Copy script to container
+        info "Copying encryption script to container $container_id..."
+        pct push "$container_id" "$encryption_script" "/srv/ingest/scripts/encrypt-existing-files.py" || {
+            error "Failed to copy script to container"
+            return 1
+        }
+        
+        # Run the script
+        info "Running encryption script${dry_run_flag:+ (dry-run)}..."
+        pct exec "$container_id" -- bash -c "set -a && source /srv/ingest/.env && set +a && /srv/ingest/venv/bin/python /srv/ingest/scripts/encrypt-existing-files.py ${dry_run_flag} --verbose" || {
+            error "Script execution failed"
+            return 1
+        }
+        return 0
+    }
+    
+    # Helper function to run encryption on Docker
+    _run_encryption_on_docker() {
+        local dry_run_flag="${1:-}"
+        local container_name="${ingest_host#docker:}"
+        
+        # Copy script to container
+        info "Copying encryption script to container..."
+        docker cp "$encryption_script" "$container_name:/tmp/encrypt-existing-files.py" || {
+            error "Failed to copy script to container"
+            return 1
+        }
+        
+        # Run in container with proper environment
+        info "Running encryption script${dry_run_flag:+ (dry-run)}..."
+        docker exec "$container_name" bash -c "set -a && source /app/.env 2>/dev/null || true && /app/venv/bin/python /tmp/encrypt-existing-files.py ${dry_run_flag} --verbose" || {
+            error "Script execution failed"
+            return 1
+        }
+        return 0
+    }
+    
+    # First do a dry run
+    if confirm "Run a dry-run first to see what would be encrypted?"; then
+        echo ""
+        
+        if [[ "$ingest_host" == docker:* ]]; then
+            _run_encryption_on_docker "--dry-run" || true
+        else
+            _run_encryption_on_proxmox "--dry-run" || true
+        fi
+        
+        echo ""
+    fi
+    
+    if confirm "Proceed with actual encryption?"; then
+        echo ""
+        warn "This will modify files in MinIO. Make sure you have a backup!"
+        echo ""
+        
+        if confirm "Are you SURE you want to proceed?"; then
+            echo ""
+            
+            if [[ "$ingest_host" == docker:* ]]; then
+                _run_encryption_on_docker "" && success "Encryption migration complete!" || error "Encryption migration failed"
+            else
+                _run_encryption_on_proxmox "" && success "Encryption migration complete!" || error "Encryption migration failed"
+            fi
+            
+            echo ""
+        fi
+    fi
+}
+
+# Reset chat insights collection (helper function)
+# Usage: _run_reset_insights <env> <backend>
+_run_reset_insights() {
+    local env="$1"
+    local backend="$2"
+    
+    echo ""
+    header "Reset Chat Insights Collection" 70
+    echo ""
+    warn "This will DROP the 'chat_insights' Milvus collection!"
+    warn "All existing insights will be deleted."
+    warn "Insights will be regenerated when users click 'Generate' in the UI."
+    echo ""
+    
+    # Determine environment
+    local milvus_host
+    
+    if [[ "$backend" == "docker" ]] || [[ "$env" == "development" ]] || [[ "$env" == "local" ]] || [[ "$env" == "demo" ]]; then
+        milvus_host="docker:local-milvus"
+        info "Using Docker environment"
+    elif [[ "$env" == "staging" ]] || [[ "$env" == "test" ]]; then
+        milvus_host="10.96.201.204"
+        info "Using staging/test environment"
+    else
+        milvus_host="10.96.200.204"
+        info "Using production environment"
+    fi
+    echo ""
+    
+    if confirm "Are you sure you want to reset the chat_insights collection?"; then
+        echo ""
+        info "Dropping and recreating chat_insights collection..."
+        
+        if [[ "$milvus_host" == docker:* ]]; then
+            # Docker environment - run Python in agent-api container
+            local container_name="${milvus_host#docker:}"
+            container_name="${container_name/milvus/agent-api}"
+            
+            info "Running in container: $container_name"
+            
+            docker exec "$container_name" python -c "
+from pymilvus import connections, utility
+
+# Connect to Milvus
+connections.connect('default', host='milvus', port=19530)
+
+# Drop chat_insights collection if it exists
+if utility.has_collection('chat_insights'):
+    utility.drop_collection('chat_insights')
+    print('Dropped collection: chat_insights')
+else:
+    print('Collection chat_insights does not exist')
+
+# Drop task_insights collection if it exists  
+if utility.has_collection('task_insights'):
+    utility.drop_collection('task_insights')
+    print('Dropped collection: task_insights')
+else:
+    print('Collection task_insights does not exist')
+
+print('Collections will be recreated on next agent-api restart')
+connections.disconnect('default')
+" || {
+                error "Failed to drop collections"
+                return 1
+            }
+            
+            echo ""
+            success "Collections dropped. Restarting agent-api..."
+            docker restart local-agent-api || true
+            sleep 3
+            success "Done! Collections will be recreated with new schema."
+        else
+            # Proxmox environment - SSH to milvus host
+            info "Connecting to $milvus_host..."
+            ssh "root@$milvus_host" "cd /root/busibox && python3 -c \"
+from pymilvus import connections, utility
+
+connections.connect('default', host='localhost', port=19530)
+
+if utility.has_collection('chat_insights'):
+    utility.drop_collection('chat_insights')
+    print('Dropped collection: chat_insights')
+else:
+    print('Collection chat_insights does not exist')
+
+if utility.has_collection('task_insights'):
+    utility.drop_collection('task_insights')
+    print('Dropped collection: task_insights')
+else:
+    print('Collection task_insights does not exist')
+
+print('Collections will be recreated on next agent service restart')
+connections.disconnect('default')
+\"" || {
+                error "Failed to drop collections"
+                return 1
+            }
+            
+            echo ""
+            success "Collections dropped. Restart agent service to recreate with new schema."
+        fi
+    fi
+}
+
 # Handle databases menu (renamed from migration)
 handle_databases() {
     local env backend
@@ -1416,15 +1643,38 @@ handle_databases() {
     header "Databases" 70
     echo ""
     
-    # Only Docker local environment uses the migration script directly
-    # Staging/Production use Ansible
+    # For non-Docker environments, show a limited menu with Proxmox-compatible options
     if [[ "$backend" != "docker" ]]; then
-        warn "Migration for $backend environments should be done via Ansible."
+        info "Environment: $env ($backend)"
         echo ""
-        info "For staging/production, use:"
-        echo "  cd provision/ansible"
-        echo "  make ${env:-production} deploy-postgres"
-        pause
+        
+        menu "Database Options (Proxmox)" \
+            "Encrypt Existing Files (MinIO)" \
+            "Reset Chat Insights Collection" \
+            "Back to Main Menu"
+        
+        echo ""
+        read -p "$(echo -e "${BOLD}Select option [1-3]:${NC} ")" proxmox_choice
+        
+        case "$proxmox_choice" in
+            1)
+                # Jump to encryption case (reuse the logic)
+                _run_encryption_migration "$env" "$backend"
+                pause
+                ;;
+            2)
+                # Reset chat insights - this works on Proxmox
+                _run_reset_insights "$env" "$backend"
+                pause
+                ;;
+            3|b|B|"")
+                return 0
+                ;;
+            *)
+                error "Invalid selection."
+                pause
+                ;;
+        esac
         return 0
     fi
     
@@ -1946,123 +2196,8 @@ asyncio.run(requeue_all())
             pause
             ;;
         11)
-            # Encrypt existing files in MinIO
-            echo ""
-            header "Encrypt Existing Files" 70
-            echo ""
-            info "This will encrypt all existing unencrypted files in MinIO storage"
-            info "using the authz keystore envelope encryption system."
-            echo ""
-            echo "What this does:"
-            echo "  1. Query files where is_encrypted = false"
-            echo "  2. Download each file from MinIO"
-            echo "  3. Encrypt via authz keystore API"
-            echo "  4. Re-upload encrypted content to MinIO"
-            echo "  5. Update is_encrypted = true in database"
-            echo ""
-            
-            # Determine environment and container ID
-            local ingest_host deploy_backend ctid
-            deploy_backend="${backend:-docker}"
-            
-            if [[ "$deploy_backend" == "docker" ]] || [[ "$env" == "development" ]] || [[ "$env" == "local" ]] || [[ "$env" == "demo" ]]; then
-                ingest_host="docker:local-ingest-api"
-                info "Using Docker environment"
-            elif [[ "$env" == "staging" ]] || [[ "$env" == "test" ]]; then
-                ingest_host="10.96.201.206"
-                ctid="306"  # TEST-ingest-lxc
-                info "Using staging/test environment (container $ctid)"
-            else
-                ingest_host="10.96.200.206"
-                ctid="206"  # ingest-lxc
-                info "Using production environment (container $ctid)"
-            fi
-            echo ""
-            
-            local encryption_script="${REPO_ROOT}/scripts/migrations/encrypt-existing-files.py"
-            
-            if [[ ! -f "$encryption_script" ]]; then
-                error "Encryption script not found: $encryption_script"
-                error "Make sure you have pulled the latest code: git pull"
-                pause
-                return 1
-            fi
-            
-            # Helper function to run encryption on Proxmox container
-            run_encryption_proxmox() {
-                local dry_run_flag="${1:-}"
-                local container_id="$ctid"
-                
-                # Create scripts directory if it doesn't exist
-                pct exec "$container_id" -- mkdir -p /srv/ingest/scripts 2>/dev/null || true
-                
-                # Copy script to container
-                info "Copying encryption script to container $container_id..."
-                pct push "$container_id" "$encryption_script" "/srv/ingest/scripts/encrypt-existing-files.py" || {
-                    error "Failed to copy script to container"
-                    return 1
-                }
-                
-                # Run the script
-                info "Running encryption script${dry_run_flag:+ (dry-run)}..."
-                pct exec "$container_id" -- bash -c "set -a && source /srv/ingest/.env && set +a && /srv/ingest/venv/bin/python /srv/ingest/scripts/encrypt-existing-files.py ${dry_run_flag} --verbose" || {
-                    error "Script execution failed"
-                    return 1
-                }
-                return 0
-            }
-            
-            # Helper function to run encryption on Docker
-            run_encryption_docker() {
-                local dry_run_flag="${1:-}"
-                local container_name="${ingest_host#docker:}"
-                
-                # Copy script to container
-                info "Copying encryption script to container..."
-                docker cp "$encryption_script" "$container_name:/tmp/encrypt-existing-files.py" || {
-                    error "Failed to copy script to container"
-                    return 1
-                }
-                
-                # Run in container with proper environment
-                info "Running encryption script${dry_run_flag:+ (dry-run)}..."
-                docker exec "$container_name" bash -c "set -a && source /app/.env 2>/dev/null || true && /app/venv/bin/python /tmp/encrypt-existing-files.py ${dry_run_flag} --verbose" || {
-                    error "Script execution failed"
-                    return 1
-                }
-                return 0
-            }
-            
-            # First do a dry run
-            if confirm "Run a dry-run first to see what would be encrypted?"; then
-                echo ""
-                
-                if [[ "$ingest_host" == docker:* ]]; then
-                    run_encryption_docker "--dry-run" || true
-                else
-                    run_encryption_proxmox "--dry-run" || true
-                fi
-                
-                echo ""
-            fi
-            
-            if confirm "Proceed with actual encryption?"; then
-                echo ""
-                warn "This will modify files in MinIO. Make sure you have a backup!"
-                echo ""
-                
-                if confirm "Are you SURE you want to proceed?"; then
-                    echo ""
-                    
-                    if [[ "$ingest_host" == docker:* ]]; then
-                        run_encryption_docker "" && success "Encryption migration complete!" || error "Encryption migration failed"
-                    else
-                        run_encryption_proxmox "" && success "Encryption migration complete!" || error "Encryption migration failed"
-                    fi
-                    
-                    echo ""
-                fi
-            fi
+            # Encrypt existing files in MinIO - use the helper function
+            _run_encryption_migration "$env" "$backend"
             pause
             ;;
         12)
