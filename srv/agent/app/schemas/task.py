@@ -258,7 +258,7 @@ class TaskCreate(BaseModel):
     
     # Delegation scopes
     scopes: List[str] = Field(
-        default_factory=lambda: ["search.read", "web_search.read"],
+        default_factory=lambda: ["search.read", "ingest.read", "agent.execute"],
         description="OAuth scopes to grant the task"
     )
     

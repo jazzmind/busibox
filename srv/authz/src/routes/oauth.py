@@ -696,13 +696,28 @@ async def create_delegation_token(request: Request):
         role_scopes = role.get("scopes") or []
         all_user_scopes.update(role_scopes)
     
+    def _scope_matches(requested: str, user_scopes: set[str]) -> bool:
+        """Check if a requested scope is covered by user's scopes (with wildcard support)."""
+        # Direct match
+        if requested in user_scopes:
+            return True
+        # Check for wildcards - e.g., "search.*" covers "search.read"
+        parts = requested.split(".")
+        for i in range(len(parts)):
+            prefix = ".".join(parts[:i + 1])
+            if f"{prefix}.*" in user_scopes:
+                return True
+        # Check for full wildcard
+        if "*" in user_scopes:
+            return True
+        return False
+    
     # If no scopes requested, use all user's scopes
     if not req.scopes:
         requested_scopes = list(all_user_scopes)
     else:
-        # Validate requested scopes are a subset of user's scopes
-        requested_set = set(req.scopes)
-        invalid_scopes = requested_set - all_user_scopes
+        # Validate requested scopes are covered by user's scopes (with wildcard support)
+        invalid_scopes = [s for s in req.scopes if not _scope_matches(s, all_user_scopes)]
         if invalid_scopes:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
