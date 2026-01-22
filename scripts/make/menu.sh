@@ -790,11 +790,12 @@ handle_deploy() {
                     "Restart All Services (down + up)" \
                     "Build All Images (docker-build)" \
                     "Build Specific Service" \
+                    "Build Specific Service (no cache)" \
                     "Regenerate .env.local from Vault" \
                     "Back to Main Menu"
                 
                 local choice=""
-                read -p "$(echo -e "${BOLD}Select option [1-7]:${NC} ")" choice
+                read -p "$(echo -e "${BOLD}Select option [1-8]:${NC} ")" choice
                 
                 case "${choice:-}" in
                     1)
@@ -835,6 +836,9 @@ handle_deploy() {
                         deploy_select_service
                         ;;
                     6)
+                        deploy_select_service "no-cache"
+                        ;;
+                    7)
                         echo ""
                         info "Regenerating .env.local from Ansible vault..."
                         save_last_command "make vault-generate-env"
@@ -846,7 +850,7 @@ handle_deploy() {
                         fi
                         pause
                         ;;
-                    7|b|B|"")
+                    8|b|B|"")
                         return 0
                         ;;
                 esac
@@ -872,12 +876,19 @@ handle_deploy() {
 }
 
 # Select a specific service to build
+# Usage: deploy_select_service [no-cache]
 deploy_select_service() {
+    local no_cache="${1:-}"
     local current_env
     current_env=$(get_environment)
     
+    local title="Select Service to Build"
+    if [[ "$no_cache" == "no-cache" ]]; then
+        title="Select Service to Build (NO CACHE)"
+    fi
+    
     echo ""
-    menu "Select Service to Build" \
+    menu "$title" \
         "authz-api" \
         "ingest-api" \
         "ingest-worker" \
@@ -910,9 +921,16 @@ deploy_select_service() {
     
     if [[ -n "$svc" ]]; then
         echo ""
-        if confirm "Build $svc (ENV=$current_env)?"; then
-            save_last_command "make docker-build SERVICE=$svc ENV=$current_env"
-            (cd "$REPO_ROOT" && make docker-build SERVICE="$svc" ENV="$current_env")
+        if [[ "$no_cache" == "no-cache" ]]; then
+            if confirm "Build $svc with NO CACHE (ENV=$current_env)?"; then
+                save_last_command "make docker-build SERVICE=$svc ENV=$current_env NO_CACHE=1"
+                (cd "$REPO_ROOT" && make docker-build SERVICE="$svc" ENV="$current_env" NO_CACHE=1)
+            fi
+        else
+            if confirm "Build $svc (ENV=$current_env)?"; then
+                save_last_command "make docker-build SERVICE=$svc ENV=$current_env"
+                (cd "$REPO_ROOT" && make docker-build SERVICE="$svc" ENV="$current_env")
+            fi
         fi
         pause
     fi
