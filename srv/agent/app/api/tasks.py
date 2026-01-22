@@ -401,10 +401,10 @@ async def _send_task_notification(
     
     body = "\n".join(body_parts)
     
-    # Portal link to task execution details page
+    # Portal link to task execution output page (clean formatted view)
     settings = get_settings()
     portal_base = settings.portal_base_url or "https://localhost"
-    portal_link = f"{portal_base}/agents/tasks/{task.id}/executions/{execution.id}"
+    portal_link = f"{portal_base}/agents/tasks/{task.id}/executions/{execution.id}/output"
     
     # Get all configured channels - support both single channel (legacy) and multiple channels
     channels_to_notify = []
