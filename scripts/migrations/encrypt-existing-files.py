@@ -422,7 +422,7 @@ async def run_migration(
     authz_base_url, admin_token = get_authz_config()
     
     print(f"Database: {db_url.split('@')[1] if '@' in db_url else db_url}")
-    print(f"MinIO: {minio_client._base_url.host}:{minio_client._base_url.port}/{bucket}")
+    print(f"MinIO: {os.environ.get('MINIO_ENDPOINT', 'localhost:9000')}/{bucket}")
     print(f"AuthZ: {authz_base_url}")
     print()
     
