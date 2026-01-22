@@ -766,7 +766,37 @@ class BaseStreamingAgent(StreamingAgent):
                 tools.append(tool_func)
         
         if not tools:
-            logger.warning(f"No tools registered for {self.name}")
+            # No tools configured - run as conversational agent without tool capabilities
+            logger.info(f"No tools configured for {self.name}, running as conversational agent")
+            
+            # Build model settings - only include max_tokens if explicitly set
+            model_settings = {}
+            if self.config.max_tokens is not None:
+                model_settings["max_tokens"] = self.config.max_tokens
+            
+            # Create agent without tools for pure conversation
+            agent = Agent(
+                model=self.synthesis_model,
+                system_prompt=self.config.instructions,
+                model_settings=model_settings if model_settings else None,
+            )
+            
+            # Build the prompt with conversation history context
+            prompt_with_context = self._build_llm_driven_prompt(query, context)
+            
+            # Run agent with context-enriched prompt
+            try:
+                result = await agent.run(prompt_with_context, deps=context.deps)
+                
+                # Store result for synthesis
+                context.tool_results["llm_response"] = result.output
+                
+            except Exception as e:
+                logger.error(f"Conversational agent error: {e}", exc_info=True)
+                await stream(error(
+                    source=self.name,
+                    message=f"Error: {str(e)}"
+                ))
             return
         
         # Build model settings - only include max_tokens if explicitly set

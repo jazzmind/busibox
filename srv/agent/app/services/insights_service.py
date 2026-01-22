@@ -457,7 +457,7 @@ class InsightsService:
             user_id: User ID to filter results
             authorization: Bearer token for authorization
             limit: Maximum number of results
-            score_threshold: Maximum L2 distance threshold (lower is better)
+            score_threshold: Maximum cosine distance threshold (lower is better, 0=identical)
             
         Returns:
             List of relevant insights with scores
@@ -471,8 +471,9 @@ class InsightsService:
         query_embedding = await self.generate_embedding(query, user_id, authorization)
         
         # Search with user filter
+        # Note: Index was created with COSINE metric, search must match
         search_params = {
-            "metric_type": "L2",
+            "metric_type": "COSINE",
             "params": {"nprobe": 10},
         }
         
@@ -490,9 +491,11 @@ class InsightsService:
         
         for hits in results:
             for hit in hits:
+                # For COSINE metric, distance is (1 - cosine_similarity)
+                # So lower distance = higher similarity (0 = identical, 2 = opposite)
                 score = hit.distance
                 
-                # Filter by score threshold (lower is better for L2 distance)
+                # Filter by score threshold (lower is better for COSINE distance)
                 if score > score_threshold:
                     continue
                 
@@ -1135,7 +1138,7 @@ class InsightsService:
             user_id: User ID for authorization
             authorization: Bearer token for embedding generation
             limit: Maximum number of results
-            score_threshold: Maximum L2 distance (lower is better)
+            score_threshold: Maximum cosine distance (lower is better, 0=identical)
             
         Returns:
             List of relevant insights with scores
@@ -1146,8 +1149,9 @@ class InsightsService:
         query_embedding = await self.generate_embedding(query, user_id, authorization)
         
         # Search with task filter
+        # Note: Index was created with COSINE metric, search must match
         search_params = {
-            "metric_type": "L2",
+            "metric_type": "COSINE",
             "params": {"nprobe": 10},
         }
         
@@ -1163,9 +1167,10 @@ class InsightsService:
         insights = []
         for hits in results:
             for hit in hits:
+                # For COSINE metric, distance is (1 - cosine_similarity)
                 score = hit.distance
                 
-                # Filter by score threshold
+                # Filter by score threshold (lower is better for COSINE distance)
                 if score > score_threshold:
                     continue
                 
