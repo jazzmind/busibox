@@ -79,10 +79,13 @@ async def _ensure_bootstrap_roles() -> None:
     # Define essential roles with their scopes/permissions
     # Admin gets wildcard access to all service namespaces
     admin_scopes = [
+        "*",           # Full wildcard - allows any scope
         "authz.*",     # All authz admin operations (users, roles, bindings, etc.)
         "ingest.*",    # All ingest operations  
         "search.*",    # All search operations
         "agent.*",     # All agent operations
+        "workflow.*",  # All workflow operations
+        "web_search.*",# All web search operations
         "apps.*",      # All app management
         "libraries.*", # All library management
         "admin.*",     # Legacy admin scope
