@@ -307,6 +307,21 @@
   register: tables_count
   changed_when: false
 
+- name: Check if alembic version table exists
+  shell: |
+    su - postgres -c "psql -d agent_server -tAc \"SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'alembic_version');\""
+  delegate_to: "{{ groups['pg'][0] }}"
+  register: alembic_version_exists
+  changed_when: false
+
+- name: Clear alembic version if tables are incomplete
+  shell: |
+    su - postgres -c "psql -d agent_server -c 'DROP TABLE IF EXISTS alembic_version;'"
+  delegate_to: "{{ groups['pg'][0] }}"
+  when: alembic_version_exists.stdout == 't' and tables_count.stdout|int < 3
+  register: clear_alembic
+  changed_when: true
+
 - name: Stamp database with current version if ALL tables exist but no migration history
   shell: |
     cd /srv/agent
