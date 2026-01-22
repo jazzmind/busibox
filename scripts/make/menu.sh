@@ -1461,10 +1461,11 @@ handle_databases() {
         "Migrate Embeddings (Milvus documents)" \
         "Reset Chat Insights Collection" \
         "Rebuild Milvus" \
+        "Encrypt Existing Files (MinIO)" \
         "Back to Main Menu"
     
     echo ""
-    read -p "$(echo -e "${BOLD}Select option [1-11]:${NC} ")" migration_choice
+    read -p "$(echo -e "${BOLD}Select option [1-12]:${NC} ")" migration_choice
     
     # For Docker execution, we need to copy the script into the container or cat it
     local docker_script_path="/tmp/migrate_db.py"
@@ -1927,6 +1928,116 @@ asyncio.run(requeue_all())
             pause
             ;;
         11)
+            # Encrypt existing files in MinIO
+            echo ""
+            header "Encrypt Existing Files" 70
+            echo ""
+            info "This will encrypt all existing unencrypted files in MinIO storage"
+            info "using the authz keystore envelope encryption system."
+            echo ""
+            echo "What this does:"
+            echo "  1. Query files where is_encrypted = false"
+            echo "  2. Download each file from MinIO"
+            echo "  3. Encrypt via authz keystore API"
+            echo "  4. Re-upload encrypted content to MinIO"
+            echo "  5. Update is_encrypted = true in database"
+            echo ""
+            
+            # Determine environment
+            local ingest_host deploy_backend
+            deploy_backend="${backend:-docker}"
+            
+            if [[ "$deploy_backend" == "docker" ]] || [[ "$env" == "development" ]] || [[ "$env" == "local" ]] || [[ "$env" == "demo" ]]; then
+                ingest_host="docker:local-ingest-api"
+                info "Using Docker environment"
+            elif [[ "$env" == "staging" ]] || [[ "$env" == "test" ]]; then
+                ingest_host="10.96.201.206"
+                info "Using staging/test environment"
+            else
+                ingest_host="10.96.200.206"
+                info "Using production environment"
+            fi
+            echo ""
+            
+            local encryption_script="${REPO_ROOT}/scripts/migrations/encrypt-existing-files.py"
+            
+            if [[ ! -f "$encryption_script" ]]; then
+                error "Encryption script not found: $encryption_script"
+                pause
+                return 1
+            fi
+            
+            # First do a dry run
+            if confirm "Run a dry-run first to see what would be encrypted?"; then
+                echo ""
+                info "Running dry-run..."
+                echo ""
+                
+                if [[ "$ingest_host" == docker:* ]]; then
+                    # Docker environment
+                    local container_name="${ingest_host#docker:}"
+                    
+                    # Copy script to container
+                    docker cp "$encryption_script" "$container_name:/tmp/encrypt-existing-files.py" 2>/dev/null || {
+                        error "Failed to copy script to container"
+                        pause
+                        return 1
+                    }
+                    
+                    # Run in container with proper environment
+                    docker exec "$container_name" bash -c 'set -a && source /app/.env 2>/dev/null || true && /app/venv/bin/python /tmp/encrypt-existing-files.py --dry-run --verbose' || true
+                else
+                    # Proxmox environment - run on ingest container via pct
+                    local ctid
+                    if [[ "$env" == "staging" ]] || [[ "$env" == "test" ]]; then
+                        ctid="306"  # TEST-ingest-lxc
+                    else
+                        ctid="206"  # ingest-lxc
+                    fi
+                    
+                    # Copy script to container
+                    pct push "$ctid" "$encryption_script" "/srv/ingest/scripts/encrypt-existing-files.py" 2>/dev/null || {
+                        error "Failed to copy script to container"
+                        pause
+                        return 1
+                    }
+                    
+                    pct exec "$ctid" -- bash -c 'set -a && source /srv/ingest/.env && set +a && /srv/ingest/venv/bin/python /srv/ingest/scripts/encrypt-existing-files.py --dry-run --verbose' || true
+                fi
+                
+                echo ""
+            fi
+            
+            if confirm "Proceed with actual encryption?"; then
+                echo ""
+                warn "This will modify files in MinIO. Make sure you have a backup!"
+                echo ""
+                
+                if confirm "Are you SURE you want to proceed?"; then
+                    echo ""
+                    info "Running encryption migration..."
+                    echo ""
+                    
+                    if [[ "$ingest_host" == docker:* ]]; then
+                        local container_name="${ingest_host#docker:}"
+                        docker exec "$container_name" bash -c 'set -a && source /app/.env 2>/dev/null || true && /app/venv/bin/python /tmp/encrypt-existing-files.py --verbose' || true
+                    else
+                        local ctid
+                        if [[ "$env" == "staging" ]] || [[ "$env" == "test" ]]; then
+                            ctid="306"
+                        else
+                            ctid="206"
+                        fi
+                        pct exec "$ctid" -- bash -c 'set -a && source /srv/ingest/.env && set +a && /srv/ingest/venv/bin/python /srv/ingest/scripts/encrypt-existing-files.py --verbose' || true
+                    fi
+                    
+                    echo ""
+                    success "Encryption migration complete!"
+                fi
+            fi
+            pause
+            ;;
+        12)
             return 0
             ;;
         *)
