@@ -118,12 +118,6 @@
     recurse: yes
   tags: [authz]
 
-- name: Restart authz service after code deployment
-  systemd:
-    name: "{{ authz_service_name }}"
-    state: restarted
-  tags: [authz]
-
 - name: Copy requirements.txt
   copy:
     src: "{{ authz_src_dir }}/requirements.txt"
@@ -218,13 +212,6 @@
   notify: Restart authz service
   tags: [authz]
 
-- name: Restart authz service after dependency changes
-  systemd:
-    name: "{{ authz_service_name }}"
-    state: restarted
-  when: authz_deps_install.changed
-  tags: [authz]
-
 - name: Render env file
   template:
     src: authz.env.j2
@@ -234,13 +221,6 @@
     mode: "0600"
   register: authz_env_file
   notify: Restart authz service
-  tags: [authz]
-
-- name: Restart authz service after env file changes
-  systemd:
-    name: "{{ authz_service_name }}"
-    state: restarted
-  when: authz_env_file.changed
   tags: [authz]
 
 - name: Install systemd service
