@@ -129,6 +129,77 @@ async def _ensure_bootstrap_roles() -> None:
                 logger.info("Updated Admin role with wildcard scopes", role_id=existing["id"])
 
 
+async def _ensure_bootstrap_test_user() -> None:
+    """
+    Ensure test user exists for PVT tests (Zero Trust architecture).
+    
+    Creates a test user with well-known ID if it doesn't exist.
+    This user is used by PVT tests to get user-scoped tokens via token exchange.
+    
+    Test user is created in BOTH production and test databases.
+    """
+    import uuid
+    from datetime import datetime
+    
+    # Well-known test user ID (same across all environments)
+    TEST_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+    TEST_USER_EMAIL = "test@test.example.com"
+    
+    # Helper to create test user in a database
+    async def create_test_user_in_db(pg_service, db_name: str):
+        # Get User role ID
+        user_role = await pg_service.get_role_by_name("User")
+        if not user_role:
+            logger.warning(f"User role not found in {db_name} - cannot assign to test user")
+            return
+        
+        user_role_id = user_role["id"]
+        
+        # Check if test user exists
+        existing_user = await pg_service.get_user(str(TEST_USER_ID))
+        if not existing_user:
+            # Create test user with specific UUID (direct SQL insert)
+            async with pg_service.acquire(None, None) as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO authz_users (user_id, email, status, created_at, updated_at)
+                    VALUES ($1, $2, $3, $4, $4)
+                    ON CONFLICT (user_id) DO NOTHING
+                    """,
+                    TEST_USER_ID,
+                    TEST_USER_EMAIL.lower(),
+                    "ACTIVE",
+                    datetime.utcnow(),
+                )
+                
+                # Assign User role
+                await conn.execute(
+                    """
+                    INSERT INTO authz_user_roles (user_id, role_id)
+                    VALUES ($1, $2)
+                    ON CONFLICT (user_id, role_id) DO NOTHING
+                    """,
+                    TEST_USER_ID,
+                    uuid.UUID(user_role_id),
+                )
+            
+            logger.info(f"Created test user in {db_name}", user_id=str(TEST_USER_ID), email=TEST_USER_EMAIL)
+        else:
+            # User exists - ensure they have User role
+            user_roles = await pg_service.get_user_roles(str(TEST_USER_ID))
+            has_user_role = any(r["id"] == user_role_id for r in user_roles)
+            if not has_user_role:
+                await pg_service.add_user_role(user_id=str(TEST_USER_ID), role_id=user_role_id)
+                logger.info(f"Assigned User role to existing test user in {db_name}", user_id=str(TEST_USER_ID))
+    
+    # Create in production database
+    await create_test_user_in_db(_pg, "production")
+    
+    # Create in test database if test mode is enabled
+    if _pg_test:
+        await create_test_user_in_db(_pg_test, "test")
+
+
 async def _ensure_bootstrap() -> None:
     """
     Ensure authz has at least one active signing key and (optionally) a bootstrap OAuth client.
@@ -208,6 +279,9 @@ async def _ensure_bootstrap() -> None:
     
     # 4) bootstrap essential roles
     await _ensure_bootstrap_roles()
+    
+    # 5) bootstrap test user (for PVT tests in Zero Trust architecture)
+    await _ensure_bootstrap_test_user()
 
 
 async def _require_client(client_id: str, client_secret: str) -> dict:
