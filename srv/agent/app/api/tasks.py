@@ -9,10 +9,12 @@ import uuid
 from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_principal
 from app.db.session import get_session
+from app.models.domain import TaskExecution
 from app.schemas.auth import Principal
 from app.schemas.task import (
     TaskCreate,
@@ -399,10 +401,10 @@ async def _send_task_notification(
     
     body = "\n".join(body_parts)
     
-    # Portal link
+    # Portal link to task execution details page
     settings = get_settings()
     portal_base = settings.portal_base_url or "https://localhost"
-    portal_link = f"{portal_base}/agents/tasks/{task.id}"
+    portal_link = f"{portal_base}/agents/tasks/{task.id}/executions/{execution.id}"
     
     # Get all configured channels - support both single channel (legacy) and multiple channels
     channels_to_notify = []
@@ -1138,6 +1140,52 @@ async def list_task_executions_endpoint(
     )
     
     return [TaskExecutionRead.model_validate(e) for e in executions]
+
+
+@router.get("/{task_id}/executions/{execution_id}", response_model=TaskExecutionRead)
+async def get_task_execution_endpoint(
+    task_id: uuid.UUID,
+    execution_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+) -> TaskExecutionRead:
+    """
+    Get a single task execution by ID.
+    
+    Args:
+        task_id: Task UUID
+        execution_id: Execution UUID
+        principal: Authenticated user
+        session: Database session
+        
+    Returns:
+        Task execution details
+    """
+    # Verify task exists and user has access
+    task = await get_task(session, task_id, principal.sub)
+    
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task {task_id} not found",
+        )
+    
+    # Get the specific execution
+    result = await session.execute(
+        select(TaskExecution).where(
+            TaskExecution.id == execution_id,
+            TaskExecution.task_id == task_id,
+        )
+    )
+    execution = result.scalar_one_or_none()
+    
+    if not execution:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Execution {execution_id} not found for task {task_id}",
+        )
+    
+    return TaskExecutionRead.model_validate(execution)
 
 
 @router.get("/{task_id}/insights")

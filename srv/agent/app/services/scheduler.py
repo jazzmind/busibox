@@ -856,11 +856,11 @@ class TaskSchedulerService:
         
         body = "\n".join(body_parts)
         
-        # Portal link to task execution
+        # Portal link to task execution details page
         from app.config.settings import get_settings
         settings = get_settings()
         portal_base = settings.portal_base_url or "https://localhost"
-        portal_link = f"{portal_base}/agents/tasks/{task.id}"
+        portal_link = f"{portal_base}/agents/tasks/{task.id}/executions/{execution.id}"
         
         # Get all configured channels - support both single channel (legacy) and multiple channels
         channels_to_notify = []
