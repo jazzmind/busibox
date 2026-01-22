@@ -296,31 +296,20 @@
   failed_when: false
   changed_when: false
 
-- name: Check if all required agent tables exist
+- name: Count all agent tables in database
   shell: |
     su - postgres -c "psql -d agent_server -tAc \"
       SELECT COUNT(*) FROM information_schema.tables 
       WHERE table_schema = 'public' 
-      AND table_name IN (
-        'agent_definitions', 
-        'tool_definitions', 
-        'workflow_definitions', 
-        'eval_definitions',
-        'rag_databases',
-        'rag_documents',
-        'run_records',
-        'token_grants',
-        'conversations',
-        'runs'
-      );
+      AND table_name NOT IN ('alembic_version');
     \""
   delegate_to: "{{ groups['pg'][0] }}"
   register: tables_count
   changed_when: false
 
-- name: Debug table count
+- name: Debug table count and alembic status
   debug:
-    msg: "Tables count: '{{ tables_count.stdout }}' (expected: 10, got: {{ tables_count.stdout|int }})"
+    msg: "Tables in DB: {{ tables_count.stdout|int }}, Alembic current: '{{ alembic_current.stdout }}'"
 
 - name: Check if alembic version table exists
   shell: |
@@ -329,48 +318,33 @@
   register: alembic_version_exists
   changed_when: false
 
-- name: Backup incomplete tables before dropping
+- name: Backup all tables before dropping (if tables exist but no alembic version)
   shell: |
     TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-    BACKUP_DIR="/var/backups/postgres/agent_incomplete_${TIMESTAMP}"
+    BACKUP_DIR="/var/backups/postgres/agent_prestamp_${TIMESTAMP}"
     mkdir -p "$BACKUP_DIR"
     
     su - postgres -c "
-      # Backup each table if it exists
-      for table in agent_definitions tool_definitions workflow_definitions eval_definitions rag_databases rag_documents run_records token_grants conversations runs alembic_version; do
-        if psql -d agent_server -tAc \"SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '\$table');\" | grep -q 't'; then
-          echo \"Backing up \$table...\"
-          pg_dump -d agent_server -t \$table --data-only > \"$BACKUP_DIR/\${table}.sql\" 2>/dev/null || true
-        fi
+      # Get list of all tables and backup each
+      for table in \$(psql -d agent_server -tAc \"SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename != 'alembic_version';\"); do
+        echo \"Backing up \$table...\"
+        pg_dump -d agent_server -t \$table --data-only > \"$BACKUP_DIR/\${table}.sql\" 2>/dev/null || true
       done
     "
     
     echo "Backup saved to: $BACKUP_DIR"
-    ls -lh "$BACKUP_DIR"
+    ls -lh "$BACKUP_DIR" 2>/dev/null || echo "No tables to backup"
   delegate_to: "{{ groups['pg'][0] }}"
-  when: tables_count.stdout|int > 0 and tables_count.stdout|int < 10
-  register: backup_incomplete
+  when: tables_count.stdout|int > 0 and (alembic_current.stdout == '' or 'No revision' in alembic_current.stdout or alembic_current.rc != 0)
+  register: backup_before_stamp
   changed_when: false
 
-- name: Clear incomplete migration state (drop all tables if count < 10)
+- name: Drop alembic_version if tables exist but no valid migration history
   shell: |
-    su - postgres -c "psql -d agent_server << 'EOF'
-    DROP TABLE IF EXISTS alembic_version CASCADE;
-    DROP TABLE IF EXISTS rag_documents CASCADE;
-    DROP TABLE IF EXISTS token_grants CASCADE;
-    DROP TABLE IF EXISTS run_records CASCADE;
-    DROP TABLE IF EXISTS rag_databases CASCADE;
-    DROP TABLE IF EXISTS eval_definitions CASCADE;
-    DROP TABLE IF EXISTS workflow_definitions CASCADE;
-    DROP TABLE IF EXISTS tool_definitions CASCADE;
-    DROP TABLE IF EXISTS agent_definitions CASCADE;
-    DROP TABLE IF EXISTS conversations CASCADE;
-    DROP TABLE IF EXISTS runs CASCADE;
-    EOF
-    "
+    su - postgres -c "psql -d agent_server -c 'DROP TABLE IF EXISTS alembic_version CASCADE;'"
   delegate_to: "{{ groups['pg'][0] }}"
-  when: tables_count.stdout|int > 0 and tables_count.stdout|int < 10
-  register: clear_incomplete
+  when: tables_count.stdout|int > 0 and (alembic_current.stdout == '' or 'No revision' in alembic_current.stdout or alembic_current.rc != 0)
+  register: clear_alembic_version
   changed_when: true
 
 - name: Grant database permissions for migrations
@@ -389,29 +363,19 @@
   failed_when: false
   changed_when: false
 
-- name: Stamp database if ALL tables exist but alembic version is missing or empty
+- name: Stamp database to head if tables exist but no valid migration history
   shell: |
     cd /srv/agent
     . .venv/bin/activate
-    # Check if we need to stamp
-    current=$(alembic current 2>&1 || echo "")
-    echo "Current alembic status: $current"
-    if [ $? -ne 0 ] || [ -z "$current" ] || echo "$current" | grep -q "No revision"; then
-      echo "Stamping database to head"
-      alembic stamp head
-      exit 0
-    else
-      echo "Database already has migration history, skipping stamp"
-      exit 1
-    fi
+    echo "Stamping database to head (tables exist but no alembic version)"
+    alembic stamp head
   become: yes
   become_user: "{{ agent_api_user }}"
   environment:
     DATABASE_URL: "{{ secrets['agent-server'].database_url }}"
-  when: tables_count.stdout|int == 10
+  when: tables_count.stdout|int > 0 and (alembic_current.stdout == '' or 'No revision' in alembic_current.stdout or alembic_current.rc != 0)
   register: stamp_result
-  failed_when: false
-  changed_when: stamp_result.rc == 0
+  changed_when: true
 
 - name: Run database migrations
   shell: |
