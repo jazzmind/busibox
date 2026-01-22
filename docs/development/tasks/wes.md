@@ -1,38 +1,26 @@
 # Wes's Tasks
-[ ] Get insights working
-[ ] Get agent tasks working with tool calling
-[ ] Deploy to staging
-[ ] Deploy to production
-[ ] 
-## Active Tasks
-[X] - get agent manager to be able to run the web search tool via the web research agent
-[X] - use this agent via the ai-portal chat
-[X] - fix the document manager
-[X] - get the doc search tool to work
-[ ] - get the doc search agent to work
-[ ] - create an email messenger tool that can send emails
-[ ] - now the ai-portal chat agent should be able to use web search AND doc search together
-[ ] - deploy all this to busibox test
-[X] - create an "agent tasks" capability
-    [X] - first add to agent manager
-    [X] - then we want to have agents, tasks, insights as things accessible from chat
-    [ ] - chat agent should be able to create agent tasks automatically
-    [ ] - test is "send me a videogame news summary via email every hour"
-        [ ] - should use "news agent"
 
-Future features
+## Active Tasks
+
+[ ] Deploy to production
+[ ] tags are not working for documents properly. 
+[ ] eliminate client token exchange from authz - there are still 
+
+ 
+## Future features
 [ ] - agents can manage their own insights/memories and consult when running
 [ ] - integration with whatsapp/sms, signal etc. (bridge service)
 [ ] - make demo
-[ ]
-4 - improve existing agents - chat (has websearch, filesearch, upload), web search (focus on deep research), RAG Search Agent
+[ ] - improve existing agents - chat (has websearch, filesearch, upload), web search (focus on deep research), RAG Search Agent
+[ ] - model registry overrides in env/dockercompose/ansible, or dynamically set during make install, or menu
+[ ] a "warmup" screen for ai-portal when models need to be cached/downloaded.
+[ ] dispatcher can recommend activation of tools, ask questions with yes/no buttons, option lists to click on. e.g. should I create an agent task for this? Yes / No if yes - activates agent task tool. 
+[ ] tasks can be initiated by a document ingest. So we need an event to be emitted that the task manager listens to (webhook?) that gives library folder, keywords and tags for docs. Tasks will trigger based on matching keywords, tags, folders, etc.
+vestiges.
+   [ ] - chat agent should be able to create agent tasks automatically
+    [ ] - test is "send me a videogame news summary via email every hour"
+        [ ] - should use "news agent"
 
-- model registry overrides in env/dockercompose/ansible, or dynamically set during make install, or menu
-- a "warmup" screen for ai-portal when models need to be cached/downloaded.
-- agent task creator tool
-- dispatcher can recommend activation of tools, ask questions with yes/no buttons, option lists to click on. e.g. should I create an agent task for this? Yes / No if yes - activates agent task tool. 
-- tasks can be initiated by a document ingest. So we need an event to be emitted that the task manager listens to (webhook?) that gives library folder, keywords and tags for docs. Tasks will trigger based on matching keywords, tags, folders, etc.
-- eliminate client token exchange from authz - there are still vestiges.
 
 2) We need to tune the chat agent's thinking to first check if there are relevant docs via document search - retrieve highly relevant docs and evaluate. Web search when getting more info is needed or requested, scrape results to determine if the information is helpful.
 
@@ -41,24 +29,7 @@ Then "Here's a quick summary of what I found... <summary> - now looking online."
 Then "Here's a summary of what I found online <summary> - now putitng it all together"
 Then final summary. This way we are streaming responses constantly vs. waiting a long time for a response to come in.
 
-Give me today's videogame news. I like games like Hades so focus there.
-
-
-https://default7ca128af4479416c8a939d9f1b1566.8e.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/625fc04d453b42838b559c4b2d2d2f02/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=zT-zQEpXGI8r1e-Bq4pOMWgpzp1SDYZde_U7SztY8EQ
-
-
-https://default5766860777be4cbb8cbc64fa20281d.ac.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/237403867199487ea71a7dacedd6b1de/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=MIJbAHxThi3QLwWmP-zFuHuxwEP_qvGJrfHKGg92dyU
-
-Agent tasks:
-2 - make sure all busibox-app tests pass
-3 - make sure all authz tests pass
-4 - make sure all ai-portal tests pass
-5 - make sure agent-api is working and all tests pass
-6 - start rebuilding agent-manager (rename to agent-manager) using busibox-app libs and components
-7 - make sure agent-manager runs and can talk to agent-api
-
-
-What I'd delagate now:
+## What I'd delagate now:
 - improving ingestion:
   [ ] long docs - split them
   [ ] lots of visuals - how does colpali handle them?
@@ -83,7 +54,22 @@ Issues:
 currently in fullchat the thinking toggle doesnt't appear immediately, is closed when it does, disappears as soon as the response has finished.
 
 
+
 ## Recent Completions
+[X] Get insights working
+[X] Get agent tasks working with tool calling
+[X] Deploy to staging
+[X] - get agent manager to be able to run the web search tool via the web research agent
+[X] - use this agent via the ai-portal chat
+[X] - fix the document manager
+[X] - get the doc search tool to work
+[X] - get the doc search agent to work
+[X] - create an email messenger tool that can send emails
+[X] - now the ai-portal chat agent should be able to use web search AND doc search together
+[X] - deploy all this to busibox test
+[X] - create an "agent tasks" capability
+    [X] - first add to agent manager
+    [X] - then we want to have agents, tasks, insights as things accessible from chat
 [X] - Fixed document_search tool authentication and configuration UI (2026-01-14)
   - Problem 1: document_search tool wasn't using authenticated API calls, causing permission errors
   - Problem 2: agent-manager showed irrelevant web_search provider options for document_search
@@ -142,21 +128,3 @@ currently in fullchat the thinking toggle doesnt't appear immediately, is closed
     - Top level: All Services, API Services, Data Services, Individual Services, Clean-up
     - Each service group has: Build, Status, Restart, Start, Stop, Logs
   - Fixed service selection menus to include ingest-worker
-
-
-## Data Analysis Tasks
-1) Ability to add charts to a report
-2) Ability to add time series data - e.g. upload the same sheet for multiple months
-3) Ability to add a report to a dashboard
-
-
-## Cashman Projects
-
-### P&L Statement Analysis Platform
-- [ ] We need a workflow: upload each monthly P&L statement, extract the data (P&L data extraction agent + data cleaning/validation agent), store as timeseries data in a database
-- [ ] Another agent needs to be able to analyze the timeseries data based on questions
-- [ ] We also want a charting agent that can take a description of a chart & dataset and generate chartJS code
-Add a tool to the agent that can analyze a P&L statement and return a summary of the financial performance
-
-
-# Projects for Claude Code
