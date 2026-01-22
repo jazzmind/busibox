@@ -18,10 +18,12 @@ from fastapi.responses import JSONResponse
 
 from shared.config import Config
 
-# Import singleton postgres service to avoid connection leaks
-from api.main import pg_service
-
 logger = structlog.get_logger()
+
+def _get_postgres_service():
+    """Lazy import to avoid circular import with api.main."""
+    from api.main import pg_service
+    return pg_service
 
 router = APIRouter()
 
@@ -86,6 +88,7 @@ async def create_token(request: Request):
 
 async def write_audit(actor_id: str, action: str, resource_type: str, resource_id: Optional[str], details: dict, request: Request):
     """Insert audit log entry."""
+    pg_service = _get_postgres_service()
     # Use the shared singleton - avoid creating new pools
     if not pg_service.pool:
         await pg_service.connect()

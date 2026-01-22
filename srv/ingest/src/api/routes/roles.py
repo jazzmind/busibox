@@ -20,10 +20,12 @@ from api.middleware.jwt_auth import ScopeChecker
 from services.milvus_service import MilvusService
 from shared.config import Config
 
-# Import singleton postgres service to avoid connection leaks
-from api.main import pg_service as postgres_service
-
 logger = structlog.get_logger()
+
+def _get_postgres_service():
+    """Lazy import to avoid circular import with api.main."""
+    from api.main import pg_service
+    return pg_service
 
 router = APIRouter()
 
@@ -158,6 +160,7 @@ async def update_document_roles(
     milvus_service = MilvusService(config)
     
     # Use the shared singleton - avoid creating new pools
+    postgres_service = _get_postgres_service()
     if not postgres_service.pool:
         await postgres_service.connect()
     milvus_service.connect()
@@ -371,6 +374,7 @@ async def share_document(
     milvus_service = MilvusService(config)
     
     # Use the shared singleton - avoid creating new pools
+    postgres_service = _get_postgres_service()
     if not postgres_service.pool:
         await postgres_service.connect()
     milvus_service.connect()
