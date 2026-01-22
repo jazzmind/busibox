@@ -256,20 +256,118 @@ async def _send_webhook_notification(
     )
 
 
+def _markdown_to_html(text: str) -> str:
+    """
+    Convert markdown-like text to HTML for email display.
+    
+    Handles common patterns:
+    - **bold** -> <strong>bold</strong>
+    - *italic* -> <em>italic</em>
+    - `code` -> <code>code</code>
+    - ```code blocks``` -> <pre><code>...</code></pre>
+    - Headers (##, ###)
+    - Lists (-, *)
+    - Links [text](url)
+    - Newlines -> <br> or <p>
+    """
+    import re
+    import html
+    
+    # Escape HTML entities first (but we'll unescape our own tags later)
+    text = html.escape(text)
+    
+    # Handle code blocks first (```...```)
+    def replace_code_block(match):
+        code = match.group(1).strip()
+        return f'<pre style="background-color: #f4f4f4; padding: 12px; border-radius: 6px; overflow-x: auto; font-family: monospace; font-size: 13px; border: 1px solid #ddd;"><code>{code}</code></pre>'
+    
+    text = re.sub(r'```(?:\w+)?\n?(.*?)```', replace_code_block, text, flags=re.DOTALL)
+    
+    # Handle inline code (`code`)
+    text = re.sub(
+        r'`([^`]+)`', 
+        r'<code style="background-color: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-family: monospace; font-size: 13px;">\1</code>', 
+        text
+    )
+    
+    # Handle bold (**text**)
+    text = re.sub(r'\*\*([^*]+)\*\*', r'<strong>\1</strong>', text)
+    
+    # Handle italic (*text*) - but not inside URLs or after **
+    text = re.sub(r'(?<!\*)\*([^*]+)\*(?!\*)', r'<em>\1</em>', text)
+    
+    # Handle headers
+    text = re.sub(r'^### (.+)$', r'<h3 style="margin: 16px 0 8px 0; font-size: 16px; color: #333;">\1</h3>', text, flags=re.MULTILINE)
+    text = re.sub(r'^## (.+)$', r'<h2 style="margin: 20px 0 10px 0; font-size: 18px; color: #333;">\1</h2>', text, flags=re.MULTILINE)
+    text = re.sub(r'^# (.+)$', r'<h1 style="margin: 24px 0 12px 0; font-size: 22px; color: #333;">\1</h1>', text, flags=re.MULTILINE)
+    
+    # Handle links [text](url)
+    text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2" style="color: #0066cc;">\1</a>', text)
+    
+    # Handle unordered lists (- or *)
+    lines = text.split('\n')
+    in_list = False
+    result_lines = []
+    
+    for line in lines:
+        stripped = line.strip()
+        is_list_item = stripped.startswith('- ') or stripped.startswith('* ')
+        
+        if is_list_item:
+            if not in_list:
+                result_lines.append('<ul style="margin: 12px 0; padding-left: 24px;">')
+                in_list = True
+            item_content = stripped[2:].strip()
+            result_lines.append(f'<li style="margin: 6px 0;">{item_content}</li>')
+        else:
+            if in_list:
+                result_lines.append('</ul>')
+                in_list = False
+            
+            # Handle numbered lists (1. , 2. , etc.)
+            num_match = re.match(r'^(\d+)\.\s+(.+)$', stripped)
+            if num_match:
+                # For simplicity, treat numbered items as regular list items
+                if not in_list:
+                    result_lines.append('<ol style="margin: 12px 0; padding-left: 24px;">')
+                    in_list = True
+                result_lines.append(f'<li style="margin: 6px 0;">{num_match.group(2)}</li>')
+            elif stripped:
+                result_lines.append(line)
+            else:
+                result_lines.append('<br>')
+    
+    if in_list:
+        result_lines.append('</ul>' if '- ' in text or '* ' in text else '</ol>')
+    
+    text = '\n'.join(result_lines)
+    
+    # Convert remaining newlines to <br> (but not after block elements)
+    text = re.sub(r'\n(?!<)', '<br>\n', text)
+    
+    # Clean up excessive <br> tags
+    text = re.sub(r'(<br>\s*){3,}', '<br><br>', text)
+    
+    return text
+
+
 def _build_email_html(body: str, portal_link: Optional[str] = None) -> str:
     """Build HTML email body with styling and portal link."""
-    # Convert markdown-like formatting to HTML
-    html_body = body.replace("\n", "<br>")
+    # Convert markdown-like formatting to proper HTML
+    html_body = _markdown_to_html(body)
     
-    # Add portal link button if provided
+    # Add portal link button if provided (now points to output view)
     portal_section = ""
     if portal_link:
+        # Modify link to go to output view
+        output_link = portal_link + "/output" if not portal_link.endswith("/output") else portal_link
         portal_section = f"""
-        <div style="margin-top: 20px; padding: 15px; background-color: #f8f9fa; border-radius: 8px;">
-            <a href="{portal_link}" 
-               style="display: inline-block; padding: 10px 20px; background-color: #0066cc; 
-                      color: white; text-decoration: none; border-radius: 4px; font-weight: 500;">
-                View Details in Portal
+        <div style="margin-top: 24px; padding: 16px; background-color: #f8f9fa; border-radius: 8px; text-align: center;">
+            <a href="{output_link}" 
+               style="display: inline-block; padding: 12px 24px; background-color: #0066cc; 
+                      color: white; text-decoration: none; border-radius: 6px; font-weight: 500;
+                      font-size: 14px;">
+                View Full Output
             </a>
         </div>
         """
@@ -279,20 +377,33 @@ def _build_email_html(body: str, portal_link: Optional[str] = None) -> str:
     <html>
     <head>
         <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
             body {{
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
                 line-height: 1.6;
                 color: #333;
                 max-width: 600px;
                 margin: 0 auto;
                 padding: 20px;
+                background-color: #f5f5f5;
             }}
             .content {{
                 background-color: #ffffff;
-                padding: 20px;
+                padding: 24px;
                 border-radius: 8px;
                 border: 1px solid #e0e0e0;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            }}
+            pre {{
+                white-space: pre-wrap;
+                word-wrap: break-word;
+            }}
+            code {{
+                font-family: 'SF Mono', Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+            }}
+            strong {{
+                color: #222;
             }}
         </style>
     </head>
@@ -301,7 +412,7 @@ def _build_email_html(body: str, portal_link: Optional[str] = None) -> str:
             {html_body}
             {portal_section}
         </div>
-        <div style="margin-top: 20px; font-size: 12px; color: #666;">
+        <div style="margin-top: 20px; font-size: 12px; color: #888; text-align: center;">
             <p>This notification was sent by Busibox Agent Tasks.</p>
         </div>
     </body>
