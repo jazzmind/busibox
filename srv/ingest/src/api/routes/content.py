@@ -21,6 +21,7 @@ from api.services.minio_service import MinIOService
 from api.services.postgres import PostgresService
 from api.services.redis_service import RedisService
 from api.services.library_service import LibraryService
+from api.services.encryption_client import EncryptionClient
 from shared.config import Config
 
 logger = structlog.get_logger()
@@ -99,6 +100,7 @@ async def ingest_content(
     from api.main import pg_service
     minio_service = MinIOService(config)
     redis_service = RedisService(config)
+    encryption_client = EncryptionClient(config)
     
     await redis_service.connect()
     
@@ -143,10 +145,33 @@ async def ingest_content(
             content_length=file_size,
         )
         
-        # Store content in MinIO
-        await minio_service.upload_text(
-            content=body.content,
+        # Encrypt content before storage (personal files only - use user_id as key owner)
+        content_to_store = content_bytes
+        is_encrypted = False
+        
+        if encryption_client.enabled:
+            content_to_store = await encryption_client.encrypt_for_upload(
+                file_id=file_id,
+                content=content_bytes,
+                user_id=user_id,  # Personal files use user_id for key ownership
+            )
+            
+            # Check if encryption actually happened (content changed)
+            is_encrypted = content_to_store != content_bytes
+            
+            if is_encrypted:
+                logger.info(
+                    "Content encrypted for storage",
+                    file_id=file_id,
+                    original_size=len(content_bytes),
+                    encrypted_size=len(content_to_store),
+                )
+        
+        # Store encrypted (or original if encryption disabled) content in MinIO
+        await minio_service.upload_bytes(
+            data=content_to_store,
             object_path=storage_path,
+            content_type='text/markdown',
         )
         
         # Prepare metadata
@@ -176,6 +201,7 @@ async def ingest_content(
             visibility="personal",
             request=request,
             library_id=library_id,  # Associate with personal library
+            is_encrypted=is_encrypted,  # Track encryption status
         )
         print(f"[content] File record created successfully: {file_id}, library_id={library_id}")
         

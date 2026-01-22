@@ -331,4 +331,19 @@ def get_ingest_schema() -> SchemaManager:
         END $$
     """)
     
+    # Add is_encrypted column to track encryption status of stored files
+    schema.add_migration("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'ingestion_files' AND column_name = 'is_encrypted'
+            ) THEN
+                ALTER TABLE ingestion_files ADD COLUMN is_encrypted BOOLEAN DEFAULT false;
+                CREATE INDEX IF NOT EXISTS idx_ingestion_files_encrypted ON ingestion_files(is_encrypted);
+                COMMENT ON COLUMN ingestion_files.is_encrypted IS 'Whether the file content is encrypted at rest using envelope encryption';
+            END IF;
+        END $$
+    """)
+    
     return schema
