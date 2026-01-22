@@ -25,6 +25,7 @@ from .auth import (
     Role,
     UserContext,
     WorkerRLSContext,
+    TokenExchangeResult,
     # JWT parsing
     parse_jwt_token,
     extract_user_context,
@@ -34,6 +35,8 @@ from .auth import (
     TokenExchangeService,  # Legacy alias
     TOKEN_EXCHANGE_GRANT,
     clear_token_cache,
+    clear_zero_trust_cache,
+    exchange_token_zero_trust,
     # Middleware
     JWTAuthMiddleware,
     # RLS helpers
@@ -81,6 +84,7 @@ __all__ = [
     "Role",
     "UserContext",
     "WorkerRLSContext",
+    "TokenExchangeResult",
     # Auth - JWT parsing
     "parse_jwt_token",
     "extract_user_context",
@@ -90,6 +94,8 @@ __all__ = [
     "TokenExchangeService",
     "TOKEN_EXCHANGE_GRANT",
     "clear_token_cache",
+    "clear_zero_trust_cache",
+    "exchange_token_zero_trust",
     # Auth - Middleware
     "JWTAuthMiddleware",
     # Auth - RLS helpers

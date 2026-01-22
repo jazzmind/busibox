@@ -507,6 +507,13 @@ TokenExchangeService = TokenExchangeClient
 _zero_trust_cache: TTLCache = TTLCache(maxsize=1000, ttl=840)  # 14 min TTL
 
 
+@dataclass
+class TokenExchangeResult:
+    """Result from token exchange operation."""
+    access_token: str
+    expires_in: int  # seconds until expiry
+
+
 async def exchange_token_zero_trust(
     subject_token: str,
     target_audience: str,
@@ -514,7 +521,7 @@ async def exchange_token_zero_trust(
     scopes: str = "",
     authz_url: Optional[str] = None,
     use_cache: bool = True,
-) -> Optional[str]:
+) -> Optional[TokenExchangeResult]:
     """
     Exchange a user's token for a downstream service token (Zero Trust).
     
@@ -535,19 +542,19 @@ async def exchange_token_zero_trust(
         use_cache: Whether to cache tokens (default True)
         
     Returns:
-        Access token string, or None if exchange fails
+        TokenExchangeResult with access_token and expires_in, or None if exchange fails
     """
     # Check cache first
     if use_cache:
         cache_key = f"zt:{user_id}:{target_audience}"
-        cached_token = _zero_trust_cache.get(cache_key)
-        if cached_token:
+        cached_result = _zero_trust_cache.get(cache_key)
+        if cached_result:
             logger.debug(
                 "Using cached Zero Trust token",
                 user_id=user_id,
                 target_audience=target_audience,
             )
-            return cached_token
+            return cached_result
     
     # Get authz URL
     token_url = authz_url or os.environ.get(
@@ -586,21 +593,26 @@ async def exchange_token_zero_trust(
             
             data = response.json()
             access_token = data.get("access_token")
+            expires_in = data.get("expires_in", 900)  # Default 15 min if not provided
             
             if access_token:
                 logger.info(
                     "Zero Trust token exchange successful",
                     user_id=user_id,
                     target_audience=target_audience,
-                    expires_in=data.get("expires_in"),
+                    expires_in=expires_in,
                 )
+                
+                result = TokenExchangeResult(access_token=access_token, expires_in=expires_in)
                 
                 # Cache the token
                 if use_cache:
                     cache_key = f"zt:{user_id}:{target_audience}"
-                    _zero_trust_cache[cache_key] = access_token
+                    _zero_trust_cache[cache_key] = result
+                
+                return result
             
-            return access_token
+            return None
     
     except Exception as e:
         logger.error(

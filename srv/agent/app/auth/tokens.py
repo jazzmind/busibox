@@ -133,7 +133,7 @@ async def exchange_token(
     audience = _audience_for_purpose(purpose, scopes)
     
     # Use Zero Trust exchange - pass user's JWT as subject_token
-    access_token = await exchange_token_zero_trust(
+    result = await exchange_token_zero_trust(
         subject_token=principal.token,
         target_audience=audience,
         user_id=principal.sub,
@@ -141,20 +141,15 @@ async def exchange_token(
         authz_url=str(settings.auth_token_url),
     )
     
-    if not access_token:
+    if not result:
         raise ValueError(f"Token exchange failed for audience {audience}")
     
-    # Use 3 years expiry for delegation tokens, shorter for regular exchanges
-    # This aligns with the authz service's default access_token_ttl
-    if "delegation" in purpose.lower() or "task" in purpose.lower():
-        # Long-lived delegation tokens (3 years)
-        expires_at = datetime.now(timezone.utc) + timedelta(days=365 * 3)
-    else:
-        # Regular short-lived tokens (15 minutes)
-        expires_at = datetime.now(timezone.utc) + timedelta(seconds=900)
+    # Use the actual expires_in from authz response instead of calculating client-side
+    # This ensures the cached token expiry matches the actual JWT expiry
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=result.expires_in)
     
     return TokenExchangeResponse(
-        access_token=access_token,
+        access_token=result.access_token,
         token_type="bearer",
         expires_at=expires_at,
         scopes=scopes,
