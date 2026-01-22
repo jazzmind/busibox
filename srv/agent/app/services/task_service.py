@@ -26,7 +26,7 @@ from app.schemas.task import (
     get_cron_from_preset,
 )
 from app.services.builtin_agents import get_builtin_agent_definitions
-from app.services.token_service import get_or_exchange_token
+from app.auth.tokens import create_delegation_token
 
 logger = logging.getLogger(__name__)
 
@@ -118,22 +118,31 @@ async def create_task(
     if task_data.trigger_type == "webhook":
         webhook_secret = _generate_webhook_secret()
     
-    # Create delegation token for the task
+    # Create delegation token for the task using the proper /oauth/delegation endpoint
+    # This creates a long-lived token (3 years) that can be used for token exchange
     delegation_token = None
     delegation_expires_at = None
     
     try:
-        # Request a long-lived delegation token (30 days)
-        token_response = await get_or_exchange_token(
-            session=session,
-            principal=principal,
+        if not principal.token:
+            raise ValueError("Principal must have a token to create delegation")
+        
+        # Create a proper delegation token via authz /oauth/delegation endpoint
+        token_response = await create_delegation_token(
+            subject_token=principal.token,
+            name=f"Task: {task_data.name}",
             scopes=task_data.scopes,
-            purpose="task-delegation",
+            # Default 3 years (94608000 seconds)
         )
         delegation_token = token_response.access_token
         delegation_expires_at = token_response.expires_at
         if delegation_expires_at and delegation_expires_at.tzinfo:
             delegation_expires_at = delegation_expires_at.replace(tzinfo=None)
+        
+        logger.info(
+            f"Created delegation token for task '{task_data.name}'",
+            extra={"expires_at": delegation_expires_at, "scopes": task_data.scopes}
+        )
     except Exception as e:
         logger.warning(f"Failed to create delegation token for task: {e}")
         # Continue without delegation token - will need to refresh on execution
@@ -431,7 +440,8 @@ async def refresh_delegation_token(
     """
     Refresh the delegation token for a task.
     
-    Creates a new long-lived token (3 years) with the task's configured scopes.
+    Creates a new long-lived token (3 years) with the task's configured scopes
+    using the proper /oauth/delegation endpoint.
     
     Args:
         session: Database session
@@ -441,22 +451,23 @@ async def refresh_delegation_token(
     Returns:
         Updated task with new delegation token, or None if task not found
     """
-    from app.services.token_service import get_or_exchange_token
-    
     task = await get_task(session, task_id, principal.sub)
     if not task:
         return None
+    
+    if not principal.token:
+        raise ValueError("Principal must have a token to refresh delegation")
     
     # Get the scopes from the task
     scopes = task.delegation_scopes or []
     
     try:
-        # Request a new long-lived delegation token (3 years)
-        token_response = await get_or_exchange_token(
-            session=session,
-            principal=principal,
+        # Create a new proper delegation token via authz /oauth/delegation endpoint
+        token_response = await create_delegation_token(
+            subject_token=principal.token,
+            name=f"Task: {task.name}",
             scopes=scopes,
-            purpose="task-delegation",
+            # Default 3 years (94608000 seconds)
         )
         
         task.delegation_token = token_response.access_token
