@@ -61,7 +61,8 @@ def auth_client():
     from testing import AuthTestClient
     
     client = AuthTestClient()
-    client.ensure_test_user_exists()
+    # Note: In Zero Trust, test user must already exist (created by bootstrap-test-credentials)
+    # We don't call ensure_test_user_exists() because that requires admin token
     yield client
     client.cleanup()
 
