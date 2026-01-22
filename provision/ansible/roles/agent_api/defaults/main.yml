@@ -15,6 +15,7 @@ default_model: "research"
 # Service endpoints
 search_api_url: "http://{{ hostvars[groups['search'][0]]['ansible_host'] if 'search' in groups else '127.0.0.1' }}:8003"
 ingest_api_url: "http://{{ hostvars[groups['ingest'][0]]['ansible_host'] if 'ingest' in groups else '127.0.0.1' }}:8002"
+embedding_api_url: "http://{{ hostvars[groups['ingest'][0]]['ansible_host'] if 'ingest' in groups else '127.0.0.1' }}:8005"
 rag_api_url: "http://{{ hostvars[groups['milvus'][0]]['ansible_host'] if 'milvus' in groups else '127.0.0.1' }}:8004"
 
 # LiteLLM
