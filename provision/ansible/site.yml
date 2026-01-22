@@ -245,8 +245,6 @@
 - hosts: authz
   tags: [apis, apis_authz]
   roles:
-    - role: node_common
-      tags: [apis, apis_authz, authz, node_common]
     - role: authz
       tags: [apis, apis_authz, authz]
     - role: docs_api
@@ -256,8 +254,6 @@
 - hosts: ingest
   tags: [apis, apis_ingest]
   roles:
-    - role: node_common
-      tags: [apis, apis_ingest, ingest, node_common]
     - role: ingest
       tags: [apis, apis_ingest, ingest, ingest_api, ingest_worker]
     - role: embedding_api
