@@ -492,10 +492,9 @@ async def initiate_login(request: Request):
         )
     
     # Check email domain allowlist
-    if config.email_domain_allowlist:
+    if config.allowed_email_domains:
         domain = email.split("@")[-1].lower()
-        allowed_domains = [d.strip().lower() for d in config.email_domain_allowlist.split(",") if d.strip()]
-        if allowed_domains and domain not in allowed_domains:
+        if domain not in config.allowed_email_domains:
             # Don't leak which domains are allowed - just reject silently
             # by returning a fake success response
             import secrets
@@ -611,10 +610,9 @@ async def create_user_admin(request: Request):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User already exists")
     
     # Check email domain allowlist
-    if config.email_domain_allowlist:
+    if config.allowed_email_domains:
         domain = email.split("@")[-1].lower()
-        allowed_domains = [d.strip().lower() for d in config.email_domain_allowlist.split(",") if d.strip()]
-        if allowed_domains and domain not in allowed_domains:
+        if domain not in config.allowed_email_domains:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Email domain '{domain}' is not allowed"
