@@ -231,14 +231,13 @@ async def _ensure_bootstrap_admin_users() -> None:
             continue
             
         # Check if user exists by email
-        existing_users = await _pg.list_users(email=email_lower, limit=1)
+        existing_user = await _pg.get_user_by_email(email_lower)
         
-        if existing_users:
-            user = existing_users[0]
-            user_id = user["user_id"]
+        if existing_user:
+            user_id = existing_user["user_id"]
             
             # Update status to ACTIVE if PENDING
-            if user.get("status") != "ACTIVE":
+            if existing_user.get("status") != "ACTIVE":
                 async with _pg.acquire(None, None) as conn:
                     await conn.execute(
                         """
