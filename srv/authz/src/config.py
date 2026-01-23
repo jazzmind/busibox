@@ -89,7 +89,21 @@ class Config:
         # Email domain allowlist (comma-separated).
         # If set, only emails from these domains can register/login.
         # Example: "company.com,subsidiary.com"
-        self.email_domain_allowlist: Optional[str] = os.getenv("EMAIL_DOMAIN_ALLOWLIST")
+        self.allowed_email_domains: List[str] = [
+            s.strip().lower()
+            for s in (os.getenv("ALLOWED_EMAIL_DOMAINS", "").split(","))
+            if s.strip()
+        ]
+        
+        # Admin emails (comma-separated).
+        # Users with these emails are automatically created with ACTIVE status
+        # and assigned the Admin role on startup.
+        # Example: "admin@company.com,cto@company.com"
+        self.admin_emails: List[str] = [
+            s.strip().lower()
+            for s in (os.getenv("ADMIN_EMAILS", "").split(","))
+            if s.strip()
+        ]
 
     def to_dict(self) -> Dict:
         return {
@@ -116,6 +130,8 @@ class Config:
             "test_db_name": self.test_db_name,
             "test_db_user": self.test_db_user,
             "test_db_password": self.test_db_password,
+            "allowed_email_domains": self.allowed_email_domains,
+            "admin_emails": self.admin_emails,
         }
 
 

@@ -200,6 +200,90 @@ async def _ensure_bootstrap_test_user() -> None:
         await create_test_user_in_db(_pg_test, "test")
 
 
+async def _ensure_bootstrap_admin_users() -> None:
+    """
+    Ensure admin users from ADMIN_EMAILS config exist with ACTIVE status and Admin role.
+    
+    This runs on startup and:
+    1. Creates users if they don't exist (ACTIVE status)
+    2. Updates existing users to ACTIVE if they're PENDING
+    3. Assigns Admin role if not already assigned
+    
+    Admin users are created in production database only.
+    """
+    from datetime import datetime
+    
+    if not config.admin_emails:
+        logger.debug("No ADMIN_EMAILS configured, skipping admin user bootstrap")
+        return
+    
+    # Get Admin role ID
+    admin_role = await _pg.get_role_by_name("Admin")
+    if not admin_role:
+        logger.error("Admin role not found - cannot assign to admin users")
+        return
+    
+    admin_role_id = admin_role["id"]
+    
+    for email in config.admin_emails:
+        email_lower = email.lower().strip()
+        if not email_lower:
+            continue
+            
+        # Check if user exists by email
+        existing_users = await _pg.list_users(email=email_lower, limit=1)
+        
+        if existing_users:
+            user = existing_users[0]
+            user_id = user["user_id"]
+            
+            # Update status to ACTIVE if PENDING
+            if user.get("status") != "ACTIVE":
+                async with _pg.acquire(None, None) as conn:
+                    await conn.execute(
+                        """
+                        UPDATE authz_users 
+                        SET status = 'ACTIVE', updated_at = $2
+                        WHERE user_id = $1
+                        """,
+                        uuid.UUID(user_id),
+                        datetime.utcnow(),
+                    )
+                logger.info("Activated admin user", email=email_lower, user_id=user_id)
+        else:
+            # Create new user with ACTIVE status
+            async with _pg.acquire(None, None) as conn:
+                new_user_id = uuid.uuid4()
+                await conn.execute(
+                    """
+                    INSERT INTO authz_users (user_id, email, status, created_at, updated_at)
+                    VALUES ($1, $2, 'ACTIVE', $3, $3)
+                    """,
+                    new_user_id,
+                    email_lower,
+                    datetime.utcnow(),
+                )
+                user_id = str(new_user_id)
+            logger.info("Created admin user", email=email_lower, user_id=user_id)
+        
+        # Ensure Admin role is assigned
+        user_roles = await _pg.get_user_roles(user_id)
+        has_admin_role = any(r["id"] == admin_role_id for r in user_roles)
+        
+        if not has_admin_role:
+            async with _pg.acquire(None, None) as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO authz_user_roles (user_id, role_id)
+                    VALUES ($1, $2)
+                    ON CONFLICT (user_id, role_id) DO NOTHING
+                    """,
+                    uuid.UUID(user_id),
+                    uuid.UUID(admin_role_id),
+                )
+            logger.info("Assigned Admin role to user", email=email_lower, user_id=user_id)
+
+
 async def _ensure_bootstrap() -> None:
     """
     Ensure authz has at least one active signing key and (optionally) a bootstrap OAuth client.
@@ -282,6 +366,9 @@ async def _ensure_bootstrap() -> None:
     
     # 5) bootstrap test user (for PVT tests in Zero Trust architecture)
     await _ensure_bootstrap_test_user()
+    
+    # 6) bootstrap admin users from ADMIN_EMAILS config
+    await _ensure_bootstrap_admin_users()
 
 
 async def _require_client(client_id: str, client_secret: str) -> dict:

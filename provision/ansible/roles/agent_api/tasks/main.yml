@@ -374,9 +374,19 @@
     DATABASE_URL: "{{ secrets['agent-server'].database_url }}"
   when: >
     tables_count.stdout|int > 0 and 
-    (alembic_table_exists.stdout != 't' or alembic_version_num.stdout == '')
+    (alembic_table_exists.stdout != 't' or 
+     (alembic_version_num.stdout is defined and alembic_version_num.stdout | trim == ''))
   register: stamp_result
   changed_when: true
+
+- name: Debug stamp decision
+  debug:
+    msg: |
+      Tables: {{ tables_count.stdout|int }}
+      Alembic table exists: {{ alembic_table_exists.stdout }}
+      Version defined: {{ alembic_version_num.stdout is defined }}
+      Version value: '{{ alembic_version_num.stdout | default("undefined") | trim }}'
+      Should stamp: {{ tables_count.stdout|int > 0 and (alembic_table_exists.stdout != 't' or (alembic_version_num.stdout is defined and alembic_version_num.stdout | trim == '')) }}
 
 - name: Run database migrations
   shell: |
