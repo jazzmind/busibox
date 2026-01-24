@@ -775,6 +775,11 @@ services:
       - ./srv/deploy/src:/app/src:ro
       - ./provision/ansible:/ansible:ro
       - ~/.ssh:/root/.ssh:ro  # SSH keys for remote operations
+      - /var/run/docker.sock:/var/run/docker.sock  # Docker socket for docker exec
+      # DEV_APPS_DIR should point to a directory containing your app source folders
+      # e.g., /Users/you/Code which contains estimator/, project-analysis/, etc.
+      # This is mounted directly - no symlinks needed
+      - ${DEV_APPS_DIR:-./dev-apps}:/srv/dev-apps:ro
     command: ["python", "-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8011", "--reload", "--reload-dir", "/app/src"]
     environment:
       # Service

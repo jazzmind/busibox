@@ -398,9 +398,11 @@ async def validate_local_dev(
     """
     Validate a local dev directory contains a valid busibox.json manifest.
     
-    Checks /srv/dev-apps/{dirName}/busibox.json in the user-apps container.
+    In Docker, the dev-apps directory is mounted directly at /srv/dev-apps,
+    so we can check the filesystem directly without docker exec.
     """
     import json
+    import os
     
     dir_name = request.dirName
     
@@ -414,38 +416,50 @@ async def validate_local_dev(
     dev_path = f"/srv/dev-apps/{dir_name}"
     manifest_path = f"{dev_path}/busibox.json"
     
-    # Check if directory exists
-    from .container_executor import execute_in_container
-    
-    stdout, stderr, code = await execute_in_container(f"test -d {dev_path}")
-    if code != 0:
+    # Check if dev-apps is mounted and directory exists
+    if not os.path.isdir("/srv/dev-apps"):
         return LocalDevValidateResponse(
             valid=False,
-            error=f"Directory not found: {dev_path}. Make sure DEV_APPS_DIR is set and the directory exists."
+            error="DEV_APPS_DIR is not configured. Run 'make configure' -> Docker Configuration -> Configure Dev Apps Directory."
+        )
+    
+    if not os.path.isdir(dev_path):
+        # List available directories for helpful error
+        try:
+            available = [d for d in os.listdir("/srv/dev-apps") if os.path.isdir(f"/srv/dev-apps/{d}")]
+            if available:
+                return LocalDevValidateResponse(
+                    valid=False,
+                    error=f"Directory '{dir_name}' not found. Available directories: {', '.join(available[:5])}"
+                )
+        except Exception:
+            pass
+        
+        return LocalDevValidateResponse(
+            valid=False,
+            error=f"Directory not found: {dir_name}. Make sure DEV_APPS_DIR points to a directory containing '{dir_name}'."
         )
     
     # Check if manifest exists
-    stdout, stderr, code = await execute_in_container(f"test -f {manifest_path}")
-    if code != 0:
+    if not os.path.isfile(manifest_path):
         return LocalDevValidateResponse(
             valid=False,
-            error=f"No busibox.json found in {dev_path}. Create a manifest file for your app."
+            error=f"No busibox.json found in {dir_name}/. Create a manifest file for your app."
         )
     
     # Read and parse manifest
-    stdout, stderr, code = await execute_in_container(f"cat {manifest_path}")
-    if code != 0:
-        return LocalDevValidateResponse(
-            valid=False,
-            error=f"Failed to read manifest: {stderr}"
-        )
-    
     try:
-        manifest = json.loads(stdout)
+        with open(manifest_path, 'r') as f:
+            manifest = json.load(f)
     except json.JSONDecodeError as e:
         return LocalDevValidateResponse(
             valid=False,
             error=f"Invalid JSON in busibox.json: {e}"
+        )
+    except Exception as e:
+        return LocalDevValidateResponse(
+            valid=False,
+            error=f"Failed to read manifest: {e}"
         )
     
     # Basic manifest validation

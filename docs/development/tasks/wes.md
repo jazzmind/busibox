@@ -1,19 +1,18 @@
 # Wes's Tasks
-[ ] get busibox live
-[ ] claude code via busibox?
+[ ] get app deployer to work with sample
+[ ] update project-analysis to match app-template & deploy
+[ ] same for estimator
 
 ## Active Tasks
 
-[ ] Deploy to production
 [ ] tags are not working for documents properly. 
 [ ] need "hero" flow: 
   - upload doc as chat attachment
   - have it do a doc search to find related
   - do a web search to get deeper info
   - summarize
-
+[ ] claude code via busibox?
 [ ] eliminate client token exchange from authz - there are still 
-[ ]
  
 ## Future features
 [ ] - agents can manage their own insights/memories and consult when running

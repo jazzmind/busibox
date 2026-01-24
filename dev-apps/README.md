@@ -1,54 +1,66 @@
 # Dev Apps Directory
 
-Place your local app sources here for development with hot-reload.
-Each app goes in its own subdirectory named by app-id.
+This directory is a placeholder. For local development, you should configure
+`DEV_APPS_DIR` to point to your code directory.
 
-## Directory Structure
+## Setup
 
-```
-dev-apps/
-  estimator/           -> symlink to ~/Code/estimator
-  project-analysis/    -> symlink to ~/Code/project-analysis
-  my-custom-app/       -> actual source or symlink
-```
-
-## Usage
-
-1. **Symlink your apps** (one per subdirectory):
+1. **Configure DEV_APPS_DIR** via the interactive menu:
    ```bash
-   ln -s ~/Code/estimator ./estimator
-   ln -s ~/Code/project-analysis ./project-analysis
+   make configure
+   # Select: Docker Configuration
+   # Select: Configure Dev Apps Directory
+   # Enter: /Users/yourname/Code  (or wherever your apps live)
    ```
 
-2. **Register each app in AI Portal** with "Dev Mode" enabled
-
-3. **For hot-reload during active development:**
-   ```bash
-   docker exec -it local-user-apps bash
-   cd /srv/dev-apps/estimator && npm run dev
+2. **Your code directory structure** should look like:
+   ```
+   /Users/yourname/Code/
+     estimator/           <- Your app with busibox.json
+     project-analysis/    <- Another app with busibox.json
+     my-custom-app/       <- etc.
    ```
 
-4. **For production-like testing:**
-   Deploy via AI Portal (builds app and creates systemd service)
+3. **Restart Docker** to pick up the mount:
+   ```bash
+   make docker-down && make docker-up
+   ```
 
-## Notes
+4. **Register apps in AI Portal** with "Development Mode" enabled
+   - Toggle "Development Mode" ON
+   - Enter the directory name (e.g., `estimator`)
+   - The system validates the directory contains a valid `busibox.json`
 
-- App subdirectory name must match the app-id in AI Portal
-- Multiple apps can run simultaneously on different ports
-- Each app gets its own systemd service when deployed
-- Changes to source files are immediately visible in the container
-- No container rebuild needed - just add/remove symlinks
+## Important: No Symlinks!
+
+Docker volume mounts don't follow symlinks. Your apps must be actual directories
+within DEV_APPS_DIR, not symlinks.
+
+**This works:**
+```
+DEV_APPS_DIR=/Users/you/Code
+/Users/you/Code/estimator/busibox.json  # actual file
+```
+
+**This does NOT work:**
+```
+DEV_APPS_DIR=/Users/you/busibox/dev-apps
+/Users/you/busibox/dev-apps/estimator -> /Users/you/Code/estimator  # symlink - won't work!
+```
+
+## Hot-Reload Development
+
+For hot-reload during active development:
+```bash
+docker exec -it local-user-apps bash
+cd /srv/dev-apps/estimator && npm run dev
+```
 
 ## How It Works
 
-The `dev-apps/` directory is mounted at `/srv/dev-apps/` in the `user-apps` container.
-When you trigger a deployment via AI Portal:
-
-1. Deploy-api checks if `/srv/dev-apps/{app-id}/` exists
-2. If found, it uses the dev path instead of git cloning
-3. It runs `npm install && npm run build`
-4. Creates/updates the systemd service
-5. Starts the app
-
-For active development, skip the deploy step and just run `npm run dev` directly
-in the container for full hot-reload support.
+When DEV_APPS_DIR is configured:
+1. The Makefile reads it from `.busibox-state`
+2. Docker mounts it at `/srv/dev-apps/` in containers
+3. Deploy-api checks `/srv/dev-apps/{app-id}/` for local source
+4. If found, it uses local source instead of git cloning
+5. Changes to source files are immediately visible in the container

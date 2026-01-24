@@ -38,12 +38,15 @@ class BusiboxManifest(BaseModel):
 
 class DeploymentConfig(BaseModel):
     """Deployment configuration"""
-    githubRepoOwner: str
-    githubRepoName: str
+    githubRepoOwner: str = ''  # Empty for local dev mode
+    githubRepoName: str = ''   # Empty for local dev mode
     githubBranch: str = 'main'
     githubToken: Optional[str] = None
     environment: Literal['production', 'staging'] = 'production'
     secrets: Dict[str, str] = {}  # Additional env vars
+    # Local development mode
+    localDevDir: Optional[str] = None  # Directory name in /srv/dev-apps/
+    devMode: bool = False
 
 
 class DeployRequest(BaseModel):
