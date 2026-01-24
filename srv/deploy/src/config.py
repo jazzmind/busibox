@@ -40,8 +40,8 @@ class Config:
     nginx_config_dir: str = os.getenv('NGINX_CONFIG_DIR', '/etc/nginx/sites-available/apps')
     nginx_enabled_dir: str = os.getenv('NGINX_ENABLED_DIR', '/etc/nginx/sites-enabled')
     
-    # Rate limiting
-    rate_limit_per_app_minutes: int = int(os.getenv('RATE_LIMIT_MINUTES', '5'))
+    # Rate limiting (1 minute for testing, increase for production)
+    rate_limit_per_app_minutes: int = int(os.getenv('RATE_LIMIT_MINUTES', '1'))
 
 
 config = Config()

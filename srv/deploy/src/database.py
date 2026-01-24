@@ -1,13 +1,15 @@
 """
 Database Provisioning
 
-Provisions PostgreSQL databases for apps via SSH to pg-lxc.
+Provisions PostgreSQL databases for apps.
+Supports both direct connection (Docker) and SSH (production LXC).
 """
 
 import asyncio
 import secrets
 import logging
-from typing import Tuple
+import os
+from typing import Tuple, Optional
 from .models import BusiboxManifest, DatabaseProvisionResult
 from .config import config
 
@@ -19,10 +21,38 @@ def generate_password(length: int = 32) -> str:
     return secrets.token_urlsafe(length)[:length]
 
 
+def is_docker_environment() -> bool:
+    """Check if running in Docker (no SSH needed for local postgres)"""
+    # In Docker, POSTGRES_HOST is typically 'postgres' (container name) not an IP
+    return not config.postgres_host.startswith('10.')
+
+
+async def execute_psql_direct(sql: str, database: str = 'postgres') -> Tuple[str, str, int]:
+    """Execute psql command directly (for Docker environment)"""
+    env = os.environ.copy()
+    env['PGPASSWORD'] = config.postgres_admin_password
+    
+    proc = await asyncio.create_subprocess_exec(
+        'psql',
+        '-h', config.postgres_host,
+        '-p', str(config.postgres_port),
+        '-U', config.postgres_admin_user,
+        '-d', database,
+        '-tAc', sql,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env
+    )
+    
+    stdout, stderr = await proc.communicate()
+    return stdout.decode(), stderr.decode(), proc.returncode or 0
+
+
 async def execute_ssh_command(host: str, command: str) -> Tuple[str, str, int]:
-    """Execute command on remote host via SSH"""
+    """Execute command on remote host via SSH (for LXC production)"""
     ssh_command = [
         'ssh',
+        '-F', '/dev/null',  # Ignore user SSH config (avoids macOS-specific options like UseKeychain)
         '-i', config.ssh_key_path,
         '-o', 'StrictHostKeyChecking=no',
         '-o', 'UserKnownHostsFile=/dev/null',
@@ -38,7 +68,17 @@ async def execute_ssh_command(host: str, command: str) -> Tuple[str, str, int]:
     )
     
     stdout, stderr = await proc.communicate()
-    return stdout.decode(), stderr.decode(), proc.returncode
+    return stdout.decode(), stderr.decode(), proc.returncode or 0
+
+
+async def execute_sql(sql: str, database: str = 'postgres') -> Tuple[str, str, int]:
+    """Execute SQL command - uses direct connection or SSH based on environment"""
+    if is_docker_environment():
+        return await execute_psql_direct(sql, database)
+    else:
+        # SSH to postgres host and run psql there
+        command = f"PGPASSWORD='{config.postgres_admin_password}' psql -h localhost -U {config.postgres_admin_user} -d {database} -tAc \"{sql}\""
+        return await execute_ssh_command(config.postgres_host, command)
 
 
 async def database_exists(db_name: str) -> bool:
@@ -46,9 +86,8 @@ async def database_exists(db_name: str) -> bool:
     if not config.postgres_admin_password:
         raise ValueError("POSTGRES_ADMIN_PASSWORD not set")
     
-    command = f"PGPASSWORD='{config.postgres_admin_password}' psql -h localhost -U {config.postgres_admin_user} -d postgres -tAc \"SELECT 1 FROM pg_database WHERE datname='{db_name}'\""
-    
-    stdout, stderr, code = await execute_ssh_command(config.postgres_host, command)
+    sql = f"SELECT 1 FROM pg_database WHERE datname='{db_name}'"
+    stdout, stderr, code = await execute_sql(sql)
     return stdout.strip() == '1'
 
 
@@ -75,15 +114,14 @@ async def create_database(
     
     # Commands to execute
     commands = [
-        f"CREATE DATABASE {db_name};",
-        f"CREATE USER {db_user} WITH PASSWORD '{password}';",
-        f"GRANT ALL PRIVILEGES ON DATABASE {db_name} TO {db_user};",
+        f"CREATE DATABASE {db_name}",
+        f"CREATE USER {db_user} WITH PASSWORD '{password}'",
+        f"GRANT ALL PRIVILEGES ON DATABASE {db_name} TO {db_user}",
     ]
     
     # Execute in postgres database
     for sql in commands:
-        command = f"PGPASSWORD='{config.postgres_admin_password}' psql -h localhost -U {config.postgres_admin_user} -d postgres -c \"{sql}\""
-        stdout, stderr, code = await execute_ssh_command(config.postgres_host, command)
+        stdout, stderr, code = await execute_sql(sql)
         
         if code != 0:
             logger.error(f"Database creation failed: {stderr}")
@@ -94,13 +132,12 @@ async def create_database(
     
     # Grant schema privileges (PostgreSQL 15+)
     schema_commands = [
-        f"GRANT ALL ON SCHEMA public TO {db_user};",
-        f"ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO {db_user};",
+        f"GRANT ALL ON SCHEMA public TO {db_user}",
+        f"ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO {db_user}",
     ]
     
     for sql in schema_commands:
-        command = f"PGPASSWORD='{config.postgres_admin_password}' psql -h localhost -U {config.postgres_admin_user} -d {db_name} -c \"{sql}\""
-        stdout, stderr, code = await execute_ssh_command(config.postgres_host, command)
+        stdout, stderr, code = await execute_sql(sql, db_name)
         # Non-fatal if these fail
         if code != 0:
             logger.warning(f"Schema privilege grant warning: {stderr}")
@@ -142,13 +179,12 @@ async def delete_database(db_name: str) -> bool:
     db_user = f"{db_name}_user"
     
     commands = [
-        f"DROP DATABASE IF EXISTS {db_name};",
-        f"DROP USER IF EXISTS {db_user};",
+        f"DROP DATABASE IF EXISTS {db_name}",
+        f"DROP USER IF EXISTS {db_user}",
     ]
     
     for sql in commands:
-        command = f"PGPASSWORD='{config.postgres_admin_password}' psql -h localhost -U {config.postgres_admin_user} -d postgres -c \"{sql}\""
-        stdout, stderr, code = await execute_ssh_command(config.postgres_host, command)
+        stdout, stderr, code = await execute_sql(sql)
         
         if code != 0:
             logger.error(f"Database deletion failed: {stderr}")

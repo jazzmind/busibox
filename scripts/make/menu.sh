@@ -903,7 +903,7 @@ deploy_select_service() {
         "Back"
     
     local choice=""
-    read -p "$(echo -e "${BOLD}Select service [1-11]:${NC} ")" choice
+    read -p "$(echo -e "${BOLD}Select service [1-12]:${NC} ")" choice
     
     local svc=""
     case "${choice:-}" in
@@ -915,10 +915,10 @@ deploy_select_service() {
         6) svc="agent-api" ;;
         7) svc="docs-api" ;;
         8) svc="litellm" ;;
-        8) svc="nginx" ;;
-        9) svc="ai-portal" ;;
-        10) svc="agent-manager" ;;
-        11|b|B|"") return 0 ;;
+        9) svc="nginx" ;;
+        10) svc="ai-portal" ;;
+        11) svc="agent-manager" ;;
+        12|b|B|"") return 0 ;;
     esac
     
     if [[ -n "$svc" ]]; then

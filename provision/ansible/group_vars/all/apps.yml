@@ -101,6 +101,8 @@ applications:
       SEARCH_API_PORT: "8003"
       # Docs API (deployed to authz-lxc)
       DOCS_API_URL: "http://{{ authz_ip }}:8004"
+      # Deployment Service (deployed to authz-lxc)
+      DEPLOYMENT_SERVICE_URL: "http://{{ authz_ip }}:8011/api/v1/deployment"
   
   - name: agent-manager
     github_repo: jazzmind/agent-manager

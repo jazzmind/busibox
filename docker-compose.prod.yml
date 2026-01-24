@@ -66,6 +66,10 @@ services:
       SEARCH_API_PORT: "8003"
       AGENT_API_HOST: agent-api
       AGENT_API_PORT: "8000"
+      # Docs API - internal container URL for server-side fetching
+      DOCS_API_URL: http://docs-api:8004
+      # Deployment Service - internal container URL for server-side deployment
+      DEPLOYMENT_SERVICE_URL: http://deploy-api:8011/api/v1/deployment
     ports:
       - "3000:3000"
     depends_on:

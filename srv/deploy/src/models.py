@@ -13,7 +13,7 @@ class DatabaseConfig(BaseModel):
     """Database configuration from manifest"""
     required: bool
     preferredName: str = Field(..., pattern=r'^[a-z0-9_]+$')
-    schemaManagement: Literal['prisma', 'migrations', 'manual']
+    schemaManagement: Literal['prisma', 'migrations', 'manual'] = 'prisma'
     seedCommand: Optional[str] = None
 
 
