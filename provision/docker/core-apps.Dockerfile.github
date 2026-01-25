@@ -1,0 +1,120 @@
+# =============================================================================
+# Core Apps - GitHub Build Dockerfile
+# =============================================================================
+#
+# Builds both ai-portal and agent-manager from GitHub in a single container.
+# This mirrors the Proxmox pattern where core-apps-lxc hosts multiple Next.js apps.
+#
+# Features:
+#   - Clones both repos at build time
+#   - Uses published @jazzmind/busibox-app from npm
+#   - Production builds with turbopack
+#   - Uses concurrently to run both apps
+#
+# Usage (via docker-compose.github.yml):
+#   docker compose -f docker-compose.yml -f docker-compose.github.yml up
+#
+# =============================================================================
+
+FROM node:20-alpine AS base
+
+# Install dependencies
+RUN apk add --no-cache python3 make g++ curl bash git
+
+# Set up npm authentication for private GitHub packages
+ARG GITHUB_AUTH_TOKEN
+RUN if [ -n "$GITHUB_AUTH_TOKEN" ]; then \
+        echo "//npm.pkg.github.com/:_authToken=${GITHUB_AUTH_TOKEN}" > /root/.npmrc && \
+        echo "@jazzmind:registry=https://npm.pkg.github.com" >> /root/.npmrc; \
+    fi
+
+# =============================================================================
+# Build AI Portal
+# =============================================================================
+FROM base AS build-ai-portal
+
+ARG AI_PORTAL_GITHUB_REF=main
+
+WORKDIR /build/ai-portal
+
+# Clone the repository
+RUN git clone --depth 1 --branch ${AI_PORTAL_GITHUB_REF} \
+    https://${GITHUB_AUTH_TOKEN}@github.com/jazzmind/ai-portal.git .
+
+# Copy npmrc for package installs
+COPY --from=base /root/.npmrc /root/.npmrc
+
+# Install dependencies
+RUN npm ci
+
+# Build the application
+RUN npm run build
+
+# =============================================================================
+# Build Agent Manager
+# =============================================================================
+FROM base AS build-agent-manager
+
+ARG AGENT_MANAGER_GITHUB_REF=main
+
+WORKDIR /build/agent-manager
+
+# Clone the repository
+RUN git clone --depth 1 --branch ${AGENT_MANAGER_GITHUB_REF} \
+    https://${GITHUB_AUTH_TOKEN}@github.com/jazzmind/agent-manager.git .
+
+# Copy npmrc for package installs
+COPY --from=base /root/.npmrc /root/.npmrc
+
+# Install dependencies
+RUN npm ci
+
+# Build the application
+RUN npm run build
+
+# =============================================================================
+# Production Runtime
+# =============================================================================
+FROM node:20-alpine AS runtime
+
+# Install runtime dependencies
+RUN apk add --no-cache curl bash
+RUN npm install -g concurrently
+
+# Create directories
+RUN mkdir -p /srv/ai-portal /srv/agent-manager
+
+# Copy built AI Portal
+WORKDIR /srv/ai-portal
+COPY --from=build-ai-portal /build/ai-portal/.next ./.next
+COPY --from=build-ai-portal /build/ai-portal/public ./public
+COPY --from=build-ai-portal /build/ai-portal/package.json ./package.json
+COPY --from=build-ai-portal /build/ai-portal/node_modules ./node_modules
+COPY --from=build-ai-portal /build/ai-portal/prisma ./prisma
+
+# Copy built Agent Manager
+WORKDIR /srv/agent-manager
+COPY --from=build-agent-manager /build/agent-manager/.next ./.next
+COPY --from=build-agent-manager /build/agent-manager/public ./public
+COPY --from=build-agent-manager /build/agent-manager/package.json ./package.json
+COPY --from=build-agent-manager /build/agent-manager/node_modules ./node_modules
+
+# Copy entrypoint script
+COPY provision/docker/core-apps-entrypoint.sh /usr/local/bin/core-apps-entrypoint.sh
+RUN chmod +x /usr/local/bin/core-apps-entrypoint.sh
+
+WORKDIR /srv
+
+# Expose ports
+EXPOSE 3000 3001
+
+# Environment
+ENV NODE_ENV=production
+ENV HOSTNAME=0.0.0.0
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:3000/api/health && curl -f http://localhost:3001/ || exit 1
+
+ENTRYPOINT ["/usr/local/bin/core-apps-entrypoint.sh"]
+CMD ["start"]

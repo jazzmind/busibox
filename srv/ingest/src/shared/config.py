@@ -19,11 +19,11 @@ class Config:
         self.consumer_group = os.getenv("REDIS_CONSUMER_GROUP", "workers")
         
         # Redis configuration
-        self.redis_host = os.getenv("REDIS_HOST", "10.96.200.206")
+        self.redis_host = os.getenv("REDIS_HOST", "redis")
         self.redis_port = int(os.getenv("REDIS_PORT", "6379"))
         
         # PostgreSQL configuration (files database)
-        self.postgres_host = os.getenv("POSTGRES_HOST", "10.96.200.203")
+        self.postgres_host = os.getenv("POSTGRES_HOST", "postgres")
         self.postgres_port = int(os.getenv("POSTGRES_PORT", "5432"))
         self.postgres_db = os.getenv("POSTGRES_DB", "files")
         self.postgres_user = os.getenv("POSTGRES_USER", "busibox_user")
@@ -37,12 +37,12 @@ class Config:
         self.test_postgres_password = os.getenv("TEST_DB_PASSWORD", "testpassword")
         
         # Milvus configuration
-        self.milvus_host = os.getenv("MILVUS_HOST", "10.96.200.204")
+        self.milvus_host = os.getenv("MILVUS_HOST", "milvus")
         self.milvus_port = int(os.getenv("MILVUS_PORT", "19530"))
         self.milvus_collection = os.getenv("MILVUS_COLLECTION", "documents")
         
         # MinIO configuration
-        self.minio_endpoint = os.getenv("MINIO_ENDPOINT", "10.96.200.205:9000")
+        self.minio_endpoint = os.getenv("MINIO_ENDPOINT", "minio:9000")
         # Support both MINIO_ACCESS_KEY and MINIO_USER for compatibility
         self.minio_access_key = os.getenv("MINIO_ACCESS_KEY") or os.getenv("MINIO_USER", "minioadmin")
         self.minio_secret_key = os.getenv("MINIO_SECRET_KEY") or os.getenv("MINIO_PASS", "minioadmin")
@@ -59,7 +59,7 @@ class Config:
         self.embedding_batch_size = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
         
         # ColPali configuration (visual embeddings)
-        self.colpali_base_url = os.getenv("COLPALI_BASE_URL", "http://10.96.200.208:9006/v1")
+        self.colpali_base_url = os.getenv("COLPALI_BASE_URL", "http://colpali:9006/v1")
         self.colpali_api_key = os.getenv("COLPALI_API_KEY", "EMPTY")
         self.colpali_enabled = os.getenv("COLPALI_ENABLED", "true").lower() == "true"
         self.colpali_pooling_method = os.getenv("COLPALI_POOLING_METHOD", "mean")  # mean or max
@@ -82,11 +82,11 @@ class Config:
         self.llm_cleanup_enabled = os.getenv("LLM_CLEANUP_ENABLED", "true").lower() == "true"
         
         # LiteLLM configuration (for LLM cleanup)
-        self.litellm_base_url = os.getenv("LITELLM_BASE_URL", "http://10.96.200.207:4000")
+        self.litellm_base_url = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
         self.litellm_api_key = os.getenv("LITELLM_API_KEY", "")
         
         # AI Portal configuration (for library resolution)
-        self.ai_portal_url = os.getenv("AI_PORTAL_URL", "http://10.96.201.201:3000")
+        self.ai_portal_url = os.getenv("AI_PORTAL_URL", "http://ai-portal:3000")
         
         # Processing configuration
         self.chunk_size_min = int(os.getenv("CHUNK_SIZE_MIN", "400"))

@@ -1,7 +1,8 @@
 .PHONY: menu help setup configure deploy test test-local test-docker test-security mcp \
-        docker-up docker-up-prod docker-start docker-down docker-restart docker-restart-apis docker-restart-ingest docker-build docker-logs docker-ps docker-clean \
+        docker-up docker-up-prod docker-start docker-down docker-down-all docker-restart docker-restart-apis docker-restart-ingest docker-build docker-logs docker-ps docker-ps-all docker-clean docker-clean-all \
         vault-generate-env vault-migrate vault-sync ssl-check \
-        demo demo-warmup demo-clean demo-status
+        github-check github-ensure \
+        install recover-admin demo demo-warmup demo-clean demo-status
 
 # Default target - interactive menu with health check
 .DEFAULT_GOAL := menu
@@ -43,12 +44,19 @@ WORKER ?=
 # Base: infrastructure and Python APIs
 # Overlay selection based on environment:
 #   development -> COMPOSE_DEV (volume mounts, npm link)
-#   demo/staging/production -> COMPOSE_PROD (built from GitHub)
-COMPOSE_FILE := docker-compose.local.yml
-COMPOSE_DEV := docker-compose.dev.yml
-COMPOSE_PROD := docker-compose.prod.yml
-ENV_FILE := .env.local
-STATE_FILE := .busibox-state
+#   demo/staging/production -> COMPOSE_GITHUB (built from GitHub)
+COMPOSE_FILE := docker-compose.yml
+COMPOSE_DEV := docker-compose.local-dev.yml
+COMPOSE_GITHUB := docker-compose.github.yml
+
+# Environment-prefixed files (allows multiple installations to coexist)
+# ENV=demo        -> .env.demo, .busibox-state-demo
+# ENV=development -> .env.dev, .busibox-state-dev
+# ENV=staging     -> .env.staging, .busibox-state-staging
+# ENV=production  -> .env.prod, .busibox-state-prod
+ENV_PREFIX = $(if $(filter demo,$(ENV)),demo,$(if $(filter development,$(ENV)),dev,$(if $(filter staging,$(ENV)),staging,$(if $(filter production,$(ENV)),prod,dev))))
+ENV_FILE := .env.$(ENV_PREFIX)
+STATE_FILE := .busibox-state-$(ENV_PREFIX)
 
 # Read DEV_APPS_DIR from state file if it exists
 # This is set via: make configure -> Docker Configuration -> Configure Dev Apps Directory
@@ -56,8 +64,30 @@ DEV_APPS_DIR := $(shell grep -s '^DEV_APPS_DIR=' $(STATE_FILE) 2>/dev/null | cut
 export DEV_APPS_DIR
 
 # Automatically select overlay based on environment
-# development uses dev overlay, everything else uses prod overlay
-COMPOSE_OVERLAY = $(if $(filter development,$(ENV)),$(COMPOSE_DEV),$(COMPOSE_PROD))
+# development uses dev overlay, everything else uses github overlay
+COMPOSE_OVERLAY = $(if $(filter development,$(ENV)),$(COMPOSE_DEV),$(COMPOSE_GITHUB))
+
+# ============================================================================
+# DOCKER PROJECT NAMING
+# ============================================================================
+# Each environment gets its own isolated Docker project (stack) with prefixed containers:
+#   - demo-busibox    -> demo-postgres, demo-authz-api, etc.
+#   - dev-busibox     -> dev-postgres, dev-authz-api, etc.
+#   - staging-busibox -> staging-postgres, staging-authz-api, etc.
+#   - prod-busibox    -> prod-postgres, prod-authz-api, etc.
+#
+# This allows multiple environments to coexist on the same Docker host.
+
+# Map ENV to container prefix
+CONTAINER_PREFIX = $(if $(filter demo,$(ENV)),demo,$(if $(filter development,$(ENV)),dev,$(if $(filter staging,$(ENV)),staging,$(if $(filter production,$(ENV)),prod,dev))))
+
+# Compose project name (stack name)
+COMPOSE_PROJECT = $(CONTAINER_PREFIX)-busibox
+
+# Export for docker-compose and scripts
+export COMPOSE_PROJECT_NAME = $(COMPOSE_PROJECT)
+export CONTAINER_PREFIX
+export BUSIBOX_ENV = $(ENV)
 
 # ============================================================================
 # MAIN MENU (Default)
@@ -291,12 +321,16 @@ _ensure-env:
 # Start Docker services based on environment
 # ENV=development -> dev overlay (volume mounts, npm-linked busibox-app)
 # ENV=demo/staging/production -> prod overlay (apps built from GitHub)
-docker-up: _ensure-env
+# Requires valid GitHub token for private repos
+docker-up: _ensure-env github-check
 	@echo "Starting Docker services (ENV=$(ENV), overlay=$(notdir $(COMPOSE_OVERLAY)))..."
+ifneq ($(DEV_APPS_DIR),)
+	@echo "Dev Apps Directory: $(DEV_APPS_DIR)"
+endif
 ifdef SERVICE
-	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) up -d $(SERVICE)
+	DEV_APPS_DIR="$(DEV_APPS_DIR)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) up -d $(SERVICE)
 else
-	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) up -d
+	DEV_APPS_DIR="$(DEV_APPS_DIR)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) up -d
 endif
 	@echo ""
 ifeq ($(ENV),development)
@@ -314,24 +348,36 @@ docker-up-prod: _ensure-env
 # Start Docker services without rebuilding (fast start)
 docker-start: _ensure-env
 ifdef SERVICE
-	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) up -d --no-build $(SERVICE)
+	DEV_APPS_DIR="$(DEV_APPS_DIR)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) up -d --no-build $(SERVICE)
 else
-	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) up -d --no-build
+	DEV_APPS_DIR="$(DEV_APPS_DIR)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) up -d --no-build
 endif
 	@echo ""
 	@echo "Services started ($(ENV) mode). Use 'make docker-ps' to check status."
 
-# Stop Docker services (works for both dev and prod mode)
+# Stop Docker services
+# Uses COMPOSE_PROJECT_NAME to stop the correct environment's containers
+# Usage: make docker-down ENV=demo   # Stops demo-busibox stack
+#        make docker-down            # Stops dev-busibox stack (default)
 docker-down:
-	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_DEV) down 2>/dev/null || true
-	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_PROD) down 2>/dev/null || true
+	@echo "Stopping $(COMPOSE_PROJECT) containers..."
+	docker compose -p $(COMPOSE_PROJECT) down 2>/dev/null || \
+	(DEV_APPS_DIR="$(DEV_APPS_DIR)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) down 2>/dev/null || true)
+
+# Stop ALL busibox environments (demo, dev, staging, prod)
+docker-down-all:
+	@echo "Stopping all Busibox environments..."
+	docker compose -p demo-busibox down 2>/dev/null || true
+	docker compose -p dev-busibox down 2>/dev/null || true
+	docker compose -p staging-busibox down 2>/dev/null || true
+	docker compose -p prod-busibox down 2>/dev/null || true
 
 # Restart Docker services (uses up -d to ensure env vars are reloaded)
 docker-restart:
 ifdef SERVICE
-	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) up -d --force-recreate $(SERVICE)
+	DEV_APPS_DIR="$(DEV_APPS_DIR)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) up -d --force-recreate $(SERVICE)
 else
-	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) up -d --force-recreate
+	DEV_APPS_DIR="$(DEV_APPS_DIR)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) up -d --force-recreate
 endif
 
 # Restart only API services (fast, preserves infrastructure like embedding-api, milvus, postgres)
@@ -352,9 +398,18 @@ ssl-check:
 		bash scripts/setup/generate-local-ssl.sh; \
 	fi
 
+# Check GitHub token is available and valid
+github-check:
+	@bash scripts/lib/github.sh check
+
+# Ensure GitHub token is available (interactive prompt if needed)
+github-ensure:
+	@bash scripts/lib/github.sh ensure
+
 # Build Docker images based on environment
 # ENV=development -> dev overlay, ENV=demo/staging/production -> prod overlay
-docker-build: ssl-check _ensure-env
+# Requires valid GitHub token for private repos
+docker-build: ssl-check _ensure-env github-check
 	$(eval GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown"))
 	@echo "Building with version: $(GIT_COMMIT) (ENV=$(ENV), overlay=$(notdir $(COMPOSE_OVERLAY)))"
 ifdef SERVICE
@@ -387,20 +442,46 @@ else
 	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_PROD) logs -f
 endif
 
-# Show Docker service status (uses environment-based overlay)
+# Show Docker service status
+# Usage: make docker-ps ENV=demo  # Shows demo-busibox stack
+#        make docker-ps           # Shows dev-busibox stack (default)
 docker-ps:
-	@docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) ps 2>/dev/null || \
-	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_DEV) ps 2>/dev/null || \
-	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_PROD) ps
+	@echo "Project: $(COMPOSE_PROJECT)"
+	@docker compose -p $(COMPOSE_PROJECT) ps 2>/dev/null || \
+	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) ps 2>/dev/null
 
-# Clean Docker environment
+# Show status of ALL busibox environments
+docker-ps-all:
+	@echo "=== Demo Environment ===" && docker compose -p demo-busibox ps 2>/dev/null || true
+	@echo ""
+	@echo "=== Development Environment ===" && docker compose -p dev-busibox ps 2>/dev/null || true
+	@echo ""
+	@echo "=== Staging Environment ===" && docker compose -p staging-busibox ps 2>/dev/null || true
+	@echo ""
+	@echo "=== Production Environment ===" && docker compose -p prod-busibox ps 2>/dev/null || true
+
+# Clean Docker environment for current ENV
+# Usage: make docker-clean ENV=demo  # Cleans demo-busibox stack
 docker-clean:
-	@echo "WARNING: This will remove all containers and volumes!"
+	@echo "WARNING: This will remove $(COMPOSE_PROJECT) containers and volumes!"
 	@read -p "Are you sure? (y/N) " confirm; \
 	if [ "$$confirm" = "y" ] || [ "$$confirm" = "Y" ]; then \
-		docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_DEV) down -v --remove-orphans 2>/dev/null || true; \
-		docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_PROD) down -v --remove-orphans 2>/dev/null || true; \
-		echo "Cleanup complete."; \
+		docker compose -p $(COMPOSE_PROJECT) down -v --remove-orphans 2>/dev/null || true; \
+		echo "Cleanup complete for $(COMPOSE_PROJECT)."; \
+	else \
+		echo "Cancelled."; \
+	fi
+
+# Clean ALL busibox Docker environments
+docker-clean-all:
+	@echo "WARNING: This will remove ALL Busibox environments (demo, dev, staging, prod)!"
+	@read -p "Are you sure? (y/N) " confirm; \
+	if [ "$$confirm" = "y" ] || [ "$$confirm" = "Y" ]; then \
+		docker compose -p demo-busibox down -v --remove-orphans 2>/dev/null || true; \
+		docker compose -p dev-busibox down -v --remove-orphans 2>/dev/null || true; \
+		docker compose -p staging-busibox down -v --remove-orphans 2>/dev/null || true; \
+		docker compose -p prod-busibox down -v --remove-orphans 2>/dev/null || true; \
+		echo "All environments cleaned."; \
 	else \
 		echo "Cancelled."; \
 	fi
@@ -420,30 +501,56 @@ docker-clean:
 # Run the full demo (start all services with local LLM)
 # Prerequisites: Docker Desktop, 16GB+ RAM
 # For offline mode: run 'make demo-warmup' first
+# ============================================================================
+# INSTALLATION
+# ============================================================================
+# Unified install with interactive wizard or demo mode.
+# All management after install is via web UI (AI Portal).
+
+# Interactive install with wizard
+# Usage: make install              # Full wizard
+#        make install VERBOSE=1    # Show all logs
+install:
+	@bash scripts/make/install.sh $(if $(VERBOSE),-v)
+
+# Generate recovery magic link for admin access
+# Use when browser/passkey access is lost
+recover-admin:
+	@bash scripts/make/recover-admin.sh
+
+# ============================================================================
+# DEMO MODE
+# ============================================================================
+# One-command demo for investor presentations and air-gap demonstrations.
+# Uses unified install with demo preset (local Docker, auto-detect LLM).
+
+# Run demo (auto-configures everything)
 demo:
-	@bash scripts/demo/check-prereqs.sh
-	@bash scripts/demo/demo.sh
+	@bash scripts/make/install.sh --demo --no-prompt $(if $(VERBOSE),-v)
 
 # Pre-download everything for offline demo
 # Requires: GitHub authentication (gh auth login)
 # Downloads: repos, models (MLX or vLLM), Docker images
 demo-warmup:
-	@bash scripts/demo/check-prereqs.sh
-	@bash scripts/demo/warmup.sh
+	@bash scripts/make/install.sh --demo --warmup-only $(if $(VERBOSE),-v)
 
-# Stop demo and optionally remove data
-# Use ARGS=--all to remove all data volumes
+# Stop demo environment and remove containers
+# Use ARGS=--volumes to also remove data volumes
 demo-clean:
-	@bash scripts/demo/clean.sh $(ARGS)
+	@echo "Stopping demo-busibox containers..."
+	@docker compose -p demo-busibox down $(if $(findstring --volumes,$(ARGS)),-v) 2>/dev/null || true
+	@echo "Demo environment cleaned."
 
 # Show demo status (system info, running services)
 demo-status:
 	@echo ""
 	@echo "=== Demo System Info ==="
-	@bash scripts/demo/detect-system.sh
+	@bash scripts/llm/detect-backend.sh 2>/dev/null || echo "Backend: cloud"
 	@echo ""
-	@echo "=== Docker Services ==="
-	@docker compose -f $(COMPOSE_FILE) ps 2>/dev/null || echo "No services running"
+	@bash scripts/llm/get-memory-tier.sh 2>/dev/null || echo "Tier: minimal"
+	@echo ""
+	@echo "=== Demo Docker Services ==="
+	@docker compose -p demo-busibox ps 2>/dev/null || echo "No demo services running"
 	@echo ""
 
 # ============================================================================

@@ -9,12 +9,25 @@ These endpoints are protected either by:
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request, status
+from pydantic import BaseModel, EmailStr
+from typing import List, Optional
 
 import uuid
 
 from config import Config
 from oauth.client_auth import verify_client_secret
 from oauth.contracts import SyncUser
+
+
+class BootstrapAdminRequest(BaseModel):
+    """Request to create the first admin user during installation."""
+    email: EmailStr
+    roles: List[str] = ["Admin"]
+
+
+class BootstrapRolesRequest(BaseModel):
+    """Request to bootstrap roles with specific scopes."""
+    roles: List[dict]  # [{"name": "Admin", "scopes": ["authz.*", "busibox-admin.*"]}]
 
 router = APIRouter()
 config = Config()
@@ -131,3 +144,164 @@ async def sync_user(request: Request):
 
     return {"status": "ok"}
 
+
+async def _require_admin_token(request: Request) -> None:
+    """
+    Verify that the request has a valid admin token.
+    
+    The admin token is a shared secret used for bootstrap operations.
+    """
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid authorization header"
+        )
+    
+    token = auth_header[7:]  # Remove "Bearer " prefix
+    if token != config.admin_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid admin token"
+        )
+
+
+@router.post("/internal/bootstrap-admin")
+async def bootstrap_admin(request: Request):
+    """
+    Create the first admin user with a magic link for initial setup.
+    
+    This endpoint is used during installation to create the admin user
+    and generate a magic link for passwordless first login.
+    
+    Protected by AUTHZ_ADMIN_TOKEN.
+    """
+    await _require_admin_token(request)
+    
+    body = await request.json()
+    try:
+        req = BootstrapAdminRequest.model_validate(body)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid request: {e}"
+        )
+    
+    db = _get_pg(request)
+    await db.connect()
+    
+    # Check if user already exists
+    existing_user = await db.get_user_by_email(req.email)
+    if existing_user:
+        # User exists, just create a new magic link
+        user_id = existing_user["user_id"]
+    else:
+        # Create the Admin role with busibox-admin scopes if it doesn't exist
+        admin_role = await db.get_role_by_name("Admin")
+        if not admin_role:
+            admin_role = await db.create_role(
+                name="Admin",
+                description="Full system administrator with all permissions",
+                scopes=["authz.*", "busibox-admin.*"]
+            )
+        else:
+            # Update Admin role to include busibox-admin scopes
+            current_scopes = admin_role.get("scopes", [])
+            if "busibox-admin.*" not in current_scopes:
+                updated_scopes = list(set(current_scopes + ["authz.*", "busibox-admin.*"]))
+                await db.update_role(
+                    role_id=admin_role["id"],
+                    name=None,
+                    description=None,
+                    scopes=updated_scopes
+                )
+        
+        # Create the user with Admin role
+        user = await db.create_user(
+            email=req.email,
+            status="PENDING",
+            role_ids=[admin_role["id"]]
+        )
+        user_id = user["user_id"]
+    
+    # Create magic link for passwordless login
+    magic_link = await db.create_magic_link(
+        user_id=user_id,
+        email=req.email,
+        expires_in_seconds=86400  # 24 hours for initial setup
+    )
+    
+    return {
+        "user_id": user_id,
+        "email": req.email,
+        "magic_link_token": magic_link["token"],
+        "expires_at": magic_link["expires_at"].isoformat() if hasattr(magic_link["expires_at"], "isoformat") else str(magic_link["expires_at"])
+    }
+
+
+@router.post("/internal/bootstrap-roles")
+async def bootstrap_roles(request: Request):
+    """
+    Bootstrap roles with specific scopes.
+    
+    Used during installation to ensure required roles exist with correct scopes.
+    
+    Protected by AUTHZ_ADMIN_TOKEN.
+    """
+    await _require_admin_token(request)
+    
+    body = await request.json()
+    try:
+        req = BootstrapRolesRequest.model_validate(body)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid request: {e}"
+        )
+    
+    db = _get_pg(request)
+    await db.connect()
+    
+    results = []
+    for role_data in req.roles:
+        name = role_data.get("name")
+        scopes = role_data.get("scopes", [])
+        description = role_data.get("description")
+        
+        if not name:
+            continue
+        
+        existing_role = await db.get_role_by_name(name)
+        if existing_role:
+            # Update existing role scopes
+            current_scopes = existing_role.get("scopes", [])
+            merged_scopes = list(set(current_scopes + scopes))
+            await db.update_role(
+                role_id=existing_role["id"],
+                name=None,
+                description=description,
+                scopes=merged_scopes
+            )
+            results.append({
+                "name": name,
+                "id": existing_role["id"],
+                "action": "updated",
+                "scopes": merged_scopes
+            })
+        else:
+            # Create new role
+            role_id = str(uuid.uuid4())
+            await db.upsert_roles([{
+                "id": role_id,
+                "name": name,
+                "description": description,
+                "scopes": scopes
+            }])
+            results.append({
+                "name": name,
+                "id": role_id,
+                "action": "created",
+                "scopes": scopes
+            })
+    
+    return {"roles": results}

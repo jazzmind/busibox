@@ -903,7 +903,7 @@ deployment_menu() {
 # Docker service selection submenu
 docker_select_service() {
     local action="$1"  # "build", "start", "restart", "stop", "logs", "status"
-    local compose_file="${REPO_ROOT}/docker-compose.local.yml"
+    local compose_file="${REPO_ROOT}/docker-compose.yml"
     local env_file="${REPO_ROOT}/.env.local"
     
     # Capitalize first letter (compatible with bash 3.x / zsh / macOS)
@@ -985,7 +985,7 @@ docker_select_service() {
 docker_service_group_menu() {
     local group_name="$1"
     local services="$2"
-    local compose_file="${REPO_ROOT}/docker-compose.local.yml"
+    local compose_file="${REPO_ROOT}/docker-compose.yml"
     local env_file="${REPO_ROOT}/.env.local"
     
     while true; do
@@ -1066,7 +1066,7 @@ docker_service_group_menu() {
 
 # Individual service operation menu
 docker_individual_service_menu() {
-    local compose_file="${REPO_ROOT}/docker-compose.local.yml"
+    local compose_file="${REPO_ROOT}/docker-compose.yml"
     local env_file="${REPO_ROOT}/.env.local"
     
     while true; do
@@ -1167,7 +1167,7 @@ docker_individual_service_menu() {
 
 # Docker deployment menu
 docker_deploy_menu() {
-    local compose_file="${REPO_ROOT}/docker-compose.local.yml"
+    local compose_file="${REPO_ROOT}/docker-compose.yml"
     local env_file="${REPO_ROOT}/.env.local"
     
     # Create .env.local if it doesn't exist
@@ -1242,7 +1242,7 @@ main() {
         
         # Handle Docker environment
         if [[ "$env" == "docker" ]]; then
-            local compose_file="${REPO_ROOT}/docker-compose.local.yml"
+            local compose_file="${REPO_ROOT}/docker-compose.yml"
             local env_file="${REPO_ROOT}/.env.local"
             
             if [[ ! -f "$env_file" ]] && [[ -f "${REPO_ROOT}/env.local.example" ]]; then

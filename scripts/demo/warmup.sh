@@ -167,7 +167,7 @@ show_stage 78 "Building Docker images" \
     "Python APIs, Next.js frontends, and infrastructure"
 
 cd "${REPO_ROOT}"
-docker compose -f docker-compose.local.yml build --quiet
+docker compose -f docker-compose.yml build --quiet
 
 # =============================================================================
 # 7. Pull Infrastructure Images
@@ -176,10 +176,10 @@ docker compose -f docker-compose.local.yml build --quiet
 show_stage 88 "Pulling infrastructure images" \
     "PostgreSQL, Redis, Milvus, MinIO - all local, all secure"
 
-docker compose -f docker-compose.local.yml pull --quiet postgres redis minio
+docker compose -f docker-compose.yml pull --quiet postgres redis minio
 
 # Milvus components
-docker compose -f docker-compose.local.yml pull --quiet etcd milvus-minio milvus || true
+docker compose -f docker-compose.yml pull --quiet etcd milvus-minio milvus || true
 
 # =============================================================================
 # 8. Cache Embedding Models
@@ -189,16 +189,16 @@ show_stage 95 "Caching embedding models" \
     "FastEmbed for efficient document vectorization"
 
 # Start postgres temporarily if needed
-docker compose -f docker-compose.local.yml up -d postgres
+docker compose -f docker-compose.yml up -d postgres
 sleep 5
 
 # Run ingest-api briefly to cache models
-docker compose -f docker-compose.local.yml run --rm ingest-api \
+docker compose -f docker-compose.yml run --rm ingest-api \
     python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')" 2>/dev/null || \
     warn "Could not pre-cache embedding model - will download at runtime"
 
 # Stop postgres
-docker compose -f docker-compose.local.yml down
+docker compose -f docker-compose.yml down
 
 # =============================================================================
 # Complete

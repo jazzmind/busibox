@@ -1,0 +1,75 @@
+# /etc/hosts - Managed by Ansible
+# DO NOT EDIT MANUALLY - Changes will be overwritten
+#
+# Busibox Internal DNS Mappings
+# Environment: {{ busibox_env }}
+# Generated: {{ ansible_date_time.iso8601 }}
+
+# Standard localhost entries
+127.0.0.1   localhost
+::1         localhost ip6-localhost ip6-loopback
+ff02::1     ip6-allnodes
+ff02::2     ip6-allrouters
+
+# Container's own hostname
+{{ ansible_default_ipv4.address }}  {{ ansible_hostname }} {{ ansible_fqdn }}
+
+# =============================================================================
+# Busibox Service DNS Mappings
+# =============================================================================
+# All services accessible via canonical hostnames regardless of container name
+# This enables consistent configuration across dev/staging/production
+
+# Infrastructure Services
+{{ postgres_ip }}       postgres pg pg-lxc
+{{ redis_host }}        redis
+{{ minio_ip }}          minio files files-lxc
+{{ milvus_ip }}         milvus milvus-lxc
+{{ proxy_ip }}          nginx proxy proxy-lxc
+
+# Core API Services
+{{ authz_ip }}          authz-api authz authz-lxc
+{{ ingest_ip }}         ingest-api ingest ingest-lxc
+{{ search_api_ip }}     search-api search
+{{ agent_ip }}          agent-api agent agent-lxc
+
+# LLM Services
+{{ litellm_ip }}        litellm litellm-lxc
+{{ vllm_ip }}           vllm vllm-lxc
+{{ ollama_ip }}         ollama ollama-lxc
+
+# Embedded Services (share container with parent service)
+{{ milvus_ip }}         docs-api docs
+{{ authz_ip }}          deploy-api deploy
+{{ ingest_ip }}         embedding-api embedding
+
+# Application Services
+{{ core_apps_ip }}      ai-portal
+{{ core_apps_ip }}      agent-manager
+{{ user_apps_ip }}      user-apps
+
+# =============================================================================
+# Environment-Specific Aliases
+# =============================================================================
+{% if busibox_env == 'staging' %}
+# Staging environment - add TEST- prefixed aliases for clarity
+{{ postgres_ip }}       TEST-pg-lxc
+{{ minio_ip }}          TEST-files-lxc
+{{ milvus_ip }}         TEST-milvus-lxc
+{{ proxy_ip }}          TEST-proxy-lxc
+{{ authz_ip }}          TEST-authz-lxc
+{{ ingest_ip }}         TEST-ingest-lxc
+{{ agent_ip }}           TEST-agent-lxc
+{{ litellm_ip }}        TEST-litellm-lxc
+{{ ollama_ip }}         TEST-ollama-lxc
+{{ core_apps_ip }}      TEST-core-apps-lxc
+{{ user_apps_ip }}      TEST-user-apps-lxc
+{% endif %}
+
+# =============================================================================
+# Cross-Environment Access (if needed)
+# =============================================================================
+{% if busibox_env == 'staging' and use_production_vllm | default(false) %}
+# Staging uses production vLLM
+{{ network_base_octets_production }}.208  prod-vllm
+{% endif %}

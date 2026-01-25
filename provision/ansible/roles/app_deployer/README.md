@@ -39,7 +39,7 @@ Applications are defined in `provision/ansible/group_vars/apps.yml` using the fo
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `process_manager` | string | `pm2` | Process manager: `pm2` or `systemd` |
+| `process_manager` | string | `systemd` | Process manager for the application |
 | `routes` | list | `[]` | NGINX routing configuration (see Routing section) |
 | `secrets` | list | `[]` | Secret keys from `vault.yml` |
 | `env` | map | `{}` | Non-secret environment variables |
@@ -344,10 +344,6 @@ journalctl -u deploywatch.service -f
 Check application-specific logs:
 
 ```bash
-# For PM2 apps
-pm2 logs <app-name>
-
-# For systemd apps
 journalctl -u <app-name>.service -f
 ```
 
@@ -368,7 +364,7 @@ cd <deploy_path>
 # Backup is in <deploy_path>.backup
 rm -rf <deploy_path>
 mv <deploy_path>.backup <deploy_path>
-pm2 restart <app-name>  # or systemctl restart <app-name>.service
+systemctl restart <app-name>.service
 ```
 
 ## Files Generated

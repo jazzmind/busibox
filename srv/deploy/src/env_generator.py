@@ -99,6 +99,10 @@ def generate_env_vars(
     env['NODE_ENV'] = 'production' if deploy_config.environment == 'production' else 'development'
     env['PORT'] = str(manifest.defaultPort)
     
+    # Next.js basePath for apps deployed at non-root paths
+    if manifest.defaultPath and manifest.defaultPath != '/':
+        env['NEXT_PUBLIC_BASE_PATH'] = manifest.defaultPath.rstrip('/')
+    
     # Database URL (if provisioned)
     if database_url:
         env['DATABASE_URL'] = database_url

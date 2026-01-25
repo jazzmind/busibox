@@ -21,8 +21,36 @@ _get_repo_root() {
     echo "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 }
 
+# Get container prefix from environment variable or default
+_get_env_prefix() {
+    local env="${BUSIBOX_ENV:-${ENV:-development}}"
+    case "$env" in
+        demo) echo "demo" ;;
+        development) echo "dev" ;;
+        staging) echo "staging" ;;
+        production) echo "prod" ;;
+        *) echo "dev" ;;
+    esac
+}
+
 # State file location
-BUSIBOX_STATE_FILE="${BUSIBOX_STATE_FILE:-$(_get_repo_root "$(pwd)")/.busibox-state}"
+# Supports environment-specific state files via BUSIBOX_STATE_FILE or ENV variable
+# Examples:
+#   .busibox-state-demo    (for make demo)
+#   .busibox-state-dev     (for local development)
+#   .busibox-state-staging (for staging)
+#   .busibox-state-prod    (for production)
+BUSIBOX_STATE_FILE="${BUSIBOX_STATE_FILE:-$(_get_repo_root "$(pwd)")/.busibox-state-$(_get_env_prefix)}"
+
+# Get env file path (matches state file naming)
+get_env_file_path() {
+    echo "$(_get_repo_root "$(pwd)")/.env.$(_get_env_prefix)"
+}
+
+# Get vault password file path (in home directory)
+get_vault_pass_path() {
+    echo "${HOME}/.busibox-vault-pass-$(_get_env_prefix)"
+}
 
 # ============================================================================
 # State File Format

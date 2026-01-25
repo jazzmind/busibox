@@ -1,0 +1,42 @@
+---
+# Internal DNS Configuration via /etc/hosts
+# This role ensures all Busibox services can be accessed via canonical hostnames
+# regardless of the deployment environment (production/staging)
+
+- name: Create /etc/hosts backup
+  ansible.builtin.copy:
+    src: /etc/hosts
+    dest: /etc/hosts.bak
+    remote_src: yes
+    force: no
+  tags: [internal_dns, hosts]
+
+- name: Deploy /etc/hosts with internal DNS mappings
+  ansible.builtin.template:
+    src: hosts.j2
+    dest: /etc/hosts
+    owner: root
+    group: root
+    mode: '0644'
+    backup: yes
+  tags: [internal_dns, hosts]
+
+- name: Verify DNS resolution
+  ansible.builtin.command: getent hosts {{ item }}
+  loop:
+    - postgres
+    - redis
+    - minio
+    - milvus
+    - authz-api
+    - ingest-api
+  register: dns_check
+  changed_when: false
+  failed_when: false
+  tags: [internal_dns, verify]
+
+- name: Display DNS resolution results
+  ansible.builtin.debug:
+    msg: "{{ item.item }}: {{ 'OK' if item.rc == 0 else 'FAILED' }}"
+  loop: "{{ dns_check.results }}"
+  tags: [internal_dns, verify]

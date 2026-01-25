@@ -60,9 +60,12 @@ ssl
 # Machine-generated model configuration
 provision/ansible/group_vars/all/model_config.yml
 
-# Busibox state file (user-specific, stores env preferences)
+# Busibox state files (user-specific, stores env preferences)
 # Used by both the interactive menu (scripts/make/menu.sh) and Makefile
+# Environment-prefixed to allow multiple installations to coexist:
+#   .busibox-state-demo, .busibox-state-dev, .busibox-state-staging, .busibox-state-prod
 .busibox-state
+.busibox-state-*
 
 # Demo mode generated files
 config/litellm-demo.yaml

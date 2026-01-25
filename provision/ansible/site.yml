@@ -28,6 +28,18 @@
 # =============================================================================
 
 # =============================================================================
+# INFRASTRUCTURE: Internal DNS Configuration
+# =============================================================================
+# Configure /etc/hosts on all containers for service discovery via canonical hostnames
+# This runs first to ensure all services can resolve each other by name
+
+- hosts: all
+  tags: [always, internal_dns]
+  roles:
+    - role: internal_dns
+      tags: [always, internal_dns]
+
+# =============================================================================
 # GROUP 1: CORE SERVICES (tag: core)
 # Deploy first - nginx enables web-driven install recovery
 # =============================================================================

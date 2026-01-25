@@ -70,7 +70,7 @@ else
     show_stage 8 "Starting vLLM container" \
         "GPU-accelerated inference. Enterprise-grade throughput."
     
-    docker compose -f docker-compose.local.yml --profile demo-vllm up -d vllm
+    docker compose -f docker-compose.yml --profile demo-vllm up -d vllm
     wait_for_url "http://localhost:8080/health" 180
 fi
 
@@ -81,19 +81,19 @@ fi
 show_stage 18 "Starting PostgreSQL" \
     "Row-level security on every table. Audit trails built-in."
 
-docker compose -f docker-compose.local.yml up -d postgres
+docker compose -f docker-compose.yml up -d postgres
 wait_for_healthy local-postgres 60
 
 show_stage 28 "Starting Milvus vector database" \
     "Enterprise vector search. Find documents by meaning, not keywords."
 
-docker compose -f docker-compose.local.yml up -d etcd milvus-minio milvus
+docker compose -f docker-compose.yml up -d etcd milvus-minio milvus
 wait_for_healthy local-milvus 120
 
 show_stage 38 "Starting Redis & MinIO" \
     "Job queues and S3-compatible storage. All local, all secure."
 
-docker compose -f docker-compose.local.yml up -d redis minio minio-init
+docker compose -f docker-compose.yml up -d redis minio minio-init
 wait_for_healthy local-redis 30
 wait_for_healthy local-minio 30
 
@@ -104,30 +104,30 @@ wait_for_healthy local-minio 30
 show_stage 48 "Starting AuthZ service" \
     "OAuth2 + RBAC. Every request authenticated and authorized."
 
-docker compose -f docker-compose.local.yml up -d authz-api
+docker compose -f docker-compose.yml up -d authz-api
 wait_for_healthy local-authz-api 60
 
 show_stage 56 "Starting Ingest API" \
     "Automatic PDF extraction, chunking, and semantic embedding."
 
-docker compose -f docker-compose.local.yml up -d ingest-api milvus-init
+docker compose -f docker-compose.yml up -d ingest-api milvus-init
 wait_for_healthy local-ingest-api 180
 
 show_stage 64 "Starting Search API" \
     "Hybrid search: vectors + keywords. Results filtered by permissions."
 
-docker compose -f docker-compose.local.yml up -d search-api
+docker compose -f docker-compose.yml up -d search-api
 wait_for_healthy local-search-api 120
 
 show_stage 70 "Starting Ingest Worker" \
     "Background processing: PDF -> text -> chunks -> vectors"
 
-docker compose -f docker-compose.local.yml up -d ingest-worker
+docker compose -f docker-compose.yml up -d ingest-worker
 
 show_stage 76 "Starting Agent API" \
     "AI agents with tools. RAG search. Workflow automation."
 
-docker compose -f docker-compose.local.yml up -d agent-api
+docker compose -f docker-compose.yml up -d agent-api
 wait_for_healthy local-agent-api 60
 
 # =============================================================================
@@ -142,7 +142,7 @@ if [[ ! -f "${REPO_ROOT}/ssl/localhost.crt" ]]; then
     bash "${REPO_ROOT}/scripts/setup/generate-local-ssl.sh" || warn "Could not generate SSL"
 fi
 
-docker compose -f docker-compose.local.yml --profile full up -d ai-portal agent-manager nginx
+docker compose -f docker-compose.yml --profile full up -d ai-portal agent-manager nginx
 wait_for_healthy local-nginx 60
 
 # =============================================================================
@@ -182,7 +182,7 @@ show_dashboard "${DEMO_TIER}" "${DEMO_RAM_GB}" "${DEMO_MODEL_AGENT}"
 echo ""
 echo "Press Ctrl+C to exit, or run these commands in another terminal:"
 echo ""
-echo "  View all logs:    docker compose -f docker-compose.local.yml logs -f"
-echo "  View agent logs:  docker compose -f docker-compose.local.yml logs -f agent-api"
+echo "  View all logs:    docker compose -f docker-compose.yml logs -f"
+echo "  View agent logs:  docker compose -f docker-compose.yml logs -f agent-api"
 echo "  Stop demo:        make demo-clean"
 echo ""

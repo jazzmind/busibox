@@ -19,6 +19,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # Source libraries
 source "${REPO_ROOT}/scripts/lib/ui.sh"
 source "${REPO_ROOT}/scripts/lib/state.sh"
+source "${REPO_ROOT}/scripts/lib/github.sh"
 
 # Get environment from state
 ENV=$(get_environment)
@@ -851,6 +852,112 @@ configure_dev_apps_dir() {
 }
 
 # ========================================================================
+# Configure GitHub Token
+# ========================================================================
+
+configure_github_token() {
+    header "Configure GitHub Token" 70
+    
+    local current_token
+    current_token=$(get_github_token 2>/dev/null || true)
+    
+    echo ""
+    if [[ -n "$current_token" ]]; then
+        # Mask the token for display
+        local masked="${current_token:0:4}...${current_token: -4}"
+        success "Current token: ${masked}"
+        echo ""
+        
+        # Check if it's still valid
+        if validate_github_token "$current_token" --quiet 2>/dev/null; then
+            success "Token is valid"
+        else
+            warn "Token may be expired or have insufficient permissions"
+        fi
+        echo ""
+    else
+        warn "No GitHub token configured"
+        echo ""
+    fi
+    
+    echo "Options:"
+    echo "  1) Set/update GitHub token"
+    echo "  2) Validate current token"
+    echo "  3) Clear token"
+    echo "  4) Back"
+    echo ""
+    
+    local choice=""
+    read -p "$(echo -e "${BOLD}Select option [1-4]:${NC} ")" choice
+    
+    case "${choice:-}" in
+        1)
+            echo ""
+            # Use ensure_github_token which handles prompting and validation
+            if ensure_github_token; then
+                # Also update the .env file for Docker
+                local env_file
+                env_file=$(get_env_file_path 2>/dev/null || echo "${REPO_ROOT}/.env.local")
+                
+                # Update or add GITHUB_AUTH_TOKEN in env file
+                if [[ -f "$env_file" ]]; then
+                    if grep -q "^GITHUB_AUTH_TOKEN=" "$env_file" 2>/dev/null; then
+                        # Update existing
+                        sed -i.bak "s|^GITHUB_AUTH_TOKEN=.*|GITHUB_AUTH_TOKEN=${GITHUB_AUTH_TOKEN}|" "$env_file"
+                        rm -f "${env_file}.bak"
+                    else
+                        # Append
+                        echo "" >> "$env_file"
+                        echo "# GitHub Authentication" >> "$env_file"
+                        echo "GITHUB_AUTH_TOKEN=${GITHUB_AUTH_TOKEN}" >> "$env_file"
+                    fi
+                else
+                    # Create minimal env file
+                    echo "# Busibox Environment Configuration" > "$env_file"
+                    echo "" >> "$env_file"
+                    echo "# GitHub Authentication" >> "$env_file"
+                    echo "GITHUB_AUTH_TOKEN=${GITHUB_AUTH_TOKEN}" >> "$env_file"
+                fi
+                
+                echo ""
+                success "Token saved to state and ${env_file}"
+                info "Restart Docker services to apply: make docker-down && make docker-up"
+            fi
+            ;;
+        2)
+            echo ""
+            if [[ -n "$current_token" ]]; then
+                info "Validating token..."
+                if validate_github_token "$current_token"; then
+                    echo ""
+                    success "Token is valid with all required permissions"
+                fi
+            else
+                error "No token to validate"
+            fi
+            ;;
+        3)
+            set_state "GITHUB_AUTH_TOKEN" ""
+            
+            # Also remove from env file
+            local env_file
+            env_file=$(get_env_file_path 2>/dev/null || echo "${REPO_ROOT}/.env.local")
+            if [[ -f "$env_file" ]]; then
+                sed -i.bak '/^GITHUB_AUTH_TOKEN=/d' "$env_file"
+                rm -f "${env_file}.bak"
+            fi
+            
+            success "GitHub token cleared"
+            ;;
+        4|"")
+            return
+            ;;
+    esac
+    
+    pause
+}
+
+# ========================================================================
 # Docker Configuration Menu
 # ========================================================================
 
@@ -860,16 +967,28 @@ docker_menu() {
         box "Configuration - Local Docker" 70
         status_bar "$ENV" "$BACKEND" "$(get_install_status)" 70
         
-        # Show DEV_APPS_DIR status
-        local dev_apps_dir
+        # Show current status
+        local dev_apps_dir github_status
         dev_apps_dir=$(get_dev_apps_dir)
+        
+        # Check GitHub token status
+        local github_token
+        github_token=$(get_github_token 2>/dev/null || true)
+        if [[ -n "$github_token" ]]; then
+            github_status="${GREEN}✓ configured${NC}"
+        else
+            github_status="${RED}✗ not set${NC}"
+        fi
+        
+        echo ""
+        echo -e "  ${DIM}GitHub Token: ${NC}${github_status}"
         if [[ -n "$dev_apps_dir" ]]; then
-            echo ""
             echo -e "  ${DIM}Dev Apps Dir: ${NC}${dev_apps_dir}"
         fi
         
         echo ""
         menu "Docker Configuration" \
+            "Configure GitHub Token (REQUIRED for builds)" \
             "App Configuration (admin, OAuth clients)" \
             "Configure Dev Apps Directory (local development)" \
             "Edit Ansible Vault (secrets)" \
@@ -879,38 +998,41 @@ docker_menu() {
             "Back to Main Menu"
         
         local choice=""
-        read -p "$(echo -e "${BOLD}Select option [1-7]:${NC} ")" choice
+        read -p "$(echo -e "${BOLD}Select option [1-8]:${NC} ")" choice
         
         case "${choice:-}" in
             1)
-                app_configuration
+                configure_github_token
                 ;;
             2)
-                configure_dev_apps_dir
+                app_configuration
                 ;;
             3)
+                configure_dev_apps_dir
+                ;;
+            4)
                 header "Edit Ansible Vault" 70
                 cd "${REPO_ROOT}/provision/ansible"
                 ansible-vault edit roles/secrets/vars/vault.yml || error "Failed to edit vault"
                 cd "${REPO_ROOT}"
                 pause
                 ;;
-            4)
+            5)
                 header "View Vault Variables" 70
                 cd "${REPO_ROOT}/provision/ansible"
                 ansible-vault view roles/secrets/vars/vault.yml | grep -E "^[a-z_]+:" | sed 's/:.*$/: <masked>/' || error "Failed"
                 cd "${REPO_ROOT}"
                 pause
                 ;;
-            5)
+            6)
                 bash "${REPO_ROOT}/scripts/vault/sync-vault.sh" || error "Failed"
                 pause
                 ;;
-            6)
+            7)
                 bash "${REPO_ROOT}/scripts/vault/generate-env-from-vault.sh" || error "Failed"
                 pause
                 ;;
-            7|b|B|"")
+            8|b|B|"")
                 return 0
                 ;;
         esac

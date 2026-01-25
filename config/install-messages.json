@@ -1,0 +1,204 @@
+{
+  "services": {
+    "postgresql": {
+      "title": "PostgreSQL",
+      "tagline": "Enterprise-grade database",
+      "description": "Row-level security on every table. Complete audit trail for compliance. Your data never leaves your infrastructure.",
+      "features": [
+        "Row-level security (RLS) on all tables",
+        "Full audit trail for compliance",
+        "Automatic backups and point-in-time recovery"
+      ]
+    },
+    "authz": {
+      "title": "AuthZ API",
+      "tagline": "Zero-trust authentication",
+      "description": "OAuth 2.0 + RBAC with envelope encryption. Every request is authenticated and authorized. Secrets encrypted at rest.",
+      "features": [
+        "OAuth 2.0 with PKCE support",
+        "Role-based access control (RBAC)",
+        "Envelope encryption for secrets"
+      ]
+    },
+    "nginx": {
+      "title": "Nginx",
+      "tagline": "Production reverse proxy",
+      "description": "SSL termination, load balancing, and rate limiting. Your single entry point with enterprise-grade security.",
+      "features": [
+        "TLS 1.3 with modern ciphers",
+        "Rate limiting and DDoS protection",
+        "WebSocket support for real-time features"
+      ]
+    },
+    "ai-portal": {
+      "title": "AI Portal",
+      "tagline": "Your command center",
+      "description": "Manage documents, libraries, and AI agents from a single interface. Deploy and configure services with clicks, not code.",
+      "features": [
+        "Drag-and-drop document upload",
+        "Real-time processing status",
+        "Service management dashboard"
+      ]
+    },
+    "milvus": {
+      "title": "Milvus Vector Database",
+      "tagline": "Semantic search at scale",
+      "description": "Search millions of documents by meaning, not just keywords. GPU-accelerated for sub-second responses.",
+      "features": [
+        "10M+ vectors at sub-second latency",
+        "GPU-accelerated similarity search",
+        "Hybrid search: combine vector + keyword"
+      ]
+    },
+    "redis": {
+      "title": "Redis",
+      "tagline": "Sub-millisecond caching",
+      "description": "In-memory data store for session management, job queues, and real-time caching. Makes everything faster.",
+      "features": [
+        "Sub-millisecond read/write latency",
+        "Persistent job queues with retry",
+        "Session storage with auto-expiry"
+      ]
+    },
+    "minio": {
+      "title": "MinIO",
+      "tagline": "S3-compatible storage",
+      "description": "Store documents, exports, and artifacts with S3 API compatibility. Your data stays on your infrastructure.",
+      "features": [
+        "S3 API compatible",
+        "Encryption at rest",
+        "Versioning and lifecycle policies"
+      ]
+    },
+    "litellm": {
+      "title": "LiteLLM Gateway",
+      "tagline": "100+ LLM providers, one API",
+      "description": "OpenAI, Anthropic, Azure, Bedrock, local models - all through a unified API with automatic fallbacks.",
+      "features": [
+        "Unified API for all LLM providers",
+        "Automatic fallback and retry",
+        "Per-user rate limiting and cost tracking"
+      ]
+    },
+    "embedding-api": {
+      "title": "Embedding API",
+      "tagline": "Document vectorization",
+      "description": "Convert documents to semantic vectors for similarity search. Fast, efficient, and runs locally.",
+      "features": [
+        "BGE-large embeddings (1024 dimensions)",
+        "Batch processing for efficiency",
+        "Cached models for instant startup"
+      ]
+    },
+    "ingest-api": {
+      "title": "Ingest API",
+      "tagline": "Intelligent document processing",
+      "description": "Upload PDFs, Word docs, images, and more. AI-powered extraction with layout preservation.",
+      "features": [
+        "PDF, DOCX, images, and more",
+        "Table and chart extraction",
+        "Automatic metadata generation"
+      ]
+    },
+    "search-api": {
+      "title": "Search API",
+      "tagline": "Semantic search engine",
+      "description": "Find relevant content by meaning, not just keywords. Contextual results with source attribution.",
+      "features": [
+        "Hybrid semantic + keyword search",
+        "Faceted filtering",
+        "Source attribution for every result"
+      ]
+    },
+    "agent-api": {
+      "title": "Agent API",
+      "tagline": "Autonomous AI agents",
+      "description": "Deploy AI agents that can search documents, browse the web, execute code, and complete complex tasks.",
+      "features": [
+        "Multi-step reasoning",
+        "Tool use (search, code, web)",
+        "Streaming responses"
+      ]
+    },
+    "mlx-server": {
+      "title": "MLX-LM Server",
+      "tagline": "Native Apple Silicon inference",
+      "description": "Run large language models directly on your Mac with Apple's MLX framework. Optimized for unified memory.",
+      "features": [
+        "Apple Silicon optimized",
+        "Unified memory for large models",
+        "OpenAI-compatible API"
+      ]
+    },
+    "vllm": {
+      "title": "vLLM Server",
+      "tagline": "GPU-accelerated inference",
+      "description": "High-throughput LLM serving with continuous batching. Run the latest open-source models locally.",
+      "features": [
+        "PagedAttention for efficiency",
+        "Multi-GPU support",
+        "OpenAI-compatible API"
+      ]
+    }
+  },
+  "value_props": {
+    "data_sovereignty": {
+      "title": "Data Sovereignty",
+      "description": "Your documents, conversations, and embeddings never leave your infrastructure. No third-party APIs required for core operations."
+    },
+    "air_gap": {
+      "title": "Air-Gap Capable",
+      "description": "Run completely offline after initial setup. Perfect for secure environments, compliance requirements, or unreliable connectivity."
+    },
+    "enterprise_security": {
+      "title": "Enterprise Security",
+      "description": "Zero-trust architecture, row-level security, envelope encryption, complete audit trails. Built for compliance from day one."
+    },
+    "local_llm": {
+      "title": "Local LLM Inference",
+      "description": "Run state-of-the-art language models on your own hardware. No API costs, no data sharing, complete privacy."
+    },
+    "unified_platform": {
+      "title": "Unified Platform",
+      "description": "Document ingestion, semantic search, and AI agents in a single platform. No integration headaches, everything works together."
+    }
+  },
+  "tiers": {
+    "minimal": {
+      "name": "Minimal",
+      "ram": "16GB",
+      "description": "MacBook Air, base MacBook Pro",
+      "capability": "Basic demos with fast models"
+    },
+    "standard": {
+      "name": "Standard", 
+      "ram": "24GB",
+      "description": "MacBook Pro 14\"",
+      "capability": "Balanced performance for most demos"
+    },
+    "enhanced": {
+      "name": "Enhanced",
+      "ram": "48GB",
+      "description": "MacBook Pro 16\", Mac Mini Pro",
+      "capability": "High-quality models for impressive demos"
+    },
+    "professional": {
+      "name": "Professional",
+      "ram": "96GB",
+      "description": "Mac Studio M2 Max",
+      "capability": "Professional-grade inference"
+    },
+    "enterprise": {
+      "name": "Enterprise",
+      "ram": "128GB",
+      "description": "Mac Studio M2 Ultra",
+      "capability": "Enterprise-scale with largest models"
+    },
+    "ultra": {
+      "name": "Ultra",
+      "ram": "256GB+",
+      "description": "Mac Studio Ultra maxed, Mac Pro",
+      "capability": "Maximum capability - run anything"
+    }
+  }
+}

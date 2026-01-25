@@ -637,7 +637,7 @@ get_current_version() {
     case "$service" in
         milvus)
             # Milvus has a pinned version in docker-compose
-            local pkg_ver=$(grep -A 2 "milvus:" "${REPO_ROOT}/docker-compose.local.yml" | grep "image:" | sed 's/.*://' || echo "unknown")
+            local pkg_ver=$(grep -A 2 "milvus:" "${REPO_ROOT}/docker-compose.yml" | grep "image:" | sed 's/.*://' || echo "unknown")
             echo "$pkg_ver"
             return
             ;;
@@ -657,17 +657,17 @@ get_current_version() {
             ;;
         postgres)
             # PostgreSQL has a pinned version
-            local pkg_ver=$(grep "image: postgres:" "${REPO_ROOT}/docker-compose.local.yml" | head -1 | sed 's/.*://' || echo "unknown")
+            local pkg_ver=$(grep "image: postgres:" "${REPO_ROOT}/docker-compose.yml" | head -1 | sed 's/.*://' || echo "unknown")
             echo "$pkg_ver"
             return
             ;;
         redis)
-            local pkg_ver=$(grep "image: redis:" "${REPO_ROOT}/docker-compose.local.yml" | sed 's/.*://' || echo "unknown")
+            local pkg_ver=$(grep "image: redis:" "${REPO_ROOT}/docker-compose.yml" | sed 's/.*://' || echo "unknown")
             echo "$pkg_ver"
             return
             ;;
         nginx)
-            local pkg_ver=$(grep "image: nginx:" "${REPO_ROOT}/docker-compose.local.yml" | head -1 | sed 's/.*://' || echo "unknown")
+            local pkg_ver=$(grep "image: nginx:" "${REPO_ROOT}/docker-compose.yml" | head -1 | sed 's/.*://' || echo "unknown")
             echo "$pkg_ver"
             return
             ;;

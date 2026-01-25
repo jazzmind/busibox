@@ -1558,7 +1558,7 @@ docker_test_menu() {
             7|status)
                 header "Docker Services Status" 70
                 echo ""
-                docker compose -f "${REPO_ROOT}/docker-compose.local.yml" ps
+                docker compose -f "${REPO_ROOT}/docker-compose.yml" ps
                 echo ""
                 pause
                 ;;
@@ -1567,7 +1567,7 @@ docker_test_menu() {
                 echo ""
                 info "Showing last 50 lines of logs (press Ctrl+C to stop)..."
                 echo ""
-                docker compose -f "${REPO_ROOT}/docker-compose.local.yml" logs --tail=50 -f || true
+                docker compose -f "${REPO_ROOT}/docker-compose.yml" logs --tail=50 -f || true
                 ;;
             9|exit)
                 return 0

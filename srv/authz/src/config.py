@@ -18,7 +18,7 @@ class Config:
     """
 
     def __init__(self):
-        self.postgres_host = os.getenv("POSTGRES_HOST", "10.96.200.203")
+        self.postgres_host = os.getenv("POSTGRES_HOST", "postgres")
         self.postgres_port = int(os.getenv("POSTGRES_PORT", "5432"))
         self.postgres_db = os.getenv("POSTGRES_DB", "busibox")
         self.postgres_user = os.getenv("POSTGRES_USER", "busibox_user")

@@ -1,0 +1,64 @@
+# =============================================================================
+# Core Apps - Development Dockerfile
+# =============================================================================
+#
+# Runs both ai-portal and agent-manager in a single container for development.
+# This mirrors the Proxmox pattern where core-apps-lxc hosts multiple Next.js apps.
+#
+# Features:
+#   - Volume-mounted source code for both apps
+#   - npm-linked busibox-app for live editing
+#   - Turbopack hot-reload for both apps
+#   - Uses concurrently to run both apps
+#
+# Usage (via docker-compose.local-dev.yml):
+#   docker compose -f docker-compose.yml -f docker-compose.local-dev.yml up
+#
+# =============================================================================
+
+# Use full Node image instead of Alpine for better compatibility with
+# Next.js Turbopack and native modules
+FROM node:20-bookworm-slim
+
+# Set working directory
+WORKDIR /srv
+
+# Install dependencies for node-gyp, development tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 make g++ curl bash \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install concurrently globally for running multiple processes
+RUN npm install -g concurrently
+
+# Create directories for apps
+RUN mkdir -p /srv/ai-portal /srv/agent-manager
+
+# Set up npm authentication for private GitHub packages
+ARG GITHUB_AUTH_TOKEN
+RUN if [ -n "$GITHUB_AUTH_TOKEN" ]; then \
+        echo "Setting up npm authentication for @jazzmind packages..." && \
+        echo "//npm.pkg.github.com/:_authToken=${GITHUB_AUTH_TOKEN}" > /root/.npmrc && \
+        echo "@jazzmind:registry=https://npm.pkg.github.com" >> /root/.npmrc; \
+    else \
+        echo "WARNING: GITHUB_AUTH_TOKEN not set - npm install may fail for @jazzmind packages"; \
+    fi
+
+# Copy entrypoint script
+COPY provision/docker/core-apps-entrypoint.sh /usr/local/bin/core-apps-entrypoint.sh
+RUN chmod +x /usr/local/bin/core-apps-entrypoint.sh
+
+# Expose ports for both apps
+EXPOSE 3000 3001
+
+# Environment
+ENV NODE_ENV=development
+ENV HOSTNAME=0.0.0.0
+
+# Health check - check both apps
+HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=5 \
+    CMD curl -f http://localhost:3000/portal/api/health && curl -f http://localhost:3001/agents || exit 1
+
+# Use entrypoint script to handle busibox-app symlink and start both apps
+ENTRYPOINT ["/usr/local/bin/core-apps-entrypoint.sh"]
+CMD ["dev"]

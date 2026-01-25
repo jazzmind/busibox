@@ -22,6 +22,7 @@ source "${REPO_ROOT}/scripts/lib/state.sh"
 source "${REPO_ROOT}/scripts/lib/health.sh"
 source "${REPO_ROOT}/scripts/lib/services.sh"
 source "${REPO_ROOT}/scripts/lib/status.sh"
+source "${REPO_ROOT}/scripts/lib/github.sh"
 
 # Parse command line arguments
 ENV_ARG="${1:-}"
@@ -282,6 +283,89 @@ handle_menu_selection() {
 }
 
 # ============================================================================
+# Helper Functions
+# ============================================================================
+
+# Get Docker container prefix
+# Priority: 1) Environment variable 2) Detect from running containers 3) .env files 4) Default
+# Usage: prefix=$(get_container_prefix)
+get_container_prefix() {
+    local prefix
+    
+    # 1. Check environment variable (set by Makefile)
+    if [[ -n "${CONTAINER_PREFIX:-}" ]]; then
+        echo "$CONTAINER_PREFIX"
+        return 0
+    fi
+    
+    # 2. Detect from running containers (look for *-authz-api pattern)
+    prefix=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '.-authz-api$' | sed 's/-authz-api$//' | head -1)
+    if [[ -n "$prefix" ]]; then
+        echo "$prefix"
+        return 0
+    fi
+    
+    # 3. Check .env files based on current environment
+    local env_name
+    env_name=$(get_environment 2>/dev/null || echo "")
+    
+    case "$env_name" in
+        development|local|docker)
+            # Check .env.dev first, then .env.local
+            prefix=$(grep -E "^CONTAINER_PREFIX=" "${REPO_ROOT}/.env.dev" 2>/dev/null | cut -d'=' -f2 || echo "")
+            if [[ -z "$prefix" ]]; then
+                prefix=$(grep -E "^CONTAINER_PREFIX=" "${REPO_ROOT}/.env.local" 2>/dev/null | cut -d'=' -f2 || echo "")
+            fi
+            # Default for development is 'dev'
+            echo "${prefix:-dev}"
+            ;;
+        demo)
+            prefix=$(grep -E "^CONTAINER_PREFIX=" "${REPO_ROOT}/.env.demo" 2>/dev/null | cut -d'=' -f2 || echo "")
+            echo "${prefix:-demo}"
+            ;;
+        staging)
+            echo "staging"
+            ;;
+        production)
+            echo "prod"
+            ;;
+        *)
+            # Fallback: try to detect from any running container
+            prefix=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '.-api$' | sed 's/-[^-]*-api$//' | head -1)
+            echo "${prefix:-local}"
+            ;;
+    esac
+}
+
+# Get current embedding model from .env.local or default
+# Usage: model=$(get_current_embedding_model)
+get_current_embedding_model() {
+    local model
+    model=$(grep -E "^FASTEMBED_MODEL=" "${REPO_ROOT}/.env.local" 2>/dev/null | cut -d'=' -f2 || echo "")
+    echo "${model:-BAAI/bge-large-en-v1.5}"
+}
+
+# Get embedding dimension for a model
+# Usage: dim=$(get_embedding_dimension "BAAI/bge-small-en-v1.5")
+get_embedding_dimension() {
+    local model="$1"
+    case "$model" in
+        "BAAI/bge-small-en-v1.5"|"bge-small-en-v1.5")
+            echo "384"
+            ;;
+        "BAAI/bge-base-en-v1.5"|"bge-base-en-v1.5")
+            echo "768"
+            ;;
+        "BAAI/bge-large-en-v1.5"|"bge-large-en-v1.5")
+            echo "1024"
+            ;;
+        *)
+            echo "1024"  # Default
+            ;;
+    esac
+}
+
+# ============================================================================
 # Action Handlers
 # ============================================================================
 
@@ -510,11 +594,11 @@ show_requirements_checklist() {
                 ((issues++))
             fi
             
-            # docker-compose.local.yml
-            if [[ -f "${REPO_ROOT}/docker-compose.local.yml" ]]; then
-                echo -e "    ${GREEN}✓${NC} docker-compose.local.yml"
+            # docker-compose.yml
+            if [[ -f "${REPO_ROOT}/docker-compose.yml" ]]; then
+                echo -e "    ${GREEN}✓${NC} docker-compose.yml"
             else
-                echo -e "    ${RED}✗${NC} docker-compose.local.yml missing"
+                echo -e "    ${RED}✗${NC} docker-compose.yml missing"
                 ((issues++))
             fi
             
@@ -953,7 +1037,7 @@ handle_services() {
                 # Show current status
                 echo ""
                 info "Current service status:"
-                (cd "$REPO_ROOT" && docker compose -f docker-compose.local.yml ps --format "table {{.Name}}\t{{.Status}}" 2>/dev/null) || echo "  (no services running)"
+                (cd "$REPO_ROOT" && docker compose -f docker-compose.yml ps --format "table {{.Name}}\t{{.Status}}" 2>/dev/null) || echo "  (no services running)"
                 echo ""
                 
                 menu "Select Service Group" \
@@ -1166,13 +1250,13 @@ service_action_menu() {
     
     if [[ -z "$services" ]]; then
         # All services
-        running_count=$(cd "$REPO_ROOT" && docker compose -f docker-compose.local.yml ps -q --status running 2>/dev/null | wc -l | tr -d ' ')
-        total_count=$(cd "$REPO_ROOT" && docker compose -f docker-compose.local.yml ps -q 2>/dev/null | wc -l | tr -d ' ')
+        running_count=$(cd "$REPO_ROOT" && docker compose -f docker-compose.yml ps -q --status running 2>/dev/null | wc -l | tr -d ' ')
+        total_count=$(cd "$REPO_ROOT" && docker compose -f docker-compose.yml ps -q 2>/dev/null | wc -l | tr -d ' ')
     else
         # Specific services
         for svc in $services; do
             ((total_count++))
-            if (cd "$REPO_ROOT" && docker compose -f docker-compose.local.yml ps -q --status running "$svc" 2>/dev/null | grep -q .); then
+            if (cd "$REPO_ROOT" && docker compose -f docker-compose.yml ps -q --status running "$svc" 2>/dev/null | grep -q .); then
                 ((running_count++))
             fi
         done
@@ -1228,7 +1312,7 @@ service_action_menu() {
                 save_last_command "make docker-up ENV=$current_env"
                 (cd "$REPO_ROOT" && make docker-up ENV="$current_env")
             else
-                (cd "$REPO_ROOT" && docker compose -f docker-compose.local.yml --env-file .env.local up -d $services)
+                (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local up -d $services)
             fi
             set_install_status "deployed"
             pause
@@ -1239,7 +1323,7 @@ service_action_menu() {
                 save_last_command "make docker-restart ENV=$current_env"
                 (cd "$REPO_ROOT" && make docker-restart ENV="$current_env")
             else
-                (cd "$REPO_ROOT" && docker compose -f docker-compose.local.yml --env-file .env.local restart $services)
+                (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local restart $services)
             fi
             pause
             ;;
@@ -1249,7 +1333,7 @@ service_action_menu() {
                 save_last_command "make docker-down"
                 (cd "$REPO_ROOT" && make docker-down)
             else
-                (cd "$REPO_ROOT" && docker compose -f docker-compose.local.yml --env-file .env.local stop $services)
+                (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local stop $services)
             fi
             pause
             ;;
@@ -1323,7 +1407,7 @@ service_action_menu_with_logs() {
     while true; do
         # Check if service is running
         local is_running=0
-        if (cd "$REPO_ROOT" && docker compose -f docker-compose.local.yml ps -q --status running "$services" 2>/dev/null | grep -q .); then
+        if (cd "$REPO_ROOT" && docker compose -f docker-compose.yml ps -q --status running "$services" 2>/dev/null | grep -q .); then
             is_running=1
         fi
         
@@ -1348,7 +1432,7 @@ service_action_menu_with_logs() {
             case "${action:-}" in
                 1)
                     echo ""
-                    (cd "$REPO_ROOT" && docker compose -f docker-compose.local.yml --env-file .env.local up -d $services)
+                    (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local up -d $services)
                     set_install_status "deployed"
                     pause
                     ;;
@@ -1372,12 +1456,12 @@ service_action_menu_with_logs() {
             case "${action:-}" in
                 1)
                     echo ""
-                    (cd "$REPO_ROOT" && docker compose -f docker-compose.local.yml --env-file .env.local restart $services)
+                    (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local restart $services)
                     pause
                     ;;
                 2)
                     echo ""
-                    (cd "$REPO_ROOT" && docker compose -f docker-compose.local.yml --env-file .env.local stop $services)
+                    (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local stop $services)
                     pause
                     ;;
                 3)
@@ -1403,9 +1487,9 @@ view_service_logs() {
     
     # Use less for scrollable output, or tail if less isn't available
     if command -v less &>/dev/null; then
-        (cd "$REPO_ROOT" && docker compose -f docker-compose.local.yml logs --tail=100 "$service" 2>&1) | less -R +G
+        (cd "$REPO_ROOT" && docker compose -f docker-compose.yml logs --tail=100 "$service" 2>&1) | less -R +G
     else
-        (cd "$REPO_ROOT" && docker compose -f docker-compose.local.yml logs --tail=50 "$service" 2>&1)
+        (cd "$REPO_ROOT" && docker compose -f docker-compose.yml logs --tail=50 "$service" 2>&1)
         pause
     fi
 }
@@ -1415,6 +1499,9 @@ view_service_logs() {
 _run_encryption_migration() {
     local env="$1"
     local backend="$2"
+    local container_prefix
+    
+    container_prefix=$(get_container_prefix)
     
     echo ""
     header "Encrypt Existing Files" 70
@@ -1434,7 +1521,7 @@ _run_encryption_migration() {
     local ingest_host ctid
     
     if [[ "$backend" == "docker" ]] || [[ "$env" == "development" ]] || [[ "$env" == "local" ]] || [[ "$env" == "demo" ]]; then
-        ingest_host="docker:local-ingest-api"
+        ingest_host="docker:${container_prefix}-ingest-api"
         info "Using Docker environment"
     elif [[ "$env" == "staging" ]] || [[ "$env" == "test" ]]; then
         ingest_host="10.96.201.206"
@@ -1537,6 +1624,10 @@ _run_encryption_migration() {
 _run_reset_insights() {
     local env="$1"
     local backend="$2"
+    local container_prefix agent_container
+    
+    container_prefix=$(get_container_prefix)
+    agent_container="${container_prefix}-agent-api"
     
     echo ""
     header "Reset Chat Insights Collection" 70
@@ -1550,7 +1641,7 @@ _run_reset_insights() {
     local milvus_host
     
     if [[ "$backend" == "docker" ]] || [[ "$env" == "development" ]] || [[ "$env" == "local" ]] || [[ "$env" == "demo" ]]; then
-        milvus_host="docker:local-milvus"
+        milvus_host="docker:${container_prefix}-milvus"
         info "Using Docker environment"
     elif [[ "$env" == "staging" ]] || [[ "$env" == "test" ]]; then
         milvus_host="10.96.201.204"
@@ -1567,12 +1658,9 @@ _run_reset_insights() {
         
         if [[ "$milvus_host" == docker:* ]]; then
             # Docker environment - run Python in agent-api container
-            local container_name="${milvus_host#docker:}"
-            container_name="${container_name/milvus/agent-api}"
+            info "Running in container: $agent_container"
             
-            info "Running in container: $container_name"
-            
-            docker exec "$container_name" python -c "
+            docker exec "$agent_container" python -c "
 from pymilvus import connections, utility
 
 # Connect to Milvus
@@ -1601,7 +1689,7 @@ connections.disconnect('default')
             
             echo ""
             success "Collections dropped. Restarting agent-api..."
-            docker restart local-agent-api || true
+            docker restart "$agent_container" || true
             sleep 3
             success "Done! Collections will be recreated with new schema."
         else
@@ -1694,14 +1782,16 @@ handle_databases() {
     # Determine how to run the migration script
     # We run it inside the authz-api container which has asyncpg installed
     local run_migration_cmd=""
-    local pg_password
+    local pg_password container_prefix authz_container
     pg_password=$(grep -E "^POSTGRES_PASSWORD=" "${REPO_ROOT}/.env.local" 2>/dev/null | cut -d'=' -f2 || echo "devpassword")
+    container_prefix=$(get_container_prefix)
+    authz_container="${container_prefix}-authz-api"
     
     # Check if authz-api container is running
-    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "local-authz-api"; then
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "${authz_container}"; then
         # Run inside Docker container
-        run_migration_cmd="docker exec -e POSTGRES_HOST=postgres -e POSTGRES_PORT=5432 -e POSTGRES_PASSWORD=${pg_password} -e SOURCE_PASSWORD=${pg_password} local-authz-api python"
-        info "Running migration inside Docker container (authz-api)..."
+        run_migration_cmd="docker exec -e POSTGRES_HOST=postgres -e POSTGRES_PORT=5432 -e POSTGRES_PASSWORD=${pg_password} -e SOURCE_PASSWORD=${pg_password} ${authz_container} python"
+        info "Running migration inside Docker container (${authz_container})..."
     else
         # Try running locally
         if ! command -v python3 &>/dev/null; then
@@ -1722,6 +1812,11 @@ handle_databases() {
         export SOURCE_PASSWORD="${pg_password:-devpassword}"
     fi
     
+    # Get current embedding model for display
+    local current_model current_dim
+    current_model=$(get_current_embedding_model)
+    current_dim=$(get_embedding_dimension "$current_model")
+    
     echo ""
     menu "Database Options" \
         "Check Migration Status (dry run)" \
@@ -1730,6 +1825,7 @@ handle_databases() {
         "Migrate Ingest Service (busibox -> files)" \
         "Migrate All Services" \
         "Cleanup Source (remove migrated tables from busibox)" \
+        "Change Embedding Model [current: ${current_model##*/} (${current_dim}d)]" \
         "Check Embedding Model Migration" \
         "Migrate Embeddings (Milvus documents)" \
         "Reset Chat Insights Collection" \
@@ -1738,18 +1834,18 @@ handle_databases() {
         "Back to Main Menu"
     
     echo ""
-    read -p "$(echo -e "${BOLD}Select option [1-12]:${NC} ")" migration_choice
+    read -p "$(echo -e "${BOLD}Select option [1-13]:${NC} ")" migration_choice
     
     # For Docker execution, we need to copy the script into the container or cat it
     local docker_script_path="/tmp/migrate_db.py"
     if [[ "$run_migration_cmd" == docker* ]]; then
         # Copy migration script to container
-        docker cp "$migration_script" local-authz-api:"$docker_script_path" 2>/dev/null || {
+        docker cp "$migration_script" "${authz_container}:${docker_script_path}" 2>/dev/null || {
             error "Failed to copy migration script to container"
             pause
             return 1
         }
-        run_migration_cmd="docker exec -e POSTGRES_HOST=postgres -e POSTGRES_PORT=5432 -e POSTGRES_PASSWORD=${pg_password} -e SOURCE_PASSWORD=${pg_password} local-authz-api python $docker_script_path"
+        run_migration_cmd="docker exec -e POSTGRES_HOST=postgres -e POSTGRES_PORT=5432 -e POSTGRES_PASSWORD=${pg_password} -e SOURCE_PASSWORD=${pg_password} ${authz_container} python $docker_script_path"
     else
         run_migration_cmd="python3 $migration_script"
     fi
@@ -1815,6 +1911,270 @@ handle_databases() {
             pause
             ;;
         7)
+            # Change Embedding Model
+            echo ""
+            header "Change Embedding Model" 70
+            echo ""
+            info "Current model: ${current_model} (${current_dim} dimensions)"
+            echo ""
+            echo "Available models:"
+            echo ""
+            echo "  1) bge-small-en-v1.5  - 384 dimensions,  ~67 MB  (~150 MB RAM)"
+            echo "     Best for: Local dev on memory-constrained systems (Apple Silicon + MLX)"
+            echo ""
+            echo "  2) bge-base-en-v1.5   - 768 dimensions,  ~210 MB (~500 MB RAM)"
+            echo "     Best for: Balance of quality and memory usage"
+            echo ""
+            echo "  3) bge-large-en-v1.5  - 1024 dimensions, ~1.2 GB (~3 GB RAM)"
+            echo "     Best for: Production, highest quality semantic search"
+            echo ""
+            echo "  b) Back (no change)"
+            echo ""
+            
+            read -p "$(echo -e "${BOLD}Select model [1-3, b]:${NC} ")" model_choice
+            
+            local new_model new_dim
+            case "$model_choice" in
+                1)
+                    new_model="BAAI/bge-small-en-v1.5"
+                    new_dim="384"
+                    ;;
+                2)
+                    new_model="BAAI/bge-base-en-v1.5"
+                    new_dim="768"
+                    ;;
+                3)
+                    new_model="BAAI/bge-large-en-v1.5"
+                    new_dim="1024"
+                    ;;
+                b|B|"")
+                    info "No changes made."
+                    pause
+                    return 0
+                    ;;
+                *)
+                    error "Invalid selection."
+                    pause
+                    return 0
+                    ;;
+            esac
+            
+            if [[ "$new_model" == "$current_model" ]]; then
+                info "Model is already set to ${new_model}. No changes needed."
+                pause
+                return 0
+            fi
+            
+            echo ""
+            warn "Changing embedding model from ${current_model##*/} to ${new_model##*/}"
+            warn ""
+            warn "This will:"
+            echo "  1. Update FASTEMBED_MODEL and EMBEDDING_DIMENSION in .env.local"
+            echo "  2. Restart the embedding-api container (to load new model)"
+            echo "  3. Drop and recreate Milvus 'documents' collection (new dimension)"
+            echo "  4. Queue all documents for re-embedding"
+            echo ""
+            warn "All existing embeddings will be regenerated!"
+            echo ""
+            
+            if confirm "Proceed with embedding model change?"; then
+                echo ""
+                
+                # Step 1: Update .env.local
+                info "Step 1/4: Updating .env.local..."
+                local env_file="${REPO_ROOT}/.env.local"
+                
+                # Update or add FASTEMBED_MODEL
+                if grep -q "^FASTEMBED_MODEL=" "$env_file" 2>/dev/null; then
+                    sed -i.bak "s|^FASTEMBED_MODEL=.*|FASTEMBED_MODEL=${new_model}|" "$env_file"
+                else
+                    echo "FASTEMBED_MODEL=${new_model}" >> "$env_file"
+                fi
+                
+                # Update or add EMBEDDING_DIMENSION
+                if grep -q "^EMBEDDING_DIMENSION=" "$env_file" 2>/dev/null; then
+                    sed -i.bak "s|^EMBEDDING_DIMENSION=.*|EMBEDDING_DIMENSION=${new_dim}|" "$env_file"
+                else
+                    echo "EMBEDDING_DIMENSION=${new_dim}" >> "$env_file"
+                fi
+                
+                rm -f "${env_file}.bak" 2>/dev/null
+                success "Updated .env.local"
+                
+                # Step 2: Restart embedding-api
+                info "Step 2/4: Restarting embedding-api (this may take a minute to download the model)..."
+                local ingest_container="${container_prefix}-ingest-api"
+                local embedding_container="${container_prefix}-embedding-api"
+                local milvus_container="${container_prefix}-milvus"
+                
+                (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local up -d --force-recreate embedding-api) || {
+                    error "Failed to restart embedding-api"
+                    pause
+                    return 1
+                }
+                
+                # Wait for embedding-api to be healthy
+                info "Waiting for embedding-api to load model and become healthy..."
+                local retries=0
+                while [ $retries -lt 60 ]; do
+                    if docker exec "${embedding_container}" curl -sf http://localhost:8005/health 2>/dev/null | grep -q '"model_loaded":true'; then
+                        success "Embedding API is healthy with new model!"
+                        break
+                    fi
+                    sleep 3
+                    ((retries++))
+                    echo -ne "\r  Loading model... ${retries}/60 (up to 3 minutes)"
+                done
+                echo ""
+                
+                if [ $retries -eq 60 ]; then
+                    error "Embedding API failed to become healthy after 3 minutes"
+                    error "Check logs: docker logs ${embedding_container}"
+                    pause
+                    return 1
+                fi
+                
+                # Step 3: Reset Milvus documents collection
+                info "Step 3/4: Resetting Milvus 'documents' collection with new dimension..."
+                
+                # Stop milvus, delete data, restart
+                (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local stop milvus) || {
+                    error "Failed to stop Milvus"
+                    pause
+                    return 1
+                }
+                
+                (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local rm -f milvus) || true
+                docker volume rm busibox_milvus_data 2>/dev/null || true
+                
+                (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local up -d milvus) || {
+                    error "Failed to start Milvus"
+                    pause
+                    return 1
+                }
+                
+                # Wait for Milvus to be ready
+                info "Waiting for Milvus to be ready..."
+                retries=0
+                while [ $retries -lt 30 ]; do
+                    if docker exec "${milvus_container}" curl -sf http://localhost:9091/healthz >/dev/null 2>&1; then
+                        success "Milvus is healthy!"
+                        break
+                    fi
+                    sleep 2
+                    ((retries++))
+                    echo -ne "\r  Waiting... ${retries}/30"
+                done
+                echo ""
+                
+                if [ $retries -eq 30 ]; then
+                    error "Milvus failed to become healthy"
+                    pause
+                    return 1
+                fi
+                
+                # Run milvus-init to create collections with new dimension
+                (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local run --rm milvus-init) || {
+                    error "Failed to create Milvus schema"
+                    pause
+                    return 1
+                }
+                
+                # Step 4: Queue documents for re-embedding
+                info "Step 4/4: Queuing all documents for re-embedding..."
+                
+                # Restart services that depend on Milvus (they need to reconnect)
+                (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local restart ingest-api search-api ingest-worker) || true
+                
+                # Wait for ingest-api to be healthy
+                sleep 5
+                
+                docker exec "${ingest_container}" python -c "
+import asyncio
+import redis.asyncio as redis_async
+import asyncpg
+import os
+
+async def requeue_all():
+    conn = await asyncpg.connect(
+        host=os.environ.get('POSTGRES_HOST', 'postgres'),
+        port=int(os.environ.get('POSTGRES_PORT', 5432)),
+        user=os.environ.get('POSTGRES_USER', 'busibox_user'),
+        password=os.environ.get('POSTGRES_PASSWORD', 'devpassword'),
+        database=os.environ.get('POSTGRES_DB', 'files'),
+    )
+    
+    files = await conn.fetch('''
+        SELECT f.file_id, f.user_id, f.storage_path, f.original_filename, f.mime_type
+        FROM ingestion_files f
+        JOIN ingestion_status s ON f.file_id = s.file_id
+        WHERE s.stage = 'completed'
+    ''')
+    
+    print(f'Found {len(files)} documents to re-embed')
+    
+    if len(files) == 0:
+        print('No documents to process')
+        await conn.close()
+        return
+    
+    redis_client = redis_async.Redis(
+        host=os.environ.get('REDIS_HOST', 'redis'),
+        port=int(os.environ.get('REDIS_PORT', 6379)),
+        decode_responses=True,
+    )
+    
+    stream_name = os.environ.get('REDIS_STREAM', 'jobs:ingestion')
+    
+    for file_row in files:
+        file_id = str(file_row['file_id'])
+        user_id = str(file_row['user_id'])
+        
+        await conn.execute('''
+            UPDATE ingestion_status
+            SET stage = 'queued', progress = 0, updated_at = NOW()
+            WHERE file_id = \$1
+        ''', file_row['file_id'])
+        
+        await conn.execute('''
+            UPDATE ingestion_files
+            SET vector_count = 0, updated_at = NOW()
+            WHERE file_id = \$1
+        ''', file_row['file_id'])
+        
+        job_data = {
+            'job_id': file_id,
+            'file_id': file_id,
+            'user_id': user_id,
+            'storage_path': file_row['storage_path'],
+            'original_filename': file_row['original_filename'],
+            'mime_type': file_row['mime_type'],
+            'reprocess': 'true',
+            'start_stage': 'embedding',
+        }
+        
+        await redis_client.xadd(stream_name, job_data)
+        print(f'Queued: {file_row[\"original_filename\"]}')
+    
+    await redis_client.aclose()
+    await conn.close()
+    print(f'Successfully queued {len(files)} documents for re-embedding')
+
+asyncio.run(requeue_all())
+" || {
+                    warn "Failed to queue documents (this is OK if you have no documents yet)"
+                }
+                
+                echo ""
+                success "Embedding model changed successfully!"
+                echo ""
+                info "New model: ${new_model} (${new_dim} dimensions)"
+                info "Documents are being re-embedded in the background."
+                info "Check progress: docker logs -f ${container_prefix}-ingest-worker"
+            fi
+            pause
+            ;;
+        8)
             # Check embedding model migration
             echo ""
             header "Check Embedding Model Migration" 70
@@ -1830,9 +2190,9 @@ handle_databases() {
             deploy_backend="${backend:-docker}"
             
             if [[ "$deploy_backend" == "docker" ]] || [[ "$env" == "development" ]] || [[ "$env" == "local" ]] || [[ "$env" == "demo" ]]; then
-                # Docker environment - use container names with local- prefix
-                milvus_host="docker:local-milvus"
-                ingest_host="docker:local-ingest-api"
+                # Docker environment - use container names with container prefix
+                milvus_host="docker:${container_prefix}-milvus"
+                ingest_host="docker:${container_prefix}-ingest-api"
                 info "Using Docker environment"
             elif [[ "$env" == "staging" ]] || [[ "$env" == "test" ]]; then
                 milvus_host="10.96.201.204"
@@ -1848,7 +2208,7 @@ handle_databases() {
             MILVUS_IP="$milvus_host" INGEST_IP="$ingest_host" bash "${REPO_ROOT}/provision/ansible/scripts/check-embedding-migration.sh" --check || true
             pause
             ;;
-        8)
+        9)
             # Migrate embeddings (Milvus)
             echo ""
             header "Migrate Embeddings (Milvus)" 70
@@ -1863,9 +2223,9 @@ handle_databases() {
             deploy_backend="${backend:-docker}"
             
             if [[ "$deploy_backend" == "docker" ]] || [[ "$env" == "development" ]] || [[ "$env" == "local" ]] || [[ "$env" == "demo" ]]; then
-                # Docker environment - use container names with local- prefix
-                milvus_host="docker:local-milvus"
-                ingest_host="docker:local-ingest-api"
+                # Docker environment - use container names with container prefix
+                milvus_host="docker:${container_prefix}-milvus"
+                ingest_host="docker:${container_prefix}-ingest-api"
                 info "Using Docker environment"
             elif [[ "$env" == "staging" ]] || [[ "$env" == "test" ]]; then
                 milvus_host="10.96.201.204"
@@ -1884,7 +2244,7 @@ handle_databases() {
             fi
             pause
             ;;
-        9)
+        10)
             # Reset Chat Insights Collection
             echo ""
             header "Reset Chat Insights Collection" 70
@@ -1895,12 +2255,13 @@ handle_databases() {
             echo ""
             
             # Determine environment and backend
-            local milvus_host deploy_backend
+            local milvus_host deploy_backend agent_container
             deploy_backend="${backend:-docker}"
+            agent_container="${container_prefix}-agent-api"
             
             if [[ "$deploy_backend" == "docker" ]] || [[ "$env" == "development" ]] || [[ "$env" == "local" ]] || [[ "$env" == "demo" ]]; then
                 # Docker environment
-                milvus_host="docker:local-milvus"
+                milvus_host="docker:${container_prefix}-milvus"
                 info "Using Docker environment"
             elif [[ "$env" == "staging" ]] || [[ "$env" == "test" ]]; then
                 milvus_host="10.96.201.204"
@@ -1917,12 +2278,9 @@ handle_databases() {
                 
                 if [[ "$milvus_host" == docker:* ]]; then
                     # Docker environment - run Python in agent-api container
-                    local container_name="${milvus_host#docker:}"
-                    container_name="${container_name/milvus/agent-api}"
+                    info "Running in container: $agent_container"
                     
-                    info "Running in container: $container_name"
-                    
-                    docker exec "$container_name" python -c "
+                    docker exec "$agent_container" python -c "
 from pymilvus import connections, utility
 
 # Connect to Milvus
@@ -1952,7 +2310,7 @@ connections.disconnect('default')
                     
                     echo ""
                     success "Collections dropped. Restarting agent-api..."
-                    docker restart local-agent-api || true
+                    docker restart "$agent_container" || true
                     sleep 3
                     success "Done! Collections will be recreated with new schema."
                 else
@@ -1989,7 +2347,7 @@ connections.disconnect('default')
             fi
             pause
             ;;
-        10)
+        11)
             # Rebuild Milvus
             echo ""
             header "Rebuild Milvus" 70
@@ -2010,12 +2368,14 @@ connections.disconnect('default')
             echo ""
             
             # Determine environment and backend
-            local milvus_host ingest_host deploy_backend
+            local milvus_host ingest_host deploy_backend milvus_container ingest_container
             deploy_backend="${backend:-docker}"
+            milvus_container="${container_prefix}-milvus"
+            ingest_container="${container_prefix}-ingest-api"
             
             if [[ "$deploy_backend" == "docker" ]] || [[ "$env" == "development" ]] || [[ "$env" == "local" ]] || [[ "$env" == "demo" ]]; then
-                milvus_host="docker:local-milvus"
-                ingest_host="docker:local-ingest-api"
+                milvus_host="docker:${milvus_container}"
+                ingest_host="docker:${ingest_container}"
                 info "Using Docker environment"
             elif [[ "$env" == "staging" ]] || [[ "$env" == "test" ]]; then
                 milvus_host="10.96.201.204"
@@ -2039,19 +2399,19 @@ connections.disconnect('default')
                         # etcd and milvus-minio store metadata, not vectors - leave them alone
                         
                         info "Step 1/5: Stopping Milvus..."
-                        (cd "$REPO_ROOT" && docker compose -f docker-compose.local.yml --env-file .env.local stop milvus) || {
+                        (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local stop milvus) || {
                             error "Failed to stop Milvus"
                             pause
                             return 1
                         }
                         
                         info "Step 2/5: Removing Milvus container and data volume..."
-                        (cd "$REPO_ROOT" && docker compose -f docker-compose.local.yml --env-file .env.local rm -f milvus) || true
+                        (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local rm -f milvus) || true
                         docker volume rm busibox_milvus_data 2>/dev/null || true
                         
                         info "Step 3/5: Starting fresh Milvus..."
                         # etcd and milvus-minio should already be running; just start milvus
-                        (cd "$REPO_ROOT" && docker compose -f docker-compose.local.yml --env-file .env.local up -d milvus) || {
+                        (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local up -d milvus) || {
                             error "Failed to start Milvus"
                             pause
                             return 1
@@ -2061,7 +2421,7 @@ connections.disconnect('default')
                         # Wait for Milvus health check to pass
                         local retries=0
                         while [ $retries -lt 30 ]; do
-                            if docker exec local-milvus curl -sf http://localhost:9091/healthz >/dev/null 2>&1; then
+                            if docker exec "${milvus_container}" curl -sf http://localhost:9091/healthz >/dev/null 2>&1; then
                                 success "Milvus is healthy!"
                                 break
                             fi
@@ -2079,7 +2439,7 @@ connections.disconnect('default')
                         
                         info "Step 4/5: Creating Milvus schema (collections)..."
                         # Run the milvus-init container to create schema
-                        (cd "$REPO_ROOT" && docker compose -f docker-compose.local.yml --env-file .env.local run --rm milvus-init) || {
+                        (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local run --rm milvus-init) || {
                             error "Failed to create Milvus schema"
                             pause
                             return 1
@@ -2087,7 +2447,7 @@ connections.disconnect('default')
                         
                         info "Step 5/5: Queuing all documents for re-embedding..."
                         # Call the reprocess-all endpoint
-                        docker exec local-ingest-api python -c "
+                        docker exec "${ingest_container}" python -c "
 import asyncio
 import redis.asyncio as redis_async
 import asyncpg
@@ -2178,13 +2538,13 @@ asyncio.run(requeue_all())
                         
                         # Restart ingest-worker to pick up the queued jobs
                         info "Restarting ingest-worker to process queue..."
-                        (cd "$REPO_ROOT" && docker compose -f docker-compose.local.yml --env-file .env.local restart ingest-worker) || true
+                        (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local restart ingest-worker) || true
                         
                         success "Milvus rebuild complete!"
                         echo ""
                         info "Documents are now being re-embedded in the background."
                         info "Check ingest-worker logs for progress:"
-                        echo "  docker logs -f local-ingest-worker"
+                        echo "  docker logs -f ${container_prefix}-ingest-worker"
                         
                     else
                         # Proxmox environment
@@ -2200,12 +2560,12 @@ asyncio.run(requeue_all())
             fi
             pause
             ;;
-        11)
+        12)
             # Encrypt existing files in MinIO - use the helper function
             _run_encryption_migration "$env" "$backend"
             pause
             ;;
-        12)
+        13|b|B|"")
             return 0
             ;;
         *)

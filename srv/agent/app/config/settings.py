@@ -87,7 +87,7 @@ class Settings(BaseSettings):
     )
 
     # Database configuration
-    # Default credentials match docker-compose.local.yml (busibox_user:devpassword)
+    # Default credentials match docker-compose.yml (busibox_user:devpassword)
     database_url: str = Field(
         "postgresql+asyncpg://busibox_user:devpassword@localhost:5432/agent_server",
         description="SQLAlchemy connection URL",

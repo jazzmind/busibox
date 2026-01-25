@@ -1,0 +1,9 @@
+---
+# Internal DNS Role Defaults
+# These are fallback values - actual values come from group_vars
+
+# Redis host (embedded in ingest-lxc)
+redis_host: "{{ ingest_ip }}"
+
+# Search API host (embedded in milvus-lxc)
+search_api_ip: "{{ milvus_ip }}"

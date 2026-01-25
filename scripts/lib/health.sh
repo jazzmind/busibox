@@ -146,10 +146,10 @@ check_configuration() {
             fi
             
             # Check docker-compose file
-            if [[ -f "${REPO_ROOT}/docker-compose.local.yml" ]]; then
-                CONFIG_FOUND+=("docker-compose.local.yml")
+            if [[ -f "${REPO_ROOT}/docker-compose.yml" ]]; then
+                CONFIG_FOUND+=("docker-compose.yml")
             else
-                CONFIG_ISSUES+=("docker-compose.local.yml missing")
+                CONFIG_ISSUES+=("docker-compose.yml missing")
                 CONFIG_OK=0
             fi
             
@@ -507,12 +507,12 @@ run_quick_health_check() {
             DOCKER_DAEMON_RUNNING=1
             
             # Check if busibox containers exist (created but maybe not running)
-            local existing=$(docker compose -f "${REPO_ROOT}/docker-compose.local.yml" ps -q 2>/dev/null | wc -l | tr -d ' ')
+            local existing=$(docker compose -f "${REPO_ROOT}/docker-compose.yml" ps -q 2>/dev/null | wc -l | tr -d ' ')
             if [[ "$existing" -gt 0 ]]; then
                 DOCKER_CONTAINERS_EXIST=1
                 
                 # Check if any are running
-                local running=$(docker compose -f "${REPO_ROOT}/docker-compose.local.yml" ps -q --status running 2>/dev/null | wc -l | tr -d ' ')
+                local running=$(docker compose -f "${REPO_ROOT}/docker-compose.yml" ps -q --status running 2>/dev/null | wc -l | tr -d ' ')
                 if [[ "$running" -gt 0 ]]; then
                     DOCKER_CONTAINERS_RUNNING=1
                     SERVICES_HEALTHY+=("docker:$running containers running")

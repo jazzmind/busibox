@@ -2,6 +2,9 @@
 [ ] get app deployer to work with sample
 [ ] update project-analysis to match app-template & deploy
 [ ] same for estimator
+[ ] improve project-analysis
+    [ ] needs to work with local llm
+    [ ] report view
 
 ## Active Tasks
 

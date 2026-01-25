@@ -32,6 +32,28 @@ def validate_uuid(value: str, field_name: str = "id") -> uuid.UUID:
         raise ValueError(f"Invalid UUID format for {field_name}: {value}") from e
 
 
+def safe_uuid(value: str | None) -> uuid.UUID | None:
+    """
+    Safely convert a string to UUID, returning None if invalid.
+    
+    Use this for optional fields where invalid UUIDs should be ignored
+    rather than causing errors (e.g., resource_id in audit logs that
+    might contain non-UUID identifiers).
+    
+    Args:
+        value: String to convert to UUID, or None
+        
+    Returns:
+        UUID object if valid, None otherwise
+    """
+    if not value:
+        return None
+    try:
+        return uuid.UUID(value)
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
 class PostgresService:
     """
     Authz PostgreSQL service with domain-specific operations.
@@ -93,10 +115,10 @@ class PostgresService:
                 INSERT INTO audit_logs (actor_id, action, resource_type, resource_id, details)
                 VALUES ($1, $2, $3, $4, $5::jsonb)
                 """,
-                uuid.UUID(actor_id),
+                safe_uuid(actor_id) or uuid.UUID(actor_id),  # actor_id should be valid UUID
                 action,
                 resource_type,
-                uuid.UUID(resource_id) if resource_id else None,
+                safe_uuid(resource_id),  # resource_id may not always be a UUID
                 json.dumps(details or {}),
             )
 
@@ -1973,11 +1995,11 @@ class PostgresService:
                 actor_uuid,
                 action,
                 resource_type,
-                uuid.UUID(resource_id) if resource_id else None,
+                safe_uuid(resource_id),  # resource_id may not always be a UUID
                 event_type,
-                uuid.UUID(target_user_id) if target_user_id else None,
-                uuid.UUID(target_role_id) if target_role_id else None,
-                uuid.UUID(target_app_id) if target_app_id else None,
+                safe_uuid(target_user_id),
+                safe_uuid(target_role_id),
+                safe_uuid(target_app_id),
                 ip_address,
                 user_agent,
                 success,

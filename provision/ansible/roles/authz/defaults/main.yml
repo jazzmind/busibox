@@ -31,7 +31,7 @@ authz_key_encryption_passphrase: "{{ secrets.jwt_secret | default(secrets.sso.jw
 # Bootstrap OAuth client for ai-portal
 authz_bootstrap_client_id: "ai-portal"
 authz_bootstrap_client_secret: "{{ secrets.jwt_secret | default(secrets.sso.jwt_secret | default('change-me')) }}"
-authz_bootstrap_allowed_audiences: "ingest-api,search-api,agent-api"
+authz_bootstrap_allowed_audiences: "ingest-api,search-api,agent-api,authz-api"
 authz_bootstrap_allowed_scopes: ""
 
 

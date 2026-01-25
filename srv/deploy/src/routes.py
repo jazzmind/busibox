@@ -143,14 +143,21 @@ async def execute_deployment(
         status.logs.append(f"[{datetime.utcnow().isoformat()}] Starting deployment...")
         await broadcast_status(deployment_id)
         
+        logger.info(f"Calling container_deploy_app for {manifest.name}")
+        
         # Collect logs from container executor
         deploy_logs = []
-        success = await container_deploy_app(
-            manifest,
-            deploy_config,
-            database_url,
-            deploy_logs
-        )
+        try:
+            success = await container_deploy_app(
+                manifest,
+                deploy_config,
+                database_url,
+                deploy_logs
+            )
+            logger.info(f"container_deploy_app returned: success={success}, logs={len(deploy_logs)}")
+        except Exception as e:
+            logger.error(f"container_deploy_app raised exception: {e}", exc_info=True)
+            raise
         
         # Add logs to status
         for log in deploy_logs:
@@ -163,30 +170,30 @@ async def execute_deployment(
         status.progress = 80
         await broadcast_status(deployment_id)
         
-        # Step 3: Configure nginx (only for non-Docker environments)
-        if not is_docker_environment():
-            status.status = 'configuring_nginx'
-            status.currentStep = 'Configuring nginx'
-            status.logs.append(f"[{datetime.utcnow().isoformat()}] Configuring nginx routing...")
-            await broadcast_status(deployment_id)
-            
-            # Get the user apps container IP
+        # Step 3: Configure nginx routing
+        status.status = 'configuring_nginx'
+        status.currentStep = 'Configuring nginx'
+        status.logs.append(f"[{datetime.utcnow().isoformat()}] Configuring nginx routing...")
+        await broadcast_status(deployment_id)
+        
+        configurator = NginxConfigurator()
+        
+        if is_docker_environment():
+            # Docker: use service name
+            nginx_success, nginx_msg = await configurator.configure_app(manifest, None)
+        else:
+            # LXC: use container IP
             if deploy_config.environment == 'staging':
                 container_ip = config.user_apps_container_ip_staging
             else:
                 container_ip = config.user_apps_container_ip
-            
-            configurator = NginxConfigurator()
             nginx_success, nginx_msg = await configurator.configure_app(manifest, container_ip)
-            
-            status.logs.append(f"[{datetime.utcnow().isoformat()}] {nginx_msg}")
-            await broadcast_status(deployment_id)
-            
-            if not nginx_success:
-                raise Exception(f"Nginx configuration failed: {nginx_msg}")
-        else:
-            status.logs.append(f"[{datetime.utcnow().isoformat()}] ℹ️ Docker environment - nginx config managed externally")
-            await broadcast_status(deployment_id)
+        
+        status.logs.append(f"[{datetime.utcnow().isoformat()}] {nginx_msg}")
+        await broadcast_status(deployment_id)
+        
+        if not nginx_success:
+            raise Exception(f"Nginx configuration failed: {nginx_msg}")
         
         # Step 4: Complete
         status.status = 'completed'

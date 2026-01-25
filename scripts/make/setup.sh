@@ -84,7 +84,7 @@ setup_docker() {
     echo ""
     if confirm "Step 4: Build Docker images now?"; then
         info "Building Docker images (this may take a few minutes)..."
-        (cd "$REPO_ROOT" && docker compose -f docker-compose.local.yml --env-file .env.local build)
+        (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local build)
         success "Docker images built successfully"
     else
         info "Skipping image build. Run 'make docker-build' when ready."
@@ -94,7 +94,7 @@ setup_docker() {
     echo ""
     if confirm "Step 5: Start Docker services now?"; then
         info "Starting Docker services..."
-        (cd "$REPO_ROOT" && docker compose -f docker-compose.local.yml --env-file .env.local up -d)
+        (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local up -d)
         success "Docker services started"
         echo ""
         info "Check status with: make docker-ps"

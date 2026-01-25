@@ -111,16 +111,29 @@ async def clone_or_update_repo(
     deploy_config: DeploymentConfig,
     logs: List[str]
 ) -> Tuple[bool, str]:
-    """Clone or update git repository. Skips if dev-apps path exists."""
+    """Clone or update git repository. Skips if dev mode or dev-apps path exists."""
     
     app_id = manifest.id
     
-    # Check for dev mode
+    # Check for explicit dev mode from deployment config
+    if deploy_config.devMode and deploy_config.localDevDir:
+        dev_path = f"/srv/dev-apps/{deploy_config.localDevDir}"
+        logs.append(f"📦 Dev mode: using local source at {dev_path}")
+        return True, dev_path
+    
+    # Also check for implicit dev mode (dev-apps directory exists for this app)
     if await check_dev_app_exists(app_id):
-        logs.append(f"📦 Dev mode: using local source at /srv/dev-apps/{app_id}")
+        logs.append(f"📦 Dev mode detected: using local source at /srv/dev-apps/{app_id}")
         return True, f"/srv/dev-apps/{app_id}"
     
+    # GitHub mode - clone or update repo
     app_path = f"/srv/apps/{app_id}"
+    
+    # Validate we have GitHub repo info
+    if not deploy_config.githubRepoOwner or not deploy_config.githubRepoName:
+        logs.append("❌ No GitHub repository configured and no local dev directory found")
+        return False, app_path
+    
     repo_url = f"https://github.com/{deploy_config.githubRepoOwner}/{deploy_config.githubRepoName}.git"
     
     # If GitHub token provided, use authenticated URL
@@ -170,9 +183,23 @@ async def install_dependencies(app_path: str, logs: List[str]) -> bool:
         logs.append("⚠️ No package.json found, skipping npm install")
         return True
     
-    command = f"""
+    # Check for package-lock.json to decide between npm ci and npm install
+    check_lock_cmd = f"test -f {app_path}/package-lock.json"
+    _, _, lock_exists = await execute_in_container(check_lock_cmd)
+    
+    if lock_exists == 0:
+        # Has package-lock.json, use npm ci for reproducible builds
+        logs.append("📦 Using npm ci (package-lock.json found)")
+        command = f"""
 cd {app_path} && \
 npm ci --legacy-peer-deps 2>&1
+"""
+    else:
+        # No package-lock.json, use npm install
+        logs.append("📦 Using npm install (no package-lock.json)")
+        command = f"""
+cd {app_path} && \
+npm install --legacy-peer-deps 2>&1
 """
     
     stdout, stderr, code = await execute_in_container(command, timeout=600)
@@ -268,15 +295,22 @@ async def create_systemd_service(
     manifest: BusiboxManifest,
     app_path: str,
     env_vars: dict,
-    logs: List[str]
+    logs: List[str],
+    dev_mode: bool = False
 ) -> bool:
     """Create systemd service file for the app"""
     logs.append("🔧 Creating systemd service...")
     
     app_id = manifest.id
     app_name = manifest.name
-    start_command = manifest.startCommand
     port = manifest.defaultPort
+    
+    # Use dev command for dev mode, otherwise use the manifest's start command
+    if dev_mode:
+        start_command = "npm run dev"
+        logs.append("📝 Using dev server: npm run dev")
+    else:
+        start_command = manifest.startCommand
     
     # Build environment section
     env_lines = [f'Environment="{k}={v}"' for k, v in env_vars.items()]
@@ -337,24 +371,66 @@ chmod 644 {service_path}
     return True
 
 
-async def start_app(app_id: str, logs: List[str]) -> bool:
-    """Start/restart app via systemd"""
+async def start_app(app_id: str, logs: List[str], app_path: str = None, start_command: str = None, env_vars: dict = None) -> bool:
+    """Start/restart app via systemd (LXC) or nohup (Docker)"""
     logs.append("🚀 Starting application...")
     
-    command = f"""
+    if is_docker_environment():
+        # Docker: Use nohup to run in background
+        if not app_path or not start_command:
+            logs.append("❌ app_path and start_command required for Docker deployment")
+            return False
+        
+        # Stop any existing process
+        stop_command = f"pkill -f 'node.*{app_id}' || true"
+        await execute_in_container(stop_command)
+        
+        # Build environment export statements
+        env_exports = "\n".join([f'export {k}="{v}"' for k, v in (env_vars or {}).items()])
+        
+        # Start new process in background with nohup
+        command = f"""
+cd {app_path}
+{env_exports}
+nohup {start_command} > /tmp/{app_id}.log 2>&1 &
+echo $! > /tmp/{app_id}.pid
+"""
+        
+        stdout, stderr, code = await execute_in_container(command, timeout=10)
+        
+        if code != 0:
+            logs.append(f"❌ Failed to start app: {stderr}")
+            return False
+        
+        # Give it a moment to start
+        await asyncio.sleep(2)
+        
+        # Check if process is running
+        check_cmd = f"ps aux | grep -v grep | grep -q 'node.*{app_id}' && echo 'running' || echo 'not running'"
+        stdout, _, _ = await execute_in_container(check_cmd)
+        
+        if 'running' in stdout:
+            logs.append(f"✅ Application started (PID file: /tmp/{app_id}.pid, log: /tmp/{app_id}.log)")
+            return True
+        else:
+            logs.append(f"⚠️ Application may not have started - check /tmp/{app_id}.log")
+            return False
+    else:
+        # LXC: Use systemd
+        command = f"""
 systemctl daemon-reload && \
 systemctl enable {app_id}.service && \
 systemctl restart {app_id}.service
 """
-    
-    stdout, stderr, code = await execute_in_container(command)
-    
-    if code != 0:
-        logs.append(f"❌ Failed to start service: {stderr}")
-        return False
-    
-    logs.append(f"✅ Application started (systemctl status {app_id})")
-    return True
+        
+        stdout, stderr, code = await execute_in_container(command)
+        
+        if code != 0:
+            logs.append(f"❌ Failed to start service: {stderr}")
+            return False
+        
+        logs.append(f"✅ Application started (systemctl status {app_id})")
+        return True
 
 
 async def stop_app(app_id: str, logs: List[str]) -> bool:
@@ -398,33 +474,44 @@ async def deploy_app(
     """
     Full deployment flow:
     1. Clone/update repo (or use dev-apps path)
-    2. Install dependencies
-    3. Build
+    2. Install dependencies (skip for dev mode)
+    3. Build (skip for dev mode)
     4. Run migrations
     5. Create/update systemd service
     6. Start app
     7. Health check
     """
     
+    is_dev_mode = deploy_config.devMode
+    
     # Check if Docker environment - log appropriate context
     if is_docker_environment():
         logs.append("📦 Docker/local environment detected")
-        logs.append(f"🎯 Deploying {manifest.name} to user-apps container")
+        if is_dev_mode:
+            logs.append(f"🔧 DEV MODE: {manifest.name} (using local source)")
+        else:
+            logs.append(f"🎯 Deploying {manifest.name} to user-apps container")
     else:
         logs.append(f"🎯 Deploying {manifest.name} to {deploy_config.environment}")
     
-    # Step 1: Clone/update repo
+    # Step 1: Clone/update repo (or get dev-apps path)
     success, app_path = await clone_or_update_repo(manifest, deploy_config, logs)
     if not success:
         return False
     
-    # Step 2: Install dependencies
-    if not await install_dependencies(app_path, logs):
-        return False
+    # Step 2: Install dependencies (skip for dev mode - local dev should have node_modules)
+    if is_dev_mode:
+        logs.append("⏭️ Skipping npm install (dev mode - use local node_modules)")
+    else:
+        if not await install_dependencies(app_path, logs):
+            return False
     
-    # Step 3: Build
-    if not await run_build(app_path, manifest.buildCommand, logs):
-        return False
+    # Step 3: Build (skip for dev mode - use local dev server)
+    if is_dev_mode:
+        logs.append("⏭️ Skipping build (dev mode - will run dev server)")
+    else:
+        if not await run_build(app_path, manifest.buildCommand, logs):
+            return False
     
     # Step 4: Migrations
     if not await run_migrations(app_path, manifest, database_url, logs):
@@ -433,6 +520,7 @@ async def deploy_app(
     # Build environment variables
     env_vars = {
         "NODE_ENV": "production" if deploy_config.environment == "production" else "development",
+        "PORT": str(manifest.defaultPort),
     }
     if database_url:
         env_vars["DATABASE_URL"] = database_url
@@ -440,12 +528,21 @@ async def deploy_app(
     # Add any additional secrets
     env_vars.update(deploy_config.secrets)
     
-    # Step 5: Create systemd service
-    if not await create_systemd_service(manifest, app_path, env_vars, logs):
-        return False
+    # Determine start command
+    if is_dev_mode:
+        start_command = "npm run dev"
+    else:
+        start_command = manifest.startCommand
+    
+    # Step 5: Create systemd service (only for LXC, not Docker)
+    if not is_docker_environment():
+        if not await create_systemd_service(manifest, app_path, env_vars, logs, dev_mode=is_dev_mode):
+            return False
+    else:
+        logs.append("⏭️ Skipping systemd service (Docker - will use nohup)")
     
     # Step 6: Start app
-    if not await start_app(manifest.id, logs):
+    if not await start_app(manifest.id, logs, app_path=app_path, start_command=start_command, env_vars=env_vars):
         return False
     
     # Step 7: Health check

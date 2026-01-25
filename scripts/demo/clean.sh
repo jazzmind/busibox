@@ -54,10 +54,10 @@ info "Stopping Docker services..."
 
 if [[ "$REMOVE_DATA" == true ]]; then
     warn "Removing all data volumes..."
-    docker compose -f docker-compose.local.yml --profile full --profile demo-vllm down -v --remove-orphans
+    docker compose -f docker-compose.yml --profile full --profile demo-vllm down -v --remove-orphans
     success "All services stopped and data removed"
 else
-    docker compose -f docker-compose.local.yml --profile full --profile demo-vllm down --remove-orphans
+    docker compose -f docker-compose.yml --profile full --profile demo-vllm down --remove-orphans
     success "All services stopped (data preserved)"
 fi
 

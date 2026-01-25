@@ -32,7 +32,7 @@ NC='\033[0m' # No Color
 # Get script directory and project root
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-COMPOSE_FILE="$PROJECT_ROOT/docker-compose.local.yml"
+COMPOSE_FILE="$PROJECT_ROOT/docker-compose.yml"
 ENV_FILE="$PROJECT_ROOT/.env.local"
 ENV_EXAMPLE="$PROJECT_ROOT/env.local.example"
 

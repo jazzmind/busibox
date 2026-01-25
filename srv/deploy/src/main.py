@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from .routes import router
+from .system_routes import router as system_router
 from .config import config
 
 # Configure logging
@@ -54,6 +55,7 @@ app.add_middleware(
 
 # Include routes
 app.include_router(router)
+app.include_router(system_router)
 
 
 @app.get("/health/live")

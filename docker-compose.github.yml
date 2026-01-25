@@ -1,15 +1,15 @@
 # =============================================================================
-# Busibox Production Mode - Next.js Applications
+# Busibox GitHub Mode - Next.js Applications
 # =============================================================================
 #
-# Production overlay for Next.js apps with:
+# GitHub overlay for Next.js apps with:
 #   - Apps cloned from GitHub at build time
 #   - Published @jazzmind/busibox-app from npm registry
 #   - Production builds with turbopack
 #
 # Usage:
-#   docker compose -f docker-compose.local.yml -f docker-compose.prod.yml up
-#   Or: make docker-up-prod
+#   docker compose -f docker-compose.yml -f docker-compose.github.yml up
+#   Or: make docker-up-github
 #
 # Configuration:
 #   Set these in .env.local to control which version to build:
@@ -17,23 +17,32 @@
 #     AI_PORTAL_GITHUB_REF=v1.2.3        # Release tag
 #     AGENT_MANAGER_GITHUB_REF=main      # Branch name
 #
+# Core Apps Architecture:
+#   - Single container runs both ai-portal (port 3000) and agent-manager (port 3001)
+#   - Mirrors Proxmox pattern where core-apps-lxc hosts multiple Next.js apps
+#   - Uses concurrently to manage both processes
+#
 # =============================================================================
 
 services:
-  # AI Portal - Main Frontend (Production Mode)
-  ai-portal:
+  # Core Apps - AI Portal + Agent Manager (GitHub Build Mode)
+  # Single container running both apps, matching Proxmox architecture
+  core-apps:
     build:
       context: .
-      dockerfile: provision/docker/ai-portal.Dockerfile.prod
+      dockerfile: provision/docker/core-apps.Dockerfile.github
       args:
         GITHUB_AUTH_TOKEN: ${GITHUB_AUTH_TOKEN:-}
-        GITHUB_REF: ${AI_PORTAL_GITHUB_REF:-main}
-    container_name: local-ai-portal
-    hostname: ai-portal
+        AI_PORTAL_GITHUB_REF: ${AI_PORTAL_GITHUB_REF:-main}
+        AGENT_MANAGER_GITHUB_REF: ${AGENT_MANAGER_GITHUB_REF:-main}
+    container_name: ${CONTAINER_PREFIX:-local}-core-apps
+    hostname: core-apps
     restart: unless-stopped
     environment:
       NODE_ENV: production
-      PORT: 3000
+      # =========================================================================
+      # AI Portal Environment (PORT 3000)
+      # =========================================================================
       # Database
       DATABASE_URL: postgresql://${POSTGRES_USER:-busibox_user}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/ai_portal
       # Auth - use https://localhost for SSL
@@ -47,7 +56,6 @@ services:
       ALLOWED_EMAIL_DOMAINS: ${ALLOWED_EMAIL_DOMAINS:-*}
       # AuthZ - use internal container URLs
       AUTHZ_BASE_URL: http://authz-api:8010
-      AUTHZ_ADMIN_TOKEN: ${AUTHZ_ADMIN_TOKEN:-local-admin-token}
       # LiteLLM
       LITELLM_BASE_URL: http://litellm:4000/v1
       LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-local-dev-key}
@@ -57,79 +65,52 @@ services:
       # Service URLs (for SSO redirect via nginx proxy)
       NEXT_PUBLIC_AGENT_MANAGER_URL: https://localhost/agents
       NEXT_PUBLIC_APP_URL: https://localhost/portal
-      # Base path for nginx subpath routing
+      # Base paths for nginx subpath routing
       NEXT_PUBLIC_BASE_PATH: /portal
+      AI_PORTAL_BASE_PATH: /portal
+      AGENT_MANAGER_BASE_PATH: /agents
       # Backend service URLs (for server-side API calls)
-      INGEST_API_HOST: ingest-api
-      INGEST_API_PORT: "8002"
-      SEARCH_API_HOST: search-api
-      SEARCH_API_PORT: "8003"
-      AGENT_API_HOST: agent-api
-      AGENT_API_PORT: "8000"
+      INGEST_API_URL: http://ingest-api:8002
+      SEARCH_API_URL: http://search-api:8003
+      AGENT_API_URL: http://agent-api:8000
       # Docs API - internal container URL for server-side fetching
       DOCS_API_URL: http://docs-api:8004
       # Deployment Service - internal container URL for server-side deployment
       DEPLOYMENT_SERVICE_URL: http://deploy-api:8011/api/v1/deployment
-    ports:
-      - "3000:3000"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      authz-api:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
-      interval: 30s
-      timeout: 10s
-      start_period: 60s
-      retries: 3
-    networks:
-      - busibox-net
-
-  # Agent Manager - Agent Management UI (Production Mode)
-  agent-manager:
-    build:
-      context: .
-      dockerfile: provision/docker/agent-manager.Dockerfile.prod
-      args:
-        GITHUB_AUTH_TOKEN: ${GITHUB_AUTH_TOKEN:-}
-        GITHUB_REF: ${AGENT_MANAGER_GITHUB_REF:-main}
-    container_name: local-agent-manager
-    hostname: agent-manager
-    restart: unless-stopped
-    environment:
-      NODE_ENV: production
-      PORT: 3001
+      # =========================================================================
+      # Agent Manager Environment (PORT 3001)
+      # =========================================================================
       # API URLs - use nginx proxy paths for CORS compliance
       NEXT_PUBLIC_AGENT_API_URL: https://localhost/api/agent
       NEXT_PUBLIC_INGEST_API_URL: https://localhost/api/ingest
       NEXT_PUBLIC_SEARCH_API_URL: https://localhost/api/search
       # AI Portal (SSO) via nginx
       NEXT_PUBLIC_AI_PORTAL_URL: https://localhost/portal
-      # AuthZ - internal container URL
-      AUTHZ_BASE_URL: http://authz-api:8010
-      # Base path for nginx subpath routing
-      NEXT_PUBLIC_BASE_PATH: /agents
-      NEXT_PUBLIC_APP_URL: https://localhost/agents
-      # Backend service URLs (for server-side API calls)
-      AGENT_API_HOST: agent-api
-      AGENT_API_PORT: "8000"
     ports:
+      - "3000:3000"
       - "3001:3001"
     depends_on:
+      postgres:
+        condition: service_healthy
       authz-api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/"]
+      # Check both apps are responding
+      test: ["CMD", "sh", "-c", "curl -f http://localhost:3000/api/health && curl -f http://localhost:3001/"]
       interval: 30s
       timeout: 10s
       start_period: 60s
       retries: 3
     networks:
-      - busibox-net
+      busibox-net:
+        aliases:
+          - core-apps
+          - ai-portal      # Backward compatibility alias
+          - agent-manager  # Backward compatibility alias
 
 # Use the same network as the base compose
+# Note: Don't use external:true - let docker compose manage the network lifecycle
 networks:
   busibox-net:
-    external: true
-    name: busibox-local
+    driver: bridge
+    name: ${CONTAINER_PREFIX:-local}-busibox-net

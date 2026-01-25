@@ -7,14 +7,15 @@
 #
 # MODES:
 #   DEV MODE (default) - For active development:
-#     docker compose -f docker-compose.local.yml -f docker-compose.dev.yml up
-#     - Next.js apps volume-mounted from local filesystem
+#     docker compose -f docker-compose.yml -f docker-compose.local-dev.yml up
+#     - Core apps (ai-portal + agent-manager) in single container
+#     - Volume-mounted source for live editing
 #     - busibox-app npm-linked for live editing
 #     - Turbopack hot-reload
 #
-#   PROD MODE - For testing production behavior:
-#     docker compose -f docker-compose.local.yml -f docker-compose.prod.yml up
-#     - Next.js apps cloned from GitHub at build time
+#   GITHUB MODE - For testing production behavior:
+#     docker compose -f docker-compose.yml -f docker-compose.github.yml up
+#     - Core apps cloned from GitHub at build time
 #     - Uses published @jazzmind/busibox-app from npm
 #     - Production builds
 #
@@ -54,7 +55,7 @@ services:
   # PostgreSQL - Shared Database
   postgres:
     image: postgres:16-alpine
-    container_name: local-postgres
+    container_name: ${CONTAINER_PREFIX:-dev}-postgres
     hostname: postgres
     labels:
       - "config_version=${GIT_COMMIT:-unknown}"
@@ -73,12 +74,15 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - busibox-net
+      busibox-net:
+        aliases:
+          - postgres
+          - pg
 
   # Redis - Job Queue and Caching
   redis:
     image: redis:7-alpine
-    container_name: local-redis
+    container_name: ${CONTAINER_PREFIX:-dev}-redis
     hostname: redis
     labels:
       - "config_version=${GIT_COMMIT:-unknown}"
@@ -92,12 +96,14 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - busibox-net
+      busibox-net:
+        aliases:
+          - redis
 
   # MinIO - Object Storage (S3-compatible)
   minio:
     image: minio/minio:latest
-    container_name: local-minio
+    container_name: ${CONTAINER_PREFIX:-dev}-minio
     hostname: minio
     labels:
       - "config_version=${GIT_COMMIT:-unknown}"
@@ -116,12 +122,15 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - busibox-net
+      busibox-net:
+        aliases:
+          - minio
+          - files
 
   # MinIO bucket initialization
   minio-init:
     image: minio/mc
-    container_name: local-minio-init
+    container_name: ${CONTAINER_PREFIX:-dev}-minio-init
     depends_on:
       minio:
         condition: service_healthy
@@ -139,7 +148,7 @@ services:
   # Milvus - Vector Database (standalone mode with etcd + minio)
   etcd:
     image: quay.io/coreos/etcd:v3.5.5
-    container_name: local-milvus-etcd
+    container_name: ${CONTAINER_PREFIX:-dev}-milvus-etcd
     hostname: etcd
     environment:
       - ETCD_AUTO_COMPACTION_MODE=revision
@@ -159,7 +168,7 @@ services:
 
   milvus-minio:
     image: minio/minio:RELEASE.2023-03-20T20-16-18Z
-    container_name: local-milvus-minio
+    container_name: ${CONTAINER_PREFIX:-dev}-milvus-minio
     hostname: milvus-minio
     environment:
       MINIO_ACCESS_KEY: minioadmin
@@ -179,7 +188,7 @@ services:
 
   milvus:
     image: milvusdb/milvus:v2.6.5
-    container_name: local-milvus
+    container_name: ${CONTAINER_PREFIX:-dev}-milvus
     hostname: milvus
     labels:
       - "config_version=${GIT_COMMIT:-unknown}"
@@ -206,7 +215,9 @@ services:
       timeout: 20s
       retries: 3
     networks:
-      - busibox-net
+      busibox-net:
+        aliases:
+          - milvus
 
   # Milvus Schema Initialization
   # Creates the 'documents' collection with hybrid search support
@@ -214,12 +225,11 @@ services:
     build:
       context: .
       dockerfile: provision/docker/milvus-init.Dockerfile
-    container_name: local-milvus-init
+    container_name: ${CONTAINER_PREFIX:-dev}-milvus-init
     volumes:
       - ./provision/ansible/roles/milvus/files/hybrid_schema.py:/app/hybrid_schema.py:ro
     environment:
       MILVUS_HOST: milvus
-      MILVUS_PORT: 19530
     command: ["python", "/app/hybrid_schema.py"]
     depends_on:
       milvus:
@@ -234,18 +244,14 @@ services:
   # This container is NOT started automatically - use the test menu to run it
   test-db-init:
     image: python:3.11-slim
-    container_name: local-test-db-init
+    container_name: ${CONTAINER_PREFIX:-dev}-test-db-init
     profiles: ["test"]  # Only start with --profile test
     volumes:
       - ./scripts/docker/bootstrap-test-databases.py:/app/bootstrap.py:ro
     environment:
       POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
       TEST_DB_USER: busibox_test_user
       TEST_DB_PASSWORD: testpassword
-      AUTHZ_BOOTSTRAP_CLIENT_ID: ${AUTHZ_BOOTSTRAP_CLIENT_ID:-ai-portal}
-      AUTHZ_BOOTSTRAP_CLIENT_SECRET: ${AUTHZ_BOOTSTRAP_CLIENT_SECRET:-ai-portal-secret}
-      AUTHZ_ADMIN_TOKEN: ${AUTHZ_ADMIN_TOKEN:-local-admin-token}
     command: ["sh", "-c", "pip install -q asyncpg cryptography && python /app/bootstrap.py"]
     depends_on:
       postgres:
@@ -261,7 +267,7 @@ services:
   # LiteLLM - Unified LLM Gateway
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
-    container_name: local-litellm
+    container_name: ${CONTAINER_PREFIX:-dev}-litellm
     hostname: litellm
     labels:
       - "config_version=${GIT_COMMIT:-unknown}"
@@ -284,7 +290,9 @@ services:
       start_period: 30s
       retries: 3
     networks:
-      - busibox-net
+      busibox-net:
+        aliases:
+          - litellm
 
   # ===========================================================================
   # EMBEDDING SERVICE (Infrastructure Tier - stays running during dev restarts)
@@ -298,7 +306,7 @@ services:
       context: ./srv/embedding
       labels:
         - "version=${GIT_COMMIT:-unknown}"
-    container_name: local-embedding-api
+    container_name: ${CONTAINER_PREFIX:-dev}-embedding-api
     hostname: embedding-api
     labels:
       - "version=${GIT_COMMIT:-unknown}"
@@ -333,7 +341,7 @@ services:
       dockerfile: authz/Dockerfile
       labels:
         - "version=${GIT_COMMIT:-unknown}"
-    container_name: local-authz-api
+    container_name: ${CONTAINER_PREFIX:-dev}-authz-api
     hostname: authz-api
     labels:
       - "version=${GIT_COMMIT:-unknown}"
@@ -344,7 +352,6 @@ services:
     environment:
       # PostgreSQL - uses dedicated authz database
       POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
       POSTGRES_DB: authz
       POSTGRES_USER: ${POSTGRES_USER:-busibox_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
@@ -358,13 +365,12 @@ services:
       AUTHZ_ACCESS_TOKEN_TTL: ${AUTHZ_ACCESS_TOKEN_TTL:-900}
       AUTHZ_SIGNING_ALG: RS256
       AUTHZ_RSA_KEY_SIZE: 2048
-      AUTHZ_ADMIN_TOKEN: ${AUTHZ_ADMIN_TOKEN:-local-admin-token}
       AUTHZ_MASTER_KEY: ${AUTHZ_MASTER_KEY:-local-master-key-change-in-production}
       # Bootstrap client (ai-portal)
-      AUTHZ_BOOTSTRAP_CLIENT_ID: ${AUTHZ_BOOTSTRAP_CLIENT_ID:-ai-portal}
-      AUTHZ_BOOTSTRAP_CLIENT_SECRET: ${AUTHZ_BOOTSTRAP_CLIENT_SECRET:-ai-portal-secret}
-      AUTHZ_BOOTSTRAP_ALLOWED_AUDIENCES: ingest-api,search-api,agent-api
+      AUTHZ_BOOTSTRAP_ALLOWED_AUDIENCES: ingest-api,search-api,agent-api,authz-api
       AUTHZ_BOOTSTRAP_ALLOWED_SCOPES: read,write,search.read,ingest.write,ingest.read,agent.execute
+      # Admin users to bootstrap on startup (comma-separated)
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-${ADMIN_EMAIL:-}}
     ports:
       - "8010:8010"
     depends_on:
@@ -377,7 +383,10 @@ services:
       start_period: 10s
       retries: 3
     networks:
-      - busibox-net
+      busibox-net:
+        aliases:
+          - authz-api
+          - authz
 
   # Ingest API - Document Processing Service
   ingest-api:
@@ -386,7 +395,7 @@ services:
       dockerfile: ingest/Dockerfile
       labels:
         - "version=${GIT_COMMIT:-unknown}"
-    container_name: local-ingest-api
+    container_name: ${CONTAINER_PREFIX:-dev}-ingest-api
     hostname: ingest-api
     labels:
       - "version=${GIT_COMMIT:-unknown}"
@@ -401,11 +410,8 @@ services:
       - model_cache:/root/.cache
     command: ["python", "-m", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8002", "--reload", "--reload-dir", "/app/src"]
     environment:
-      # Service
-      SERVICE_PORT: 8002
       # PostgreSQL - uses dedicated files database
       POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
       POSTGRES_DB: files
       POSTGRES_USER: ${POSTGRES_USER:-busibox_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
@@ -418,7 +424,6 @@ services:
       TEST_DOC_REPO_PATH: /testdocs
       # Redis
       REDIS_HOST: redis
-      REDIS_PORT: 6379
       # MinIO
       MINIO_ENDPOINT: minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
@@ -427,7 +432,6 @@ services:
       MINIO_BUCKET: documents
       # Milvus
       MILVUS_HOST: milvus
-      MILVUS_PORT: 19530
       MILVUS_COLLECTION: documents
       # AI Portal (for library resolution and migration)
       # Note: In Docker dev, AI Portal typically runs on host, use host.docker.internal
@@ -485,7 +489,7 @@ services:
     build:
       context: ./srv
       dockerfile: ingest/Dockerfile
-    container_name: local-ingest-worker
+    container_name: ${CONTAINER_PREFIX:-dev}-ingest-worker
     hostname: ingest-worker
     # Hot-reload: mount source code for development
     volumes:
@@ -500,13 +504,11 @@ services:
     environment:
       # PostgreSQL - uses dedicated files database
       POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
       POSTGRES_DB: files
       POSTGRES_USER: ${POSTGRES_USER:-busibox_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
       # Redis
       REDIS_HOST: redis
-      REDIS_PORT: 6379
       REDIS_STREAM: jobs:ingestion
       REDIS_CONSUMER_GROUP: workers
       # MinIO
@@ -517,7 +519,6 @@ services:
       MINIO_BUCKET: documents
       # Milvus
       MILVUS_HOST: milvus
-      MILVUS_PORT: 19530
       MILVUS_COLLECTION: documents
       # LiteLLM
       LITELLM_BASE_URL: http://litellm:4000
@@ -568,7 +569,7 @@ services:
       dockerfile: search/Dockerfile
       labels:
         - "version=${GIT_COMMIT:-unknown}"
-    container_name: local-search-api
+    container_name: ${CONTAINER_PREFIX:-dev}-search-api
     hostname: search-api
     labels:
       - "version=${GIT_COMMIT:-unknown}"
@@ -580,12 +581,9 @@ services:
       - model_cache:/root/.cache
     command: ["python", "-m", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8003", "--reload", "--reload-dir", "/app/src"]
     environment:
-      # Service
-      SERVICE_PORT: 8003
       LOG_LEVEL: INFO
       # PostgreSQL - uses dedicated files database
       POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
       POSTGRES_DB: files
       POSTGRES_USER: ${POSTGRES_USER:-busibox_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
@@ -596,11 +594,9 @@ services:
       TEST_DB_PASSWORD: testpassword
       # Milvus
       MILVUS_HOST: milvus
-      MILVUS_PORT: 19530
       MILVUS_COLLECTION: documents
       # Redis (caching)
       REDIS_HOST: redis
-      REDIS_PORT: 6379
       ENABLE_CACHING: "true"
       # Embedding API - dedicated embedding service (direct call, no token exchange needed)
       EMBEDDING_API_URL: http://embedding-api:8005
@@ -612,9 +608,6 @@ services:
       AUTHZ_ISSUER: busibox-authz
       AUTHZ_AUDIENCE: search-api
       AUTHZ_TOKEN_URL: http://authz-api:8010/oauth/token
-      # API Service client for calling other services (e.g., ingest-api for embeddings)
-      API_SERVICE_CLIENT_ID: ${AUTHZ_BOOTSTRAP_CLIENT_ID:-ai-portal}
-      API_SERVICE_CLIENT_SECRET: ${AUTHZ_BOOTSTRAP_CLIENT_SECRET:-ai-portal-secret}
       # Reranking mode: "none" (skip), "vllm" (GPU), "local" (CPU, slow startup)
       # Default to "none" in local Docker to avoid 2GB model download and vLLM dependency
       RERANKING_MODE: ${RERANKING_MODE:-none}
@@ -647,7 +640,7 @@ services:
       dockerfile: agent/Dockerfile
       labels:
         - "version=${GIT_COMMIT:-unknown}"
-    container_name: local-agent-api
+    container_name: ${CONTAINER_PREFIX:-dev}-agent-api
     hostname: agent-api
     labels:
       - "version=${GIT_COMMIT:-unknown}"
@@ -689,10 +682,6 @@ services:
       AUTH_ISSUER: busibox-authz
       AUTH_AUDIENCE: agent-api
       AUTH_TOKEN_URL: http://authz-api:8010/oauth/token
-      # Use the same bootstrap client as ai-portal for token exchange
-      # This allows agent-api to exchange tokens for downstream services (search-api, ingest-api)
-      AUTH_CLIENT_ID: ${AUTHZ_BOOTSTRAP_CLIENT_ID:-ai-portal}
-      AUTH_CLIENT_SECRET: ${AUTHZ_BOOTSTRAP_CLIENT_SECRET:-ai-portal-secret}
       # SMTP configuration for email notifications
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
@@ -731,7 +720,7 @@ services:
       dockerfile: docs/Dockerfile
       labels:
         - "version=${GIT_COMMIT:-unknown}"
-    container_name: local-docs-api
+    container_name: ${CONTAINER_PREFIX:-dev}-docs-api
     hostname: docs-api
     labels:
       - "version=${GIT_COMMIT:-unknown}"
@@ -742,8 +731,6 @@ services:
       - ./openapi:/app/openapi:ro
     command: ["python", "-m", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8004", "--reload", "--reload-dir", "/app/src"]
     environment:
-      # Service
-      SERVICE_PORT: 8004
       DOCS_PATH: /app/docs
       OPENAPI_PATH: /app/openapi
     ports:
@@ -766,7 +753,7 @@ services:
       dockerfile: Dockerfile
       labels:
         - "version=${GIT_COMMIT:-unknown}"
-    container_name: local-deploy-api
+    container_name: ${CONTAINER_PREFIX:-dev}-deploy-api
     hostname: deploy-api
     labels:
       - "version=${GIT_COMMIT:-unknown}"
@@ -780,6 +767,8 @@ services:
       # e.g., /Users/you/Code which contains estimator/, project-analysis/, etc.
       # This is mounted directly - no symlinks needed
       - ${DEV_APPS_DIR:-./dev-apps}:/srv/dev-apps:ro
+      # Mount busibox root for writing nginx configs
+      - .:/busibox:rw
     command: ["python", "-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8011", "--reload", "--reload-dir", "/app/src"]
     environment:
       # Service
@@ -791,7 +780,6 @@ services:
       ANSIBLE_DIR: /ansible
       # PostgreSQL (for database provisioning)
       POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
       POSTGRES_ADMIN_USER: postgres
       POSTGRES_ADMIN_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
       # Container IPs (use Docker service names in local dev)
@@ -835,12 +823,15 @@ services:
 
   user-apps:
     image: node:20-slim
-    container_name: local-user-apps
+    container_name: ${CONTAINER_PREFIX:-dev}-user-apps
     hostname: user-apps
     labels:
       - "version=${GIT_COMMIT:-unknown}"
     volumes:
       - user_apps_data:/srv/apps  # Deployed apps (git cloned by deploy-api)
+      # Dev apps mount - uses DEV_APPS_DIR from .busibox-state via Makefile
+      # Falls back to local ./dev-apps directory if not set
+      - ${DEV_APPS_DIR:-./dev-apps}:/srv/dev-apps
     environment:
       NODE_ENV: production
     # Container stays running - deploy-api uses docker exec to manage apps
@@ -854,12 +845,13 @@ services:
 # ===========================================================================
   # NEXT.JS APPLICATIONS (Core Apps)
   # ===========================================================================
-  # Core Next.js apps (ai-portal, agent-manager) are defined in overlay files:
-  #   - docker-compose.dev.yml  - Development mode with volume mounts
-  #   - docker-compose.prod.yml - Production mode built from GitHub
+  # Core Next.js apps (ai-portal + agent-manager) run in a single container
+  # defined in overlay files:
+  #   - docker-compose.local-dev.yml - Development mode with volume mounts
+  #   - docker-compose.github.yml    - GitHub mode built from source
   #
-  # Use: docker compose -f docker-compose.local.yml -f docker-compose.dev.yml up
-  # Or:  make docker-up (uses dev mode by default)
+  # Use: docker compose -f docker-compose.yml -f docker-compose.local-dev.yml up
+  # Or:  make docker-up (uses local-dev mode by default)
   # ===========================================================================
 
 # ===========================================================================
@@ -870,7 +862,7 @@ services:
   # In hybrid mode (default), proxies to locally-running Next.js apps on host ports
   nginx:
     image: nginx:alpine
-    container_name: local-nginx
+    container_name: ${CONTAINER_PREFIX:-dev}-nginx
     hostname: nginx
     labels:
       - "config_version=${GIT_COMMIT:-unknown}"
@@ -880,17 +872,14 @@ services:
     volumes:
       - ./config/nginx-local.conf:/etc/nginx/nginx.conf:ro
       - ./config/nginx-sites:/etc/nginx/conf.d:ro
+      - ./config/nginx-sites/apps:/etc/nginx/conf.d/apps:rw  # Dynamic app configs (writable)
       - ./ssl:/etc/nginx/ssl:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"  # Access host's localhost from container
+    # Nginx can start with just authz-api for bootstrap
+    # Other APIs will be routed once they come online
     depends_on:
       authz-api:
-        condition: service_healthy
-      ingest-api:
-        condition: service_healthy
-      search-api:
-        condition: service_healthy
-      agent-api:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:80/health"]
@@ -911,7 +900,7 @@ services:
   vllm:
     profiles: ["demo-vllm"]
     image: vllm/vllm-openai:latest
-    container_name: local-vllm
+    container_name: ${CONTAINER_PREFIX:-dev}-vllm
     hostname: vllm
     command: >
       --model Qwen/Qwen2.5-7B-Instruct-AWQ
@@ -968,4 +957,4 @@ volumes:
 networks:
   busibox-net:
     driver: bridge
-    name: busibox-local
+    name: ${CONTAINER_PREFIX:-dev}-busibox-net

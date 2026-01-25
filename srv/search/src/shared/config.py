@@ -21,7 +21,7 @@ class Config(BaseSettings):
     milvus_collection: str = "documents"
     
     # PostgreSQL
-    postgres_host: str = os.getenv("POSTGRES_HOST", "10.96.200.203")
+    postgres_host: str = os.getenv("POSTGRES_HOST", "postgres")
     postgres_port: int = int(os.getenv("POSTGRES_PORT", "5432"))
     postgres_db: str = os.getenv("POSTGRES_DB", "busibox")
     postgres_user: str = os.getenv("POSTGRES_USER", "app_user")
@@ -47,7 +47,7 @@ class Config(BaseSettings):
     embedding_dim: int = int(os.getenv("EMBEDDING_DIMENSION", "1024"))
     
     # LiteLLM (for LLM calls)
-    litellm_base_url: str = os.getenv("LITELLM_BASE_URL", "http://10.96.200.207:4000")
+    litellm_base_url: str = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
     litellm_api_key: str = os.getenv("LITELLM_API_KEY", "")
     
     # Reranking mode: "none" (skip), "vllm" or "qwen3-gpu" (GPU), "local" or "baai-cpu" (CPU, slow startup)
@@ -63,17 +63,17 @@ class Config(BaseSettings):
     reranker_device: str = "cpu"  # or "cuda"
     
     # vLLM Reranker (for hybrid search via MilvusSearchService)
-    vllm_reranker_url: str = os.getenv("VLLM_RERANKER_URL", "http://10.96.200.208:8002/v1")
+    vllm_reranker_url: str = os.getenv("VLLM_RERANKER_URL", "http://vllm-reranker:8002/v1")
     vllm_reranker_model: str = os.getenv("VLLM_RERANKER_MODEL", "Qwen/Qwen3-Reranker-0.6B")
     
     # AuthZ JWT Validation
-    authz_jwks_url: str = os.getenv("AUTHZ_JWKS_URL", "http://10.96.200.210:8010/.well-known/jwks.json")
+    authz_jwks_url: str = os.getenv("AUTHZ_JWKS_URL", "http://authz-api:8010/.well-known/jwks.json")
     authz_issuer: str = os.getenv("AUTHZ_ISSUER", "busibox-authz")
     authz_audience: str = os.getenv("AUTHZ_AUDIENCE", "search-api")
     jwt_algorithms: str = os.getenv("JWT_ALGORITHMS", "RS256")
     
     # AuthZ Token URL (for token exchange)
-    authz_token_url: str = os.getenv("AUTHZ_TOKEN_URL", "http://10.96.200.210:8010/oauth/token")
+    authz_token_url: str = os.getenv("AUTHZ_TOKEN_URL", "http://authz-api:8010/oauth/token")
     
     # Service-to-service OAuth client (api-service)
     # Used for token exchange when calling other services (ingest, agent, etc.)

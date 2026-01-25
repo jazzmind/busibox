@@ -129,6 +129,65 @@ async def _sign_session_jwt(
     return token, exp
 
 
+async def _ensure_admin_role_for_email(email: str, user_id, db) -> List[dict]:
+    """
+    Check if email is in ADMIN_EMAILS and assign Admin role if so.
+    
+    This ensures admin users get their Admin role even if they log in
+    before the authz bootstrap runs or if the user was created during login.
+    
+    Args:
+        email: User's email address
+        user_id: User ID (can be string or UUID object)
+        db: PostgresService instance
+    
+    Returns the updated list of user roles.
+    """
+    import structlog
+    import uuid
+    logger = structlog.get_logger(__name__)
+    
+    # Normalize user_id to string for lookups
+    user_id_str = str(user_id)
+    
+    email_lower = email.lower().strip()
+    
+    # Check if email is in admin list
+    if not config.admin_emails or email_lower not in config.admin_emails:
+        # Not an admin email, return current roles
+        return await db.get_user_roles(user_id_str)
+    
+    # Get Admin role
+    admin_role = await db.get_role_by_name("Admin")
+    if not admin_role:
+        logger.warning("Admin role not found - cannot assign to admin user", email=email_lower)
+        return await db.get_user_roles(user_id_str)
+    
+    admin_role_id = str(admin_role["id"])
+    
+    # Check if user already has Admin role
+    user_roles = await db.get_user_roles(user_id_str)
+    has_admin_role = any(str(r["id"]) == admin_role_id for r in user_roles)
+    
+    if not has_admin_role:
+        # Assign Admin role - convert to UUID objects for PostgreSQL
+        async with db.acquire(None, None) as conn:
+            await conn.execute(
+                """
+                INSERT INTO authz_user_roles (user_id, role_id)
+                VALUES ($1, $2)
+                ON CONFLICT (user_id, role_id) DO NOTHING
+                """,
+                uuid.UUID(user_id_str),
+                uuid.UUID(admin_role_id),
+            )
+        logger.info("Assigned Admin role to admin user on login", email=email_lower, user_id=user_id_str)
+        # Refresh roles after assignment
+        user_roles = await db.get_user_roles(user_id_str)
+    
+    return user_roles
+
+
 # ============================================================================
 # Request/Response Models
 # ============================================================================
@@ -751,7 +810,10 @@ async def use_magic_link(request: Request, token: str):
 
     user = result["user"]
     session = result["session"]
-    user_roles = user.get("roles", [])
+    
+    # Ensure admin role is assigned if email is in ADMIN_EMAILS
+    # This handles the case where user logs in before bootstrap ran, or database was reset
+    user_roles = await _ensure_admin_role_for_email(user["email"], user["user_id"], db)
     
     # Sign a session JWT with roles embedded
     session_jwt, expires_at = await _sign_session_jwt(
@@ -869,7 +931,9 @@ async def verify_totp_code(request: Request):
 
     user = result["user"]
     session = result["session"]
-    user_roles = user.get("roles", [])
+    
+    # Ensure admin role is assigned if email is in ADMIN_EMAILS
+    user_roles = await _ensure_admin_role_for_email(user["email"], user["user_id"], db)
     
     # Sign a session JWT with roles embedded
     session_jwt, expires_at = await _sign_session_jwt(
@@ -913,7 +977,9 @@ async def create_passkey_challenge(request: Request):
     - user_id: string (optional, required for registration)
     
     Note: This endpoint is PUBLIC for "authentication" type (passkey login).
-    For "registration" type, authentication is required.
+    For "registration" type:
+    - Self-service: Users can create challenges for their own passkeys with session JWT
+    - Admin: Can create challenges for any user with access token + authz.passkeys.write scope
     """
     body = await request.json()
     try:
@@ -924,21 +990,35 @@ async def create_passkey_challenge(request: Request):
     # For registration, require authentication (user must be logged in to register a passkey)
     # For authentication, this is public (the passkey IS the authentication)
     if challenge_data.type == "registration":
-        await _require_client_auth(request)
         if not challenge_data.user_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="user_id is required for registration",
             )
+        
+        try:
+            UUID(challenge_data.user_id)
+        except ValueError as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user_id format") from e
+        
+        db = _get_pg(request)
+        await db.connect()
+        
+        # Allow self-service (user creating own challenge) or admin with scope
+        await require_auth_or_self_service(
+            request, db,
+            self_service_user_id=challenge_data.user_id,
+            admin_scopes=["authz.passkeys.write"],
+        )
+    else:
+        db = _get_pg(request)
+        await db.connect()
 
     if challenge_data.user_id:
         try:
             UUID(challenge_data.user_id)
         except ValueError as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user_id format") from e
-
-    db = _get_pg(request)
-    await db.connect()
 
     # For registration, verify user exists
     if challenge_data.user_id:
@@ -984,8 +1064,10 @@ async def register_passkey(request: Request):
     """
     Register a new passkey for a user.
     
+    Self-service: Users can register their own passkeys with session JWT.
+    Admin: Can register passkeys for any user with access token + authz.passkeys.write scope.
+    
     Body:
-    - client_id, client_secret (OAuth client auth)
     - user_id: string (required)
     - credential_id: string (Base64URL, required)
     - credential_public_key: string (Base64URL, required)
@@ -996,8 +1078,7 @@ async def register_passkey(request: Request):
     - aaguid: string (optional)
     - name: string (required, user-friendly device name)
     """
-    await _require_client_auth(request)
-
+    # Parse body first to get user_id for self-service check
     body = await request.json()
     try:
         passkey_data = PasskeyRegister.model_validate(body)
@@ -1011,6 +1092,13 @@ async def register_passkey(request: Request):
 
     db = _get_pg(request)
     await db.connect()
+    
+    # Allow self-service (user registering own passkey) or admin with scope
+    await require_auth_or_self_service(
+        request, db,
+        self_service_user_id=passkey_data.user_id,
+        admin_scopes=["authz.passkeys.write"],
+    )
 
     # Check user exists
     user = await db.get_user(passkey_data.user_id)
@@ -1167,7 +1255,9 @@ async def authenticate_with_passkey(request: Request):
 
     user = result["user"]
     session = result["session"]
-    user_roles = user.get("roles", [])
+    
+    # Ensure admin role is assigned if email is in ADMIN_EMAILS
+    user_roles = await _ensure_admin_role_for_email(user["email"], user["user_id"], db)
     
     # Sign a session JWT with roles embedded
     session_jwt, expires_at = await _sign_session_jwt(
