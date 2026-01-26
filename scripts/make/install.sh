@@ -788,9 +788,9 @@ bootstrap_docker() {
     show_stage 40 "Starting PostgreSQL" "Enterprise-grade database with row-level security."
     
     if [[ "$VERBOSE" == true ]]; then
-        docker compose $compose_files up -d postgres
+        docker compose $compose_files up -d --no-deps postgres
     else
-        docker compose $compose_files up -d postgres 2>&1 | grep -v "^$" || true
+        docker compose $compose_files up -d --no-deps postgres 2>&1 | grep -v "^$" || true
     fi
     
     # Wait for postgres
@@ -824,9 +824,9 @@ bootstrap_docker() {
     show_stage 55 "Starting AuthZ API" "Zero-trust authentication with OAuth 2.0."
     
     if [[ "$VERBOSE" == true ]]; then
-        ADMIN_EMAIL="${ADMIN_EMAIL}" docker compose $compose_files up -d authz-api
+        ADMIN_EMAIL="${ADMIN_EMAIL}" docker compose $compose_files up -d --no-deps authz-api
     else
-        ADMIN_EMAIL="${ADMIN_EMAIL}" docker compose $compose_files up -d authz-api 2>&1 | grep -v "^$" || true
+        ADMIN_EMAIL="${ADMIN_EMAIL}" docker compose $compose_files up -d --no-deps authz-api 2>&1 | grep -v "^$" || true
     fi
     
     # Wait for authz
@@ -855,6 +855,43 @@ bootstrap_docker() {
         success "Admin user created successfully"
     else
         warn "Could not create admin user - you'll need to sign up manually"
+    fi
+    
+    # ==========================================================================
+    # PHASE 3.5: Deploy API (Service Orchestration)
+    # ==========================================================================
+    show_stage 68 "Building Deploy API" "Service orchestration and deployment automation."
+    
+    # Build deploy-api first
+    info "Building deploy-api container..."
+    if [[ "$VERBOSE" == true ]]; then
+        docker compose $compose_files build deploy-api
+    else
+        docker compose $compose_files build deploy-api 2>&1 | tail -10 || true
+    fi
+    
+    show_stage 70 "Starting Deploy API" "Starting deployment orchestration service."
+    
+    if [[ "$VERBOSE" == true ]]; then
+        docker compose $compose_files up -d --no-deps deploy-api
+    else
+        docker compose $compose_files up -d --no-deps deploy-api 2>&1 | grep -v "^$" || true
+    fi
+    
+    # Wait for deploy-api
+    info "Waiting for Deploy API to be healthy..."
+    attempt=0
+    while [[ $attempt -lt 30 ]]; do
+        if curl -sf http://localhost:8011/health/live > /dev/null 2>&1; then
+            success "Deploy API is ready"
+            break
+        fi
+        attempt=$((attempt + 1))
+        sleep 1
+    done
+    
+    if [[ $attempt -ge 30 ]]; then
+        warning "Deploy API health check timeout - continuing anyway"
     fi
     
     # ==========================================================================
@@ -1644,7 +1681,7 @@ main() {
     set_install_status "installed"
     
     # Note: SETUP_COMPLETE will be set by AI Portal after admin completes setup wizard
-    save_state "SETUP_COMPLETE" "false"
+    set_state "SETUP_COMPLETE" "false"
     
     # Generate admin magic link
     local magic_link
