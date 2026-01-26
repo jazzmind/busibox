@@ -4,12 +4,13 @@ Service Management Routes
 API endpoints for starting/stopping Docker services and checking health.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 import subprocess
 import httpx
 import logging
+import asyncio
 from pydantic import BaseModel
-from .auth import verify_admin_token
+from .auth import verify_admin_token, verify_token
 from .config import config
 
 logger = logging.getLogger(__name__)
@@ -207,3 +208,102 @@ async def get_services_status(
     except Exception as e:
         logger.error(f"Error getting service status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.websocket("/start/{service}")
+async def start_service_websocket(
+    websocket: WebSocket,
+    service: str
+):
+    """
+    WebSocket endpoint for starting a Docker Compose service with real-time output.
+    
+    Streams docker compose output line-by-line to the client.
+    Query params: token (required for auth)
+    """
+    await websocket.accept()
+    
+    try:
+        # Authenticate via query parameter
+        token = websocket.query_params.get('token')
+        if not token:
+            await websocket.send_json({"error": "Authentication required. Pass token as query parameter."})
+            await websocket.close(code=4001)
+            return
+        
+        try:
+            verify_token(token)
+        except Exception as e:
+            logger.error(f"WebSocket auth failed: {e}")
+            await websocket.send_json({"error": "Authentication failed"})
+            await websocket.close(code=4001)
+            return
+        
+        # Validate service name
+        if not service or not all(c.isalnum() or c in '-_' for c in service):
+            await websocket.send_json({"error": "Invalid service name", "done": True})
+            return
+        
+        logger.info(f"[WS] Starting service: {service}")
+        await websocket.send_json({"type": "info", "message": f"Starting {service}..."})
+        
+        # Start docker compose with real-time output
+        process = await asyncio.create_subprocess_exec(
+            'docker', 'compose', '-f', '/busibox/docker-compose.yml', 'up', '-d', service,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        
+        # Stream stdout and stderr
+        async def stream_output(stream, stream_type):
+            while True:
+                line = await stream.readline()
+                if not line:
+                    break
+                message = line.decode('utf-8').rstrip()
+                if message:
+                    await websocket.send_json({
+                        "type": "log",
+                        "stream": stream_type,
+                        "message": message
+                    })
+        
+        # Run both streams concurrently
+        await asyncio.gather(
+            stream_output(process.stdout, "stdout"),
+            stream_output(process.stderr, "stderr"),
+        )
+        
+        # Wait for process to complete
+        returncode = await process.wait()
+        
+        if returncode == 0:
+            await websocket.send_json({
+                "type": "success",
+                "message": f"Service {service} started successfully",
+                "done": True
+            })
+        else:
+            await websocket.send_json({
+                "type": "warning",
+                "message": f"Service {service} completed with code {returncode}",
+                "done": True
+            })
+        
+    except WebSocketDisconnect:
+        logger.info(f"[WS] Client disconnected during service start: {service}")
+    except Exception as e:
+        logger.error(f"[WS] Error starting service {service}: {e}")
+        try:
+            await websocket.send_json({
+                "type": "error",
+                "message": str(e),
+                "done": True
+            })
+        except:
+            pass
+    finally:
+        try:
+            await websocket.close()
+        except:
+            pass
