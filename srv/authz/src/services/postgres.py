@@ -1243,7 +1243,7 @@ class PostgresService:
         """Delete a session by session_id (for self-service logout)."""
         async with self.acquire(None, None) as conn:
             result = await conn.execute(
-                "DELETE FROM authz_sessions WHERE session_id = $1",
+                "DELETE FROM authz_sessions WHERE id = $1",
                 session_id,
             )
             return result != "DELETE 0"
@@ -1359,7 +1359,7 @@ class PostgresService:
                 user = await self.get_user_with_roles(str(user_id))
                 session = await conn.fetchrow(
                     """
-                    SELECT session_id::text, user_id::text, token, expires_at, ip_address, user_agent
+                    SELECT id::text as session_id, user_id::text, token, expires_at, ip_address, user_agent
                     FROM authz_sessions
                     WHERE user_id = $1 AND expires_at > now() AND revoked_at IS NULL
                     ORDER BY created_at DESC

@@ -1,0 +1,168 @@
+# =============================================================================
+# Busibox Development Mode - Next.js Applications
+# =============================================================================
+#
+# Development overlay for Next.js apps with:
+#   - Volume-mounted source code for live editing
+#   - busibox-app mounted at /app/.busibox-app and symlinked into node_modules
+#   - Turbopack hot-reload with full busibox-app support
+#
+# Prerequisites:
+#   - Build busibox-app on host: cd ../busibox-app && npm run build
+#   - Set GITHUB_AUTH_TOKEN in .env.local
+#
+# Usage:
+#   docker compose -f docker-compose.local.yml -f docker-compose.dev.yml up
+#   Or: make docker-up ENV=development
+#
+# How busibox-app linking works:
+#   1. busibox-app is mounted at /app/.busibox-app (inside project for Turbopack)
+#   2. dev-entrypoint.sh creates symlink: node_modules/@jazzmind/busibox-app -> /app/.busibox-app
+#   3. next.config.ts has transpilePackages: ['@jazzmind/busibox-app']
+#
+# See docs/development/docker-dev-mode.md for full documentation.
+#
+# =============================================================================
+
+services:
+  # AI Portal - Main Frontend (Development Mode)
+  ai-portal:
+    build:
+      context: ../ai-portal
+      dockerfile: Dockerfile.dev
+      args:
+        GITHUB_AUTH_TOKEN: ${GITHUB_AUTH_TOKEN:-}
+    container_name: local-ai-portal
+    hostname: ai-portal
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      # Database
+      DATABASE_URL: postgresql://${POSTGRES_USER:-busibox_user}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/ai_portal
+      # Auth - use https://localhost for SSL
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-dev-secret-change-in-production}
+      BETTER_AUTH_URL: https://localhost/portal
+      # Email (optional - uses console logging in dev)
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      EMAIL_FROM: ${EMAIL_FROM:-noreply@localhost}
+      # Admin
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@localhost}
+      ALLOWED_EMAIL_DOMAINS: ${ALLOWED_EMAIL_DOMAINS:-*}
+      # AuthZ - use internal container URLs
+      AUTHZ_BASE_URL: http://authz-api:8010
+      AUTHZ_ADMIN_TOKEN: ${AUTHZ_ADMIN_TOKEN:-local-admin-token}
+      # LiteLLM
+      LITELLM_BASE_URL: http://litellm:4000/v1
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-local-dev-key}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # SSO
+      SSO_JWT_SECRET: ${SSO_JWT_SECRET:-dev-sso-secret}
+      # Service URLs (for SSO redirect via nginx proxy)
+      NEXT_PUBLIC_AGENT_MANAGER_URL: https://localhost/agents
+      NEXT_PUBLIC_APP_URL: https://localhost/portal
+      # Base path for nginx subpath routing
+      NEXT_PUBLIC_BASE_PATH: /portal
+      # Backend service URLs (for server-side API calls)
+      # Note: AGENT_API_URL overrides any .env file setting
+      AGENT_API_URL: http://agent-api:8000
+      INGEST_API_HOST: ingest-api
+      INGEST_API_PORT: "8002"
+      SEARCH_API_HOST: search-api
+      SEARCH_API_PORT: "8003"
+      AGENT_API_HOST: agent-api
+      AGENT_API_PORT: "8000"
+      # Docs API - internal container URL for server-side fetching
+      DOCS_API_URL: http://docs-api:8004
+    ports:
+      - "3000:3000"
+    volumes:
+      # Mount source code for live editing
+      - ../ai-portal:/app
+      # Preserve node_modules from container (installed during build)
+      - ai-portal-node-modules:/app/node_modules
+      # Preserve .next build cache
+      - ai-portal-next-cache:/app/.next
+      # Mount busibox-app INSIDE /app so outputFileTracingRoot works
+      - ../busibox-app:/app/.busibox-app:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      authz-api:
+        condition: service_healthy
+      docs-api:
+        condition: service_healthy
+    healthcheck:
+      # Note: basePath is /portal, so health is at /portal/api/health
+      test: ["CMD", "curl", "-f", "http://localhost:3000/portal/api/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 120s
+      retries: 5
+    networks:
+      - busibox-net
+
+  # Agent Manager - Agent Management UI (Development Mode)
+  agent-manager:
+    build:
+      context: ../agent-manager
+      dockerfile: Dockerfile.dev
+      args:
+        GITHUB_AUTH_TOKEN: ${GITHUB_AUTH_TOKEN:-}
+    container_name: local-agent-manager
+    hostname: agent-manager
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      PORT: 3001
+      # API URLs - use nginx proxy paths for CORS compliance
+      NEXT_PUBLIC_AGENT_API_URL: https://localhost/api/agent
+      NEXT_PUBLIC_INGEST_API_URL: https://localhost/api/ingest
+      NEXT_PUBLIC_SEARCH_API_URL: https://localhost/api/search
+      # AI Portal (SSO) via nginx
+      NEXT_PUBLIC_AI_PORTAL_URL: https://localhost/portal
+      # AuthZ - internal container URL
+      AUTHZ_BASE_URL: http://authz-api:8010
+      # Base path for nginx subpath routing
+      NEXT_PUBLIC_BASE_PATH: /agents
+      NEXT_PUBLIC_APP_URL: https://localhost/agents
+      # Backend service URLs (for server-side API calls)
+      AGENT_API_HOST: agent-api
+      AGENT_API_PORT: "8000"
+    ports:
+      - "3001:3001"
+    volumes:
+      # Mount source code for live editing
+      - ../agent-manager:/app
+      # Preserve node_modules from container (installed during build)
+      - agent-manager-node-modules:/app/node_modules
+      # Preserve .next build cache
+      - agent-manager-next-cache:/app/.next
+      # Mount busibox-app INSIDE /app so outputFileTracingRoot works
+      - ../busibox-app:/app/.busibox-app:ro
+    depends_on:
+      authz-api:
+        condition: service_healthy
+    healthcheck:
+      # Note: basePath is /agents, so check the base path
+      test: ["CMD", "curl", "-f", "http://localhost:3001/agents"]
+      interval: 30s
+      timeout: 10s
+      start_period: 120s
+      retries: 5
+    networks:
+      - busibox-net
+
+# Named volumes for node_modules and .next cache
+# These preserve installed dependencies across container restarts
+volumes:
+  ai-portal-node-modules:
+  ai-portal-next-cache:
+  agent-manager-node-modules:
+  agent-manager-next-cache:
+
+# Use the same network as the base compose
+networks:
+  busibox-net:
+    external: true
+    name: busibox-local

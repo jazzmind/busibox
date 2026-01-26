@@ -184,6 +184,7 @@ def get_authz_schema() -> SchemaManager:
             expires_at timestamptz NOT NULL,
             ip_address text NULL,
             user_agent text NULL,
+            revoked_at timestamptz NULL,
             created_at timestamptz NOT NULL DEFAULT now()
         )
     """)

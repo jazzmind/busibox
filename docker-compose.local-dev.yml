@@ -4,21 +4,20 @@
 #
 # Development overlay for Next.js apps with:
 #   - Volume-mounted source code for live editing
-#   - busibox-app mounted at /srv/busibox-app for both apps
-#   - Turbopack hot-reload with full busibox-app support
+#   - busibox-app installed from GitHub Packages
+#   - Turbopack hot-reload for both apps
 #
 # Prerequisites:
-#   - Build busibox-app on host: cd ../busibox-app && npm run build
-#   - Set GITHUB_AUTH_TOKEN in .env.local
+#   - Set GITHUB_AUTH_TOKEN in .env.local for @jazzmind/busibox-app
 #
 # Usage:
 #   docker compose -f docker-compose.yml -f docker-compose.local-dev.yml up
 #   Or: make docker-up
 #
-# Core Apps Architecture:
-#   - Single container runs both ai-portal (port 3000) and agent-manager (port 3001)
-#   - Mirrors Proxmox pattern where core-apps-lxc hosts multiple Next.js apps
-#   - Uses concurrently to manage both processes
+# Architecture:
+#   - Both ai-portal and agent-manager run in single core-apps container
+#   - Uses concurrently to manage both Next.js processes
+#   - Mirrors production Proxmox pattern (core-apps-lxc hosts both)
 #
 # See docs/development/docker-dev-mode.md for full documentation.
 #
@@ -26,10 +25,10 @@
 
 services:
   # Core Apps - AI Portal + Agent Manager (Development Mode)
-  # Single container running both apps, matching Proxmox architecture
+  # Runs both Next.js apps in single container using concurrently
   core-apps:
     build:
-      context: .
+      context: ${BUSIBOX_DIR:-.}
       dockerfile: provision/docker/core-apps.Dockerfile.dev
       args:
         GITHUB_AUTH_TOKEN: ${GITHUB_AUTH_TOKEN:-}
@@ -38,16 +37,19 @@ services:
     restart: unless-stopped
     environment:
       NODE_ENV: development
+      # GitHub token for busibox-app access (REQUIRED)
+      # Set via: export GITHUB_AUTH_TOKEN=ghp_your_token_here
+      # Or set directly here (not recommended): GITHUB_AUTH_TOKEN: ghp_your_token_here
+      GITHUB_AUTH_TOKEN: ${GITHUB_AUTH_TOKEN:?GITHUB_AUTH_TOKEN must be set - get token from https://github.com/settings/tokens/new with repo and read:packages scopes}
       # Allow self-signed SSL certificates in local dev
       NODE_TLS_REJECT_UNAUTHORIZED: "0"
-      # GitHub token for npm authentication (required for @jazzmind packages)
-      GITHUB_AUTH_TOKEN: ${GITHUB_AUTH_TOKEN:-}
-      # =========================================================================
-      # AI Portal Environment (PORT 3000)
-      # =========================================================================
+      
+      # =======================================================================
+      # AI Portal Environment (PORT 3000, /portal path)
+      # =======================================================================
       # Database
       DATABASE_URL: postgresql://${POSTGRES_USER:-busibox_user}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/ai_portal
-     # Email (optional - uses console logging in dev)
+      # Email (optional - uses console logging in dev)
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       EMAIL_FROM: ${EMAIL_FROM:-noreply@localhost}
       # Admin
@@ -58,50 +60,50 @@ services:
       # LiteLLM
       LITELLM_BASE_URL: http://litellm:4000/v1
       LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-local-dev-key}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       # SSO
       SSO_JWT_SECRET: ${SSO_JWT_SECRET:-dev-sso-secret}
       # Service URLs (for SSO redirect via nginx proxy)
       NEXT_PUBLIC_AGENT_MANAGER_URL: https://localhost/agents
       NEXT_PUBLIC_APP_URL: https://localhost/portal
-      # Base paths for nginx subpath routing
+      # Base path for nginx subpath routing
       NEXT_PUBLIC_BASE_PATH: /portal
-      AI_PORTAL_BASE_PATH: /portal
-      AGENT_MANAGER_BASE_PATH: /agents
       # Backend service URLs (for server-side API calls)
-      INGEST_API_URL: http://ingest-api:8002
-      SEARCH_API_URL: http://search-api:8003
       AGENT_API_URL: http://agent-api:8000
+      INGEST_API_HOST: ingest-api
+      INGEST_API_PORT: "8002"
+      SEARCH_API_HOST: search-api
+      SEARCH_API_PORT: "8003"
+      AGENT_API_HOST: agent-api
+      AGENT_API_PORT: "8000"
       # Docs API - internal container URL for server-side fetching
       DOCS_API_URL: http://docs-api:8004
       # Deployment Service - internal container URL for server-side deployment
       DEPLOYMENT_SERVICE_URL: http://deploy-api:8011/api/v1/deployment
-      # =========================================================================
-      # Agent Manager Environment (PORT 3001)
-      # =========================================================================
+      
+      # =======================================================================
+      # Agent Manager Environment (PORT 3001, /agents path)
+      # =======================================================================
       # API URLs - use nginx proxy paths for CORS compliance
       NEXT_PUBLIC_AGENT_API_URL: https://localhost/api/agent
       NEXT_PUBLIC_INGEST_API_URL: https://localhost/api/ingest
       NEXT_PUBLIC_SEARCH_API_URL: https://localhost/api/search
       # AI Portal (SSO) via nginx
       NEXT_PUBLIC_AI_PORTAL_URL: https://localhost/portal
+      # Base path for nginx subpath routing
+      # NEXT_PUBLIC_BASE_PATH: /agents  # Commented out - handled by agent-manager's env
     ports:
-      - "3000:3000"
-      - "3001:3001"
+      - "3000:3000"  # AI Portal
+      - "3001:3001"  # Agent Manager
     volumes:
-      # Mount source code for both apps
-      # Use AI_PORTAL_DIR and AGENT_MANAGER_DIR env vars if set, fall back to relative paths
+      # Mount both app directories
       - ${AI_PORTAL_DIR:-../ai-portal}:/srv/ai-portal
       - ${AGENT_MANAGER_DIR:-../agent-manager}:/srv/agent-manager
       # Preserve node_modules from container (installed during build)
       - ai-portal-node-modules:/srv/ai-portal/node_modules
       - agent-manager-node-modules:/srv/agent-manager/node_modules
-      # Note: .next cache volumes removed - Turbopack rebuilds quickly in dev mode
-      # and the volume overlay caused cache inconsistency issues with host .next dirs
-      # Mount busibox-app at /srv/busibox-app for entrypoint to link into node_modules
-      - ${BUSIBOX_APP_DIR:-../busibox-app}:/srv/busibox-app:ro
-    # Core apps only need postgres and authz for bootstrap
-    # docs-api can come online later
+      # Preserve .next build caches
+      - ai-portal-next-cache:/srv/ai-portal/.next
+      - agent-manager-next-cache:/srv/agent-manager/.next
     depends_on:
       postgres:
         condition: service_healthy
@@ -112,14 +114,14 @@ services:
       test: ["CMD", "sh", "-c", "curl -f http://localhost:3000/portal/api/health && curl -f http://localhost:3001/agents"]
       interval: 30s
       timeout: 10s
-      start_period: 180s
+      start_period: 120s
       retries: 5
     networks:
       busibox-net:
         aliases:
           - core-apps
-          - ai-portal      # Backward compatibility alias
-          - agent-manager  # Backward compatibility alias
+          - ai-portal      # For nginx routing to portal
+          - agent-manager  # For nginx routing to agents
 
   # User Apps - Development Mode
   # Mount dev-apps directory for local app development with hot-reload
@@ -139,7 +141,9 @@ services:
 # These preserve installed dependencies across container restarts
 volumes:
   ai-portal-node-modules:
+  ai-portal-next-cache:
   agent-manager-node-modules:
+  agent-manager-next-cache:
 
 # Use the same network as the base compose
 # Note: Don't use external:true - let docker compose manage the network lifecycle

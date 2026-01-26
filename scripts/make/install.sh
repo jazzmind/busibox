@@ -113,11 +113,55 @@ show_install_banner() {
     echo ""
 }
 
+# =============================================================================
+# BOX LINE HELPER - Single function for all padded box lines
+# =============================================================================
+# Usage: box_line "content" [border_style] [border_color]
+#   content:      Text to display (no padding needed - calculated automatically)
+#   border_style: "single" (│) or "double" (║) - default "single"
+#   border_color: ANSI color for border - default no color
+#
+# Box is 80 chars total: border(1) + content(78) + border(1)
+# ANSI escape codes are stripped to calculate true visible length
+# =============================================================================
+box_line() {
+    local content="$1"
+    local border_style="${2:-single}"
+    local border_color="${3:-}"
+    
+    # Border character
+    local border_char="│"
+    [[ "$border_style" == "double" ]] && border_char="║"
+    
+    # Strip ANSI codes to get visible character count
+    # Use echo -e to interpret escape sequences, then strip them
+    local visible_text
+    visible_text=$(echo -e "$content" | sed -E 's/\x1b\[[0-9;]*m//g')
+    local visible_len=${#visible_text}
+    
+    # Calculate padding (78 content width)
+    local pad=$((78 - visible_len))
+    [[ $pad -lt 0 ]] && pad=0
+    
+    # Build the line with echo -e to render ANSI codes
+    if [[ -n "$border_color" ]]; then
+        echo -e "${border_color}${border_char}${NC}${content}$(printf '%*s' "$pad" "")${border_color}${border_char}${NC}"
+    else
+        echo -e "${border_char}${content}$(printf '%*s' "$pad" "")${border_char}"
+    fi
+}
+
 # Show progress bar with percentage
 show_progress_bar() {
     local percent=$1
     local width=50
     local filled=$((percent * width / 100))
+    
+    # Ensure at 100% we get exactly 50 filled blocks
+    if [[ $percent -eq 100 ]]; then
+        filled=50
+    fi
+    
     local empty=$((width - filled))
     
     printf "\r[${GREEN}"
@@ -208,11 +252,11 @@ detect_system() {
 wizard_environment() {
     echo ""
     echo -e "┌─ ${BOLD}ENVIRONMENT${NC} ────────────────────────────────────────────────────────────────┐"
-    echo -e "│                                                                              │"
-    echo -e "│  ${CYAN}1)${NC} development  Docker on this machine (dev mode, volume mounts)            │"
-    echo -e "│  ${CYAN}2)${NC} staging      Pre-production testing (Docker or Proxmox)                  │"
-    echo -e "│  ${CYAN}3)${NC} production   Production deployment (Docker or Proxmox)                   │"
-    echo -e "│                                                                              │"
+    box_line "" "single"
+    box_line "  ${CYAN}1)${NC} development  Docker on this machine (dev mode, volume mounts)" "single"
+    box_line "  ${CYAN}2)${NC} staging      Pre-production testing (Docker or Proxmox)" "single"
+    box_line "  ${CYAN}3)${NC} production   Production deployment (Docker or Proxmox)" "single"
+    box_line "" "single"
     echo -e "└──────────────────────────────────────────────────────────────────────────────┘"
     echo ""
     
@@ -236,10 +280,10 @@ wizard_platform() {
     
     echo ""
     echo -e "┌─ ${BOLD}PLATFORM${NC} ───────────────────────────────────────────────────────────────────┐"
-    echo -e "│                                                                              │"
-    echo -e "│  ${CYAN}1)${NC} docker       Docker Compose                                              │"
-    echo -e "│  ${CYAN}2)${NC} proxmox      LXC Containers (requires root on Proxmox host)              │"
-    echo -e "│                                                                              │"
+    box_line "" "single"
+    box_line "  ${CYAN}1)${NC} docker       Docker Compose" "single"
+    box_line "  ${CYAN}2)${NC} proxmox      LXC Containers (requires root on Proxmox host)" "single"
+    box_line "" "single"
     echo -e "└──────────────────────────────────────────────────────────────────────────────┘"
     echo ""
     
@@ -262,58 +306,56 @@ wizard_platform() {
 }
 
 wizard_llm_backend() {
-    # Box inner content = 75 chars (after "│  " prefix, before " │" suffix)
-    # Total: │ (1) + 2 spaces + 75 content + 1 space + │ (1) = 80 visual cols
-    local box_content_width=75
-    
-    # Helper function to pad a line to box width (plain text only, no escape codes)
-    box_line() {
+    # Local helper: box line with 2-space indent (│  text │)
+    # Content width = 75 chars (after "│  " prefix, before " │" suffix)
+    _wizard_line() {
         local text="$1"
-        local text_len=${#text}
-        local padding=$((box_content_width - text_len))
-        if [[ $padding -lt 0 ]]; then padding=0; fi
-        printf "│  %s%*s │\n" "$text" "$padding" ""
+        local stripped
+        stripped=$(printf '%s' "$text" | sed $'s/\x1b\\[[0-9;]*m//g')
+        local pad=$((75 - ${#stripped}))
+        [[ $pad -lt 0 ]] && pad=0
+        printf '│  %s%*s │\n' "$text" "$pad" ""
     }
     
     echo ""
     echo -e "┌─ ${BOLD}LLM BACKEND${NC} ────────────────────────────────────────────────────────────────┐"
-    echo -e "│                                                                              │"
+    box_line "" "single"
     
     if [[ "$DETECTED_LLM_BACKEND" == "mlx" ]]; then
         local detected_text="Detected: Apple Silicon (${DETECTED_ARCH}) - ${DETECTED_RAM_GB}GB Unified Memory"
         local tier_text="Selected tier: $(ucfirst "$DETECTED_LLM_TIER") (${DETECTED_RAM_GB}GB)"
         
-        box_line "$detected_text"
-        echo -e "│                                                                              │"
-        echo -e "│  ${CYAN}1)${NC} local        Run models locally with MLX (recommended)                   │"
-        echo -e "│                  - Complete data privacy - nothing leaves your machine       │"
-        box_line "                - $tier_text"
-        echo -e "│                                                                              │"
-        echo -e "│  ${CYAN}2)${NC} cloud        Use AWS Bedrock                                             │"
-        echo -e "│                  - No local GPU/memory requirements                          │"
-        echo -e "│                  - Requires AWS credentials                                  │"
+        _wizard_line "$detected_text"
+        box_line "" "single"
+        box_line "  ${CYAN}1)${NC} local        Run models locally with MLX (recommended)" "single"
+        box_line "                  - Complete data privacy - nothing leaves your machine" "single"
+        _wizard_line "                - $tier_text"
+        box_line "" "single"
+        box_line "  ${CYAN}2)${NC} cloud        Use AWS Bedrock" "single"
+        box_line "                  - No local GPU/memory requirements" "single"
+        box_line "                  - Requires AWS credentials" "single"
     elif [[ "$DETECTED_LLM_BACKEND" == "vllm" ]]; then
         local detected_text="Detected: x86_64 Linux - ${DETECTED_RAM_GB}GB RAM - NVIDIA GPU"
         local tier_text="Selected tier: $(ucfirst "$DETECTED_LLM_TIER")"
         
-        box_line "$detected_text"
-        echo -e "│                                                                              │"
-        echo -e "│  ${CYAN}1)${NC} local        Run models locally with vLLM                                │"
-        echo -e "│                  - Complete data privacy                                     │"
-        box_line "                - $tier_text"
-        echo -e "│                                                                              │"
-        echo -e "│  ${CYAN}2)${NC} cloud        Use AWS Bedrock                                             │"
-        echo -e "│                  - No local GPU requirements                                 │"
+        _wizard_line "$detected_text"
+        box_line "" "single"
+        box_line "  ${CYAN}1)${NC} local        Run models locally with vLLM" "single"
+        box_line "                  - Complete data privacy" "single"
+        _wizard_line "                - $tier_text"
+        box_line "" "single"
+        box_line "  ${CYAN}2)${NC} cloud        Use AWS Bedrock" "single"
+        box_line "                  - No local GPU requirements" "single"
     else
         local detected_text="Detected: ${DETECTED_ARCH} - No GPU detected"
         
-        box_line "$detected_text"
-        echo -e "│                                                                              │"
-        echo -e "│  Local AI requires Apple Silicon (MLX) or NVIDIA GPU (vLLM).                 │"
-        echo -e "│  Using AWS Bedrock for LLM inference.                                        │"
+        _wizard_line "$detected_text"
+        box_line "" "single"
+        box_line "  Local AI requires Apple Silicon (MLX) or NVIDIA GPU (vLLM)." "single"
+        box_line "  Using AWS Bedrock for LLM inference." "single"
     fi
     
-    echo -e "│                                                                              │"
+    box_line "" "single"
     echo -e "└──────────────────────────────────────────────────────────────────────────────┘"
     echo ""
     
@@ -366,10 +408,10 @@ wizard_network() {
     
     echo ""
     echo -e "┌─ ${BOLD}NETWORK CONFIGURATION${NC} ──────────────────────────────────────────────────────┐"
-    echo -e "│                                                                              │"
-    echo -e "│  Proxmox LXC containers use static IPs on isolated networks.                 │"
-    echo -e "│  Production and staging use separate subnets for isolation.                  │"
-    echo -e "│                                                                              │"
+    box_line "" "single"
+    box_line "  Proxmox LXC containers use static IPs on isolated networks." "single"
+    box_line "  Production and staging use separate subnets for isolation." "single"
+    box_line "" "single"
     echo -e "└──────────────────────────────────────────────────────────────────────────────┘"
     echo ""
     
@@ -389,14 +431,14 @@ wizard_domain() {
     
     echo ""
     echo -e "┌─ ${BOLD}DOMAIN CONFIGURATION${NC} ───────────────────────────────────────────────────────┐"
-    echo -e "│                                                                              │"
-    echo -e "│  Your Busibox deployment needs a domain name for HTTPS and external access.  │"
-    echo -e "│                                                                              │"
-    echo -e "│  Examples:                                                                   │"
-    echo -e "│    - ${CYAN}localhost${NC}           Local development only (self-signed SSL)            │"
-    echo -e "│    - ${CYAN}ai.company.com${NC}      Production with proper SSL certificate              │"
-    echo -e "│    - ${CYAN}busibox.local${NC}       Internal network (requires DNS/hosts setup)         │"
-    echo -e "│                                                                              │"
+    box_line "" "single"
+    box_line "  Your Busibox deployment needs a domain name for HTTPS and external access." "single"
+    box_line "" "single"
+    box_line "  Examples:" "single"
+    box_line "    - ${CYAN}localhost${NC}           Local development only (self-signed SSL)" "single"
+    box_line "    - ${CYAN}ai.company.com${NC}      Production with proper SSL certificate" "single"
+    box_line "    - ${CYAN}busibox.local${NC}       Internal network (requires DNS/hosts setup)" "single"
+    box_line "" "single"
     echo -e "└──────────────────────────────────────────────────────────────────────────────┘"
     echo ""
     
@@ -410,10 +452,10 @@ wizard_domain() {
 wizard_admin() {
     echo ""
     echo -e "┌─ ${BOLD}ADMIN CONFIGURATION${NC} ────────────────────────────────────────────────────────┐"
-    echo -e "│                                                                              │"
-    echo -e "│  The admin account will have full access to manage Busibox.                  │"
-    echo -e "│  A magic link will be sent to this email for passwordless login.             │"
-    echo -e "│                                                                              │"
+    box_line "" "single"
+    box_line "  The admin account will have full access to manage Busibox." "single"
+    box_line "  A magic link will be sent to this email for passwordless login." "single"
+    box_line "" "single"
     echo -e "└──────────────────────────────────────────────────────────────────────────────┘"
     echo ""
     
@@ -521,20 +563,20 @@ detect_app_directories() {
         warn "Could not find: ${missing[*]}"
         echo ""
         echo -e "┌──────────────────────────────────────────────────────────────────────────────┐"
-        echo -e "│  ${BOLD}MISSING REPOSITORIES${NC}                                                        │"
+        box_line "  ${BOLD}MISSING REPOSITORIES${NC}" "single"
         echo -e "├──────────────────────────────────────────────────────────────────────────────┤"
-        echo -e "│  The following repositories were not found:                                 │"
+        box_line "  The following repositories were not found:" "single"
         for repo in "${missing[@]}"; do
-            printf "│    - %-72s│\n" "$repo"
+            box_line "    - $repo" "single"
         done
-        echo -e "│                                                                              │"
-        echo -e "│  Please clone them to the same parent directory as busibox:                 │"
-        printf "│    %-74s│\n" "$parent_dir"
-        echo -e "│                                                                              │"
-        echo -e "│  Or set these environment variables before running install:                 │"
-        echo -e "│    export AI_PORTAL_DIR=/path/to/ai-portal                                  │"
-        echo -e "│    export AGENT_MANAGER_DIR=/path/to/agent-manager                          │"
-        echo -e "│    export BUSIBOX_APP_DIR=/path/to/busibox-app                              │"
+        box_line "" "single"
+        box_line "  Please clone them to the same parent directory as busibox:" "single"
+        box_line "    $parent_dir" "single"
+        box_line "" "single"
+        box_line "  Or set these environment variables before running install:" "single"
+        box_line "    export AI_PORTAL_DIR=/path/to/ai-portal" "single"
+        box_line "    export AGENT_MANAGER_DIR=/path/to/agent-manager" "single"
+        box_line "    export BUSIBOX_APP_DIR=/path/to/busibox-app" "single"
         echo -e "└──────────────────────────────────────────────────────────────────────────────┘"
         return 1
     fi
@@ -567,7 +609,7 @@ generate_secrets() {
     export POSTGRES_PASSWORD=$(openssl rand -base64 24 | tr -d '/+=')
     export BETTER_AUTH_SECRET=$(openssl rand -hex 32)
     export SSO_JWT_SECRET=$(openssl rand -hex 32)
-    export AUTHZ_ADMIN_TOKEN=$(openssl rand -hex 32)
+    # Note: AUTHZ_ADMIN_TOKEN removed - we use direct PostgreSQL for bootstrap (Zero Trust)
     export AUTHZ_MASTER_KEY=$(openssl rand -base64 32)
     export LITELLM_API_KEY="sk-$(openssl rand -hex 16)"
     export LITELLM_MASTER_KEY="sk-$(openssl rand -hex 16)"
@@ -601,7 +643,7 @@ MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
 MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
 
 # AuthZ
-AUTHZ_ADMIN_TOKEN=${AUTHZ_ADMIN_TOKEN}
+# Note: AUTHZ_ADMIN_TOKEN removed - bootstrap uses direct PostgreSQL (Zero Trust)
 AUTHZ_MASTER_KEY=${AUTHZ_MASTER_KEY}
 AUTHZ_BOOTSTRAP_CLIENT_ID=${AUTHZ_BOOTSTRAP_CLIENT_ID}
 AUTHZ_BOOTSTRAP_CLIENT_SECRET=${AUTHZ_BOOTSTRAP_CLIENT_SECRET}
@@ -746,9 +788,9 @@ bootstrap_docker() {
     show_stage 40 "Starting PostgreSQL" "Enterprise-grade database with row-level security."
     
     if [[ "$VERBOSE" == true ]]; then
-        docker compose $compose_files --env-file "$env_file" up -d postgres
+        docker compose $compose_files up -d postgres
     else
-        docker compose $compose_files --env-file "$env_file" up -d postgres 2>&1 | grep -v "^$" || true
+        docker compose $compose_files up -d postgres 2>&1 | grep -v "^$" || true
     fi
     
     # Wait for postgres
@@ -782,9 +824,9 @@ bootstrap_docker() {
     show_stage 55 "Starting AuthZ API" "Zero-trust authentication with OAuth 2.0."
     
     if [[ "$VERBOSE" == true ]]; then
-        docker compose $compose_files --env-file "$env_file" up -d authz-api
+        ADMIN_EMAIL="${ADMIN_EMAIL}" docker compose $compose_files up -d authz-api
     else
-        docker compose $compose_files --env-file "$env_file" up -d authz-api 2>&1 | grep -v "^$" || true
+        ADMIN_EMAIL="${ADMIN_EMAIL}" docker compose $compose_files up -d authz-api 2>&1 | grep -v "^$" || true
     fi
     
     # Wait for authz
@@ -824,9 +866,9 @@ bootstrap_docker() {
     # This is required for npm to install @jazzmind/busibox-app from GitHub Packages
     info "Building core-apps container (this may take a few minutes on first run)..."
     if [[ "$VERBOSE" == true ]]; then
-        docker compose $compose_files --env-file "$env_file" build core-apps
+        GITHUB_AUTH_TOKEN="${GITHUB_AUTH_TOKEN}" docker compose $compose_files build core-apps
     else
-        docker compose $compose_files --env-file "$env_file" build core-apps 2>&1 | tail -20 || true
+        GITHUB_AUTH_TOKEN="${GITHUB_AUTH_TOKEN}" docker compose $compose_files build core-apps 2>&1 | tail -20 || true
     fi
     
     show_stage 80 "Starting AI Portal" "Your command center for managing Busibox."
@@ -834,9 +876,9 @@ bootstrap_docker() {
     # Start core-apps (contains ai-portal + agent-manager) without waiting for docs-api
     # We use --no-deps to skip the docs-api dependency for bootstrap
     if [[ "$VERBOSE" == true ]]; then
-        docker compose $compose_files --env-file "$env_file" up -d --no-deps core-apps
+        GITHUB_AUTH_TOKEN="${GITHUB_AUTH_TOKEN}" docker compose $compose_files up -d --no-deps core-apps
     else
-        docker compose $compose_files --env-file "$env_file" up -d --no-deps core-apps 2>&1 | grep -v "^$" || true
+        GITHUB_AUTH_TOKEN="${GITHUB_AUTH_TOKEN}" docker compose $compose_files up -d --no-deps core-apps 2>&1 | grep -v "^$" || true
     fi
     
     # Wait for core-apps container to exist
@@ -853,15 +895,29 @@ bootstrap_docker() {
     # Run database migrations for AI Portal
     show_stage 85 "Running database migrations" "Setting up AI Portal schema..."
     
-    info "Running Prisma migrations for AI Portal..."
-    # Wait for container to be ready to accept commands
-    sleep 10
+    info "Waiting for AI Portal dependencies to install..."
+    # Wait for node_modules to be populated (entrypoint runs npm install)
+    attempt=0
+    max_attempts=60  # 2 minutes
+    while [[ $attempt -lt $max_attempts ]]; do
+        if docker exec "${container_prefix}-core-apps" sh -c "test -f /srv/ai-portal/node_modules/.package-lock.json" 2>/dev/null; then
+            success "Dependencies installed"
+            break
+        fi
+        sleep 2
+        ((attempt++))
+    done
     
-    # Run prisma db push to sync schema
-    if docker exec "${container_prefix}-core-apps" sh -c "cd /srv/ai-portal && npx prisma db push" 2>&1; then
-        success "Database schema synchronized"
+    if [[ $attempt -ge $max_attempts ]]; then
+        warn "Dependencies installation timed out - check container logs"
     else
-        warn "Database migration may have failed - check logs if issues persist"
+        info "Running Prisma migrations for AI Portal..."
+        # Run prisma db push to sync schema
+        if docker exec "${container_prefix}-core-apps" sh -c "cd /srv/ai-portal && npx prisma db push --accept-data-loss" 2>&1; then
+            success "Database schema synchronized"
+        else
+            warn "Database migration may have failed - check logs if issues persist"
+        fi
     fi
     
     # ==========================================================================
@@ -871,9 +927,9 @@ bootstrap_docker() {
     
     # Start nginx without waiting for all API dependencies
     if [[ "$VERBOSE" == true ]]; then
-        docker compose $compose_files --env-file "$env_file" up -d --no-deps nginx
+        docker compose $compose_files up -d --no-deps nginx
     else
-        docker compose $compose_files --env-file "$env_file" up -d --no-deps nginx 2>&1 | grep -v "^$" || true
+        docker compose $compose_files up -d --no-deps nginx 2>&1 | grep -v "^$" || true
     fi
     
     # ==========================================================================
@@ -909,13 +965,30 @@ bootstrap_docker() {
 
 create_admin_user() {
     local email="$1"
-    local authz_admin_token="${AUTHZ_ADMIN_TOKEN:-}"
+    local container_prefix="${CONTAINER_PREFIX:-local}"
+    local db_user="${POSTGRES_USER:-busibox_user}"
+    local db_pass="${POSTGRES_PASSWORD:-devpassword}"
     local max_attempts=30
     local attempt=0
     
-    info "Creating admin user in authz..."
+    info "Creating admin user via direct PostgreSQL (Zero Trust bootstrap)..."
     
-    # Wait for authz to be ready
+    # Wait for postgres to be ready
+    while [[ $attempt -lt $max_attempts ]]; do
+        if docker exec "${container_prefix}-postgres" pg_isready -U "$db_user" &>/dev/null; then
+            break
+        fi
+        sleep 2
+        ((attempt++))
+    done
+    
+    if [[ $attempt -ge $max_attempts ]]; then
+        warn "PostgreSQL not ready, cannot create admin user automatically"
+        return 1
+    fi
+    
+    # Also wait for authz to bootstrap (creates Admin role)
+    attempt=0
     while [[ $attempt -lt $max_attempts ]]; do
         if curl -sf http://localhost:8010/health/live &>/dev/null; then
             break
@@ -925,69 +998,191 @@ create_admin_user() {
     done
     
     if [[ $attempt -ge $max_attempts ]]; then
-        warn "AuthZ API not ready, cannot create admin user automatically"
+        warn "AuthZ API not ready, Admin role may not exist"
+    fi
+    
+    # Give authz a moment to bootstrap roles
+    sleep 3
+    
+    # Generate UUIDs and token
+    local user_id=$(uuidgen | tr '[:upper:]' '[:lower:]')
+    local magic_link_token=$(openssl rand -base64 32 | tr -d '/+=' | head -c 43)
+    local email_lower=$(echo "$email" | tr '[:upper:]' '[:lower:]')
+    
+    # Execute SQL via docker exec to postgres container
+    # This is Zero Trust compliant - we're using direct DB access during bootstrap only
+    local sql_result
+    
+    # First check if user already exists
+    local existing_user_id
+    existing_user_id=$(docker exec "${container_prefix}-postgres" psql -U "$db_user" -d authz -t -A -c "
+        SELECT user_id::text FROM authz_users WHERE email = '${email_lower}';
+    " 2>&1 | grep -v "^$" | head -1)
+    
+    if [[ -n "$existing_user_id" && "$existing_user_id" != *"ERROR"* ]]; then
+        # User exists, update status
+        user_id=$(echo "$existing_user_id" | tr -d '[:space:]')
+        docker exec "${container_prefix}-postgres" psql -U "$db_user" -d authz -c "
+            UPDATE authz_users SET status = 'active', updated_at = now()
+            WHERE user_id = '${user_id}'::uuid;
+        " >/dev/null 2>&1
+        sql_result="$user_id"
+    else
+        # User doesn't exist, insert new
+        sql_result=$(docker exec "${container_prefix}-postgres" psql -U "$db_user" -d authz -t -A -c "
+            INSERT INTO authz_users (user_id, email, status)
+            VALUES ('${user_id}'::uuid, '${email_lower}', 'active')
+            RETURNING user_id::text;
+        " 2>&1 | grep -v "^$" | head -1)
+    fi
+    
+    if [[ $? -ne 0 ]]; then
+        warn "Failed to create admin user: $sql_result"
         return 1
     fi
     
-    # Bootstrap the Admin role with busibox-admin scope
-    local roles_response
-    roles_response=$(curl -s -X POST "http://localhost:8010/internal/bootstrap-roles" \
-        -H "Content-Type: application/json" \
-        -H "Authorization: Bearer ${authz_admin_token}" \
-        -d '{"roles": [{"name": "Admin", "scopes": ["authz.*", "busibox-admin.*"], "description": "Full system administrator with all permissions"}]}')
+    # Get the actual user_id (may differ if user already existed)
+    # Clean it up to remove any extra whitespace or newlines
+    user_id=$(echo "$sql_result" | tr -d '[:space:]' | tr -d '\n' | tr -d '\r')
     
-    if [[ "$VERBOSE" == true ]]; then
-        info "Roles bootstrap response: $roles_response"
+    if [[ -z "$user_id" ]]; then
+        warn "Failed to get user ID from database"
+        return 1
     fi
     
-    # Create admin user and get magic link
-    local response
-    response=$(curl -s -X POST "http://localhost:8010/internal/bootstrap-admin" \
-        -H "Content-Type: application/json" \
-        -H "Authorization: Bearer ${authz_admin_token}" \
-        -d "{\"email\": \"${email}\", \"roles\": [\"Admin\"]}")
+    # Get Admin role ID (created by authz bootstrap)
+    local admin_role_id
+    admin_role_id=$(docker exec "${container_prefix}-postgres" psql -U "$db_user" -d authz -t -A -c "
+        SELECT id::text FROM authz_roles WHERE name = 'Admin' LIMIT 1;
+    " 2>&1 | grep -v "^$" | head -1)
     
-    if [[ "$VERBOSE" == true ]]; then
-        info "Bootstrap admin response: $response"
+    if [[ -z "$admin_role_id" || "$admin_role_id" == *"ERROR"* ]]; then
+        warn "Admin role not found - authz may not have bootstrapped yet"
+        # Create Admin role manually as fallback
+        # First check if it exists
+        existing_admin=$(docker exec "${container_prefix}-postgres" psql -U "$db_user" -d authz -t -A -c "
+            SELECT id::text FROM authz_roles WHERE name = 'Admin' LIMIT 1;
+        " 2>&1 | grep -v "^$" | head -1)
+        
+        if [[ -z "$existing_admin" || "$existing_admin" == *"ERROR"* ]]; then
+            # Create new Admin role
+            admin_role_id=$(uuidgen | tr '[:upper:]' '[:lower:]')
+            docker exec "${container_prefix}-postgres" psql -U "$db_user" -d authz -c "
+                INSERT INTO authz_roles (id, name, description, scopes)
+                VALUES ('${admin_role_id}'::uuid, 'Admin', 'Full system administrator', 
+                        ARRAY['authz.*', 'busibox-admin.*']);
+            " >/dev/null 2>&1
+        else
+            admin_role_id="$existing_admin"
+        fi
     fi
     
-    # Extract user_id and magic_link_token from response
-    local user_id magic_link_token
-    user_id=$(echo "$response" | grep -o '"user_id"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*: *"\([^"]*\)".*/\1/' || echo "")
-    magic_link_token=$(echo "$response" | grep -o '"magic_link_token"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*: *"\([^"]*\)".*/\1/' || echo "")
+    # Clean up the admin_role_id to remove any extra whitespace or newlines
+    admin_role_id=$(echo "$admin_role_id" | tr -d '[:space:]' | tr -d '\n' | tr -d '\r')
     
-    if [[ -n "$user_id" && -n "$magic_link_token" ]]; then
+    # Assign Admin role to user (check first to avoid constraint errors)
+    local existing_role
+    existing_role=$(docker exec "${container_prefix}-postgres" psql -U "$db_user" -d authz -t -A -c "
+        SELECT 1 FROM authz_user_roles 
+        WHERE user_id = '${user_id}'::uuid AND role_id = '${admin_role_id}'::uuid;
+    " 2>&1)
+    
+    if [[ -z "$existing_role" || "$existing_role" == *"ERROR"* ]]; then
+        docker exec "${container_prefix}-postgres" psql -U "$db_user" -d authz -c "
+            INSERT INTO authz_user_roles (user_id, role_id)
+            VALUES ('${user_id}'::uuid, '${admin_role_id}'::uuid);
+        " >/dev/null 2>&1
+    fi
+    
+    # Create magic link (24 hour expiry for initial setup)
+    # First delete any existing magic links for this user to avoid conflicts
+    docker exec "${container_prefix}-postgres" psql -U "$db_user" -d authz -c "
+        DELETE FROM authz_magic_links WHERE user_id = '${user_id}'::uuid;
+    " >/dev/null 2>&1
+    
+    # Now insert the new magic link
+    local magic_result
+    magic_result=$(docker exec "${container_prefix}-postgres" psql -U "$db_user" -d authz -c "
+        INSERT INTO authz_magic_links (user_id, token, email, expires_at)
+        VALUES ('${user_id}'::uuid, '${magic_link_token}', '${email_lower}', 
+                now() + interval '24 hours')
+        RETURNING token;
+    " 2>&1)
+    
+    if [[ $? -eq 0 && "$magic_result" == *"${magic_link_token}"* ]]; then
         set_state "ADMIN_USER_ID" "$user_id"
         set_state "MAGIC_LINK_TOKEN" "$magic_link_token"
         success "Admin user created with ID: $user_id"
         return 0
     else
-        warn "Failed to create admin user or extract magic link token"
-        if [[ "$VERBOSE" == true ]]; then
-            warn "Response was: $response"
-        fi
+        warn "Failed to create magic link: $magic_result"
         return 1
     fi
 }
 
 generate_admin_link() {
-    local token
-    token=$(get_state "MAGIC_LINK_TOKEN" 2>/dev/null || echo "")
+    local regenerate="${1:-false}"  # Pass true to force regeneration
+    local admin_email
+    admin_email=$(get_state "ADMIN_EMAIL" 2>/dev/null || echo "")
     
-    if [[ -n "$token" ]]; then
-        # Return proper setup URL with magic link token
-        if [[ "$BASE_DOMAIN" == "localhost" ]]; then
-            echo "https://localhost/portal/admin/setup?token=${token}"
-        else
-            echo "https://${BASE_DOMAIN}/portal/admin/setup?token=${token}"
-        fi
-    else
-        # Fallback to portal URL without token
+    if [[ -z "$admin_email" ]]; then
+        # No admin email configured - return portal URL without token
         if [[ "$BASE_DOMAIN" == "localhost" ]]; then
             echo "https://localhost/portal/"
         else
             echo "https://${BASE_DOMAIN}/portal/"
         fi
+        return
+    fi
+    
+    local token
+    
+    # Check if we should regenerate or if existing token is still valid
+    if [[ "$regenerate" == "true" ]]; then
+        token=""
+    else
+        token=$(get_state "MAGIC_LINK_TOKEN" 2>/dev/null || echo "")
+        
+        # Verify token is still valid (not used/expired) if we have one
+        if [[ -n "$token" ]]; then
+            local is_valid
+            is_valid=$(docker exec "${CONTAINER_PREFIX}-postgres" psql -U postgres -d authz -t -A -c \
+                "SELECT COUNT(*) FROM authz_magic_links WHERE token = '$token' AND expires_at > now() AND used_at IS NULL;" \
+                2>/dev/null || echo "0")
+            
+            if [[ "$is_valid" != "1" ]]; then
+                # Token is used or expired - need to regenerate
+                token=""
+            fi
+        fi
+    fi
+    
+    # Generate new token if needed
+    if [[ -z "$token" ]]; then
+        # Generate new magic link token
+        token=$(openssl rand -base64 32 | tr -d '/+=' | cut -c1-43)
+        
+        # Delete any existing magic links for this user
+        docker exec "${CONTAINER_PREFIX}-postgres" psql -U postgres -d authz -c \
+            "DELETE FROM authz_magic_links WHERE user_id = (SELECT user_id FROM authz_users WHERE email = '$admin_email');" \
+            >/dev/null 2>&1 || true
+        
+        # Insert new magic link
+        docker exec "${CONTAINER_PREFIX}-postgres" psql -U postgres -d authz -c \
+            "INSERT INTO authz_magic_links (user_id, email, token, expires_at) 
+             SELECT user_id, email, '$token', now() + interval '24 hours' 
+             FROM authz_users WHERE email = '$admin_email';" \
+            >/dev/null 2>&1
+        
+        # Save to state
+        save_state "MAGIC_LINK_TOKEN" "$token"
+    fi
+    
+    # Return proper setup URL with magic link token
+    if [[ "$BASE_DOMAIN" == "localhost" ]]; then
+        echo "https://localhost/portal/admin/setup?token=${token}"
+    else
+        echo "https://${BASE_DOMAIN}/portal/admin/setup?token=${token}"
     fi
 }
 
@@ -999,27 +1194,29 @@ show_completion() {
     echo ""
     echo ""
     
-    # Box width is 80 chars (78 inside the borders)
+    # First box - BOOTSTRAP COMPLETE (green double-line box)
     echo -e "${GREEN}╔══════════════════════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║${NC}                         ${BOLD}BOOTSTRAP COMPLETE${NC}                                 ${GREEN}║${NC}"
+    box_line "                         ${BOLD}BOOTSTRAP COMPLETE${NC}" "double" "${GREEN}"
     echo -e "${GREEN}╠══════════════════════════════════════════════════════════════════════════════╣${NC}"
-    echo -e "${GREEN}║${NC}                                                                              ${GREEN}║${NC}"
-    echo -e "${GREEN}║${NC}  Core services are running! Open the AI Portal in your browser:             ${GREEN}║${NC}"
-    echo -e "${GREEN}║${NC}                                                                              ${GREEN}║${NC}"
+    box_line "" "double" "${GREEN}"
+    box_line "  Core services are running! Open the AI Portal in your browser:" "double" "${GREEN}"
+    box_line "" "double" "${GREEN}"
     echo -e "${GREEN}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "  ${CYAN}${magic_link}${NC}"
     echo ""
+    
+    # Second box - What's Running (green double-line box)
     echo -e "${GREEN}╔══════════════════════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║${NC}  ${BOLD}What's Running:${NC}                                                             ${GREEN}║${NC}"
-    echo -e "${GREEN}║${NC}                                                                              ${GREEN}║${NC}"
-    echo -e "${GREEN}║${NC}  • PostgreSQL     - Database with row-level security                        ${GREEN}║${NC}"
-    echo -e "${GREEN}║${NC}  • AuthZ API      - OAuth 2.0 authentication                                ${GREEN}║${NC}"
-    echo -e "${GREEN}║${NC}  • AI Portal      - Web dashboard for managing Busibox                      ${GREEN}║${NC}"
-    echo -e "${GREEN}║${NC}  • Nginx          - Reverse proxy with SSL                                  ${GREEN}║${NC}"
-    echo -e "${GREEN}║${NC}                                                                              ${GREEN}║${NC}"
-    echo -e "${GREEN}║${NC}  ${BOLD}Note:${NC} Your browser will show a certificate warning (self-signed SSL).     ${GREEN}║${NC}"
-    echo -e "${GREEN}║${NC}  Click 'Advanced' and proceed to continue.                                  ${GREEN}║${NC}"
+    box_line "  ${BOLD}What's Running:${NC}" "double" "${GREEN}"
+    box_line "" "double" "${GREEN}"
+    box_line "  • PostgreSQL     - Database with row-level security" "double" "${GREEN}"
+    box_line "  • AuthZ API      - OAuth 2.0 authentication" "double" "${GREEN}"
+    box_line "  • AI Portal      - Web dashboard for managing Busibox" "double" "${GREEN}"
+    box_line "  • Nginx          - Reverse proxy with SSL" "double" "${GREEN}"
+    box_line "" "double" "${GREEN}"
+    box_line "  ${BOLD}Note:${NC} Your browser will show a certificate warning (self-signed SSL)." "double" "${GREEN}"
+    box_line "  Click 'Advanced' and proceed to continue." "double" "${GREEN}"
     echo -e "${GREEN}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
@@ -1136,14 +1333,17 @@ check_existing_install() {
     # Check if bootstrap is complete
     if [[ "$install_status" == "installed" || "$install_phase" == "complete" ]]; then
         # Installation complete - show magic link and open browser
+        # Load BASE_DOMAIN from state for URL generation
+        BASE_DOMAIN=$(get_state "BASE_DOMAIN" 2>/dev/null || echo "localhost")
+        
         echo ""
         echo -e "${GREEN}╔══════════════════════════════════════════════════════════════════════════════╗${NC}"
-        echo -e "${GREEN}║${NC}                      ${BOLD}BUSIBOX ALREADY INSTALLED${NC}                              ${GREEN}║${NC}"
+        box_line "                      ${BOLD}BUSIBOX ALREADY INSTALLED${NC}" "double" "${GREEN}"
         echo -e "${GREEN}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
         echo ""
         
         local magic_link
-        magic_link=$(generate_admin_link)
+        magic_link=$(generate_admin_link true)  # Force regenerate for existing installations
         
         echo -e "  Your Busibox instance is ready. Open the AI Portal:"
         echo ""
@@ -1152,11 +1352,11 @@ check_existing_install() {
         
         if [[ "$NO_PROMPT" != true ]]; then
             echo -e "┌──────────────────────────────────────────────────────────────────────────────┐"
-            echo -e "│                                                                              │"
-            echo -e "│  ${CYAN}1)${NC} Open browser       Launch AI Portal in your default browser              │"
-            echo -e "│  ${CYAN}2)${NC} Fresh install      Delete existing stack and start over                  │"
-            echo -e "│  ${CYAN}3)${NC} Exit               Do nothing                                            │"
-            echo -e "│                                                                              │"
+            box_line "" "single"
+            box_line "  ${CYAN}1)${NC} Open browser       Launch AI Portal in your default browser" "single"
+            box_line "  ${CYAN}2)${NC} Fresh install      Delete existing stack and start over" "single"
+            box_line "  ${CYAN}3)${NC} Exit               Do nothing" "single"
+            box_line "" "single"
             echo -e "└──────────────────────────────────────────────────────────────────────────────┘"
             echo ""
             
@@ -1202,7 +1402,7 @@ check_existing_install() {
     # Installation interrupted - offer resume or restart
     echo ""
     echo -e "${YELLOW}╔══════════════════════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${YELLOW}║${NC}                     ${BOLD}INTERRUPTED INSTALLATION DETECTED${NC}                        ${YELLOW}║${NC}"
+    box_line "                     ${BOLD}INTERRUPTED INSTALLATION DETECTED${NC}" "double" "${YELLOW}"
     echo -e "${YELLOW}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "  A previous installation was interrupted at phase: ${BOLD}${install_phase:-unknown}${NC}"
@@ -1210,11 +1410,11 @@ check_existing_install() {
     
     if [[ "$NO_PROMPT" != true ]]; then
         echo -e "┌──────────────────────────────────────────────────────────────────────────────┐"
-        echo -e "│                                                                              │"
-        echo -e "│  ${CYAN}1)${NC} Continue          Resume from where we left off                          │"
-        echo -e "│  ${CYAN}2)${NC} Start fresh       Delete existing stack and start over                   │"
-        echo -e "│  ${CYAN}3)${NC} Exit              Do nothing                                             │"
-        echo -e "│                                                                              │"
+        box_line "" "single"
+        box_line "  ${CYAN}1)${NC} Continue          Resume from where we left off" "single"
+        box_line "  ${CYAN}2)${NC} Start fresh       Delete existing stack and start over" "single"
+        box_line "  ${CYAN}3)${NC} Exit              Do nothing" "single"
+        box_line "" "single"
         echo -e "└──────────────────────────────────────────────────────────────────────────────┘"
         echo ""
         
@@ -1261,10 +1461,16 @@ cleanup_existing_install() {
     local compose_files="-f docker-compose.yml -f docker-compose.local-dev.yml"
     
     if [[ -f "$env_file" ]]; then
-        docker compose $compose_files --env-file "$env_file" down -v 2>/dev/null || true
+        docker compose $compose_files down -v --rmi local 2>/dev/null || true
     else
-        docker compose $compose_files down -v 2>/dev/null || true
+        docker compose $compose_files down -v --rmi local 2>/dev/null || true
     fi
+    
+    # Also remove any cached core-apps images to force rebuild with new Dockerfile
+    # This ensures we don't use stale images when the Dockerfile changes
+    info "Removing cached core-apps images..."
+    docker images --filter "reference=*core-apps*" -q 2>/dev/null | xargs -r docker rmi -f 2>/dev/null || true
+    docker images --filter "reference=*busibox*core*" -q 2>/dev/null | xargs -r docker rmi -f 2>/dev/null || true
     
     # Remove state and env files
     rm -f "$state_file"
@@ -1436,6 +1642,9 @@ main() {
     # Mark installation as complete
     set_install_phase "complete"
     set_install_status "installed"
+    
+    # Note: SETUP_COMPLETE will be set by AI Portal after admin completes setup wizard
+    save_state "SETUP_COMPLETE" "false"
     
     # Generate admin magic link
     local magic_link

@@ -207,7 +207,7 @@ ensure_github_token() {
     
     # Need to prompt for token
     echo ""
-    echo -e "┌─ ${BOLD}GITHUB AUTHENTICATION${NC} ─────────────────────────────────────────────────────────┐"
+    echo -e "┌─ ${BOLD}GITHUB AUTHENTICATION${NC} ───────────────────────────────────────────────────────┐"
     echo -e "│                                                                              │"
     echo -e "│  A GitHub Personal Access Token is required to:                              │"
     echo -e "│    - Clone private repositories (ai-portal, agent-manager)                   │"
