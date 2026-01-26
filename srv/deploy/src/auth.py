@@ -86,13 +86,18 @@ async def verify_admin_token(
         # (In production, we should verify signature via JWKS)
         try:
             unverified = jwt.get_unverified_claims(token)
+            logger.debug(f"[AUTH] Decoded JWT claims: {unverified}")
         except JWTError as e:
             logger.error(f"Failed to decode JWT: {e}")
             raise HTTPException(status_code=401, detail="Invalid token format")
         
-        user_id = unverified.get('sub')
+        # Session JWTs have user_id, session_id, email, roles_count
+        user_id = unverified.get('user_id') or unverified.get('sub')
         if not user_id:
+            logger.error(f"[AUTH] Token missing user_id: {unverified.keys()}")
             raise HTTPException(status_code=401, detail="Invalid token: missing user ID")
+        
+        logger.info(f"[AUTH] Validating token for user {user_id}")
         
         # Check if token has roles embedded (session JWTs from ai-portal have this)
         roles = unverified.get('roles', [])
@@ -104,31 +109,37 @@ async def verify_admin_token(
         
         if not is_admin:
             # Fallback: try to fetch roles from authz service
-            logger.info(f"No Admin role in token, checking authz service for user {user_id}")
-            async with httpx.AsyncClient() as client:
-                roles_response = await client.get(
-                    f"{config.authz_url}/api/v1/users/{user_id}/roles",
-                    headers={"Authorization": f"Bearer {token}"},
-                    timeout=10.0
-                )
-                
-                if roles_response.status_code == 200:
-                    roles = roles_response.json()
-                    is_admin = any(
-                        r.get('name') == 'Admin' or r.get('role', {}).get('name') == 'Admin'
-                        for r in roles
+            logger.info(f"[AUTH] No Admin role in token, checking authz service for user {user_id}")
+            try:
+                async with httpx.AsyncClient() as client:
+                    roles_response = await client.get(
+                        f"{config.authz_url}/api/v1/users/{user_id}/roles",
+                        headers={"Authorization": f"Bearer {token}"},
+                        timeout=10.0
                     )
-                else:
-                    logger.warning(f"Failed to get user roles from authz: {roles_response.status_code}")
+                    
+                    if roles_response.status_code == 200:
+                        roles_data = roles_response.json()
+                        logger.debug(f"[AUTH] Roles from authz: {roles_data}")
+                        is_admin = any(
+                            r.get('name') == 'Admin' or r.get('role', {}).get('name') == 'Admin'
+                            for r in roles_data
+                        )
+                        if is_admin:
+                            logger.info(f"[AUTH] User {user_id} verified as Admin via authz")
+                    else:
+                        logger.warning(f"[AUTH] Failed to get user roles from authz: {roles_response.status_code}")
+            except Exception as e:
+                logger.error(f"[AUTH] Error fetching roles from authz: {e}")
         
         if not is_admin:
-            logger.warning(f"Non-admin user {user_id} attempted deployment operation")
+            logger.warning(f"[AUTH] Non-admin user {user_id} attempted deployment operation")
             raise HTTPException(
                 status_code=403,
                 detail="Admin role required for deployment operations"
             )
         
-        logger.info(f"Admin user {user_id} authenticated for deployment")
+        logger.info(f"[AUTH] Admin user {user_id} authenticated for deployment")
         return {"user_id": user_id, "roles": roles, **unverified}
             
     except httpx.RequestError as e:
