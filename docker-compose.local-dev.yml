@@ -65,8 +65,8 @@ services:
       # Service URLs (for SSO redirect via nginx proxy)
       NEXT_PUBLIC_AGENT_MANAGER_URL: https://localhost/agents
       NEXT_PUBLIC_APP_URL: https://localhost/portal
-      # Base path for nginx subpath routing
-      NEXT_PUBLIC_BASE_PATH: /portal
+      # NOTE: NEXT_PUBLIC_BASE_PATH is set per-app in core-apps-entrypoint.sh
+      # because both apps run in the same container but need different values
       # Backend service URLs (for server-side API calls)
       AGENT_API_URL: http://agent-api:8000
       INGEST_API_HOST: ingest-api
@@ -95,8 +95,9 @@ services:
       NEXT_PUBLIC_SEARCH_API_URL: https://localhost/api/search
       # AI Portal (SSO) via nginx
       NEXT_PUBLIC_AI_PORTAL_URL: https://localhost/portal
-      # Base path for nginx subpath routing
-      # NEXT_PUBLIC_BASE_PATH: /agents  # Commented out - handled by agent-manager's env
+      # NOTE: NEXT_PUBLIC_BASE_PATH is set per-app in core-apps-entrypoint.sh
+      # because both apps run in the same container but need different values
+      # (/portal for ai-portal, /agents for agent-manager)
     ports:
       - "3000:3000"  # AI Portal
       - "3001:3001"  # Agent Manager
@@ -116,8 +117,8 @@ services:
       authz-api:
         condition: service_healthy
     healthcheck:
-      # Check both apps are responding
-      test: ["CMD", "sh", "-c", "curl -f http://localhost:3000/portal/api/health && curl -f http://localhost:3001/agents"]
+      # Check both apps are responding at their health endpoints
+      test: ["CMD", "sh", "-c", "curl -f http://localhost:3000/portal/api/health && curl -f http://localhost:3001/agents/api/health"]
       interval: 30s
       timeout: 10s
       start_period: 120s

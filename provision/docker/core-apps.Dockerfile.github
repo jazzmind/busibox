@@ -47,7 +47,9 @@ COPY --from=base /root/.npmrc /root/.npmrc
 # Install dependencies
 RUN npm ci
 
-# Build the application
+# Build the application with correct base path
+# NEXT_PUBLIC_BASE_PATH must be set at build time for Next.js
+ENV NEXT_PUBLIC_BASE_PATH=/portal
 RUN npm run build
 
 # =============================================================================
@@ -69,7 +71,9 @@ COPY --from=base /root/.npmrc /root/.npmrc
 # Install dependencies
 RUN npm ci
 
-# Build the application
+# Build the application with correct base path
+# NEXT_PUBLIC_BASE_PATH must be set at build time for Next.js
+ENV NEXT_PUBLIC_BASE_PATH=/agents
 RUN npm run build
 
 # =============================================================================
@@ -112,9 +116,9 @@ EXPOSE 3000 3001
 ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
 
-# Health check
+# Health check - apps are served at their respective health endpoints
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:3000/api/health && curl -f http://localhost:3001/ || exit 1
+    CMD curl -f http://localhost:3000/portal/api/health && curl -f http://localhost:3001/agents/api/health || exit 1
 
 ENTRYPOINT ["/usr/local/bin/core-apps-entrypoint.sh"]
 CMD ["start"]

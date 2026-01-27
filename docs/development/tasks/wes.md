@@ -1,6 +1,12 @@
 # Wes's Tasks
+issues:
+ - health check on service page 
+
+
 [ ] get full make install flow working
-   [ ] embedding model pre-download, speed up container 
+
+
+
 [ ] get app deployer to work with sample
 [ ] update project-analysis to match app-template & deploy
 [ ] same for estimator

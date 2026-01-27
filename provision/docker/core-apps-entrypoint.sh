@@ -84,12 +84,14 @@ case "$MODE" in
         
         # Start both apps with concurrently
         # Names are prefixed with app name for log clarity
+        # IMPORTANT: Set NEXT_PUBLIC_BASE_PATH per-app since they need different values
+        # This overrides the container-wide environment variable
         exec concurrently \
             --names "portal,agents" \
             --prefix-colors "blue,green" \
             --kill-others-on-fail \
-            "cd /srv/ai-portal && PORT=3000 npm run dev" \
-            "cd /srv/agent-manager && PORT=3001 npm run dev"
+            "cd /srv/ai-portal && PORT=3000 NEXT_PUBLIC_BASE_PATH=/portal npm run dev" \
+            "cd /srv/agent-manager && PORT=3001 NEXT_PUBLIC_BASE_PATH=/agents npm run dev"
         ;;
         
     start)
@@ -102,12 +104,13 @@ case "$MODE" in
         fi
         
         # Start both apps with concurrently
+        # IMPORTANT: Set NEXT_PUBLIC_BASE_PATH per-app since they need different values
         exec concurrently \
             --names "portal,agents" \
             --prefix-colors "blue,green" \
             --kill-others-on-fail \
-            "cd /srv/ai-portal && PORT=3000 npm start" \
-            "cd /srv/agent-manager && PORT=3001 npm start"
+            "cd /srv/ai-portal && PORT=3000 NEXT_PUBLIC_BASE_PATH=/portal npm start" \
+            "cd /srv/agent-manager && PORT=3001 NEXT_PUBLIC_BASE_PATH=/agents npm start"
         ;;
         
     *)

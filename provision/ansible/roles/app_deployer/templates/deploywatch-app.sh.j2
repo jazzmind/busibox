@@ -430,6 +430,37 @@ run_migrations() {
     return 0
 }
 
+# Run database seeding (if db:seed script exists)
+# Only runs for apps that have db:seed in package.json
+run_seeding() {
+    cd "${DEPLOY_PATH}"
+    
+    # Load environment variables from .env file if it exists
+    if [[ -f ".env" ]]; then
+        set -a  # Automatically export all variables
+        source .env
+        set +a  # Turn off automatic export
+    fi
+    
+{% if app.name == 'ai-portal' %}
+    # ai-portal always runs seeding to ensure core apps and role bindings exist
+    if [[ -f "package.json" ]] && grep -q '"db:seed"' package.json; then
+        log_info "Running database seeding (ai-portal)"
+        if npm run db:seed 2>&1 | sed 's/^/[seed] /' >&2; then
+            log_success "Database seeding completed successfully"
+            return 0
+        else
+            log_warning "Database seeding had issues (non-fatal)"
+            # Don't fail deployment if seeding fails
+            return 0
+        fi
+    fi
+{% endif %}
+    
+    log_info "No seeding to run"
+    return 0
+}
+
 # Build application (if build command specified)
 build_application() {
     cd "${DEPLOY_PATH}"
@@ -621,6 +652,9 @@ main() {
         rollback
         return 1
     fi
+    
+    # Run seeding (for ai-portal to create core apps and role bindings)
+    run_seeding
     
     # Build application
     if ! build_application; then
