@@ -33,6 +33,14 @@ AgentInstance = Union[Agent, BaseStreamingAgent]
 #   - template_generator_agent
 #   - template_improvement_agent
 BUILTIN_AGENT_METADATA = {
+    "test_agent": {
+        "name": "test-agent",
+        "display_name": "Test Agent",
+        "description": "Minimal agent for LLM chain validation tests (uses Qwen3-0.6B, no tools)",
+        "model": "test",
+        "version": 1,
+        "tools": [],
+    },
     "chat_agent": {
         "name": "chat-agent",
         "display_name": "Chat Assistant",

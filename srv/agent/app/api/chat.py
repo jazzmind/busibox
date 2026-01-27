@@ -238,54 +238,77 @@ async def send_chat_message(
         selected_model = payload.model
         model_selection_reasoning = None
         
-        if payload.model == "auto":
-            model_selection = select_model_and_tools(
-                message=payload.message,
-                attachments=[att.model_dump() for att in (payload.attachments or [])],
-                history=history_dicts,
-                user_model_preference=user_settings.model if user_settings else None,
-                enabled_tools=enabled_tools
-            )
-            
-            selected_model = model_selection.model_id
-            model_selection_reasoning = model_selection.reasoning
-            
+        # Special handling for test mode - bypass dispatcher and use test agent directly
+        if payload.model == "test":
+            # Generate deterministic UUID for test-agent (same as builtin_agents.py)
+            test_agent_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, "busibox.builtin.test-agent"))
             logger.info(
-                f"Auto model selection: {selected_model}",
+                "Test mode: bypassing dispatcher, using test-agent directly",
                 extra={
                     "user_sub": principal.sub,
                     "conversation_id": str(conversation.id),
-                    "selected_model": selected_model,
-                    "confidence": model_selection.confidence,
-                    "reasoning": model_selection_reasoning
+                    "test_agent_uuid": test_agent_uuid,
                 }
             )
-        
-        # Route through dispatcher
-        dispatcher_request = DispatcherRequest(
-            query=payload.message,
-            available_tools=["web_search", "doc_search"],
-            available_agents=[],  # TODO: Get from agent registry
-            attachments=[
-                FileAttachment(name=att.name, type=att.type, url=att.url)
-                for att in (payload.attachments or [])
-            ],
-            user_settings=UserSettings(
-                enabled_tools=enabled_tools,
-                enabled_agents=user_settings.enabled_agents if user_settings else []
+            # Create a routing decision that forces the test agent (using UUID, not name)
+            from app.schemas.dispatcher import RoutingDecision
+            decision = RoutingDecision(
+                selected_tools=[],
+                selected_agents=[test_agent_uuid],  # Use UUID, not name
+                confidence=1.0,
+                reasoning="Test mode: using test-agent for LLM chain validation",
+                alternatives=[],
+                requires_disambiguation=False
             )
-        )
-        
-        request_id = str(uuid.uuid4())
-        
-        routing_response = await route_query(
-            request=dispatcher_request,
-            user_id=principal.sub,
-            request_id=request_id,
-            session=session
-        )
-        
-        decision = routing_response.routing_decision
+        else:
+            if payload.model == "auto":
+                model_selection = select_model_and_tools(
+                    message=payload.message,
+                    attachments=[att.model_dump() for att in (payload.attachments or [])],
+                    history=history_dicts,
+                    user_model_preference=user_settings.model if user_settings else None,
+                    enabled_tools=enabled_tools
+                )
+                
+                selected_model = model_selection.model_id
+                model_selection_reasoning = model_selection.reasoning
+                
+                logger.info(
+                    f"Auto model selection: {selected_model}",
+                    extra={
+                        "user_sub": principal.sub,
+                        "conversation_id": str(conversation.id),
+                        "selected_model": selected_model,
+                        "confidence": model_selection.confidence,
+                        "reasoning": model_selection_reasoning
+                    }
+                )
+            
+            # Route through dispatcher
+            dispatcher_request = DispatcherRequest(
+                query=payload.message,
+                available_tools=["web_search", "doc_search"],
+                available_agents=[],  # TODO: Get from agent registry
+                attachments=[
+                    FileAttachment(name=att.name, type=att.type, url=att.url)
+                    for att in (payload.attachments or [])
+                ],
+                user_settings=UserSettings(
+                    enabled_tools=enabled_tools,
+                    enabled_agents=user_settings.enabled_agents if user_settings else []
+                )
+            )
+            
+            request_id = str(uuid.uuid4())
+            
+            routing_response = await route_query(
+                request=dispatcher_request,
+                user_id=principal.sub,
+                request_id=request_id,
+                session=session
+            )
+            
+            decision = routing_response.routing_decision
         
         logger.info(
             f"Dispatcher routing complete: confidence={decision.confidence:.2f}",
