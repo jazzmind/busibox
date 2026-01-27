@@ -7,7 +7,7 @@
 # Usage:
 #   - Services reference purposes, not model names
 #   - Change models here without touching code
-#   - Environment-specific overrides in inventory/*/group_vars/
+#   - Environment-specific overrides via model_purposes_dev / model_purposes (staging/prod)
 #
 # Note: GPU/port assignments and technical details are in model_config.yml
 # (machine-generated, not version-controlled)
@@ -135,6 +135,71 @@ available_models:
     # Note: vLLM 0.11.0 does not support LoRA for PaliGemmaForConditionalGeneration
     # ColPali uses its own service with custom inference code
 
+  # =========================================================================
+  # MLX Models (Apple Silicon - Development/Demo)
+  # =========================================================================
+  # These models run on Apple Silicon Macs via mlx-lm
+  # Tiered by RAM: micro (<16GB), standard (16-32GB), pro (>32GB)
+  
+  "qwen3-0.6b":
+    provider: "mlx"
+    model: "qwen3-0.6b"
+    model_name: "mlx-community/Qwen3-0.6B-4bit"
+    description: "Tiny test model with reasoning (0.6B params, has <think> mode)"
+    tool_calling: true
+    tier: "micro"
+    
+  "qwen2.5-0.5b":
+    provider: "mlx"
+    model: "qwen2.5-0.5b"
+    model_name: "mlx-community/Qwen2.5-0.5B-Instruct-4bit"
+    description: "Tiny model for quick tests (0.5B params)"
+    tool_calling: true
+    tier: "micro"
+    
+  "qwen2.5-1.5b":
+    provider: "mlx"
+    model: "qwen2.5-1.5b"
+    model_name: "mlx-community/Qwen2.5-1.5B-Instruct-4bit"
+    description: "Small model for simple tasks (1.5B params)"
+    tool_calling: true
+    tier: "micro"
+    
+  "qwen2.5-3b":
+    provider: "mlx"
+    model: "qwen2.5-3b"
+    model_name: "mlx-community/Qwen2.5-3B-Instruct-4bit"
+    description: "Fast model for quick operations (3B params)"
+    tool_calling: true
+    tier: "standard"
+    
+  "qwen2.5-7b":
+    provider: "mlx"
+    model: "qwen2.5-7b"
+    model_name: "mlx-community/Qwen2.5-7B-Instruct-4bit"
+    description: "Agent model for reasoning tasks (7B params)"
+    tool_calling: true
+    tier: "standard"
+    
+  "qwen2.5-14b":
+    provider: "mlx"
+    model: "qwen2.5-14b"
+    model_name: "mlx-community/Qwen2.5-14B-Instruct-4bit"
+    description: "Frontier model for complex analysis (14B params)"
+    tool_calling: true
+    tier: "standard"
+    
+  "qwen2.5-32b":
+    provider: "mlx"
+    model: "qwen2.5-32b"
+    model_name: "mlx-community/Qwen2.5-32B-Instruct-4bit"
+    description: "Large frontier model (32B params, requires pro tier)"
+    tool_calling: true
+    tier: "pro"
+
+# =============================================================================
+# Model Purposes - Staging/Production (vLLM + Bedrock)
+# =============================================================================
 model_purposes:
   # Primary models
   default: "phi-4"   # General purpose agent model (default for most tasks)
@@ -142,19 +207,48 @@ model_purposes:
   frontier-fast: "claude-haiku-4-5"   # Fast frontier model (Claude 4.5 Haiku)
   
   # Task-specific
-  research: "qwen3-30b"   # Research and analysis (using best Claude)
-  agent: "qwen3-30b"   # agent model for agentic tasks
-  chat: "phi-4"   # General chat (Claude 4.5 Haiku)
+  research: "qwen3-30b"   # Research and analysis
+  agent: "qwen3-30b"   # Agent model for agentic tasks
+  chat: "phi-4"   # General chat
   vision: "phi-4"   # Vision-language model for image understanding
   classify: "phi-4"   # Document classification
   parsing: "phi-4"   # Document parsing and structure extraction
   cleanup: "phi-4"   # Text cleanup and formatting  
   fast: "phi-4"   # Fast model for quick operations
   tool_calling: "qwen3-30b"   # Tool calling model for tool calling tasks
-  
+  test: "qwen3-0.6b"   # Tiny model for validation tests
+
   # Embeddings (dedicated services)
-  embedding: "bge-large"   # Text embedding generation
+  embedding: "bge-large"   # Text embedding generation (1024-d)
   visual-embedding: "colpali"   # Visual document embedding (dedicated service)
   reranking: "qwen3-reranker"   # Search result reranking
   # Note: ColPali uses dedicated service (port 9006, GPU 0) - vLLM doesn't support LoRA for PaliGemma
+
+# =============================================================================
+# Model Purposes - Development (MLX on Apple Silicon)
+# =============================================================================
+# Uses smaller, locally-cached models for faster iteration and offline dev
+# Maps to models cached by `make warmup` - bge-small and qwen3-0.6b
+model_purposes_dev:
+  # Primary models (all use small MLX models for dev speed)
+  default: "qwen2.5-3b"   # General purpose (fast local model)
+  frontier: "qwen2.5-14b"   # Most capable local model
+  frontier-fast: "qwen2.5-7b"   # Fast frontier (local)
+  
+  # Task-specific (use small/fast models for dev)
+  research: "qwen2.5-7b"   # Research and analysis
+  agent: "qwen2.5-7b"   # Agent model for agentic tasks
+  chat: "qwen2.5-3b"   # General chat
+  vision: "qwen2.5-3b"   # Vision-language model (basic support)
+  classify: "qwen2.5-3b"   # Document classification
+  parsing: "qwen2.5-3b"   # Document parsing
+  cleanup: "qwen2.5-3b"   # Text cleanup
+  fast: "qwen2.5-3b"   # Fast model for quick operations
+  tool_calling: "qwen2.5-7b"   # Tool calling
+  test: "qwen3-0.6b"   # Tiny model for validation tests (cached by warmup)
+
+  # Embeddings (use smaller models for dev)
+  embedding: "bge-small"   # Text embedding (384-d, cached by warmup)
+  visual-embedding: "colpali"   # Visual document embedding (same as prod)
+  reranking: "bge-reranker-v2-m3-cpu"   # CPU reranking for dev (no GPU needed)
 

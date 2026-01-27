@@ -607,7 +607,6 @@ generate_secrets() {
     
     # Generate all secrets
     export POSTGRES_PASSWORD=$(openssl rand -base64 24 | tr -d '/+=')
-    export BETTER_AUTH_SECRET=$(openssl rand -hex 32)
     export SSO_JWT_SECRET=$(openssl rand -hex 32)
     # Note: AUTHZ_ADMIN_TOKEN removed - we use direct PostgreSQL for bootstrap (Zero Trust)
     export AUTHZ_MASTER_KEY=$(openssl rand -base64 32)
@@ -649,7 +648,6 @@ AUTHZ_BOOTSTRAP_CLIENT_ID=${AUTHZ_BOOTSTRAP_CLIENT_ID}
 AUTHZ_BOOTSTRAP_CLIENT_SECRET=${AUTHZ_BOOTSTRAP_CLIENT_SECRET}
 
 # AI Portal
-BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
 SSO_JWT_SECRET=${SSO_JWT_SECRET}
 ADMIN_EMAIL=${ADMIN_EMAIL}
 ALLOWED_EMAIL_DOMAINS=${ALLOWED_DOMAINS:-*}
@@ -687,6 +685,11 @@ COMPOSE_PROJECT_NAME=${container_prefix}-busibox
 
 # GitHub Authentication (for private repos and npm packages)
 GITHUB_AUTH_TOKEN=${GITHUB_AUTH_TOKEN}
+
+# Busibox host path (for volume mounts when deploy-api spawns containers)
+# This must be the absolute path on the host machine
+BUSIBOX_HOST_PATH="${REPO_ROOT}"
+export BUSIBOX_HOST_PATH
 
 # App Directories (for volume mounts in docker-compose.local-dev.yml)
 AI_PORTAL_DIR=${AI_PORTAL_DIR}
@@ -769,6 +772,12 @@ bootstrap_docker() {
     container_prefix=$(get_container_prefix)
     export CONTAINER_PREFIX="$container_prefix"
     export COMPOSE_PROJECT_NAME="${container_prefix}-busibox"
+    
+    # Set BUSIBOX_HOST_PATH for deploy-api (needed for volume mounts in spawned containers)
+    export BUSIBOX_HOST_PATH="${REPO_ROOT}"
+    
+    # Export LLM_BACKEND so deploy-api knows what hardware is on the host
+    export LLM_BACKEND="${LLM_BACKEND:-}"
     
     # Get environment-specific env file
     local env_file
@@ -872,10 +881,11 @@ bootstrap_docker() {
     
     show_stage 70 "Starting Deploy API" "Starting deployment orchestration service."
     
+    # BUSIBOX_HOST_PATH must be passed explicitly as docker compose may not pick it up from env file
     if [[ "$VERBOSE" == true ]]; then
-        docker compose $compose_files up -d --no-deps deploy-api
+        BUSIBOX_HOST_PATH="${BUSIBOX_HOST_PATH}" docker compose $compose_files up -d --no-deps deploy-api
     else
-        docker compose $compose_files up -d --no-deps deploy-api 2>&1 | grep -v "^$" || true
+        BUSIBOX_HOST_PATH="${BUSIBOX_HOST_PATH}" docker compose $compose_files up -d --no-deps deploy-api 2>&1 | grep -v "^$" || true
     fi
     
     # Wait for deploy-api
@@ -891,7 +901,7 @@ bootstrap_docker() {
     done
     
     if [[ $attempt -ge 30 ]]; then
-        warning "Deploy API health check timeout - continuing anyway"
+        warn "Deploy API health check timeout - continuing anyway"
     fi
     
     # ==========================================================================
@@ -1212,7 +1222,7 @@ generate_admin_link() {
             >/dev/null 2>&1
         
         # Save to state
-        save_state "MAGIC_LINK_TOKEN" "$token"
+        set_state "MAGIC_LINK_TOKEN" "$token"
     fi
     
     # Return proper setup URL with magic link token
@@ -1251,11 +1261,456 @@ show_completion() {
     box_line "  • AuthZ API      - OAuth 2.0 authentication" "double" "${GREEN}"
     box_line "  • AI Portal      - Web dashboard for managing Busibox" "double" "${GREEN}"
     box_line "  • Nginx          - Reverse proxy with SSL" "double" "${GREEN}"
+    if [[ "${LLM_BACKEND:-}" == "mlx" ]]; then
+        box_line "  • Host Agent     - MLX control service (localhost:8089)" "double" "${GREEN}"
+        box_line "" "double" "${GREEN}"
+        box_line "  ${BOLD}MLX:${NC} Test model downloaded. Start via AI Portal or run:" "double" "${GREEN}"
+        box_line "       scripts/llm/start-mlx-server.sh" "double" "${GREEN}"
+    fi
     box_line "" "double" "${GREEN}"
     box_line "  ${BOLD}Note:${NC} Your browser will show a certificate warning (self-signed SSL)." "double" "${GREEN}"
     box_line "  Click 'Advanced' and proceed to continue." "double" "${GREEN}"
     echo -e "${GREEN}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
     echo ""
+}
+
+# =============================================================================
+# MLX SETUP (Apple Silicon)
+# =============================================================================
+
+# MLX virtual environment path
+MLX_VENV_DIR="${HOME}/.busibox/mlx-venv"
+
+# Setup or activate the MLX virtual environment
+# This is required on modern macOS due to PEP 668 (externally-managed-environment)
+setup_mlx_venv() {
+    # Check for Python 3
+    if ! command -v python3 &>/dev/null; then
+        error "Python 3 is required for MLX but not found"
+        return 1
+    fi
+    
+    # Create ~/.busibox directory if it doesn't exist
+    mkdir -p "${HOME}/.busibox"
+    
+    # Create virtual environment if it doesn't exist
+    if [[ ! -d "$MLX_VENV_DIR" ]]; then
+        info "Creating MLX virtual environment at ${MLX_VENV_DIR}..."
+        python3 -m venv "$MLX_VENV_DIR" || {
+            error "Failed to create virtual environment"
+            return 1
+        }
+        success "Virtual environment created"
+    fi
+    
+    # Save venv path to state for other scripts to use
+    set_state "MLX_VENV_DIR" "$MLX_VENV_DIR"
+    
+    return 0
+}
+
+# Get the path to the MLX venv Python
+get_mlx_python() {
+    echo "${MLX_VENV_DIR}/bin/python3"
+}
+
+# Get the path to the MLX venv pip
+get_mlx_pip() {
+    echo "${MLX_VENV_DIR}/bin/pip3"
+}
+
+# Global variable to track background model download PID
+MODEL_DOWNLOAD_PID=""
+
+# Start downloading the test model in background (called early in install)
+# This allows the model to download while Docker containers are being built
+start_model_download_background() {
+    if [[ "$LLM_BACKEND" != "mlx" ]]; then
+        return 0
+    fi
+    
+    info "Starting model download in background..."
+    
+    # Setup virtual environment first
+    setup_mlx_venv || return 1
+    
+    local mlx_python
+    local mlx_pip
+    mlx_python=$(get_mlx_python)
+    mlx_pip=$(get_mlx_pip)
+    
+    # Install huggingface_hub first (needed for download)
+    "$mlx_pip" install -q huggingface_hub 2>/dev/null || {
+        warn "Could not install huggingface_hub - model will be downloaded later"
+        return 0
+    }
+    
+    # Check if model is already cached
+    local test_model="mlx-community/Qwen3-0.6B-4bit"
+    local cache_dir="${HOME}/.cache/huggingface/hub"
+    local model_dir="${cache_dir}/models--${test_model//\//-}"
+    
+    if [[ -d "$model_dir" ]]; then
+        info "Test model already cached, skipping background download"
+        return 0
+    fi
+    
+    # Start download in background
+    (
+        "$mlx_python" -c "
+from huggingface_hub import snapshot_download
+import sys
+try:
+    snapshot_download('${test_model}', local_dir_use_symlinks=True)
+except Exception as e:
+    print(f'Background download failed: {e}', file=sys.stderr)
+    sys.exit(1)
+" &>/dev/null
+    ) &
+    
+    MODEL_DOWNLOAD_PID=$!
+    set_state "MODEL_DOWNLOAD_PID" "$MODEL_DOWNLOAD_PID"
+    info "Model download started in background (PID: ${MODEL_DOWNLOAD_PID})"
+    
+    return 0
+}
+
+# Wait for background model download to complete (called at end of install)
+wait_for_model_download() {
+    if [[ -z "$MODEL_DOWNLOAD_PID" ]]; then
+        # Try to restore from state
+        MODEL_DOWNLOAD_PID=$(get_state "MODEL_DOWNLOAD_PID" "")
+    fi
+    
+    if [[ -z "$MODEL_DOWNLOAD_PID" ]]; then
+        return 0
+    fi
+    
+    # Check if process is still running
+    if kill -0 "$MODEL_DOWNLOAD_PID" 2>/dev/null; then
+        info "Waiting for background model download to complete..."
+        wait "$MODEL_DOWNLOAD_PID" 2>/dev/null || true
+        success "Model download complete"
+    fi
+    
+    # Clear the PID from state
+    set_state "MODEL_DOWNLOAD_PID" ""
+}
+
+# Get the appropriate embedding model based on environment
+# Development/demo use small model (faster), staging/production use large (better quality)
+get_embedding_model_for_env() {
+    # Check if explicitly set
+    if [[ -n "${FASTEMBED_MODEL:-}" ]]; then
+        echo "$FASTEMBED_MODEL"
+        return
+    fi
+    
+    # Choose based on environment
+    case "${ENVIRONMENT:-development}" in
+        staging|production)
+            echo "BAAI/bge-large-en-v1.5"
+            ;;
+        *)
+            # development, demo, or unset - use small model
+            echo "BAAI/bge-small-en-v1.5"
+            ;;
+    esac
+}
+
+# Download FastEmbed embedding model for offline use
+# This pre-downloads the model so embedding-api doesn't need to download on first run
+# Uses Docker because fastembed requires Python <3.13 (onnxruntime compatibility)
+download_embedding_model() {
+    local embedding_model
+    embedding_model=$(get_embedding_model_for_env)
+    
+    info "Preparing FastEmbed model: ${embedding_model}"
+    
+    # FastEmbed cache location - we use ~/.cache/fastembed to match what Docker containers expect
+    local fastembed_cache="${HOME}/.cache/fastembed"
+    mkdir -p "$fastembed_cache"
+    
+    # Check if model is already cached
+    # FastEmbed uses HuggingFace hub cache format: qdrant/bge-small-en-v1.5-onnx-q
+    # Extract model size to match the right cached model
+    local model_size=""
+    case "$embedding_model" in
+        *small*) model_size="small" ;;
+        *base*) model_size="base" ;;
+        *large*) model_size="large" ;;
+    esac
+    
+    local is_cached=false
+    if [[ -n "$model_size" ]]; then
+        if find "${fastembed_cache}" -name "model*.onnx" -path "*bge-${model_size}*" 2>/dev/null | grep -q .; then
+            is_cached=true
+        fi
+    fi
+    
+    if [[ "$is_cached" == "true" ]]; then
+        success "Embedding model already cached: ${embedding_model}"
+        # Still need to save the cache path and model to env/state
+        save_fastembed_config "$fastembed_cache" "$embedding_model"
+        return 0
+    fi
+    
+    # Check if Docker is available
+    if ! command -v docker &>/dev/null; then
+        warn "Docker not available - embedding model will be downloaded on first container start"
+        save_fastembed_config "$fastembed_cache" "$embedding_model"
+        return 0
+    fi
+    
+    # Show size estimate
+    local size_info=""
+    case "$embedding_model" in
+        *small*) size_info="(~134MB)" ;;
+        *base*) size_info="(~438MB)" ;;
+        *large*) size_info="(~1.3GB)" ;;
+    esac
+    
+    info "Downloading embedding model: ${embedding_model} ${size_info}"
+    info "Using Docker (fastembed requires Python <3.13)"
+    info "Cache location: ${fastembed_cache}"
+    
+    # Use Docker to download the model
+    docker run --rm \
+        -v "${fastembed_cache}:/root/.cache/fastembed" \
+        python:3.11-slim \
+        bash -c "
+            pip install -q fastembed && \
+            python -c \"
+from fastembed import TextEmbedding
+model = '${embedding_model}'
+cache_dir = '/root/.cache/fastembed'
+print(f'Downloading {model}...')
+embedder = TextEmbedding(model_name=model, cache_dir=cache_dir)
+list(embedder.embed(['warmup test']))
+print('Download complete!')
+\"
+        " || {
+        warn "Failed to download embedding model - it will be downloaded on first container start"
+        save_fastembed_config "$fastembed_cache" "$embedding_model"
+        return 0  # Don't fail the installation
+    }
+    
+    success "Embedding model downloaded and verified"
+    info "  Model: ${embedding_model}"
+    info "  Location: ${fastembed_cache}"
+    
+    # Save cache path and model to env/state for Docker to use
+    save_fastembed_config "$fastembed_cache" "$embedding_model"
+    
+    return 0
+}
+
+# Get embedding dimension based on model
+get_embedding_dimension() {
+    local model="$1"
+    case "$model" in
+        *small*) echo "384" ;;
+        *base*) echo "768" ;;
+        *large*) echo "1024" ;;
+        *) echo "1024" ;;  # Default to large dimension
+    esac
+}
+
+# Save FastEmbed config (cache path and model) to env file and state
+save_fastembed_config() {
+    local fastembed_cache="$1"
+    local embedding_model="$2"
+    local env_file
+    env_file=$(get_env_file)
+    
+    # Determine embedding dimension based on model
+    local dimension
+    dimension=$(get_embedding_dimension "$embedding_model")
+    
+    # Save model name and dimension to state for warmup script to use
+    set_state "FASTEMBED_MODEL" "$embedding_model"
+    set_state "FASTEMBED_HOST_CACHE" "$fastembed_cache"
+    set_state "EMBEDDING_DIMENSION" "$dimension"
+    
+    # Check if FASTEMBED_HOST_CACHE is already in env file
+    if grep -q "^FASTEMBED_HOST_CACHE=" "$env_file" 2>/dev/null; then
+        # Update existing value
+        sed -i.bak "s|^FASTEMBED_HOST_CACHE=.*|FASTEMBED_HOST_CACHE=${fastembed_cache}|" "$env_file"
+        rm -f "${env_file}.bak"
+    else
+        # Add new entry
+        echo "" >> "$env_file"
+        echo "# FastEmbed model cache (pre-downloaded for fast container startup)" >> "$env_file"
+        echo "FASTEMBED_HOST_CACHE=${fastembed_cache}" >> "$env_file"
+    fi
+    
+    # Also save the model name to env file
+    if grep -q "^FASTEMBED_MODEL=" "$env_file" 2>/dev/null; then
+        sed -i.bak "s|^FASTEMBED_MODEL=.*|FASTEMBED_MODEL=${embedding_model}|" "$env_file"
+        rm -f "${env_file}.bak"
+    else
+        echo "FASTEMBED_MODEL=${embedding_model}" >> "$env_file"
+    fi
+    
+    # Save embedding dimension to env file
+    if grep -q "^EMBEDDING_DIMENSION=" "$env_file" 2>/dev/null; then
+        sed -i.bak "s|^EMBEDDING_DIMENSION=.*|EMBEDDING_DIMENSION=${dimension}|" "$env_file"
+        rm -f "${env_file}.bak"
+    else
+        echo "EMBEDDING_DIMENSION=${dimension}" >> "$env_file"
+    fi
+    
+    info "Set embedding dimension to ${dimension} for model ${embedding_model}"
+}
+
+# Install MLX dependencies and download tiny test model
+setup_mlx() {
+    if [[ "$LLM_BACKEND" != "mlx" ]]; then
+        return 0
+    fi
+    
+    show_stage 92 "Setting up MLX" "Installing MLX-LM and downloading models for Apple Silicon."
+    
+    # Setup virtual environment first
+    setup_mlx_venv || return 1
+    
+    local mlx_python
+    local mlx_pip
+    mlx_python=$(get_mlx_python)
+    mlx_pip=$(get_mlx_pip)
+    
+    # Install mlx-lm and huggingface_hub if not already installed
+    info "Installing MLX-LM dependencies into virtual environment..."
+    if ! "$mlx_python" -c "import mlx_lm" 2>/dev/null; then
+        "$mlx_pip" install -q mlx-lm huggingface_hub || {
+            error "Failed to install mlx-lm"
+            return 1
+        }
+        success "MLX-LM installed"
+    else
+        info "MLX-LM already installed"
+    fi
+    
+    # Download small test model (Qwen3-0.6B-4bit ~400MB)
+    # Larger models are managed by deploy-api and can be downloaded via AI Portal
+    local test_model="mlx-community/Qwen3-0.6B-4bit"
+    
+    # Check if model is already cached (may have been downloaded in background)
+    local cache_dir="${HOME}/.cache/huggingface/hub"
+    local model_dir="${cache_dir}/models--${test_model//\//-}"
+    
+    if [[ -d "$model_dir" ]]; then
+        info "Test model already cached (downloaded in background)"
+        success "Test model ready"
+    else
+        info "Downloading test model: ${test_model}"
+        info "This is a small model (~400MB) to verify MLX works."
+        info "Larger models can be downloaded via the AI Portal later."
+        
+        "$mlx_python" -c "
+from huggingface_hub import snapshot_download
+import os
+
+model = '${test_model}'
+print(f'Downloading {model}...')
+try:
+    snapshot_download(model, local_dir_use_symlinks=True)
+    print('Download complete!')
+except Exception as e:
+    print(f'Download failed: {e}')
+    exit(1)
+" || {
+            warn "Failed to download test model - you can download it later via the AI Portal"
+            return 0  # Don't fail the installation
+        }
+        
+        success "Test model downloaded"
+    fi
+    
+    # Download embedding model for FastEmbed (used by embedding-api container)
+    info ""
+    download_embedding_model
+    
+    # Save MLX state
+    set_state "MLX_INSTALLED" "true"
+    set_state "MLX_TEST_MODEL" "$test_model"
+    
+    return 0
+}
+
+# Install and start the host-agent for MLX control
+setup_host_agent() {
+    if [[ "$LLM_BACKEND" != "mlx" ]]; then
+        return 0
+    fi
+    
+    show_stage 94 "Setting up Host Agent" "Installing host-agent for MLX control from Docker containers."
+    
+    local host_agent_dir="${REPO_ROOT}/scripts/host-agent"
+    
+    if [[ ! -f "${host_agent_dir}/host-agent.py" ]]; then
+        error "Host agent script not found at ${host_agent_dir}/host-agent.py"
+        return 1
+    fi
+    
+    # Ensure MLX venv is set up (should already be done by setup_mlx, but be safe)
+    setup_mlx_venv || return 1
+    
+    local mlx_pip
+    mlx_pip=$(get_mlx_pip)
+    
+    # Install host-agent dependencies into the MLX venv
+    info "Installing host-agent dependencies into virtual environment..."
+    "$mlx_pip" install -q fastapi uvicorn httpx pyyaml || {
+        error "Failed to install host-agent dependencies"
+        return 1
+    }
+    
+    # Generate host-agent token
+    local host_agent_token
+    host_agent_token=$(openssl rand -hex 32)
+    
+    # Save to env file
+    local env_file
+    env_file=$(get_env_file)
+    echo "" >> "$env_file"
+    echo "# Host Agent (for MLX control)" >> "$env_file"
+    echo "HOST_AGENT_TOKEN=${host_agent_token}" >> "$env_file"
+    echo "HOST_AGENT_PORT=8089" >> "$env_file"
+    
+    # Save to state
+    set_state "HOST_AGENT_TOKEN" "$host_agent_token"
+    set_state "HOST_AGENT_PORT" "8089"
+    
+    # Run the launchd installer
+    info "Installing host-agent as background service..."
+    if [[ -f "${host_agent_dir}/install-host-agent.sh" ]]; then
+        bash "${host_agent_dir}/install-host-agent.sh" || {
+            warn "Failed to install host-agent as service - you can start it manually"
+            info "Run: $(get_mlx_python) ${host_agent_dir}/host-agent.py"
+            return 0
+        }
+        success "Host agent installed and started"
+    else
+        warn "Host agent installer not found - skipping service installation"
+        info "Run manually: $(get_mlx_python) ${host_agent_dir}/host-agent.py"
+    fi
+    
+    # Wait for host-agent to be ready
+    info "Waiting for host-agent to be ready..."
+    local max_attempts=10
+    local attempt=0
+    while [[ $attempt -lt $max_attempts ]]; do
+        if curl -sf http://localhost:8089/health &>/dev/null; then
+            success "Host agent is ready"
+            return 0
+        fi
+        sleep 1
+        ((attempt++))
+    done
+    
+    warn "Host agent health check timeout - it may still be starting"
+    return 0
 }
 
 # =============================================================================
@@ -1644,12 +2099,34 @@ main() {
         set_state "APPS_BASE_DIR" "$APPS_BASE_DIR"
     fi
     
+    # Start model download in background early (if MLX backend)
+    # This allows the model to download while Docker containers are being built
+    if [[ "$LLM_BACKEND" == "mlx" ]]; then
+        start_model_download_background
+    fi
+    
     # Generate secrets and create .env file
-    # Skip if already done
+    # Skip if already done, but restore from state if resuming
     if [[ "$current_phase" != "secrets_generated" && "$current_phase" != "bootstrap_started" && "$current_phase" != "bootstrap_complete" ]]; then
         generate_secrets
         create_env_file
+        # Save secrets to state for resume capability
+        set_state "POSTGRES_PASSWORD" "$POSTGRES_PASSWORD"
+        set_state "GITHUB_AUTH_TOKEN" "$GITHUB_AUTH_TOKEN"
+        set_state "SSO_JWT_SECRET" "$SSO_JWT_SECRET"
         set_install_phase "secrets_generated"
+    else
+        # Restore secrets from state when resuming
+        info "Restoring secrets from saved state..."
+        export POSTGRES_PASSWORD=$(get_state "POSTGRES_PASSWORD" "")
+        export GITHUB_AUTH_TOKEN=$(get_state "GITHUB_AUTH_TOKEN" "")
+        export SSO_JWT_SECRET=$(get_state "SSO_JWT_SECRET" "")
+        
+        if [[ -z "$POSTGRES_PASSWORD" || -z "$GITHUB_AUTH_TOKEN" ]]; then
+            error "Required secrets not found in state - cannot resume"
+            error "Please run 'make clean' and start fresh installation"
+            exit 1
+        fi
     fi
     
     # Ensure SSL certificates
@@ -1674,6 +2151,19 @@ main() {
         # TODO: Implement Proxmox bootstrap
         error "Proxmox bootstrap not yet implemented"
         exit 1
+    fi
+    
+    # Setup MLX and host-agent if on Apple Silicon
+    if [[ "$LLM_BACKEND" == "mlx" ]]; then
+        setup_mlx
+        setup_host_agent
+        # Wait for background model download if still running
+        wait_for_model_download
+    else
+        # For non-MLX backends, still download the embedding model
+        # (embeddings run locally regardless of LLM backend)
+        show_stage 92 "Downloading Embedding Model" "Pre-downloading FastEmbed model for document search."
+        download_embedding_model
     fi
     
     # Mark installation as complete

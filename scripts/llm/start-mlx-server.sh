@@ -17,6 +17,28 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # Source UI library
 source "${SCRIPT_DIR}/../lib/ui.sh"
 
+# MLX virtual environment (PEP 668 compliance for modern macOS)
+MLX_VENV_DIR="${HOME}/.busibox/mlx-venv"
+
+# Setup or use the MLX virtual environment
+setup_mlx_venv() {
+    mkdir -p "${HOME}/.busibox"
+    if [[ ! -d "$MLX_VENV_DIR" ]]; then
+        info "Creating MLX virtual environment..."
+        python3 -m venv "$MLX_VENV_DIR"
+    fi
+}
+
+# Get venv python path
+get_mlx_python() {
+    echo "${MLX_VENV_DIR}/bin/python3"
+}
+
+# Get venv pip path
+get_mlx_pip() {
+    echo "${MLX_VENV_DIR}/bin/pip3"
+}
+
 # Server configuration
 PORT="${MLX_PORT:-8080}"
 PID_FILE="/tmp/mlx-lm-server.pid"
@@ -91,10 +113,16 @@ start_server() {
         rm -f "$PID_FILE"
     fi
     
-    # Install mlx-lm if needed
-    if ! python3 -c "import mlx_lm" 2>/dev/null; then
-        info "Installing mlx-lm..."
-        pip3 install -q mlx-lm huggingface_hub
+    # Setup venv and install mlx-lm if needed
+    setup_mlx_venv
+    local mlx_python
+    local mlx_pip
+    mlx_python=$(get_mlx_python)
+    mlx_pip=$(get_mlx_pip)
+    
+    if ! "$mlx_python" -c "import mlx_lm" 2>/dev/null; then
+        info "Installing mlx-lm into virtual environment..."
+        "$mlx_pip" install -q mlx-lm huggingface_hub
     fi
     
     # Display banner
@@ -114,8 +142,8 @@ start_server() {
     echo "  Log: ${LOG_FILE}"
     echo ""
     
-    # Start server in background
-    nohup python3 -m mlx_lm.server \
+    # Start server in background using venv python
+    nohup "$mlx_python" -m mlx_lm.server \
         --model "$model" \
         --host 0.0.0.0 \
         --port "$PORT" \

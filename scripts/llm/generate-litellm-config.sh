@@ -21,7 +21,13 @@ source "${SCRIPT_DIR}/../lib/ui.sh"
 BACKEND="${1:-${LLM_BACKEND:-$(bash "${SCRIPT_DIR}/detect-backend.sh")}}"
 TIER="${LLM_TIER:-$(bash "${SCRIPT_DIR}/get-memory-tier.sh" "$BACKEND")}"
 
-OUTPUT_FILE="${REPO_ROOT}/config/litellm-generated.yaml"
+# Output to the same file docker-compose mounts
+OUTPUT_FILE="${REPO_ROOT}/config/litellm-config.yaml"
+
+# Backup original if it exists and hasn't been generated
+if [[ -f "$OUTPUT_FILE" ]] && ! grep -q "DO NOT EDIT - regenerate with" "$OUTPUT_FILE" 2>/dev/null; then
+    cp "$OUTPUT_FILE" "${REPO_ROOT}/config/litellm-config.original.yaml"
+fi
 
 generate_local_config() {
     local backend="$1"
@@ -44,6 +50,15 @@ generate_local_config() {
 # DO NOT EDIT - regenerate with: scripts/llm/generate-litellm-config.sh
 
 model_list:
+  # Test model - smallest/fastest for validation tests
+  - model_name: test
+    litellm_params:
+      model: openai/mlx-community/Qwen2.5-0.5B-Instruct-4bit
+      api_base: ${api_base}
+      api_key: local
+    model_info:
+      description: "Tiny model for quick validation tests"
+
   # Fast model - for simple tasks
   - model_name: fast
     litellm_params:
@@ -80,7 +95,7 @@ model_list:
 
 general_settings:
   debug: true
-  master_key: \${LITELLM_MASTER_KEY}
+  master_key: os.environ/LITELLM_MASTER_KEY
 
 router_settings:
   enable_cache: true
@@ -138,7 +153,7 @@ model_list:
 
 general_settings:
   debug: true
-  master_key: ${LITELLM_MASTER_KEY}
+  master_key: os.environ/LITELLM_MASTER_KEY
 
 router_settings:
   enable_cache: true

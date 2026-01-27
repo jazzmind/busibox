@@ -35,7 +35,7 @@ error() {
 # ASCII box with title
 box() {
     local title="$1"
-    local width=${2:-60}
+    local width=${2:-120}
     
     # Calculate padding for centered title
     local title_len=${#title}
@@ -56,7 +56,7 @@ box() {
 # Section header
 header() {
     local title="$1"
-    local width=${2:-60}
+    local width=${2:-120}
     
     echo ""
     echo -e "${CYAN}$(printf '═%.0s' $(seq 1 $width))${NC}"
@@ -67,7 +67,7 @@ header() {
 
 # Simple separator
 separator() {
-    local width=${1:-60}
+    local width=${1:-120}
     echo -e "${CYAN}$(printf '─%.0s' $(seq 1 $width))${NC}"
 }
 
@@ -241,7 +241,7 @@ status_bar() {
     local env="${1:-unknown}"
     local backend="${2:-}"
     local status="${3:-unknown}"
-    local width=${4:-70}
+    local width=${4:-120}
     
     local env_display="$env"
     if [[ -n "$backend" ]]; then
@@ -271,14 +271,14 @@ status_bar() {
             status_color="$YELLOW"; status_icon="○"; status_display="not running" ;;
     esac
     
-    local left_text="Environment: $env_display"
+    local left_text="Environment: $env_display [Press 'e' to change]"
     local right_text="Status: $status_display $status_icon"
     local left_len=${#left_text}
     local right_len=$((${#right_text} + 2))
     local spaces=$((width - left_len - right_len - 4))
     
     echo ""
-    echo -e "  ${BOLD}Environment:${NC} ${CYAN}$env_display${NC}$(printf '%*s' $spaces '')${BOLD}Status:${NC} ${status_color}$status_display $status_icon${NC}"
+    echo -e "  ${BOLD}Environment:${NC} ${CYAN}$env_display${NC} ${DIM}[Press 'e' to change]${NC}$(printf '%*s' $spaces '')${BOLD}Status:${NC} ${status_color}$status_display $status_icon${NC}"
     separator "$width"
 }
 
@@ -468,7 +468,7 @@ dynamic_menu() {
             options+=("Start Busibox"); option_keys+=("start_busibox")
             options+=("Install/Setup"); option_keys+=("install")
             options+=("Configure"); option_keys+=("configure")
-            options+=("Deploy (build images)"); option_keys+=("deploy")
+            options+=("Services (deploy/start/stop/restart/rebuild)"); option_keys+=("services")
             ;;
         *)
             # Normal flow for other statuses
@@ -479,8 +479,7 @@ dynamic_menu() {
             fi
             
             if [[ "$status" == "configured" || "$status" == "deployed" || "$status" == "healthy" ]]; then
-                options+=("Deploy"); option_keys+=("deploy")
-                options+=("Services (start/stop/restart)"); option_keys+=("services")
+                options+=("Services (deploy/start/stop/restart/rebuild)"); option_keys+=("services")
             fi
             
             if [[ "$status" == "deployed" || "$status" == "healthy" ]]; then
@@ -494,7 +493,6 @@ dynamic_menu() {
             ;;
     esac
     
-    options+=("Change Environment"); option_keys+=("change_env")
     options+=("Help"); option_keys+=("help")
     options+=("Quit"); option_keys+=("quit")
     
@@ -514,7 +512,9 @@ dynamic_menu() {
         echo -ne "  ${BOLD}Select option [1-${#options[@]}]:${NC} " >&2
         read choice < /dev/tty
         
-        if [[ "${choice:-}" == "r" ]] && [[ -n "$last_cmd" ]]; then
+        if [[ "${choice:-}" == "e" ]] || [[ "${choice:-}" == "E" ]]; then
+            echo "change_env"; return 0
+        elif [[ "${choice:-}" == "r" ]] && [[ -n "$last_cmd" ]]; then
             echo "rerun"; return 0
         elif [[ "${choice:-}" == "s" ]]; then
             echo "status"; return 0
@@ -533,7 +533,7 @@ dynamic_menu() {
 # Clear screen and show header
 clear_and_header() {
     local title="${1:-Busibox Control Panel}"
-    local width=${2:-70}
+    local width=${2:-120}
     
     clear
     box "$title" "$width"
@@ -683,86 +683,84 @@ render_consolidated_ingest_line() {
     # Sync indicator
     local sync_indicator=$(get_sync_indicator "$api_sync" "$api_version")
     
-    # Render line with proper spacing using tabs (matching render_service_line format)
-    printf "  %s %-15s\t%s\t\t│ %-18s\t%s\n" \
+    # Define column widths (matching render_service_line)
+    local col1_width=25  # Service name (including symbol)
+    local col2_width=30  # Status/health
+    local col3_width=45  # Version info
+    
+    # Calculate spacing dynamically
+    local name_text="Ingest API & Worker"
+    local name_text_len=${#name_text}
+    local status_text_len=$(strip_ansi "$status_text" | wc -c | tr -d ' ')
+    
+    # Calculate padding needed
+    local name_padding=$((col1_width - name_text_len - 2))  # -2 for symbol and space
+    # Adjust padding based on status text length
+    # "checking..." = 11 chars, "up" = 2 chars (+9), "down" = 4 chars (+7)
+    # "down (api)" = 10 chars, "down (worker)" = 13 chars, "down (both)" = 11 chars
+    if [[ "$status_text" =~ "down (api)" ]]; then
+        local status_padding=$((col2_width - status_text_len + 2))
+    elif [[ "$status_text" =~ "down (both)" ]]; then
+        local status_padding=$((col2_width - status_text_len + 2))
+    elif [[ "$status_text" =~ "down (worker)" ]]; then
+        local status_padding=$((col2_width - status_text_len + 2))
+    elif [[ "$status_text" =~ "up" ]] || [[ "$status_text" =~ "down" ]]; then
+        local status_padding=$((col2_width - status_text_len + 2))
+    else
+        local status_padding=$((col2_width - status_text_len))
+    fi
+    
+    # Ensure minimum padding
+    [[ $name_padding -lt 1 ]] && name_padding=1
+    [[ $status_padding -lt 1 ]] && status_padding=1
+    
+    # Render line with dynamic spacing
+    printf "  %s %s%*s%s%*s│ %-${col3_width}s%s\n" \
         "$combined_symbol" \
-        "Ingest API & Worker" \
+        "$name_text" \
+        "$name_padding" "" \
         "$status_text" \
+        "$status_padding" "" \
         "$version_info" \
         "$sync_indicator"
 }
 
-# Render consolidated litellm line (LiteLLM + vLLM if available)
-# Usage: render_consolidated_litellm_line "staging"
-render_consolidated_litellm_line() {
+# Render LiteLLM status line (standalone - no longer combined with vLLM)
+# Usage: render_litellm_line "staging"
+render_litellm_line() {
     local env=$1
     
-    # Get status for LiteLLM and vLLM
-    local litellm_status_json vllm_status_json
+    # Get status for LiteLLM only
+    local litellm_status_json
     litellm_status_json=$(get_service_status_from_cache "litellm" "$env" 2>/dev/null)
-    vllm_status_json=$(get_service_status_from_cache "vllm" "$env" 2>/dev/null)
     
     # Parse statuses
-    local litellm_status vllm_status litellm_version litellm_current litellm_sync
+    local litellm_status litellm_version litellm_current litellm_sync
     if command -v jq &>/dev/null; then
         litellm_status=$(echo "$litellm_status_json" | jq -r '.status // "unknown"')
-        vllm_status=$(echo "$vllm_status_json" | jq -r '.status // "unknown"')
         litellm_version=$(echo "$litellm_status_json" | jq -r '.version // "unknown"')
         litellm_current=$(echo "$litellm_status_json" | jq -r '.current_version // "unknown"')
         litellm_sync=$(echo "$litellm_status_json" | jq -r '.sync_state // "unknown"')
     else
         litellm_status="unknown"
-        vllm_status="unknown"
         litellm_version="unknown"
         litellm_current="unknown"
         litellm_sync="unknown"
     fi
     
-    # Determine combined status and label
-    local combined_status combined_symbol status_text service_label
+    # LiteLLM always shows as standalone
+    local service_label="LiteLLM"
+    local status_symbol status_text
     
-    # Check if vLLM is actually deployed/used (not just unknown)
-    local vllm_used=false
-    if [[ "$vllm_status" == "up" || "$vllm_status" == "down" ]]; then
-        vllm_used=true
-    fi
-    
-    if [[ "$vllm_used" == "true" ]]; then
-        service_label="LiteLLM & vLLM"
-        if [[ "$litellm_status" == "up" && "$vllm_status" == "up" ]]; then
-            combined_status="up"
-            combined_symbol=$(echo -e "${GREEN}●${NC}")
-            status_text=$(echo -e "${GREEN}✓ up${NC}")
-        elif [[ "$litellm_status" == "down" && "$vllm_status" == "down" ]]; then
-            combined_status="down"
-            combined_symbol=$(echo -e "${RED}○${NC}")
-            status_text=$(echo -e "${RED}✗ down (both)${NC}")
-        elif [[ "$litellm_status" == "down" ]]; then
-            combined_status="degraded"
-            combined_symbol=$(echo -e "${YELLOW}◐${NC}")
-            status_text=$(echo -e "${YELLOW}⚠ down (litellm)${NC}")
-        elif [[ "$vllm_status" == "down" ]]; then
-            combined_status="degraded"
-            combined_symbol=$(echo -e "${YELLOW}◐${NC}")
-            status_text=$(echo -e "${YELLOW}⚠ down (vllm)${NC}")
-        else
-            combined_status="unknown"
-            combined_symbol=$(echo -e "${DIM}○${NC}")
-            status_text=$(echo -e "${DIM}- unknown${NC}")
-        fi
+    if [[ "$litellm_status" == "up" ]]; then
+        status_symbol=$(echo -e "${GREEN}●${NC}")
+        status_text=$(echo -e "${GREEN}✓ up${NC}")
+    elif [[ "$litellm_status" == "down" ]]; then
+        status_symbol=$(echo -e "${RED}○${NC}")
+        status_text=$(echo -e "${RED}✗ down${NC}")
     else
-        # vLLM not used, show just LiteLLM
-        service_label="LiteLLM"
-        if [[ "$litellm_status" == "up" ]]; then
-            combined_symbol=$(echo -e "${GREEN}●${NC}")
-            status_text=$(echo -e "${GREEN}✓ up${NC}")
-        elif [[ "$litellm_status" == "down" ]]; then
-            combined_symbol=$(echo -e "${RED}○${NC}")
-            status_text=$(echo -e "${RED}✗ down${NC}")
-        else
-            combined_symbol=$(echo -e "${DIM}○${NC}")
-            status_text=$(echo -e "${DIM}- unknown${NC}")
-        fi
+        status_symbol=$(echo -e "${DIM}○${NC}")
+        status_text=$(echo -e "${DIM}- unknown${NC}")
     fi
     
     # Format version info
@@ -786,13 +784,47 @@ render_consolidated_litellm_line() {
     # Sync indicator
     local sync_indicator=$(get_sync_indicator "$litellm_sync" "$litellm_version")
     
-    # Render line with proper spacing using tabs (matching render_service_line format)
-    printf "  %s %-15s\t%s\t\t│ %-18s\t%s\n" \
-        "$combined_symbol" \
+    # Define column widths (matching render_service_line)
+    local col1_width=25  # Service name (including symbol)
+    local col2_width=30  # Status/health
+    local col3_width=45  # Version info
+    
+    # Calculate spacing dynamically
+    local name_text_len=${#service_label}
+    local status_text_len=$(strip_ansi "$status_text" | wc -c | tr -d ' ')
+    
+    # Calculate padding needed
+    local name_padding=$((col1_width - name_text_len - 2))  # -2 for symbol and space
+    # Add +3 for "up"/"down" lines to match "checking..." length
+    if [[ "$status_text" =~ "up" ]] || [[ "$status_text" =~ "down" ]]; then
+        local status_padding=$((col2_width - status_text_len + 2))
+    else
+        local status_padding=$((col2_width - status_text_len))
+    fi
+    
+    # Ensure minimum padding
+    [[ $name_padding -lt 1 ]] && name_padding=1
+    [[ $status_padding -lt 1 ]] && status_padding=1
+    
+    # Render line with dynamic spacing
+    printf "  %s %s%*s%s%*s│ %-${col3_width}s%s\n" \
+        "$status_symbol" \
         "$service_label" \
+        "$name_padding" "" \
         "$status_text" \
+        "$status_padding" "" \
         "$version_info" \
         "$sync_indicator"
+}
+
+# Keep backward-compatible alias
+render_consolidated_litellm_line() {
+    render_litellm_line "$@"
+}
+
+# Helper function to strip ANSI color codes for length calculation
+strip_ansi() {
+    echo "$1" | sed 's/\x1b\[[0-9;]*m//g'
 }
 
 # Render single service line
@@ -831,14 +863,14 @@ render_service_line() {
     local sync_indicator=$(get_sync_indicator "$sync_state" "$version")
     local time_display=$(format_response_time "$response_time")
     
-    # Format versions (truncate if too long)
+    # Format versions (truncate if too long, but not for checking/unknown)
     local version_display="$version"
-    if [[ ${#version} -gt 7 ]]; then
+    if [[ "$version" != "checking" && "$version" != "unknown" && ${#version} -gt 7 ]]; then
         version_display="${version:0:7}"
     fi
     
     local current_display="$current_version"
-    if [[ ${#current_version} -gt 7 ]]; then
+    if [[ "$current_version" != "checking" && "$current_version" != "unknown" && ${#current_version} -gt 7 ]]; then
         current_display="${current_version:0:7}"
     fi
     
@@ -862,12 +894,35 @@ render_service_line() {
         version_info="${version_display} → ${current_display}"
     fi
     
-    # Render line with proper spacing using tabs
-    # Format: "  ● ServiceName    ✓ up    │ a1b2c3d → b2c3d4e    ✓ synced"
-    printf "  %s %-15s\t%s\t\t│ %-18s\t%s\n" \
+    # Define column widths (wider for 120-char display)
+    local col1_width=25  # Service name (including symbol)
+    local col2_width=30  # Status/health
+    local col3_width=45  # Version info
+    
+    # Calculate spacing dynamically based on actual text length (without ANSI codes)
+    local name_text_len=${#display_name}
+    local health_text_len=$(strip_ansi "$health_indicator" | wc -c | tr -d ' ')
+    
+    # Calculate padding needed
+    local name_padding=$((col1_width - name_text_len - 2))  # -2 for symbol and space
+    # Add +3 for "up"/"down" lines to match "checking..." length
+    if [[ "$health_indicator" =~ "up" ]] || [[ "$health_indicator" =~ "down" ]]; then
+        local health_padding=$((col2_width - health_text_len + 2))
+    else
+        local health_padding=$((col2_width - health_text_len))
+    fi
+    
+    # Ensure minimum padding
+    [[ $name_padding -lt 1 ]] && name_padding=1
+    [[ $health_padding -lt 1 ]] && health_padding=1
+    
+    # Render line with dynamic spacing
+    printf "  %s %s%*s%s%*s│ %-${col3_width}s%s\n" \
         "$status_symbol" \
         "$display_name" \
+        "$name_padding" "" \
         "$health_indicator" \
+        "$health_padding" "" \
         "$version_info" \
         "$sync_indicator"
 }
@@ -887,6 +942,7 @@ render_service_category() {
     local underline_length
     case "$category" in
         core) underline_length=13 ;;  # "Core Services"
+        llm) underline_length=12 ;;   # "LLM Services"
         api) underline_length=12 ;;   # "API Services"
         app) underline_length=4 ;;    # "Apps"
         *) underline_length=20 ;;     # Default fallback
@@ -895,7 +951,9 @@ render_service_category() {
     
     # Add column headers only if requested (only for first category)
     if [[ "$show_header" == "true" ]]; then
-        printf "    ${DIM}%-15s\t%-8s\t│ %-18s\t%-10s${NC}\n" \
+        # Match column widths from render_service_line (25, 30, 45)
+        # Status column: -1 space as requested
+        printf "    ${DIM}%-23s %-27s │ %-43s %s${NC}\n" \
             "Service" \
             "Status" \
             "Version (deployed → current)" \
@@ -920,6 +978,7 @@ render_service_category() {
 }
 
 # Main status dashboard renderer (non-blocking)
+# Uses a two-column grouped layout for compact display
 # Usage: render_status_dashboard "staging" "proxmox"
 render_status_dashboard() {
     local env=$1
@@ -953,11 +1012,201 @@ render_status_dashboard() {
             cache_age="$((cache_age / 3600))h ago"
         fi
     fi
-       
-    # Render each category (only show header for first category)
-    render_service_category "Core Services $(printf '%*s' 10 '')${DIM}Last check: $cache_age  ${CYAN}[Press 's' to refresh]${NC}" "core" "$env" "true"
-    render_service_category "API Services" "api" "$env" "false"
-    render_service_category "Apps" "app" "$env" "false"
+    
+    # Use two-column layout for compact display
+    render_status_dashboard_two_column "$env" "$cache_age"
+}
+
+# Render compact service line for two-column layout
+# Usage: render_compact_service_line "authz" "staging"
+# Returns: formatted string (no newline)
+render_compact_service_line() {
+    local service=$1
+    local env=$2
+    
+    # Get cached status
+    local status_json
+    status_json=$(get_service_status_from_cache "$service" "$env" 2>/dev/null)
+    
+    # Parse JSON
+    local status health version
+    if command -v jq &>/dev/null; then
+        status=$(echo "$status_json" | jq -r '.status // "checking"')
+        health=$(echo "$status_json" | jq -r '.health // "checking"')
+        version=$(echo "$status_json" | jq -r '.version // ""')
+    else
+        status="checking"
+        health="checking"
+        version=""
+    fi
+    
+    # Get display name
+    local display_name=$(get_service_display_name "$service")
+    
+    # Status symbol
+    local status_symbol
+    case "$status" in
+        up) status_symbol="${GREEN}●${NC}" ;;
+        down) status_symbol="${RED}○${NC}" ;;
+        *) status_symbol="${DIM}◷${NC}" ;;
+    esac
+    
+    # Health indicator (compact)
+    local health_text
+    case "$health" in
+        healthy) health_text="${GREEN}up${NC}" ;;
+        degraded) health_text="${YELLOW}slow${NC}" ;;
+        down) health_text="${RED}down${NC}" ;;
+        *) health_text="${DIM}...${NC}" ;;
+    esac
+    
+    # Format version (truncate)
+    local ver_display=""
+    if [[ -n "$version" && "$version" != "checking" && "$version" != "unknown" ]]; then
+        if [[ ${#version} -gt 7 ]]; then
+            ver_display="${version:0:7}"
+        else
+            ver_display="$version"
+        fi
+    fi
+    
+    # Return formatted line
+    printf "%b %-14s %-6b %s" "$status_symbol" "$display_name" "$health_text" "$ver_display"
+}
+
+# Compact consolidated ingest line (API + Worker)
+render_compact_ingest_line() {
+    local env=$1
+    
+    # Get status for both
+    local api_json worker_json
+    api_json=$(get_service_status_from_cache "ingest-api" "$env" 2>/dev/null)
+    worker_json=$(get_service_status_from_cache "ingest-worker" "$env" 2>/dev/null)
+    
+    local api_status worker_status
+    if command -v jq &>/dev/null; then
+        api_status=$(echo "$api_json" | jq -r '.status // "unknown"')
+        worker_status=$(echo "$worker_json" | jq -r '.status // "unknown"')
+    else
+        api_status="unknown"
+        worker_status="unknown"
+    fi
+    
+    # Combined status
+    local status_symbol health_text
+    if [[ "$api_status" == "up" && "$worker_status" == "up" ]]; then
+        status_symbol="${GREEN}●${NC}"
+        health_text="${GREEN}up${NC}"
+    elif [[ "$api_status" == "down" && "$worker_status" == "down" ]]; then
+        status_symbol="${RED}○${NC}"
+        health_text="${RED}down${NC}"
+    elif [[ "$api_status" == "down" ]]; then
+        status_symbol="${YELLOW}◐${NC}"
+        health_text="${YELLOW}api↓${NC}"
+    elif [[ "$worker_status" == "down" ]]; then
+        status_symbol="${YELLOW}◐${NC}"
+        health_text="${YELLOW}wrk↓${NC}"
+    else
+        status_symbol="${DIM}◷${NC}"
+        health_text="${DIM}...${NC}"
+    fi
+    
+    printf "%b %-14s %-6b" "$status_symbol" "Ingest" "$health_text"
+}
+
+# Two-column status dashboard layout
+# Left: Core + LLM services  |  Right: API + Apps
+render_status_dashboard_two_column() {
+    local env=$1
+    local cache_age=$2
+    
+    echo ""
+    echo -e "${BOLD}Service Status${NC}  ${DIM}Last check: $cache_age${NC}  ${CYAN}[Press 's' to refresh]${NC}"
+    echo -e "${DIM}$(printf '─%.0s' $(seq 1 115))${NC}"
+    
+    # Column width
+    local col_width=55
+    
+    # Get services for each category
+    local core_services=$(get_services_in_category "core")
+    local llm_services=$(get_services_in_category "llm")
+    local api_services=$(get_services_in_category "api")
+    local app_services=$(get_services_in_category "app")
+    
+    # Build service lists for each column
+    # Left: Core + LLM
+    # Right: API + Apps
+    local -a left_items=()
+    local -a right_items=()
+    
+    # Add Core services to left
+    left_items+=("HEADER:Core")
+    for svc in $core_services; do
+        left_items+=("$svc")
+    done
+    
+    # Add LLM services to left
+    left_items+=("HEADER:LLM")
+    for svc in $llm_services; do
+        left_items+=("$svc")
+    done
+    
+    # Add API services to right
+    right_items+=("HEADER:API")
+    for svc in $api_services; do
+        # Consolidate ingest-api and ingest-worker
+        if [[ "$svc" == "ingest-api" ]]; then
+            right_items+=("INGEST")
+        elif [[ "$svc" == "ingest-worker" ]]; then
+            continue  # Skip, shown as consolidated
+        else
+            right_items+=("$svc")
+        fi
+    done
+    
+    # Add App services to right
+    right_items+=("HEADER:Apps")
+    for svc in $app_services; do
+        right_items+=("$svc")
+    done
+    
+    # Determine max rows
+    local left_count=${#left_items[@]}
+    local right_count=${#right_items[@]}
+    local max_rows=$((left_count > right_count ? left_count : right_count))
+    
+    # Print rows side by side
+    for ((i=0; i<max_rows; i++)); do
+        local left_line=""
+        local right_line=""
+        
+        # Left column
+        if [[ $i -lt $left_count ]]; then
+            local item="${left_items[$i]}"
+            if [[ "$item" == HEADER:* ]]; then
+                local header_name="${item#HEADER:}"
+                left_line="${DIM}── $header_name ──${NC}"
+            else
+                left_line="$(render_compact_service_line "$item" "$env")"
+            fi
+        fi
+        
+        # Right column
+        if [[ $i -lt $right_count ]]; then
+            local item="${right_items[$i]}"
+            if [[ "$item" == HEADER:* ]]; then
+                local header_name="${item#HEADER:}"
+                right_line="${DIM}── $header_name ──${NC}"
+            elif [[ "$item" == "INGEST" ]]; then
+                right_line="$(render_compact_ingest_line "$env")"
+            else
+                right_line="$(render_compact_service_line "$item" "$env")"
+            fi
+        fi
+        
+        # Print with proper spacing
+        printf "  %-${col_width}b │ %-${col_width}b\n" "$left_line" "$right_line"
+    done
     
     echo ""
 }

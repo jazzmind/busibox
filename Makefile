@@ -2,7 +2,8 @@
         docker-up docker-up-prod docker-start docker-down docker-down-all docker-restart docker-restart-apis docker-restart-ingest docker-build docker-logs docker-ps docker-ps-all docker-clean docker-clean-all \
         vault-generate-env vault-migrate vault-sync ssl-check \
         github-check github-ensure \
-        install recover-admin demo demo-warmup demo-clean demo-status
+        install recover-admin demo warmup demo-clean demo-status \
+        mlx-status mlx-start mlx-stop mlx-restart host-agent-status host-agent-start host-agent-stop host-agent-restart
 
 # Default target - interactive menu with health check
 .DEFAULT_GOAL := menu
@@ -129,6 +130,8 @@ help:
 	@echo "  test          - Run tests (see testing section)"
 	@echo "  mcp           - Build MCP server for Cursor AI"
 	@echo ""
+	@echo "  warmup        - Check cache and download missing models"
+	@echo ""
 	@echo "═══════════════════════════════════════════════════════════════════════"
 	@echo "                    DOCKER DEVELOPMENT"
 	@echo "═══════════════════════════════════════════════════════════════════════"
@@ -184,6 +187,22 @@ help:
 	@echo "    FAST=0      Include slow/GPU tests (default: FAST=1 skips them)"
 	@echo "    WORKER=1    Start local ingest worker for pipeline tests"
 	@echo "    ARGS='...'  Pass pytest arguments"
+	@echo ""
+	@echo "═══════════════════════════════════════════════════════════════════════"
+	@echo "                 MLX & HOST-AGENT (Apple Silicon)"
+	@echo "═══════════════════════════════════════════════════════════════════════"
+	@echo ""
+	@echo "  MLX Server (local LLM on Apple Silicon):"
+	@echo "    make mlx-status                # Check MLX server status"
+	@echo "    make mlx-start                 # Start MLX server"
+	@echo "    make mlx-stop                  # Stop MLX server"
+	@echo "    make mlx-restart               # Restart MLX server"
+	@echo ""
+	@echo "  Host Agent (controls MLX from Docker):"
+	@echo "    make host-agent-status         # Check host-agent status"
+	@echo "    make host-agent-start          # Start host-agent"
+	@echo "    make host-agent-stop           # Stop host-agent"
+	@echo "    make host-agent-restart        # Restart host-agent"
 	@echo ""
 	@echo "═══════════════════════════════════════════════════════════════════════"
 	@echo "                      ENVIRONMENTS"
@@ -329,9 +348,9 @@ ifneq ($(DEV_APPS_DIR),)
 	@echo "Dev Apps Directory: $(DEV_APPS_DIR)"
 endif
 ifdef SERVICE
-	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" DEV_APPS_DIR="$(DEV_APPS_DIR)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) up -d $(SERVICE)
+	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" DEV_APPS_DIR="$(DEV_APPS_DIR)" BUSIBOX_HOST_PATH="$(PWD)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) up -d $(SERVICE)
 else
-	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" DEV_APPS_DIR="$(DEV_APPS_DIR)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) up -d
+	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" DEV_APPS_DIR="$(DEV_APPS_DIR)" BUSIBOX_HOST_PATH="$(PWD)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) up -d
 endif
 	@echo ""
 ifeq ($(ENV),development)
@@ -349,9 +368,9 @@ docker-up-prod: _ensure-env
 # Start Docker services without rebuilding (fast start)
 docker-start:
 ifdef SERVICE
-	DEV_APPS_DIR="$(DEV_APPS_DIR)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) up -d --no-build $(SERVICE)
+	DEV_APPS_DIR="$(DEV_APPS_DIR)" BUSIBOX_HOST_PATH="$(PWD)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) up -d --no-build $(SERVICE)
 else
-	DEV_APPS_DIR="$(DEV_APPS_DIR)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) up -d --no-build
+	DEV_APPS_DIR="$(DEV_APPS_DIR)" BUSIBOX_HOST_PATH="$(PWD)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) up -d --no-build
 endif
 	@echo ""
 	@echo "Services started ($(ENV) mode). Use 'make docker-ps' to check status."
@@ -377,21 +396,21 @@ docker-down-all:
 docker-restart: github-check
 	$(eval GITHUB_AUTH_TOKEN := $(shell bash scripts/lib/github.sh get 2>/dev/null))
 ifdef SERVICE
-	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" DEV_APPS_DIR="$(DEV_APPS_DIR)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) restart $(SERVICE)
+	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" DEV_APPS_DIR="$(DEV_APPS_DIR)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) restart $(SERVICE)
 else
-	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" DEV_APPS_DIR="$(DEV_APPS_DIR)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) restart
+	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" DEV_APPS_DIR="$(DEV_APPS_DIR)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) restart
 endif
 
 # Restart only API services (fast, preserves infrastructure like embedding-api, milvus, postgres)
 # Use this when developing - embedding model stays loaded, so restarts are fast
 docker-restart-apis:
 	@echo "Restarting API services (infrastructure tier preserved)..."
-	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) restart authz-api deploy-api ingest-api ingest-worker search-api agent-api docs-api nginx
+	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) restart authz-api deploy-api ingest-api ingest-worker search-api agent-api docs-api nginx
 
 # Restart ingest services only
 docker-restart-ingest:
 	@echo "Restarting ingest services..."
-	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) restart ingest-api ingest-worker
+	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) restart ingest-api ingest-worker
 
 # Check/generate SSL certificates
 ssl-check:
@@ -425,20 +444,20 @@ docker-build: ssl-check github-check
 	@echo "Building with version: $(GIT_COMMIT) (ENV=$(ENV), overlay=$(notdir $(COMPOSE_OVERLAY)))"
 ifdef SERVICE
 ifdef NO_CACHE
-	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" GIT_COMMIT=$(GIT_COMMIT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) build --no-cache $(SERVICE)
+	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" GIT_COMMIT=$(GIT_COMMIT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) build --no-cache $(SERVICE)
 else
-	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" GIT_COMMIT=$(GIT_COMMIT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) build $(SERVICE)
+	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" GIT_COMMIT=$(GIT_COMMIT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) build $(SERVICE)
 endif
 	@echo "Recreating container to apply new image..."
-	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" GIT_COMMIT=$(GIT_COMMIT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) up -d $(SERVICE)
+	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" GIT_COMMIT=$(GIT_COMMIT) BUSIBOX_HOST_PATH="$(PWD)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) up -d --no-deps $(SERVICE)
 else
 ifdef NO_CACHE
-	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" GIT_COMMIT=$(GIT_COMMIT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) build --no-cache
+	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" GIT_COMMIT=$(GIT_COMMIT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) build --no-cache
 else
-	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" GIT_COMMIT=$(GIT_COMMIT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) build
+	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" GIT_COMMIT=$(GIT_COMMIT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) build
 endif
 	@echo "Recreating containers to apply new images..."
-	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" GIT_COMMIT=$(GIT_COMMIT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) up -d
+	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" GIT_COMMIT=$(GIT_COMMIT) BUSIBOX_HOST_PATH="$(PWD)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) up -d
 endif
 
 # View Docker logs (uses environment-based overlay)
@@ -498,25 +517,16 @@ docker-clean-all:
 	fi
 
 # ============================================================================
-# DEMO MODE
-# ============================================================================
-# One-command demo for investor presentations and air-gap demonstrations.
-# Automatically detects system architecture and RAM to select optimal models.
-#
-# Usage:
-#   make demo-warmup   # Pre-download everything (run with network)
-#   make demo          # Start the full demo (can run offline after warmup)
-#   make demo-clean    # Stop demo and clean up
-#   make demo-status   # Show current demo status
-
-# Run the full demo (start all services with local LLM)
-# Prerequisites: Docker Desktop, 16GB+ RAM
-# For offline mode: run 'make demo-warmup' first
-# ============================================================================
 # INSTALLATION
 # ============================================================================
 # Unified install with interactive wizard or demo mode.
 # All management after install is via web UI (AI Portal).
+#
+# Usage:
+#   make install         # Full wizard
+#   make demo            # Demo mode (auto-configure)
+#   make warmup          # Check cache and download missing models
+#   make warmup FORCE=1  # Re-download (interactive selection)
 
 # Interactive install with wizard
 # Usage: make install              # Full wizard
@@ -530,20 +540,27 @@ recover-admin:
 	@bash scripts/make/recover-admin.sh
 
 # ============================================================================
+# MODEL WARMUP
+# ============================================================================
+# Pre-download models to cache for fast startup and offline use.
+# Downloads: FastEmbed embedding model + MLX LLM models (Apple Silicon only)
+
+# Check cache status and download any missing models
+# Use --force to re-download (interactive model selection)
+warmup:
+	@bash scripts/make/warmup.sh $(if $(FORCE),--force)
+
+# ============================================================================
 # DEMO MODE
 # ============================================================================
 # One-command demo for investor presentations and air-gap demonstrations.
 # Uses unified install with demo preset (local Docker, auto-detect LLM).
 
 # Run demo (auto-configures everything)
+# Prerequisites: Docker Desktop, 16GB+ RAM
+# For offline mode: run 'make warmup' first
 demo:
 	@bash scripts/make/install.sh --demo --no-prompt $(if $(VERBOSE),-v)
-
-# Pre-download everything for offline demo
-# Requires: GitHub authentication (gh auth login)
-# Downloads: repos, models (MLX or vLLM), Docker images
-demo-warmup:
-	@bash scripts/make/install.sh --demo --warmup-only $(if $(VERBOSE),-v)
 
 # Stop demo environment and remove containers
 # Use ARGS=--volumes to also remove data volumes
@@ -578,6 +595,110 @@ vault-migrate:
 # Sync vault structure with vault.example.yml
 vault-sync:
 	@bash scripts/vault/sync-vault.sh
+
+# ============================================================================
+# MLX & HOST-AGENT MANAGEMENT (Apple Silicon only)
+# ============================================================================
+# MLX runs on the host machine (not in Docker) for best performance.
+# The host-agent provides an HTTP API to control MLX from Docker containers.
+
+# Check MLX server status
+mlx-status:
+	@echo "=== MLX Server Status ==="
+	@if curl -sf http://localhost:8080/health >/dev/null 2>&1; then \
+		echo "MLX Server: Running (port 8080)"; \
+		curl -sf http://localhost:8080/v1/models 2>/dev/null | head -5 || true; \
+	else \
+		echo "MLX Server: Not running"; \
+	fi
+	@echo ""
+	@echo "=== Host Agent Status ==="
+	@if curl -sf http://localhost:8089/health >/dev/null 2>&1; then \
+		echo "Host Agent: Running (port 8089)"; \
+		curl -sf http://localhost:8089/mlx/status 2>/dev/null || true; \
+	else \
+		echo "Host Agent: Not running"; \
+	fi
+
+# Start MLX server (via host-agent or directly)
+# Reads HOST_AGENT_TOKEN from .env.dev for authentication
+mlx-start:
+	@echo "Starting MLX server..."
+	@TOKEN=$$(grep -s '^HOST_AGENT_TOKEN=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
+	if curl -sf http://localhost:8089/health >/dev/null 2>&1; then \
+		echo "Using host-agent to start MLX..."; \
+		if [ -n "$$TOKEN" ]; then \
+			curl -sf -X POST http://localhost:8089/mlx/start \
+				-H "Content-Type: application/json" \
+				-H "Authorization: Bearer $$TOKEN" \
+				-d '{"model_type": "agent"}' && echo "MLX server started" || echo "Failed - check host-agent logs"; \
+		else \
+			echo "Warning: HOST_AGENT_TOKEN not found in $(ENV_FILE)"; \
+			curl -sf -X POST http://localhost:8089/mlx/start \
+				-H "Content-Type: application/json" \
+				-d '{"model_type": "agent"}' || echo "Failed - authentication may be required"; \
+		fi; \
+	else \
+		echo "Host-agent not running. Starting MLX directly..."; \
+		bash scripts/llm/start-mlx-server.sh; \
+	fi
+
+# Stop MLX server
+mlx-stop:
+	@echo "Stopping MLX server..."
+	@TOKEN=$$(grep -s '^HOST_AGENT_TOKEN=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
+	if curl -sf http://localhost:8089/health >/dev/null 2>&1; then \
+		if [ -n "$$TOKEN" ]; then \
+			curl -sf -X POST http://localhost:8089/mlx/stop \
+				-H "Authorization: Bearer $$TOKEN" && echo "MLX server stopped" || echo "Failed - check host-agent logs"; \
+		else \
+			curl -sf -X POST http://localhost:8089/mlx/stop || echo "Failed - authentication may be required"; \
+		fi; \
+	else \
+		pkill -f "mlx_lm.server" 2>/dev/null && echo "MLX server stopped" || echo "MLX server not running"; \
+	fi
+
+# Restart MLX server
+mlx-restart: mlx-stop
+	@sleep 2
+	@$(MAKE) mlx-start
+
+# Check host-agent status
+host-agent-status:
+	@echo "=== Host Agent Status ==="
+	@if curl -sf http://localhost:8089/health >/dev/null 2>&1; then \
+		echo "Status: Running (port 8089)"; \
+		curl -sf http://localhost:8089/health 2>/dev/null; \
+	else \
+		echo "Status: Not running"; \
+		echo ""; \
+		echo "Start with: make host-agent-start"; \
+	fi
+
+# Start host-agent (runs in background)
+host-agent-start:
+	@echo "Starting host-agent..."
+	@if curl -sf http://localhost:8089/health >/dev/null 2>&1; then \
+		echo "Host-agent is already running."; \
+	else \
+		bash scripts/host-agent/install-host-agent.sh; \
+		sleep 2; \
+		if curl -sf http://localhost:8089/health >/dev/null 2>&1; then \
+			echo "Host-agent started successfully."; \
+		else \
+			echo "Failed to start host-agent. Check logs."; \
+		fi; \
+	fi
+
+# Stop host-agent
+host-agent-stop:
+	@echo "Stopping host-agent..."
+	@pkill -f "host-agent.py" 2>/dev/null || echo "Host-agent not running"
+
+# Restart host-agent
+host-agent-restart: host-agent-stop
+	@sleep 1
+	@$(MAKE) host-agent-start
 
 # Backward compatibility
 docker-test: test-docker

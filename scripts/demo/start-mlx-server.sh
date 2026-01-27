@@ -24,6 +24,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/detect-system.sh"
 eval "$(${SCRIPT_DIR}/get-models.sh all)"
 
+# MLX virtual environment (PEP 668 compliance for modern macOS)
+MLX_VENV_DIR="${HOME}/.busibox/mlx-venv"
+
 PORT=8080
 PID_FILE="/tmp/mlx-lm-server.pid"
 LOG_FILE="/tmp/mlx-lm-server.log"
@@ -59,10 +62,20 @@ if [[ -f "$PID_FILE" ]]; then
     fi
 fi
 
-# Check if mlx-lm is installed
-if ! python3 -c "import mlx_lm" 2>/dev/null; then
-    echo "Installing mlx-lm..."
-    pip3 install -q mlx-lm huggingface_hub
+# Setup MLX virtual environment (PEP 668 compliance)
+mkdir -p "${HOME}/.busibox"
+if [[ ! -d "$MLX_VENV_DIR" ]]; then
+    echo "Creating MLX virtual environment..."
+    python3 -m venv "$MLX_VENV_DIR"
+fi
+
+MLX_PYTHON="${MLX_VENV_DIR}/bin/python3"
+MLX_PIP="${MLX_VENV_DIR}/bin/pip3"
+
+# Check if mlx-lm is installed in venv
+if ! "$MLX_PYTHON" -c "import mlx_lm" 2>/dev/null; then
+    echo "Installing mlx-lm into virtual environment..."
+    "$MLX_PIP" install -q mlx-lm huggingface_hub
 fi
 
 echo ""
@@ -81,7 +94,7 @@ echo "  Log: ${LOG_FILE}"
 echo ""
 
 # Start server in background with agent model (primary model for demo)
-nohup python3 -m mlx_lm.server \
+nohup "$MLX_PYTHON" -m mlx_lm.server \
     --model "$DEMO_MODEL_AGENT" \
     --host 0.0.0.0 \
     --port "$PORT" \

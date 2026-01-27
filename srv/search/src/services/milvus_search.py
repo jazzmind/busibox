@@ -52,9 +52,9 @@ class MilvusSearchService:
         self._partition_cache: Optional[set] = None
     
     def connect(self):
-        """Connect to Milvus."""
+        """Connect to Milvus. Returns True if successful, False otherwise."""
         if self.connected:
-            return
+            return True
         
         try:
             connections.connect(
@@ -72,9 +72,11 @@ class MilvusSearchService:
                 port=self.port,
                 collection=self.collection_name,
             )
+            return True
         except Exception as e:
             logger.error("Failed to connect to Milvus", error=str(e), exc_info=True)
-            raise
+            self.connected = False
+            return False
     
     def disconnect(self):
         """Disconnect from Milvus."""
@@ -95,7 +97,9 @@ class MilvusSearchService:
         """Get set of existing partition names (cached)."""
         if self._partition_cache is None:
             if not self.connected:
-                self.connect()
+                if not self.connect():
+                    logger.warning("Cannot get partitions: Milvus unavailable")
+                    return set()
             self._partition_cache = {p.name for p in self.collection.partitions}
         return self._partition_cache
     
@@ -367,18 +371,19 @@ class MilvusSearchService:
         Returns:
             List of search results with fused (and optionally reranked) scores
         """
-        if not self.connected:
-            self.connect()
-        
-        # Build partition list once for both searches
-        if partition_names is None:
-            partition_names = self.get_accessible_partitions(user_id, readable_role_ids)
-        
-        if not partition_names:
-            logger.info("No accessible partitions, returning empty results")
-            return []
-        
         try:
+            if not self.connected:
+                if not self.connect():
+                    logger.error("Cannot perform hybrid search: Milvus unavailable")
+                    return []
+            
+            # Build partition list once for both searches
+            if partition_names is None:
+                partition_names = self.get_accessible_partitions(user_id, readable_role_ids)
+            
+            if not partition_names:
+                logger.info("No accessible partitions, returning empty results")
+                return []
             logger.info(
                 "Performing hybrid search",
                 user_id=user_id,

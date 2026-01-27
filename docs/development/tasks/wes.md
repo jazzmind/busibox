@@ -1,4 +1,6 @@
 # Wes's Tasks
+[ ] get full make install flow working
+   [ ] embedding model pre-download, speed up container 
 [ ] get app deployer to work with sample
 [ ] update project-analysis to match app-template & deploy
 [ ] same for estimator
@@ -14,8 +16,8 @@
   - have it do a doc search to find related
   - do a web search to get deeper info
   - summarize
-[ ] claude code via busibox?
-[ ] eliminate client token exchange from authz - there are still 
+[ ] claude code via busibox? clawd.bot?
+
  
 ## Future features
 [ ] - agents can manage their own insights/memories and consult when running

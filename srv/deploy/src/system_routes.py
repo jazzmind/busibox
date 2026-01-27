@@ -10,7 +10,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from .auth import verify_admin_token, verify_busibox_admin_token
+from .auth import verify_admin_token
 from .state import read_state, write_state, get_state_value
 from .docker_manager import DockerManager
 
@@ -49,8 +49,22 @@ class ServiceLogsRequest(BaseModel):
 # State Management Endpoints
 # =============================================================================
 
+@router.get("/state/setup-complete")
+async def get_setup_complete_status():
+    """
+    Public endpoint to check if initial setup is complete.
+    
+    Used by middleware to decide whether to redirect to setup wizard.
+    No authentication required - only returns boolean setup status.
+    """
+    state = await read_state()
+    return {
+        "setupComplete": state.get("SETUP_COMPLETE") == "true",
+    }
+
+
 @router.get("/state")
-async def get_install_state(token: dict = Depends(verify_busibox_admin_token)):
+async def get_install_state(token: dict = Depends(verify_admin_token)):
     """
     Read current installation state from .busibox-state file.
     
@@ -76,7 +90,7 @@ async def get_install_state(token: dict = Depends(verify_busibox_admin_token)):
 @router.put("/state")
 async def update_install_state(
     request: StateUpdateRequest,
-    token: dict = Depends(verify_busibox_admin_token)
+    token: dict = Depends(verify_admin_token)
 ):
     """
     Update installation state.
@@ -95,7 +109,7 @@ async def update_install_state(
 async def update_state_key(
     key: str,
     value: str,
-    token: dict = Depends(verify_busibox_admin_token)
+    token: dict = Depends(verify_admin_token)
 ):
     """
     Update a single state key.
@@ -113,7 +127,7 @@ async def update_state_key(
 # =============================================================================
 
 @router.get("/services")
-async def list_services(token: dict = Depends(verify_busibox_admin_token)):
+async def list_services(token: dict = Depends(verify_admin_token)):
     """
     List all busibox services and their status.
     """
@@ -125,7 +139,7 @@ async def list_services(token: dict = Depends(verify_busibox_admin_token)):
 @router.get("/services/{service}")
 async def get_service_status(
     service: str,
-    token: dict = Depends(verify_busibox_admin_token)
+    token: dict = Depends(verify_admin_token)
 ):
     """
     Get status of a specific service.
@@ -138,7 +152,7 @@ async def get_service_status(
 @router.post("/services/{service}/start")
 async def start_service(
     service: str,
-    token: dict = Depends(verify_busibox_admin_token)
+    token: dict = Depends(verify_admin_token)
 ):
     """
     Start a specific service.
@@ -155,7 +169,7 @@ async def start_service(
 @router.post("/services/{service}/stop")
 async def stop_service(
     service: str,
-    token: dict = Depends(verify_busibox_admin_token)
+    token: dict = Depends(verify_admin_token)
 ):
     """
     Stop a specific service.
@@ -172,7 +186,7 @@ async def stop_service(
 @router.post("/services/{service}/restart")
 async def restart_service(
     service: str,
-    token: dict = Depends(verify_busibox_admin_token)
+    token: dict = Depends(verify_admin_token)
 ):
     """
     Restart a specific service.
@@ -190,7 +204,7 @@ async def restart_service(
 async def get_service_logs(
     service: str,
     lines: int = 100,
-    token: dict = Depends(verify_busibox_admin_token)
+    token: dict = Depends(verify_admin_token)
 ):
     """
     Get logs for a specific service.
@@ -211,7 +225,7 @@ async def get_service_logs(
 @router.post("/compose/up")
 async def compose_up(
     request: ComposeUpRequest,
-    token: dict = Depends(verify_busibox_admin_token)
+    token: dict = Depends(verify_admin_token)
 ):
     """
     Start services via docker compose.
@@ -231,7 +245,7 @@ async def compose_up(
 @router.post("/compose/down")
 async def compose_down(
     request: ComposeDownRequest,
-    token: dict = Depends(verify_busibox_admin_token)
+    token: dict = Depends(verify_admin_token)
 ):
     """
     Stop and remove compose services.
@@ -265,7 +279,7 @@ async def system_health():
 
 
 @router.get("/health/detailed")
-async def system_health_detailed(token: dict = Depends(verify_busibox_admin_token)):
+async def system_health_detailed(token: dict = Depends(verify_admin_token)):
     """
     Detailed system health with service information.
     

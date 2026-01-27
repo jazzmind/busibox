@@ -43,7 +43,8 @@ class Config(BaseSettings):
     
     # Embedding API (dedicated embedding service - no auth required)
     embedding_api_url: str = os.getenv("EMBEDDING_API_URL", "http://embedding-api:8005")
-    embedding_model: str = "bge-large-en-v1.5"
+    # Note: This is for logging only - actual model is determined by embedding-api service
+    embedding_model: str = os.getenv("FASTEMBED_MODEL", "BAAI/bge-large-en-v1.5").split("/")[-1]
     embedding_dim: int = int(os.getenv("EMBEDDING_DIMENSION", "1024"))
     
     # LiteLLM (for LLM calls)

@@ -3,12 +3,14 @@ Embedding API Configuration.
 
 Environment variables:
 - FASTEMBED_MODEL: Model name (default: BAAI/bge-large-en-v1.5)
+- FASTEMBED_CACHE_DIR: Cache directory for model files (default: /root/.cache/fastembed)
 - EMBEDDING_BATCH_SIZE: Batch size for embedding generation (default: 32)
-- PORT: Server port (default: 8004)
+- PORT: Server port (default: 8005)
 """
 
 import os
 from dataclasses import dataclass
+from typing import Optional
 
 
 # Model dimensions for FastEmbed BGE models
@@ -30,6 +32,11 @@ class Config:
     # Model configuration
     model_name: str = os.getenv("FASTEMBED_MODEL", "BAAI/bge-large-en-v1.5")
     batch_size: int = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
+    
+    # Cache directory for model files
+    # This allows pre-downloaded models to be mounted from the host
+    # Falls back to FastEmbed default if not set
+    cache_dir: Optional[str] = os.getenv("FASTEMBED_CACHE_DIR", "/root/.cache/fastembed")
     
     # Server configuration
     port: int = int(os.getenv("PORT", "8005"))

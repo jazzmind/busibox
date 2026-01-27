@@ -3,6 +3,21 @@
 # Each tier defines models for: fast (quick tasks), agent (reasoning), frontier (best quality)
 
 tiers:
+  # Test tier - tiny model for installation validation
+  # Used during initial setup to verify MLX works before downloading larger models
+  test:
+    min_ram_gb: 0
+    max_ram_gb: 15
+    description: "Tiny model for installation testing (~300MB download)"
+    mlx:
+      fast: "mlx-community/Qwen2.5-0.5B-Instruct-4bit"      # ~300MB
+      agent: "mlx-community/Qwen2.5-0.5B-Instruct-4bit"     # ~300MB
+      frontier: "mlx-community/Qwen2.5-0.5B-Instruct-4bit"  # ~300MB
+    vllm:
+      fast: "Qwen/Qwen2.5-0.5B-Instruct-AWQ"
+      agent: "Qwen/Qwen2.5-0.5B-Instruct-AWQ"
+      frontier: "Qwen/Qwen2.5-0.5B-Instruct-AWQ"
+
   # 16GB - MacBook Air, base MacBook Pro
   # ~6GB reserved for system + Docker, ~10GB for models
   minimal:

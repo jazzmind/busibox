@@ -29,7 +29,10 @@ Busibox is a local-first LLM platform running on a single Proxmox host with isol
 - **RBAC everywhere**: JWTs carry role permissions; services translate them into RLS session variables.
 - **Deterministic pipelines**: Ingestion writes to MinIO → PostgreSQL → Milvus; search reads from Milvus + Postgres partitions.
 - **Infrastructure as code**: Containers defined in `provision/pct/vars.env`; configuration and deployment via Ansible.
-- **Local LLM stack**: liteLLM gateway fronts local vLLM/Ollama and optional remote providers.
+- **Local LLM stack**: liteLLM gateway fronts local inference engines:
+  - **MLX** for Apple Silicon (runs on host via host-agent)
+  - **vLLM** for NVIDIA GPUs (runs in Docker/container)
+  - Optional remote providers (AWS Bedrock, OpenAI, etc.)
 
 ## End-to-End Flow (Happy Path)
 1. **AuthZ token issued** by the `authz` service (CT 210) for a user and their document roles.  
@@ -52,6 +55,8 @@ Busibox is a local-first LLM platform running on a single Proxmox host with isol
 ## Control Plane
 - **liteLLM gateway** in `litellm-lxc` normalizes LLM calls and reranker access.
 - **AuthZ** in `authz-lxc` issues HS256 JWTs and records audit events in PostgreSQL.
+- **Deploy API** provides service orchestration and deployment automation.
+- **Host Agent** (Apple Silicon only) runs on the host machine to control MLX, which requires direct hardware access.
 - **Provisioning/Config**: Proxmox scripts in `provision/pct/`, Ansible roles in `provision/ansible/`.
 
 ## What Changed from Prior Docs

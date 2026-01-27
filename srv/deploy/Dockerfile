@@ -16,12 +16,16 @@ RUN apt-get update && apt-get install -y \
     && apt-get install -y docker-ce-cli \
     && rm -rf /var/lib/apt/lists/*
 
+# Copy and install busibox_common shared library
+COPY shared/ ./shared/
+RUN pip install --no-cache-dir ./shared
+
 # Copy requirements and install
-COPY requirements.txt .
+COPY deploy/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy source code
-COPY src/ ./src/
+COPY deploy/src/ ./src/
 
 # Expose port
 EXPOSE 8011

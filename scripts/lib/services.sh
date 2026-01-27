@@ -33,13 +33,16 @@ _SERVICE_ingest_api="206:busibox:srv/ingest:/health:8002"
 _SERVICE_ingest_worker="206:busibox:srv/ingest::8002"
 _SERVICE_search_api="204:busibox:srv/search:/health:8003"
 _SERVICE_agent_api="202:busibox:srv/agent:/health:8000"
+_SERVICE_deploy_api="201:busibox:srv/deploy:/health/live:8011"
+_SERVICE_docs_api="201:busibox:srv/docs:/health/live:8004"
 _SERVICE_litellm="207:litellm::/health:4000"
 _SERVICE_vllm="210:vllm::/health:8000"
+_SERVICE_mlx="211:mlx::/v1/models:8080"
+_SERVICE_host_agent="0:busibox:scripts/host-agent:/health:8089"
+_SERVICE_embedding="208:busibox:srv/embedding:/health:8005"
 _SERVICE_nginx="200:busibox:provision/ansible/roles/nginx:/:80"
 _SERVICE_ai_portal="201:ai-portal::/portal/api/health:3000"
 _SERVICE_agent_manager="201:agent-manager::/agents/api/health:3001"
-_SERVICE_docs_api="201:busibox:srv/docs:/health:8004"
-_SERVICE_authz_api="210:busibox:srv/authz:/health/live:8010"
 
 # Service display names
 _NAME_authz="AuthZ"
@@ -54,20 +57,33 @@ _NAME_search_api="Search API"
 _NAME_agent_api="Agent API"
 _NAME_litellm="LiteLLM"
 _NAME_vllm="vLLM"
+_NAME_mlx="MLX"
+_NAME_host_agent="Host Agent"
+_NAME_embedding="Embedding API"
 _NAME_nginx="Nginx"
 _NAME_ai_portal="AI Portal"
 _NAME_agent_manager="Agent Manager"
 _NAME_docs_api="Docs API"
 _NAME_authz_api="AuthZ API"
+_NAME_deploy_api="Deploy API"
 
 # Service categories (reorganized per user request)
-_CORE_SERVICES="authz postgres milvus minio nginx litellm"
-_API_SERVICES="ingest search-api agent-api"
-_APP_SERVICES="ai-portal agent-manager"
+# Core: authz, postgres, redis, milvus, minio
+# LLM: litellm, mlx/vllm (platform-dependent), embedding
+# API: deploy, ingest, search, agent, docs
+# App: nginx, ai-portal, agent-manager
+_CORE_SERVICES="authz postgres redis milvus minio"
+# LLM services - mlx or vllm depends on platform (detected at runtime)
+_LLM_SERVICES_BASE="litellm"
+_LLM_SERVICES_GPU="vllm"     # For Linux with NVIDIA GPU
+_LLM_SERVICES_APPLE="mlx"    # For Apple Silicon
+_LLM_SERVICES_SUFFIX="embedding"
+_API_SERVICES="deploy-api ingest search-api agent-api docs-api"
+_APP_SERVICES="nginx ai-portal agent-manager"
 
 # All services combined (includes individual services for status checking)
 # Note: "ingest" is used for display, but we check "ingest-api" and "ingest-worker" individually
-ALL_SERVICES="authz postgres milvus minio nginx litellm ingest-api ingest-worker search-api agent-api ai-portal agent-manager"
+ALL_SERVICES="authz postgres redis milvus minio nginx litellm vllm mlx embedding ingest-api ingest-worker search-api agent-api deploy-api docs-api ai-portal agent-manager"
 
 # ============================================================================
 # Service Metadata Functions
@@ -158,7 +174,7 @@ get_service_port() {
 get_service_display_name() {
     local service=$1
     local var_name="_NAME_${service//-/_}"
-    local name=$(eval echo "\$$var_name")
+    local name=$(eval echo "\${$var_name:-}" 2>/dev/null)
     echo "${name:-$service}"
 }
 
@@ -234,6 +250,25 @@ get_service_category() {
     fi
 }
 
+# Detect which LLM backend to use based on platform
+# Returns: "mlx" for Apple Silicon, "vllm" for NVIDIA GPU, empty for cloud-only
+_detect_llm_backend() {
+    local os arch
+    os=$(uname -s)
+    arch=$(uname -m)
+    
+    if [[ "$os" == "Darwin" && ("$arch" == "arm64" || "$arch" == "aarch64") ]]; then
+        echo "mlx"
+    elif command -v nvidia-smi &>/dev/null; then
+        local gpu_count
+        gpu_count=$(nvidia-smi -L 2>/dev/null | wc -l || echo "0")
+        if [[ $gpu_count -gt 0 ]]; then
+            echo "vllm"
+        fi
+    fi
+    # Returns empty for cloud-only setups
+}
+
 # Get all services in a category
 # Usage: get_services_in_category "core"
 get_services_in_category() {
@@ -242,6 +277,19 @@ get_services_in_category() {
     case "$category" in
         core)
             echo "$_CORE_SERVICES"
+            ;;
+        llm)
+            # Dynamically determine LLM services based on platform
+            local llm_backend
+            llm_backend=$(_detect_llm_backend)
+            local llm_services="$_LLM_SERVICES_BASE"
+            if [[ "$llm_backend" == "mlx" ]]; then
+                llm_services="$llm_services mlx host-agent"
+            elif [[ "$llm_backend" == "vllm" ]]; then
+                llm_services="$llm_services vllm"
+            fi
+            llm_services="$llm_services $_LLM_SERVICES_SUFFIX"
+            echo "$llm_services"
             ;;
         api)
             echo "$_API_SERVICES"

@@ -43,6 +43,17 @@ published: true
 | `ollama-lxc` | 209 | 10.96.200.209 | Ollama inference | 11434 | Local model serving option. |
 | `authz-lxc` | 210 | 10.96.200.210 | AuthZ service | 8010 | Issues HS256 JWTs and records audit events. |
 
+### Host Services (Docker Development Only)
+
+On Apple Silicon Macs, some services run on the host instead of in containers:
+
+| Service | Port | Purpose | Notes |
+| --- | --- | --- | --- |
+| `host-agent` | 8089 | MLX control bridge | Allows Docker to control MLX on the host |
+| `mlx-lm` | 8080 | Local LLM inference | MLX-LM server for Apple Silicon |
+
+The host-agent is necessary because MLX requires direct access to Apple Silicon hardware, which is not available inside Docker containers. Deploy-API communicates with host-agent via `host.docker.internal:8089`.
+
 ## Responsibilities & Traffic
 - **North-south**: Users hit proxy → apps; no direct public access to ingest/search/authz.
 - **East-west**:

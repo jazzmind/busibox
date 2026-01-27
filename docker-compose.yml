@@ -273,6 +273,8 @@ services:
       - "config_version=${GIT_COMMIT:-unknown}"
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-local-dev-key}
+      # PostgreSQL database for caching, usage tracking, and team management
+      DATABASE_URL: postgresql://${POSTGRES_USER:-busibox_user}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/litellm
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       # AWS Bedrock - pass BEDROCK_API_KEY directly as bearer token
@@ -283,6 +285,9 @@ services:
     volumes:
       - ./config/litellm-config.yaml:/app/config.yaml:ro
     command: --config /app/config.yaml --port 4000 --detailed_debug
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"]
       interval: 30s
@@ -301,6 +306,11 @@ services:
   # Embedding API - Dedicated embedding service
   # Loads FastEmbed model once at startup and provides HTTP API for all consumers.
   # This service should NOT be restarted frequently - it's in the infrastructure tier.
+  # 
+  # Model Caching:
+  #   - On macOS with `make install`, the model is pre-downloaded to ~/.cache/fastembed
+  #   - This host directory is bind-mounted into the container for instant startup
+  #   - If not pre-cached, the model will be downloaded on first container start (~1.3GB)
   embedding-api:
     build:
       context: ./srv/embedding
@@ -311,13 +321,18 @@ services:
     labels:
       - "version=${GIT_COMMIT:-unknown}"
     volumes:
-      # Model cache - persists downloaded models across container rebuilds
-      - model_cache:/root/.cache
+      # Mount host's fastembed cache for pre-downloaded models (from make install)
+      # Falls back to Docker volume if FASTEMBED_HOST_CACHE is not set
+      - ${FASTEMBED_HOST_CACHE:-fastembed_cache}:/root/.cache/fastembed
+      # General model cache for huggingface, etc.
+      - model_cache:/root/.cache/huggingface
     environment:
       # FastEmbed model - use bge-large for consistency with production
       # Override with FASTEMBED_MODEL=BAAI/bge-small-en-v1.5 for faster dev (384-d, ~134MB vs 1024-d, ~1.3GB)
       FASTEMBED_MODEL: ${FASTEMBED_MODEL:-BAAI/bge-large-en-v1.5}
       EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE:-32}
+      # Cache directory inside container - matches mounted volume
+      FASTEMBED_CACHE_DIR: /root/.cache/fastembed
     ports:
       - "8005:8005"
     healthcheck:
@@ -749,8 +764,8 @@ services:
   # Runs alongside authz-api and validates tokens via authz
   deploy-api:
     build:
-      context: ./srv/deploy
-      dockerfile: Dockerfile
+      context: ./srv
+      dockerfile: deploy/Dockerfile
       labels:
         - "version=${GIT_COMMIT:-unknown}"
     container_name: ${CONTAINER_PREFIX:-dev}-deploy-api
@@ -767,8 +782,9 @@ services:
       # e.g., /Users/you/Code which contains estimator/, project-analysis/, etc.
       # This is mounted directly - no symlinks needed
       - ${DEV_APPS_DIR:-./dev-apps}:/srv/dev-apps:ro
-      # Mount busibox root for writing nginx configs
-      - .:/busibox:rw
+      # Mount busibox root at its HOST path so docker compose paths work for both builds and volumes
+      # BUSIBOX_HOST_PATH must be set to the actual host path (e.g., /Users/you/Code/busibox)
+      - ${BUSIBOX_HOST_PATH:-.}:${BUSIBOX_HOST_PATH:-/busibox}:rw
     command: ["python", "-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8011", "--reload", "--reload-dir", "/app/src"]
     environment:
       # Service
@@ -782,17 +798,43 @@ services:
       POSTGRES_HOST: postgres
       POSTGRES_ADMIN_USER: postgres
       POSTGRES_ADMIN_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
+      # POSTGRES_PASSWORD passed through so docker compose can use it for spawned services
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
+      POSTGRES_USER: ${POSTGRES_USER:-busibox_user}
       # Container IPs (use Docker service names in local dev)
       APPS_CONTAINER_IP: ${APPS_CONTAINER_IP:-host.docker.internal}
       APPS_CONTAINER_IP_STAGING: ${APPS_CONTAINER_IP_STAGING:-host.docker.internal}
       # SSH (for remote operations in production)
       SSH_KEY_PATH: /root/.ssh/id_rsa
+      # Docker Compose configuration
+      COMPOSE_PROJECT_NAME: ${CONTAINER_PREFIX:-dev}-busibox
+      COMPOSE_FILES: "-f docker-compose.yml -f docker-compose.local-dev.yml"
+      # Host path to busibox directory (for volume mounts in spawned containers)
+      # This MUST be set by the Makefile to the actual host path when running via deploy-api
+      # Without this, deploy-api cannot correctly start other services with volume mounts
+      BUSIBOX_HOST_PATH: ${BUSIBOX_HOST_PATH:-}
       # Nginx
       NGINX_HOST: nginx
       NGINX_CONFIG_DIR: /etc/nginx/sites-available/apps
       NGINX_ENABLED_DIR: /etc/nginx/sites-enabled
       # Rate limiting (10 seconds for testing)
       RATE_LIMIT_SECONDS: 10
+      # GitHub token (needed for docker compose to validate core-apps service)
+      # Passed through so docker compose can validate all services in compose file
+      GITHUB_AUTH_TOKEN: ${GITHUB_AUTH_TOKEN:-}
+      # Host Agent (for MLX control on Apple Silicon)
+      # The host-agent runs on the host machine and is accessible via host.docker.internal
+      HOST_AGENT_URL: http://host.docker.internal:8089
+      HOST_AGENT_TOKEN: ${HOST_AGENT_TOKEN:-}
+      # LLM Backend - set during install to tell deploy-api what hardware is available on host
+      # Values: mlx (Apple Silicon), vllm (NVIDIA GPU), cloud (no local AI)
+      LLM_BACKEND: ${LLM_BACKEND:-}
+      # LLM Services (for LLM chain validation)
+      LITELLM_URL: http://litellm:4000
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-local-dev-key}
+      AGENT_API_URL: http://agent-api:8000
+      # MLX server runs on host (not in docker) on port 8080
+      MLX_SERVER_URL: http://host.docker.internal:8080
     ports:
       - "8011:8011"
     depends_on:
@@ -945,6 +987,10 @@ volumes:
   # Includes: .cache/huggingface, .cache/datalab, .cache/torch, etc.
   # Persists across container rebuilds and survives docker-compose down
   model_cache:
+  # FastEmbed cache - fallback volume when FASTEMBED_HOST_CACHE is not set
+  # On macOS with `make install`, FASTEMBED_HOST_CACHE points to ~/.cache/fastembed
+  # which contains pre-downloaded models for instant startup
+  fastembed_cache:
   # vLLM cache - for demo mode on x86/Linux with NVIDIA GPU
   vllm_cache:
   # User apps - persistent storage for deployed external applications

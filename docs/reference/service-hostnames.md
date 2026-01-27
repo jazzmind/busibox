@@ -51,6 +51,15 @@ All Busibox services are accessible via canonical hostnames that work consistent
 | Agent Manager | `agent-manager` | 3001 | - | Agent management UI |
 | User Apps | `user-apps` | varies | - | External/user applications |
 
+### Host Services (Apple Silicon Only)
+
+These services run on the host machine (not in containers) and are accessible from Docker via `host.docker.internal`:
+
+| Service | Hostname | Port | Description |
+|---------|----------|------|-------------|
+| Host Agent | `host.docker.internal` | 8089 | MLX control bridge for Docker containers |
+| MLX-LM | `host.docker.internal` | 8080 | Local LLM inference for Apple Silicon |
+
 ## Usage Examples
 
 ### Python (FastAPI/Flask)

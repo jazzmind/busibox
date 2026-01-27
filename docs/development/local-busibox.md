@@ -79,6 +79,36 @@ open https://localhost/portal
 │                     │      │ milvus      :19530 Vector DB            │
 │                     │      │ minio       :9000  Object Storage       │
 └─────────────────────┘      └─────────────────────────────────────────┘
+           │
+           ▼ (Apple Silicon only)
+┌─────────────────────┐
+│   HOST SERVICES     │
+├─────────────────────┤
+│ host-agent   :8089  │  ← Controls MLX from Docker
+│ mlx-lm       :8080  │  ← Local LLM inference
+└─────────────────────┘
+```
+
+### Apple Silicon (MLX) Support
+
+On Apple Silicon Macs, local LLM inference uses MLX instead of vLLM:
+
+- **host-agent** (`localhost:8089`) - Lightweight FastAPI service running on the host
+- **mlx-lm** (`localhost:8080`) - MLX-LM server for inference
+
+The host-agent allows Docker containers (like deploy-api) to control MLX, which requires
+direct access to Apple Silicon hardware. During `make install`, a tiny test model (~300MB)
+is downloaded to verify MLX works. Larger models can be downloaded via the AI Portal.
+
+```bash
+# Manual host-agent control
+scripts/host-agent/install-host-agent.sh     # Install as launchd service
+scripts/host-agent/install-host-agent.sh -u  # Uninstall
+
+# Manual MLX control
+scripts/llm/start-mlx-server.sh              # Start with default model
+scripts/llm/start-mlx-server.sh --stop       # Stop server
+scripts/llm/start-mlx-server.sh --status     # Check status
 ```
 
 ## Configuration

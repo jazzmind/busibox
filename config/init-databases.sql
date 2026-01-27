@@ -65,6 +65,10 @@ WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'authz')\gexec
 SELECT 'CREATE DATABASE files OWNER busibox_user'
 WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'files')\gexec
 
+-- Create litellm database (for LiteLLM proxy caching and usage tracking)
+SELECT 'CREATE DATABASE litellm OWNER busibox_user'
+WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'litellm')\gexec
+
 -- =============================================================================
 -- PYTEST TEST DATABASES (owned by busibox_test_user)
 -- Same table names as production, but completely isolated
@@ -92,6 +96,7 @@ GRANT ALL PRIVILEGES ON DATABASE ai_portal TO busibox_user;
 GRANT ALL PRIVILEGES ON DATABASE agent_server TO busibox_user;
 GRANT ALL PRIVILEGES ON DATABASE authz TO busibox_user;
 GRANT ALL PRIVILEGES ON DATABASE files TO busibox_user;
+GRANT ALL PRIVILEGES ON DATABASE litellm TO busibox_user;
 
 -- Test databases
 GRANT ALL PRIVILEGES ON DATABASE test_agent_server TO busibox_test_user;
@@ -153,6 +158,18 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO busibox_
 -- AI_PORTAL DATABASE SETUP (production)
 -- =============================================================================
 \c ai_portal
+
+GRANT ALL ON SCHEMA public TO busibox_user;
+GRANT CREATE ON SCHEMA public TO busibox_user;
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO busibox_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO busibox_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO busibox_user;
+
+-- =============================================================================
+-- LITELLM DATABASE SETUP (production)
+-- =============================================================================
+\c litellm
 
 GRANT ALL ON SCHEMA public TO busibox_user;
 GRANT CREATE ON SCHEMA public TO busibox_user;

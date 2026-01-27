@@ -10,16 +10,7 @@ This package provides common functionality used across services:
 - Common utilities
 """
 
-from .db import DatabaseInitializer, SchemaManager
-from .test_mode import (
-    TestModeConfig,
-    DatabaseRouter,
-    is_test_mode_request,
-    init_database_router,
-    get_database,
-    get_router,
-    TEST_MODE_HEADER,
-)
+# Import auth utilities (no heavy dependencies)
 from .auth import (
     # Data classes
     Role,
@@ -56,27 +47,65 @@ from .auth import (
     get_accessible_partitions,
     get_partition_names_for_search,
 )
-from .llm import (
-    # LiteLLM Client
-    LiteLLMClient,
-    get_client as get_llm_client,
-    reset_client as reset_llm_client,
-    ensure_openai_env,
-    # Model Registry
-    ModelRegistry,
-    get_registry as get_model_registry,
-    reset_registry as reset_model_registry,
-)
-from .pool import (
-    # Pool Configuration
-    PoolConfig,
-    # Pool Manager
-    AsyncPGPoolManager,
-    # Module-level convenience functions
-    get_pool,
-    init_pool,
-    reset_pool,
-)
+# Optional imports for services that need database/LLM functionality
+# These require heavy dependencies (asyncpg, litellm, etc.)
+try:
+    from .db import DatabaseInitializer, SchemaManager
+    from .test_mode import (
+        TestModeConfig,
+        DatabaseRouter,
+        is_test_mode_request,
+        init_database_router,
+        get_database,
+        get_router,
+        TEST_MODE_HEADER,
+    )
+    from .llm import (
+        # LiteLLM Client
+        LiteLLMClient,
+        get_client as get_llm_client,
+        reset_client as reset_llm_client,
+        ensure_openai_env,
+        # Model Registry
+        ModelRegistry,
+        get_registry as get_model_registry,
+        reset_registry as reset_model_registry,
+    )
+    from .pool import (
+        # Pool Configuration
+        PoolConfig,
+        # Pool Manager
+        AsyncPGPoolManager,
+        # Module-level convenience functions
+        get_pool,
+        init_pool,
+        reset_pool,
+    )
+    _HAS_DB_SUPPORT = True
+except ImportError:
+    # Services without database/LLM support can still use auth utilities
+    _HAS_DB_SUPPORT = False
+    DatabaseInitializer = None
+    SchemaManager = None
+    TestModeConfig = None
+    DatabaseRouter = None
+    is_test_mode_request = None
+    init_database_router = None
+    get_database = None
+    get_router = None
+    TEST_MODE_HEADER = None
+    LiteLLMClient = None
+    get_llm_client = None
+    reset_llm_client = None
+    ensure_openai_env = None
+    ModelRegistry = None
+    get_model_registry = None
+    reset_model_registry = None
+    PoolConfig = None
+    AsyncPGPoolManager = None
+    get_pool = None
+    init_pool = None
+    reset_pool = None
 
 __all__ = [
     # Database

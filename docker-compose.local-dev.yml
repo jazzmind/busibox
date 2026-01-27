@@ -79,6 +79,12 @@ services:
       DOCS_API_URL: http://docs-api:8004
       # Deployment Service - internal container URL for server-side deployment
       DEPLOYMENT_SERVICE_URL: http://deploy-api:8011/api/v1/deployment
+      DEPLOY_API_URL: http://deploy-api:8011
+      # Host Agent (for MLX control on Apple Silicon)
+      HOST_AGENT_URL: http://host.docker.internal:8089
+      HOST_AGENT_TOKEN: ${HOST_AGENT_TOKEN:-}
+      # LLM Backend - passed from install.sh to tell AI Portal what hardware is available
+      LLM_BACKEND: ${LLM_BACKEND:-}
       
       # =======================================================================
       # Agent Manager Environment (PORT 3001, /agents path)

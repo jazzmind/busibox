@@ -16,6 +16,28 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # Source UI library for progress display
 source "${SCRIPT_DIR}/../lib/ui.sh"
 
+# MLX virtual environment (PEP 668 compliance for modern macOS)
+MLX_VENV_DIR="${HOME}/.busibox/mlx-venv"
+
+# Setup or use the MLX virtual environment
+setup_mlx_venv() {
+    mkdir -p "${HOME}/.busibox"
+    if [[ ! -d "$MLX_VENV_DIR" ]]; then
+        info "Creating MLX virtual environment..."
+        python3 -m venv "$MLX_VENV_DIR"
+    fi
+}
+
+# Get venv python path
+get_mlx_python() {
+    echo "${MLX_VENV_DIR}/bin/python3"
+}
+
+# Get venv pip path
+get_mlx_pip() {
+    echo "${MLX_VENV_DIR}/bin/pip3"
+}
+
 # Get backend and tier
 BACKEND="${LLM_BACKEND:-$(bash "${SCRIPT_DIR}/detect-backend.sh")}"
 TIER="${LLM_TIER:-$(bash "${SCRIPT_DIR}/get-memory-tier.sh" "$BACKEND")}"
@@ -37,14 +59,21 @@ download_mlx_model() {
         return 0
     fi
     
+    # Setup venv and get paths
+    setup_mlx_venv
+    local mlx_python
+    local mlx_pip
+    mlx_python=$(get_mlx_python)
+    mlx_pip=$(get_mlx_pip)
+    
     # Install huggingface_hub if needed
-    if ! python3 -c "import huggingface_hub" 2>/dev/null; then
-        info "Installing huggingface_hub..."
-        pip3 install -q huggingface_hub
+    if ! "$mlx_python" -c "import huggingface_hub" 2>/dev/null; then
+        info "Installing huggingface_hub into virtual environment..."
+        "$mlx_pip" install -q huggingface_hub
     fi
     
     # Download model
-    python3 -c "
+    "$mlx_python" -c "
 from huggingface_hub import snapshot_download
 snapshot_download('${model}', local_dir_use_symlinks=True)
 "
@@ -65,13 +94,19 @@ from vllm import LLM
 LLM('${model}', download_dir='/root/.cache/huggingface')
 "
     else
-        # On host - use huggingface_hub
-        if ! python3 -c "import huggingface_hub" 2>/dev/null; then
-            info "Installing huggingface_hub..."
-            pip3 install -q huggingface_hub
+        # On host - use huggingface_hub via venv (PEP 668 compliance)
+        setup_mlx_venv
+        local mlx_python
+        local mlx_pip
+        mlx_python=$(get_mlx_python)
+        mlx_pip=$(get_mlx_pip)
+        
+        if ! "$mlx_python" -c "import huggingface_hub" 2>/dev/null; then
+            info "Installing huggingface_hub into virtual environment..."
+            "$mlx_pip" install -q huggingface_hub
         fi
         
-        python3 -c "
+        "$mlx_python" -c "
 from huggingface_hub import snapshot_download
 snapshot_download('${model}')
 "

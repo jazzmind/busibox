@@ -99,14 +99,48 @@ async def lifespan(app: FastAPI):
         model=config.model_name,
         dimension=config.dimension,
         batch_size=config.batch_size,
+        cache_dir=config.cache_dir,
     )
     
     # Load model at startup
     start_time = time.time()
-    logger.info("Loading FastEmbed model", model=config.model_name)
+    
+    # Check if model is already cached
+    cached = False
+    if config.cache_dir:
+        import os
+        # FastEmbed normalizes model names for cache directory
+        model_normalized = config.model_name.replace("/", "_").replace(":", "_")
+        model_path = os.path.join(config.cache_dir, model_normalized)
+        if os.path.exists(model_path):
+            cached = True
+            logger.info(
+                "Found cached model",
+                model=config.model_name,
+                cache_path=model_path,
+            )
+        else:
+            logger.info(
+                "Model not cached, will download",
+                model=config.model_name,
+                expected_path=model_path,
+            )
+    
+    logger.info(
+        "Loading FastEmbed model",
+        model=config.model_name,
+        from_cache=cached,
+    )
     
     try:
-        embedder = TextEmbedding(model_name=config.model_name)
+        # Initialize TextEmbedding with cache_dir if configured
+        if config.cache_dir:
+            embedder = TextEmbedding(
+                model_name=config.model_name,
+                cache_dir=config.cache_dir,
+            )
+        else:
+            embedder = TextEmbedding(model_name=config.model_name)
         
         # Warmup: run a test embedding to fully initialize
         logger.info("Warming up model")
@@ -120,6 +154,7 @@ async def lifespan(app: FastAPI):
             model=config.model_name,
             dimension=config.dimension,
             load_time_seconds=round(load_time, 2),
+            from_cache=cached,
         )
     except Exception as e:
         logger.error("Failed to load model", error=str(e), exc_info=True)

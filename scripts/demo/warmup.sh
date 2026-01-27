@@ -91,28 +91,41 @@ fi
 # =============================================================================
 
 if [[ "$DEMO_BACKEND" == "mlx" ]]; then
-    # MLX on Apple Silicon
+    # MLX on Apple Silicon - use virtual environment (PEP 668 compliance)
+    MLX_VENV_DIR="${HOME}/.busibox/mlx-venv"
+    
+    show_stage 33 "Setting up MLX virtual environment" \
+        "Creating isolated Python environment for MLX packages"
+    
+    mkdir -p "${HOME}/.busibox"
+    if [[ ! -d "$MLX_VENV_DIR" ]]; then
+        python3 -m venv "$MLX_VENV_DIR"
+    fi
+    
+    MLX_PYTHON="${MLX_VENV_DIR}/bin/python3"
+    MLX_PIP="${MLX_VENV_DIR}/bin/pip3"
+    
     show_stage 35 "Installing MLX-LM" \
         "Apple's native ML framework for optimal Silicon performance"
     
-    pip3 install -q mlx-lm huggingface_hub pyyaml
+    "$MLX_PIP" install -q mlx-lm huggingface_hub pyyaml
     
     show_stage 42 "Downloading fast model" \
         "Quick responses for simple tasks: ${DEMO_MODEL_FAST}"
     
-    python3 -c "from mlx_lm import load; load('${DEMO_MODEL_FAST}')" || \
+    "$MLX_PYTHON" -c "from mlx_lm import load; load('${DEMO_MODEL_FAST}')" || \
         warn "Could not download fast model - will try at runtime"
     
     show_stage 52 "Downloading agent model" \
         "Primary model for agent reasoning and tool use: ${DEMO_MODEL_AGENT}"
     
-    python3 -c "from mlx_lm import load; load('${DEMO_MODEL_AGENT}')" || \
+    "$MLX_PYTHON" -c "from mlx_lm import load; load('${DEMO_MODEL_AGENT}')" || \
         error "Could not download agent model"
     
     show_stage 62 "Downloading frontier model" \
         "Best quality for complex analysis: ${DEMO_MODEL_FRONTIER}"
     
-    python3 -c "from mlx_lm import load; load('${DEMO_MODEL_FRONTIER}')" || \
+    "$MLX_PYTHON" -c "from mlx_lm import load; load('${DEMO_MODEL_FRONTIER}')" || \
         warn "Could not download frontier model - will try at runtime"
 
 else

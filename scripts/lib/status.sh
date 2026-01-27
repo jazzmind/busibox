@@ -21,6 +21,55 @@ if ! type get_service_container_id &>/dev/null; then
     source "${_STATUS_SCRIPT_DIR}/services.sh"
 fi
 
+# Get Docker container prefix for environment
+# Priority: 1) Environment variable 2) Detect from running containers 3) .env files 4) Default
+# Usage: prefix=$(get_container_prefix_for_status "development")
+get_container_prefix_for_status() {
+    local env_name="${1:-}"
+    local prefix
+    
+    # 1. Check environment variable (set by Makefile)
+    if [[ -n "${CONTAINER_PREFIX:-}" ]]; then
+        echo "$CONTAINER_PREFIX"
+        return 0
+    fi
+    
+    # 2. Detect from running containers (look for *-authz-api pattern)
+    prefix=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '.-authz-api$' | sed 's/-authz-api$//' | head -1)
+    if [[ -n "$prefix" ]]; then
+        echo "$prefix"
+        return 0
+    fi
+    
+    # 3. Check .env files based on environment
+    case "$env_name" in
+        development|local|docker)
+            # Check .env.dev first, then .env.local
+            prefix=$(grep -E "^CONTAINER_PREFIX=" "${REPO_ROOT}/.env.dev" 2>/dev/null | cut -d'=' -f2 || echo "")
+            if [[ -z "$prefix" ]]; then
+                prefix=$(grep -E "^CONTAINER_PREFIX=" "${REPO_ROOT}/.env.local" 2>/dev/null | cut -d'=' -f2 || echo "")
+            fi
+            # Default for development is 'dev'
+            echo "${prefix:-dev}"
+            ;;
+        demo)
+            prefix=$(grep -E "^CONTAINER_PREFIX=" "${REPO_ROOT}/.env.demo" 2>/dev/null | cut -d'=' -f2 || echo "")
+            echo "${prefix:-demo}"
+            ;;
+        staging)
+            echo "staging"
+            ;;
+        production)
+            echo "prod"
+            ;;
+        *)
+            # Fallback: try to detect from any running container
+            prefix=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '.-api$' | sed 's/-[^-]*-api$//' | head -1)
+            echo "${prefix:-local}"
+            ;;
+    esac
+}
+
 # ============================================================================
 # Configuration
 # ============================================================================
@@ -212,24 +261,74 @@ check_service_status() {
                     fi
                     return
                     ;;
+                mlx)
+                    # MLX runs on host via host-agent on Apple Silicon
+                    # Check host-agent for MLX status, or directly check port 8080
+                    local os arch
+                    os=$(uname -s)
+                    arch=$(uname -m)
+                    if [[ "$os" == "Darwin" && ("$arch" == "arm64" || "$arch" == "aarch64") ]]; then
+                        # Try host-agent first (more reliable)
+                        local mlx_response
+                        mlx_response=$(curl -sf --max-time 2 http://localhost:8089/mlx/status 2>/dev/null)
+                        if [[ -n "$mlx_response" ]]; then
+                            local mlx_running
+                            mlx_running=$(echo "$mlx_response" | jq -r '.running // false' 2>/dev/null)
+                            if [[ "$mlx_running" == "true" ]]; then
+                                echo "up"
+                            else
+                                echo "down"
+                            fi
+                            return
+                        fi
+                        # Fallback: check MLX port 8080 directly
+                        if lsof -i :8080 -sTCP:LISTEN -t >/dev/null 2>&1; then
+                            echo "up"
+                        else
+                            echo "down"
+                        fi
+                    else
+                        # MLX not applicable on non-Apple Silicon
+                        echo "unknown"
+                    fi
+                    return
+                    ;;
+                host-agent)
+                    # Host-agent runs on host (not in Docker)
+                    if curl -sf --max-time 2 http://localhost:8089/health >/dev/null 2>&1; then
+                        echo "up"
+                    else
+                        echo "down"
+                    fi
+                    return
+                    ;;
             esac
             
             # Check Docker container status
-            # Map service names to Docker container names
+            # Use dynamic container prefix based on environment
+            local container_prefix
+            container_prefix=$(get_container_prefix_for_status "$env")
+            
+            # Map service names to Docker container names with environment prefix
             local container_name
             case "$service" in
-                authz) container_name="local-authz-api" ;;
-                postgres) container_name="local-postgres" ;;
-                redis) container_name="local-redis" ;;
-                milvus) container_name="local-milvus" ;;
-                minio) container_name="local-minio" ;;
-                ingest-api) container_name="local-ingest-api" ;;
-                search-api) container_name="local-search-api" ;;
-                agent-api) container_name="local-agent-api" ;;
-                litellm) container_name="local-litellm" ;;
-                nginx) container_name="local-nginx" ;;
-                docs-api) container_name="local-docs-api" ;;
-                *) container_name="local-${service}" ;;
+                authz) container_name="${container_prefix}-authz-api" ;;
+                postgres) container_name="${container_prefix}-postgres" ;;
+                redis) container_name="${container_prefix}-redis" ;;
+                milvus) container_name="${container_prefix}-milvus" ;;
+                minio) container_name="${container_prefix}-minio" ;;
+                ingest-api) container_name="${container_prefix}-ingest-api" ;;
+                ingest-worker) container_name="${container_prefix}-ingest-worker" ;;
+                search-api) container_name="${container_prefix}-search-api" ;;
+                agent-api) container_name="${container_prefix}-agent-api" ;;
+                deploy-api) container_name="${container_prefix}-deploy-api" ;;
+                docs-api) container_name="${container_prefix}-docs-api" ;;
+                litellm) container_name="${container_prefix}-litellm" ;;
+                vllm) container_name="${container_prefix}-vllm" ;;
+                mlx) container_name="${container_prefix}-mlx" ;;
+                embedding) container_name="${container_prefix}-embedding-api" ;;
+                nginx) container_name="${container_prefix}-nginx" ;;
+                *) container_name="${container_prefix}-${service}" ;;
             esac
             
             if docker ps --filter "name=${container_name}" --filter "status=running" --format '{{.Names}}' 2>/dev/null | grep -q "^${container_name}$"; then
@@ -330,6 +429,89 @@ check_service_health() {
     
     HEALTH_RESPONSE_TIME=0
     
+    # Special handling for host-agent - runs on host (not in Docker)
+    if [[ "$service" == "host-agent" && "$backend" == "docker" ]]; then
+        local http_code
+        http_code=$(curl -s -w "%{http_code}" --max-time 2 -o /dev/null "http://localhost:8089/health" 2>/dev/null)
+        if [[ "$http_code" == "200" ]]; then
+            echo "healthy"
+        else
+            echo "down"
+        fi
+        return 0
+    fi
+    
+    # Special handling for MLX - runs on host via host-agent
+    if [[ "$service" == "mlx" && "$backend" == "docker" ]]; then
+        local os arch
+        os=$(uname -s)
+        arch=$(uname -m)
+        if [[ "$os" == "Darwin" && ("$arch" == "arm64" || "$arch" == "aarch64") ]]; then
+            # Check MLX health via host-agent
+            local mlx_response
+            mlx_response=$(curl -sf --max-time 2 http://localhost:8089/mlx/status 2>/dev/null)
+            if [[ -n "$mlx_response" ]]; then
+                local mlx_healthy
+                mlx_healthy=$(echo "$mlx_response" | jq -r '.healthy // false' 2>/dev/null)
+                if [[ "$mlx_healthy" == "true" ]]; then
+                    echo "healthy"
+                else
+                    # Running but not healthy = degraded
+                    local mlx_running
+                    mlx_running=$(echo "$mlx_response" | jq -r '.running // false' 2>/dev/null)
+                    if [[ "$mlx_running" == "true" ]]; then
+                        echo "degraded"
+                    else
+                        echo "down"
+                    fi
+                fi
+                return 0
+            fi
+            # Fallback: check MLX server directly
+            local http_code
+            http_code=$(curl -s -w "%{http_code}" --max-time 2 -o /dev/null "http://localhost:8080/v1/models" 2>/dev/null)
+            if [[ "$http_code" == "200" ]]; then
+                echo "healthy"
+            else
+                echo "down"
+            fi
+        else
+            echo "unknown"
+        fi
+        return 0
+    fi
+    
+    # For Docker backend with services that have JSON health endpoints,
+    # check the actual endpoint to get degraded status (Docker only knows healthy/unhealthy)
+    local check_json_health=false
+    case "$service" in
+        search-api|deploy-api|docs-api) check_json_health=true ;;
+    esac
+    
+    # For Docker backend, use Docker's built-in health check for simple services
+    if [[ "$backend" == "docker" && "$check_json_health" == "false" ]]; then
+        local container_prefix
+        container_prefix=$(get_container_prefix_for_status "$env")
+        
+        # Map service name to container name
+        local container_name
+        case "$service" in
+            authz) container_name="${container_prefix}-authz-api" ;;
+            *) container_name="${container_prefix}-${service}" ;;
+        esac
+        
+        # Check Docker health status
+        local docker_health=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null)
+        if [[ -n "$docker_health" && "$docker_health" != "<no value>" ]]; then
+            case "$docker_health" in
+                healthy) echo "healthy"; return 0 ;;
+                unhealthy) echo "down"; return 0 ;;
+                starting) echo "degraded"; return 0 ;;
+            esac
+        fi
+        # If no Docker health check, fall through to HTTP check
+    fi
+    
     local health_url=$(get_service_health_url "$service" "$env" "$backend")
     
     # Measure response time (use perl for milliseconds on macOS)
@@ -340,10 +522,13 @@ check_service_health() {
         start_time=$(($(date +%s) * 1000))
     fi
     
+    # Get both HTTP code and response body
+    local response_file=$(mktemp)
     local http_code
-    http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+    http_code=$(curl -s -w "%{http_code}" \
         --max-time $HEALTH_TIMEOUT \
         --connect-timeout 2 \
+        -o "$response_file" \
         "$health_url" 2>/dev/null)
     
     local end_time
@@ -354,29 +539,50 @@ check_service_health() {
     fi
     HEALTH_RESPONSE_TIME=$((end_time - start_time))
     
-    # Evaluate health based on HTTP code
+    # Evaluate health based on HTTP code and response body
+    local health_status="unknown"
     case "$http_code" in
         200|301|302)
-            # 200 = OK, 301/302 = redirect (still responding)
-            if [[ $HEALTH_RESPONSE_TIME -gt 1000 ]]; then
-                echo "degraded"
+            # Check if response contains JSON with status field
+            if command -v jq &>/dev/null && [[ -s "$response_file" ]]; then
+                local json_status=$(jq -r '.status // empty' "$response_file" 2>/dev/null)
+                if [[ -n "$json_status" ]]; then
+                    # Use the status from JSON response
+                    case "$json_status" in
+                        healthy|ok) health_status="healthy" ;;
+                        degraded|warning) health_status="degraded" ;;
+                        unhealthy|error) health_status="down" ;;
+                        *) health_status="unknown" ;;
+                    esac
+                elif [[ $HEALTH_RESPONSE_TIME -gt 1000 ]]; then
+                    health_status="degraded"
+                else
+                    health_status="healthy"
+                fi
+            elif [[ $HEALTH_RESPONSE_TIME -gt 1000 ]]; then
+                health_status="degraded"
             else
-                echo "healthy"
+                health_status="healthy"
             fi
             ;;
         401|403)
             # Auth required but service is up
-            echo "healthy"
+            health_status="healthy"
             ;;
         000)
             # Connection failed
-            echo "down"
+            health_status="down"
             ;;
         *)
             # Other codes (404, 500, etc.)
-            echo "unknown"
+            health_status="unknown"
             ;;
     esac
+    
+    # Clean up temp file
+    rm -f "$response_file"
+    
+    echo "$health_status"
 }
 
 # Get deployed version from container
@@ -389,44 +595,48 @@ get_deployed_version() {
     
     case "$backend" in
         docker)
+            # Get container prefix for environment
+            local container_prefix
+            container_prefix=$(get_container_prefix_for_status "$env")
+            
             # Handle external services (return both package version and config version)
             case "$service" in
                 milvus)
-                    local pkg_ver=$(docker inspect local-milvus --format '{{.Config.Image}}' 2>/dev/null | sed 's/.*://' || echo "unknown")
-                    local cfg_ver=$(docker inspect local-milvus --format '{{.Config.Labels.config_version}}' 2>/dev/null || echo "unknown")
+                    local pkg_ver=$(docker inspect "${container_prefix}-milvus" --format '{{.Config.Image}}' 2>/dev/null | sed 's/.*://' || echo "unknown")
+                    local cfg_ver=$(docker inspect "${container_prefix}-milvus" --format '{{.Config.Labels.config_version}}' 2>/dev/null || echo "unknown")
                     [[ "$cfg_ver" == "<no value>" ]] && cfg_ver="unknown"
                     echo "${pkg_ver}@${cfg_ver}"
                     return
                     ;;
                 minio)
                     # Get actual MinIO version from running container
-                    local version=$(docker exec local-minio minio --version 2>/dev/null | grep -oE 'RELEASE\.[0-9TZ-]+(-cpuv[0-9]+)?' | head -1)
+                    local version=$(docker exec "${container_prefix}-minio" minio --version 2>/dev/null | grep -oE 'RELEASE\.[0-9TZ-]+(-cpuv[0-9]+)?' | head -1)
                     echo "${version:-unknown}"
                     return
                     ;;
                 litellm)
                     # Get actual LiteLLM version from running container
-                    local version=$(docker exec local-litellm pip show litellm 2>/dev/null | grep -oE 'Version: [0-9.]+' | sed 's/Version: //')
+                    local version=$(docker exec "${container_prefix}-litellm" pip show litellm 2>/dev/null | grep -oE 'Version: [0-9.]+' | sed 's/Version: //')
                     echo "${version:-unknown}"
                     return
                     ;;
                 postgres)
-                    local pkg_ver=$(docker inspect local-postgres --format '{{.Config.Image}}' 2>/dev/null | sed 's/.*://' || echo "unknown")
-                    local cfg_ver=$(docker inspect local-postgres --format '{{.Config.Labels.config_version}}' 2>/dev/null || echo "unknown")
+                    local pkg_ver=$(docker inspect "${container_prefix}-postgres" --format '{{.Config.Image}}' 2>/dev/null | sed 's/.*://' || echo "unknown")
+                    local cfg_ver=$(docker inspect "${container_prefix}-postgres" --format '{{.Config.Labels.config_version}}' 2>/dev/null || echo "unknown")
                     [[ "$cfg_ver" == "<no value>" ]] && cfg_ver="unknown"
                     echo "${pkg_ver}@${cfg_ver}"
                     return
                     ;;
                 redis)
-                    local pkg_ver=$(docker inspect local-redis --format '{{.Config.Image}}' 2>/dev/null | sed 's/.*://' || echo "unknown")
-                    local cfg_ver=$(docker inspect local-redis --format '{{.Config.Labels.config_version}}' 2>/dev/null || echo "unknown")
+                    local pkg_ver=$(docker inspect "${container_prefix}-redis" --format '{{.Config.Image}}' 2>/dev/null | sed 's/.*://' || echo "unknown")
+                    local cfg_ver=$(docker inspect "${container_prefix}-redis" --format '{{.Config.Labels.config_version}}' 2>/dev/null || echo "unknown")
                     [[ "$cfg_ver" == "<no value>" ]] && cfg_ver="unknown"
                     echo "${pkg_ver}@${cfg_ver}"
                     return
                     ;;
                 nginx)
-                    local pkg_ver=$(docker inspect local-nginx --format '{{.Config.Image}}' 2>/dev/null | sed 's/.*://' || echo "unknown")
-                    local cfg_ver=$(docker inspect local-nginx --format '{{.Config.Labels.config_version}}' 2>/dev/null || echo "unknown")
+                    local pkg_ver=$(docker inspect "${container_prefix}-nginx" --format '{{.Config.Image}}' 2>/dev/null | sed 's/.*://' || echo "unknown")
+                    local cfg_ver=$(docker inspect "${container_prefix}-nginx" --format '{{.Config.Labels.config_version}}' 2>/dev/null || echo "unknown")
                     [[ "$cfg_ver" == "<no value>" ]] && cfg_ver="unknown"
                     echo "${pkg_ver}@${cfg_ver}"
                     return
@@ -465,21 +675,22 @@ get_deployed_version() {
                     ;;
             esac
             
-            # Map service names to Docker container names
+            # Map service names to Docker container names with environment prefix
             local container_name
             case "$service" in
-                authz) container_name="local-authz-api" ;;
-                postgres) container_name="local-postgres" ;;
-                redis) container_name="local-redis" ;;
-                milvus) container_name="local-milvus" ;;
-                minio) container_name="local-minio" ;;
-                ingest-api) container_name="local-ingest-api" ;;
-                search-api) container_name="local-search-api" ;;
-                agent-api) container_name="local-agent-api" ;;
-                litellm) container_name="local-litellm" ;;
-                nginx) container_name="local-nginx" ;;
-                docs-api) container_name="local-docs-api" ;;
-                *) container_name="local-${service}" ;;
+                authz) container_name="${container_prefix}-authz-api" ;;
+                postgres) container_name="${container_prefix}-postgres" ;;
+                redis) container_name="${container_prefix}-redis" ;;
+                milvus) container_name="${container_prefix}-milvus" ;;
+                minio) container_name="${container_prefix}-minio" ;;
+                ingest-api) container_name="${container_prefix}-ingest-api" ;;
+                ingest-worker) container_name="${container_prefix}-ingest-worker" ;;
+                search-api) container_name="${container_prefix}-search-api" ;;
+                agent-api) container_name="${container_prefix}-agent-api" ;;
+                litellm) container_name="${container_prefix}-litellm" ;;
+                nginx) container_name="${container_prefix}-nginx" ;;
+                docs-api) container_name="${container_prefix}-docs-api" ;;
+                *) container_name="${container_prefix}-${service}" ;;
             esac
             
             # Try label first (set during docker compose build with GIT_COMMIT)

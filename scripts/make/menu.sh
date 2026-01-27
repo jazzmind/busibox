@@ -16,6 +16,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
+# Export host path for deploy-api to use when spawning containers
+export BUSIBOX_HOST_PATH="${REPO_ROOT}"
+
+# Return code that signals "return to main status dashboard"
+# Used by 's' command from any submenu
+export RETURN_TO_STATUS=42
+
 # Source libraries
 source "${REPO_ROOT}/scripts/lib/ui.sh"
 source "${REPO_ROOT}/scripts/lib/state.sh"
@@ -223,9 +230,10 @@ show_main_menu() {
 }
 
 # Handle menu selection
+# Returns: exit code from submenu (including $RETURN_TO_STATUS for 's' key)
 handle_menu_selection() {
     local selection="$1"
-    local env backend
+    local env backend result=0
     
     env=$(get_environment)
     backend=$(get_backend "$env")
@@ -242,18 +250,19 @@ handle_menu_selection() {
             ;;
         configure)
             handle_configure
+            result=$?
             ;;
         services)
             handle_services
-            ;;
-        deploy)
-            handle_deploy
+            result=$?
             ;;
         test)
             handle_test
+            result=$?
             ;;
         migration|databases)
             handle_databases
+            result=$?
             ;;
         change_env)
             select_and_save_environment
@@ -280,6 +289,8 @@ handle_menu_selection() {
             pause
             ;;
     esac
+    
+    return $result
 }
 
 # ============================================================================
@@ -855,97 +866,824 @@ handle_configure() {
     bash "${SCRIPT_DIR}/configure.sh"
 }
 
+# DEPRECATED: Old deploy function - functionality moved to handle_services
+# This function is kept for backward compatibility but redirects to services
 handle_deploy() {
-    local env backend
+    warn "The 'deploy' option has been merged into 'Services'"
+    info "Redirecting to Services menu..."
+    sleep 2
+    handle_services
+}
+
+# Host-native service menu (for MLX, host-agent - services that run on host, not in Docker)
+# Usage: host_service_menu "mlx" or host_service_menu "host-agent"
+host_service_menu() {
+    local service="$1"
+    local env_file="${REPO_ROOT}/.env.dev"
     
+    while true; do
+        clear
+        box "$service - Host Service Actions" 70
+        
+        # Show service status
+        echo ""
+        info "Service status:"
+        case "$service" in
+            mlx)
+                if curl -sf http://localhost:8080/health >/dev/null 2>&1; then
+                    echo -e "  ${GREEN}●${NC} MLX Server: Running (port 8080)"
+                    local models
+                    models=$(curl -sf http://localhost:8080/v1/models 2>/dev/null | jq -r '.data[].id' 2>/dev/null | head -3)
+                    if [[ -n "$models" ]]; then
+                        echo -e "    ${DIM}Models: $(echo "$models" | tr '\n' ', ' | sed 's/, $//')${NC}"
+                    fi
+                else
+                    echo -e "  ${DIM}○${NC} MLX Server: Not running"
+                fi
+                ;;
+            host-agent)
+                if curl -sf http://localhost:8089/health >/dev/null 2>&1; then
+                    echo -e "  ${GREEN}●${NC} Host Agent: Running (port 8089)"
+                    # Check MLX status via host-agent
+                    local mlx_status
+                    mlx_status=$(curl -sf http://localhost:8089/mlx/status 2>/dev/null)
+                    if [[ -n "$mlx_status" ]]; then
+                        local mlx_running
+                        mlx_running=$(echo "$mlx_status" | jq -r '.running // false' 2>/dev/null)
+                        if [[ "$mlx_running" == "true" ]]; then
+                            echo -e "    ${DIM}MLX Status: Running${NC}"
+                        else
+                            echo -e "    ${DIM}MLX Status: Not running${NC}"
+                        fi
+                    fi
+                else
+                    echo -e "  ${DIM}○${NC} Host Agent: Not running"
+                fi
+                ;;
+        esac
+        
+        echo ""
+        menu "Actions" \
+            "Start" \
+            "Stop" \
+            "Restart" \
+            "View Logs" \
+            "Check Status" \
+            "Back"
+        
+        local choice=""
+        read -p "$(echo -e "${BOLD}Select action [1-6]:${NC} ")" choice
+        
+        # Get token for host-agent authentication
+        local token=""
+        if [[ -f "$env_file" ]]; then
+            token=$(grep -s '^HOST_AGENT_TOKEN=' "$env_file" 2>/dev/null | cut -d= -f2)
+        fi
+        
+        case "${choice:-}" in
+            1)  # Start
+                info "Starting $service..."
+                case "$service" in
+                    mlx)
+                        if curl -sf http://localhost:8089/health >/dev/null 2>&1; then
+                            # Use host-agent to start MLX
+                            if [[ -n "$token" ]]; then
+                                curl -sf -X POST http://localhost:8089/mlx/start \
+                                    -H "Content-Type: application/json" \
+                                    -H "Authorization: Bearer $token" \
+                                    -d '{"model_type": "agent"}' && success "MLX started" || error "Failed to start MLX"
+                            else
+                                curl -sf -X POST http://localhost:8089/mlx/start \
+                                    -H "Content-Type: application/json" \
+                                    -d '{"model_type": "agent"}' || error "Failed to start MLX (may need auth)"
+                            fi
+                        else
+                            warn "Host-agent not running. Starting MLX directly..."
+                            bash "${REPO_ROOT}/scripts/llm/start-mlx-server.sh" || error "Failed to start MLX"
+                        fi
+                        ;;
+                    host-agent)
+                        if curl -sf http://localhost:8089/health >/dev/null 2>&1; then
+                            warn "Host-agent is already running"
+                        else
+                            bash "${REPO_ROOT}/scripts/host-agent/install-host-agent.sh"
+                            sleep 2
+                            if curl -sf http://localhost:8089/health >/dev/null 2>&1; then
+                                success "Host-agent started"
+                            else
+                                error "Failed to start host-agent"
+                            fi
+                        fi
+                        ;;
+                esac
+                pause
+                ;;
+            2)  # Stop
+                info "Stopping $service..."
+                case "$service" in
+                    mlx)
+                        if curl -sf http://localhost:8089/health >/dev/null 2>&1; then
+                            if [[ -n "$token" ]]; then
+                                curl -sf -X POST http://localhost:8089/mlx/stop \
+                                    -H "Authorization: Bearer $token" && success "MLX stopped" || error "Failed to stop MLX"
+                            else
+                                curl -sf -X POST http://localhost:8089/mlx/stop || error "Failed to stop MLX (may need auth)"
+                            fi
+                        else
+                            pkill -f "mlx_lm.server" 2>/dev/null && success "MLX stopped" || warn "MLX not running"
+                        fi
+                        ;;
+                    host-agent)
+                        pkill -f "host-agent.py" 2>/dev/null && success "Host-agent stopped" || warn "Host-agent not running"
+                        ;;
+                esac
+                pause
+                ;;
+            3)  # Restart
+                info "Restarting $service..."
+                case "$service" in
+                    mlx)
+                        # Stop first
+                        if curl -sf http://localhost:8089/health >/dev/null 2>&1; then
+                            if [[ -n "$token" ]]; then
+                                curl -sf -X POST http://localhost:8089/mlx/stop -H "Authorization: Bearer $token" || true
+                            else
+                                curl -sf -X POST http://localhost:8089/mlx/stop || true
+                            fi
+                        else
+                            pkill -f "mlx_lm.server" 2>/dev/null || true
+                        fi
+                        sleep 2
+                        # Start
+                        if curl -sf http://localhost:8089/health >/dev/null 2>&1; then
+                            if [[ -n "$token" ]]; then
+                                curl -sf -X POST http://localhost:8089/mlx/start \
+                                    -H "Content-Type: application/json" \
+                                    -H "Authorization: Bearer $token" \
+                                    -d '{"model_type": "agent"}' && success "MLX restarted" || error "Failed to restart MLX"
+                            else
+                                curl -sf -X POST http://localhost:8089/mlx/start \
+                                    -H "Content-Type: application/json" \
+                                    -d '{"model_type": "agent"}' || error "Failed to restart MLX"
+                            fi
+                        else
+                            bash "${REPO_ROOT}/scripts/llm/start-mlx-server.sh" && success "MLX restarted" || error "Failed to restart MLX"
+                        fi
+                        ;;
+                    host-agent)
+                        pkill -f "host-agent.py" 2>/dev/null || true
+                        sleep 1
+                        bash "${REPO_ROOT}/scripts/host-agent/install-host-agent.sh"
+                        sleep 2
+                        if curl -sf http://localhost:8089/health >/dev/null 2>&1; then
+                            success "Host-agent restarted"
+                        else
+                            error "Failed to restart host-agent"
+                        fi
+                        ;;
+                esac
+                pause
+                ;;
+            4)  # View Logs
+                info "Logs for $service:"
+                case "$service" in
+                    mlx)
+                        # MLX logs would be in the terminal where it was started or via host-agent
+                        if [[ -f "$HOME/.busibox/mlx-server.log" ]]; then
+                            tail -50 "$HOME/.busibox/mlx-server.log"
+                        else
+                            warn "No MLX log file found. MLX logs appear in the terminal where it was started."
+                        fi
+                        ;;
+                    host-agent)
+                        if [[ -f "$HOME/.busibox/host-agent.log" ]]; then
+                            tail -50 "$HOME/.busibox/host-agent.log"
+                        else
+                            warn "No host-agent log file found."
+                        fi
+                        ;;
+                esac
+                pause
+                ;;
+            5)  # Check Status
+                info "Detailed status for $service:"
+                case "$service" in
+                    mlx)
+                        echo ""
+                        if curl -sf http://localhost:8080/health >/dev/null 2>&1; then
+                            echo -e "${GREEN}MLX Server: Running${NC}"
+                            echo ""
+                            echo "Available models:"
+                            curl -sf http://localhost:8080/v1/models 2>/dev/null | jq '.data[].id' 2>/dev/null || echo "  (unable to fetch models)"
+                        else
+                            echo -e "${RED}MLX Server: Not running${NC}"
+                        fi
+                        ;;
+                    host-agent)
+                        echo ""
+                        if curl -sf http://localhost:8089/health >/dev/null 2>&1; then
+                            echo -e "${GREEN}Host Agent: Running${NC}"
+                            echo ""
+                            echo "Health check:"
+                            curl -sf http://localhost:8089/health 2>/dev/null | jq . 2>/dev/null || curl -sf http://localhost:8089/health 2>/dev/null
+                            echo ""
+                            echo "MLX Status:"
+                            curl -sf http://localhost:8089/mlx/status 2>/dev/null | jq . 2>/dev/null || echo "  (unavailable)"
+                        else
+                            echo -e "${RED}Host Agent: Not running${NC}"
+                        fi
+                        ;;
+                esac
+                pause
+                ;;
+            6|b|B|"")
+                return 0
+                ;;
+        esac
+    done
+}
+
+# Service group action menu with deployment/build options
+# Usage: services_group_menu "Group Name" "service1 service2..."
+services_group_menu() {
+    local group_name="$1"
+    local services="$2"
+    local env
+    env=$(get_environment)
+    
+    while true; do
+        clear
+        box "$group_name - Actions" 70
+        
+        # Show service status
+        echo ""
+        info "Service status:"
+        if [[ -z "$services" ]]; then
+            (cd "$REPO_ROOT" && docker compose -f docker-compose.yml ps --format "table {{.Name}}\t{{.Status}}" 2>/dev/null) || echo "  (no services running)"
+        else
+            for svc in $services; do
+                local status_line
+                # Special handling for ai-portal and agent-manager (run in core-apps container)
+                case "$svc" in
+                    ai-portal)
+                        # Check if core-apps is running and port 3000 is listening
+                        local core_status
+                        core_status=$(cd "$REPO_ROOT" && docker compose -f docker-compose.yml ps --format "table {{.Name}}\t{{.Status}}" "core-apps" 2>/dev/null | tail -n +2)
+                        if [[ -n "$core_status" ]] && lsof -i :3000 -sTCP:LISTEN -t >/dev/null 2>&1; then
+                            echo "  ai-portal: running (in core-apps)"
+                        else
+                            echo "  ai-portal: not running"
+                        fi
+                        ;;
+                    agent-manager)
+                        # Check if core-apps is running and port 3001 is listening
+                        local core_status
+                        core_status=$(cd "$REPO_ROOT" && docker compose -f docker-compose.yml ps --format "table {{.Name}}\t{{.Status}}" "core-apps" 2>/dev/null | tail -n +2)
+                        if [[ -n "$core_status" ]] && lsof -i :3001 -sTCP:LISTEN -t >/dev/null 2>&1; then
+                            echo "  agent-manager: running (in core-apps)"
+                        else
+                            echo "  agent-manager: not running"
+                        fi
+                        ;;
+                    *)
+                        status_line=$(cd "$REPO_ROOT" && docker compose -f docker-compose.yml ps --format "table {{.Name}}\t{{.Status}}" "$svc" 2>/dev/null | tail -n +2)
+                        if [[ -n "$status_line" ]]; then
+                            echo "  $status_line"
+                        else
+                            echo "  $svc: not running"
+                        fi
+                        ;;
+                esac
+            done
+        fi
+        echo ""
+        
+        menu "Select Action" \
+            "Start" \
+            "Stop" \
+            "Restart" \
+            "Rebuild (docker build)" \
+            "Rebuild (no cache)" \
+            "View Logs" \
+            "Back"
+        echo -e "  ${DIM}Press 's' to refresh status and return to main menu${NC}"
+        
+        local choice=""
+        read -p "$(echo -e "${BOLD}Select action [1-7]:${NC} ")" choice
+        
+        case "${choice:-}" in
+            1)
+                services_start_with_deps "$group_name" "$services"
+                ;;
+            2)
+                services_stop_group "$group_name" "$services"
+                ;;
+            3)
+                services_restart_with_deps "$group_name" "$services"
+                ;;
+            4)
+                services_rebuild_group "$group_name" "$services" ""
+                ;;
+            5)
+                services_rebuild_group "$group_name" "$services" "no-cache"
+                ;;
+            6)
+                services_view_logs "$group_name" "$services"
+                ;;
+            7|b|B|"")
+                return 0
+                ;;
+            s|S)
+                return $RETURN_TO_STATUS
+                ;;
+        esac
+    done
+}
+
+# Start services with dependency order
+# Usage: services_start_with_deps "Group Name" "service1 service2..."
+services_start_with_deps() {
+    local group_name="$1"
+    local services="$2"
+    local env
+    env=$(get_environment)
+    
+    echo ""
+    if [[ -z "$services" ]]; then
+        info "Starting all services with dependencies..."
+        save_last_command "make docker-up ENV=$env"
+        (cd "$REPO_ROOT" && make docker-up ENV="$env")
+    else
+        # Translate logical service names to docker-compose service names
+        local docker_services
+        docker_services=$(translate_service_names "$services")
+        
+        # Source service definitions to get categories
+        source "${SCRIPT_DIR}/../lib/services.sh"
+        
+        # Determine dependency order
+        local core_svcs=""
+        local api_svcs=""
+        local app_svcs=""
+        
+        for svc in $docker_services; do
+            # Normalize service name (remove -api, -worker suffixes for matching)
+            local svc_normalized="${svc%%-api}"
+            svc_normalized="${svc_normalized%%-worker}"
+            
+            if echo "$_CORE_SERVICES" | grep -qw "$svc_normalized" || echo "$_CORE_SERVICES" | grep -qw "$svc"; then
+                core_svcs="$core_svcs $svc"
+            elif echo "$_API_SERVICES" | grep -qw "$svc_normalized" || echo "$_API_SERVICES" | grep -qw "$svc" || [[ "$svc" == "ingest-worker" ]] || [[ "$svc" == "embedding-api" ]]; then
+                api_svcs="$api_svcs $svc"
+            elif echo "$_APP_SERVICES" | grep -qw "$svc_normalized" || echo "$_APP_SERVICES" | grep -qw "$svc" || [[ "$svc" == "core-apps" ]]; then
+                app_svcs="$app_svcs $svc"
+            else
+                # Default to API services if unknown
+                api_svcs="$api_svcs $svc"
+            fi
+        done
+        
+        # Start in dependency order: core -> api -> apps
+        info "Starting services in dependency order..."
+        
+        if [[ -n "$core_svcs" ]]; then
+            info "Starting core services:$core_svcs"
+            (cd "$REPO_ROOT" && BUSIBOX_HOST_PATH="$REPO_ROOT" docker compose -f docker-compose.yml up -d --no-deps $core_svcs)
+            sleep 2
+        fi
+        
+        if [[ -n "$api_svcs" ]]; then
+            info "Starting API services:$api_svcs"
+            (cd "$REPO_ROOT" && BUSIBOX_HOST_PATH="$REPO_ROOT" docker compose -f docker-compose.yml up -d --no-deps $api_svcs)
+            sleep 2
+        fi
+        
+        if [[ -n "$app_svcs" ]]; then
+            info "Starting app services:$app_svcs"
+            (cd "$REPO_ROOT" && BUSIBOX_HOST_PATH="$REPO_ROOT" docker compose -f docker-compose.yml up -d --no-deps $app_svcs)
+        fi
+        
+        success "$group_name started"
+    fi
+    set_install_status "deployed"
+    pause
+}
+
+# Stop services (reverse dependency order)
+# Usage: services_stop_group "Group Name" "service1 service2..."
+services_stop_group() {
+    local group_name="$1"
+    local services="$2"
+    
+    echo ""
+    if ! confirm "Stop $group_name?"; then
+        return 0
+    fi
+    
+    if [[ -z "$services" ]]; then
+        info "Stopping all services..."
+        save_last_command "make docker-down"
+        (cd "$REPO_ROOT" && make docker-down)
+    else
+        # Translate logical service names to docker-compose service names
+        local docker_services
+        docker_services=$(translate_service_names "$services")
+        
+        # Stop in reverse order: apps -> api -> core
+        source "${SCRIPT_DIR}/../lib/services.sh"
+        
+        local core_svcs=""
+        local api_svcs=""
+        local app_svcs=""
+        
+        for svc in $docker_services; do
+            # Normalize service name (remove -api, -worker suffixes for matching)
+            local svc_normalized="${svc%%-api}"
+            svc_normalized="${svc_normalized%%-worker}"
+            
+            if echo "$_CORE_SERVICES" | grep -qw "$svc_normalized" || echo "$_CORE_SERVICES" | grep -qw "$svc"; then
+                core_svcs="$core_svcs $svc"
+            elif echo "$_API_SERVICES" | grep -qw "$svc_normalized" || echo "$_API_SERVICES" | grep -qw "$svc" || [[ "$svc" == "ingest-worker" ]] || [[ "$svc" == "embedding-api" ]]; then
+                api_svcs="$api_svcs $svc"
+            elif echo "$_APP_SERVICES" | grep -qw "$svc_normalized" || echo "$_APP_SERVICES" | grep -qw "$svc" || [[ "$svc" == "core-apps" ]]; then
+                app_svcs="$app_svcs $svc"
+            else
+                # Default to API services if unknown
+                api_svcs="$api_svcs $svc"
+            fi
+        done
+        
+        # Stop in reverse order
+        if [[ -n "$app_svcs" ]]; then
+            info "Stopping app services:$app_svcs"
+            (cd "$REPO_ROOT" && docker compose -f docker-compose.yml stop $app_svcs)
+        fi
+        
+        if [[ -n "$api_svcs" ]]; then
+            info "Stopping API services:$api_svcs"
+            (cd "$REPO_ROOT" && docker compose -f docker-compose.yml stop $api_svcs)
+        fi
+        
+        if [[ -n "$core_svcs" ]]; then
+            info "Stopping core services:$core_svcs"
+            (cd "$REPO_ROOT" && docker compose -f docker-compose.yml stop $core_svcs)
+        fi
+        
+        success "$group_name stopped"
+    fi
+    pause
+}
+
+# Restart services with dependency order
+# Usage: services_restart_with_deps "Group Name" "service1 service2..."
+services_restart_with_deps() {
+    local group_name="$1"
+    local services="$2"
+    local env
+    env=$(get_environment)
+    
+    echo ""
+    if [[ -z "$services" ]]; then
+        info "Restarting all services..."
+        save_last_command "make docker-restart ENV=$env"
+        (cd "$REPO_ROOT" && make docker-down && make docker-up ENV="$env")
+    else
+        # Translate logical service names to docker-compose service names
+        local docker_services
+        docker_services=$(translate_service_names "$services")
+        
+        info "Restarting $group_name..."
+        (cd "$REPO_ROOT" && docker compose -f docker-compose.yml restart $docker_services)
+        success "$group_name restarted"
+    fi
+    set_install_status "deployed"
+    pause
+}
+
+# Translate logical service names to docker-compose service names
+# In local dev, ai-portal and agent-manager run in a single core-apps container
+# Usage: translate_service_names "ai-portal agent-manager nginx"
+# Returns: "core-apps nginx" (deduplicated)
+translate_service_names() {
+    local services="$1"
+    local translated=""
+    local seen_core_apps=false
+    
+    for svc in $services; do
+        case "$svc" in
+            ai-portal|agent-manager)
+                # Both run in core-apps container in local dev
+                if [[ "$seen_core_apps" == "false" ]]; then
+                    translated="$translated core-apps"
+                    seen_core_apps=true
+                fi
+                ;;
+            *)
+                translated="$translated $svc"
+                ;;
+        esac
+    done
+    
+    # Trim leading/trailing whitespace
+    echo "$translated" | xargs
+}
+
+# Rebuild service images
+# Usage: services_rebuild_group "Group Name" "service1 service2..." ["no-cache"]
+services_rebuild_group() {
+    local group_name="$1"
+    local services="$2"
+    local no_cache="$3"
+    local env
+    env=$(get_environment)
+    
+    local cache_msg=""
+    if [[ "$no_cache" == "no-cache" ]]; then
+        cache_msg=" (NO CACHE)"
+    fi
+    
+    echo ""
+    if ! confirm "Rebuild $group_name$cache_msg?"; then
+        return 0
+    fi
+    
+    if [[ -z "$services" ]]; then
+        # Build all images
+        info "Building all Docker images..."
+        if [[ "$no_cache" == "no-cache" ]]; then
+            save_last_command "make docker-build ENV=$env NO_CACHE=1"
+            (cd "$REPO_ROOT" && make docker-build ENV="$env" NO_CACHE=1)
+        else
+            save_last_command "make docker-build ENV=$env"
+            (cd "$REPO_ROOT" && make docker-build ENV="$env")
+        fi
+    else
+        # Translate logical service names to docker-compose service names
+        local docker_services
+        docker_services=$(translate_service_names "$services")
+        
+        # Build specific services
+        info "Building services: $docker_services"
+        for svc in $docker_services; do
+            info "Building $svc..."
+            if [[ "$no_cache" == "no-cache" ]]; then
+                (cd "$REPO_ROOT" && make docker-build SERVICE="$svc" ENV="$env" NO_CACHE=1)
+            else
+                (cd "$REPO_ROOT" && make docker-build SERVICE="$svc" ENV="$env")
+            fi
+        done
+        success "$group_name rebuilt"
+    fi
+    
+    # Refresh status cache after build
+    refresh_all_services_async "$env" "$backend" &
+    pause
+}
+
+# View logs for service group
+# Usage: services_view_logs "Group Name" "service1 service2..."
+services_view_logs() {
+    local group_name="$1"
+    local services="$2"
+    
+    echo ""
+    if [[ -z "$services" ]]; then
+        info "Showing logs for all services (last 50 lines)"
+        info "Press Ctrl+C to exit"
+        echo ""
+        sleep 1
+        (cd "$REPO_ROOT" && docker compose -f docker-compose.yml logs --tail=50 --follow)
+    else
+        # Translate logical service names to docker-compose service names
+        local docker_services
+        docker_services=$(translate_service_names "$services")
+        
+        info "Showing logs for: $docker_services (last 50 lines)"
+        info "Press 'q' to exit, arrow keys to scroll"
+        echo ""
+        sleep 1
+        if command -v less &>/dev/null; then
+            (cd "$REPO_ROOT" && docker compose -f docker-compose.yml logs --tail=100 $docker_services 2>&1) | less -R +G
+        else
+            (cd "$REPO_ROOT" && docker compose -f docker-compose.yml logs --tail=50 $docker_services 2>&1)
+            pause
+        fi
+    fi
+}
+
+# Select specific service for management
+# Usage: services_select_specific
+services_select_specific() {
+    # Detect platform for MLX/vLLM display
+    local os arch llm_backend_label=""
+    os=$(uname -s)
+    arch=$(uname -m)
+    if [[ "$os" == "Darwin" && ("$arch" == "arm64" || "$arch" == "aarch64") ]]; then
+        llm_backend_label="mlx (host)"
+    elif command -v nvidia-smi &>/dev/null && [[ $(nvidia-smi -L 2>/dev/null | wc -l) -gt 0 ]]; then
+        llm_backend_label="vllm"
+    fi
+    
+    echo ""
+    if [[ -n "$llm_backend_label" ]]; then
+        menu "Select Service" \
+            "authz-api" \
+            "postgres" \
+            "redis" \
+            "milvus" \
+            "minio" \
+            "nginx" \
+            "litellm" \
+            "$llm_backend_label" \
+            "embedding-api" \
+            "deploy-api" \
+            "ingest-api" \
+            "ingest-worker" \
+            "search-api" \
+            "agent-api" \
+            "docs-api" \
+            "ai-portal" \
+            "agent-manager" \
+            "host-agent (host)" \
+            "Back"
+        
+        local choice=""
+        read -p "$(echo -e "${BOLD}Select service [1-19]:${NC} ")" choice
+        
+        case "${choice:-}" in
+            1) services_group_menu "authz-api" "authz-api" ;;
+            2) services_group_menu "postgres" "postgres" ;;
+            3) services_group_menu "redis" "redis" ;;
+            4) services_group_menu "milvus" "milvus" ;;
+            5) services_group_menu "minio" "minio" ;;
+            6) services_group_menu "nginx" "nginx" ;;
+            7) services_group_menu "litellm" "litellm" ;;
+            8) 
+                # MLX or vLLM based on platform
+                if [[ "$llm_backend_label" == "mlx (host)" ]]; then
+                    host_service_menu "mlx"
+                else
+                    services_group_menu "vllm" "vllm"
+                fi
+                ;;
+            9) services_group_menu "embedding-api" "embedding-api" ;;
+            10) services_group_menu "deploy-api" "deploy-api" ;;
+            11) services_group_menu "ingest-api" "ingest-api" ;;
+            12) services_group_menu "ingest-worker" "ingest-worker" ;;
+            13) services_group_menu "search-api" "search-api" ;;
+            14) services_group_menu "agent-api" "agent-api" ;;
+            15) services_group_menu "docs-api" "docs-api" ;;
+            16) services_group_menu "ai-portal" "ai-portal" ;;
+            17) services_group_menu "agent-manager" "agent-manager" ;;
+            18) host_service_menu "host-agent" ;;
+            19|b|B|"") return 0 ;;
+        esac
+    else
+        # No local LLM backend
+        menu "Select Service" \
+            "authz-api" \
+            "postgres" \
+            "redis" \
+            "milvus" \
+            "minio" \
+            "nginx" \
+            "litellm" \
+            "embedding-api" \
+            "deploy-api" \
+            "ingest-api" \
+            "ingest-worker" \
+            "search-api" \
+            "agent-api" \
+            "docs-api" \
+            "ai-portal" \
+            "agent-manager" \
+            "Back"
+        
+        local choice=""
+        read -p "$(echo -e "${BOLD}Select service [1-17]:${NC} ")" choice
+        
+        case "${choice:-}" in
+            1) services_group_menu "authz-api" "authz-api" ;;
+            2) services_group_menu "postgres" "postgres" ;;
+            3) services_group_menu "redis" "redis" ;;
+            4) services_group_menu "milvus" "milvus" ;;
+            5) services_group_menu "minio" "minio" ;;
+            6) services_group_menu "nginx" "nginx" ;;
+            7) services_group_menu "litellm" "litellm" ;;
+            8) services_group_menu "embedding-api" "embedding-api" ;;
+            9) services_group_menu "deploy-api" "deploy-api" ;;
+            10) services_group_menu "ingest-api" "ingest-api" ;;
+            11) services_group_menu "ingest-worker" "ingest-worker" ;;
+            12) services_group_menu "search-api" "search-api" ;;
+            13) services_group_menu "agent-api" "agent-api" ;;
+            14) services_group_menu "docs-api" "docs-api" ;;
+            15) services_group_menu "ai-portal" "ai-portal" ;;
+            16) services_group_menu "agent-manager" "agent-manager" ;;
+            17|b|B|"") return 0 ;;
+        esac
+    fi
+}
+
+handle_services() {
+    local env backend
     env=$(get_environment)
     backend=$(get_backend "$env")
     
+    # Detect LLM backend for menu display
+    local llm_backend_service=""
+    local os arch
+    os=$(uname -s)
+    arch=$(uname -m)
+    if [[ "$os" == "Darwin" && ("$arch" == "arm64" || "$arch" == "aarch64") ]]; then
+        llm_backend_service="mlx"
+    elif command -v nvidia-smi &>/dev/null && [[ $(nvidia-smi -L 2>/dev/null | wc -l) -gt 0 ]]; then
+        llm_backend_service="vllm"
+    fi
+    
     case "$backend" in
         docker)
+            # Main services menu for Docker
             while true; do
                 clear
-                box "Build/Deploy ($env)" 70
+                box "Services Management ($env)" 70
+                
+                # Show current status
+                echo ""
+                info "Current service status:"
+                (cd "$REPO_ROOT" && docker compose -f docker-compose.yml ps --format "table {{.Name}}\t{{.Status}}" 2>/dev/null) || echo "  (no services running)"
                 echo ""
                 
-                menu "Docker Build & Deploy Options" \
-                    "Start All Services (docker-up)" \
-                    "Stop All Services (docker-down)" \
-                    "Restart All Services (down + up)" \
-                    "Build All Images (docker-build)" \
-                    "Build Specific Service" \
-                    "Build Specific Service (no cache)" \
-                    "Regenerate .env.local from Vault" \
+                # Build LLM services description based on detected platform
+                local llm_desc="litellm"
+                if [[ -n "$llm_backend_service" ]]; then
+                    llm_desc="litellm, $llm_backend_service, embedding"
+                else
+                    llm_desc="litellm, embedding"
+                fi
+                
+                menu "Select Service Group" \
+                    "All Services" \
+                    "Specific Service" \
+                    "Core Services (authz, postgres, redis, milvus, minio)" \
+                    "LLM Services ($llm_desc)" \
+                    "API Services (deploy, ingest, search, agent, docs)" \
+                    "App Services (nginx, ai-portal, agent-manager)" \
                     "Back to Main Menu"
+                echo -e "  ${DIM}Press 's' to refresh status and return to main menu${NC}"
                 
                 local choice=""
-                read -p "$(echo -e "${BOLD}Select option [1-8]:${NC} ")" choice
+                read -p "$(echo -e "${BOLD}Select option [1-7]:${NC} ")" choice
+                
+                # Build LLM services list based on platform
+                local llm_services="litellm"
+                if [[ "$llm_backend_service" == "mlx" ]]; then
+                    llm_services="litellm mlx embedding-api"
+                elif [[ "$llm_backend_service" == "vllm" ]]; then
+                    llm_services="litellm vllm embedding-api"
+                else
+                    llm_services="litellm embedding-api"
+                fi
                 
                 case "${choice:-}" in
                     1)
-                        echo ""
-                        info "Starting all Docker services (ENV=$env)..."
-                        save_last_command "make docker-up ENV=$env"
-                        (cd "$REPO_ROOT" && make docker-up ENV="$env")
-                        set_install_status "deployed"
-                        pause
+                        services_group_menu "All Services" ""
+                        [[ $? -eq $RETURN_TO_STATUS ]] && return $RETURN_TO_STATUS
                         ;;
                     2)
-                        echo ""
-                        info "Stopping all Docker services..."
-                        save_last_command "make docker-down"
-                        (cd "$REPO_ROOT" && make docker-down)
-                        pause
+                        services_select_specific
+                        [[ $? -eq $RETURN_TO_STATUS ]] && return $RETURN_TO_STATUS
                         ;;
                     3)
-                        echo ""
-                        info "Restarting all Docker services (ENV=$env)..."
-                        save_last_command "make docker-restart ENV=$env"
-                        (cd "$REPO_ROOT" && make docker-down && make docker-up ENV="$env")
-                        set_install_status "deployed"
-                        pause
+                        services_group_menu "Core Services" "authz-api postgres redis milvus minio"
+                        [[ $? -eq $RETURN_TO_STATUS ]] && return $RETURN_TO_STATUS
                         ;;
                     4)
-                        echo ""
-                        if confirm "Build all Docker images (this may take a while)?"; then
-                            save_last_command "make docker-build ENV=$env"
-                            (cd "$REPO_ROOT" && make docker-build ENV="$env")
-                            # Don't set status - let health check determine it
-                            # Refresh status cache after build
-                            refresh_all_services_async "$env" "$backend" &
-                        fi
-                        pause
+                        services_group_menu "LLM Services" "$llm_services"
+                        [[ $? -eq $RETURN_TO_STATUS ]] && return $RETURN_TO_STATUS
                         ;;
                     5)
-                        deploy_select_service
+                        services_group_menu "API Services" "deploy-api ingest-api ingest-worker search-api agent-api docs-api"
+                        [[ $? -eq $RETURN_TO_STATUS ]] && return $RETURN_TO_STATUS
                         ;;
                     6)
-                        deploy_select_service "no-cache"
+                        services_group_menu "App Services" "nginx ai-portal agent-manager"
+                        [[ $? -eq $RETURN_TO_STATUS ]] && return $RETURN_TO_STATUS
                         ;;
-                    7)
-                        echo ""
-                        info "Regenerating .env.local from Ansible vault..."
-                        save_last_command "make vault-generate-env"
-                        (cd "$REPO_ROOT" && make vault-generate-env)
-                        echo ""
-                        if confirm "Restart Docker services to apply new configuration?"; then
-                            info "Restarting Docker services..."
-                            (cd "$REPO_ROOT" && make docker-restart ENV="$env")
-                        fi
-                        pause
-                        ;;
-                    8|b|B|"")
+                    7|b|B|"")
                         return 0
+                        ;;
+                    s|S)
+                        # Return to main status dashboard
+                        return $RETURN_TO_STATUS
                         ;;
                 esac
             done
             ;;
             
         proxmox)
-            # Use existing deploy script for Ansible deployments
-            # Pass environment directly to avoid re-prompting
+            # Proxmox service management uses Ansible
+            # Use existing deploy script for Proxmox deployments
             if BUSIBOX_ENV="$env" bash "${SCRIPT_DIR}/deploy.sh"; then
-                # After successful deployment, set status to deployed
                 set_install_status "deployed"
                 echo ""
                 success "Deployment completed successfully"
@@ -959,540 +1697,8 @@ handle_deploy() {
     esac
 }
 
-# Select a specific service to build
-# Usage: deploy_select_service [no-cache]
-deploy_select_service() {
-    local no_cache="${1:-}"
-    local current_env
-    current_env=$(get_environment)
-    
-    local title="Select Service to Build"
-    if [[ "$no_cache" == "no-cache" ]]; then
-        title="Select Service to Build (NO CACHE)"
-    fi
-    
-    echo ""
-    menu "$title" \
-        "authz-api" \
-        "deploy-api" \
-        "ingest-api" \
-        "ingest-worker" \
-        "search-api" \
-        "agent-api" \
-        "docs-api" \
-        "litellm" \
-        "nginx" \
-        "ai-portal" \
-        "agent-manager" \
-        "Back"
-    
-    local choice=""
-    read -p "$(echo -e "${BOLD}Select service [1-12]:${NC} ")" choice
-    
-    local svc=""
-    case "${choice:-}" in
-        1) svc="authz-api" ;;
-        2) svc="deploy-api" ;;
-        3) svc="ingest-api" ;;
-        4) svc="ingest-worker" ;;
-        5) svc="search-api" ;;
-        6) svc="agent-api" ;;
-        7) svc="docs-api" ;;
-        8) svc="litellm" ;;
-        9) svc="nginx" ;;
-        10) svc="ai-portal" ;;
-        11) svc="agent-manager" ;;
-        12|b|B|"") return 0 ;;
-    esac
-    
-    if [[ -n "$svc" ]]; then
-        echo ""
-        if [[ "$no_cache" == "no-cache" ]]; then
-            if confirm "Build $svc with NO CACHE (ENV=$current_env)?"; then
-                save_last_command "make docker-build SERVICE=$svc ENV=$current_env NO_CACHE=1"
-                (cd "$REPO_ROOT" && make docker-build SERVICE="$svc" ENV="$current_env" NO_CACHE=1)
-            fi
-        else
-            if confirm "Build $svc (ENV=$current_env)?"; then
-                save_last_command "make docker-build SERVICE=$svc ENV=$current_env"
-                (cd "$REPO_ROOT" && make docker-build SERVICE="$svc" ENV="$current_env")
-            fi
-        fi
-        pause
-    fi
-}
-
-handle_services() {
-    local env backend
-    
-    env=$(get_environment)
-    backend=$(get_backend "$env")
-    
-    case "$backend" in
-        docker)
-            while true; do
-                clear
-                box "Service Control" 70
-                
-                # Show current status
-                echo ""
-                info "Current service status:"
-                (cd "$REPO_ROOT" && docker compose -f docker-compose.yml ps --format "table {{.Name}}\t{{.Status}}" 2>/dev/null) || echo "  (no services running)"
-                echo ""
-                
-                menu "Select Service Group" \
-                    "All Services" \
-                    "Specific Service (with logs)" \
-                    "Data Services (postgres, redis, milvus, minio)" \
-                    "API Services (authz, ingest, search, agent, worker)" \
-                    "Refresh Status" \
-                    "Back to Main Menu"
-                
-                local choice=""
-                read -p "$(echo -e "${BOLD}Select option [1-6]:${NC} ")" choice
-                
-                case "${choice:-}" in
-                    1)
-                        service_action_menu "all" ""
-                        ;;
-                    2)
-                        service_select_specific
-                        ;;
-                    3)
-                        service_action_menu "data" "postgres redis milvus minio"
-                        ;;
-                    4)
-                        service_action_menu "api" "authz-api deploy-api ingest-api ingest-worker search-api agent-api"
-                        ;;
-                    5)
-                        # Just continue loop to refresh
-                        continue
-                        ;;
-                    6|b|B|"")
-                        return 0
-                        ;;
-                esac
-            done
-            ;;
-            
-        proxmox)
-            # Proxmox service management menu
-            while true; do
-                clear
-                echo ""
-                echo "══════════════════════════════════════════════════════════════════════"
-                echo "Service Management (Proxmox)"
-                echo "══════════════════════════════════════════════════════════════════════"
-                
-                echo ""
-                echo -e "  ${BOLD}Service Status:${NC}"
-                echo ""
-                
-                # Helper function to check service status
-                check_service_status() {
-                    local service_name="$1"
-                    local display_name="$2"
-                    local ip="$3"
-                    local systemd_name="${4:-$service_name}"
-                    
-                    # Query systemd status via SSH
-                    if ssh -o ConnectTimeout=2 -o StrictHostKeyChecking=no "root@${ip}" "systemctl is-active ${systemd_name}" &>/dev/null; then
-                        echo -e "      ${GREEN}✓${NC} ${display_name}"
-                    else
-                        echo -e "      ${RED}✗${NC} ${display_name} ${DIM}(stopped or not deployed)${NC}"
-                    fi
-                }
-                
-                echo "    Core Services:"
-                check_service_status "authz" "authz (Authentication & Authorization)" "10.96.200.200"
-                check_service_status "postgresql" "postgresql (Database)" "10.96.200.203"
-                check_service_status "redis" "redis (Cache & Queue)" "10.96.200.206" "redis-server"
-                echo ""
-                echo "    Vector/Storage:"
-                check_service_status "milvus" "milvus (Vector Database)" "10.96.200.204" "milvus-standalone"
-                echo ""
-                echo "    API Services:"
-                check_service_status "ingest-api" "ingest-api (Document Ingestion API)" "10.96.200.206"
-                check_service_status "ingest-worker" "ingest-worker (Background Worker)" "10.96.200.206"
-                check_service_status "search-api" "search-api (Semantic Search API)" "10.96.200.204"
-                check_service_status "agent-api" "agent-api (AI Agent API)" "10.96.200.202" "agent-api"
-                echo ""
-                echo "    Frontend:"
-                check_service_status "nginx" "nginx (Reverse Proxy)" "10.96.200.207"
-                echo ""
-                
-                echo -e "  ${BOLD}Actions:${NC}"
-                echo ""
-                echo -e "    ${CYAN}1)${NC} Start Service"
-                echo -e "    ${CYAN}2)${NC} Stop Service"
-                echo -e "    ${CYAN}3)${NC} Restart Service"
-                echo -e "    ${CYAN}4)${NC} Service Status"
-                echo -e "    ${CYAN}5)${NC} View Service Logs"
-                echo -e "    ${CYAN}6)${NC} Check Service Health"
-                echo -e "    ${CYAN}7)${NC} Restart All Services"
-                echo -e "    ${CYAN}8)${NC} Status of All Services"
-                echo -e "    ${CYAN}9)${NC} Back to Main Menu"
-                echo ""
-                
-                read -p "$(echo -e "  ${BOLD}Select option [1-9]:${NC} ")" choice
-                
-                case "$choice" in
-                    1)
-                        echo ""
-                        read -p "$(echo -e "  ${BOLD}Enter service name:${NC} ")" service
-                        if [[ -n "$service" ]]; then
-                            info "Starting $service..."
-                            save_last_command "make service-start SERVICE=$service INV=${DEPLOY_ENV}"
-                            (cd "$REPO_ROOT/provision/ansible" && make service-start SERVICE="$service" INV="${DEPLOY_ENV}")
-                            pause
-                        fi
-                        ;;
-                    2)
-                        echo ""
-                        read -p "$(echo -e "  ${BOLD}Enter service name:${NC} ")" service
-                        if [[ -n "$service" ]]; then
-                            if confirm "Stop $service?"; then
-                                info "Stopping $service..."
-                                save_last_command "make service-stop SERVICE=$service INV=${DEPLOY_ENV}"
-                                (cd "$REPO_ROOT/provision/ansible" && make service-stop SERVICE="$service" INV="${DEPLOY_ENV}")
-                            fi
-                            pause
-                        fi
-                        ;;
-                    3)
-                        echo ""
-                        read -p "$(echo -e "  ${BOLD}Enter service name:${NC} ")" service
-                        if [[ -n "$service" ]]; then
-                            info "Restarting $service..."
-                            save_last_command "make service-restart SERVICE=$service INV=${DEPLOY_ENV}"
-                            (cd "$REPO_ROOT/provision/ansible" && make service-restart SERVICE="$service" INV="${DEPLOY_ENV}")
-                            pause
-                        fi
-                        ;;
-                    4)
-                        echo ""
-                        read -p "$(echo -e "  ${BOLD}Enter service name:${NC} ")" service
-                        if [[ -n "$service" ]]; then
-                            info "Checking status of $service..."
-                            (cd "$REPO_ROOT/provision/ansible" && make service-status SERVICE="$service" INV="${DEPLOY_ENV}")
-                            pause
-                        fi
-                        ;;
-                    5)
-                        echo ""
-                        read -p "$(echo -e "  ${BOLD}Enter service name:${NC} ")" service
-                        if [[ -n "$service" ]]; then
-                            read -p "$(echo -e "  ${BOLD}Number of lines [50]:${NC} ")" lines
-                            lines="${lines:-50}"
-                            info "Viewing logs for $service..."
-                            (cd "$REPO_ROOT/provision/ansible" && make service-logs SERVICE="$service" LINES="$lines" INV="${DEPLOY_ENV}")
-                            pause
-                        fi
-                        ;;
-                    6)
-                        echo ""
-                        read -p "$(echo -e "  ${BOLD}Enter service name:${NC} ")" service
-                        if [[ -n "$service" ]]; then
-                            info "Checking health of $service..."
-                            (cd "$REPO_ROOT/provision/ansible" && make service-health SERVICE="$service" INV="${DEPLOY_ENV}")
-                            pause
-                        fi
-                        ;;
-                    7)
-                        echo ""
-                        if confirm "Restart all services? This will cause brief downtime."; then
-                            info "Restarting all services..."
-                            save_last_command "make service-restart-all INV=${DEPLOY_ENV}"
-                            # Restart services in order: core -> APIs -> frontend
-                            local services="postgresql redis authz deploy-api milvus ingest-worker ingest-api search-api agent-api nginx"
-                            for svc in $services; do
-                                info "Restarting $svc..."
-                                (cd "$REPO_ROOT/provision/ansible" && make service-restart SERVICE="$svc" INV="${DEPLOY_ENV}" 2>&1 || echo "  (service may not be deployed)")
-                            done
-                            success "All services restarted"
-                        fi
-                        pause
-                        ;;
-                    8)
-                        echo ""
-                        info "Checking status of all services..."
-                        echo ""
-                        local services="postgresql redis authz deploy-api milvus ingest-api ingest-worker search-api agent-api nginx"
-                        for svc in $services; do
-                            echo -e "${BOLD}$svc:${NC}"
-                            (cd "$REPO_ROOT/provision/ansible" && make service-status SERVICE="$svc" INV="${DEPLOY_ENV}" 2>&1 || echo "  (not deployed or unreachable)")
-                            echo ""
-                        done
-                        pause
-                        ;;
-                    9|b|B|"")
-                        return 0
-                        ;;
-                    *)
-                        error "Invalid option"
-                        pause
-                        ;;
-                esac
-            done
-            ;;
-    esac
-}
-
-# Show action menu for a service group
-# Usage: service_action_menu "group_name" "service1 service2 ..."
-service_action_menu() {
-    local group_name="$1"
-    local services="$2"
-    
-    # Check if services are running
-    local running_count=0
-    local total_count=0
-    
-    if [[ -z "$services" ]]; then
-        # All services
-        running_count=$(cd "$REPO_ROOT" && docker compose -f docker-compose.yml ps -q --status running 2>/dev/null | wc -l | tr -d ' ')
-        total_count=$(cd "$REPO_ROOT" && docker compose -f docker-compose.yml ps -q 2>/dev/null | wc -l | tr -d ' ')
-    else
-        # Specific services
-        for svc in $services; do
-            ((total_count++))
-            if (cd "$REPO_ROOT" && docker compose -f docker-compose.yml ps -q --status running "$svc" 2>/dev/null | grep -q .); then
-                ((running_count++))
-            fi
-        done
-    fi
-    
-    # Capitalize first letter (compatible with older bash)
-    local display_name
-    display_name="$(echo "${group_name:0:1}" | tr '[:lower:]' '[:upper:]')${group_name:1}"
-    
-    echo ""
-    if [[ $running_count -gt 0 ]]; then
-        info "$display_name services: $running_count running"
-    else
-        info "$display_name services: stopped"
-    fi
-    echo ""
-    
-    # Build menu based on state
-    local options=()
-    local option_keys=()
-    
-    if [[ $running_count -eq 0 ]]; then
-        # Services are stopped - show Start
-        options+=("Start"); option_keys+=("start")
-    else
-        # Services are running - show Restart and Stop
-        options+=("Restart"); option_keys+=("restart")
-        options+=("Stop"); option_keys+=("stop")
-    fi
-    options+=("Back"); option_keys+=("back")
-    
-    # Display menu
-    local i=1
-    for option in "${options[@]}"; do
-        echo -e "    ${CYAN}$i)${NC} $option"
-        ((i++))
-    done
-    echo ""
-    
-    local action=""
-    read -p "$(echo -e "  ${BOLD}Select action [1-${#options[@]}]:${NC} ")" action
-    
-    local selected_key="${option_keys[$((${action:-1}-1))]}"
-    
-    # Get current environment for make commands
-    local current_env
-    current_env=$(get_environment)
-    
-    case "$selected_key" in
-        start)
-            echo ""
-            if [[ -z "$services" ]]; then
-                save_last_command "make docker-up ENV=$current_env"
-                (cd "$REPO_ROOT" && make docker-up ENV="$current_env")
-            else
-                (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local up -d $services)
-            fi
-            set_install_status "deployed"
-            pause
-            ;;
-        restart)
-            echo ""
-            if [[ -z "$services" ]]; then
-                save_last_command "make docker-restart ENV=$current_env"
-                (cd "$REPO_ROOT" && make docker-restart ENV="$current_env")
-            else
-                (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local restart $services)
-            fi
-            pause
-            ;;
-        stop)
-            echo ""
-            if [[ -z "$services" ]]; then
-                save_last_command "make docker-down"
-                (cd "$REPO_ROOT" && make docker-down)
-            else
-                (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local stop $services)
-            fi
-            pause
-            ;;
-        back|"")
-            return 0
-            ;;
-    esac
-}
-
-# Select and manage a specific service
-service_select_specific() {
-    local services=(
-        "postgres"
-        "redis"
-        "milvus"
-        "minio"
-        "authz-api"
-        "deploy-api"
-        "ingest-api"
-        "ingest-worker"
-        "search-api"
-        "agent-api"
-        "litellm"
-        "nginx"
-        "docs"
-    )
-    
-    echo ""
-    menu "Select Service" \
-        "postgres" \
-        "redis" \
-        "milvus" \
-        "minio" \
-        "authz-api" \
-        "deploy-api" \
-        "ingest-api" \
-        "ingest-worker" \
-        "search-api" \
-        "agent-api" \
-        "litellm" \
-        "nginx" \
-        "docs" \
-        "Back"
-    
-    local choice=""
-    read -p "$(echo -e "${BOLD}Select service [1-14]:${NC} ")" choice
-    
-    case "${choice:-}" in
-        1) service_action_menu_with_logs "postgres" "postgres" ;;
-        2) service_action_menu_with_logs "redis" "redis" ;;
-        3) service_action_menu_with_logs "milvus" "milvus" ;;
-        4) service_action_menu_with_logs "minio" "minio" ;;
-        5) service_action_menu_with_logs "authz-api" "authz-api" ;;
-        6) service_action_menu_with_logs "deploy-api" "deploy-api" ;;
-        7) service_action_menu_with_logs "ingest-api" "ingest-api" ;;
-        8) service_action_menu_with_logs "ingest-worker" "ingest-worker" ;;
-        9) service_action_menu_with_logs "search-api" "search-api" ;;
-        10) service_action_menu_with_logs "agent-api" "agent-api" ;;
-        11) service_action_menu_with_logs "litellm" "litellm" ;;
-        12) service_action_menu_with_logs "nginx" "nginx" ;;
-        13) service_action_menu_with_logs "docs" "docs" ;;
-        14|b|B|"") return 0 ;;
-    esac
-}
-
-# Show action menu for a specific service with logs option
-service_action_menu_with_logs() {
-    local group_name="$1"
-    local services="$2"
-    
-    while true; do
-        # Check if service is running
-        local is_running=0
-        if (cd "$REPO_ROOT" && docker compose -f docker-compose.yml ps -q --status running "$services" 2>/dev/null | grep -q .); then
-            is_running=1
-        fi
-        
-        echo ""
-        if [[ $is_running -eq 1 ]]; then
-            echo -e "  ${GREEN}●${NC} ${BOLD}$group_name${NC} is running"
-        else
-            echo -e "  ${RED}○${NC} ${BOLD}$group_name${NC} is stopped"
-        fi
-        echo ""
-        
-        # Build menu based on state
-        if [[ $is_running -eq 0 ]]; then
-            menu "$group_name Actions" \
-                "Start" \
-                "View Logs" \
-                "Back"
-            
-            local action=""
-            read -p "$(echo -e "${BOLD}Select action [1-3]:${NC} ")" action
-            
-            case "${action:-}" in
-                1)
-                    echo ""
-                    (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local up -d $services)
-                    set_install_status "deployed"
-                    pause
-                    ;;
-                2)
-                    view_service_logs "$services"
-                    ;;
-                3|b|B|"")
-                    return 0
-                    ;;
-            esac
-        else
-            menu "$group_name Actions" \
-                "Restart" \
-                "Stop" \
-                "View Logs" \
-                "Back"
-            
-            local action=""
-            read -p "$(echo -e "${BOLD}Select action [1-4]:${NC} ")" action
-            
-            case "${action:-}" in
-                1)
-                    echo ""
-                    (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local restart $services)
-                    pause
-                    ;;
-                2)
-                    echo ""
-                    (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local stop $services)
-                    pause
-                    ;;
-                3)
-                    view_service_logs "$services"
-                    ;;
-                4|b|B|"")
-                    return 0
-                    ;;
-            esac
-        fi
-    done
-}
-
-# View logs for a specific service
-view_service_logs() {
-    local service="$1"
-    
-    echo ""
-    info "Showing last 50 lines of logs for $service"
-    info "Press 'q' to exit, arrow keys to scroll"
-    echo ""
-    sleep 1
-    
-    # Use less for scrollable output, or tail if less isn't available
-    if command -v less &>/dev/null; then
-        (cd "$REPO_ROOT" && docker compose -f docker-compose.yml logs --tail=100 "$service" 2>&1) | less -R +G
-    else
-        (cd "$REPO_ROOT" && docker compose -f docker-compose.yml logs --tail=50 "$service" 2>&1)
-        pause
-    fi
-}
+# DEPRECATED: Old service functions - replaced by new unified services_* functions
+# Kept for backward compatibility, but these redirect to new functions
 
 # Run encryption migration (helper function for both Docker and Proxmox)
 # Usage: _run_encryption_migration <env> <backend>
@@ -1745,6 +1951,7 @@ handle_databases() {
             "Encrypt Existing Files (MinIO)" \
             "Reset Chat Insights Collection" \
             "Back to Main Menu"
+        echo -e "  ${DIM}Press 's' to refresh status and return to main menu${NC}"
         
         echo ""
         read -p "$(echo -e "${BOLD}Select option [1-3]:${NC} ")" proxmox_choice
@@ -1762,6 +1969,9 @@ handle_databases() {
                 ;;
             3|b|B|"")
                 return 0
+                ;;
+            s|S)
+                return $RETURN_TO_STATUS
                 ;;
             *)
                 error "Invalid selection."
@@ -1832,6 +2042,7 @@ handle_databases() {
         "Rebuild Milvus" \
         "Encrypt Existing Files (MinIO)" \
         "Back to Main Menu"
+    echo -e "  ${DIM}Press 's' to refresh status and return to main menu${NC}"
     
     echo ""
     read -p "$(echo -e "${BOLD}Select option [1-13]:${NC} ")" migration_choice
@@ -2007,7 +2218,7 @@ handle_databases() {
                 local embedding_container="${container_prefix}-embedding-api"
                 local milvus_container="${container_prefix}-milvus"
                 
-                (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local up -d --force-recreate embedding-api) || {
+                (cd "$REPO_ROOT" && BUSIBOX_HOST_PATH="$REPO_ROOT" docker compose -f docker-compose.yml --env-file .env.local up -d --force-recreate embedding-api) || {
                     error "Failed to restart embedding-api"
                     pause
                     return 1
@@ -2047,7 +2258,7 @@ handle_databases() {
                 (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local rm -f milvus) || true
                 docker volume rm busibox_milvus_data 2>/dev/null || true
                 
-                (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local up -d milvus) || {
+                (cd "$REPO_ROOT" && BUSIBOX_HOST_PATH="$REPO_ROOT" docker compose -f docker-compose.yml --env-file .env.local up -d milvus) || {
                     error "Failed to start Milvus"
                     pause
                     return 1
@@ -2411,7 +2622,7 @@ connections.disconnect('default')
                         
                         info "Step 3/5: Starting fresh Milvus..."
                         # etcd and milvus-minio should already be running; just start milvus
-                        (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local up -d milvus) || {
+                        (cd "$REPO_ROOT" && BUSIBOX_HOST_PATH="$REPO_ROOT" docker compose -f docker-compose.yml --env-file .env.local up -d milvus) || {
                             error "Failed to start Milvus"
                             pause
                             return 1
@@ -2568,6 +2779,10 @@ asyncio.run(requeue_all())
         13|b|B|"")
             return 0
             ;;
+        s|S)
+            # Return to main status dashboard
+            return $RETURN_TO_STATUS
+            ;;
         *)
             error "Invalid selection."
             pause
@@ -2610,6 +2825,10 @@ handle_test() {
         case "$choice" in
             back)
                 return 0
+                ;;
+            status)
+                # 's' key pressed - return to main status
+                return $RETURN_TO_STATUS
                 ;;
             pvt)
                 handle_test_pvt
@@ -2691,6 +2910,7 @@ show_test_main_menu() {
             "App Tests (AI Portal, Agent Manager)" \
             "Clear Test Results" \
             "Back to Main Menu"
+        echo -e "  ${DIM}Press 's' to refresh status and return to main menu${NC}"
     } >&2
     
     read -p "$(echo -e "${BOLD}Select option [1-5]:${NC} ")" choice
@@ -2701,7 +2921,8 @@ show_test_main_menu() {
         2) echo "services" ;;
         3) echo "apps" ;;
         4) echo "clear" ;;
-        5) echo "back" ;;
+        5|b|B) echo "back" ;;
+        s|S) echo "status" ;;
         *) echo "back" ;;
     esac
 }
@@ -3526,6 +3747,14 @@ main() {
         selection=$(show_main_menu)
         
         handle_menu_selection "$selection"
+        local result=$?
+        
+        # Handle "return to status" from any submenu (s key)
+        if [[ $result -eq $RETURN_TO_STATUS ]]; then
+            # Force a status refresh
+            info "Refreshing status..."
+            run_quick_health_check "$env" "$backend"
+        fi
         
         # Optional: Kick off background refresh for next menu display
         refresh_all_services_async "$env" "$backend" &
