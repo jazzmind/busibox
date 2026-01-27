@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
 #
-# Generate LiteLLM configuration based on detected backend
+# Generate LiteLLM configuration from model_registry.yml
 #
 # Usage:
 #   generate-litellm-config.sh              # Generate for detected backend
 #   generate-litellm-config.sh mlx          # Generate for MLX
 #   generate-litellm-config.sh vllm         # Generate for vLLM
 #   generate-litellm-config.sh cloud        # Generate for AWS Bedrock
+#
+# This script reads model definitions from:
+#   provision/ansible/group_vars/all/model_registry.yml
+#
+# Environment variables:
+#   ENVIRONMENT - development/staging/production (default: development)
+#   LLM_BACKEND - mlx/vllm/cloud (auto-detected if not set)
 #
 
 set -euo pipefail
@@ -17,140 +24,206 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # Source UI library
 source "${SCRIPT_DIR}/../lib/ui.sh"
 
-# Get backend and models
-BACKEND="${1:-${LLM_BACKEND:-$(bash "${SCRIPT_DIR}/detect-backend.sh")}}"
-TIER="${LLM_TIER:-$(bash "${SCRIPT_DIR}/get-memory-tier.sh" "$BACKEND")}"
+# Model registry file
+MODEL_REGISTRY="${REPO_ROOT}/provision/ansible/group_vars/all/model_registry.yml"
 
 # Output to the same file docker-compose mounts
 OUTPUT_FILE="${REPO_ROOT}/config/litellm-config.yaml"
 
-# Backup original if it exists and hasn't been generated
-if [[ -f "$OUTPUT_FILE" ]] && ! grep -q "DO NOT EDIT - regenerate with" "$OUTPUT_FILE" 2>/dev/null; then
-    cp "$OUTPUT_FILE" "${REPO_ROOT}/config/litellm-config.original.yaml"
-fi
+# Get backend
+BACKEND="${1:-${LLM_BACKEND:-$(bash "${SCRIPT_DIR}/detect-backend.sh" 2>/dev/null || echo "mlx")}}"
+ENVIRONMENT="${ENVIRONMENT:-${NODE_ENV:-development}}"
 
-generate_local_config() {
-    local backend="$1"
+# Check if yq is available, fall back to Python if not
+parse_yaml() {
+    local file="$1"
+    local query="$2"
     
-    # Get models for current tier
-    eval "$(bash "${SCRIPT_DIR}/get-models.sh" all)"
-    
-    local api_base
-    if [[ "$backend" == "mlx" ]]; then
-        # MLX runs on host, Docker accesses via host.docker.internal
-        api_base="http://host.docker.internal:8080/v1"
+    if command -v yq &>/dev/null; then
+        yq -r "$query" "$file" 2>/dev/null || echo ""
     else
-        # vLLM runs in container
-        api_base="http://vllm:8000/v1"
+        # Use Python as fallback
+        python3 -c "
+import yaml
+import sys
+
+with open('$file', 'r') as f:
+    data = yaml.safe_load(f)
+
+# Navigate the query path
+query = '''$query'''.strip('.')
+parts = query.split('.')
+result = data
+for part in parts:
+    if result is None:
+        break
+    if part.startswith('[') and part.endswith(']'):
+        # Array index
+        idx = int(part[1:-1])
+        result = result[idx] if isinstance(result, list) and len(result) > idx else None
+    else:
+        result = result.get(part) if isinstance(result, dict) else None
+
+if result is not None:
+    print(result)
+" 2>/dev/null || echo ""
     fi
-    
-    cat > "$OUTPUT_FILE" << EOF
-# LiteLLM Configuration - Generated for ${backend} (${TIER} tier)
-# Generated: $(date -Iseconds)
-# DO NOT EDIT - regenerate with: scripts/llm/generate-litellm-config.sh
-
-model_list:
-  # Test model - smallest/fastest for validation tests
-  - model_name: test
-    litellm_params:
-      model: openai/mlx-community/Qwen2.5-0.5B-Instruct-4bit
-      api_base: ${api_base}
-      api_key: local
-    model_info:
-      description: "Tiny model for quick validation tests"
-
-  # Fast model - for simple tasks
-  - model_name: fast
-    litellm_params:
-      model: openai/${LLM_MODEL_FAST}
-      api_base: ${api_base}
-      api_key: local
-    model_info:
-      description: "Fast local model for simple tasks"
-      
-  # Agent model - for complex reasoning
-  - model_name: agent
-    litellm_params:
-      model: openai/${LLM_MODEL_AGENT}
-      api_base: ${api_base}
-      api_key: local
-    model_info:
-      description: "Agent model for complex reasoning"
-      
-  # Chat alias (same as agent)
-  - model_name: chat
-    litellm_params:
-      model: openai/${LLM_MODEL_AGENT}
-      api_base: ${api_base}
-      api_key: local
-      
-  # Frontier model - best quality
-  - model_name: frontier
-    litellm_params:
-      model: openai/${LLM_MODEL_FRONTIER}
-      api_base: ${api_base}
-      api_key: local
-    model_info:
-      description: "Frontier model for complex analysis"
-
-general_settings:
-  debug: true
-  master_key: os.environ/LITELLM_MASTER_KEY
-
-router_settings:
-  enable_cache: true
-  num_retries: 3
-  retry_after: 5
-  timeout: 120
-  allowed_fails: 1
-
-litellm_settings:
-  drop_params: true
-  request_timeout: 120
-  set_verbose: true
-EOF
-    
-    success "Generated ${OUTPUT_FILE}"
-    echo "  Backend: ${backend}"
-    echo "  Tier: ${TIER}"
-    echo "  Fast: ${LLM_MODEL_FAST}"
-    echo "  Agent: ${LLM_MODEL_AGENT}"
-    echo "  Frontier: ${LLM_MODEL_FRONTIER}"
 }
 
-generate_cloud_config() {
-    cat > "$OUTPUT_FILE" << 'EOF'
-# LiteLLM Configuration - Generated for AWS Bedrock
+# Get model_name from available_models for a given key
+get_model_name() {
+    local model_key="$1"
+    local model_name
+    
+    # Try to get model_name from available_models section
+    model_name=$(python3 -c "
+import yaml
+with open('$MODEL_REGISTRY', 'r') as f:
+    data = yaml.safe_load(f)
+available = data.get('available_models', {})
+model = available.get('$model_key', {})
+print(model.get('model_name', '$model_key'))
+" 2>/dev/null)
+    
+    echo "${model_name:-$model_key}"
+}
+
+# Get purpose->model mapping based on environment
+get_model_for_purpose() {
+    local purpose="$1"
+    local model_key
+    
+    # Use model_purposes_dev for development, model_purposes for staging/production
+    if [[ "$ENVIRONMENT" == "development" || "$ENVIRONMENT" == "demo" || "$ENVIRONMENT" == "dev" ]]; then
+        model_key=$(python3 -c "
+import yaml
+with open('$MODEL_REGISTRY', 'r') as f:
+    data = yaml.safe_load(f)
+purposes = data.get('model_purposes_dev', data.get('model_purposes', {}))
+print(purposes.get('$purpose', ''))
+" 2>/dev/null)
+    else
+        model_key=$(python3 -c "
+import yaml
+with open('$MODEL_REGISTRY', 'r') as f:
+    data = yaml.safe_load(f)
+purposes = data.get('model_purposes', {})
+print(purposes.get('$purpose', ''))
+" 2>/dev/null)
+    fi
+    
+    echo "$model_key"
+}
+
+# Get provider for a model key
+get_model_provider() {
+    local model_key="$1"
+    
+    python3 -c "
+import yaml
+with open('$MODEL_REGISTRY', 'r') as f:
+    data = yaml.safe_load(f)
+available = data.get('available_models', {})
+model = available.get('$model_key', {})
+print(model.get('provider', 'mlx'))
+" 2>/dev/null || echo "mlx"
+}
+
+# Get description for a model key
+get_model_description() {
+    local model_key="$1"
+    
+    python3 -c "
+import yaml
+with open('$MODEL_REGISTRY', 'r') as f:
+    data = yaml.safe_load(f)
+available = data.get('available_models', {})
+model = available.get('$model_key', {})
+desc = model.get('description', '')
+print(desc)
+" 2>/dev/null || echo ""
+}
+
+generate_config_from_registry() {
+    local backend="$1"
+    
+    # Check registry exists
+    if [[ ! -f "$MODEL_REGISTRY" ]]; then
+        error "Model registry not found: $MODEL_REGISTRY"
+        exit 1
+    fi
+    
+    # Determine API base
+    local api_base
+    if [[ "$backend" == "mlx" ]]; then
+        api_base="http://host.docker.internal:8080/v1"
+    elif [[ "$backend" == "vllm" ]]; then
+        api_base="http://vllm:8000/v1"
+    else
+        api_base=""  # Cloud models don't need api_base
+    fi
+    
+    # Start building config
+    cat > "$OUTPUT_FILE" << EOF
+# LiteLLM Configuration - Generated from model_registry.yml
+# Environment: ${ENVIRONMENT}
+# Backend: ${backend}
 # Generated: $(date -Iseconds)
 # DO NOT EDIT - regenerate with: scripts/llm/generate-litellm-config.sh
 
 model_list:
-  # Fast model - Claude 3 Haiku
-  - model_name: fast
-    litellm_params:
-      model: bedrock/anthropic.claude-3-haiku-20240307-v1:0
-    model_info:
-      description: "Fast Claude model for simple tasks"
-      
-  # Agent model - Claude 3.5 Sonnet
-  - model_name: agent
-    litellm_params:
-      model: bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0
-    model_info:
-      description: "Agent model for complex reasoning"
-      
-  # Chat alias (same as agent)
-  - model_name: chat
-    litellm_params:
-      model: bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0
-      
-  # Frontier model - Claude 3.5 Sonnet (best available)
-  - model_name: frontier
-    litellm_params:
-      model: bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0
-    model_info:
-      description: "Frontier model for complex analysis"
+EOF
 
+    # Define purposes to include (order matters for readability)
+    local purposes=("test" "fast" "agent" "chat" "frontier" "tool_calling")
+    
+    for purpose in "${purposes[@]}"; do
+        local model_key=$(get_model_for_purpose "$purpose")
+        
+        if [[ -z "$model_key" ]]; then
+            continue
+        fi
+        
+        local model_name=$(get_model_name "$model_key")
+        local provider=$(get_model_provider "$model_key")
+        local description=$(get_model_description "$model_key")
+        
+        # Build model entry based on provider
+        if [[ "$provider" == "bedrock" ]]; then
+            cat >> "$OUTPUT_FILE" << EOF
+  - model_name: ${purpose}
+    litellm_params:
+      model: bedrock/${model_name}
+EOF
+        elif [[ "$provider" == "mlx" || "$provider" == "vllm" ]]; then
+            cat >> "$OUTPUT_FILE" << EOF
+  - model_name: ${purpose}
+    litellm_params:
+      model: openai/${model_name}
+      api_base: ${api_base}
+      api_key: local
+EOF
+        else
+            cat >> "$OUTPUT_FILE" << EOF
+  - model_name: ${purpose}
+    litellm_params:
+      model: ${model_name}
+EOF
+        fi
+        
+        # Add description if available
+        if [[ -n "$description" ]]; then
+            cat >> "$OUTPUT_FILE" << EOF
+    model_info:
+      description: "${description}"
+EOF
+        fi
+        
+        echo "" >> "$OUTPUT_FILE"
+    done
+    
+    # Add general settings
+    cat >> "$OUTPUT_FILE" << 'EOF'
 general_settings:
   debug: true
   master_key: os.environ/LITELLM_MASTER_KEY
@@ -169,26 +242,32 @@ litellm_settings:
 EOF
     
     success "Generated ${OUTPUT_FILE}"
-    echo "  Backend: AWS Bedrock"
-    echo "  Fast: Claude 3 Haiku"
-    echo "  Agent: Claude 3.5 Sonnet"
-    echo "  Frontier: Claude 3.5 Sonnet"
+    echo "  Source: ${MODEL_REGISTRY}"
+    echo "  Environment: ${ENVIRONMENT}"
+    echo "  Backend: ${backend}"
+    echo ""
+    echo "  Models configured:"
+    for purpose in "${purposes[@]}"; do
+        local model_key=$(get_model_for_purpose "$purpose")
+        if [[ -n "$model_key" ]]; then
+            local model_name=$(get_model_name "$model_key")
+            echo "    ${purpose}: ${model_name}"
+        fi
+    done
 }
 
 # Main
 main() {
-    info "Generating LiteLLM configuration..."
+    info "Generating LiteLLM configuration from model registry..."
     echo ""
     
     case "$BACKEND" in
-        mlx|vllm)
-            generate_local_config "$BACKEND"
-            ;;
-        cloud)
-            generate_cloud_config
+        mlx|vllm|cloud)
+            generate_config_from_registry "$BACKEND"
             ;;
         *)
             error "Unknown backend: ${BACKEND}"
+            echo "Valid backends: mlx, vllm, cloud"
             exit 1
             ;;
     esac

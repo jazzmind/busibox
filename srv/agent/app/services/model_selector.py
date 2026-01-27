@@ -42,6 +42,17 @@ class ModelSelectionResult(BaseModel):
 
 # Available models with their capabilities
 AVAILABLE_MODELS = {
+    "test": ModelCapabilities(
+        id="test",
+        name="Test Model",
+        description="Tiny model for validation tests (Qwen3-0.6B)",
+        supports_vision=False,
+        supports_tools=False,
+        supports_reasoning=True,  # Qwen3 has <think> reasoning
+        max_tokens=512,
+        cost_tier="low",
+        speed_tier="fast"
+    ),
     "chat": ModelCapabilities(
         id="chat",
         name="Chat Model",
