@@ -1275,15 +1275,142 @@ litellm_settings:
 
 
 # =============================================================================
-# LLM Chain Validation Endpoint
+# MLX Ensure Endpoint
 # =============================================================================
-# Validates the complete LLM chain: Direct LLM (MLX/vLLM) -> LiteLLM -> Agent API
+# Ensures MLX server is running before LLM validation (Apple Silicon only)
 
 # LLM Service URLs from environment
 LITELLM_URL = os.getenv("LITELLM_URL", "http://litellm:4000")
 AGENT_API_URL = os.getenv("AGENT_API_URL", "http://agent-api:8000")
 MLX_SERVER_URL = os.getenv("MLX_SERVER_URL", "http://host.docker.internal:8080")
 LLM_BACKEND = os.getenv("LLM_BACKEND", "")  # mlx, vllm, or cloud
+
+
+@router.get("/mlx/ensure")
+async def ensure_mlx_running(
+    request: Request,
+    admin: dict = Depends(verify_admin_token)
+):
+    """
+    SSE endpoint to ensure MLX server is running on Apple Silicon.
+    
+    This should be called before LLM validation to:
+    1. Check if MLX is already running
+    2. Start MLX via host-agent if not running
+    3. Wait for MLX to be ready
+    
+    Returns Server-Sent Events with progress updates.
+    Requires admin authentication.
+    """
+    async def event_generator():
+        def sse_event(event_type: str, message: str, done: bool = False) -> str:
+            return f"data: {json.dumps({'type': event_type, 'message': message, 'done': done})}\n\n"
+        
+        llm_backend = LLM_BACKEND or 'unknown'
+        
+        # Skip if not MLX backend
+        if llm_backend != 'mlx':
+            yield sse_event('info', f'LLM backend is {llm_backend}, MLX ensure not needed')
+            yield sse_event('success', 'Skipped (not MLX)', done=True)
+            return
+        
+        yield sse_event('info', 'Ensuring MLX server is running...')
+        
+        # Build headers for host-agent (requires auth)
+        host_agent_headers = {'Content-Type': 'application/json'}
+        if HOST_AGENT_TOKEN:
+            host_agent_headers['Authorization'] = f'Bearer {HOST_AGENT_TOKEN}'
+        
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            # Step 1: Check if MLX is already running directly
+            try:
+                yield sse_event('info', f'Checking MLX server at {MLX_SERVER_URL}...')
+                response = await client.get(f'{MLX_SERVER_URL}/v1/models', timeout=5.0)
+                if response.status_code == 200:
+                    models_data = response.json()
+                    model_count = len(models_data.get('data', []))
+                    yield sse_event('success', f'MLX server is already running ({model_count} model(s) loaded)', done=True)
+                    return
+            except Exception as e:
+                yield sse_event('info', f'MLX not responding directly: {str(e)[:50]}')
+            
+            # Step 2: Try to check/start via host-agent
+            try:
+                yield sse_event('info', f'Checking host-agent at {HOST_AGENT_URL}...')
+                response = await client.get(
+                    f'{HOST_AGENT_URL}/mlx/status',
+                    headers=host_agent_headers,
+                    timeout=10.0
+                )
+                
+                if response.status_code == 200:
+                    mlx_status = response.json()
+                    if mlx_status.get('running'):
+                        model = mlx_status.get('model', 'unknown')
+                        yield sse_event('success', f'MLX server is running (model: {model})', done=True)
+                        return
+                    else:
+                        # MLX not running - try to start it
+                        yield sse_event('info', 'MLX not running, starting server...')
+                        
+                        start_response = await client.post(
+                            f'{HOST_AGENT_URL}/mlx/start',
+                            headers=host_agent_headers,
+                            json={'model': 'mlx-community/Qwen3-0.6B-4bit'},
+                            timeout=30.0
+                        )
+                        
+                        if start_response.status_code == 200:
+                            yield sse_event('info', 'MLX start command sent, waiting for server...')
+                        else:
+                            yield sse_event('warning', f'MLX start request returned {start_response.status_code}')
+                elif response.status_code in (401, 403):
+                    yield sse_event('warning', 'Host agent requires authentication - check HOST_AGENT_TOKEN')
+                else:
+                    yield sse_event('warning', f'Host agent returned status {response.status_code}')
+            except Exception as e:
+                yield sse_event('warning', f'Host agent error: {str(e)[:50]}')
+            
+            # Step 3: Wait for MLX to be ready
+            yield sse_event('info', 'Waiting for MLX server to be ready...')
+            max_attempts = 30  # 60 seconds max
+            attempt = 0
+            
+            while attempt < max_attempts:
+                try:
+                    response = await client.get(f'{MLX_SERVER_URL}/v1/models', timeout=5.0)
+                    if response.status_code == 200:
+                        models_data = response.json()
+                        model_count = len(models_data.get('data', []))
+                        yield sse_event('success', f'MLX server is ready ({model_count} model(s) loaded)', done=True)
+                        return
+                except Exception:
+                    pass
+                
+                await asyncio.sleep(2)
+                attempt += 1
+                
+                if attempt % 5 == 0:
+                    yield sse_event('info', f'Still waiting for MLX... ({attempt * 2}s)')
+            
+            # Final failure
+            yield sse_event('error', 'MLX server failed to start within timeout', done=True)
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
+    )
+
+
+# =============================================================================
+# LLM Chain Validation Endpoint
+# =============================================================================
+# Validates the complete LLM chain: Direct LLM (MLX/vLLM) -> LiteLLM -> Agent API
 
 
 @router.get("/llm/validate")
@@ -1311,7 +1438,7 @@ async def validate_llm_chain(
         # Use deterministic prompts that allow us to verify correctness
         # Math: 2+2=4 - simple enough for even the smallest models
         # Validation looks for "4" in response (including in <think> blocks)
-        test_prompt_math = "What is 2+2? Answer with just the number."
+        test_prompt_math = "This is a test to verify the model is working. 2+2=? Answer with just the number."
         test_prompt_letters = "How many letters in 'hello'? Answer with just the number."
         test_prompt = test_prompt_math  # Primary test uses simple math
         tests_run = 0
@@ -1465,14 +1592,43 @@ async def validate_llm_chain(
                 yield sse_event('info', 'Will test LiteLLM with cloud fallback if configured...')
             else:
                 # Test direct LLM inference
+                # First, query /v1/models to see what's actually loaded
+                loaded_model = None
                 try:
-                    model_name = 'mlx-community/Qwen2.5-0.5B-Instruct-4bit' if llm_backend == 'mlx' else 'default'
+                    models_response = await client.get(f'{llm_url}/v1/models', timeout=5.0)
+                    if models_response.status_code == 200:
+                        models_data = models_response.json()
+                        models_list = models_data.get('data', [])
+                        if models_list:
+                            loaded_model = models_list[0].get('id', None)
+                            yield sse_event('info', f'[Direct {llm_backend.upper()}] Currently loaded model: {loaded_model}')
+                            if len(models_list) > 1:
+                                yield sse_event('info', f'[Direct {llm_backend.upper()}] Additional models: {[m.get("id") for m in models_list[1:]]}')
+                except Exception as e:
+                    yield sse_event('info', f'Could not query loaded models: {str(e)}')
+                
+                # MLX can only serve ONE model at a time
+                # Use the actually loaded model, not a hardcoded one
+                if llm_backend == 'mlx' and loaded_model:
+                    model_name = loaded_model
+                    yield sse_event('info', f'[Direct MLX] Using loaded model: {model_name}')
+                else:
+                    model_name = loaded_model or ('default' if llm_backend == 'vllm' else 'mlx-community/Qwen3-0.6B-4bit')
+                    yield sse_event('info', f'[Direct {llm_backend.upper()}] Model: {model_name}')
+                
+                # Test with the loaded model
+                try:
+                    direct_prompt = test_prompt
+                    yield sse_event('info', f'[Direct {llm_backend.upper()}] Prompt: "{direct_prompt}"')
+                    
                     response = await client.post(
                         f'{llm_url}/v1/chat/completions',
                         json={
                             'model': model_name,
-                            'messages': [{'role': 'user', 'content': test_prompt}],
-                            'max_tokens': 200,  # Allow room for Qwen3 <think> reasoning
+                            'messages': [{'role': 'user', 'content': direct_prompt}],
+                            'reasoning_effort': 'minimal',
+                            'verbosity': 'low',
+                            'max_tokens': 1000,  # Allow room for Qwen3 <think> reasoning
                         },
                         timeout=30.0
                     )
@@ -1480,166 +1636,151 @@ async def validate_llm_chain(
                     if response.status_code == 200:
                         data = response.json()
                         reply = data.get('choices', [{}])[0].get('message', {}).get('content', 'No response')
+                        actual_model = data.get('model', model_name)
+                        yield sse_event('info', f'[Direct {llm_backend.upper()}] Model in response: {actual_model}')
+                        yield sse_event('info', f'[Direct {llm_backend.upper()}] Response: "{reply[:300]}"')
                         is_valid, validation_msg = validate_llm_response(reply, "4")
                         if is_valid:
-                            yield sse_event('success', f'Direct {llm_backend.upper()}: "2+2={reply.strip()}" ✓')
+                            yield sse_event('success', f'Direct {llm_backend.upper()} ({actual_model}): "2+2=4" ✓')
                             tests_passed += 1
                         else:
                             yield sse_event('warning', f'Direct {llm_backend.upper()} response invalid: {validation_msg}')
                     else:
-                        yield sse_event('warning', f'Direct {llm_backend.upper()} test failed: {response.text}')
+                        yield sse_event('warning', f'Direct {llm_backend.upper()} test failed: HTTP {response.status_code}')
+                        yield sse_event('info', f'[Direct {llm_backend.upper()}] Error: {response.text[:200]}')
                 except Exception as e:
                     yield sse_event('warning', f'Direct {llm_backend.upper()} test error: {str(e)}')
             
             # =================================================================
-            # Configure LiteLLM for detected backend
+            # Check LiteLLM config - only regenerate if needed
             # =================================================================
             if llm_backend in ('mlx', 'vllm'):
-                yield sse_event('info', f'Configuring LiteLLM for {llm_backend.upper()}...')
-                
                 try:
-                    # Generate config file for this backend
-                    platform_info = get_platform_info()
-                    tier = platform_info.get("tier", "standard")
+                    # Get paths
                     busibox_host_path = os.getenv('BUSIBOX_HOST_PATH', '/busibox')
                     config_path = f"{busibox_host_path}/config/litellm-config.yaml"
                     
-                    if llm_backend == "mlx":
-                        api_base = "http://host.docker.internal:8080/v1"
-                        models = {
-                            "micro": {
-                                "fast": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
-                                "agent": "mlx-community/Qwen2.5-1.5B-Instruct-4bit",
-                                "frontier": "mlx-community/Qwen2.5-3B-Instruct-4bit",
-                            },
-                            "standard": {
-                                "fast": "mlx-community/Qwen2.5-3B-Instruct-4bit",
-                                "agent": "mlx-community/Qwen2.5-7B-Instruct-4bit",
-                                "frontier": "mlx-community/Qwen2.5-14B-Instruct-4bit",
-                            },
-                            "pro": {
-                                "fast": "mlx-community/Qwen2.5-3B-Instruct-4bit",
-                                "agent": "mlx-community/Qwen2.5-14B-Instruct-4bit",
-                                "frontier": "mlx-community/Qwen2.5-32B-Instruct-4bit",
-                            },
-                        }
-                        tier_models = models.get(tier, models["standard"])
-                        
-                        config_content = f'''# LiteLLM Configuration - Auto-generated for MLX ({tier} tier)
-model_list:
-  - model_name: fast
-    litellm_params:
-      model: openai/{tier_models["fast"]}
-      api_base: {api_base}
-      api_key: local
-  - model_name: agent
-    litellm_params:
-      model: openai/{tier_models["agent"]}
-      api_base: {api_base}
-      api_key: local
-  - model_name: chat
-    litellm_params:
-      model: openai/{tier_models["agent"]}
-      api_base: {api_base}
-      api_key: local
-  - model_name: frontier
-    litellm_params:
-      model: openai/{tier_models["frontier"]}
-      api_base: {api_base}
-      api_key: local
-
-general_settings:
-  debug: true
-  master_key: os.environ/LITELLM_MASTER_KEY
-
-router_settings:
-  enable_cache: true
-  timeout: 120
-
-litellm_settings:
-  drop_params: true
-  request_timeout: 120
-'''
-                    else:  # vllm
-                        api_base = "http://vllm:8000/v1"
-                        config_content = f'''# LiteLLM Configuration - Auto-generated for vLLM
-model_list:
-  - model_name: agent
-    litellm_params:
-      model: openai/local-model
-      api_base: {api_base}
-      api_key: local
-  - model_name: fast
-    litellm_params:
-      model: openai/local-model
-      api_base: {api_base}
-      api_key: local
-  - model_name: chat
-    litellm_params:
-      model: openai/local-model
-      api_base: {api_base}
-      api_key: local
-  - model_name: frontier
-    litellm_params:
-      model: openai/local-model
-      api_base: {api_base}
-      api_key: local
-
-general_settings:
-  debug: true
-  master_key: os.environ/LITELLM_MASTER_KEY
-
-router_settings:
-  enable_cache: true
-  timeout: 120
-
-litellm_settings:
-  drop_params: true
-  request_timeout: 120
-'''
-                    
-                    # Write config
-                    with open(config_path, 'w') as f:
-                        f.write(config_content)
-                    
-                    yield sse_event('info', f'LiteLLM config updated for {llm_backend.upper()}')
-                    
-                    # Restart LiteLLM to pick up new config
-                    yield sse_event('info', 'Restarting LiteLLM to apply new configuration...')
-                    
-                    restart_cmd = [
-                        'docker', 'compose',
-                        '-p', COMPOSE_PROJECT_NAME,
-                        '-f', f'{busibox_host_path}/docker-compose.yml',
-                        '-f', f'{busibox_host_path}/docker-compose.local-dev.yml',
-                        'restart', 'litellm'
-                    ]
-                    
-                    process = await asyncio.create_subprocess_exec(
-                        *restart_cmd,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                        cwd=busibox_host_path,
-                    )
-                    stdout, stderr = await process.communicate()
-                    
-                    if process.returncode == 0:
-                        yield sse_event('info', 'LiteLLM restarted, waiting for it to be ready...')
-                        # Wait for LiteLLM to be ready using /health/liveliness (no auth required)
-                        for _ in range(30):  # 30 second timeout
-                            try:
-                                response = await client.get(f'{LITELLM_URL}/health/liveliness', timeout=2.0)
-                                if response.status_code == 200:
-                                    yield sse_event('success', 'LiteLLM is ready with new configuration')
-                                    break
-                            except:
-                                pass
-                            await asyncio.sleep(1)
+                    # Generate expected config from registry
+                    registry = load_model_registry()
+                    if registry:
+                        environment = os.getenv('ENVIRONMENT', 'development')
+                        expected_config = generate_litellm_config_from_registry(
+                            registry=registry,
+                            environment=environment,
+                            llm_backend=llm_backend
+                        )
                     else:
-                        yield sse_event('warning', f'LiteLLM restart failed: {stderr.decode()}')
+                        # Fallback config
+                        api_base = "http://host.docker.internal:8080/v1" if llm_backend == "mlx" else "http://vllm:8000/v1"
+                        expected_config = f'''# LiteLLM Configuration - Fallback (registry not available)
+model_list:
+  - model_name: test
+    litellm_params:
+      model: openai/mlx-community/Qwen3-0.6B-4bit
+      api_base: {api_base}
+      api_key: local
+    model_info:
+      description: "Test model for LLM chain validation"
+  - model_name: fast
+    litellm_params:
+      model: openai/mlx-community/Qwen2.5-3B-Instruct-4bit
+      api_base: {api_base}
+      api_key: local
+
+general_settings:
+  debug: true
+  master_key: os.environ/LITELLM_MASTER_KEY
+
+router_settings:
+  enable_cache: true
+  timeout: 120
+
+litellm_settings:
+  drop_params: true
+  request_timeout: 120
+'''
+                    
+                    # Read existing config
+                    existing_config = ""
+                    try:
+                        with open(config_path, 'r') as f:
+                            existing_config = f.read()
+                    except FileNotFoundError:
+                        pass
+                    
+                    # Check if config needs updating by comparing model_list content
+                    # (ignore comments and whitespace differences)
+                    def extract_models(config: str) -> set:
+                        """Extract model names from config for comparison."""
+                        models = set()
+                        for line in config.split('\n'):
+                            if 'model_name:' in line:
+                                parts = line.split('model_name:')
+                                if len(parts) > 1:
+                                    models.add(parts[1].strip())
+                        return models
+                    
+                    existing_models = extract_models(existing_config)
+                    expected_models = extract_models(expected_config)
+                    
+                    config_needs_update = existing_models != expected_models
+                    
+                    if config_needs_update:
+                        yield sse_event('info', f'LiteLLM config needs update: existing={existing_models}, expected={expected_models}')
+                        
+                        # Write new config
+                        with open(config_path, 'w') as f:
+                            f.write(expected_config)
+                        
+                        yield sse_event('info', f'LiteLLM config updated for {llm_backend.upper()}')
+                        
+                        # Restart LiteLLM to pick up new config
+                        yield sse_event('info', 'Restarting LiteLLM to apply new configuration...')
+                        
+                        restart_cmd = [
+                            'docker', 'compose',
+                            '-p', COMPOSE_PROJECT_NAME,
+                            '-f', f'{busibox_host_path}/docker-compose.yml',
+                            '-f', f'{busibox_host_path}/docker-compose.local-dev.yml',
+                            'restart', 'litellm'
+                        ]
+                        
+                        process = await asyncio.create_subprocess_exec(
+                            *restart_cmd,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                            cwd=busibox_host_path,
+                        )
+                        stdout, stderr = await process.communicate()
+                        
+                        if process.returncode == 0:
+                            yield sse_event('info', 'LiteLLM restarted, waiting for it to be ready...')
+                            # Wait for LiteLLM to be ready using /health/liveliness (no auth required)
+                            for _ in range(30):  # 30 second timeout
+                                try:
+                                    response = await client.get(f'{LITELLM_URL}/health/liveliness', timeout=2.0)
+                                    if response.status_code == 200:
+                                        yield sse_event('success', 'LiteLLM is ready with updated configuration')
+                                        break
+                                except:
+                                    pass
+                                await asyncio.sleep(1)
+                        else:
+                            yield sse_event('warning', f'LiteLLM restart failed: {stderr.decode()}')
+                    else:
+                        # Config is already correct - just verify LiteLLM is healthy
+                        yield sse_event('info', f'LiteLLM config is up-to-date (models: {existing_models})')
+                        try:
+                            response = await client.get(f'{LITELLM_URL}/health/liveliness', timeout=5.0)
+                            if response.status_code == 200:
+                                yield sse_event('success', 'LiteLLM is healthy with correct configuration')
+                            else:
+                                yield sse_event('warning', f'LiteLLM health check failed: {response.status_code}')
+                        except Exception as e:
+                            yield sse_event('warning', f'LiteLLM health check error: {str(e)}')
                         
                 except Exception as e:
-                    yield sse_event('warning', f'Failed to configure LiteLLM: {str(e)}')
+                    yield sse_event('warning', f'Failed to check/configure LiteLLM: {str(e)}')
             
             # =================================================================
             # Test 2: LiteLLM Gateway
@@ -1666,13 +1807,19 @@ litellm_settings:
                 yield sse_event('info', 'LiteLLM is healthy, testing chat completion...')
                 
                 # Chat completion test with auth - use 'test' model for fast validation
+                litellm_prompt = '/no_think ' + test_prompt
+                yield sse_event('info', f'[LiteLLM] Model: test')
+                yield sse_event('info', f'[LiteLLM] Prompt: "{litellm_prompt}"')
+                
                 response = await client.post(
                     f'{LITELLM_URL}/v1/chat/completions',
                     headers=litellm_headers,
                     json={
                         'model': 'test',  # Use test model (Qwen3-0.6B) for validation
-                        'messages': [{'role': 'user', 'content': test_prompt}],
-                        'max_tokens': 50,  # /no_think disables reasoning, only need short response
+                        'messages': [{'role': 'user', 'content': litellm_prompt}],
+                        'reasoning_effort': 'minimal',
+                        'verbosity': 'low',
+                        'max_tokens': 1000,  # Give some room in case /no_think doesn't fully suppress
                     },
                     timeout=60.0
                 )
@@ -1680,9 +1827,12 @@ litellm_settings:
                 if response.status_code == 200:
                     data = response.json()
                     reply = data.get('choices', [{}])[0].get('message', {}).get('content', 'No response')
+                    model_used = data.get('model', 'unknown')
+                    yield sse_event('info', f'[LiteLLM] Model used: {model_used}')
+                    yield sse_event('info', f'[LiteLLM] Response: "{reply[:300]}"')
                     is_valid, validation_msg = validate_llm_response(reply, "4")
                     if is_valid:
-                        yield sse_event('success', f'LiteLLM → LLM: "2+2={reply.strip()}" ✓')
+                        yield sse_event('success', f'LiteLLM → LLM: "2+2=4" ✓')
                         tests_passed += 1
                     else:
                         yield sse_event('warning', f'LiteLLM response invalid: {validation_msg}')
@@ -1691,7 +1841,8 @@ litellm_settings:
                     if response.status_code == 401:
                         yield sse_event('warning', f'LiteLLM auth failed (401) - key may not be registered in DB')
                         yield sse_event('info', f'Hint: LiteLLM may need database migration or use master_key in config')
-                    yield sse_event('warning', f'LiteLLM test failed: {response.status_code} - {response.text[:300]}')
+                    yield sse_event('warning', f'LiteLLM test failed: HTTP {response.status_code}')
+                    yield sse_event('info', f'[LiteLLM] Error: {response.text[:300]}')
             except Exception as e:
                 yield sse_event('warning', f'LiteLLM test error: {str(e)}')
             
@@ -1728,6 +1879,11 @@ litellm_settings:
                 if agent_api_token:
                     # Test the chat endpoint with proper auth
                     # Use selected_agents to bypass dispatcher and directly use test-agent
+                    agent_prompt = test_prompt
+                    yield sse_event('info', f'[Agent API] Model: test')
+                    yield sse_event('info', f'[Agent API] Agents: test-agent')
+                    yield sse_event('info', f'[Agent API] Prompt: "{agent_prompt}"')
+                    
                     response = await client.post(
                         f'{AGENT_API_URL}/chat/message',
                         headers={
@@ -1736,7 +1892,7 @@ litellm_settings:
                         },
                         json={
                             'conversation_id': None,
-                            'message': test_prompt,
+                            'message': agent_prompt,
                             'model': 'test',  # Use test model (Qwen3-0.6B) for validation
                             'selected_agents': ['test-agent'],  # Bypass dispatcher, use test agent
                             'enable_web_search': False,
@@ -1747,19 +1903,28 @@ litellm_settings:
                     
                     if response.status_code == 200:
                         data = response.json()
+                        # Debug: show full response structure
+                        yield sse_event('info', f'[Agent API] Response keys: {list(data.keys())}')
+                        
                         reply = data.get('response') or data.get('content') or data.get('message') or str(data)[:100]
                         reply_str = str(reply).strip()
+                        
+                        # Debug: show raw response
+                        yield sse_event('info', f'[Agent API] Response: "{reply_str[:300]}"')
                         
                         # Validate the response is a real LLM answer, not an error message
                         is_valid, validation_msg = validate_llm_response(reply_str, "4")
                         if is_valid:
-                            yield sse_event('success', f'Agent API chat: "2+2={reply_str}" ✓')
+                            yield sse_event('success', f'Agent API chat: "2+2=4" ✓')
                             tests_passed += 1
                         else:
                             yield sse_event('warning', f'Agent API returned error response: {validation_msg}')
-                            yield sse_event('info', f'Full response: {reply_str[:150]}')
+                            # Show more context about the failure
+                            if 'error' in data:
+                                yield sse_event('info', f'[Agent API] Error field: {data.get("error")}')
                     else:
-                        yield sse_event('warning', f'Agent API chat failed: {response.status_code} - {response.text[:200]}')
+                        yield sse_event('warning', f'Agent API chat failed: HTTP {response.status_code}')
+                        yield sse_event('info', f'[Agent API] Error: {response.text[:300]}')
                 else:
                     # No token exchange, just verify health
                     yield sse_event('success', 'Agent API is healthy (no token available for chat test)')

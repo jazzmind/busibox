@@ -11,6 +11,9 @@ Direct LLM -> LiteLLM -> Agent API
 import logging
 from typing import List
 
+from pydantic_ai import Agent
+from pydantic_ai.models.openai import OpenAIChatModel
+
 from app.agents.base_agent import (
     AgentConfig,
     AgentContext,
@@ -40,11 +43,14 @@ This agent is used for automated testing. Responses should be predictable and ve
 class TestAgent(BaseStreamingAgent):
     """
     A minimal test agent that:
-    1. Uses the smallest/fastest model available
+    1. Uses the smallest/fastest model available ("test" model = Qwen3-0.6B)
     2. Has no tools enabled
     3. Provides direct, deterministic responses
     
     Used for LLM chain validation testing.
+    
+    Uses LLM_DRIVEN strategy which directly calls the LLM (synthesis_agent) without
+    needing any tools. This ensures we get a direct LLM response.
     """
     
     def __init__(self):
@@ -54,9 +60,23 @@ class TestAgent(BaseStreamingAgent):
             instructions=TEST_SYSTEM_PROMPT,
             tools=[],  # No tools - direct LLM responses only
             execution_mode=ExecutionMode.RUN_ONCE,
-            tool_strategy=ToolStrategy.SEQUENTIAL,  # Doesn't matter since no tools
+            tool_strategy=ToolStrategy.LLM_DRIVEN,  # LLM_DRIVEN allows direct LLM responses
         )
         super().__init__(config)
+        
+        # Override synthesis_model to use the "test" model (Qwen3-0.6B)
+        # This ensures test agent uses the smallest/fastest model
+        self.synthesis_model = OpenAIChatModel(
+            model_name="test",  # Maps to qwen3-0.6b in LiteLLM
+            provider="openai",
+        )
+        
+        # Recreate synthesis agent with test model
+        self.synthesis_agent = Agent(
+            model=self.synthesis_model,
+            system_prompt=TEST_SYSTEM_PROMPT,
+            model_settings={"max_tokens": 100},  # Short responses for test
+        )
     
     def pipeline_steps(self, query: str, context: AgentContext) -> List[PipelineStep]:
         """

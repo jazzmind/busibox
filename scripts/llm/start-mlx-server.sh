@@ -98,6 +98,8 @@ start_server() {
         fast) model="$LLM_MODEL_FAST" ;;
         agent) model="$LLM_MODEL_AGENT" ;;
         frontier) model="$LLM_MODEL_FRONTIER" ;;
+        test) model="${LLM_MODEL_TEST:-$LLM_MODEL_AGENT}" ;;
+        default) model="${LLM_MODEL_DEFAULT:-$LLM_MODEL_AGENT}" ;;
         *) model="$LLM_MODEL_AGENT" ;;
     esac
     
@@ -199,7 +201,7 @@ main() {
         --status)
             check_status
             ;;
-        fast|agent|frontier)
+        fast|agent|frontier|test|default)
             start_server "$action"
             ;;
         *)

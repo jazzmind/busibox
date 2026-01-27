@@ -175,7 +175,7 @@ model_list:
 EOF
 
     # Define purposes to include (order matters for readability)
-    local purposes=("test" "fast" "agent" "chat" "frontier" "tool_calling")
+    local purposes=("default" "test" "fast" "agent" "chat" "frontier" "tool_calling")
     
     for purpose in "${purposes[@]}"; do
         local model_key=$(get_model_for_purpose "$purpose")

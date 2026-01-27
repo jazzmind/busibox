@@ -951,11 +951,11 @@ host_service_menu() {
                                 curl -sf -X POST http://localhost:8089/mlx/start \
                                     -H "Content-Type: application/json" \
                                     -H "Authorization: Bearer $token" \
-                                    -d '{"model_type": "agent"}' && success "MLX started" || error "Failed to start MLX"
+                                    -d '{"model_type": "default"}' && success "MLX started" || error "Failed to start MLX"
                             else
                                 curl -sf -X POST http://localhost:8089/mlx/start \
                                     -H "Content-Type: application/json" \
-                                    -d '{"model_type": "agent"}' || error "Failed to start MLX (may need auth)"
+                                    -d '{"model_type": "default"}' || error "Failed to start MLX (may need auth)"
                             fi
                         else
                             warn "Host-agent not running. Starting MLX directly..."
@@ -966,12 +966,25 @@ host_service_menu() {
                         if curl -sf http://localhost:8089/health >/dev/null 2>&1; then
                             warn "Host-agent is already running"
                         else
-                            bash "${REPO_ROOT}/scripts/host-agent/install-host-agent.sh"
-                            sleep 2
-                            if curl -sf http://localhost:8089/health >/dev/null 2>&1; then
-                                success "Host-agent started"
+                            info "Installing and starting host-agent..."
+                            local install_result=0
+                            bash "${REPO_ROOT}/scripts/host-agent/install-host-agent.sh" || install_result=$?
+                            
+                            if [[ $install_result -ne 0 ]]; then
+                                error "Host-agent install failed with code $install_result"
+                                echo ""
+                                echo "Common issues:"
+                                echo "  - macOS: Check logs at ~/Library/Logs/Busibox/host-agent.error.log"
+                                echo "  - Ensure Python 3 and required packages are available"
+                                echo "  - Try: launchctl list | grep busibox"
                             else
-                                error "Failed to start host-agent"
+                                sleep 2
+                                if curl -sf http://localhost:8089/health >/dev/null 2>&1; then
+                                    success "Host-agent started"
+                                else
+                                    warn "Install succeeded but health check failed"
+                                    echo "Check logs: ~/Library/Logs/Busibox/host-agent.error.log"
+                                fi
                             fi
                         fi
                         ;;
@@ -1020,11 +1033,11 @@ host_service_menu() {
                                 curl -sf -X POST http://localhost:8089/mlx/start \
                                     -H "Content-Type: application/json" \
                                     -H "Authorization: Bearer $token" \
-                                    -d '{"model_type": "agent"}' && success "MLX restarted" || error "Failed to restart MLX"
+                                    -d '{"model_type": "default"}' && success "MLX restarted" || error "Failed to restart MLX"
                             else
                                 curl -sf -X POST http://localhost:8089/mlx/start \
                                     -H "Content-Type: application/json" \
-                                    -d '{"model_type": "agent"}' || error "Failed to restart MLX"
+                                    -d '{"model_type": "default"}' || error "Failed to restart MLX"
                             fi
                         else
                             bash "${REPO_ROOT}/scripts/llm/start-mlx-server.sh" && success "MLX restarted" || error "Failed to restart MLX"
@@ -1605,23 +1618,25 @@ handle_services() {
             # Main services menu for Docker
             while true; do
                 clear
-                box "Services Management ($env)" 70
+                local menu_width=120
+                box "Services Management ($env)" "$menu_width"
                 
-                # Show current status
+                # Show current status using two-column layout
                 echo ""
-                info "Current service status:"
-                (cd "$REPO_ROOT" && docker compose -f docker-compose.yml ps --format "table {{.Name}}\t{{.Status}}" 2>/dev/null) || echo "  (no services running)"
+                echo -e "${BOLD}Service Status:${NC}"
+                echo -e "${DIM}$(printf '─%.0s' $(seq 1 $menu_width))${NC}"
+                render_services_status_two_column "$env" "$menu_width"
                 echo ""
                 
                 # Build LLM services description based on detected platform
                 local llm_desc="litellm"
                 if [[ -n "$llm_backend_service" ]]; then
-                    llm_desc="litellm, $llm_backend_service, embedding"
+                    llm_desc="litellm, $llm_backend_service, host-agent, embedding"
                 else
                     llm_desc="litellm, embedding"
                 fi
                 
-                menu "Select Service Group" \
+                menu "Select Service Group" "$menu_width" \
                     "All Services" \
                     "Specific Service" \
                     "Core Services (authz, postgres, redis, milvus, minio)" \
@@ -1669,12 +1684,18 @@ handle_services() {
                         services_group_menu "App Services" "nginx ai-portal agent-manager"
                         [[ $? -eq $RETURN_TO_STATUS ]] && return $RETURN_TO_STATUS
                         ;;
-                    7|b|B|"")
+                    7|b|B)
                         return 0
                         ;;
                     s|S)
-                        # Return to main status dashboard
+                        # Return to main status dashboard - trigger status refresh
                         return $RETURN_TO_STATUS
+                        ;;
+                    "")
+                        # Empty input - just redisplay menu
+                        ;;
+                    *)
+                        # Invalid input - just redisplay menu
                         ;;
                 esac
             done

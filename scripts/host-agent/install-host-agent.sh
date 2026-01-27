@@ -185,10 +185,36 @@ EOF
     
     # Load the service
     info "Loading service..."
-    if launchctl load "$PLIST_PATH"; then
+    local load_result=0
+    local load_output
+    load_output=$(launchctl load "$PLIST_PATH" 2>&1) || load_result=$?
+    
+    if [[ $load_result -eq 0 ]]; then
         success "Service loaded"
+    elif [[ $load_result -eq 37 ]] || [[ "$load_output" == *"already loaded"* ]]; then
+        # Error 37 or "already loaded" message means service already loaded - not a real error
+        warn "Service was already loaded, reloading..."
+        launchctl unload "$PLIST_PATH" 2>/dev/null || true
+        sleep 1
+        if launchctl load "$PLIST_PATH"; then
+            success "Service reloaded"
+        else
+            error "Failed to reload service"
+            exit 1
+        fi
+    elif [[ $load_result -eq 22 ]]; then
+        # Error 22 (EINVAL) can happen if plist syntax is wrong
+        error "Invalid plist syntax (error 22)"
+        echo "Checking plist..."
+        plutil -lint "$PLIST_PATH" || true
+        exit 1
     else
-        error "Failed to load service"
+        error "Failed to load service (error code: $load_result)"
+        if [[ -n "$load_output" ]]; then
+            echo "Output: $load_output"
+        fi
+        echo "Try checking: launchctl list | grep busibox"
+        echo "Or run manually: ${PYTHON_PATH} ${SCRIPT_DIR}/host-agent.py"
         exit 1
     fi
     

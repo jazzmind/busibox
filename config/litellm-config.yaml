@@ -1,70 +1,64 @@
 # LiteLLM Configuration - Generated from model_registry.yml
 # Environment: development
 # Backend: mlx
-# Generated: 2026-01-27T13:25:59-05:00
-# DO NOT EDIT - regenerate with: scripts/llm/generate-litellm-config.sh
+# DO NOT EDIT - regenerate via deploy-api or scripts/llm/generate-litellm-config.sh
 
 model_list:
-  - model_name: test
-    litellm_params:
-      model: openai/mlx-community/Qwen3-0.6B-4bit
-      api_base: http://host.docker.internal:8080/v1
-      api_key: local
-    model_info:
-      description: "Tiny test model with reasoning (0.6B params, has <think> mode)"
-
-  - model_name: fast
-    litellm_params:
-      model: openai/mlx-community/Qwen2.5-3B-Instruct-4bit
-      api_base: http://host.docker.internal:8080/v1
-      api_key: local
-    model_info:
-      description: "Fast model for quick operations (3B params)"
-
-  - model_name: agent
-    litellm_params:
-      model: openai/mlx-community/Qwen2.5-7B-Instruct-4bit
-      api_base: http://host.docker.internal:8080/v1
-      api_key: local
-    model_info:
-      description: "Agent model for reasoning tasks (7B params)"
-
-  - model_name: chat
-    litellm_params:
-      model: openai/mlx-community/Qwen2.5-3B-Instruct-4bit
-      api_base: http://host.docker.internal:8080/v1
-      api_key: local
-    model_info:
-      description: "Fast model for quick operations (3B params)"
-
-  - model_name: frontier
-    litellm_params:
-      model: openai/mlx-community/Qwen2.5-14B-Instruct-4bit
-      api_base: http://host.docker.internal:8080/v1
-      api_key: local
-    model_info:
-      description: "Frontier model for complex analysis (14B params)"
-
-  - model_name: tool_calling
-    litellm_params:
-      model: openai/mlx-community/Qwen2.5-7B-Instruct-4bit
-      api_base: http://host.docker.internal:8080/v1
-      api_key: local
-    model_info:
-      description: "Agent model for reasoning tasks (7B params)"
-
+- model_name: test
+  litellm_params:
+    model: openai/mlx-community/Qwen3-0.6B-4bit
+    api_base: http://host.docker.internal:8080/v1
+    api_key: local
+  model_info:
+    description: Tiny test model with reasoning (0.6B params, has <think> mode)
+- model_name: fast
+  litellm_params:
+    model: openai/mlx-community/Qwen2.5-3B-Instruct-4bit
+    api_base: http://host.docker.internal:8080/v1
+    api_key: local
+  model_info:
+    description: Fast model for quick operations (3B params)
+- model_name: agent
+  litellm_params:
+    model: openai/mlx-community/Qwen2.5-7B-Instruct-4bit
+    api_base: http://host.docker.internal:8080/v1
+    api_key: local
+  model_info:
+    description: Agent model for reasoning tasks (7B params)
+- model_name: chat
+  litellm_params:
+    model: openai/mlx-community/Qwen2.5-3B-Instruct-4bit
+    api_base: http://host.docker.internal:8080/v1
+    api_key: local
+  model_info:
+    description: Fast model for quick operations (3B params)
+- model_name: frontier
+  litellm_params:
+    model: openai/mlx-community/Qwen2.5-14B-Instruct-4bit
+    api_base: http://host.docker.internal:8080/v1
+    api_key: local
+  model_info:
+    description: Frontier model for complex analysis (14B params)
+- model_name: default
+  litellm_params:
+    model: openai/mlx-community/Qwen2.5-3B-Instruct-4bit
+    api_base: http://host.docker.internal:8080/v1
+    api_key: local
+  model_info:
+    description: Fast model for quick operations (3B params)
+- model_name: tool_calling
+  litellm_params:
+    model: openai/mlx-community/Qwen2.5-7B-Instruct-4bit
+    api_base: http://host.docker.internal:8080/v1
+    api_key: local
+  model_info:
+    description: Agent model for reasoning tasks (7B params)
 general_settings:
   debug: true
   master_key: os.environ/LITELLM_MASTER_KEY
-
 router_settings:
   enable_cache: true
-  num_retries: 3
-  retry_after: 5
   timeout: 120
-  allowed_fails: 1
-
 litellm_settings:
   drop_params: true
   request_timeout: 120
-  set_verbose: true

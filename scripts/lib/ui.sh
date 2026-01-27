@@ -83,14 +83,23 @@ progress() {
 }
 
 # Interactive menu
-# Usage: menu "Title" "option1" "option2" "option3"
+# Usage: menu "Title" [width] "option1" "option2" "option3"
+# If width is a number, it sets the box width; otherwise it's treated as an option
 menu() {
     local title="$1"
     shift
+    
+    # Check if first arg is a number (width)
+    local width=120
+    if [[ "$1" =~ ^[0-9]+$ ]]; then
+        width="$1"
+        shift
+    fi
+    
     local options=("$@")
     
     echo ""
-    box "$title"
+    box "$title" "$width"
     echo ""
     
     local i=1
@@ -978,7 +987,6 @@ render_service_category() {
 }
 
 # Main status dashboard renderer (non-blocking)
-# Uses a two-column grouped layout for compact display
 # Usage: render_status_dashboard "staging" "proxmox"
 render_status_dashboard() {
     local env=$1
@@ -1012,9 +1020,48 @@ render_status_dashboard() {
             cache_age="$((cache_age / 3600))h ago"
         fi
     fi
+       
+    # Render each category (only show header for first category)
+    render_service_category "Core Services $(printf '%*s' 10 '')${DIM}Last check: $cache_age  ${CYAN}[Press 's' to refresh]${NC}" "core" "$env" "true"
+    render_service_category "LLM Services" "llm" "$env" "false"
+    render_service_category "API Services" "api" "$env" "false"
+    render_service_category "Apps" "app" "$env" "false"
     
-    # Use two-column layout for compact display
-    render_status_dashboard_two_column "$env" "$cache_age"
+    echo ""
+}
+
+# ============================================================================
+# Two-Column Service Status Display (for Services Menu)
+# ============================================================================
+
+# Get container uptime for a service
+# Usage: get_container_uptime "service_name"
+# Returns: uptime string like "2h30m" or "5d12h" or "-" if not running
+get_container_uptime() {
+    local service="$1"
+    local container_prefix="${CONTAINER_PREFIX:-local}"
+    local container_name="${container_prefix}-${service}"
+    
+    # Try to get container status with uptime
+    local status_info
+    status_info=$(docker ps --filter "name=^${container_name}$" --format '{{.Status}}' 2>/dev/null | head -1)
+    
+    if [[ -z "$status_info" ]]; then
+        echo "-"
+        return
+    fi
+    
+    # Parse "Up X minutes/hours/days" format
+    if [[ "$status_info" =~ ^Up[[:space:]]+(.*) ]]; then
+        local uptime_part="${BASH_REMATCH[1]}"
+        # Remove "(healthy)" or "(unhealthy)" suffix
+        uptime_part="${uptime_part%% (*}"
+        # Compact format: "2 hours" -> "2h", "30 minutes" -> "30m", "5 days" -> "5d"
+        uptime_part=$(echo "$uptime_part" | sed -E 's/([0-9]+) seconds?/\1s/g; s/([0-9]+) minutes?/\1m/g; s/([0-9]+) hours?/\1h/g; s/([0-9]+) days?/\1d/g; s/, //g; s/About //g')
+        echo "$uptime_part"
+    else
+        echo "-"
+    fi
 }
 
 # Render compact service line for two-column layout
@@ -1060,18 +1107,16 @@ render_compact_service_line() {
         *) health_text="${DIM}...${NC}" ;;
     esac
     
-    # Format version (truncate)
-    local ver_display=""
-    if [[ -n "$version" && "$version" != "checking" && "$version" != "unknown" ]]; then
-        if [[ ${#version} -gt 7 ]]; then
-            ver_display="${version:0:7}"
-        else
-            ver_display="$version"
-        fi
+    # Get uptime instead of version for compact display
+    local uptime_display
+    if [[ "$status" == "up" ]]; then
+        uptime_display=$(get_container_uptime "$service")
+    else
+        uptime_display="-"
     fi
     
     # Return formatted line
-    printf "%b %-14s %-6b %s" "$status_symbol" "$display_name" "$health_text" "$ver_display"
+    printf "%b %-14s %-6b %s" "$status_symbol" "$display_name" "$health_text" "$uptime_display"
 }
 
 # Compact consolidated ingest line (API + Worker)
@@ -1093,10 +1138,11 @@ render_compact_ingest_line() {
     fi
     
     # Combined status
-    local status_symbol health_text
+    local status_symbol health_text uptime_display="-"
     if [[ "$api_status" == "up" && "$worker_status" == "up" ]]; then
         status_symbol="${GREEN}●${NC}"
         health_text="${GREEN}up${NC}"
+        uptime_display=$(get_container_uptime "ingest-api")
     elif [[ "$api_status" == "down" && "$worker_status" == "down" ]]; then
         status_symbol="${RED}○${NC}"
         health_text="${RED}down${NC}"
@@ -1106,26 +1152,30 @@ render_compact_ingest_line() {
     elif [[ "$worker_status" == "down" ]]; then
         status_symbol="${YELLOW}◐${NC}"
         health_text="${YELLOW}wrk↓${NC}"
+        uptime_display=$(get_container_uptime "ingest-api")
     else
         status_symbol="${DIM}◷${NC}"
         health_text="${DIM}...${NC}"
     fi
     
-    printf "%b %-14s %-6b" "$status_symbol" "Ingest" "$health_text"
+    printf "%b %-14s %-6b %s" "$status_symbol" "Ingest" "$health_text" "$uptime_display"
 }
 
-# Two-column status dashboard layout
-# Left: Core + LLM services  |  Right: API + Apps
-render_status_dashboard_two_column() {
+# Two-column service status display for services menu
+# Groups: Core+LLM (left), API+Apps (right)
+# Usage: render_services_status_two_column "staging" [total_width]
+render_services_status_two_column() {
     local env=$1
-    local cache_age=$2
+    local total_width=${2:-120}
     
-    echo ""
-    echo -e "${BOLD}Service Status${NC}  ${DIM}Last check: $cache_age${NC}  ${CYAN}[Press 's' to refresh]${NC}"
-    echo -e "${DIM}$(printf '─%.0s' $(seq 1 115))${NC}"
+    # Check if status library is available
+    if ! type get_service_status_from_cache &>/dev/null; then
+        echo -e "${DIM}  (Status unavailable)${NC}"
+        return 0
+    fi
     
-    # Column width
-    local col_width=55
+    # Column width - half of total width minus separator
+    local col_width=$(( (total_width - 5) / 2 ))
     
     # Get services for each category
     local core_services=$(get_services_in_category "core")
@@ -1207,6 +1257,4 @@ render_status_dashboard_two_column() {
         # Print with proper spacing
         printf "  %-${col_width}b │ %-${col_width}b\n" "$left_line" "$right_line"
     done
-    
-    echo ""
 }

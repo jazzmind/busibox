@@ -231,7 +231,7 @@ model_purposes:
 # Maps to models cached by `make warmup` - bge-small and qwen3-0.6b
 model_purposes_dev:
   # Primary models (all use small MLX models for dev speed)
-  default: "qwen2.5-3b"   # General purpose (fast local model)
+  default: "qwen3-0.6b"   # General purpose (tiny, fast, cached by warmup)
   frontier: "qwen2.5-14b"   # Most capable local model
   frontier-fast: "qwen2.5-7b"   # Fast frontier (local)
   

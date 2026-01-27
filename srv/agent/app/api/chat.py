@@ -238,28 +238,30 @@ async def send_chat_message(
         selected_model = payload.model
         model_selection_reasoning = None
         
-        # Special handling for test mode - bypass dispatcher and use test agent directly
+        # Special handling for test mode - bypass dispatcher's LLM call, use test-agent directly
+        # This still uses the full agent system (agent prompt, execution) but skips dispatcher analysis
         if payload.model == "test":
             # Generate deterministic UUID for test-agent (same as builtin_agents.py)
             test_agent_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, "busibox.builtin.test-agent"))
             logger.info(
-                "Test mode: bypassing dispatcher, using test-agent directly",
+                "Test mode: bypassing dispatcher LLM, routing directly to test-agent",
                 extra={
                     "user_sub": principal.sub,
                     "conversation_id": str(conversation.id),
                     "test_agent_uuid": test_agent_uuid,
                 }
             )
-            # Create a routing decision that forces the test agent (using UUID, not name)
+            # Create a routing decision that forces the test agent (no LLM call needed)
             from app.schemas.dispatcher import RoutingDecision
             decision = RoutingDecision(
                 selected_tools=[],
-                selected_agents=[test_agent_uuid],  # Use UUID, not name
+                selected_agents=[test_agent_uuid],
                 confidence=1.0,
-                reasoning="Test mode: using test-agent for LLM chain validation",
+                reasoning="Test mode: direct routing to test-agent (no dispatcher LLM)",
                 alternatives=[],
                 requires_disambiguation=False
             )
+            selected_model = "test"  # Ensure we use the test model
         else:
             if payload.model == "auto":
                 model_selection = select_model_and_tools(

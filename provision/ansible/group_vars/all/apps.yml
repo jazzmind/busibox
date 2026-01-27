@@ -166,3 +166,36 @@ applications:
       # Enable verbose authz logging for debugging
       VERBOSE_AUTHZ_LOGGING: "true"
   
+  - name: estimator
+    github_repo: jazzmind/estimator
+    container: core-apps-lxc
+    container_ip: "{{ core_apps_ip }}"
+    port: 3007
+    deploy_path: /srv/apps/estimator
+    health_endpoint: /api/health
+    build_command: "npm run build"
+    start_command: "node .next/standalone/server.js"  # Standalone mode for Next.js
+    process_manager: systemd  # Use systemd for consistent logging via journalctl
+    auto_deploy: false  # Manual deployment for now - enable when ready
+    routes:
+      - type: path
+        domain: "{{ full_domain }}"
+        path: /estimator
+        strip_path: false  # Keep /estimator path - Next.js handles basePath
+    secrets:
+      - database_url       # PostgreSQL connection string
+    optional_secrets: []
+    env:
+      NODE_ENV: "{{ node_env }}"
+      PORT: "3007"
+      APP_NAME: "estimator"
+      APP_MODE: "prisma"
+      # URLs
+      NEXT_PUBLIC_APP_URL: "https://{{ full_domain }}/estimator"
+      NEXT_PUBLIC_BASE_PATH: "/estimator"
+      NEXT_PUBLIC_AI_PORTAL_URL: "https://{{ full_domain }}/portal"
+      # AuthZ Service Configuration (Zero Trust - no client secret needed)
+      AUTHZ_BASE_URL: "http://{{ authz_ip }}:8010"
+      # Enable verbose authz logging for debugging (staging)
+      VERBOSE_AUTHZ_LOGGING: "true"
+  

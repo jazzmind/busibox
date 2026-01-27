@@ -610,8 +610,9 @@ generate_secrets() {
     export SSO_JWT_SECRET=$(openssl rand -hex 32)
     # Note: AUTHZ_ADMIN_TOKEN removed - we use direct PostgreSQL for bootstrap (Zero Trust)
     export AUTHZ_MASTER_KEY=$(openssl rand -base64 32)
-    export LITELLM_API_KEY="sk-$(openssl rand -hex 16)"
+    # LiteLLM uses master_key for authentication - services should use the same key
     export LITELLM_MASTER_KEY="sk-$(openssl rand -hex 16)"
+    export LITELLM_API_KEY="${LITELLM_MASTER_KEY}"  # Same as master key for authentication
     export MINIO_ACCESS_KEY="minioadmin"
     export MINIO_SECRET_KEY=$(openssl rand -base64 24 | tr -d '/+=')
     export AUTHZ_BOOTSTRAP_CLIENT_ID="ai-portal"
@@ -1713,6 +1714,105 @@ setup_host_agent() {
     return 0
 }
 
+# Ensure MLX server is running before AI Portal setup
+# This is called after all MLX setup is complete and models are downloaded
+ensure_mlx_running() {
+    if [[ "$LLM_BACKEND" != "mlx" ]]; then
+        return 0
+    fi
+    
+    show_stage 96 "Starting MLX Server" "Ensuring MLX is ready for AI Portal setup wizard."
+    
+    # Check if MLX is already running
+    if curl -sf http://localhost:8080/v1/models &>/dev/null; then
+        success "MLX server is already running"
+        return 0
+    fi
+    
+    info "MLX server not running, starting it..."
+    
+    # Try to start via host-agent first (if it's running)
+    local host_agent_token
+    host_agent_token=$(get_state "HOST_AGENT_TOKEN" 2>/dev/null || echo "")
+    
+    if curl -sf http://localhost:8089/health &>/dev/null; then
+        info "Using host-agent to start MLX..."
+        
+        # Get the test model (small model for quick startup)
+        local test_model
+        test_model=$(get_state "MLX_TEST_MODEL" 2>/dev/null || echo "mlx-community/Qwen3-0.6B-4bit")
+        
+        local start_response
+        if [[ -n "$host_agent_token" ]]; then
+            start_response=$(curl -sf -X POST http://localhost:8089/mlx/start \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Bearer ${host_agent_token}" \
+                -d "{\"model\": \"${test_model}\"}" 2>/dev/null)
+        else
+            start_response=$(curl -sf -X POST http://localhost:8089/mlx/start \
+                -H "Content-Type: application/json" \
+                -d "{\"model\": \"${test_model}\"}" 2>/dev/null)
+        fi
+        
+        if [[ -n "$start_response" ]]; then
+            info "MLX start command sent via host-agent"
+        else
+            warn "Failed to start MLX via host-agent, trying direct start..."
+        fi
+    fi
+    
+    # Wait for MLX to be ready (either from host-agent start or direct start)
+    info "Waiting for MLX server to be ready..."
+    local max_attempts=60
+    local attempt=0
+    
+    while [[ $attempt -lt $max_attempts ]]; do
+        if curl -sf http://localhost:8080/v1/models &>/dev/null; then
+            success "MLX server is ready"
+            return 0
+        fi
+        sleep 2
+        ((attempt++))
+        if [[ $((attempt % 10)) -eq 0 ]]; then
+            echo -n "."
+        fi
+    done
+    echo ""
+    
+    # If still not running, try direct start as fallback
+    if ! curl -sf http://localhost:8080/v1/models &>/dev/null; then
+        warn "MLX server still not ready, attempting direct start..."
+        
+        local mlx_script="${REPO_ROOT}/scripts/llm/start-mlx-server.sh"
+        if [[ -f "$mlx_script" ]]; then
+            # Start MLX server in background
+            bash "$mlx_script" agent &
+            
+            # Wait again
+            attempt=0
+            while [[ $attempt -lt 30 ]]; do
+                if curl -sf http://localhost:8080/v1/models &>/dev/null; then
+                    success "MLX server started successfully"
+                    return 0
+                fi
+                sleep 2
+                ((attempt++))
+            done
+        fi
+    fi
+    
+    # Final check
+    if curl -sf http://localhost:8080/v1/models &>/dev/null; then
+        success "MLX server is running"
+        return 0
+    else
+        warn "MLX server could not be started automatically"
+        info "You can start it manually with: make mlx-start"
+        info "The AI Portal setup wizard will also try to start it"
+        return 0  # Don't fail installation, just warn
+    fi
+}
+
 # =============================================================================
 # DEMO MODE
 # =============================================================================
@@ -1856,6 +1956,11 @@ check_existing_install() {
                 read -p "$(echo -e "${BOLD}Choice [1]:${NC} ")" choice
                 case "${choice:-1}" in
                     1)
+                        # Ensure MLX is running on Apple Silicon before opening portal
+                        LLM_BACKEND=$(get_state "LLM_BACKEND" 2>/dev/null || echo "")
+                        if [[ "$LLM_BACKEND" == "mlx" ]]; then
+                            ensure_mlx_running
+                        fi
                         info "Opening browser..."
                         if [[ "$DETECTED_OS" == "Darwin" ]]; then
                             open "$magic_link" 2>/dev/null || true
@@ -1882,6 +1987,11 @@ check_existing_install() {
             done
         else
             # Non-interactive mode - just open browser and exit
+            # Ensure MLX is running on Apple Silicon before opening portal
+            LLM_BACKEND=$(get_state "LLM_BACKEND" 2>/dev/null || echo "")
+            if [[ "$LLM_BACKEND" == "mlx" ]]; then
+                ensure_mlx_running
+            fi
             if [[ "$DETECTED_OS" == "Darwin" ]]; then
                 open "$magic_link" 2>/dev/null || true
             else
@@ -2159,6 +2269,8 @@ main() {
         setup_host_agent
         # Wait for background model download if still running
         wait_for_model_download
+        # Ensure MLX server is running for AI Portal setup
+        ensure_mlx_running
     else
         # For non-MLX backends, still download the embedding model
         # (embeddings run locally regardless of LLM backend)
