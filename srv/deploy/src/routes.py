@@ -386,6 +386,101 @@ async def list_deployments(
     return deployments[:50]  # Last 50 deployments
 
 
+class LocalDevApp(BaseModel):
+    """A local dev app with its manifest."""
+    dirName: str
+    manifest: dict
+
+
+class ListLocalDevAppsResponse(BaseModel):
+    """Response for listing local dev apps."""
+    devAppsDir: str
+    apps: list[LocalDevApp]
+    error: str | None = None
+
+
+@router.get("/list-local-dev-apps", response_model=ListLocalDevAppsResponse)
+async def list_local_dev_apps(
+    token_payload: dict = Depends(verify_admin_token)
+):
+    """
+    List all local dev directories that contain valid busibox.json manifests.
+    
+    Scans /srv/dev-apps (the mounted DEV_APPS_DIR) for subdirectories
+    and returns those that have valid manifest files.
+    """
+    import json
+    import os
+    
+    dev_apps_path = "/srv/dev-apps"
+    
+    # Check if dev-apps is mounted
+    if not os.path.isdir(dev_apps_path):
+        return ListLocalDevAppsResponse(
+            devAppsDir="(not configured)",
+            apps=[],
+            error="DEV_APPS_DIR is not configured. Run 'make configure' -> Docker Configuration -> Configure Dev Apps Directory."
+        )
+    
+    # Get the actual host path from environment if available
+    # DEV_APPS_DIR_HOST is passed through docker-compose with the host path
+    # DEV_APPS_DIR is the container path (/srv/dev-apps)
+    host_dev_apps_dir = os.environ.get("DEV_APPS_DIR_HOST") or os.environ.get("DEV_APPS_DIR", dev_apps_path)
+    
+    apps: list[LocalDevApp] = []
+    
+    try:
+        # List all subdirectories
+        for entry in os.listdir(dev_apps_path):
+            entry_path = os.path.join(dev_apps_path, entry)
+            
+            # Skip non-directories
+            if not os.path.isdir(entry_path):
+                continue
+            
+            # Skip hidden directories
+            if entry.startswith('.'):
+                continue
+            
+            # Check for busibox.json
+            manifest_path = os.path.join(entry_path, "busibox.json")
+            if not os.path.isfile(manifest_path):
+                continue
+            
+            # Try to parse manifest
+            try:
+                with open(manifest_path, 'r') as f:
+                    manifest = json.load(f)
+                
+                # Basic validation - must have required fields
+                required_fields = ['name', 'id', 'version', 'defaultPath', 'defaultPort']
+                if all(f in manifest for f in required_fields):
+                    apps.append(LocalDevApp(
+                        dirName=entry,
+                        manifest=manifest
+                    ))
+            except (json.JSONDecodeError, IOError):
+                # Skip invalid manifests
+                continue
+    except Exception as e:
+        logger.error(f"Error listing local dev apps: {e}")
+        return ListLocalDevAppsResponse(
+            devAppsDir=host_dev_apps_dir,
+            apps=[],
+            error=f"Failed to scan dev apps directory: {str(e)}"
+        )
+    
+    # Sort by app name
+    apps.sort(key=lambda a: a.manifest.get('name', a.dirName).lower())
+    
+    logger.info(f"Found {len(apps)} local dev apps in {dev_apps_path}")
+    
+    return ListLocalDevAppsResponse(
+        devAppsDir=host_dev_apps_dir,
+        apps=apps
+    )
+
+
 class LocalDevValidateRequest(BaseModel):
     dirName: str
 

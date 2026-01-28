@@ -7,12 +7,17 @@ In Docker/local environments, skips actual configuration.
 
 import asyncio
 import logging
+import os
 from typing import Optional, Tuple
 from .models import BusiboxManifest
 from .config import config
 from .database import execute_ssh_command
 
 logger = logging.getLogger(__name__)
+
+# Container prefix for Docker container names
+CONTAINER_PREFIX = os.environ.get("CONTAINER_PREFIX", "dev")
+NGINX_CONTAINER = f"{CONTAINER_PREFIX}-nginx"
 
 
 def is_docker_environment() -> bool:
@@ -64,10 +69,14 @@ class NginxConfigurator:
 # App ID: {manifest.id}
 # Uses dynamic DNS resolution via variable to allow nginx to start
 # even if this app's backend service isn't running yet.
+#
+# Next.js apps run with basePath={path}, so we preserve the path prefix.
+# This matches the agent-manager nginx config pattern exactly.
+# proxy_pass WITHOUT trailing slash = preserve the request URI
 
-location {path}/ {{
+location {path} {{
     set $backend_{var_name} http://{backend};
-    proxy_pass $backend_{var_name}/;
+    proxy_pass $backend_{var_name};
     proxy_http_version 1.1;
     
     # Headers
@@ -77,27 +86,18 @@ location {path}/ {{
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Forwarded-Host $server_name;
     
-    # WebSocket support
+    # WebSocket support for Next.js HMR
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
     
-    # Timeouts
+    # Timeouts - extended for WebSocket/HMR
     proxy_connect_timeout 60s;
     proxy_send_timeout 60s;
-    proxy_read_timeout 60s;
+    proxy_read_timeout 86400;
     
     # Buffering
     proxy_buffering off;
     proxy_request_buffering off;
-}}
-
-# Health check endpoint
-location {path}{manifest.healthEndpoint} {{
-    set $backend_{var_name} http://{backend};
-    proxy_pass $backend_{var_name}{manifest.healthEndpoint};
-    proxy_http_version 1.1;
-    proxy_set_header Host $host;
-    access_log off;
 }}
 """
         return config_content
@@ -201,11 +201,12 @@ ln -s {source} {target}
             config_content = self.generate_location_config(manifest, backend)
             
             # Write to mounted directory (accessible from deploy-api container)
-            # This path should match the volume mount in docker-compose
-            config_path = f"/busibox/config/nginx-sites/apps/{manifest.id}.conf"
+            # The busibox directory is mounted at BUSIBOX_HOST_PATH inside deploy-api
+            # and nginx mounts ./config/nginx-sites/apps to /etc/nginx/conf.d/apps
+            busibox_path = os.environ.get("BUSIBOX_HOST_PATH", "/busibox")
+            config_path = f"{busibox_path}/config/nginx-sites/apps/{manifest.id}.conf"
             
             try:
-                import os
                 os.makedirs(os.path.dirname(config_path), exist_ok=True)
                 
                 with open(config_path, 'w') as f:
@@ -216,7 +217,7 @@ ln -s {source} {target}
                 # Reload nginx via docker exec
                 import subprocess
                 reload_result = subprocess.run(
-                    ['docker', 'exec', 'local-nginx', 'nginx', '-s', 'reload'],
+                    ['docker', 'exec', NGINX_CONTAINER, 'nginx', '-s', 'reload'],
                     capture_output=True,
                     text=True
                 )

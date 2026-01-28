@@ -809,7 +809,14 @@ configure_dev_apps_dir() {
     case "${choice:-}" in
         1)
             echo ""
-            read -p "$(echo -e "${BOLD}Enter directory path:${NC} ")" new_dir
+            # Show default suggestion (parent of busibox)
+            local default_dir
+            default_dir="$(dirname "$REPO_ROOT")"
+            
+            read -p "$(echo -e "${BOLD}Enter directory path [${default_dir}]:${NC} ")" new_dir
+            
+            # Use default if empty
+            new_dir="${new_dir:-$default_dir}"
             
             # Expand ~ to home directory
             new_dir="${new_dir/#\~/$HOME}"
@@ -834,14 +841,64 @@ configure_dev_apps_dir() {
                 new_dir="$(cd "$new_dir" 2>/dev/null && pwd)"
             fi
             
+            # Save to state file
             set_dev_apps_dir "$new_dir"
+            
+            # Also update the .env file for Docker
+            local env_file
+            env_file=$(get_env_file_path 2>/dev/null || echo "${REPO_ROOT}/.env.dev")
+            
+            if [[ -f "$env_file" ]]; then
+                # Update or add DEV_APPS_DIR in env file
+                if grep -q "^DEV_APPS_DIR=" "$env_file" 2>/dev/null; then
+                    # Update existing
+                    sed -i.bak "s|^DEV_APPS_DIR=.*|DEV_APPS_DIR=${new_dir}|" "$env_file"
+                    rm -f "${env_file}.bak"
+                else
+                    # Append
+                    echo "" >> "$env_file"
+                    echo "# Local Development Apps Directory" >> "$env_file"
+                    echo "DEV_APPS_DIR=${new_dir}" >> "$env_file"
+                fi
+                
+                # Also update DEV_APPS_DIR_HOST
+                if grep -q "^DEV_APPS_DIR_HOST=" "$env_file" 2>/dev/null; then
+                    sed -i.bak "s|^DEV_APPS_DIR_HOST=.*|DEV_APPS_DIR_HOST=${new_dir}|" "$env_file"
+                    rm -f "${env_file}.bak"
+                else
+                    echo "DEV_APPS_DIR_HOST=${new_dir}" >> "$env_file"
+                fi
+            else
+                # Create minimal env file
+                echo "# Busibox Environment Configuration" > "$env_file"
+                echo "" >> "$env_file"
+                echo "# Local Development Apps Directory" >> "$env_file"
+                echo "DEV_APPS_DIR=${new_dir}" >> "$env_file"
+                echo "DEV_APPS_DIR_HOST=${new_dir}" >> "$env_file"
+            fi
+            
             success "Dev Apps Directory set to: $new_dir"
             echo ""
-            info "To use this setting, restart Docker services: make docker-up"
+            info "Saved to:"
+            echo "  - State file: $(basename "$BUSIBOX_STATE_FILE")"
+            echo "  - Env file: $(basename "$env_file")"
+            echo ""
+            info "To apply this setting, recreate the deploy-api container:"
+            echo "  make docker-down SERVICE=deploy-api && make docker-up SERVICE=deploy-api"
             ;;
         2)
             set_dev_apps_dir ""
-            success "Dev Apps Directory cleared"
+            
+            # Also remove from env file
+            local env_file
+            env_file=$(get_env_file_path 2>/dev/null || echo "${REPO_ROOT}/.env.dev")
+            if [[ -f "$env_file" ]]; then
+                sed -i.bak '/^DEV_APPS_DIR=/d' "$env_file"
+                sed -i.bak '/^DEV_APPS_DIR_HOST=/d' "$env_file"
+                rm -f "${env_file}.bak"
+            fi
+            
+            success "Dev Apps Directory cleared from state and env file"
             ;;
         3|"")
             return
@@ -982,8 +1039,14 @@ docker_menu() {
         
         echo ""
         echo -e "  ${DIM}GitHub Token: ${NC}${github_status}"
-        if [[ -n "$dev_apps_dir" ]]; then
-            echo -e "  ${DIM}Dev Apps Dir: ${NC}${dev_apps_dir}"
+        
+        # Show Dev Apps Dir status (only relevant for development environment)
+        if [[ "$ENV" == "development" ]]; then
+            if [[ -n "$dev_apps_dir" ]]; then
+                echo -e "  ${DIM}Dev Apps Dir: ${NC}${GREEN}${dev_apps_dir}${NC}"
+            else
+                echo -e "  ${DIM}Dev Apps Dir: ${NC}${YELLOW}not configured${NC}"
+            fi
         fi
         
         echo ""

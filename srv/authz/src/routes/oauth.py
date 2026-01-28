@@ -678,6 +678,7 @@ async def token(request: Request):
         
         # Determine authentication mode: subject_token (Zero Trust) or client credentials (legacy)
         user_id: str
+        email: str = ""
         purpose: str = token_req.requested_purpose or "token-exchange"
         
         if token_req.subject_token:
@@ -705,6 +706,7 @@ async def token(request: Request):
                 )
             
             user_id = token_req.requested_subject
+            # Email will be fetched from DB below
             
         else:
             raise HTTPException(
@@ -717,6 +719,11 @@ async def token(request: Request):
         await db.connect()
         if not await db.user_exists(user_id):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unknown_subject")
+        
+        # Get user info including email (for legacy mode or if email not in token)
+        user_info = await db.get_user(user_id)
+        if user_info and not email:
+            email = user_info.get("email", "")
         
         roles = await db.get_user_roles(user_id)
         
@@ -790,6 +797,7 @@ async def token(request: Request):
             jti=str(uuid.uuid4()),
             scope=aggregated_scope,
             roles=role_claims,
+            email=email or None,  # Include email for downstream apps to display
         ).model_dump()
         
         # Add extra claims

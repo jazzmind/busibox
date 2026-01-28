@@ -42,3 +42,7 @@ class AccessTokenClaims(BaseModel):
 
     # Role memberships for data access filtering (RLS/partitions)
     roles: List[RoleClaim] = Field(default_factory=list)
+    
+    # User email for display purposes
+    # Included in access tokens so downstream apps can display user info
+    email: Optional[str] = None

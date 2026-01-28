@@ -476,6 +476,73 @@ async def check_service_health(
     
     busibox_host_path = os.getenv('BUSIBOX_HOST_PATH', '/busibox')
     
+    # Apps proxied behind nginx (accessed via nginx, not direct container)
+    # These are Next.js apps running in the core-apps container or separately
+    # They don't have their own containers, so we check them via nginx BEFORE container check
+    nginx_apps = {
+        'agent-manager': {'path': '/agents', 'health_endpoint': '/api/health'},
+        'ai-portal': {'path': '/portal', 'health_endpoint': '/api/health'},
+    }
+    
+    # Check nginx apps first (they don't have their own containers)
+    if service in nginx_apps:
+        app_config = nginx_apps[service]
+        # Use endpoint from request if it looks like a full path, otherwise use default
+        if endpoint.startswith(app_config['path']):
+            # Full path provided (e.g., /agents/api/health)
+            health_path = endpoint
+        else:
+            # Just the health endpoint provided, prepend app path
+            health_path = f"{app_config['path']}{app_config['health_endpoint']}"
+        
+        # Determine nginx host based on environment
+        # - NGINX_HOST env var (explicit override)
+        # - dev-nginx for development environment
+        # - nginx for production
+        nginx_host = os.getenv('NGINX_HOST')
+        if not nginx_host:
+            environment = os.getenv('ENVIRONMENT', os.getenv('NODE_ENV', 'development'))
+            if environment in ('development', 'dev', 'demo'):
+                nginx_host = 'dev-nginx'
+            else:
+                nginx_host = 'nginx'
+        
+        # Check via nginx container (HTTPS with self-signed cert, verify=False like curl -k)
+        url = f"https://{nginx_host}{health_path}"
+        logger.info(f"Checking nginx-proxied app health: {url}")
+        
+        try:
+            # verify=False to ignore self-signed SSL cert (equivalent to curl -k)
+            async with httpx.AsyncClient(verify=False) as client:
+                response = await client.get(url, timeout=5.0)
+                healthy = response.status_code == 200
+                logger.info(f"Nginx app health check for {service}: {healthy} (status: {response.status_code})")
+                return {
+                    "healthy": healthy,
+                    "service": service,
+                    "url": url,
+                    "status_code": response.status_code,
+                    "reason": "nginx_app_health_check",
+                }
+        except httpx.TimeoutException:
+            logger.warning(f"Health check timeout for nginx app {service} at {url}")
+            return {
+                "healthy": False,
+                "service": service,
+                "url": url,
+                "error": "timeout",
+                "reason": "nginx_timeout",
+            }
+        except Exception as e:
+            logger.warning(f"Nginx app health check failed for {service}: {e}")
+            return {
+                "healthy": False,
+                "service": service,
+                "url": url,
+                "error": str(e),
+                "reason": "nginx_error",
+            }
+    
     try:
         # Step 1: Check if container is running (same as install script)
         cmd = get_docker_compose_base_cmd(busibox_host_path) + ['ps', '--status', 'running', '-q', service]
@@ -612,7 +679,7 @@ async def check_service_health(
                     "reason": "container_running",
                 }
         
-        # Services with HTTP health endpoints
+        # Services with HTTP health endpoints (internal container network)
         # Map service names to their internal ports and health endpoints
         # These must match the docker-compose.yml healthcheck configurations
         health_checks = {

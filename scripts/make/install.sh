@@ -474,6 +474,58 @@ wizard_admin() {
     fi
 }
 
+wizard_dev_apps_dir() {
+    # Only prompt in development environment
+    if [[ "$ENVIRONMENT" != "development" ]]; then
+        return
+    fi
+    
+    # Default to parent directory of busibox (where app repos typically live)
+    local parent_dir
+    parent_dir=$(dirname "$REPO_ROOT")
+    
+    echo ""
+    echo -e "┌─ ${BOLD}LOCAL DEVELOPMENT APPS DIRECTORY${NC} ─────────────────────────────────────────┐"
+    box_line "" "single"
+    box_line "  This directory will be mounted into deploy-api for local app deployment." "single"
+    box_line "  Apps in this directory with a busibox.json manifest can be deployed." "single"
+    box_line "" "single"
+    box_line "  Default: Parent directory of busibox repository" "single"
+    box_line "    ${CYAN}${parent_dir}${NC}" "single"
+    box_line "" "single"
+    echo -e "└──────────────────────────────────────────────────────────────────────────────┘"
+    echo ""
+    
+    read -p "$(echo -e "${BOLD}Dev apps directory [${parent_dir}]:${NC} ")" DEV_APPS_DIR
+    DEV_APPS_DIR="${DEV_APPS_DIR:-${parent_dir}}"
+    
+    # Validate directory exists
+    if [[ ! -d "$DEV_APPS_DIR" ]]; then
+        warn "Directory does not exist: $DEV_APPS_DIR"
+        if confirm "Create this directory?"; then
+            mkdir -p "$DEV_APPS_DIR"
+            success "Created: $DEV_APPS_DIR"
+        else
+            error "Dev apps directory must exist"
+            exit 1
+        fi
+    fi
+    
+    # Show what apps were found
+    local app_count=0
+    for dir in "$DEV_APPS_DIR"/*/; do
+        if [[ -f "${dir}busibox.json" ]]; then
+            ((app_count++))
+        fi
+    done
+    
+    if [[ $app_count -gt 0 ]]; then
+        success "Found $app_count app(s) with busibox.json in $DEV_APPS_DIR"
+    else
+        info "No apps with busibox.json found yet in $DEV_APPS_DIR"
+    fi
+}
+
 # =============================================================================
 # GITHUB TOKEN (uses library from scripts/lib/github.sh)
 # =============================================================================
@@ -697,6 +749,11 @@ AI_PORTAL_DIR=${AI_PORTAL_DIR}
 AGENT_MANAGER_DIR=${AGENT_MANAGER_DIR}
 BUSIBOX_APP_DIR=${BUSIBOX_APP_DIR}
 APPS_BASE_DIR=${APPS_BASE_DIR}
+
+# Local Development Apps Directory (for local app deployment via deploy-api)
+# This directory is mounted into deploy-api at /srv/dev-apps
+DEV_APPS_DIR=${DEV_APPS_DIR:-${APPS_BASE_DIR}}
+DEV_APPS_DIR_HOST=${DEV_APPS_DIR:-${APPS_BASE_DIR}}
 EOF
     
     chmod 600 "$env_file"
@@ -2162,6 +2219,7 @@ main() {
             wizard_network
             wizard_domain
             wizard_admin
+            wizard_dev_apps_dir
         fi
     fi
     
@@ -2189,6 +2247,7 @@ main() {
         AGENT_MANAGER_DIR=$(get_state "AGENT_MANAGER_DIR" "")
         BUSIBOX_APP_DIR=$(get_state "BUSIBOX_APP_DIR" "")
         APPS_BASE_DIR=$(get_state "APPS_BASE_DIR" "")
+        DEV_APPS_DIR=$(get_dev_apps_dir)
         
         # If not in state, detect them
         if [[ -z "$AI_PORTAL_DIR" || -z "$BUSIBOX_APP_DIR" ]]; then
@@ -2197,6 +2256,8 @@ main() {
                 exit 1
             fi
         fi
+        # Default DEV_APPS_DIR if not set
+        DEV_APPS_DIR="${DEV_APPS_DIR:-$APPS_BASE_DIR}"
     else
         if ! detect_app_directories; then
             error "Cannot proceed without app directories"
@@ -2207,6 +2268,11 @@ main() {
         set_state "AGENT_MANAGER_DIR" "$AGENT_MANAGER_DIR"
         set_state "BUSIBOX_APP_DIR" "$BUSIBOX_APP_DIR"
         set_state "APPS_BASE_DIR" "$APPS_BASE_DIR"
+        # For development environment, set DEV_APPS_DIR (defaults to APPS_BASE_DIR if not set by wizard)
+        if [[ "$ENVIRONMENT" == "development" ]]; then
+            DEV_APPS_DIR="${DEV_APPS_DIR:-$APPS_BASE_DIR}"
+            set_dev_apps_dir "$DEV_APPS_DIR"
+        fi
     fi
     
     # Start model download in background early (if MLX backend)

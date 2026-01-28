@@ -56,10 +56,26 @@ async def get_setup_complete_status():
     
     Used by middleware to decide whether to redirect to setup wizard.
     No authentication required - only returns boolean setup status.
+    
+    Returns setupComplete=true if:
+    - INSTALL_PHASE is "complete" (preferred check)
+    - OR SETUP_COMPLETE is explicitly set to "true" in state file
+    - OR the state file doesn't exist (no state = default to complete to avoid blocking users)
     """
     state = await read_state()
+    
+    # If state file is empty (doesn't exist), default to complete
+    # This prevents blocking users when state file is missing
+    if not state:
+        logger.info("State file empty or missing, defaulting setupComplete to true")
+        return {"setupComplete": True}
+    
+    # Check phase first (preferred), then fall back to SETUP_COMPLETE flag
+    phase = state.get("INSTALL_PHASE", "")
+    setup_complete_flag = state.get("SETUP_COMPLETE") == "true"
+    
     return {
-        "setupComplete": state.get("SETUP_COMPLETE") == "true",
+        "setupComplete": phase == "complete" or setup_complete_flag,
     }
 
 
@@ -69,6 +85,7 @@ async def get_install_state(token: dict = Depends(verify_admin_token)):
     Read current installation state from .busibox-state file.
     
     Returns structured state information for the setup wizard.
+    Note: Does NOT include raw state to avoid exposing secrets.
     """
     state = await read_state()
     
@@ -82,8 +99,6 @@ async def get_install_state(token: dict = Depends(verify_admin_token)):
         "adminEmail": state.get("ADMIN_EMAIL"),
         "baseDomain": state.get("BASE_DOMAIN"),
         "adminUserId": state.get("ADMIN_USER_ID"),
-        # Raw state for debugging
-        "raw": state,
     }
 
 

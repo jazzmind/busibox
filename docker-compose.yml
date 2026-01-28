@@ -790,6 +790,8 @@ services:
       # Service
       DEPLOY_PORT: 8011
       DEBUG: "true"
+      # Container prefix (for docker exec commands)
+      CONTAINER_PREFIX: ${CONTAINER_PREFIX:-dev}
       # Authz (for token validation)
       AUTHZ_URL: http://authz-api:8010
       # Ansible
@@ -813,12 +815,17 @@ services:
       # This MUST be set by the Makefile to the actual host path when running via deploy-api
       # Without this, deploy-api cannot correctly start other services with volume mounts
       BUSIBOX_HOST_PATH: ${BUSIBOX_HOST_PATH:-}
+      # State file path - must match the mounted busibox path inside container
+      # The busibox directory is mounted at BUSIBOX_HOST_PATH (same path as host)
+      BUSIBOX_STATE_FILE: ${BUSIBOX_HOST_PATH:-.}/.busibox-state-dev
       # Nginx
       NGINX_HOST: nginx
       NGINX_CONFIG_DIR: /etc/nginx/sites-available/apps
       NGINX_ENABLED_DIR: /etc/nginx/sites-enabled
       # Rate limiting (10 seconds for testing)
       RATE_LIMIT_SECONDS: 10
+      # Dev apps directory - host path for display in UI
+      DEV_APPS_DIR_HOST: ${DEV_APPS_DIR:-./dev-apps}
       # GitHub token (needed for docker compose to validate core-apps service)
       # Passed through so docker compose can validate all services in compose file
       GITHUB_AUTH_TOKEN: ${GITHUB_AUTH_TOKEN:-}

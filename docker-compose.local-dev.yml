@@ -135,8 +135,10 @@ services:
   user-apps:
     environment:
       NODE_ENV: development
-      # Tell deploy-api where to look for dev apps
+      # Tell deploy-api where to look for dev apps inside container
       DEV_APPS_DIR: /srv/dev-apps
+      # Pass the host path for display in UI
+      DEV_APPS_DIR_HOST: ${DEV_APPS_DIR:-./dev-apps}
     volumes:
       # Mount DEV_APPS_DIR from env (set in .env.local)
       # If not set, falls back to local ./dev-apps directory
