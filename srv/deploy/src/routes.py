@@ -4,10 +4,12 @@ Deployment Service Routes
 API endpoints for app deployment operations.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, Request
+from fastapi.responses import StreamingResponse
 import asyncio
 import logging
 import uuid
+import json
 from datetime import datetime
 from typing import Dict
 from pydantic import BaseModel
@@ -20,7 +22,7 @@ from .models import (
 )
 from .auth import verify_admin_token
 from .database import provision_database
-from .container_executor import deploy_app as container_deploy_app, is_docker_environment
+from .container_executor import deploy_app as container_deploy_app, is_docker_environment, undeploy_app as container_undeploy_app, stop_app as container_stop_app
 from .env_generator import generate_env_vars
 from .nginx_config import NginxConfigurator
 from .config import config
@@ -38,6 +40,9 @@ active_connections: Dict[str, list[WebSocket]] = {}
 
 # Rate limiting: track last deployment per app
 last_deployment_times: Dict[str, datetime] = {}
+
+# Track log positions for SSE streaming
+log_positions: Dict[str, int] = {}
 
 
 def check_rate_limit(app_id: str) -> None:
@@ -165,7 +170,10 @@ async def execute_deployment(
         await broadcast_status(deployment_id)
         
         if not success:
-            raise Exception("Application deployment failed")
+            # Find the last error log (starts with ❌)
+            error_logs = [log for log in deploy_logs if '❌' in log]
+            error_detail = error_logs[-1] if error_logs else "Unknown error - check logs"
+            raise Exception(f"Deployment failed: {error_detail}")
         
         status.progress = 80
         await broadcast_status(deployment_id)
@@ -256,6 +264,93 @@ async def get_deployment_status(
         raise HTTPException(status_code=404, detail="Deployment not found")
     
     return status
+
+
+@router.get("/deploy/{deployment_id}/stream")
+async def stream_deployment_status(
+    deployment_id: str,
+    request: Request,
+    token_payload: dict = Depends(verify_admin_token)
+):
+    """
+    SSE endpoint for real-time deployment status streaming.
+    
+    Returns Server-Sent Events with deployment status updates.
+    Much more reliable than WebSockets and works well with Next.js.
+    
+    Usage: EventSource('/api/v1/deployment/deploy/{id}/stream?token=...')
+    """
+    
+    async def event_generator():
+        """Generate SSE events for deployment status"""
+        last_log_count = 0
+        last_status = None
+        
+        while True:
+            # Check if client disconnected
+            if await request.is_disconnected():
+                break
+            
+            status = deployment_statuses.get(deployment_id)
+            
+            if not status:
+                yield f"event: error\ndata: {json.dumps({'error': 'Deployment not found'})}\n\n"
+                break
+            
+            # Check if there are new logs
+            current_log_count = len(status.logs)
+            current_status = status.status
+            
+            # Send update if logs changed or status changed
+            if current_log_count > last_log_count or current_status != last_status:
+                # Send only new logs
+                new_logs = status.logs[last_log_count:]
+                
+                data = {
+                    'deploymentId': status.deploymentId,
+                    'status': status.status,
+                    'progress': status.progress,
+                    'currentStep': status.currentStep,
+                    'logs': new_logs,  # Only send new logs
+                    'totalLogs': current_log_count,
+                    'completedAt': status.completedAt.isoformat() if status.completedAt else None,
+                    'error': status.error
+                }
+                
+                yield f"data: {json.dumps(data)}\n\n"
+                
+                last_log_count = current_log_count
+                last_status = current_status
+            
+            # Check if deployment is complete
+            if status.status in ['completed', 'failed']:
+                # Send one final update with all logs
+                data = {
+                    'deploymentId': status.deploymentId,
+                    'status': status.status,
+                    'progress': status.progress,
+                    'currentStep': status.currentStep,
+                    'logs': status.logs,  # Send all logs on completion
+                    'totalLogs': len(status.logs),
+                    'completedAt': status.completedAt.isoformat() if status.completedAt else None,
+                    'error': status.error,
+                    'final': True
+                }
+                yield f"event: complete\ndata: {json.dumps(data)}\n\n"
+                break
+            
+            # Wait a short time before checking again (500ms for responsive updates)
+            await asyncio.sleep(0.5)
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+        }
+    )
 
 
 @router.websocket("/deploy/{deployment_id}/logs")
@@ -671,3 +766,110 @@ async def check_version(
     except Exception as e:
         logger.error(f"Version check failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class UndeployRequest(BaseModel):
+    """Request to undeploy an app."""
+    appId: str
+    removeVolumes: bool = True
+
+
+class UndeployResponse(BaseModel):
+    """Response from undeploy operation."""
+    success: bool
+    appId: str
+    logs: list[str]
+    error: str | None = None
+
+
+@router.post("/undeploy", response_model=UndeployResponse)
+async def undeploy_app(
+    request: UndeployRequest,
+    token_payload: dict = Depends(verify_admin_token)
+):
+    """
+    Undeploy an app, removing all associated resources.
+    
+    This endpoint:
+    1. Stops the running application
+    2. Removes Docker volumes (node_modules, .next cache)
+    3. Removes nginx configuration
+    4. Cleans up build artifacts
+    
+    Use this when:
+    - You need to fix deployment issues (package-lock.json sync errors)
+    - You want to completely remove an app from the system
+    - You're troubleshooting volume mount issues
+    
+    After undeploying, you can redeploy the app with a fresh state.
+    """
+    app_id = request.appId
+    logs: list[str] = []
+    
+    logger.info(f"Starting undeploy for {app_id} by user {token_payload.get('user_id')}")
+    
+    try:
+        success = await container_undeploy_app(
+            app_id=app_id,
+            logs=logs,
+            remove_volumes=request.removeVolumes
+        )
+        
+        if success:
+            logger.info(f"Undeploy completed successfully for {app_id}")
+            return UndeployResponse(
+                success=True,
+                appId=app_id,
+                logs=logs
+            )
+        else:
+            logger.error(f"Undeploy failed for {app_id}")
+            return UndeployResponse(
+                success=False,
+                appId=app_id,
+                logs=logs,
+                error="Undeploy operation failed. Check logs for details."
+            )
+            
+    except Exception as e:
+        logger.error(f"Undeploy error for {app_id}: {e}")
+        logs.append(f"❌ Error: {str(e)}")
+        return UndeployResponse(
+            success=False,
+            appId=app_id,
+            logs=logs,
+            error=str(e)
+        )
+
+
+@router.post("/stop/{app_id}")
+async def stop_app_endpoint(
+    app_id: str,
+    token_payload: dict = Depends(verify_admin_token)
+):
+    """
+    Stop a running app without removing volumes or configuration.
+    
+    This is a lighter operation than undeploy - it just stops the process.
+    Use undeploy if you need to clean up volumes and configurations.
+    """
+    logs: list[str] = []
+    
+    logger.info(f"Stopping app {app_id} by user {token_payload.get('user_id')}")
+    
+    try:
+        success = await container_stop_app(app_id, logs)
+        
+        return {
+            "success": success,
+            "appId": app_id,
+            "logs": logs
+        }
+    except Exception as e:
+        logger.error(f"Stop error for {app_id}: {e}")
+        return {
+            "success": False,
+            "appId": app_id,
+            "logs": logs,
+            "error": str(e)
+        }

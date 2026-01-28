@@ -19,6 +19,9 @@ class Config:
     # Authz service for token validation
     authz_url: str = os.getenv('AUTHZ_URL', 'http://localhost:8010')
     
+    # Busibox paths
+    busibox_host_path: str = os.getenv('BUSIBOX_HOST_PATH', '/root/busibox')
+    
     # Ansible
     ansible_dir: str = os.getenv('ANSIBLE_DIR', '/root/busibox/provision/ansible')
     

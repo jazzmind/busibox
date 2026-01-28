@@ -306,8 +306,15 @@ async def recreate_user_apps_with_volumes(dev_app_ids: Set[str], logs: List[str]
     
     if proc.returncode != 0:
         error_msg = stderr.decode().strip()
+        stdout_msg = stdout.decode().strip()
         logs.append(f"❌ Failed to start container: {error_msg}")
+        if stdout_msg:
+            logs.append(f"   stdout: {stdout_msg}")
+        logger.error(f"docker run failed: returncode={proc.returncode}, stderr={error_msg}, stdout={stdout_msg}")
         return False, f"Failed to start container: {error_msg}"
+    
+    container_id = stdout.decode().strip()[:12]
+    logs.append(f"   Container ID: {container_id}")
     
     # Wait for container to be ready
     await asyncio.sleep(2)
@@ -366,20 +373,29 @@ async def ensure_app_volumes_mounted(app_id: str, logs: List[str]) -> bool:
     """
     # First, create the volumes if they don't exist
     if not await create_app_volumes(app_id, logs):
+        logs.append(f"❌ Failed to create volumes for {app_id}")
         return False
     
     # Check what apps currently have volumes mounted
     current_mounted = await get_mounted_dev_apps()
+    logger.info(f"Current mounted apps: {current_mounted}, checking for: {app_id}")
     
     if app_id in current_mounted:
         logs.append(f"✅ Volume mounts already present for {app_id}")
+        logger.info(f"Volume mounts already present for {app_id}, returning True")
         return True
     
     # Need to add this app's volumes - recreate container with all mounted apps plus new one
     new_mounted = current_mounted | {app_id}
     
     logs.append(f"📦 Adding volume mounts for {app_id}...")
+    logs.append(f"   Current mounted apps: {list(current_mounted) if current_mounted else 'none'}")
+    logs.append(f"   Will mount: {list(new_mounted)}")
+    
     success, msg = await recreate_user_apps_with_volumes(new_mounted, logs)
+    
+    if not success:
+        logs.append(f"❌ Failed to mount volumes: {msg}")
     
     return success
 
@@ -522,6 +538,10 @@ async def execute_docker_command(command: str, timeout: int = 300) -> Tuple[str,
         '/bin/bash', '-c', command
     ]
     
+    # Log short commands, truncate long ones
+    cmd_preview = command[:100] + "..." if len(command) > 100 else command
+    logger.debug(f"Executing in container: {cmd_preview}")
+    
     proc = await asyncio.create_subprocess_exec(
         *docker_command,
         stdout=asyncio.subprocess.PIPE,
@@ -530,10 +550,13 @@ async def execute_docker_command(command: str, timeout: int = 300) -> Tuple[str,
     
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        return stdout.decode(), stderr.decode(), proc.returncode or 0
+        result = (stdout.decode(), stderr.decode(), proc.returncode or 0)
+        logger.debug(f"Command completed with code {result[2]}")
+        return result
     except asyncio.TimeoutError:
+        logger.error(f"Command timed out after {timeout}s: {cmd_preview}")
         proc.kill()
-        return "", "Command timed out", 1
+        return "", f"Command timed out after {timeout}s", 1
 
 
 async def execute_in_container(
@@ -653,7 +676,14 @@ async def install_dependencies(app_path: str, logs: List[str]) -> bool:
     
     if lock_exists == 0:
         # Has package-lock.json, use npm ci for reproducible builds
+        # IMPORTANT: Clear node_modules contents first because it's a Docker volume
+        # npm ci tries to remove node_modules entirely which fails with ENOTEMPTY
+        # when node_modules is a volume mount point
         logs.append("📦 Using npm ci (package-lock.json found)")
+        logs.append("🧹 Clearing node_modules (Docker volume)...")
+        clear_cmd = f"rm -rf {app_path}/node_modules/* {app_path}/node_modules/.* 2>/dev/null || true"
+        await execute_in_container(clear_cmd)
+        
         command = f"""
 cd {app_path} && \
 npm ci --legacy-peer-deps 2>&1
@@ -988,27 +1018,66 @@ systemctl restart {app_id}.service
         return True
 
 
-async def stop_app(app_id: str, logs: List[str]) -> bool:
-    """Stop app via systemd (LXC) or kill process (Docker)"""
+async def stop_app(app_id: str, logs: List[str], port: int = None) -> bool:
+    """Stop app via systemd (LXC) or kill process (Docker)
+    
+    Args:
+        app_id: Application ID
+        logs: List to append log messages
+        port: Optional port to kill any process listening on (ensures no port conflicts)
+    """
     logs.append("🛑 Stopping application...")
     
     if is_docker_environment():
-        # Docker: Kill process by app_id or PID file
+        # Docker: Kill process by app_id, PID file, and optionally by port
         pid_file = f"/tmp/{app_id}.pid"
+        
+        # Build kill command - handle case where lsof/fuser might not be available
+        port_kill_cmd = ""
+        if port:
+            port_kill_cmd = f"""
+# Kill any process on port {port} using various methods
+# Try ss + awk (most reliable on minimal containers)
+PID_ON_PORT=$(ss -tlnp 2>/dev/null | grep ':{port}' | grep -oP 'pid=\\K\\d+' | head -1)
+if [ -n "$PID_ON_PORT" ]; then
+    echo "Killing process $PID_ON_PORT on port {port}"
+    kill -9 $PID_ON_PORT 2>/dev/null || true
+fi
+# Fallback: try fuser if available
+if command -v fuser &>/dev/null; then
+    fuser -k {port}/tcp 2>/dev/null || true
+fi
+# Fallback: try lsof if available
+if command -v lsof &>/dev/null; then
+    lsof -ti:{port} | xargs kill -9 2>/dev/null || true
+fi
+"""
+        
         command = f"""
 if [ -f {pid_file} ]; then
     PID=$(cat {pid_file})
+    echo "Killing PID $PID from pidfile"
     kill -9 $PID 2>/dev/null || true
     rm -f {pid_file}
 fi
 # Also kill any process with app_id in command line
-pkill -f '{app_id}' 2>/dev/null || true
+pkill -9 -f '{app_id}' 2>/dev/null || true
+{port_kill_cmd}
+# Give a moment for port to be released
+sleep 1
 """
-        await execute_in_container(command)
+        stdout, stderr, code = await execute_in_container(command)
+        if stdout:
+            logs.append(stdout.strip())
     else:
         # LXC: Use systemd
         command = f"systemctl stop {app_id}.service 2>/dev/null || true"
         await execute_in_container(command)
+        
+        # Also kill by port if specified
+        if port:
+            port_cmd = f"fuser -k {port}/tcp 2>/dev/null || true"
+            await execute_in_container(port_cmd)
     
     # Unregister app from running apps registry
     unregister_running_app(app_id)
@@ -1047,6 +1116,100 @@ async def cleanup_app_volumes(app_id: str, logs: List[str]) -> bool:
     
     logs.append(f"✅ Volumes cleaned up for {app_id}")
     return True
+
+
+async def undeploy_app(app_id: str, logs: List[str], remove_volumes: bool = True) -> bool:
+    """
+    Fully undeploy an app, cleaning up all resources.
+    
+    This removes:
+    1. Running process (via stop_app)
+    2. Docker volumes (node_modules and .next cache)
+    3. nginx configuration (if in Docker mode)
+    4. App source directory (only for non-local-dev apps)
+    
+    Args:
+        app_id: Application ID
+        logs: List to append log messages
+        remove_volumes: Whether to remove Docker volumes (default True)
+    
+    Returns:
+        True if undeploy succeeded, False otherwise
+    """
+    logs.append(f"🗑️ Starting undeploy for {app_id}...")
+    
+    try:
+        # Step 1: Stop the application
+        logs.append("Step 1: Stopping application...")
+        await stop_app(app_id, logs)
+        
+        # Step 2: Clean up Docker volumes (if applicable)
+        if remove_volumes:
+            logs.append("Step 2: Cleaning up Docker volumes...")
+            await cleanup_app_volumes(app_id, logs)
+        
+        # Step 3: Remove nginx config (Docker mode - config is on host)
+        if is_docker_environment():
+            logs.append("Step 3: Removing nginx configuration...")
+            
+            # Import here to avoid circular dependency
+            from .config import config
+            
+            nginx_config_path = f"{config.busibox_host_path}/config/nginx-sites/apps/{app_id}.conf"
+            
+            # Remove using host filesystem (we're in deploy container with access)
+            import os
+            if os.path.exists(nginx_config_path):
+                try:
+                    os.remove(nginx_config_path)
+                    logs.append(f"✅ Removed nginx config: {nginx_config_path}")
+                except Exception as e:
+                    logs.append(f"⚠️ Failed to remove nginx config: {e}")
+            else:
+                logs.append(f"ℹ️ No nginx config found at {nginx_config_path}")
+        else:
+            # LXC mode: nginx config removal handled by NginxConfigurator via SSH
+            logs.append("Step 3: Nginx config removal requires NginxConfigurator (LXC mode)")
+        
+        # Step 4: Clean up .next and node_modules directories in the source
+        # This helps resolve the "cannot remove directory" issues
+        if is_docker_environment():
+            logs.append("Step 4: Cleaning up build artifacts...")
+            
+            dev_path = f"/srv/dev-apps/{app_id}"
+            apps_path = f"/srv/apps/{app_id}"
+            
+            # Check which path exists and clean up artifacts
+            cleanup_script = f"""
+# Clean up dev-apps location
+if [ -d "{dev_path}" ]; then
+    echo "Cleaning artifacts in {dev_path}"
+    rm -rf "{dev_path}/.next" 2>/dev/null || true
+    rm -rf "{dev_path}/node_modules" 2>/dev/null || true
+fi
+
+# Clean up apps location (cloned from GitHub)
+if [ -d "{apps_path}" ]; then
+    echo "Cleaning artifacts in {apps_path}"
+    rm -rf "{apps_path}/.next" 2>/dev/null || true
+    rm -rf "{apps_path}/node_modules" 2>/dev/null || true
+fi
+"""
+            stdout, stderr, code = await execute_in_container(cleanup_script)
+            if stdout:
+                logs.append(stdout)
+            if code == 0:
+                logs.append("✅ Build artifacts cleaned up")
+            else:
+                logs.append(f"⚠️ Artifact cleanup had issues: {stderr}")
+        
+        logs.append(f"✅ Undeploy completed for {app_id}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Undeploy failed for {app_id}: {e}")
+        logs.append(f"❌ Undeploy failed: {str(e)}")
+        return False
 
 
 async def check_app_health(app_id: str, port: int, health_endpoint: str, logs: List[str]) -> bool:
@@ -1139,6 +1302,7 @@ async def deploy_app(
 ) -> bool:
     """
     Full deployment flow:
+    0. Stop any existing instance (prevent port conflicts)
     1. Clone/update repo (or use dev-apps path)
     2. Install dependencies (skip for dev mode)
     3. Build (skip for dev mode)
@@ -1149,6 +1313,11 @@ async def deploy_app(
     """
     
     is_dev_mode = deploy_config.devMode
+    
+    # Step 0: Stop any existing instance to prevent port conflicts
+    # This is important for re-deployments
+    logs.append(f"🛑 Stopping any existing instance of {manifest.id}...")
+    await stop_app(manifest.id, logs, port=manifest.defaultPort)
     
     # Check if Docker environment - log appropriate context
     if is_docker_environment():
@@ -1190,8 +1359,10 @@ async def deploy_app(
         # Clear the entire .next cache to prevent Turbopack corruption errors
         # Turbopack uses SST files that can become corrupted and cause panics
         logs.append("🧹 Clearing .next cache (prevents Turbopack corruption)...")
+        logger.info(f"Clearing .next cache for {app_path}")
         clear_cache_cmd = f"rm -rf {app_path}/.next/* 2>/dev/null || true"
         await execute_in_container(clear_cache_cmd)
+        logger.info("Cache cleared successfully")
     
     # Step 2: Install dependencies
     # In Docker dev mode, we MUST run npm install because the host's node_modules
@@ -1264,12 +1435,10 @@ async def deploy_app(
         return False
     
     # Step 7: Health check
-    # For Next.js apps with basePath, the health endpoint needs the basePath prefix
-    # e.g., /myapp/api/health instead of /api/health
-    health_endpoint = manifest.healthEndpoint
-    if manifest.defaultPath and manifest.defaultPath != "/":
-        # Prepend basePath to health endpoint
-        health_endpoint = f"{manifest.defaultPath}{manifest.healthEndpoint}"
+    # IMPORTANT: For internal/direct requests to the Next.js dev server, we do NOT include basePath.
+    # basePath is only used by nginx to route external requests to the correct app.
+    # Direct requests to the container (curl http://localhost:PORT/api/health) bypass nginx.
+    health_endpoint = manifest.healthEndpoint  # e.g., "/api/health" - no basePath prefix
     
     if not await check_app_health(manifest.id, manifest.defaultPort, health_endpoint, logs):
         logs.append("⚠️ App started but health check failed - check logs")

@@ -2,7 +2,7 @@
         docker-up docker-up-prod docker-start docker-down docker-down-all docker-restart docker-restart-apis docker-restart-ingest docker-build docker-logs docker-ps docker-ps-all docker-clean docker-clean-all \
         vault-generate-env vault-migrate vault-sync ssl-check \
         github-check github-ensure \
-        install recover-admin demo warmup demo-clean demo-status \
+        install update recover-admin demo warmup demo-clean demo-status \
         mlx-status mlx-start mlx-stop mlx-restart host-agent-status host-agent-start host-agent-stop host-agent-restart
 
 # Default target - interactive menu with health check
@@ -130,6 +130,8 @@ help:
 	@echo "  test          - Run tests (see testing section)"
 	@echo "  mcp           - Build MCP server for Cursor AI"
 	@echo ""
+	@echo "  install       - Fresh installation (interactive wizard)"
+	@echo "  update        - Update existing installation (preserves data)"
 	@echo "  warmup        - Check cache and download missing models"
 	@echo ""
 	@echo "═══════════════════════════════════════════════════════════════════════"
@@ -533,6 +535,15 @@ docker-clean-all:
 #        make install VERBOSE=1    # Show all logs
 install:
 	@bash scripts/make/install.sh $(if $(VERBOSE),-v)
+
+# Update existing installation
+# Preserves: PostgreSQL, Redis, MinIO, Milvus, model cache
+# Updates: APIs, apps, nginx, runs migrations
+# Usage: make update               # Interactive update
+#        make update VERBOSE=1     # Show all logs
+#        make update REBUILD=1     # Force rebuild all containers
+update:
+	@bash scripts/make/update.sh $(if $(VERBOSE),-v) $(if $(REBUILD),--rebuild-all)
 
 # Generate recovery magic link for admin access
 # Use when browser/passkey access is lost
