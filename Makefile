@@ -537,13 +537,16 @@ install:
 	@bash scripts/make/install.sh $(if $(VERBOSE),-v)
 
 # Update existing installation
-# Preserves: PostgreSQL, Redis, MinIO, Milvus, model cache
+# Preserves: PostgreSQL, Redis, MinIO, Milvus, model cache, user apps
 # Updates: APIs, apps, nginx, runs migrations
-# Usage: make update               # Interactive update
+# Supports both Docker and Proxmox (auto-detected)
+#
+# Usage: make update               # Interactive update (auto-detect platform)
+#        make update ENV=staging   # Update staging environment
 #        make update VERBOSE=1     # Show all logs
-#        make update REBUILD=1     # Force rebuild all containers
+#        make update REBUILD=1     # Force rebuild all containers (Docker only)
 update:
-	@bash scripts/make/update.sh $(if $(VERBOSE),-v) $(if $(REBUILD),--rebuild-all)
+	@ENV=$(ENV) INV=$(INV) bash scripts/make/update.sh $(if $(VERBOSE),-v) $(if $(REBUILD),--rebuild-all)
 
 # Generate recovery magic link for admin access
 # Use when browser/passkey access is lost

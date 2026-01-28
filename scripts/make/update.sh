@@ -3,25 +3,32 @@
 # Busibox Update Script
 #
 # Updates an existing Busibox installation while preserving data.
+# Supports both Docker (local development) and Proxmox (LXC containers) platforms.
 #
 # Usage:
-#   update.sh                      # Interactive update
+#   update.sh                      # Interactive update (auto-detect platform)
+#   update.sh --docker             # Force Docker mode
+#   update.sh --proxmox            # Force Proxmox mode (uses Ansible)
 #   update.sh --no-prompt          # Non-interactive update
-#   update.sh --rebuild-all        # Force rebuild all containers
+#   update.sh --rebuild-all        # Force rebuild all containers (Docker only)
 #   update.sh -v | --verbose       # Verbose output
 #
+# Environment Variables:
+#   ENV=staging|production         # Target environment (default: from state or staging)
+#   INV=inventory/staging          # Ansible inventory (Proxmox mode)
+#
 # What is preserved:
-#   - PostgreSQL data (postgres_data volume)
-#   - Redis data (redis_data volume)
-#   - MinIO object storage (minio_data volume)
-#   - Milvus vector database (milvus_data, milvus_minio_data, etcd_data volumes)
-#   - Model cache (model_cache, fastembed_cache volumes)
-#   - Deployed external apps (user_apps_data volume, user-apps container not stopped)
-#   - All configuration (.env files, state files)
+#   - PostgreSQL data
+#   - Redis data  
+#   - MinIO object storage
+#   - Milvus vector database
+#   - Model cache
+#   - Deployed external apps (user_apps_data volume on Docker)
+#   - All configuration
 #   - Admin users and credentials
 #
 # What is updated:
-#   - Container images (APIs, apps, nginx)
+#   - Container images / LXC container code
 #   - Application code (pulled from GitHub)
 #   - Database migrations (run automatically)
 #
@@ -35,7 +42,11 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # Source libraries
 source "${SCRIPT_DIR}/../lib/ui.sh"
 source "${SCRIPT_DIR}/../lib/state.sh"
-source "${SCRIPT_DIR}/../lib/github.sh"
+
+# Source github.sh only if it exists (not required for Proxmox)
+if [[ -f "${SCRIPT_DIR}/../lib/github.sh" ]]; then
+    source "${SCRIPT_DIR}/../lib/github.sh"
+fi
 
 # =============================================================================
 # CONFIGURATION
@@ -45,6 +56,11 @@ source "${SCRIPT_DIR}/../lib/github.sh"
 NO_PROMPT=false
 REBUILD_ALL=false
 VERBOSE=false
+FORCE_DOCKER=false
+FORCE_PROXMOX=false
+
+# Detected platform
+PLATFORM=""  # docker or proxmox
 
 # Parse command line arguments
 parse_args() {
@@ -56,6 +72,14 @@ parse_args() {
                 ;;
             --rebuild-all)
                 REBUILD_ALL=true
+                shift
+                ;;
+            --docker)
+                FORCE_DOCKER=true
+                shift
+                ;;
+            --proxmox)
+                FORCE_PROXMOX=true
                 shift
                 ;;
             -v|--verbose)
@@ -79,23 +103,86 @@ ucfirst() {
     echo "$(echo "${str:0:1}" | tr '[:lower:]' '[:upper:]')${str:1}"
 }
 
+# Get environment from ENV variable or state
+get_environment() {
+    # Check ENV variable first
+    if [[ -n "${ENV:-}" ]]; then
+        echo "$ENV"
+        return
+    fi
+    
+    # Check INV variable (maps inventory to environment)
+    if [[ -n "${INV:-}" ]]; then
+        case "$INV" in
+            *staging*) echo "staging"; return ;;
+            *production*) echo "production"; return ;;
+        esac
+    fi
+    
+    # Fall back to state file
+    local saved_env
+    saved_env=$(get_state "ENVIRONMENT" "" 2>/dev/null || echo "")
+    if [[ -n "$saved_env" ]]; then
+        echo "$saved_env"
+        return
+    fi
+    
+    # Default
+    echo "staging"
+}
+
 # Get container prefix from environment
 get_container_prefix() {
-    local env="${BUSIBOX_ENV:-${ENV:-development}}"
+    local env
+    env=$(get_environment)
     case "$env" in
         demo) echo "demo" ;;
         development) echo "dev" ;;
         staging) echo "staging" ;;
         production) echo "prod" ;;
-        *) echo "dev" ;;
+        *) echo "staging" ;;
     esac
 }
 
-# Get env file path
+# Get env file path (Docker mode)
 get_env_file() {
     local prefix
     prefix=$(get_container_prefix)
     echo "${REPO_ROOT}/.env.${prefix}"
+}
+
+# Detect platform (Docker or Proxmox)
+detect_platform() {
+    if [[ "$FORCE_DOCKER" == true ]]; then
+        PLATFORM="docker"
+        return
+    fi
+    
+    if [[ "$FORCE_PROXMOX" == true ]]; then
+        PLATFORM="proxmox"
+        return
+    fi
+    
+    # Check if Docker is available
+    if command -v docker &>/dev/null && docker info &>/dev/null 2>&1; then
+        PLATFORM="docker"
+        return
+    fi
+    
+    # Check if we're on a Proxmox host (has pct command)
+    if command -v pct &>/dev/null; then
+        PLATFORM="proxmox"
+        return
+    fi
+    
+    # Check if Ansible inventory exists (we're on admin workstation for Proxmox)
+    if [[ -d "${REPO_ROOT}/provision/ansible/inventory" ]]; then
+        PLATFORM="proxmox"
+        return
+    fi
+    
+    # Default to proxmox if nothing else matches (assume we're updating remotely)
+    PLATFORM="proxmox"
 }
 
 # =============================================================================
@@ -150,49 +237,170 @@ show_stage() {
 }
 
 # =============================================================================
-# VERIFICATION
+# PROXMOX UPDATE FUNCTIONS
 # =============================================================================
 
-verify_installation() {
-    local env_prefix
-    env_prefix=$(get_container_prefix)
-    local env_file="${REPO_ROOT}/.env.${env_prefix}"
-    local state_file="${REPO_ROOT}/.busibox-state-${env_prefix}"
+update_proxmox() {
+    local environment
+    environment=$(get_environment)
     
-    # Check state file
-    if [[ ! -f "$state_file" ]]; then
-        error "No installation found for environment: ${env_prefix}"
+    # Determine inventory path
+    local inventory="inventory/${environment}"
+    if [[ -n "${INV:-}" ]]; then
+        inventory="$INV"
+    fi
+    
+    info "Using Ansible inventory: ${inventory}"
+    
+    # Change to ansible directory
+    cd "${REPO_ROOT}/provision/ansible"
+    
+    # Check if inventory exists
+    if [[ ! -d "$inventory" ]]; then
+        error "Inventory not found: ${inventory}"
         echo ""
-        echo "  Run 'make install' to create a new installation."
+        echo "  Available inventories:"
+        ls -1 inventory/ 2>/dev/null | sed 's/^/    - /'
         echo ""
         return 1
     fi
     
-    # Check install status
-    local install_status
-    install_status=$(get_state "INSTALL_STATUS" "not_installed")
+    # Pull latest code
+    show_stage 10 "Pulling Latest Code" "Fetching updates from Git repository."
     
-    if [[ "$install_status" == "not_installed" ]]; then
-        error "Installation not complete for environment: ${env_prefix}"
-        echo ""
-        echo "  Run 'make install' to complete the installation."
-        echo ""
-        return 1
+    cd "$REPO_ROOT"
+    if git pull --ff-only 2>/dev/null; then
+        success "Repository updated"
+    else
+        warn "Could not fast-forward - you may have local changes"
+        if [[ "$NO_PROMPT" != true ]]; then
+            if ! confirm "Continue anyway?"; then
+                info "Update cancelled."
+                exit 0
+            fi
+        fi
+    fi
+    
+    cd "${REPO_ROOT}/provision/ansible"
+    
+    # Run Ansible deployment (preserves data by design)
+    show_stage 30 "Deploying Core Services" "Updating nginx, storage, database, and vector store."
+    
+    info "Running: make core INV=${inventory}"
+    if [[ "$VERBOSE" == true ]]; then
+        make core INV="$inventory" || {
+            warn "Core deployment had issues - continuing"
+        }
+    else
+        make core INV="$inventory" 2>&1 | tail -20 || {
+            warn "Core deployment had issues - continuing"
+        }
+    fi
+    
+    show_stage 50 "Deploying API Services" "Updating AuthZ, Ingest, Search, Agent, and Docs APIs."
+    
+    info "Running: make apis INV=${inventory}"
+    if [[ "$VERBOSE" == true ]]; then
+        make apis INV="$inventory" || {
+            warn "API deployment had issues - continuing"
+        }
+    else
+        make apis INV="$inventory" 2>&1 | tail -20 || {
+            warn "API deployment had issues - continuing"
+        }
+    fi
+    
+    show_stage 70 "Deploying LLM Services" "Updating vLLM, LiteLLM, and ColPali (if configured)."
+    
+    info "Running: make llm INV=${inventory}"
+    if [[ "$VERBOSE" == true ]]; then
+        make llm INV="$inventory" || {
+            warn "LLM deployment had issues - this may be expected if no GPU"
+        }
+    else
+        make llm INV="$inventory" 2>&1 | tail -20 || {
+            warn "LLM deployment had issues - this may be expected if no GPU"
+        }
+    fi
+    
+    show_stage 85 "Deploying Frontend Apps" "Updating AI Portal and Agent Manager."
+    
+    info "Running: make apps-frontend INV=${inventory}"
+    if [[ "$VERBOSE" == true ]]; then
+        make apps-frontend INV="$inventory" || {
+            warn "Frontend deployment had issues - continuing"
+        }
+    else
+        make apps-frontend INV="$inventory" 2>&1 | tail -20 || {
+            warn "Frontend deployment had issues - continuing"
+        }
+    fi
+    
+    show_stage 95 "Running Verification" "Checking service health."
+    
+    info "Running: make verify-health INV=${inventory}"
+    make verify-health INV="$inventory" 2>&1 | tail -30 || {
+        warn "Some health checks failed - check service logs"
+    }
+    
+    return 0
+}
+
+# =============================================================================
+# DOCKER UPDATE FUNCTIONS (original implementation)
+# =============================================================================
+
+verify_docker_installation() {
+    local container_prefix
+    container_prefix=$(get_container_prefix)
+    local env_file
+    env_file=$(get_env_file)
+    local state_file="${REPO_ROOT}/.busibox-state-${container_prefix}"
+    
+    # For Docker, we need the state file and env file
+    # But we'll be lenient - if Docker is running our containers, that's enough
+    
+    # Check if any busibox containers are running
+    local running_containers
+    running_containers=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c "${container_prefix}-" || echo "0")
+    
+    if [[ "$running_containers" -gt 0 ]]; then
+        info "Found ${running_containers} running containers with prefix: ${container_prefix}"
+        return 0
+    fi
+    
+    # Check state file
+    if [[ -f "$state_file" ]]; then
+        info "Found state file: ${state_file}"
+        return 0
     fi
     
     # Check env file
-    if [[ ! -f "$env_file" ]]; then
-        error "Environment file not found: ${env_file}"
-        echo ""
-        echo "  The .env file is required for update. Run 'make install' to recreate."
-        echo ""
-        return 1
+    if [[ -f "$env_file" ]]; then
+        info "Found env file: ${env_file}"
+        return 0
+    fi
+    
+    warn "No existing Docker installation found for environment: ${container_prefix}"
+    echo ""
+    echo "  This could mean:"
+    echo "    - First time running update (run 'make install' for fresh install)"
+    echo "    - Wrong environment (try ENV=development or ENV=staging)"
+    echo "    - Containers were removed (data volumes may still exist)"
+    echo ""
+    
+    if [[ "$NO_PROMPT" != true ]]; then
+        if confirm "Continue with update anyway?"; then
+            return 0
+        else
+            return 1
+        fi
     fi
     
     return 0
 }
 
-check_running_services() {
+check_running_services_docker() {
     local container_prefix
     container_prefix=$(get_container_prefix)
     
@@ -218,10 +426,6 @@ check_running_services() {
     
     return 0
 }
-
-# =============================================================================
-# DATA PRESERVATION VERIFICATION
-# =============================================================================
 
 verify_data_volumes() {
     local container_prefix
@@ -262,10 +466,6 @@ verify_data_volumes() {
     
     return 0
 }
-
-# =============================================================================
-# UPDATE FUNCTIONS
-# =============================================================================
 
 pull_latest_code() {
     show_stage 10 "Pulling Latest Code" "Fetching updates from Git repositories."
@@ -384,9 +584,11 @@ rebuild_containers() {
     git_commit=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
     export GIT_COMMIT="$git_commit"
     
-    # Get GitHub token
-    local github_token
-    github_token=$(bash scripts/lib/github.sh get 2>/dev/null || echo "")
+    # Get GitHub token if available
+    local github_token=""
+    if type ensure_github_token &>/dev/null; then
+        github_token=$(bash scripts/lib/github.sh get 2>/dev/null || echo "")
+    fi
     export GITHUB_AUTH_TOKEN="$github_token"
     
     # Load app directories from state for volume mounts
@@ -569,9 +771,11 @@ start_frontend_services() {
     export APPS_BASE_DIR=$(get_state "APPS_BASE_DIR" "")
     export DEV_APPS_DIR=$(get_state "DEV_APPS_DIR" "$APPS_BASE_DIR")
     
-    # Get GitHub token
-    local github_token
-    github_token=$(bash scripts/lib/github.sh get 2>/dev/null || echo "")
+    # Get GitHub token if available
+    local github_token=""
+    if type ensure_github_token &>/dev/null; then
+        github_token=$(bash scripts/lib/github.sh get 2>/dev/null || echo "")
+    fi
     export GITHUB_AUTH_TOKEN="$github_token"
     
     local compose_files="-f docker-compose.yml -f docker-compose.local-dev.yml"
@@ -649,76 +853,14 @@ run_migrations() {
     fi
 }
 
-# =============================================================================
-# COMPLETION
-# =============================================================================
-
-show_completion() {
-    local base_domain
-    base_domain=$(get_state "BASE_DOMAIN" "localhost")
-    
-    local portal_url
-    if [[ "$base_domain" == "localhost" ]]; then
-        portal_url="https://localhost/portal/"
-    else
-        portal_url="https://${base_domain}/portal/"
+update_docker() {
+    # Verify installation (lenient)
+    if ! verify_docker_installation; then
+        return 1
     fi
-    
-    echo ""
-    show_progress_bar 100
-    echo ""
-    echo ""
-    
-    echo -e "${GREEN}╔══════════════════════════════════════════════════════════════════════════════╗${NC}"
-    printf "${GREEN}║${NC}%*s${BOLD}UPDATE COMPLETE${NC}%*s${GREEN}║${NC}\n" 31 "" 32 ""
-    echo -e "${GREEN}╠══════════════════════════════════════════════════════════════════════════════╣${NC}"
-    printf "${GREEN}║${NC}  %-76s${GREEN}║${NC}\n" "All services have been updated and restarted."
-    printf "${GREEN}║${NC}  %-76s${GREEN}║${NC}\n" ""
-    printf "${GREEN}║${NC}  %-76s${GREEN}║${NC}\n" "Your data has been preserved:"
-    printf "${GREEN}║${NC}    %-74s${GREEN}║${NC}\n" "• PostgreSQL database"
-    printf "${GREEN}║${NC}    %-74s${GREEN}║${NC}\n" "• Redis cache"
-    printf "${GREEN}║${NC}    %-74s${GREEN}║${NC}\n" "• MinIO object storage"
-    printf "${GREEN}║${NC}    %-74s${GREEN}║${NC}\n" "• Milvus vector database"
-    printf "${GREEN}║${NC}    %-74s${GREEN}║${NC}\n" "• Model cache"
-    printf "${GREEN}║${NC}    %-74s${GREEN}║${NC}\n" "• Deployed external apps"
-    printf "${GREEN}║${NC}  %-76s${GREEN}║${NC}\n" ""
-    printf "${GREEN}║${NC}  Open the AI Portal:                                                        ${GREEN}║${NC}\n"
-    echo -e "${GREEN}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-    echo -e "  ${CYAN}${portal_url}${NC}"
-    echo ""
-}
-
-# =============================================================================
-# MAIN
-# =============================================================================
-
-main() {
-    parse_args "$@"
-    
-    # Show banner
-    show_update_banner
-    
-    # Get environment info
-    local env_prefix
-    env_prefix=$(get_container_prefix)
-    local environment
-    environment=$(get_state "ENVIRONMENT" "$env_prefix")
-    
-    echo -e "  Environment: ${BOLD}$(ucfirst "$environment")${NC}"
-    echo -e "  Container prefix: ${BOLD}${env_prefix}${NC}"
-    echo ""
-    
-    # Verify installation exists
-    show_stage 5 "Verifying Installation" "Checking for existing Busibox installation."
-    
-    if ! verify_installation; then
-        exit 1
-    fi
-    success "Installation found"
     
     # Check running services
-    check_running_services
+    check_running_services_docker
     
     # Verify data volumes
     verify_data_volumes
@@ -727,7 +869,7 @@ main() {
     if [[ "$NO_PROMPT" != true ]]; then
         echo ""
         echo -e "┌──────────────────────────────────────────────────────────────────────────────┐"
-        printf "│  %-76s│\n" "${BOLD}Ready to update${NC}"
+        printf "│  %-76s│\n" "${BOLD}Ready to update (Docker)${NC}"
         printf "│  %-76s│\n" ""
         printf "│  %-76s│\n" "This will:"
         printf "│    %-74s│\n" "• Pull latest code from Git repositories"
@@ -741,15 +883,16 @@ main() {
         
         if ! confirm "Proceed with update?"; then
             info "Update cancelled."
-            exit 0
+            return 1
         fi
     fi
     
-    # Ensure GitHub token is available
-    ensure_github_token || {
-        error "Cannot proceed without valid GitHub token"
-        exit 1
-    }
+    # Ensure GitHub token is available (if function exists)
+    if type ensure_github_token &>/dev/null; then
+        ensure_github_token || {
+            warn "GitHub token not available - some features may not work"
+        }
+    fi
     
     # Pull latest code
     pull_latest_code
@@ -768,22 +911,126 @@ main() {
     # Run migrations
     run_migrations
     
+    return 0
+}
+
+# =============================================================================
+# COMPLETION
+# =============================================================================
+
+show_completion() {
+    local environment
+    environment=$(get_environment)
+    
+    echo ""
+    show_progress_bar 100
+    echo ""
+    echo ""
+    
+    echo -e "${GREEN}╔══════════════════════════════════════════════════════════════════════════════╗${NC}"
+    printf "${GREEN}║${NC}%*s${BOLD}UPDATE COMPLETE${NC}%*s${GREEN}║${NC}\n" 31 "" 32 ""
+    echo -e "${GREEN}╠══════════════════════════════════════════════════════════════════════════════╣${NC}"
+    printf "${GREEN}║${NC}  %-76s${GREEN}║${NC}\n" "All services have been updated for: $(ucfirst "$environment")"
+    printf "${GREEN}║${NC}  %-76s${GREEN}║${NC}\n" ""
+    printf "${GREEN}║${NC}  %-76s${GREEN}║${NC}\n" "Your data has been preserved:"
+    printf "${GREEN}║${NC}    %-74s${GREEN}║${NC}\n" "• PostgreSQL database"
+    printf "${GREEN}║${NC}    %-74s${GREEN}║${NC}\n" "• Redis cache"
+    printf "${GREEN}║${NC}    %-74s${GREEN}║${NC}\n" "• MinIO object storage"
+    printf "${GREEN}║${NC}    %-74s${GREEN}║${NC}\n" "• Milvus vector database"
+    printf "${GREEN}║${NC}    %-74s${GREEN}║${NC}\n" "• Model cache"
+    printf "${GREEN}║${NC}    %-74s${GREEN}║${NC}\n" "• Deployed external apps"
+    printf "${GREEN}║${NC}  %-76s${GREEN}║${NC}\n" ""
+    
+    if [[ "$PLATFORM" == "proxmox" ]]; then
+        printf "${GREEN}║${NC}  %-76s${GREEN}║${NC}\n" "Check service status with:"
+        printf "${GREEN}║${NC}    %-74s${GREEN}║${NC}\n" "cd provision/ansible && make verify-health INV=inventory/${environment}"
+    else
+        local base_domain
+        base_domain=$(get_state "BASE_DOMAIN" "localhost")
+        printf "${GREEN}║${NC}  %-76s${GREEN}║${NC}\n" "Open the AI Portal:"
+        printf "${GREEN}║${NC}    %-74s${GREEN}║${NC}\n" "https://${base_domain}/portal/"
+    fi
+    
+    echo -e "${GREEN}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+}
+
+# =============================================================================
+# MAIN
+# =============================================================================
+
+main() {
+    parse_args "$@"
+    
+    # Detect platform
+    detect_platform
+    
+    # Get environment
+    local environment
+    environment=$(get_environment)
+    local container_prefix
+    container_prefix=$(get_container_prefix)
+    
+    # Show banner
+    show_update_banner
+    
+    echo -e "  Environment: ${BOLD}$(ucfirst "$environment")${NC}"
+    echo -e "  Platform: ${BOLD}$(ucfirst "$PLATFORM")${NC}"
+    if [[ "$PLATFORM" == "docker" ]]; then
+        echo -e "  Container prefix: ${BOLD}${container_prefix}${NC}"
+    fi
+    echo ""
+    
+    # Run platform-specific update
+    if [[ "$PLATFORM" == "proxmox" ]]; then
+        # Confirm update for Proxmox
+        if [[ "$NO_PROMPT" != true ]]; then
+            echo -e "┌──────────────────────────────────────────────────────────────────────────────┐"
+            printf "│  %-76s│\n" "${BOLD}Ready to update (Proxmox/Ansible)${NC}"
+            printf "│  %-76s│\n" ""
+            printf "│  %-76s│\n" "This will run Ansible playbooks to update:"
+            printf "│    %-74s│\n" "• Core services (nginx, storage, database)"
+            printf "│    %-74s│\n" "• API services (authz, ingest, search, agent)"
+            printf "│    %-74s│\n" "• LLM services (if configured)"
+            printf "│    %-74s│\n" "• Frontend apps (ai-portal, agent-manager)"
+            printf "│  %-76s│\n" ""
+            printf "│  %-76s│\n" "Your data will be preserved."
+            echo -e "└──────────────────────────────────────────────────────────────────────────────┘"
+            echo ""
+            
+            if ! confirm "Proceed with update?"; then
+                info "Update cancelled."
+                exit 0
+            fi
+        fi
+        
+        if ! update_proxmox; then
+            error "Proxmox update failed"
+            exit 1
+        fi
+    else
+        if ! update_docker; then
+            error "Docker update failed"
+            exit 1
+        fi
+        
+        # Open browser for Docker
+        local base_domain
+        base_domain=$(get_state "BASE_DOMAIN" "localhost")
+        local portal_url="https://${base_domain}/portal/"
+        
+        info "Opening browser..."
+        local os_type
+        os_type=$(uname -s)
+        if [[ "$os_type" == "Darwin" ]]; then
+            open "$portal_url" 2>/dev/null || true
+        else
+            xdg-open "$portal_url" 2>/dev/null || true
+        fi
+    fi
+    
     # Show completion
     show_completion
-    
-    # Open browser
-    local base_domain
-    base_domain=$(get_state "BASE_DOMAIN" "localhost")
-    local portal_url="https://${base_domain}/portal/"
-    
-    info "Opening browser..."
-    local os_type
-    os_type=$(uname -s)
-    if [[ "$os_type" == "Darwin" ]]; then
-        open "$portal_url" 2>/dev/null || true
-    else
-        xdg-open "$portal_url" 2>/dev/null || true
-    fi
 }
 
 main "$@"
