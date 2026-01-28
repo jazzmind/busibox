@@ -1236,6 +1236,9 @@ async def deploy_app(
         "NEXT_PUBLIC_BASE_PATH": manifest.defaultPath,
         # Portal URL for auth redirects
         "NEXT_PUBLIC_AI_PORTAL_URL": portal_url,
+        # APP_NAME must match the audience in SSO tokens issued by AI Portal
+        # AI Portal uses app.name as the audience when requesting tokens from authz
+        "APP_NAME": manifest.name,
     }
     if database_url:
         env_vars["DATABASE_URL"] = database_url
