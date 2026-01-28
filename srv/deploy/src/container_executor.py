@@ -400,19 +400,37 @@ async def ensure_app_volumes_mounted(app_id: str, logs: List[str]) -> bool:
     return success
 
 
-async def ensure_user_apps_container_running() -> Tuple[bool, str]:
+async def ensure_user_apps_container_running(force_check: bool = False) -> Tuple[bool, str]:
     """
     Ensure the user-apps container is running before executing commands.
     Uses docker compose to start/build the container if needed.
+    
+    Args:
+        force_check: If True, always check even if we've checked before this session.
+                     Use this after operations that might have stopped the container.
     
     Returns:
         Tuple of (success, message)
     """
     global _user_apps_container_checked
     
-    # Skip if we've already checked this session
-    if _user_apps_container_checked:
-        return True, "Already checked"
+    # Skip if we've already checked this session (unless force_check is True)
+    if _user_apps_container_checked and not force_check:
+        # Still verify the container is actually running (quick check)
+        check_cmd = ['docker', 'inspect', '-f', '{{.State.Running}}', USER_APPS_CONTAINER]
+        proc = await asyncio.create_subprocess_exec(
+            *check_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, _ = await proc.communicate()
+        
+        if proc.returncode == 0 and stdout.decode().strip() == 'true':
+            return True, "Container running (verified)"
+        else:
+            # Container stopped unexpectedly - reset flag and continue to start it
+            logger.warning(f"{USER_APPS_CONTAINER} container stopped unexpectedly, will restart")
+            _user_apps_container_checked = False
     
     logger.info(f"Checking if {USER_APPS_CONTAINER} container is running...")
     
@@ -432,6 +450,17 @@ async def ensure_user_apps_container_running() -> Tuple[bool, str]:
     
     # Container doesn't exist or isn't running - need to start it via docker compose
     logger.info(f"{USER_APPS_CONTAINER} not running, starting via docker compose...")
+    
+    # First, remove any stopped container with the same name (prevents "name already in use" error)
+    rm_cmd = ['docker', 'rm', '-f', USER_APPS_CONTAINER]
+    proc = await asyncio.create_subprocess_exec(
+        *rm_cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    await proc.communicate()
+    # Ignore errors - container might not exist at all
+    logger.debug(f"Removed old {USER_APPS_CONTAINER} container (if any)")
     
     # Get busibox host path for docker compose
     busibox_host_path = os.environ.get("BUSIBOX_HOST_PATH", "")
@@ -531,8 +560,14 @@ async def execute_ssh_command(host: str, command: str, timeout: int = 300) -> Tu
         return "", "Command timed out", 1
 
 
-async def execute_docker_command(command: str, timeout: int = 300) -> Tuple[str, str, int]:
-    """Execute command in Docker user-apps container via docker exec"""
+async def execute_docker_command(command: str, timeout: int = 300, _retry: bool = True) -> Tuple[str, str, int]:
+    """Execute command in Docker user-apps container via docker exec
+    
+    Args:
+        command: Shell command to execute
+        timeout: Timeout in seconds
+        _retry: Internal flag to prevent infinite retry loops
+    """
     docker_command = [
         'docker', 'exec', USER_APPS_CONTAINER,
         '/bin/bash', '-c', command
@@ -550,9 +585,23 @@ async def execute_docker_command(command: str, timeout: int = 300) -> Tuple[str,
     
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        result = (stdout.decode(), stderr.decode(), proc.returncode or 0)
-        logger.debug(f"Command completed with code {result[2]}")
-        return result
+        stdout_str = stdout.decode()
+        stderr_str = stderr.decode()
+        returncode = proc.returncode or 0
+        
+        # Check if container was not running (common Docker error)
+        if returncode != 0 and _retry and ("is not running" in stderr_str or "No such container" in stderr_str):
+            logger.warning(f"Container not running, attempting to restart...")
+            success, msg = await ensure_user_apps_container_running(force_check=True)
+            if success:
+                logger.info("Container restarted, retrying command...")
+                return await execute_docker_command(command, timeout, _retry=False)
+            else:
+                logger.error(f"Failed to restart container: {msg}")
+                return "", f"Container not running and restart failed: {msg}", 1
+        
+        logger.debug(f"Command completed with code {returncode}")
+        return stdout_str, stderr_str, returncode
     except asyncio.TimeoutError:
         logger.error(f"Command timed out after {timeout}s: {cmd_preview}")
         proc.kill()
