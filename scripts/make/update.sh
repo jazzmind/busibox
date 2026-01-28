@@ -103,35 +103,60 @@ ucfirst() {
     echo "$(echo "${str:0:1}" | tr '[:lower:]' '[:upper:]')${str:1}"
 }
 
+# Normalize environment name
+# Maps legacy names to current names (test -> staging)
+normalize_environment() {
+    local env="$1"
+    case "$env" in
+        test) echo "staging" ;;  # Legacy name
+        prod) echo "production" ;;
+        *) echo "$env" ;;
+    esac
+}
+
 # Get environment from ENV variable or state
+# Valid environments for Proxmox: staging, production
+# Valid environments for Docker: staging, production, development, demo
 get_environment() {
+    local env=""
+    
     # Check ENV variable first
     if [[ -n "${ENV:-}" ]]; then
-        echo "$ENV"
+        env=$(normalize_environment "$ENV")
+        echo "$env"
         return
     fi
     
     # Check INV variable (maps inventory to environment)
     if [[ -n "${INV:-}" ]]; then
         case "$INV" in
-            *staging*) echo "staging"; return ;;
+            *staging*|*test*) echo "staging"; return ;;
             *production*) echo "production"; return ;;
+            *local*) echo "development"; return ;;
         esac
     fi
     
-    # Fall back to state file
-    local saved_env
-    saved_env=$(get_state "ENVIRONMENT" "" 2>/dev/null || echo "")
-    if [[ -n "$saved_env" ]]; then
-        echo "$saved_env"
+    # For Proxmox, default to staging (don't check state files)
+    if [[ "$PLATFORM" == "proxmox" ]] || [[ "$FORCE_PROXMOX" == true ]]; then
+        echo "staging"
         return
     fi
     
-    # Default
+    # For Docker, check state file
+    local saved_env
+    saved_env=$(get_state "ENVIRONMENT" "" 2>/dev/null || echo "")
+    if [[ -n "$saved_env" ]]; then
+        echo "$(normalize_environment "$saved_env")"
+        return
+    fi
+    
+    # Default to staging
     echo "staging"
 }
 
 # Get container prefix from environment
+# For Docker: demo, dev, staging, prod
+# For Proxmox: staging, prod (maps to LXC container names)
 get_container_prefix() {
     local env
     env=$(get_environment)
@@ -140,7 +165,7 @@ get_container_prefix() {
         development) echo "dev" ;;
         staging) echo "staging" ;;
         production) echo "prod" ;;
-        *) echo "staging" ;;
+        *) echo "staging" ;;  # Default to staging
     esac
 }
 
@@ -186,15 +211,159 @@ detect_platform() {
 }
 
 # =============================================================================
+# BOX DRAWING UTILITIES
+# =============================================================================
+
+# Standard box width (inner content width, not including borders)
+BOX_WIDTH=78
+
+# Define ANSI codes using $'...' syntax for proper escape interpretation
+# These will work correctly with printf %s (no need for %b)
+_BOLD=$'\033[1m'
+_DIM=$'\033[2m'
+_NC=$'\033[0m'
+_CYAN=$'\033[0;36m'
+_GREEN=$'\033[0;32m'
+_RED=$'\033[0;31m'
+_YELLOW=$'\033[1;33m'
+
+# Strip ANSI codes from a string for length calculation
+strip_ansi() {
+    printf '%s' "$1" | sed $'s/\033\\[[0-9;]*m//g'
+}
+
+# Get visible length of a string (excluding ANSI codes)
+visible_length() {
+    local stripped
+    stripped=$(strip_ansi "$1")
+    printf '%d' "${#stripped}"
+}
+
+# Print a horizontal border line
+# Usage: box_border "top" | "middle" | "bottom" [color]
+box_border() {
+    local type="${1:-top}"
+    local color="${2:-$_CYAN}"
+    local line=""
+    
+    # Build the line of ═ characters
+    for ((i=0; i<BOX_WIDTH; i++)); do
+        line+="═"
+    done
+    
+    case "$type" in
+        top)    printf '%s╔%s╗%s\n' "$color" "$line" "$_NC" ;;
+        middle) printf '%s╠%s╣%s\n' "$color" "$line" "$_NC" ;;
+        bottom) printf '%s╚%s╝%s\n' "$color" "$line" "$_NC" ;;
+    esac
+}
+
+# Print a simple box border (single line)
+# Usage: simple_border "top" | "bottom"
+simple_border() {
+    local type="${1:-top}"
+    local line=""
+    
+    for ((i=0; i<BOX_WIDTH; i++)); do
+        line+="─"
+    done
+    
+    case "$type" in
+        top)    printf '┌%s┐\n' "$line" ;;
+        bottom) printf '└%s┘\n' "$line" ;;
+    esac
+}
+
+# Print a box line with text
+# Usage: box_line "text" [align] [color] [indent]
+#   align: "left" (default), "center"
+#   color: border color (default: cyan)
+#   indent: number of spaces to indent (default: 0, use 2 for content, 4 for bullets)
+box_line() {
+    local text="$1"
+    local align="${2:-left}"
+    local color="${3:-$_CYAN}"
+    local indent="${4:-0}"
+    
+    # Calculate visible text length (excluding ANSI codes)
+    local visible_len
+    visible_len=$(visible_length "$text")
+    
+    # Add indent to visible length for padding calculation
+    local content_len=$((visible_len + indent))
+    
+    # Calculate padding
+    local total_padding=$((BOX_WIDTH - content_len))
+    
+    # Build indent spaces
+    local indent_spaces=""
+    for ((i=0; i<indent; i++)); do indent_spaces+=" "; done
+    
+    # Build padding spaces
+    if [[ "$align" == "center" ]]; then
+        local left_pad=$((total_padding / 2))
+        local right_pad=$((total_padding - left_pad))
+        local left_spaces="" right_spaces=""
+        for ((i=0; i<left_pad; i++)); do left_spaces+=" "; done
+        for ((i=0; i<right_pad; i++)); do right_spaces+=" "; done
+        printf '%s║%s%s%s%s%s║%s\n' "$color" "$_NC" "$left_spaces" "$text" "$right_spaces" "$color" "$_NC"
+    else
+        # Left align with optional indent
+        local right_spaces=""
+        for ((i=0; i<total_padding; i++)); do right_spaces+=" "; done
+        printf '%s║%s%s%s%s%s║%s\n' "$color" "$_NC" "$indent_spaces" "$text" "$right_spaces" "$color" "$_NC"
+    fi
+}
+
+# Print an empty box line
+# Usage: box_empty [color]
+box_empty() {
+    local color="${1:-$_CYAN}"
+    local spaces=""
+    for ((i=0; i<BOX_WIDTH; i++)); do
+        spaces+=" "
+    done
+    printf '%s║%s%s%s║%s\n' "$color" "$_NC" "$spaces" "$color" "$_NC"
+}
+
+# Print a simple box line (single border)
+# Usage: simple_line "text" [indent]
+simple_line() {
+    local text="$1"
+    local indent="${2:-2}"
+    
+    local visible_len
+    visible_len=$(visible_length "$text")
+    local content_len=$((visible_len + indent))
+    local right_pad=$((BOX_WIDTH - content_len))
+    
+    # Build indent and padding spaces
+    local indent_spaces="" right_spaces=""
+    for ((i=0; i<indent; i++)); do indent_spaces+=" "; done
+    for ((i=0; i<right_pad; i++)); do right_spaces+=" "; done
+    
+    printf '│%s%s%s│\n' "$indent_spaces" "$text" "$right_spaces"
+}
+
+# Print a simple empty line
+simple_empty() {
+    local spaces=""
+    for ((i=0; i<BOX_WIDTH; i++)); do
+        spaces+=" "
+    done
+    printf '│%s│\n' "$spaces"
+}
+
+# =============================================================================
 # PROGRESS DISPLAY
 # =============================================================================
 
 show_update_banner() {
     echo ""
-    echo -e "${CYAN}╔══════════════════════════════════════════════════════════════════════════════╗${NC}"
-    printf "${CYAN}║${NC}%*s${BOLD}BUSIBOX UPDATE${NC}%*s${CYAN}║${NC}\n" 32 "" 32 ""
-    printf "${CYAN}║${NC}%*s${DIM}Update your installation while preserving data${NC}%*s${CYAN}║${NC}\n" 16 "" 17 ""
-    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
+    box_border "top" "$_CYAN"
+    box_line "${_BOLD}BUSIBOX UPDATE${_NC}" "center" "$_CYAN"
+    box_line "${_DIM}Update your installation while preserving data${_NC}" "center" "$_CYAN"
+    box_border "bottom" "$_CYAN"
     echo ""
 }
 
@@ -209,11 +378,12 @@ show_progress_bar() {
     
     local empty=$((width - filled))
     
-    printf "\r[${GREEN}"
-    printf '█%.0s' $(seq 1 $filled 2>/dev/null) || true
-    printf "${DIM}"
-    printf '░%.0s' $(seq 1 $empty 2>/dev/null) || true
-    printf "${NC}] %3d%%" "$percent"
+    printf "\r["
+    printf '%s' "$_GREEN"
+    for ((i=0; i<filled; i++)); do printf '█'; done
+    printf '%s' "$_DIM"
+    for ((i=0; i<empty; i++)); do printf '░'; done
+    printf '%s] %3d%%' "$_NC" "$percent"
 }
 
 show_stage() {
@@ -225,15 +395,15 @@ show_stage() {
     show_progress_bar "$percent"
     echo ""
     echo ""
-    echo -e "┌──────────────────────────────────────────────────────────────────────────────┐"
-    printf "│  ${BOLD}%-74s${NC} │\n" "$title"
-    echo -e "├──────────────────────────────────────────────────────────────────────────────┤"
+    simple_border "top"
+    simple_line "${_BOLD}${title}${_NC}" 2
     if [[ -n "$description" ]]; then
-        echo "$description" | fold -s -w 76 | while read -r line; do
-            printf "│  %-76s│\n" "$line"
+        # Use fold to wrap long descriptions, then print each line
+        echo "$description" | fold -s -w $((BOX_WIDTH - 4)) | while IFS= read -r line; do
+            simple_line "$line" 2
         done
     fi
-    echo -e "└──────────────────────────────────────────────────────────────────────────────┘"
+    simple_border "bottom"
 }
 
 # =============================================================================
@@ -244,16 +414,21 @@ update_proxmox() {
     local environment
     environment=$(get_environment)
     
-    # Determine inventory path
+    # Change to ansible directory FIRST (inventory paths are relative to this)
+    cd "${REPO_ROOT}/provision/ansible"
+    
+    # Determine inventory path (relative to provision/ansible/)
     local inventory="inventory/${environment}"
     if [[ -n "${INV:-}" ]]; then
-        inventory="$INV"
+        # INV can be "staging", "inventory/staging", etc.
+        # Normalize to inventory/<env> format
+        case "$INV" in
+            inventory/*) inventory="$INV" ;;
+            *) inventory="inventory/$INV" ;;
+        esac
     fi
     
     info "Using Ansible inventory: ${inventory}"
-    
-    # Change to ansible directory
-    cd "${REPO_ROOT}/provision/ansible"
     
     # Check if inventory exists
     if [[ ! -d "$inventory" ]]; then
@@ -868,17 +1043,17 @@ update_docker() {
     # Confirm update
     if [[ "$NO_PROMPT" != true ]]; then
         echo ""
-        echo -e "┌──────────────────────────────────────────────────────────────────────────────┐"
-        printf "│  %-76s│\n" "${BOLD}Ready to update (Docker)${NC}"
-        printf "│  %-76s│\n" ""
-        printf "│  %-76s│\n" "This will:"
-        printf "│    %-74s│\n" "• Pull latest code from Git repositories"
-        printf "│    %-74s│\n" "• Rebuild container images"
-        printf "│    %-74s│\n" "• Restart all services"
-        printf "│    %-74s│\n" "• Run database migrations"
-        printf "│  %-76s│\n" ""
-        printf "│  %-76s│\n" "Your data will be preserved."
-        echo -e "└──────────────────────────────────────────────────────────────────────────────┘"
+        simple_border "top"
+        simple_line "${_BOLD}Ready to update (Docker)${_NC}" 2
+        simple_empty
+        simple_line "This will:" 2
+        simple_line "• Pull latest code from Git repositories" 4
+        simple_line "• Rebuild container images" 4
+        simple_line "• Restart all services" 4
+        simple_line "• Run database migrations" 4
+        simple_empty
+        simple_line "Your data will be preserved." 2
+        simple_border "bottom"
         echo ""
         
         if ! confirm "Proceed with update?"; then
@@ -927,31 +1102,31 @@ show_completion() {
     echo ""
     echo ""
     
-    echo -e "${GREEN}╔══════════════════════════════════════════════════════════════════════════════╗${NC}"
-    printf "${GREEN}║${NC}%*s${BOLD}UPDATE COMPLETE${NC}%*s${GREEN}║${NC}\n" 31 "" 32 ""
-    echo -e "${GREEN}╠══════════════════════════════════════════════════════════════════════════════╣${NC}"
-    printf "${GREEN}║${NC}  %-76s${GREEN}║${NC}\n" "All services have been updated for: $(ucfirst "$environment")"
-    printf "${GREEN}║${NC}  %-76s${GREEN}║${NC}\n" ""
-    printf "${GREEN}║${NC}  %-76s${GREEN}║${NC}\n" "Your data has been preserved:"
-    printf "${GREEN}║${NC}    %-74s${GREEN}║${NC}\n" "• PostgreSQL database"
-    printf "${GREEN}║${NC}    %-74s${GREEN}║${NC}\n" "• Redis cache"
-    printf "${GREEN}║${NC}    %-74s${GREEN}║${NC}\n" "• MinIO object storage"
-    printf "${GREEN}║${NC}    %-74s${GREEN}║${NC}\n" "• Milvus vector database"
-    printf "${GREEN}║${NC}    %-74s${GREEN}║${NC}\n" "• Model cache"
-    printf "${GREEN}║${NC}    %-74s${GREEN}║${NC}\n" "• Deployed external apps"
-    printf "${GREEN}║${NC}  %-76s${GREEN}║${NC}\n" ""
+    box_border "top" "$_GREEN"
+    box_line "${_BOLD}UPDATE COMPLETE${_NC}" "center" "$_GREEN"
+    box_border "middle" "$_GREEN"
+    box_line "All services have been updated for: $(ucfirst "$environment")" "left" "$_GREEN" 2
+    box_empty "$_GREEN"
+    box_line "Your data has been preserved:" "left" "$_GREEN" 2
+    box_line "• PostgreSQL database" "left" "$_GREEN" 4
+    box_line "• Redis cache" "left" "$_GREEN" 4
+    box_line "• MinIO object storage" "left" "$_GREEN" 4
+    box_line "• Milvus vector database" "left" "$_GREEN" 4
+    box_line "• Model cache" "left" "$_GREEN" 4
+    box_line "• Deployed external apps" "left" "$_GREEN" 4
+    box_empty "$_GREEN"
     
     if [[ "$PLATFORM" == "proxmox" ]]; then
-        printf "${GREEN}║${NC}  %-76s${GREEN}║${NC}\n" "Check service status with:"
-        printf "${GREEN}║${NC}    %-74s${GREEN}║${NC}\n" "cd provision/ansible && make verify-health INV=inventory/${environment}"
+        box_line "Check service status with:" "left" "$_GREEN" 2
+        box_line "cd provision/ansible && make verify-health INV=inventory/${environment}" "left" "$_GREEN" 4
     else
         local base_domain
         base_domain=$(get_state "BASE_DOMAIN" "localhost")
-        printf "${GREEN}║${NC}  %-76s${GREEN}║${NC}\n" "Open the AI Portal:"
-        printf "${GREEN}║${NC}    %-74s${GREEN}║${NC}\n" "https://${base_domain}/portal/"
+        box_line "Open the AI Portal:" "left" "$_GREEN" 2
+        box_line "https://${base_domain}/portal/" "left" "$_GREEN" 4
     fi
     
-    echo -e "${GREEN}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
+    box_border "bottom" "$_GREEN"
     echo ""
 }
 
@@ -974,10 +1149,10 @@ main() {
     # Show banner
     show_update_banner
     
-    echo -e "  Environment: ${BOLD}$(ucfirst "$environment")${NC}"
-    echo -e "  Platform: ${BOLD}$(ucfirst "$PLATFORM")${NC}"
+    printf '  Environment: %s%s%s\n' "$_BOLD" "$(ucfirst "$environment")" "$_NC"
+    printf '  Platform: %s%s%s\n' "$_BOLD" "$(ucfirst "$PLATFORM")" "$_NC"
     if [[ "$PLATFORM" == "docker" ]]; then
-        echo -e "  Container prefix: ${BOLD}${container_prefix}${NC}"
+        printf '  Container prefix: %s%s%s\n' "$_BOLD" "$container_prefix" "$_NC"
     fi
     echo ""
     
@@ -985,17 +1160,17 @@ main() {
     if [[ "$PLATFORM" == "proxmox" ]]; then
         # Confirm update for Proxmox
         if [[ "$NO_PROMPT" != true ]]; then
-            echo -e "┌──────────────────────────────────────────────────────────────────────────────┐"
-            printf "│  %-76s│\n" "${BOLD}Ready to update (Proxmox/Ansible)${NC}"
-            printf "│  %-76s│\n" ""
-            printf "│  %-76s│\n" "This will run Ansible playbooks to update:"
-            printf "│    %-74s│\n" "• Core services (nginx, storage, database)"
-            printf "│    %-74s│\n" "• API services (authz, ingest, search, agent)"
-            printf "│    %-74s│\n" "• LLM services (if configured)"
-            printf "│    %-74s│\n" "• Frontend apps (ai-portal, agent-manager)"
-            printf "│  %-76s│\n" ""
-            printf "│  %-76s│\n" "Your data will be preserved."
-            echo -e "└──────────────────────────────────────────────────────────────────────────────┘"
+            simple_border "top"
+            simple_line "${_BOLD}Ready to update (Proxmox/Ansible)${_NC}" 2
+            simple_empty
+            simple_line "This will run Ansible playbooks to update:" 2
+            simple_line "• Core services (nginx, storage, database)" 4
+            simple_line "• API services (authz, ingest, search, agent)" 4
+            simple_line "• LLM services (if configured)" 4
+            simple_line "• Frontend apps (ai-portal, agent-manager)" 4
+            simple_empty
+            simple_line "Your data will be preserved." 2
+            simple_border "bottom"
             echo ""
             
             if ! confirm "Proceed with update?"; then
