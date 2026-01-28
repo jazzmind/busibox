@@ -752,6 +752,24 @@ npm run migrate 2>&1
         return False
     
     logs.append("✅ Migrations completed")
+    
+    # Run seed command if specified
+    seed_command = manifest.database.seedCommand if manifest.database else None
+    if seed_command:
+        logs.append("🌱 Running database seed...")
+        seed_cmd = f"""
+cd {app_path} && \
+export DATABASE_URL="{database_url}" && \
+{seed_command} 2>&1
+"""
+        stdout, stderr, code = await execute_in_container(seed_cmd, timeout=300)
+        
+        if code != 0:
+            logs.append(f"⚠️ Seed command failed (non-fatal): {stderr or stdout}")
+            # Don't fail deployment for seed errors - database might already have data
+        else:
+            logs.append("✅ Database seeded")
+    
     return True
 
 
@@ -869,8 +887,9 @@ fi
         # Give a moment for port to be released
         await asyncio.sleep(1)
         
-        # Build environment export statements
-        env_exports = "\n".join([f'export {k}="{v}"' for k, v in (env_vars or {}).items()])
+        # Build environment variables for the subshell
+        # We need to pass these to the bash -c subshell, so build them as inline env assignments
+        env_inline = " ".join([f'{k}="{v}"' for k, v in (env_vars or {}).items()])
         
         log_file = f"/tmp/{app_id}.log"
         pid_file = f"/tmp/{app_id}.pid"
@@ -879,13 +898,14 @@ fi
         # Redirect stdout/stderr to log file with app_id prefix for identification
         # The container's main process (tail -F /tmp/*.log) will stream these to docker logs
         # Using a simple pipe with sed to prefix each line with the app_id
+        # IMPORTANT: Use env to pass environment variables into the bash -c subshell
         command = f"""
 cd {app_path}
-{env_exports}
 rm -f {log_file} {pid_file}
 touch {log_file}
 echo "[{app_id}] Starting: {start_command}" >> {log_file}
-nohup bash -c '{start_command} 2>&1 | while IFS= read -r line; do echo "[{app_id}] $line"; done >> {log_file}' &
+echo "[{app_id}] Environment: NEXT_PUBLIC_BASE_PATH={env_vars.get('NEXT_PUBLIC_BASE_PATH', 'not set') if env_vars else 'none'}" >> {log_file}
+nohup env {env_inline} bash -c '{start_command} 2>&1 | while IFS= read -r line; do echo "[{app_id}] $line"; done >> {log_file}' &
 APP_PID=$!
 echo $APP_PID > {pid_file}
 sleep 2
@@ -1167,9 +1187,10 @@ async def deploy_app(
             logs.append("❌ Failed to set up app volumes")
             return False
         
-        # Clear any stale .next/dev cache to prevent build manifest errors
-        logs.append("🧹 Clearing stale .next/dev cache...")
-        clear_cache_cmd = f"rm -rf {app_path}/.next/dev 2>/dev/null || true"
+        # Clear the entire .next cache to prevent Turbopack corruption errors
+        # Turbopack uses SST files that can become corrupted and cause panics
+        logs.append("🧹 Clearing .next cache (prevents Turbopack corruption)...")
+        clear_cache_cmd = f"rm -rf {app_path}/.next/* 2>/dev/null || true"
         await execute_in_container(clear_cache_cmd)
     
     # Step 2: Install dependencies
