@@ -20,19 +20,55 @@ The Busibox MCP Server is a **Model Context Protocol server** that makes the Bus
 - **Log gathering** - Get logs and service status from containers via SSH
 - **Container/Service lookup** - Quick access to IPs, ports, and service mappings
 
+## Critical: Always Use Make Commands
+
+**NEVER run `docker compose`, `docker`, or `ansible-playbook` commands directly.**
+
+All service operations MUST go through the unified `make` interface:
+
+```bash
+# ❌ NEVER DO THIS
+docker compose up -d authz-api
+docker restart prod-authz-api
+ansible-playbook -i inventory/docker docker.yml --tags authz
+
+# ✅ ALWAYS DO THIS
+make install SERVICE=authz              # Deploy/redeploy
+make manage SERVICE=authz ACTION=restart # Manage running service
+```
+
+**Why?** The `make` commands inject secrets from Ansible Vault at runtime. Direct docker/ansible commands skip this and cause authentication failures.
+
 ## What Can It Do?
+
+### Service Deployment and Management
+
+**Deploy Services** (installs/redeploys via Ansible with secrets):
+```bash
+make install SERVICE=authz              # Single service
+make install SERVICE=authz,agent        # Multiple services
+make install SERVICE=apis               # Service group
+```
+
+**Manage Running Services**:
+```bash
+make manage SERVICE=authz ACTION=restart  # Restart
+make manage SERVICE=authz ACTION=logs     # View logs
+make manage SERVICE=authz ACTION=status   # Check status
+make manage SERVICE=authz ACTION=redeploy # Full rebuild
+```
 
 ### Git Operations on Proxmox
 - Pull latest code from git
 - Check git status
 - Reset to origin (discard local changes)
 
-### Run Make Targets
-- Deploy services (all, milvus, ingest, search, agent, etc.)
-- Deploy apps (ai-portal, agent-manager, doc-intel, etc.)
-- Run tests (test-ingest, test-search, test-agent, etc.)
-- Run verification (verify, verify-health, verify-smoke)
-- All with proper environment handling (staging vs production)
+### Testing
+```bash
+make test-docker SERVICE=authz            # Docker tests
+make test-local SERVICE=agent INV=staging # Remote tests
+make test SERVICE=agent INV=staging       # Container tests
+```
 
 ### Container & Service Information
 - Complete container inventory with IPs for staging and production
@@ -70,12 +106,12 @@ The Busibox MCP Server is a **Model Context Protocol server** that makes the Bus
                   │ MCP Protocol
                   │ (stdio)
 ┌─────────────────▼───────────────────────┐
-│       Busibox MCP Server v2.0           │
+│       Busibox MCP Server v3.0           │
 │   (Node.js/TypeScript)                  │
 │                                          │
 │  ┌──────────────────────────────────┐  │
 │  │ Resources │ Tools   │ Prompts    │  │
-│  │ 10+       │ 15      │ 7          │  │
+│  │ 10+       │ 23      │ 10         │  │
 │  └──────────────────────────────────┘  │
 └─────────────────┬───────────────────────┘
                   │ SSH / File System
@@ -113,15 +149,31 @@ This will:
 In Claude or Cursor, just ask naturally:
 
 ```
+"Deploy the authz service"
+"Restart the agent API"
+"Check the status of postgres and redis"
+"View logs for the ingest service"
 "Pull the latest busibox code on Proxmox"
-"Deploy ingest to test"
-"Run the search tests"
-"What's the IP for milvus in test?"
+"Run the agent tests against Docker"
+"What's the IP for milvus in staging?"
 "Show me the container logs for agent-lxc"
 "Search docs for GPU passthrough"
 ```
 
-## Available Tools (15 total)
+## Available Tools (23 total)
+
+### Service & Testing Tools
+| Tool | Description |
+|------|-------------|
+| `get_makefile_help` | Get comprehensive Makefile help by category |
+| `run_docker_tests` | Run tests against local Docker services |
+| `run_remote_tests` | Run tests locally against remote staging/production |
+| `run_container_tests` | Run tests directly on containers via SSH |
+| `init_test_databases` | Initialize test databases for testing |
+| `check_test_databases` | Verify test databases are ready |
+| `get_testing_guide` | Get comprehensive testing documentation |
+
+> **Note**: `docker_control` is deprecated. Use `make manage SERVICE=x ACTION=y` instead.
 
 ### Git & Deployment
 | Tool | Description |
@@ -171,8 +223,27 @@ In Claude or Cursor, just ask naturally:
 | ollama-lxc | 209 | 10.96.200.209 | ollama |
 | authz-lxc | 210 | 10.96.200.210 | authz |
 
-### Test (10.96.201.x)
+### Staging (10.96.201.x)
 Same containers with ID + 100 and IP in 201 subnet (e.g., TEST-milvus-lxc: 304, 10.96.201.204)
+
+## Service Management Quick Reference
+
+### Deploy Services
+```bash
+make install SERVICE=authz              # Single service
+make install SERVICE=authz,agent        # Multiple services
+make install SERVICE=apis               # All API services
+make install SERVICE=infrastructure     # postgres, redis, minio, milvus
+make install SERVICE=all                # Everything
+```
+
+### Manage Running Services
+```bash
+make manage SERVICE=authz ACTION=restart  # Restart
+make manage SERVICE=authz ACTION=logs     # View logs
+make manage SERVICE=authz ACTION=status   # Check status
+make manage SERVICE=authz ACTION=redeploy # Full rebuild
+```
 
 ## Make Target Categories
 
@@ -191,14 +262,28 @@ Same containers with ID + 100 and IP in 201 subnet (e.g., TEST-milvus-lxc: 304, 
 
 ## Example Workflows
 
-### Update and Deploy to Test
+### Deploy a Service
 
 ```
-User: "Update busibox and deploy ingest to test"
+User: "Deploy the authz service"
+
+AI responds with:
+  make install SERVICE=authz
+
+User: "Restart the agent API"
+
+AI responds with:
+  make manage SERVICE=agent ACTION=restart
+```
+
+### Update and Deploy to Staging
+
+```
+User: "Update busibox and deploy ingest to staging"
 
 AI uses:
 1. git_pull_busibox - Pull latest code
-2. run_make_target(target: "ingest", environment: "test") - Deploy
+2. run_make_target(target: "ingest", environment: "staging") - Deploy
 3. get_container_service_status(container: "ingest-lxc", service: "ingest-api") - Verify
 ```
 
@@ -207,7 +292,10 @@ AI uses:
 ```
 User: "The search API seems slow, check the logs"
 
-AI uses:
+AI responds with:
+  make manage SERVICE=search ACTION=logs
+
+Or uses:
 1. get_container_info(container: "milvus") - Get IP
 2. get_container_service_status(container: "milvus-lxc", service: "search-api") - Check status
 3. get_container_logs(container: "milvus-lxc", service: "search-api", lines: 100) - Get logs
@@ -216,10 +304,15 @@ AI uses:
 ### Run Tests
 
 ```
-User: "Run the ingest tests with coverage on staging environment"
+User: "Run the agent tests"
 
-AI uses:
-1. run_make_target(target: "test-ingest-coverage", environment: "test")
+AI responds with:
+  make test-docker SERVICE=agent
+
+User: "Run tests against staging"
+
+AI responds with:
+  make test-local SERVICE=agent INV=staging
 ```
 
 ## Environment Variables
@@ -259,13 +352,15 @@ BUSIBOX_PATH_ON_PROXMOX=/root/busibox # Path to busibox on Proxmox
 
 ## Version History
 
+- **v3.0.0** (2026-01-17): Renamed "test" environment to "staging", updated all tools and prompts
+- **v2.2.0** (2026-01-16): Added comprehensive testing/deployment tools and prompts
 - **v2.0.0** (2025-12-21): Added git operations, make target execution, enhanced container info
 - **v1.0.0** (2025-11-06): Initial release with documentation and SSH commands
 
 ---
 
-**Version**: 2.0.0  
+**Version**: 3.0.0  
 **Created**: 2025-11-06  
-**Updated**: 2025-12-21  
+**Updated**: 2026-01-17  
 **Status**: Production Ready  
 **License**: Part of Busibox project

@@ -1458,7 +1458,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'docker_control',
-        description: 'Control Docker services for local development (start, stop, restart, status, logs)',
+        description: '⚠️ DEPRECATED - Use `make manage SERVICE=x ACTION=y` instead. This tool uses old docker-* targets.',
         inputSchema: {
           type: 'object',
           properties: {

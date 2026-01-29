@@ -537,7 +537,7 @@ async def query_records(
     try:
         # Get document and execute query
         from api.main import pg_service
-        from busibox_common.auth import set_rls_session_vars
+        from api.middleware.jwt_auth import set_rls_session_vars
         
         async with pg_service.pool.acquire() as conn:
             await set_rls_session_vars(conn, request)
