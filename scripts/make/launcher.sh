@@ -99,7 +99,65 @@ detect_installation_status() {
         return
     fi
     
-    # Get backend for this environment
+    # Check INSTALL_STATUS from state first - this is the authoritative source
+    # Only consider "installed" if the install actually completed successfully
+    local install_status
+    install_status=$(get_state "INSTALL_STATUS" "not_installed")
+    
+    # If state says installed, verify containers are actually running
+    # If state says not_installed or partial, trust it even if containers exist
+    if [[ "$install_status" != "installed" ]]; then
+        # Install didn't complete - check if there are partial containers
+        local env_upper
+        env_upper=$(echo "$env" | tr '[:lower:]' '[:upper:]')
+        backend=$(get_state "BACKEND_${env_upper}" || echo "")
+        
+        # Development always uses docker
+        if [[ "$env" == "development" ]]; then
+            backend="docker"
+        fi
+        
+        if [[ -z "$backend" ]]; then
+            echo "not_installed"
+            return
+        fi
+        
+        # Check if there are partial containers (install started but didn't finish)
+        case "$backend" in
+            docker)
+                if check_docker_available 2>/dev/null; then
+                    local prefix
+                    case "$env" in
+                        development) prefix="dev" ;;
+                        staging) prefix="staging" ;;
+                        production) prefix="prod" ;;
+                    esac
+                    local running
+                    running=$(docker ps --filter "name=${prefix}-" --format '{{.Names}}' 2>/dev/null | wc -l | tr -d ' ')
+                    if [[ "$running" -gt 0 ]]; then
+                        echo "partial"  # Containers exist but install not complete
+                    else
+                        echo "not_installed"
+                    fi
+                else
+                    echo "not_installed"
+                fi
+                ;;
+            proxmox)
+                if check_proxmox_available 2>/dev/null && check_proxmox_containers_exist "$env" 2>/dev/null; then
+                    echo "partial"  # Containers exist but install not complete
+                else
+                    echo "not_installed"
+                fi
+                ;;
+            *)
+                echo "not_installed"
+                ;;
+        esac
+        return
+    fi
+    
+    # Install status says installed - verify containers are running
     local env_upper
     env_upper=$(echo "$env" | tr '[:lower:]' '[:upper:]')
     backend=$(get_state "BACKEND_${env_upper}" || echo "")
@@ -109,59 +167,42 @@ detect_installation_status() {
         backend="docker"
     fi
     
-    # No backend configured for staging/production
-    if [[ -z "$backend" ]]; then
-        echo "not_installed"
-        return
-    fi
-    
-    # Check based on backend type
     case "$backend" in
         docker)
-            if ! check_docker_available; then
-                echo "not_installed"
+            if ! check_docker_available 2>/dev/null; then
+                echo "partial"  # Installed but Docker not available
                 return
             fi
-            if check_docker_stack_exists "$env"; then
-                # Check if containers are running
-                local prefix
-                case "$env" in
-                    development) prefix="dev" ;;
-                    staging) prefix="staging" ;;
-                    production) prefix="prod" ;;
-                esac
-                local running
-                running=$(docker ps --filter "name=${prefix}-" --format '{{.Names}}' 2>/dev/null | wc -l | tr -d ' ')
-                if [[ "$running" -gt 0 ]]; then
-                    echo "installed"
-                else
-                    echo "partial"
-                fi
+            local prefix
+            case "$env" in
+                development) prefix="dev" ;;
+                staging) prefix="staging" ;;
+                production) prefix="prod" ;;
+            esac
+            local running
+            running=$(docker ps --filter "name=${prefix}-" --format '{{.Names}}' 2>/dev/null | wc -l | tr -d ' ')
+            if [[ "$running" -gt 0 ]]; then
+                echo "installed"
             else
-                echo "not_installed"
+                echo "partial"  # Installed but containers stopped
             fi
             ;;
         proxmox)
-            if ! check_proxmox_available; then
-                echo "not_installed"
+            if ! check_proxmox_available 2>/dev/null; then
+                echo "partial"
                 return
             fi
-            if check_proxmox_containers_exist "$env"; then
-                # Check if containers are running
-                local base_ctid
-                case "$env" in
-                    production) base_ctid=200 ;;
-                    staging) base_ctid=300 ;;
-                esac
-                local status
-                status=$(pct status "$base_ctid" 2>/dev/null | awk '{print $2}')
-                if [[ "$status" == "running" ]]; then
-                    echo "installed"
-                else
-                    echo "partial"
-                fi
+            local base_ctid
+            case "$env" in
+                production) base_ctid=200 ;;
+                staging) base_ctid=300 ;;
+            esac
+            local status
+            status=$(pct status "$base_ctid" 2>/dev/null | awk '{print $2}')
+            if [[ "$status" == "running" ]]; then
+                echo "installed"
             else
-                echo "not_installed"
+                echo "partial"
             fi
             ;;
         *)

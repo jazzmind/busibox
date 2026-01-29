@@ -9,14 +9,27 @@
 #       docker_wait_service: "postgres"
 #       docker_wait_timeout: 60
 
+- name: Check if environment file exists
+  ansible.builtin.stat:
+    path: "{{ docker_env_file }}"
+  register: _env_file_stat
+
+- name: Set compose command arguments
+  ansible.builtin.set_fact:
+    docker_compose_file_args: "{{ docker_compose_files_list | map('regex_replace', '^(.*)$', '-f \\1') | join(' ') }}"
+    docker_compose_env_args: "{{ '--env-file ' ~ docker_env_file if _env_file_stat.stat.exists else '' }}"
+
 - name: Wait for {{ docker_wait_service }} to be healthy
   ansible.builtin.shell: |
     cd {{ docker_compose_dir }}
     timeout={{ docker_wait_timeout | default(60) }}
     elapsed=0
     while [ $elapsed -lt $timeout ]; do
-      health=$(docker compose {{ docker_compose_file_args }} {{ docker_compose_env_args }} \
-        ps --format json {{ docker_wait_service }} 2>/dev/null | jq -r '.[0].Health // "none"')
+      # Docker compose ps --format json returns either an object (single) or array (multiple)
+      # Use jq to handle both: if array, get first element; if object, use directly
+      json_output=$(docker compose {{ docker_compose_file_args }} {{ docker_compose_env_args }} \
+        ps --format json {{ docker_wait_service }} 2>/dev/null)
+      health=$(echo "$json_output" | jq -r 'if type == "array" then .[0].Health else .Health end // "none"')
       
       case "$health" in
         healthy)
@@ -27,10 +40,9 @@
           echo "Service {{ docker_wait_service }} is unhealthy"
           exit 1
           ;;
-        none)
+        none|null|"")
           # No healthcheck defined, check if running
-          state=$(docker compose {{ docker_compose_file_args }} {{ docker_compose_env_args }} \
-            ps --format json {{ docker_wait_service }} 2>/dev/null | jq -r '.[0].State // "none"')
+          state=$(echo "$json_output" | jq -r 'if type == "array" then .[0].State else .State end // "none"')
           if [ "$state" = "running" ]; then
             echo "Service {{ docker_wait_service }} is running (no healthcheck)"
             exit 0

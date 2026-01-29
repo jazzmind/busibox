@@ -10,8 +10,15 @@
 #       docker_build_first: true
 #       docker_wait_for_health: true
 
-- name: Set service list for compose up
+- name: Check if environment file exists
+  ansible.builtin.stat:
+    path: "{{ docker_env_file }}"
+  register: _env_file_stat
+
+- name: Set compose command arguments
   ansible.builtin.set_fact:
+    docker_compose_file_args: "{{ docker_compose_files_list | map('regex_replace', '^(.*)$', '-f \\1') | join(' ') }}"
+    docker_compose_env_args: "{{ '--env-file ' ~ docker_env_file if _env_file_stat.stat.exists else '' }}"
     _services_arg: "{{ docker_services_to_start | default([]) | join(' ') }}"
 
 - name: Build services (if requested)
@@ -25,23 +32,39 @@
   register: build_result
   changed_when: "'Building' in build_result.stdout or 'built' in build_result.stdout"
 
+- name: Show docker compose command (debug)
+  ansible.builtin.debug:
+    msg: |
+      Running: docker compose {{ docker_compose_file_args }} {{ docker_compose_env_args }} up -d --no-deps {{ _services_arg }}
+      Compose dir: {{ docker_compose_dir }}
+      Env file: {{ docker_env_file }} (exists: {{ _env_file_stat.stat.exists }})
+
 - name: Start services with docker compose up
   ansible.builtin.shell: |
     cd {{ docker_compose_dir }}
+    echo "Starting services: {{ _services_arg }}"
     docker compose {{ docker_compose_file_args }} {{ docker_compose_env_args }} \
       up -d --no-deps {{ '--force-recreate' if docker_force_recreate else '' }} \
       {{ '--remove-orphans' if docker_remove_orphans else '' }} \
-      {{ _services_arg }}
+      {{ _services_arg }} 2>&1
   args:
     chdir: "{{ docker_compose_dir }}"
   register: up_result
-  changed_when: "'Creating' in up_result.stderr or 'Recreating' in up_result.stderr or 'Started' in up_result.stderr"
+  changed_when: "'Creating' in up_result.stdout or 'Recreating' in up_result.stdout or 'Started' in up_result.stdout or 'Creating' in up_result.stderr or 'Recreating' in up_result.stderr"
+
+- name: Show docker compose output
+  ansible.builtin.debug:
+    msg: "{{ up_result.stdout_lines | default([]) + up_result.stderr_lines | default([]) }}"
+  when: up_result is defined
 
 - name: Wait for services to be healthy
   ansible.builtin.shell: |
     cd {{ docker_compose_dir }}
-    docker compose {{ docker_compose_file_args }} {{ docker_compose_env_args }} \
-      ps --format json {{ _services_arg }} | jq -r '.[].Health // "none"'
+    # Docker compose ps --format json returns either an object (single) or array (multiple)
+    json_output=$(docker compose {{ docker_compose_file_args }} {{ docker_compose_env_args }} \
+      ps --format json {{ _services_arg }})
+    # Handle both array and object formats
+    echo "$json_output" | jq -r 'if type == "array" then .[].Health else .Health end // "none"'
   args:
     chdir: "{{ docker_compose_dir }}"
   register: health_check
