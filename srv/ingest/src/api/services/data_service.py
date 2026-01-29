@@ -26,7 +26,7 @@ from contextlib import asynccontextmanager
 import asyncpg
 import structlog
 
-from busibox_common.auth import set_rls_session_vars
+from api.middleware.jwt_auth import set_rls_session_vars
 
 logger = structlog.get_logger()
 

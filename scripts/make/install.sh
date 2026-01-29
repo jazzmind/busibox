@@ -278,16 +278,24 @@ show_stage() {
 # =============================================================================
 
 detect_system() {
-    local os arch ram_gb
+    local os arch ram_gb ram_bytes
     
     os=$(uname -s)
     arch=$(uname -m)
     
-    # Detect RAM
+    # Detect RAM (with fallback on error)
+    ram_gb=8  # Default fallback
     if [[ "$os" == "Darwin" ]]; then
-        ram_gb=$(($(sysctl -n hw.memsize) / 1024 / 1024 / 1024))
+        ram_bytes=$(sysctl -n hw.memsize 2>/dev/null || echo "")
+        if [[ -n "$ram_bytes" && "$ram_bytes" =~ ^[0-9]+$ ]]; then
+            ram_gb=$((ram_bytes / 1024 / 1024 / 1024))
+        fi
     else
-        ram_gb=$(($(grep MemTotal /proc/meminfo | awk '{print $2}') / 1024 / 1024))
+        local mem_kb
+        mem_kb=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}' || echo "")
+        if [[ -n "$mem_kb" && "$mem_kb" =~ ^[0-9]+$ ]]; then
+            ram_gb=$((mem_kb / 1024 / 1024))
+        fi
     fi
     
     # Detect LLM backend capability
@@ -1174,20 +1182,39 @@ _load_github_token_from_vault() {
     
     # Set up vault password if needed
     if is_vault_encrypted; then
-        local vault_pass_file
-        vault_pass_file=$(get_vault_pass_file)
-        if [[ -f "$vault_pass_file" ]]; then
-            export ANSIBLE_VAULT_PASSWORD_FILE="$vault_pass_file"
-        else
-            # Try the standard ~/.vault_pass location
-            if [[ -f "$HOME/.vault_pass" ]]; then
-                export ANSIBLE_VAULT_PASSWORD_FILE="$HOME/.vault_pass"
-            else
-                # Will need to prompt for password - use ensure_vault_access
-                if ! ensure_vault_access 2>/dev/null; then
-                    warn "Could not access vault - GitHub token not loaded"
-                    return 1
+        # Try multiple possible vault password file locations
+        local found_pass_file=""
+        
+        # 1. Environment-specific vault pass file
+        local env_vault_pass
+        env_vault_pass=$(get_vault_pass_file 2>/dev/null || echo "")
+        if [[ -n "$env_vault_pass" && -f "$env_vault_pass" ]]; then
+            found_pass_file="$env_vault_pass"
+        fi
+        
+        # 2. Try all known environment prefixes if not found
+        if [[ -z "$found_pass_file" ]]; then
+            for prefix in prod staging dev demo; do
+                local try_file="${HOME}/.busibox-vault-pass-${prefix}"
+                if [[ -f "$try_file" ]]; then
+                    found_pass_file="$try_file"
+                    break
                 fi
+            done
+        fi
+        
+        # 3. Try the standard ~/.vault_pass location
+        if [[ -z "$found_pass_file" && -f "$HOME/.vault_pass" ]]; then
+            found_pass_file="$HOME/.vault_pass"
+        fi
+        
+        if [[ -n "$found_pass_file" ]]; then
+            export ANSIBLE_VAULT_PASSWORD_FILE="$found_pass_file"
+        else
+            # Will need to prompt for password - use ensure_vault_access
+            if ! ensure_vault_access 2>/dev/null; then
+                warn "Could not access vault - GitHub token not loaded"
+                return 1
             fi
         fi
     fi
@@ -3044,7 +3071,8 @@ main() {
             BASE_DOMAIN=$(get_state "BASE_DOMAIN" "localhost")
             ALLOWED_DOMAINS=$(get_state "ALLOWED_DOMAINS" "*")
             # Load GitHub token from vault (secrets are now in vault, not state)
-            _load_github_token_from_vault
+            # Token may not exist yet - that's OK, we'll prompt later
+            _load_github_token_from_vault || true
         else
             setup_demo_mode
         fi
@@ -3064,7 +3092,8 @@ main() {
             BASE_DOMAIN=$(get_state "BASE_DOMAIN" "localhost")
             ALLOWED_DOMAINS=$(get_state "ALLOWED_DOMAINS" "*")
             # Load GitHub token from vault (secrets are now in vault, not state)
-            _load_github_token_from_vault
+            # Token may not exist yet - that's OK, we'll prompt later
+            _load_github_token_from_vault || true
             
             # Show what we restored
             info "Restored configuration from saved state:"
@@ -3073,7 +3102,7 @@ main() {
             echo -e "  Base Domain:     ${CYAN}${BASE_DOMAIN}${NC}"
             echo -e "  Admin Email:     ${CYAN}${ADMIN_EMAIL:-not set}${NC}"
             echo -e "  Allowed Domains: ${CYAN}${ALLOWED_DOMAINS}${NC}"
-            [[ -n "$GITHUB_AUTH_TOKEN" ]] && echo -e "  GitHub Token:    ${CYAN}saved${NC}"
+            [[ -n "${GITHUB_AUTH_TOKEN:-}" ]] && echo -e "  GitHub Token:    ${CYAN}saved${NC}"
             echo ""
         else
             # Fresh install - run wizards (they use saved values as defaults if available)
@@ -3250,7 +3279,7 @@ main() {
         fi
         
         # GitHub token may be empty for some setups
-        if [[ -z "$GITHUB_AUTH_TOKEN" ]] || [[ "$GITHUB_AUTH_TOKEN" == "CHANGE_ME"* ]]; then
+        if [[ -z "${GITHUB_AUTH_TOKEN:-}" ]] || [[ "${GITHUB_AUTH_TOKEN:-}" == "CHANGE_ME"* ]]; then
             warn "GitHub token not found in vault - may need to re-enter"
             ensure_github_token
         fi

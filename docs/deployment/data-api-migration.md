@@ -87,26 +87,32 @@ Update client code to use the new data endpoints if needed:
 - `@jazzmind/busibox-app` - Add DataClient
 - Agent tools - Already included in deployment
 
-### Phase 4: Full Rename (Future)
+### Phase 4: Full Rename (Optional)
 
-When ready to fully rename the service:
+A comprehensive rename script is available when you're ready to fully transition:
 
-1. **Ansible Roles:**
-   - Copy `roles/ingest` to `roles/data`
-   - Update template names: `ingest-*.j2` → `data-*.j2`
-   - Update service names in systemd files
+```bash
+# Dry run - shows what would be changed
+./scripts/refactor/rename-ingest-to-data.sh
 
-2. **Inventory Updates:**
-   - Update group names in `inventory/*/hosts.yml`
-   - Update `group_vars` filenames
+# Execute the rename
+./scripts/refactor/rename-ingest-to-data.sh --execute
+```
 
-3. **Container Updates:**
-   - Update container name: `ingest-lxc` → `data-lxc`
-   - Update IP assignments in `vars.env`
+The script handles:
+1. **Ansible Roles** - Copies `roles/ingest` to `roles/data`, renames templates
+2. **Docker Compose** - Updates service names, hostnames, volumes
+3. **Inventory Files** - Updates host groups and group_vars
+4. **Scripts** - Updates service references in deployment scripts
+5. **Proxmox/LXC** - Updates container names and IPs
+6. **Documentation** - Updates references in markdown files
 
-4. **Client Updates:**
-   - Update API URLs from `ingest-lxc:8002` to `data-lxc:8002`
-   - Update token audience claims
+**After running the script:**
+1. Review changes: `git diff`
+2. Test locally
+3. Update DNS entries on Proxmox host
+4. Deploy to test environment first
+5. Commit and push changes
 
 ## Rollback
 
