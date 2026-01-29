@@ -2496,32 +2496,70 @@ check_prerequisites() {
     
     local errors=0
     
-    # Docker
-    if ! command -v docker &>/dev/null; then
-        error "Docker is not installed"
-        ((errors++))
-    elif ! docker info &>/dev/null; then
-        error "Docker daemon is not running"
-        ((errors++))
-    else
-        success "Docker installed and running"
+    # Platform-specific checks
+    if [[ "$PLATFORM" == "docker" ]]; then
+        # Docker
+        if ! command -v docker &>/dev/null; then
+            error "Docker is not installed"
+            ((errors++))
+        elif ! docker info &>/dev/null; then
+            error "Docker daemon is not running"
+            ((errors++))
+        else
+            success "Docker installed and running"
+        fi
+        
+        # Docker Compose
+        if ! docker compose version &>/dev/null; then
+            error "Docker Compose is not installed"
+            ((errors++))
+        else
+            success "Docker Compose available"
+        fi
+    elif [[ "$PLATFORM" == "proxmox" ]]; then
+        # Proxmox Container Tools
+        if ! command -v pct &>/dev/null; then
+            error "Proxmox container tools (pct) not found. Are you on a Proxmox host?"
+            ((errors++))
+        else
+            success "Proxmox container tools available"
+        fi
+        
+        # Check if running as root (required for Proxmox)
+        if [[ "$(id -u)" != "0" ]]; then
+            error "Proxmox installation must be run as root"
+            ((errors++))
+        else
+            success "Running as root"
+        fi
+        
+        # Ansible
+        if ! command -v ansible-playbook &>/dev/null; then
+            error "Ansible is not installed"
+            ((errors++))
+        else
+            success "Ansible available"
+        fi
     fi
     
-    # Docker Compose
-    if ! docker compose version &>/dev/null; then
-        error "Docker Compose is not installed"
-        ((errors++))
+    # Common checks
+    
+    # Ansible (required for both platforms now)
+    if ! command -v ansible-playbook &>/dev/null; then
+        warn "Ansible not installed - some features may not work"
     else
-        success "Docker Compose available"
+        success "Ansible available"
     fi
     
-    # RAM check
-    local min_ram=8
-    if [[ $DETECTED_RAM_GB -lt $min_ram ]]; then
-        error "Minimum ${min_ram}GB RAM required, found ${DETECTED_RAM_GB}GB"
-        ((errors++))
-    else
-        success "${DETECTED_RAM_GB}GB RAM available"
+    # RAM check (skip on Proxmox as containers have separate resources)
+    if [[ "$PLATFORM" == "docker" ]]; then
+        local min_ram=8
+        if [[ $DETECTED_RAM_GB -lt $min_ram ]]; then
+            error "Minimum ${min_ram}GB RAM required, found ${DETECTED_RAM_GB}GB"
+            ((errors++))
+        else
+            success "${DETECTED_RAM_GB}GB RAM available"
+        fi
     fi
     
     # Disk space
@@ -2758,15 +2796,13 @@ main() {
         show_install_banner "BUSIBOX INSTALLATION" "Your private AI infrastructure"
     fi
     
-    # Check prerequisites
-    check_prerequisites
-    
     # Determine environment prefix for state checking
     local env_prefix=""
     local resuming=false
     
     if [[ "$DEMO_MODE" == true ]]; then
         env_prefix="demo"
+        PLATFORM="docker"  # Demo always uses Docker
         if check_existing_install "$env_prefix"; then
             resuming=true
         fi
@@ -2810,6 +2846,9 @@ main() {
             wizard_dev_apps_dir
         fi
     fi
+    
+    # Now check prerequisites (after PLATFORM is determined)
+    check_prerequisites
     
     # Check what phase we're resuming from
     local current_phase=""
