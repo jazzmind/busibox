@@ -9,8 +9,15 @@
 #       docker_services_to_stop: ["nginx", "core-apps"]
 #       docker_remove_volumes: false
 
-- name: Set service list for compose stop
+- name: Check if environment file exists
+  ansible.builtin.stat:
+    path: "{{ docker_env_file }}"
+  register: _env_file_stat
+
+- name: Set compose command arguments
   ansible.builtin.set_fact:
+    docker_compose_file_args: "{{ docker_compose_files_list | map('regex_replace', '^(.*)$', '-f \\1') | join(' ') }}"
+    docker_compose_env_args: "{{ '--env-file ' ~ docker_env_file if _env_file_stat.stat.exists else '' }}"
     _services_arg: "{{ docker_services_to_stop | default([]) | join(' ') }}"
 
 - name: Stop services with docker compose stop

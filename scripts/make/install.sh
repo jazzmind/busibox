@@ -25,10 +25,33 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-# Source libraries
+# Source libraries (note: state.sh uses BUSIBOX_ENV for state file path)
+# We'll manage our own state file path after ENVIRONMENT is determined
 source "${SCRIPT_DIR}/../lib/ui.sh"
 source "${SCRIPT_DIR}/../lib/state.sh"
 source "${SCRIPT_DIR}/../lib/github.sh"
+
+# =============================================================================
+# STATE FILE MANAGEMENT
+# =============================================================================
+# Install.sh manages its own state file based on ENVIRONMENT variable
+# This overrides the default state.sh behavior which uses BUSIBOX_ENV
+
+# Update state file path for current environment
+# Call this after ENVIRONMENT is set
+_update_state_file_for_env() {
+    local prefix
+    case "$ENVIRONMENT" in
+        demo) prefix="demo" ;;
+        development) prefix="dev" ;;
+        staging) prefix="staging" ;;
+        production) prefix="prod" ;;
+        *) prefix="dev" ;;
+    esac
+    # Override the global state file path from state.sh
+    BUSIBOX_STATE_FILE="${REPO_ROOT}/.busibox-state-${prefix}"
+    export BUSIBOX_STATE_FILE
+}
 
 # =============================================================================
 # HELPER FUNCTIONS
@@ -273,6 +296,9 @@ wizard_environment() {
             PLATFORM="$BACKEND_FROM_LAUNCHER"
         fi
         
+        # Update state file path for this environment
+        _update_state_file_for_env
+        
         echo ""
         echo -e "┌─ ${BOLD}ENVIRONMENT${NC} ────────────────────────────────────────────────────────────────┐"
         box_line "" "single"
@@ -315,6 +341,9 @@ wizard_environment() {
             *) echo "Invalid choice. Please enter 1, 2, or 3." ;;
         esac
     done
+    
+    # Update state file path for this environment
+    _update_state_file_for_env
 }
 
 wizard_platform() {
@@ -643,6 +672,10 @@ wizard_domain() {
         return
     fi
     
+    # Load saved value as default
+    local saved_domain
+    saved_domain=$(get_state "BASE_DOMAIN" "localhost")
+    
     echo ""
     echo -e "┌─ ${BOLD}DOMAIN CONFIGURATION${NC} ───────────────────────────────────────────────────────┐"
     box_line "" "single"
@@ -656,33 +689,66 @@ wizard_domain() {
     echo -e "└──────────────────────────────────────────────────────────────────────────────┘"
     echo ""
     
-    read -p "$(echo -e "${BOLD}Base domain [localhost]:${NC} ")" BASE_DOMAIN
-    BASE_DOMAIN="${BASE_DOMAIN:-localhost}"
+    read -p "$(echo -e "${BOLD}Base domain [${saved_domain}]:${NC} ")" BASE_DOMAIN
+    BASE_DOMAIN="${BASE_DOMAIN:-${saved_domain}}"
     
     echo ""
     echo -e "  ${DIM}AI Portal will be available at:${NC} ${CYAN}https://${BASE_DOMAIN}/portal${NC}"
 }
 
 wizard_admin() {
+    # Load saved values as defaults
+    local saved_email saved_domains
+    saved_email=$(get_state "ADMIN_EMAIL" "")
+    saved_domains=$(get_state "ALLOWED_DOMAINS" "")
+    
     echo ""
     echo -e "┌─ ${BOLD}ADMIN CONFIGURATION${NC} ────────────────────────────────────────────────────────┐"
     box_line "" "single"
     box_line "  The admin account will have full access to manage Busibox." "single"
     box_line "  A magic link will be sent to this email for passwordless login." "single"
+    box_line "  You can specify multiple emails separated by commas." "single"
     box_line "" "single"
     echo -e "└──────────────────────────────────────────────────────────────────────────────┘"
     echo ""
     
-    read -p "$(echo -e "${BOLD}Admin email:${NC} ")" ADMIN_EMAIL
+    if [[ -n "$saved_email" ]]; then
+        read -p "$(echo -e "${BOLD}Admin email(s) [${saved_email}]:${NC} ")" ADMIN_EMAIL
+        ADMIN_EMAIL="${ADMIN_EMAIL:-${saved_email}}"
+    else
+        read -p "$(echo -e "${BOLD}Admin email(s):${NC} ")" ADMIN_EMAIL
+    fi
     
     if [[ "$ENVIRONMENT" != "development" ]]; then
+        # Extract unique domains from admin emails for default
+        # E.g., "wes@sonnenreich.com,wes@maigent.ai" -> "sonnenreich.com,maigent.ai"
+        local default_domains=""
+        local seen_domains=""
+        IFS=',' read -ra emails <<< "$ADMIN_EMAIL"
+        for email in "${emails[@]}"; do
+            # Trim whitespace and extract domain
+            email=$(echo "$email" | xargs)
+            local domain="${email##*@}"
+            # Only add if not seen before
+            if [[ ! ",$seen_domains," =~ ",$domain," ]]; then
+                if [[ -n "$default_domains" ]]; then
+                    default_domains="${default_domains},${domain}"
+                else
+                    default_domains="${domain}"
+                fi
+                seen_domains="${seen_domains},${domain}"
+            fi
+        done
+        
+        # Use saved value if available, otherwise extracted domains
+        local display_default="${saved_domains:-${default_domains}}"
+        
         echo ""
         echo -e "  ${DIM}Restrict which email domains can sign up (comma-separated).${NC}"
         echo -e "  ${DIM}Use * to allow any domain.${NC}"
         echo ""
-        local default_domains="${BASE_DOMAIN}"
-        read -p "$(echo -e "${BOLD}Allowed email domains [${default_domains}]:${NC} ")" ALLOWED_DOMAINS
-        ALLOWED_DOMAINS="${ALLOWED_DOMAINS:-${default_domains}}"
+        read -p "$(echo -e "${BOLD}Allowed email domains [${display_default}]:${NC} ")" ALLOWED_DOMAINS
+        ALLOWED_DOMAINS="${ALLOWED_DOMAINS:-${display_default}}"
     else
         ALLOWED_DOMAINS="*"
     fi
@@ -995,6 +1061,17 @@ GITHUB_AUTH_TOKEN=${GITHUB_AUTH_TOKEN}
 BUSIBOX_HOST_PATH="${REPO_ROOT}"
 export BUSIBOX_HOST_PATH
 
+# Docker Development Mode
+# - local-dev: Uses local directory mounts for hot-reload (development)
+# - github: Clones from GitHub at build time (staging/production)
+DOCKER_DEV_MODE=${DOCKER_DEV_MODE:-local-dev}
+EOF
+
+    # Environment-specific app configuration
+    if [[ "$ENVIRONMENT" == "development" ]]; then
+        # Development: mount local directories for hot-reload
+        cat >> "$env_file" << EOF
+
 # App Directories (for volume mounts in docker-compose.local-dev.yml)
 AI_PORTAL_DIR=${AI_PORTAL_DIR}
 AGENT_MANAGER_DIR=${AGENT_MANAGER_DIR}
@@ -1006,6 +1083,24 @@ APPS_BASE_DIR=${APPS_BASE_DIR}
 DEV_APPS_DIR=${DEV_APPS_DIR:-${APPS_BASE_DIR}}
 DEV_APPS_DIR_HOST=${DEV_APPS_DIR:-${APPS_BASE_DIR}}
 EOF
+    else
+        # Staging/Production: clone from GitHub releases
+        cat >> "$env_file" << EOF
+
+# GitHub Release Configuration (for docker-compose.github.yml)
+# Uses latest release by default; override to pin specific versions
+AI_PORTAL_GITHUB_REF=${AI_PORTAL_GITHUB_REF:-main}
+AGENT_MANAGER_GITHUB_REF=${AGENT_MANAGER_GITHUB_REF:-main}
+
+# Empty local paths (not used in github mode)
+AI_PORTAL_DIR=
+AGENT_MANAGER_DIR=
+BUSIBOX_APP_DIR=
+APPS_BASE_DIR=
+DEV_APPS_DIR=
+DEV_APPS_DIR_HOST=
+EOF
+    fi
     
     chmod 600 "$env_file"
     success "Created ${env_file}"
@@ -1136,20 +1231,19 @@ bootstrap_docker_ansible() {
         local tags="$1"
         local log_file="${REPO_ROOT}/.ansible-${container_prefix}-${tags}.log"
         
-        if [[ "$VERBOSE" == true ]]; then
-            # Verbose mode: show all output with colors
-            ANSIBLE_FORCE_COLOR=1 $playbook_cmd --tags "$tags" 2>&1 | tee "$log_file"
-        else
-            # Quiet mode: run and show summary, save full log
-            echo ""
-            ANSIBLE_FORCE_COLOR=1 $playbook_cmd --tags "$tags" 2>&1 | tee "$log_file" | grep -E "^(TASK|PLAY|ok:|changed:|failed:|fatal:|skipping:|included:|\s+[✓✗]|localhost)" || true
-            local exit_code=${PIPESTATUS[0]}
-            if [[ $exit_code -ne 0 ]]; then
-                error "Ansible failed. See log: $log_file"
-                tail -30 "$log_file"
-                return 1
-            fi
+        # Always show full output for now - ansible filtering is tricky
+        # Use -v for slightly more verbose output to see what's happening
+        echo ""
+        info "Running ansible with tags: $tags"
+        ANSIBLE_FORCE_COLOR=1 $playbook_cmd --tags "$tags" -v 2>&1 | tee "$log_file"
+        local exit_code=${PIPESTATUS[0]}
+        
+        if [[ $exit_code -ne 0 ]]; then
+            error "Ansible failed (exit code: $exit_code). See log: $log_file"
+            return 1
         fi
+        
+        return 0
     }
     
     # Run deployment phases with progress display
@@ -2471,6 +2565,9 @@ setup_demo_mode() {
     ADMIN_EMAIL="demo@localhost"
     ALLOWED_DOMAINS="*"
     
+    # Update state file path for demo environment
+    _update_state_file_for_env
+    
     # Use detected LLM backend
     if [[ "$DETECTED_LLM_BACKEND" != "cloud" ]]; then
         LLM_BACKEND="$DETECTED_LLM_BACKEND"
@@ -2485,6 +2582,16 @@ setup_demo_mode() {
         wizard_aws_credentials
         LLM_BACKEND="cloud"
     fi
+    
+    # Save demo mode settings to state
+    set_state "ENVIRONMENT" "$ENVIRONMENT"
+    set_state "PLATFORM" "$PLATFORM"
+    set_state "LLM_BACKEND" "$LLM_BACKEND"
+    set_state "LLM_TIER" "${LLM_TIER:-}"
+    set_state "ADMIN_EMAIL" "$ADMIN_EMAIL"
+    set_state "BASE_DOMAIN" "$BASE_DOMAIN"
+    set_state "ALLOWED_DOMAINS" "$ALLOWED_DOMAINS"
+    set_install_phase "wizard_complete"
 }
 
 # =============================================================================
@@ -2802,7 +2909,10 @@ main() {
     
     if [[ "$DEMO_MODE" == true ]]; then
         env_prefix="demo"
+        ENVIRONMENT="demo"
         PLATFORM="docker"  # Demo always uses Docker
+        # Update state file path for demo environment
+        _update_state_file_for_env
         if check_existing_install "$env_prefix"; then
             resuming=true
         fi
@@ -2811,14 +2921,16 @@ main() {
     # Run wizard or use demo defaults (or resume from saved state)
     if [[ "$DEMO_MODE" == true ]]; then
         if [[ "$resuming" == true ]]; then
-            # Load saved state
-            ENVIRONMENT=$(get_state "ENVIRONMENT" "demo")
+            # Load saved state - all wizard values (state file path already updated above)
             PLATFORM=$(get_state "PLATFORM" "docker")
             LLM_BACKEND=$(get_state "LLM_BACKEND" "$DETECTED_LLM_BACKEND")
             LLM_TIER=$(get_state "LLM_TIER" "$DETECTED_LLM_TIER")
             ADMIN_EMAIL=$(get_state "ADMIN_EMAIL" "demo@localhost")
             BASE_DOMAIN=$(get_state "BASE_DOMAIN" "localhost")
             ALLOWED_DOMAINS=$(get_state "ALLOWED_DOMAINS" "*")
+            # Load saved secrets
+            GITHUB_AUTH_TOKEN=$(get_state "GITHUB_AUTH_TOKEN" "")
+            export GITHUB_AUTH_TOKEN
         else
             setup_demo_mode
         fi
@@ -2826,24 +2938,48 @@ main() {
         # For non-demo mode, we need to run wizard to know which environment
         wizard_environment
         
-        # Now we can check for existing install
+        # Now we can check for existing install (state file path is now correct for this env)
         env_prefix=$(get_container_prefix)
         if check_existing_install "$env_prefix"; then
             resuming=true
-            # Load saved state
+            # Load saved state - all wizard values
             PLATFORM=$(get_state "PLATFORM" "docker")
             LLM_BACKEND=$(get_state "LLM_BACKEND" "")
             LLM_TIER=$(get_state "LLM_TIER" "")
             ADMIN_EMAIL=$(get_state "ADMIN_EMAIL" "")
             BASE_DOMAIN=$(get_state "BASE_DOMAIN" "localhost")
             ALLOWED_DOMAINS=$(get_state "ALLOWED_DOMAINS" "*")
+            # Load saved secrets
+            GITHUB_AUTH_TOKEN=$(get_state "GITHUB_AUTH_TOKEN" "")
+            export GITHUB_AUTH_TOKEN
+            
+            # Show what we restored
+            info "Restored configuration from saved state:"
+            echo -e "  Platform:        ${CYAN}${PLATFORM}${NC}"
+            echo -e "  LLM Backend:     ${CYAN}${LLM_BACKEND:-not set}${NC}"
+            echo -e "  Base Domain:     ${CYAN}${BASE_DOMAIN}${NC}"
+            echo -e "  Admin Email:     ${CYAN}${ADMIN_EMAIL:-not set}${NC}"
+            echo -e "  Allowed Domains: ${CYAN}${ALLOWED_DOMAINS}${NC}"
+            [[ -n "$GITHUB_AUTH_TOKEN" ]] && echo -e "  GitHub Token:    ${CYAN}saved${NC}"
+            echo ""
         else
+            # Fresh install - run wizards (they use saved values as defaults if available)
             wizard_platform
             wizard_llm_backend
             wizard_network
             wizard_domain
             wizard_admin
             wizard_dev_apps_dir
+            
+            # Save wizard inputs to state immediately so they can be restored on resume
+            set_state "ENVIRONMENT" "$ENVIRONMENT"
+            set_state "PLATFORM" "$PLATFORM"
+            set_state "LLM_BACKEND" "$LLM_BACKEND"
+            set_state "LLM_TIER" "${LLM_TIER:-}"
+            set_state "ADMIN_EMAIL" "$ADMIN_EMAIL"
+            set_state "BASE_DOMAIN" "$BASE_DOMAIN"
+            set_state "ALLOWED_DOMAINS" "${ALLOWED_DOMAINS:-*}"
+            set_install_phase "wizard_complete"
         fi
     fi
     
@@ -2857,49 +2993,69 @@ main() {
     fi
     
     # GitHub token is always required (for both demo and regular install)
-    # Skip if we already have it from a previous run
-    if [[ "$current_phase" != "secrets_generated" && "$current_phase" != "bootstrap_started" && "$current_phase" != "bootstrap_complete" ]]; then
+    # Check if we have a valid token - prompt if missing or empty
+    if [[ -z "${GITHUB_AUTH_TOKEN:-}" ]]; then
         if ! wizard_github_token; then
             error "Cannot proceed without valid GitHub token"
             exit 1
         fi
+        # Save token to state
+        set_state "GITHUB_AUTH_TOKEN" "$GITHUB_AUTH_TOKEN"
         set_install_phase "github_token_obtained"
+    else
+        info "Using saved GitHub token"
     fi
     
-    # Detect app directories (ai-portal, agent-manager, busibox-app)
-    # These are required for volume mounts in docker-compose.local-dev.yml
-    if [[ "$current_phase" == "secrets_generated" || "$current_phase" == "bootstrap_started" || "$current_phase" == "bootstrap_complete" ]]; then
-        # Load saved paths from state
-        AI_PORTAL_DIR=$(get_state "AI_PORTAL_DIR" "")
-        AGENT_MANAGER_DIR=$(get_state "AGENT_MANAGER_DIR" "")
-        BUSIBOX_APP_DIR=$(get_state "BUSIBOX_APP_DIR" "")
-        APPS_BASE_DIR=$(get_state "APPS_BASE_DIR" "")
-        DEV_APPS_DIR=$(get_dev_apps_dir)
+    # App directory detection depends on environment:
+    # - development: Requires local directories for volume mounts (hot-reload)
+    # - staging/production: Deploys from GitHub releases (no local dirs needed)
+    if [[ "$ENVIRONMENT" == "development" ]]; then
+        # Development mode: detect local app directories for volume mounts
+        export DOCKER_DEV_MODE="local-dev"
         
-        # If not in state, detect them
-        if [[ -z "$AI_PORTAL_DIR" || -z "$BUSIBOX_APP_DIR" ]]; then
+        if [[ "$current_phase" == "secrets_generated" || "$current_phase" == "bootstrap_started" || "$current_phase" == "bootstrap_complete" ]]; then
+            # Load saved paths from state
+            AI_PORTAL_DIR=$(get_state "AI_PORTAL_DIR" "")
+            AGENT_MANAGER_DIR=$(get_state "AGENT_MANAGER_DIR" "")
+            BUSIBOX_APP_DIR=$(get_state "BUSIBOX_APP_DIR" "")
+            APPS_BASE_DIR=$(get_state "APPS_BASE_DIR" "")
+            DEV_APPS_DIR=$(get_dev_apps_dir)
+            
+            # If not in state, detect them
+            if [[ -z "$AI_PORTAL_DIR" || -z "$BUSIBOX_APP_DIR" ]]; then
+                if ! detect_app_directories; then
+                    error "Cannot proceed without app directories"
+                    exit 1
+                fi
+            fi
+            # Default DEV_APPS_DIR if not set
+            DEV_APPS_DIR="${DEV_APPS_DIR:-$APPS_BASE_DIR}"
+        else
             if ! detect_app_directories; then
                 error "Cannot proceed without app directories"
                 exit 1
             fi
-        fi
-        # Default DEV_APPS_DIR if not set
-        DEV_APPS_DIR="${DEV_APPS_DIR:-$APPS_BASE_DIR}"
-    else
-        if ! detect_app_directories; then
-            error "Cannot proceed without app directories"
-            exit 1
-        fi
-        # Save paths to state
-        set_state "AI_PORTAL_DIR" "$AI_PORTAL_DIR"
-        set_state "AGENT_MANAGER_DIR" "$AGENT_MANAGER_DIR"
-        set_state "BUSIBOX_APP_DIR" "$BUSIBOX_APP_DIR"
-        set_state "APPS_BASE_DIR" "$APPS_BASE_DIR"
-        # For development environment, set DEV_APPS_DIR (defaults to APPS_BASE_DIR if not set by wizard)
-        if [[ "$ENVIRONMENT" == "development" ]]; then
+            # Save paths to state
+            set_state "AI_PORTAL_DIR" "$AI_PORTAL_DIR"
+            set_state "AGENT_MANAGER_DIR" "$AGENT_MANAGER_DIR"
+            set_state "BUSIBOX_APP_DIR" "$BUSIBOX_APP_DIR"
+            set_state "APPS_BASE_DIR" "$APPS_BASE_DIR"
+            # Set DEV_APPS_DIR (defaults to APPS_BASE_DIR if not set by wizard)
             DEV_APPS_DIR="${DEV_APPS_DIR:-$APPS_BASE_DIR}"
             set_dev_apps_dir "$DEV_APPS_DIR"
         fi
+    else
+        # Staging/Production mode: deploy from GitHub releases
+        # No local directory detection needed - apps are cloned at build time
+        export DOCKER_DEV_MODE="github"
+        info "Using GitHub mode - apps will be deployed from latest releases"
+        
+        # Set empty values to prevent docker-compose from complaining about missing vars
+        AI_PORTAL_DIR=""
+        AGENT_MANAGER_DIR=""
+        BUSIBOX_APP_DIR=""
+        APPS_BASE_DIR=""
+        DEV_APPS_DIR=""
     fi
     
     # Start model download in background early (if MLX backend)

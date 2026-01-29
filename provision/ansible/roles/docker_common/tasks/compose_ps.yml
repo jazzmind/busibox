@@ -8,8 +8,15 @@
 #     vars:
 #       docker_ps_services: ["postgres", "redis"]  # optional, all if not specified
 
-- name: Set service list for compose ps
+- name: Check if environment file exists
+  ansible.builtin.stat:
+    path: "{{ docker_env_file }}"
+  register: _env_file_stat
+
+- name: Set compose command arguments
   ansible.builtin.set_fact:
+    docker_compose_file_args: "{{ docker_compose_files_list | map('regex_replace', '^(.*)$', '-f \\1') | join(' ') }}"
+    docker_compose_env_args: "{{ '--env-file ' ~ docker_env_file if _env_file_stat.stat.exists else '' }}"
     _services_arg: "{{ docker_ps_services | default([]) | join(' ') }}"
 
 - name: Get container status
@@ -24,7 +31,15 @@
 
 - name: Parse container status
   ansible.builtin.set_fact:
-    docker_container_status: "{{ ps_result.stdout | from_json if ps_result.stdout else [] }}"
+    # Docker compose ps --format json returns either an object (single) or array (multiple)
+    # Normalize to always be a list
+    docker_container_status: >-
+      {%- set parsed = ps_result.stdout | from_json if ps_result.stdout else [] -%}
+      {%- if parsed is mapping -%}
+        {{ [parsed] }}
+      {%- else -%}
+        {{ parsed }}
+      {%- endif -%}
 
 - name: Display container status
   ansible.builtin.debug:

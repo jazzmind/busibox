@@ -27,12 +27,17 @@ compose_project_name: "{{ container_prefix }}"
 docker_compose_dir: "{{ playbook_dir }}/../.."
 
 # Development mode: local-dev (volume mounts) or github (clone at build)
+# - local-dev: Mounts local directories for hot-reload development
+# - github: Clones from GitHub at build time (staging/production)
 docker_dev_mode: "{{ lookup('env', 'DOCKER_DEV_MODE') | default('local-dev', true) }}"
 
 # List of compose files to use (required by docker_common role)
-docker_compose_files_list:
-  - "{{ docker_compose_dir }}/docker-compose.yml"
-  - "{{ docker_compose_dir }}/docker-compose.local-dev.yml"
+# Dynamically selected based on docker_dev_mode
+docker_compose_files_list: >-
+  {{
+    [docker_compose_dir ~ '/docker-compose.yml'] +
+    ([docker_compose_dir ~ '/docker-compose.local-dev.yml'] if docker_dev_mode == 'local-dev' else [docker_compose_dir ~ '/docker-compose.github.yml'])
+  }}
 
 # Environment file path
 docker_env_file: "{{ docker_compose_dir }}/.env.{{ container_prefix }}"
