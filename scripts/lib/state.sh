@@ -480,3 +480,178 @@ show_state() {
     fi
     echo "===================="
 }
+
+# ============================================================================
+# Version Tracking
+# ============================================================================
+# Tracks deployed versions for repositories:
+#   DEPLOYED_<REPO>_TYPE = branch | release
+#   DEPLOYED_<REPO>_REF = branch name or release tag
+#   DEPLOYED_<REPO>_COMMIT = short commit SHA
+#   DEPLOYED_<REPO>_TIME = ISO timestamp of deployment
+
+# List of tracked repositories
+TRACKED_REPO_KEYS="busibox ai-portal agent-manager busibox-app"
+
+# Save deployed version for a repository
+# Usage: save_deployed_version "busibox" "branch" "main" "abc1234"
+# Usage: save_deployed_version "ai-portal" "release" "v1.2.3" "def5678"
+save_deployed_version() {
+    local repo_key="$1"
+    local version_type="$2"  # "branch" or "release"
+    local ref="$3"           # branch name or tag
+    local commit="$4"        # short commit SHA
+    local timestamp
+    timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    
+    # Normalize repo key to uppercase for state keys
+    local key_prefix="DEPLOYED_$(echo "$repo_key" | tr '[:lower:]-' '[:upper:]_')"
+    
+    set_state "${key_prefix}_TYPE" "$version_type"
+    set_state "${key_prefix}_REF" "$ref"
+    set_state "${key_prefix}_COMMIT" "$commit"
+    set_state "${key_prefix}_TIME" "$timestamp"
+}
+
+# Get deployed version for a repository
+# Usage: info=$(get_deployed_version "busibox")
+# Returns: "type:ref:commit" or empty if not tracked
+get_deployed_version() {
+    local repo_key="$1"
+    local key_prefix="DEPLOYED_$(echo "$repo_key" | tr '[:lower:]-' '[:upper:]_')"
+    
+    local version_type ref commit
+    version_type=$(get_state "${key_prefix}_TYPE" "")
+    ref=$(get_state "${key_prefix}_REF" "")
+    commit=$(get_state "${key_prefix}_COMMIT" "")
+    
+    if [[ -n "$version_type" ]] && [[ -n "$ref" ]]; then
+        echo "${version_type}:${ref}:${commit}"
+    fi
+}
+
+# Get deployed version time
+# Usage: time=$(get_deployed_version_time "busibox")
+get_deployed_version_time() {
+    local repo_key="$1"
+    local key_prefix="DEPLOYED_$(echo "$repo_key" | tr '[:lower:]-' '[:upper:]_')"
+    get_state "${key_prefix}_TIME" ""
+}
+
+# Get deployed version type (branch or release)
+# Usage: type=$(get_deployed_version_type "busibox")
+get_deployed_version_type() {
+    local repo_key="$1"
+    local key_prefix="DEPLOYED_$(echo "$repo_key" | tr '[:lower:]-' '[:upper:]_')"
+    get_state "${key_prefix}_TYPE" ""
+}
+
+# Get deployed version ref (branch name or release tag)
+# Usage: ref=$(get_deployed_version_ref "busibox")
+get_deployed_version_ref() {
+    local repo_key="$1"
+    local key_prefix="DEPLOYED_$(echo "$repo_key" | tr '[:lower:]-' '[:upper:]_')"
+    get_state "${key_prefix}_REF" ""
+}
+
+# Get deployed version commit
+# Usage: commit=$(get_deployed_version_commit "busibox")
+get_deployed_version_commit() {
+    local repo_key="$1"
+    local key_prefix="DEPLOYED_$(echo "$repo_key" | tr '[:lower:]-' '[:upper:]_')"
+    get_state "${key_prefix}_COMMIT" ""
+}
+
+# Clear deployed version for a repository
+# Usage: clear_deployed_version "busibox"
+clear_deployed_version() {
+    local repo_key="$1"
+    local key_prefix="DEPLOYED_$(echo "$repo_key" | tr '[:lower:]-' '[:upper:]_')"
+    
+    set_state "${key_prefix}_TYPE" ""
+    set_state "${key_prefix}_REF" ""
+    set_state "${key_prefix}_COMMIT" ""
+    set_state "${key_prefix}_TIME" ""
+}
+
+# Clear all deployed versions
+# Usage: clear_all_deployed_versions
+clear_all_deployed_versions() {
+    for repo_key in $TRACKED_REPO_KEYS; do
+        clear_deployed_version "$repo_key"
+    done
+}
+
+# Get human-readable time since deployment
+# Usage: ago=$(get_deployed_version_ago "busibox")
+get_deployed_version_ago() {
+    local repo_key="$1"
+    local deploy_time
+    deploy_time=$(get_deployed_version_time "$repo_key")
+    
+    if [[ -z "$deploy_time" ]]; then
+        echo "never"
+        return
+    fi
+    
+    local now last_epoch now_epoch diff
+    
+    # Convert to epoch seconds
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        last_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$deploy_time" "+%s" 2>/dev/null || echo "0")
+        now_epoch=$(date "+%s")
+    else
+        last_epoch=$(date -d "$deploy_time" "+%s" 2>/dev/null || echo "0")
+        now_epoch=$(date "+%s")
+    fi
+    
+    if [[ "$last_epoch" == "0" ]]; then
+        echo "unknown"
+        return
+    fi
+    
+    diff=$((now_epoch - last_epoch))
+    
+    if [[ $diff -lt 60 ]]; then
+        echo "just now"
+    elif [[ $diff -lt 3600 ]]; then
+        echo "$((diff / 60)) minutes ago"
+    elif [[ $diff -lt 86400 ]]; then
+        echo "$((diff / 3600)) hours ago"
+    else
+        echo "$((diff / 86400)) days ago"
+    fi
+}
+
+# Check if any repository has a deployed version tracked
+# Usage: if has_deployed_versions; then ...
+has_deployed_versions() {
+    for repo_key in $TRACKED_REPO_KEYS; do
+        local version
+        version=$(get_deployed_version "$repo_key")
+        if [[ -n "$version" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Display deployed versions summary
+# Usage: show_deployed_versions
+show_deployed_versions() {
+    echo "=== Deployed Versions ==="
+    for repo_key in $TRACKED_REPO_KEYS; do
+        local version type ref commit ago
+        version=$(get_deployed_version "$repo_key")
+        if [[ -n "$version" ]]; then
+            type=$(get_deployed_version_type "$repo_key")
+            ref=$(get_deployed_version_ref "$repo_key")
+            commit=$(get_deployed_version_commit "$repo_key")
+            ago=$(get_deployed_version_ago "$repo_key")
+            printf "  %-15s %s:%s@%s (%s)\n" "$repo_key" "$type" "$ref" "$commit" "$ago"
+        else
+            printf "  %-15s (not tracked)\n" "$repo_key"
+        fi
+    done
+    echo "========================="
+}

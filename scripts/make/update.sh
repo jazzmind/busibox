@@ -53,6 +53,11 @@ if [[ -f "${SCRIPT_DIR}/../lib/github.sh" ]]; then
     source "${SCRIPT_DIR}/../lib/github.sh"
 fi
 
+# Source versions.sh for version tracking
+if [[ -f "${SCRIPT_DIR}/../lib/versions.sh" ]]; then
+    source "${SCRIPT_DIR}/../lib/versions.sh"
+fi
+
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
@@ -122,10 +127,11 @@ normalize_environment() {
 # Get environment from ENV variable or state
 # Valid environments for Proxmox: staging, production
 # Valid environments for Docker: staging, production, development, demo
+# DEFAULT: staging (if nothing else specified)
 get_environment() {
     local env=""
     
-    # Check ENV variable first
+    # Check ENV variable first (highest priority)
     if [[ -n "${ENV:-}" ]]; then
         env=$(normalize_environment "$ENV")
         echo "$env"
@@ -141,13 +147,7 @@ get_environment() {
         esac
     fi
     
-    # For Proxmox, default to staging (don't check state files)
-    if [[ "$PLATFORM" == "proxmox" ]] || [[ "$FORCE_PROXMOX" == true ]]; then
-        echo "staging"
-        return
-    fi
-    
-    # For Docker, check state file
+    # Check state file for saved environment
     local saved_env
     saved_env=$(get_state "ENVIRONMENT" "" 2>/dev/null || echo "")
     if [[ -n "$saved_env" ]]; then
@@ -155,7 +155,8 @@ get_environment() {
         return
     fi
     
-    # Default to staging
+    # DEFAULT: staging for all platforms
+    # This ensures a safe default that doesn't accidentally affect production
     echo "staging"
 }
 
@@ -1214,6 +1215,80 @@ update_docker() {
 # COMPLETION
 # =============================================================================
 
+# Save deployed versions after successful update
+save_all_deployed_versions() {
+    info "Recording deployed versions..."
+    
+    # Save busibox version
+    cd "$REPO_ROOT"
+    if [[ -d ".git" ]]; then
+        local busibox_commit busibox_branch busibox_tag
+        busibox_commit=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+        busibox_tag=$(git describe --tags --exact-match 2>/dev/null || true)
+        
+        if [[ -n "$busibox_tag" ]]; then
+            save_deployed_version "busibox" "release" "$busibox_tag" "$busibox_commit"
+        else
+            busibox_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
+            save_deployed_version "busibox" "branch" "$busibox_branch" "$busibox_commit"
+        fi
+    fi
+    
+    # Save ai-portal version
+    local ai_portal_dir
+    ai_portal_dir=$(get_state "AI_PORTAL_DIR" "")
+    if [[ -n "$ai_portal_dir" ]] && [[ -d "$ai_portal_dir/.git" ]]; then
+        cd "$ai_portal_dir"
+        local ap_commit ap_branch ap_tag
+        ap_commit=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+        ap_tag=$(git describe --tags --exact-match 2>/dev/null || true)
+        
+        if [[ -n "$ap_tag" ]]; then
+            save_deployed_version "ai-portal" "release" "$ap_tag" "$ap_commit"
+        else
+            ap_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
+            save_deployed_version "ai-portal" "branch" "$ap_branch" "$ap_commit"
+        fi
+    fi
+    
+    # Save agent-manager version
+    local agent_manager_dir
+    agent_manager_dir=$(get_state "AGENT_MANAGER_DIR" "")
+    if [[ -n "$agent_manager_dir" ]] && [[ -d "$agent_manager_dir/.git" ]]; then
+        cd "$agent_manager_dir"
+        local am_commit am_branch am_tag
+        am_commit=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+        am_tag=$(git describe --tags --exact-match 2>/dev/null || true)
+        
+        if [[ -n "$am_tag" ]]; then
+            save_deployed_version "agent-manager" "release" "$am_tag" "$am_commit"
+        else
+            am_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
+            save_deployed_version "agent-manager" "branch" "$am_branch" "$am_commit"
+        fi
+    fi
+    
+    # Save busibox-app version
+    local busibox_app_dir
+    busibox_app_dir=$(get_state "BUSIBOX_APP_DIR" "")
+    if [[ -n "$busibox_app_dir" ]] && [[ -d "$busibox_app_dir/.git" ]]; then
+        cd "$busibox_app_dir"
+        local ba_commit ba_branch ba_tag
+        ba_commit=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+        ba_tag=$(git describe --tags --exact-match 2>/dev/null || true)
+        
+        if [[ -n "$ba_tag" ]]; then
+            save_deployed_version "busibox-app" "release" "$ba_tag" "$ba_commit"
+        else
+            ba_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
+            save_deployed_version "busibox-app" "branch" "$ba_branch" "$ba_commit"
+        fi
+    fi
+    
+    cd "$REPO_ROOT"
+    success "Deployed versions recorded"
+}
+
 show_completion() {
     local environment
     environment=$(get_environment)
@@ -1252,6 +1327,406 @@ show_completion() {
 }
 
 # =============================================================================
+# INTERACTIVE MENU
+# =============================================================================
+
+# Show the main update menu
+show_update_menu() {
+    local environment
+    environment=$(get_environment)
+    
+    clear
+    show_update_banner
+    
+    printf '  Environment: %s%s%s\n' "$_BOLD" "$(ucfirst "$environment")" "$_NC"
+    printf '  Platform: %s%s%s\n' "$_BOLD" "$(ucfirst "$PLATFORM")" "$_NC"
+    echo ""
+    
+    echo -e "  ${_BOLD}Main Menu:${_NC}"
+    echo -e "    ${_CYAN}1)${_NC} Change environment (currently: ${environment})"
+    echo -e "    ${_CYAN}2)${_NC} What needs to be updated?"
+    echo -e "    ${_CYAN}3)${_NC} Run update"
+    echo -e "    ${_CYAN}4)${_NC} Exit"
+    echo ""
+    
+    while true; do
+        echo -ne "  ${_BOLD}Select option [1-4]:${_NC} "
+        read -r choice
+        
+        case "$choice" in
+            1) return 1 ;;  # Change environment
+            2) return 2 ;;  # What needs updating
+            3) return 3 ;;  # Run update
+            4) return 0 ;;  # Exit
+            *) echo -e "  ${_RED}Invalid selection${_NC}" ;;
+        esac
+    done
+}
+
+# Show environment selection menu
+select_environment_menu() {
+    echo ""
+    simple_border "top"
+    simple_line "${_BOLD}Select Environment${_NC}" 2
+    simple_border "bottom"
+    echo ""
+    
+    echo -e "    ${_CYAN}1)${_NC} Staging     ${_DIM}(10.96.201.x network)${_NC}"
+    echo -e "    ${_CYAN}2)${_NC} Production  ${_DIM}(10.96.200.x network)${_NC}"
+    if [[ "$PLATFORM" == "docker" ]]; then
+        echo -e "    ${_CYAN}3)${_NC} Development ${_DIM}(Docker dev mode)${_NC}"
+        echo -e "    ${_CYAN}4)${_NC} Demo        ${_DIM}(Docker prod mode)${_NC}"
+    fi
+    echo -e "    ${_CYAN}0)${_NC} Cancel"
+    echo ""
+    
+    while true; do
+        echo -ne "  ${_BOLD}Select [0-4]:${_NC} "
+        read -r choice
+        
+        case "$choice" in
+            0) return ;;
+            1) 
+                ENV="staging"
+                export ENV
+                set_state "ENVIRONMENT" "staging"
+                success "Environment set to: staging"
+                ;;
+            2) 
+                ENV="production"
+                export ENV
+                set_state "ENVIRONMENT" "production"
+                success "Environment set to: production"
+                ;;
+            3)
+                if [[ "$PLATFORM" == "docker" ]]; then
+                    ENV="development"
+                    export ENV
+                    set_state "ENVIRONMENT" "development"
+                    success "Environment set to: development"
+                else
+                    echo -e "  ${_RED}Invalid selection${_NC}"
+                    continue
+                fi
+                ;;
+            4)
+                if [[ "$PLATFORM" == "docker" ]]; then
+                    ENV="demo"
+                    export ENV
+                    set_state "ENVIRONMENT" "demo"
+                    success "Environment set to: demo"
+                else
+                    echo -e "  ${_RED}Invalid selection${_NC}"
+                    continue
+                fi
+                ;;
+            *) 
+                echo -e "  ${_RED}Invalid selection${_NC}"
+                continue
+                ;;
+        esac
+        break
+    done
+    
+    sleep 1
+}
+
+# Show what needs to be updated
+show_update_status() {
+    echo ""
+    simple_border "top"
+    simple_line "${_BOLD}Update Status${_NC}" 2
+    simple_border "bottom"
+    
+    # Check if versions.sh is loaded
+    if ! type get_update_summary &>/dev/null; then
+        echo ""
+        echo -e "  ${_YELLOW}Version tracking not available${_NC}"
+        echo -e "  ${_DIM}Install jq for version comparison: brew install jq${_NC}"
+        echo ""
+    else
+        # Ensure GitHub token for API access
+        if ! _get_github_token &>/dev/null; then
+            echo ""
+            echo -e "  ${_YELLOW}GitHub token required for version checking${_NC}"
+            echo ""
+            if type ensure_github_token &>/dev/null; then
+                ensure_github_token || {
+                    echo -e "  ${_RED}Could not get GitHub token${_NC}"
+                    pause "Press any key to continue..."
+                    return
+                }
+            fi
+        fi
+        
+        # Show update summary
+        info "Checking for updates..."
+        get_update_summary
+    fi
+    
+    pause "Press any key to continue..."
+}
+
+# Select version for a specific repository
+# Usage: select_repo_version "busibox"
+# Sets: SELECTED_VERSION_TYPE, SELECTED_VERSION_REF
+select_repo_version() {
+    local repo_key="$1"
+    local repo="${TRACKED_REPOS[$repo_key]:-}"
+    
+    if [[ -z "$repo" ]]; then
+        warn "Unknown repository: $repo_key"
+        return 1
+    fi
+    
+    echo ""
+    simple_border "top"
+    simple_line "${_BOLD}Select version for: ${repo_key}${_NC}" 2
+    simple_border "bottom"
+    echo ""
+    
+    # Get current deployed version
+    local deployed
+    deployed=$(get_deployed_version "$repo_key")
+    if [[ -n "$deployed" ]]; then
+        local type ref commit
+        type=$(parse_deployed_version "$deployed" "type")
+        ref=$(parse_deployed_version "$deployed" "ref")
+        commit=$(parse_deployed_version "$deployed" "commit")
+        echo -e "  ${_DIM}Currently deployed: ${type}:${ref}@${commit}${_NC}"
+        echo ""
+    fi
+    
+    # Get default branch
+    local default_branch="${DEFAULT_BRANCHES[$repo_key]:-main}"
+    
+    # Get latest on default branch
+    local branch_head=""
+    branch_head=$(get_branch_head "$repo_key" "$default_branch" 2>/dev/null) || true
+    
+    # Get latest release
+    local latest_release=""
+    latest_release=$(get_latest_release "$repo_key" 2>/dev/null) || true
+    
+    echo -e "    ${_CYAN}1)${_NC} Latest on branch: ${default_branch}"
+    if [[ -n "$branch_head" ]]; then
+        echo -e "       ${_DIM}(commit: ${branch_head})${_NC}"
+    fi
+    
+    if [[ -n "$latest_release" ]]; then
+        echo -e "    ${_CYAN}2)${_NC} Latest release: ${latest_release}"
+    else
+        echo -e "    ${_DIM}2) No releases available${_NC}"
+    fi
+    
+    echo -e "    ${_CYAN}3)${_NC} Specific release..."
+    echo -e "    ${_CYAN}4)${_NC} Specific branch..."
+    echo -e "    ${_CYAN}5)${_NC} Skip this repo"
+    echo ""
+    
+    while true; do
+        echo -ne "  ${_BOLD}Select [1-5]:${_NC} "
+        read -r choice
+        
+        case "$choice" in
+            1)
+                SELECTED_VERSION_TYPE="branch"
+                SELECTED_VERSION_REF="$default_branch"
+                return 0
+                ;;
+            2)
+                if [[ -n "$latest_release" ]]; then
+                    SELECTED_VERSION_TYPE="release"
+                    SELECTED_VERSION_REF="$latest_release"
+                    return 0
+                else
+                    echo -e "  ${_RED}No releases available${_NC}"
+                    continue
+                fi
+                ;;
+            3)
+                # Show list of releases
+                echo ""
+                info "Fetching releases..."
+                local releases
+                releases=$(get_release_options "$repo_key" 10 2>/dev/null) || true
+                
+                if [[ -z "$releases" ]]; then
+                    echo -e "  ${_RED}No releases found${_NC}"
+                    continue
+                fi
+                
+                echo ""
+                echo -e "  ${_BOLD}Available releases:${_NC}"
+                local i=1
+                local release_array=()
+                while IFS= read -r release; do
+                    echo -e "    ${_CYAN}${i})${_NC} ${release}"
+                    release_array+=("$release")
+                    ((i++))
+                done <<< "$releases"
+                echo -e "    ${_CYAN}0)${_NC} Cancel"
+                echo ""
+                
+                echo -ne "  ${_BOLD}Select release:${_NC} "
+                read -r rel_choice
+                
+                if [[ "$rel_choice" == "0" ]]; then
+                    continue
+                fi
+                
+                if [[ "$rel_choice" =~ ^[0-9]+$ ]] && [[ "$rel_choice" -ge 1 ]] && [[ "$rel_choice" -le "${#release_array[@]}" ]]; then
+                    SELECTED_VERSION_TYPE="release"
+                    SELECTED_VERSION_REF="${release_array[$((rel_choice-1))]}"
+                    return 0
+                else
+                    echo -e "  ${_RED}Invalid selection${_NC}"
+                fi
+                ;;
+            4)
+                # Show list of branches
+                echo ""
+                info "Fetching branches..."
+                local branches
+                branches=$(get_branch_options "$repo_key" 10 2>/dev/null) || true
+                
+                if [[ -z "$branches" ]]; then
+                    echo -e "  ${_RED}No branches found${_NC}"
+                    continue
+                fi
+                
+                echo ""
+                echo -e "  ${_BOLD}Available branches:${_NC}"
+                local i=1
+                local branch_array=()
+                while IFS= read -r branch; do
+                    echo -e "    ${_CYAN}${i})${_NC} ${branch}"
+                    branch_array+=("$branch")
+                    ((i++))
+                done <<< "$branches"
+                echo -e "    ${_CYAN}0)${_NC} Cancel"
+                echo ""
+                
+                echo -ne "  ${_BOLD}Select branch:${_NC} "
+                read -r br_choice
+                
+                if [[ "$br_choice" == "0" ]]; then
+                    continue
+                fi
+                
+                if [[ "$br_choice" =~ ^[0-9]+$ ]] && [[ "$br_choice" -ge 1 ]] && [[ "$br_choice" -le "${#branch_array[@]}" ]]; then
+                    SELECTED_VERSION_TYPE="branch"
+                    SELECTED_VERSION_REF="${branch_array[$((br_choice-1))]}"
+                    return 0
+                else
+                    echo -e "  ${_RED}Invalid selection${_NC}"
+                fi
+                ;;
+            5)
+                SELECTED_VERSION_TYPE="skip"
+                SELECTED_VERSION_REF=""
+                return 0
+                ;;
+            *)
+                echo -e "  ${_RED}Invalid selection${_NC}"
+                ;;
+        esac
+    done
+}
+
+# Interactive version selection for all repos
+# Sets up UPDATE_TARGETS associative array
+declare -A UPDATE_TARGETS
+
+select_update_targets() {
+    UPDATE_TARGETS=()
+    
+    echo ""
+    simple_border "top"
+    simple_line "${_BOLD}Select Update Targets${_NC}" 2
+    simple_border "bottom"
+    echo ""
+    
+    # Check if we should use quick mode or detailed selection
+    echo -e "  ${_CYAN}1)${_NC} Quick update (latest on current branch/release)"
+    echo -e "  ${_CYAN}2)${_NC} Select versions for each repository"
+    echo -e "  ${_CYAN}0)${_NC} Cancel"
+    echo ""
+    
+    echo -ne "  ${_BOLD}Select mode [0-2]:${_NC} "
+    read -r mode
+    
+    case "$mode" in
+        0)
+            return 1
+            ;;
+        1)
+            # Quick mode - use current track (branch or release)
+            for repo_key in busibox ai-portal agent-manager busibox-app; do
+                local deployed
+                deployed=$(get_deployed_version "$repo_key")
+                
+                if [[ -n "$deployed" ]]; then
+                    local type ref
+                    type=$(parse_deployed_version "$deployed" "type")
+                    ref=$(parse_deployed_version "$deployed" "ref")
+                    UPDATE_TARGETS["$repo_key"]="${type}:${ref}"
+                else
+                    # Default to main branch
+                    UPDATE_TARGETS["$repo_key"]="branch:main"
+                fi
+            done
+            return 0
+            ;;
+        2)
+            # Detailed selection for each repo
+            for repo_key in busibox ai-portal agent-manager busibox-app; do
+                if select_repo_version "$repo_key"; then
+                    if [[ "$SELECTED_VERSION_TYPE" != "skip" ]]; then
+                        UPDATE_TARGETS["$repo_key"]="${SELECTED_VERSION_TYPE}:${SELECTED_VERSION_REF}"
+                    fi
+                fi
+            done
+            
+            if [[ ${#UPDATE_TARGETS[@]} -eq 0 ]]; then
+                warn "No repositories selected for update"
+                return 1
+            fi
+            
+            return 0
+            ;;
+        *)
+            echo -e "  ${_RED}Invalid selection${_NC}"
+            return 1
+            ;;
+    esac
+}
+
+# Run the interactive menu loop
+run_interactive_menu() {
+    while true; do
+        show_update_menu
+        local choice=$?
+        
+        case $choice in
+            0)  # Exit
+                info "Goodbye!"
+                exit 0
+                ;;
+            1)  # Change environment
+                select_environment_menu
+                ;;
+            2)  # What needs updating
+                show_update_status
+                ;;
+            3)  # Run update
+                return 0
+                ;;
+        esac
+    done
+}
+
+# =============================================================================
 # MAIN
 # =============================================================================
 
@@ -1261,13 +1736,22 @@ main() {
     # Detect platform
     detect_platform
     
-    # Get environment
+    # Get environment (defaults to staging now)
     local environment
     environment=$(get_environment)
     local container_prefix
     container_prefix=$(get_container_prefix)
     
-    # Show banner
+    # Interactive menu mode (unless --no-prompt)
+    if [[ "$NO_PROMPT" != true ]]; then
+        run_interactive_menu
+    fi
+    
+    # Re-get environment after potential menu changes
+    environment=$(get_environment)
+    container_prefix=$(get_container_prefix)
+    
+    # Show banner for the actual update
     show_update_banner
     
     printf '  Environment: %s%s%s\n' "$_BOLD" "$(ucfirst "$environment")" "$_NC"
@@ -1304,11 +1788,17 @@ main() {
             error "Proxmox update failed"
             exit 1
         fi
+        
+        # Save deployed versions
+        save_all_deployed_versions
     else
         if ! update_docker; then
             error "Docker update failed"
             exit 1
         fi
+        
+        # Save deployed versions
+        save_all_deployed_versions
         
         # Open browser for Docker
         local base_domain
