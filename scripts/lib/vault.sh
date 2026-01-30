@@ -6,16 +6,157 @@
 #   Provides functions for accessing Ansible vault secrets from make install/update.
 #   Used by both Docker and Proxmox deployments to access encrypted secrets.
 #
+#   MULTI-VAULT ARCHITECTURE:
+#   -------------------------
+#   Supports separate vault files per environment (dev, staging, prod, demo):
+#   - vault.dev.yml    -> ~/.busibox-vault-pass-dev
+#   - vault.staging.yml -> ~/.busibox-vault-pass-staging
+#   - vault.prod.yml   -> ~/.busibox-vault-pass-prod
+#   - vault.demo.yml   -> ~/.busibox-vault-pass-demo
+#   
+#   Fallback for legacy setups:
+#   - vault.yml        -> ~/.vault_pass
+#
 # Usage:
 #   source scripts/lib/vault.sh
+#   set_vault_environment "prod"  # Set environment first!
 #   ensure_vault_access
 #   get_vault_secret "secrets.postgresql.password"
 #
 # Dependencies: ansible-vault, yq (optional, for structured reading)
 
-# Vault file locations (relative to REPO_ROOT)
-VAULT_FILE="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}/provision/ansible/roles/secrets/vars/vault.yml"
-VAULT_EXAMPLE="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}/provision/ansible/roles/secrets/vars/vault.example.yml"
+# Base paths (relative to REPO_ROOT)
+_VAULT_BASE_DIR="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}/provision/ansible/roles/secrets/vars"
+
+# Current vault environment (set by set_vault_environment)
+VAULT_ENVIRONMENT=""
+
+# Vault file locations - these get set by set_vault_environment()
+# Default to legacy single vault for backwards compatibility
+VAULT_FILE="${_VAULT_BASE_DIR}/vault.yml"
+VAULT_EXAMPLE="${_VAULT_BASE_DIR}/vault.example.yml"
+VAULT_PASS_FILE=""
+
+# =============================================================================
+# Environment-Specific Vault Functions
+# =============================================================================
+
+# Set the vault environment - MUST be called before accessing vault
+# Usage: set_vault_environment "prod"
+# Sets up VAULT_FILE and VAULT_PASS_FILE for the given environment
+set_vault_environment() {
+    local env_prefix="$1"
+    
+    if [[ -z "$env_prefix" ]]; then
+        _vault_error "Environment prefix required (dev, staging, prod, demo)"
+        return 1
+    fi
+    
+    VAULT_ENVIRONMENT="$env_prefix"
+    
+    # Environment-specific vault file
+    local env_vault="${_VAULT_BASE_DIR}/vault.${env_prefix}.yml"
+    local env_pass_file="$HOME/.busibox-vault-pass-${env_prefix}"
+    
+    # Check if environment-specific vault exists
+    if [[ -f "$env_vault" ]]; then
+        VAULT_FILE="$env_vault"
+        VAULT_PASS_FILE="$env_pass_file"
+        VAULT_EXAMPLE="${_VAULT_BASE_DIR}/vault.example.yml"
+        _vault_info "Using environment vault: vault.${env_prefix}.yml"
+        return 0
+    fi
+    
+    # Fallback to legacy single vault
+    local legacy_vault="${_VAULT_BASE_DIR}/vault.yml"
+    if [[ -f "$legacy_vault" ]]; then
+        VAULT_FILE="$legacy_vault"
+        # Try env-specific pass file first, then legacy
+        if [[ -f "$env_pass_file" ]]; then
+            VAULT_PASS_FILE="$env_pass_file"
+        elif [[ -f "$HOME/.vault_pass" ]]; then
+            VAULT_PASS_FILE="$HOME/.vault_pass"
+        else
+            VAULT_PASS_FILE="$env_pass_file"  # Will be created
+        fi
+        _vault_warn "Environment vault not found, using legacy vault.yml"
+        _vault_warn "Consider creating: vault.${env_prefix}.yml"
+        return 0
+    fi
+    
+    # Neither exists - will need to be created
+    VAULT_FILE="$env_vault"
+    VAULT_PASS_FILE="$env_pass_file"
+    VAULT_EXAMPLE="${_VAULT_BASE_DIR}/vault.example.yml"
+    return 0
+}
+
+# Get the vault file path for an environment (without setting it)
+# Usage: get_vault_file_for_env "prod"
+get_vault_file_for_env() {
+    local env_prefix="$1"
+    local env_vault="${_VAULT_BASE_DIR}/vault.${env_prefix}.yml"
+    
+    if [[ -f "$env_vault" ]]; then
+        echo "$env_vault"
+    elif [[ -f "${_VAULT_BASE_DIR}/vault.yml" ]]; then
+        echo "${_VAULT_BASE_DIR}/vault.yml"
+    else
+        echo "$env_vault"  # Return expected path even if doesn't exist
+    fi
+}
+
+# Get the vault password file path for an environment
+# Usage: get_vault_pass_file_for_env "prod"
+get_vault_pass_file_for_env() {
+    local env_prefix="$1"
+    local env_pass="$HOME/.busibox-vault-pass-${env_prefix}"
+    
+    if [[ -f "$env_pass" ]]; then
+        echo "$env_pass"
+    elif [[ -f "$HOME/.vault_pass" ]]; then
+        echo "$HOME/.vault_pass"
+    else
+        echo "$env_pass"  # Return expected path
+    fi
+}
+
+# Verify vault can be decrypted with the given password file
+# Usage: verify_vault_decryption [vault_file] [pass_file]
+# Returns 0 if successful, 1 if failed
+verify_vault_decryption() {
+    local vault_file="${1:-$VAULT_FILE}"
+    local pass_file="${2:-$VAULT_PASS_FILE}"
+    
+    if [[ ! -f "$vault_file" ]]; then
+        _vault_error "Vault file not found: $vault_file"
+        return 1
+    fi
+    
+    if [[ ! -f "$pass_file" ]]; then
+        _vault_error "Vault password file not found: $pass_file"
+        _vault_error "Expected password file for this environment: $pass_file"
+        return 1
+    fi
+    
+    # Test decryption
+    if ! ansible-vault view "$vault_file" --vault-password-file="$pass_file" &>/dev/null; then
+        _vault_error "Failed to decrypt vault!"
+        _vault_error "  Vault file: $vault_file"
+        _vault_error "  Password file: $pass_file"
+        _vault_error ""
+        _vault_error "This usually means:"
+        _vault_error "  1. The password file contains the wrong password"
+        _vault_error "  2. The vault was encrypted with a different password"
+        _vault_error ""
+        _vault_error "To fix:"
+        _vault_error "  - Ensure $pass_file contains the correct password"
+        _vault_error "  - Or re-encrypt the vault with: ansible-vault rekey $vault_file"
+        return 1
+    fi
+    
+    return 0
+}
 
 # Colors (use existing if available, or define minimal set)
 _V_RED="${RED:-\033[0;31m}"
@@ -128,8 +269,11 @@ encrypt_vault() {
 
 # Ensure vault password is accessible
 # Sets ANSIBLE_VAULT_PASSWORD_FILE environment variable
+# 
+# IMPORTANT: Call set_vault_environment() first to set the correct vault context!
 ensure_vault_access() {
-    local vault_pass_file="$HOME/.vault_pass"
+    # Determine which password file to use
+    local vault_pass_file="${VAULT_PASS_FILE:-$HOME/.vault_pass}"
     
     # Check ansible-vault is available
     if ! check_ansible_vault; then
@@ -175,20 +319,44 @@ ensure_vault_access() {
     
     # Use existing password file if available
     if [[ -f "$vault_pass_file" ]]; then
-        _vault_info "Using vault password from ~/.vault_pass"
+        _vault_info "Using vault password from $vault_pass_file"
         export ANSIBLE_VAULT_PASSWORD_FILE="$vault_pass_file"
         
-        # Verify password works
-        if ! ansible-vault view "$VAULT_FILE" &>/dev/null; then
-            _vault_error "Vault password in ~/.vault_pass is incorrect"
-            rm -f "$vault_pass_file"
-            # Fall through to prompt
+        # Verify password works - this is CRITICAL
+        if ! ansible-vault view "$VAULT_FILE" --vault-password-file="$vault_pass_file" &>/dev/null; then
+            _vault_error ""
+            _vault_error "╔══════════════════════════════════════════════════════════════════════════════╗"
+            _vault_error "║                      VAULT DECRYPTION FAILED                                ║"
+            _vault_error "╚══════════════════════════════════════════════════════════════════════════════╝"
+            _vault_error ""
+            _vault_error "  Vault file:    $VAULT_FILE"
+            _vault_error "  Password file: $vault_pass_file"
+            _vault_error "  Environment:   ${VAULT_ENVIRONMENT:-unset}"
+            _vault_error ""
+            _vault_error "  The password in $vault_pass_file cannot decrypt this vault."
+            _vault_error ""
+            _vault_error "  This usually means:"
+            _vault_error "    • The vault was encrypted with a different password"
+            _vault_error "    • You're using the wrong environment's password file"
+            _vault_error ""
+            _vault_error "  To fix:"
+            _vault_error "    1. Update the password file with the correct password:"
+            _vault_error "       echo 'your-vault-password' > $vault_pass_file"
+            _vault_error "       chmod 600 $vault_pass_file"
+            _vault_error ""
+            _vault_error "    2. Or re-encrypt the vault with a new password:"
+            _vault_error "       ansible-vault rekey $VAULT_FILE"
+            _vault_error ""
+            # Don't silently fall through - this is a critical error
+            return 1
         else
             return 0
         fi
     fi
     
-    # Prompt for password
+    # Password file doesn't exist - prompt for password
+    _vault_info "No password file found at: $vault_pass_file"
+    
     local max_attempts=3
     local attempt=1
     
@@ -210,15 +378,16 @@ ensure_vault_access() {
         export ANSIBLE_VAULT_PASSWORD_FILE="$tmp_pass"
         
         # Verify password works
-        if ansible-vault view "$VAULT_FILE" &>/dev/null; then
+        if ansible-vault view "$VAULT_FILE" --vault-password-file="$tmp_pass" &>/dev/null; then
             # Password is correct - offer to save it
             echo ""
-            read -p "Save password to ~/.vault_pass for future use? (y/N) " save_pass
+            local save_target="$vault_pass_file"
+            read -p "Save password to $save_target for future use? (y/N) " save_pass
             if [[ "$save_pass" =~ ^[Yy]$ ]]; then
-                echo "$vault_pass" > "$vault_pass_file"
-                chmod 600 "$vault_pass_file"
-                _vault_info "Password saved to ~/.vault_pass"
-                export ANSIBLE_VAULT_PASSWORD_FILE="$vault_pass_file"
+                echo "$vault_pass" > "$save_target"
+                chmod 600 "$save_target"
+                _vault_info "Password saved to $save_target"
+                export ANSIBLE_VAULT_PASSWORD_FILE="$save_target"
                 rm -f "$tmp_pass"
             else
                 # Clean up temp file on exit
@@ -253,9 +422,16 @@ get_vault_secret() {
             # Unencrypted - read directly
             :
         else
-            _vault_error "Vault access not initialized. Call ensure_vault_access first."
+            _vault_error "Vault access not initialized."
+            _vault_error "Call set_vault_environment() and ensure_vault_access() first."
             return 1
         fi
+    fi
+    
+    # Verify password file still exists
+    if [[ -n "$ANSIBLE_VAULT_PASSWORD_FILE" ]] && [[ ! -f "$ANSIBLE_VAULT_PASSWORD_FILE" ]]; then
+        _vault_error "Vault password file not found: $ANSIBLE_VAULT_PASSWORD_FILE"
+        return 1
     fi
     
     # Convert dot notation to yq path (e.g., secrets.postgresql.password -> .secrets.postgresql.password)

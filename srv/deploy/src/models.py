@@ -81,3 +81,44 @@ class DeploymentResult(BaseModel):
     deploymentId: str
     status: str
     appUrl: Optional[str] = None
+
+
+# =============================================================================
+# CONFIG MODELS - Runtime configuration stored in database
+# =============================================================================
+
+class ConfigValue(BaseModel):
+    """A single configuration value"""
+    key: str
+    value: str
+    encrypted: bool = False
+    category: Optional[str] = None
+    description: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class ConfigSetRequest(BaseModel):
+    """Request to set a configuration value"""
+    value: str
+    encrypted: bool = False
+    category: Optional[str] = None
+    description: Optional[str] = None
+
+
+class ConfigBulkSetRequest(BaseModel):
+    """Request to set multiple configuration values"""
+    configs: Dict[str, ConfigSetRequest]
+
+
+class ConfigListResponse(BaseModel):
+    """Response for listing all config keys"""
+    configs: List[ConfigValue]
+    total: int
+
+
+class ConfigCategory(BaseModel):
+    """A configuration category with its keys"""
+    category: str
+    keys: List[str]
+    count: int

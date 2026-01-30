@@ -78,7 +78,7 @@ source "${SCRIPT_DIR}/../lib/github.sh"
 # Install.sh manages its own state file based on ENVIRONMENT variable
 # This overrides the default state.sh behavior which uses BUSIBOX_ENV
 
-# Update state file path for current environment
+# Update state file path and vault environment for current environment
 # Call this after ENVIRONMENT is set
 _update_state_file_for_env() {
     local prefix
@@ -91,6 +91,10 @@ _update_state_file_for_env() {
     esac
     # Override the global state file path from state.sh
     BUSIBOX_STATE_FILE="${REPO_ROOT}/.busibox-state-${prefix}"
+    
+    # Set vault environment for this prefix
+    # This configures VAULT_FILE and VAULT_PASS_FILE
+    set_vault_environment "$prefix"
     export BUSIBOX_STATE_FILE
 }
 
@@ -1168,6 +1172,8 @@ get_vault_pass_file() {
 
 # Load GitHub token from vault (used during resume)
 # This sets GITHUB_AUTH_TOKEN environment variable if found in vault
+# 
+# IMPORTANT: set_vault_environment() should be called first via _update_state_file_for_env()
 _load_github_token_from_vault() {
     # Skip if token already set
     if [[ -n "${GITHUB_AUTH_TOKEN:-}" ]]; then
@@ -1176,43 +1182,33 @@ _load_github_token_from_vault() {
     
     # Check if vault file exists
     if [[ ! -f "$VAULT_FILE" ]]; then
-        return 0
+        warn "Vault file not found: $VAULT_FILE"
+        return 1
     fi
     
     # Set up vault password if needed
     if is_vault_encrypted; then
-        # Try multiple possible vault password file locations
-        local found_pass_file=""
+        # VAULT_PASS_FILE should be set by set_vault_environment()
+        local pass_file="${VAULT_PASS_FILE:-$(get_vault_pass_file)}"
         
-        # 1. Environment-specific vault pass file
-        local env_vault_pass
-        env_vault_pass=$(get_vault_pass_file 2>/dev/null || echo "")
-        if [[ -n "$env_vault_pass" && -f "$env_vault_pass" ]]; then
-            found_pass_file="$env_vault_pass"
-        fi
-        
-        # 2. Try all known environment prefixes if not found
-        if [[ -z "$found_pass_file" ]]; then
-            for prefix in prod staging dev demo; do
-                local try_file="${HOME}/.busibox-vault-pass-${prefix}"
-                if [[ -f "$try_file" ]]; then
-                    found_pass_file="$try_file"
-                    break
-                fi
-            done
-        fi
-        
-        # 3. Try the standard ~/.vault_pass location
-        if [[ -z "$found_pass_file" && -f "$HOME/.vault_pass" ]]; then
-            found_pass_file="$HOME/.vault_pass"
-        fi
-        
-        if [[ -n "$found_pass_file" ]]; then
-            export ANSIBLE_VAULT_PASSWORD_FILE="$found_pass_file"
+        if [[ -n "$pass_file" && -f "$pass_file" ]]; then
+            export ANSIBLE_VAULT_PASSWORD_FILE="$pass_file"
+            
+            # Verify we can actually decrypt the vault
+            if ! verify_vault_decryption "$VAULT_FILE" "$pass_file"; then
+                error ""
+                error "Cannot load secrets - vault decryption failed!"
+                error ""
+                error "Environment: ${VAULT_ENVIRONMENT:-unknown}"
+                error "Vault file: $VAULT_FILE"
+                error "Password file: $pass_file"
+                error ""
+                return 1
+            fi
         else
-            # Will need to prompt for password - use ensure_vault_access
-            if ! ensure_vault_access 2>/dev/null; then
-                warn "Could not access vault - GitHub token not loaded"
+            # Password file not found - need to prompt
+            if ! ensure_vault_access; then
+                error "Could not access vault - secrets not loaded"
                 return 1
             fi
         fi
@@ -1223,8 +1219,15 @@ _load_github_token_from_vault() {
     vault_token=$(get_vault_secret "secrets.github.personal_access_token" 2>/dev/null || echo "")
     
     if [[ -n "$vault_token" ]] && [[ "$vault_token" != "null" ]] && [[ "$vault_token" != "CHANGE_ME"* ]]; then
-        export GITHUB_AUTH_TOKEN="$vault_token"
-        return 0
+        # Validate the token before accepting it
+        if validate_github_token "$vault_token" --quiet 2>/dev/null; then
+            export GITHUB_AUTH_TOKEN="$vault_token"
+            info "GitHub token loaded from vault and validated"
+            return 0
+        else
+            warn "GitHub token from vault failed validation - will prompt for new token"
+            return 1
+        fi
     fi
     
     return 1
@@ -1232,42 +1235,23 @@ _load_github_token_from_vault() {
 
 # Load admin config from vault (used during resume)
 # This sets ADMIN_EMAIL and ALLOWED_DOMAINS from vault if they're not set or are "null"
+#
+# IMPORTANT: set_vault_environment() should be called first via _update_state_file_for_env()
 _load_admin_config_from_vault() {
     # Check if vault file exists
     if [[ ! -f "$VAULT_FILE" ]]; then
         return 0
     fi
     
-    # Set up vault password if needed (reuse logic from GitHub token loader)
+    # Set up vault password if needed
+    # ANSIBLE_VAULT_PASSWORD_FILE should already be set by _load_github_token_from_vault
+    # or ensure_vault_access, but double-check
     if is_vault_encrypted && [[ -z "${ANSIBLE_VAULT_PASSWORD_FILE:-}" ]]; then
-        local found_pass_file=""
-        
-        # Try environment-specific vault pass file
-        local env_vault_pass
-        env_vault_pass=$(get_vault_pass_file 2>/dev/null || echo "")
-        if [[ -n "$env_vault_pass" && -f "$env_vault_pass" ]]; then
-            found_pass_file="$env_vault_pass"
-        fi
-        
-        # Try all known environment prefixes if not found
-        if [[ -z "$found_pass_file" ]]; then
-            for prefix in prod staging dev demo; do
-                local try_file="${HOME}/.busibox-vault-pass-${prefix}"
-                if [[ -f "$try_file" ]]; then
-                    found_pass_file="$try_file"
-                    break
-                fi
-            done
-        fi
-        
-        # Try the standard ~/.vault_pass location
-        if [[ -z "$found_pass_file" && -f "$HOME/.vault_pass" ]]; then
-            found_pass_file="$HOME/.vault_pass"
-        fi
-        
-        if [[ -n "$found_pass_file" ]]; then
-            export ANSIBLE_VAULT_PASSWORD_FILE="$found_pass_file"
+        local pass_file="${VAULT_PASS_FILE:-$(get_vault_pass_file)}"
+        if [[ -n "$pass_file" && -f "$pass_file" ]]; then
+            export ANSIBLE_VAULT_PASSWORD_FILE="$pass_file"
         else
+            # Can't load without password
             return 1
         fi
     fi
@@ -1358,10 +1342,13 @@ bootstrap_docker_ansible() {
     playbook_cmd+=" -e busibox_env=${ENVIRONMENT:-development}"
     playbook_cmd+=" -e github_token=${GITHUB_AUTH_TOKEN:-}"
     playbook_cmd+=" -e admin_email=${ADMIN_EMAIL:-}"
+    playbook_cmd+=" -e docker_dev_mode=${DOCKER_DEV_MODE:-local-dev}"
     
     if [[ -n "$vault_args" ]]; then
         playbook_cmd+=" $vault_args"
     fi
+    
+    info "Docker mode: ${DOCKER_DEV_MODE:-local-dev}"
     
     # Helper function to run ansible with proper output handling
     run_ansible() {
@@ -1446,19 +1433,13 @@ bootstrap_docker_ansible() {
         ((attempt++))
     done
     
-    # Phase 5: Core Apps (AI Portal + Agent Manager)
-    show_stage 80 "Deploying AI Portal" "Your command center for managing Busibox."
+    # Phase 5: Core Apps (Nginx + AI Portal + Agent Manager)
+    # In Docker mode, nginx is bundled inside the core-apps container
+    # This mirrors the Proxmox apps-lxc architecture
+    show_stage 80 "Deploying Core Apps" "Nginx, AI Portal, and Agent Manager."
     info "Running: ansible-playbook ... --tags core-apps"
     if ! run_ansible "core-apps"; then
         error "Core apps deployment failed"
-        return 1
-    fi
-    
-    # Phase 6: Nginx (reverse proxy)
-    show_stage 90 "Deploying Nginx" "Reverse proxy with SSL termination."
-    info "Running: ansible-playbook ... --tags nginx"
-    if ! run_ansible "nginx"; then
-        error "Nginx deployment failed"
         return 1
     fi
     

@@ -939,15 +939,20 @@ services:
   # ===========================================================================
 
 # ===========================================================================
-  # NGINX REVERSE PROXY
+  # NGINX REVERSE PROXY (Standalone - for hybrid mode only)
   # ===========================================================================
-
-  # Nginx - Reverse Proxy (routes traffic to all services)
-  # In hybrid mode (default), proxies to locally-running Next.js apps on host ports
+  # 
+  # NOTE: When using core-apps container (dev or production mode), nginx is
+  # bundled inside core-apps. This standalone nginx is only used for hybrid
+  # mode where Next.js apps run directly on the host machine.
+  #
+  # To use standalone nginx: docker compose --profile hybrid up nginx
+  #
   nginx:
+    profiles: ["hybrid"]  # Only starts with --profile hybrid
     image: nginx:alpine
     container_name: ${CONTAINER_PREFIX:-dev}-nginx
-    hostname: nginx
+    hostname: nginx-standalone
     labels:
       - "config_version=${GIT_COMMIT:-unknown}"
     ports:

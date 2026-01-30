@@ -172,6 +172,8 @@ help:
 	@echo "  make vault-generate-env                  # Generate .env.local from vault"
 	@echo "  make vault-migrate                       # Migrate .env.local to vault (one-time)"
 	@echo "  make vault-sync                          # Sync vault with vault.example.yml"
+	@echo "  make vault-setup                         # Multi-vault setup wizard"
+	@echo "  make vault-setup ARGS='--status'         # Show vault status"
 	@echo ""
 	@echo "═══════════════════════════════════════════════════════════════════════"
 	@echo "                         TESTING"
@@ -741,6 +743,12 @@ vault-migrate:
 # Sync vault structure with vault.example.yml
 vault-sync:
 	@bash scripts/vault/sync-vault.sh
+
+# Multi-vault setup: Create environment-specific vault files
+# Usage: make vault-setup           # Interactive wizard
+#        make vault-setup --status  # Show vault status
+vault-setup:
+	@bash scripts/vault-migrate.sh $(ARGS)
 
 # ============================================================================
 # MLX & HOST-AGENT MANAGEMENT (Apple Silicon only)

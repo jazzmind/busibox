@@ -10,25 +10,22 @@
 #       docker_logs_lines: 100
 #       docker_logs_follow: false
 
-- name: Check if environment file exists
-  ansible.builtin.stat:
-    path: "{{ docker_env_file }}"
-  register: _env_file_stat
-
 - name: Set compose command arguments
   ansible.builtin.set_fact:
     docker_compose_file_args: "{{ docker_compose_files_list | map('regex_replace', '^(.*)$', '-f \\1') | join(' ') }}"
-    docker_compose_env_args: "{{ '--env-file ' ~ docker_env_file if _env_file_stat.stat.exists else '' }}"
 
 - name: Get container logs
   ansible.builtin.shell: |
     cd {{ docker_compose_dir }}
-    docker compose {{ docker_compose_file_args }} {{ docker_compose_env_args }} \
+    docker compose {{ docker_compose_file_args }} \
       logs {{ '--tail=' ~ (docker_logs_lines | default(100)) }} \
       {{ '--follow' if docker_logs_follow | default(false) else '' }} \
       {{ docker_logs_service | default('') }}
   args:
     chdir: "{{ docker_compose_dir }}"
+  environment:
+    CONTAINER_PREFIX: "{{ container_prefix | default('dev') }}"
+    GITHUB_AUTH_TOKEN: "{{ secrets.github.personal_access_token | default(github_token) | default('') }}"
   register: logs_result
   changed_when: false
   async: "{{ 30 if docker_logs_follow | default(false) else 0 }}"

@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from .routes import router
 from .system_routes import router as system_router
 from .service_routes import router as service_router
+from .config_routes import router as config_router
 from .config import config
 
 # Configure logging
@@ -58,6 +59,7 @@ app.add_middleware(
 app.include_router(router)
 app.include_router(system_router)
 app.include_router(service_router)
+app.include_router(config_router)
 
 
 @app.get("/health/live")

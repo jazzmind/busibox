@@ -43,10 +43,17 @@ WORKDIR /build/ai-portal
 RUN git clone --depth 1 --branch ${AI_PORTAL_GITHUB_REF} \
     https://${GITHUB_AUTH_TOKEN}@github.com/jazzmind/ai-portal.git .
 
-# Copy npmrc for package installs
+# Copy npmrc for package installs (to /root for global fallback)
 COPY --from=base /root/.npmrc /root/.npmrc
 
+# Also copy to project directory to override repo's .npmrc that uses env var expansion
+# The base .npmrc has the actual token value, not ${GITHUB_AUTH_TOKEN} reference
+COPY --from=base /root/.npmrc .npmrc
+
 # Install dependencies
+# Set dummy DATABASE_URL for prisma generate during postinstall
+# The actual DATABASE_URL is set at runtime via environment variables
+ENV DATABASE_URL="postgresql://dummy:dummy@localhost:5432/dummy"
 RUN npm ci
 
 # Build the application with correct base path
@@ -67,10 +74,15 @@ WORKDIR /build/agent-manager
 RUN git clone --depth 1 --branch ${AGENT_MANAGER_GITHUB_REF} \
     https://${GITHUB_AUTH_TOKEN}@github.com/jazzmind/agent-manager.git .
 
-# Copy npmrc for package installs
+# Copy npmrc for package installs (to /root for global fallback)
 COPY --from=base /root/.npmrc /root/.npmrc
 
+# Also copy to project directory to override repo's .npmrc that uses env var expansion
+COPY --from=base /root/.npmrc .npmrc
+
 # Install dependencies
+# Set dummy DATABASE_URL for prisma generate during postinstall (if needed)
+ENV DATABASE_URL="postgresql://dummy:dummy@localhost:5432/dummy"
 RUN npm ci
 
 # Build the application with correct base path
@@ -83,12 +95,20 @@ RUN npm run build
 # =============================================================================
 FROM node:20-alpine AS runtime
 
-# Install runtime dependencies
-RUN apk add --no-cache curl bash
+# Install runtime dependencies including nginx
+RUN apk add --no-cache curl bash nginx openssl
+
+# Install concurrently for running multiple processes
 RUN npm install -g concurrently
 
 # Create directories
-RUN mkdir -p /srv/ai-portal /srv/agent-manager
+RUN mkdir -p /srv/ai-portal /srv/agent-manager \
+    /etc/nginx/ssl \
+    /etc/nginx/sites-available \
+    /etc/nginx/sites-enabled \
+    /etc/nginx/conf.d/apps \
+    /run/nginx \
+    /var/log/nginx
 
 # Copy built AI Portal
 WORKDIR /srv/ai-portal
@@ -105,22 +125,29 @@ COPY --from=build-agent-manager /build/agent-manager/public ./public
 COPY --from=build-agent-manager /build/agent-manager/package.json ./package.json
 COPY --from=build-agent-manager /build/agent-manager/node_modules ./node_modules
 
+# Copy nginx configuration
+COPY config/nginx-local.conf /etc/nginx/nginx.conf
+COPY config/nginx-sites/ /etc/nginx/conf.d/
+
+# Copy SSL certificates (self-signed will be generated if not present)
+COPY ssl/ /etc/nginx/ssl/
+
 # Copy entrypoint script
 COPY provision/docker/core-apps-entrypoint.sh /usr/local/bin/core-apps-entrypoint.sh
 RUN chmod +x /usr/local/bin/core-apps-entrypoint.sh
 
 WORKDIR /srv
 
-# Expose ports
-EXPOSE 3000 3001
+# Expose ports - nginx (80, 443) + apps (3000, 3001)
+EXPOSE 80 443 3000 3001
 
 # Environment
 ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
 
-# Health check - apps are served at their respective health endpoints
+# Health check - check nginx and both apps
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:3000/portal/api/health && curl -f http://localhost:3001/agents/api/health || exit 1
+    CMD curl -f http://localhost:80/health && curl -f http://localhost:3000/portal/api/health && curl -f http://localhost:3001/agents/api/health || exit 1
 
 ENTRYPOINT ["/usr/local/bin/core-apps-entrypoint.sh"]
 CMD ["start"]

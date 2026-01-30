@@ -8,24 +8,21 @@
 #     vars:
 #       docker_ps_services: ["postgres", "redis"]  # optional, all if not specified
 
-- name: Check if environment file exists
-  ansible.builtin.stat:
-    path: "{{ docker_env_file }}"
-  register: _env_file_stat
-
 - name: Set compose command arguments
   ansible.builtin.set_fact:
     docker_compose_file_args: "{{ docker_compose_files_list | map('regex_replace', '^(.*)$', '-f \\1') | join(' ') }}"
-    docker_compose_env_args: "{{ '--env-file ' ~ docker_env_file if _env_file_stat.stat.exists else '' }}"
     _services_arg: "{{ docker_ps_services | default([]) | join(' ') }}"
 
 - name: Get container status
   ansible.builtin.shell: |
     cd {{ docker_compose_dir }}
-    docker compose {{ docker_compose_file_args }} {{ docker_compose_env_args }} \
+    docker compose {{ docker_compose_file_args }} \
       ps --format json {{ _services_arg }}
   args:
     chdir: "{{ docker_compose_dir }}"
+  environment:
+    CONTAINER_PREFIX: "{{ container_prefix | default('dev') }}"
+    GITHUB_AUTH_TOKEN: "{{ secrets.github.personal_access_token | default(github_token) | default('') }}"
   register: ps_result
   changed_when: false
 

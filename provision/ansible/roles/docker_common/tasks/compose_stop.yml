@@ -9,29 +9,24 @@
 #       docker_services_to_stop: ["nginx", "core-apps"]
 #       docker_remove_volumes: false
 
-- name: Check if environment file exists
-  ansible.builtin.stat:
-    path: "{{ docker_env_file }}"
-  register: _env_file_stat
-
 - name: Set compose command arguments
   ansible.builtin.set_fact:
     docker_compose_file_args: "{{ docker_compose_files_list | map('regex_replace', '^(.*)$', '-f \\1') | join(' ') }}"
-    docker_compose_env_args: "{{ '--env-file ' ~ docker_env_file if _env_file_stat.stat.exists else '' }}"
     _services_arg: "{{ docker_services_to_stop | default([]) | join(' ') }}"
 
 - name: Stop services with docker compose stop
   ansible.builtin.shell: |
     cd {{ docker_compose_dir }}
-    docker compose {{ docker_compose_file_args }} {{ docker_compose_env_args }} \
+    docker compose {{ docker_compose_file_args }} \
       stop {{ _services_arg }}
   args:
     chdir: "{{ docker_compose_dir }}"
   environment:
+    CONTAINER_PREFIX: "{{ container_prefix | default('dev') }}"
     POSTGRES_PASSWORD: "{{ secrets.postgresql.password | default('') }}"
     MINIO_ACCESS_KEY: "{{ secrets.minio.root_user | default('minioadmin') }}"
     MINIO_SECRET_KEY: "{{ secrets.minio.root_password | default('') }}"
-    GITHUB_AUTH_TOKEN: "{{ secrets.github.personal_access_token | default('') }}"
+    GITHUB_AUTH_TOKEN: "{{ secrets.github.personal_access_token | default(github_token) | default('') }}"
   register: stop_result
   changed_when: "'Stopping' in stop_result.stderr or 'Stopped' in stop_result.stderr"
   failed_when: false
@@ -39,15 +34,16 @@
 - name: Remove stopped containers (if requested)
   ansible.builtin.shell: |
     cd {{ docker_compose_dir }}
-    docker compose {{ docker_compose_file_args }} {{ docker_compose_env_args }} \
+    docker compose {{ docker_compose_file_args }} \
       rm -f {{ '-v' if docker_remove_volumes | default(false) else '' }} {{ _services_arg }}
   args:
     chdir: "{{ docker_compose_dir }}"
   environment:
+    CONTAINER_PREFIX: "{{ container_prefix | default('dev') }}"
     POSTGRES_PASSWORD: "{{ secrets.postgresql.password | default('') }}"
     MINIO_ACCESS_KEY: "{{ secrets.minio.root_user | default('minioadmin') }}"
     MINIO_SECRET_KEY: "{{ secrets.minio.root_password | default('') }}"
-    GITHUB_AUTH_TOKEN: "{{ secrets.github.personal_access_token | default('') }}"
+    GITHUB_AUTH_TOKEN: "{{ secrets.github.personal_access_token | default(github_token) | default('') }}"
   when: docker_remove_containers | default(false)
   register: rm_result
   changed_when: "'Removing' in rm_result.stderr"

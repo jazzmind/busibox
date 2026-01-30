@@ -3,8 +3,9 @@
 # Core Apps Entrypoint Script
 # =============================================================================
 #
-# Starts both ai-portal and agent-manager in the same container.
-# Uses concurrently to manage both processes.
+# Starts nginx, ai-portal, and agent-manager in the same container.
+# Uses concurrently to manage all processes.
+# Mirrors the Proxmox apps-lxc architecture.
 #
 # Modes:
 #   dev   - Development mode with hot-reload (Turbopack)
@@ -15,6 +16,42 @@
 set -e
 
 MODE="${1:-dev}"
+
+# Generate self-signed SSL certificate if not present
+generate_ssl_cert() {
+    local ssl_dir="/etc/nginx/ssl"
+    local cert_file="$ssl_dir/server.crt"
+    local key_file="$ssl_dir/server.key"
+    
+    if [ ! -f "$cert_file" ] || [ ! -f "$key_file" ]; then
+        echo "Generating self-signed SSL certificate..."
+        mkdir -p "$ssl_dir"
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+            -keyout "$key_file" \
+            -out "$cert_file" \
+            -subj "/CN=localhost/O=Busibox/C=US" \
+            2>/dev/null
+        echo "SSL certificate generated."
+    fi
+}
+
+# Start nginx in background
+start_nginx() {
+    echo "Starting nginx..."
+    
+    # Ensure SSL certificates exist
+    generate_ssl_cert
+    
+    # Test nginx configuration
+    if nginx -t 2>/dev/null; then
+        nginx -g 'daemon off;' &
+        NGINX_PID=$!
+        echo "Nginx started (PID: $NGINX_PID)"
+    else
+        echo "WARNING: Nginx configuration test failed, skipping nginx"
+        nginx -t
+    fi
+}
 
 # Setup npm authentication for GitHub Packages
 setup_npm_auth() {
@@ -73,6 +110,9 @@ case "$MODE" in
     dev)
         echo "Starting Core Apps in development mode..."
         
+        # Start nginx first (handles routing)
+        start_nginx
+        
         # Setup npm authentication (required for @jazzmind/busibox-app from GitHub Packages)
         setup_npm_auth
         
@@ -96,6 +136,9 @@ case "$MODE" in
         
     start)
         echo "Starting Core Apps in production mode..."
+        
+        # Start nginx first (handles routing)
+        start_nginx
         
         # Run prisma migrations if needed
         if [ -d "/srv/ai-portal/prisma" ]; then

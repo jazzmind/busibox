@@ -48,13 +48,43 @@
           Environment: {{ busibox_env | default('development') }}
           Container Prefix: {{ container_prefix | default('dev') }}
           Compose Project: {{ compose_project_name | default(container_prefix) }}
+          Docker Mode: {{ docker_dev_mode | default('local-dev') }}
           ═══════════════════════════════════════════════════════════════════
+      tags: always
 
-    - name: Load secrets from vault
+    # Multi-vault architecture: Load environment-specific vault file
+    # Priority: vault.{prefix}.yml > vault.yml (legacy fallback)
+    - name: Check for environment-specific vault file
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/roles/secrets/vars/vault.{{ container_prefix | default('dev') }}.yml"
+      register: env_vault_file
+      tags: always
+
+    - name: Load secrets from environment-specific vault
+      ansible.builtin.include_vars:
+        file: "roles/secrets/vars/vault.{{ container_prefix | default('dev') }}.yml"
+      when: env_vault_file.stat.exists
+      no_log: true
+      tags: always
+
+    - name: Load secrets from legacy vault (fallback)
       ansible.builtin.include_vars:
         file: roles/secrets/vars/vault.yml
+      when: not env_vault_file.stat.exists
       no_log: true
       ignore_errors: true
+      tags: always
+    
+    - name: Warn if no vault loaded
+      ansible.builtin.debug:
+        msg: |
+          ⚠️  WARNING: No vault file loaded!
+          
+          Expected vault file: roles/secrets/vars/vault.{{ container_prefix | default('dev') }}.yml
+          Fallback vault file: roles/secrets/vars/vault.yml
+          
+          Secrets may not be available. Deployment may fail.
+      when: not env_vault_file.stat.exists
       tags: always
 
     - name: Initialize Docker common
@@ -213,7 +243,9 @@
     # FRONTEND - User-facing applications
     # =========================================================================
     
-    - name: Deploy Core Apps (AI Portal, Agent Manager)
+    # Core Apps container includes Nginx, AI Portal, and Agent Manager
+    # This mirrors the Proxmox apps-lxc architecture
+    - name: Deploy Core Apps (Nginx + AI Portal + Agent Manager)
       ansible.builtin.include_role:
         name: app_deployer
         tasks_from: docker
@@ -222,23 +254,26 @@
             - frontend
             - core-apps
             - apps
+            - nginx  # nginx is now bundled in core-apps
       tags:
         - frontend
         - core-apps
         - apps
+        - nginx  # Allow --tags nginx to deploy core-apps
 
-    - name: Deploy Nginx
+    # Standalone Nginx (only if not using bundled nginx in core-apps)
+    # This is kept for backward compatibility and hybrid deployments
+    - name: Deploy Standalone Nginx (optional, for hybrid mode)
       ansible.builtin.include_role:
         name: nginx
         tasks_from: docker
         apply:
           tags:
-            - frontend
-            - nginx
+            - nginx-standalone
             - proxy
+      when: deploy_standalone_nginx | default(false)
       tags:
-        - frontend
-        - nginx
+        - nginx-standalone
         - proxy
 
     # =========================================================================

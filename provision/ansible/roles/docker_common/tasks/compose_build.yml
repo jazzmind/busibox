@@ -10,28 +10,32 @@
 #       docker_build_no_cache: false
 #       docker_build_pull: true
 
-- name: Check if environment file exists
-  ansible.builtin.stat:
-    path: "{{ docker_env_file }}"
-  register: _env_file_stat
-
 - name: Set compose command arguments
   ansible.builtin.set_fact:
     docker_compose_file_args: "{{ docker_compose_files_list | map('regex_replace', '^(.*)$', '-f \\1') | join(' ') }}"
-    docker_compose_env_args: "{{ '--env-file ' ~ docker_env_file if _env_file_stat.stat.exists else '' }}"
     _services_arg: "{{ docker_services_to_build | default([]) | join(' ') }}"
+
+- name: Debug - Show compose files being used
+  ansible.builtin.debug:
+    msg: |
+      Compose files: {{ docker_compose_file_args }}
+      Services: {{ _services_arg }}
+      Container prefix: {{ container_prefix | default('dev') }}
+      GitHub token set: {{ 'yes' if (secrets.github.personal_access_token | default(github_token) | default('')) else 'no' }}
 
 - name: Build services with docker compose build
   ansible.builtin.shell: |
     cd {{ docker_compose_dir }}
-    docker compose {{ docker_compose_file_args }} {{ docker_compose_env_args }} \
+    docker compose {{ docker_compose_file_args }} \
       build \
       {{ '--no-cache' if docker_build_no_cache | default(false) else '' }} \
       {{ '--pull' if docker_build_pull | default(true) else '' }} \
-      {{ _services_arg }}
+      {{ _services_arg }} 2>&1
   args:
     chdir: "{{ docker_compose_dir }}"
   environment:
+    # Container naming
+    CONTAINER_PREFIX: "{{ container_prefix | default('dev') }}"
     # Secrets injected from vault
     POSTGRES_PASSWORD: "{{ secrets.postgresql.password | default('') }}"
     MINIO_ACCESS_KEY: "{{ secrets.minio.root_user | default('minioadmin') }}"
@@ -41,9 +45,26 @@
     LITELLM_API_KEY: "{{ secrets.litellm_api_key | default('') }}"
     LITELLM_MASTER_KEY: "{{ secrets.litellm_api_key | default('') }}"
     GITHUB_AUTH_TOKEN: "{{ secrets.github.personal_access_token | default(github_token) | default('') }}"
-    ADMIN_EMAIL: "{{ secrets.admin_email | default('') }}"
+    ADMIN_EMAIL: "{{ secrets.admin_emails | default(secrets.admin_email) | default('') }}"
     ALLOWED_EMAIL_DOMAINS: "{{ secrets.allowed_email_domains | default('*') }}"
     DOCKER_BUILDKIT: "1"
   register: build_result
   changed_when: "'Building' in build_result.stdout or 'built' in build_result.stdout"
-  no_log: true
+  ignore_errors: true
+
+- name: Show build result
+  ansible.builtin.debug:
+    msg: |
+      Build stdout (last 50 lines):
+      {{ build_result.stdout_lines[-50:] | default(['No stdout']) | join('\n') }}
+      
+      Build stderr (last 20 lines):
+      {{ build_result.stderr_lines[-20:] | default(['No stderr']) | join('\n') }}
+      
+      Return code: {{ build_result.rc }}
+  when: build_result is defined
+
+- name: Fail if build failed
+  ansible.builtin.fail:
+    msg: "Docker compose build failed with exit code {{ build_result.rc }}"
+  when: build_result.rc != 0

@@ -25,8 +25,8 @@
 # =============================================================================
 
 services:
-  # Core Apps - AI Portal + Agent Manager (GitHub Build Mode)
-  # Single container running both apps, matching Proxmox architecture
+  # Core Apps - Nginx + AI Portal + Agent Manager (GitHub Build Mode)
+  # Single container running nginx and both Next.js apps, matching Proxmox apps-lxc architecture
   core-apps:
     build:
       context: .
@@ -38,6 +38,8 @@ services:
     container_name: ${CONTAINER_PREFIX:-local}-core-apps
     hostname: core-apps
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # Access host's localhost from container
     environment:
       NODE_ENV: production
       # =========================================================================
@@ -86,24 +88,32 @@ services:
       # AI Portal (SSO) via nginx
       NEXT_PUBLIC_AI_PORTAL_URL: https://localhost/portal
     ports:
+      # Nginx ports (main entry points)
+      - "80:80"
+      - "443:443"
+      # Direct app ports (optional, for debugging)
       - "3000:3000"
       - "3001:3001"
+    volumes:
+      # Dynamic app configs for nginx (deploy-api manages these)
+      - ./config/nginx-sites/apps:/etc/nginx/conf.d/apps:rw
     depends_on:
       postgres:
         condition: service_healthy
       authz-api:
         condition: service_healthy
     healthcheck:
-      # Check both apps are responding
-      test: ["CMD", "sh", "-c", "curl -f http://localhost:3000/api/health && curl -f http://localhost:3001/"]
+      # Check nginx and both apps are responding
+      test: ["CMD", "sh", "-c", "curl -f http://localhost:80/health && curl -f http://localhost:3000/portal/api/health && curl -f http://localhost:3001/agents/api/health"]
       interval: 30s
       timeout: 10s
-      start_period: 60s
+      start_period: 90s
       retries: 3
     networks:
       busibox-net:
         aliases:
           - core-apps
+          - nginx          # nginx is now inside core-apps
           - ai-portal      # Backward compatibility alias
           - agent-manager  # Backward compatibility alias
 

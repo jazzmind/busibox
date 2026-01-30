@@ -10,27 +10,22 @@
 #       docker_exec_command: "pg_isready -U postgres"
 #       docker_exec_user: "root"  # optional
 
-- name: Check if environment file exists
-  ansible.builtin.stat:
-    path: "{{ docker_env_file }}"
-  register: _env_file_stat
-
 - name: Set compose command arguments
   ansible.builtin.set_fact:
     docker_compose_file_args: "{{ docker_compose_files_list | map('regex_replace', '^(.*)$', '-f \\1') | join(' ') }}"
-    docker_compose_env_args: "{{ '--env-file ' ~ docker_env_file if _env_file_stat.stat.exists else '' }}"
 
 - name: Execute command in container
   ansible.builtin.shell: |
     cd {{ docker_compose_dir }}
-    docker compose {{ docker_compose_file_args }} {{ docker_compose_env_args }} \
+    docker compose {{ docker_compose_file_args }} \
       exec {{ '-u ' ~ docker_exec_user if docker_exec_user is defined else '' }} \
       {{ docker_exec_service }} {{ docker_exec_command }}
   args:
     chdir: "{{ docker_compose_dir }}"
   environment:
+    # Container naming
+    CONTAINER_PREFIX: "{{ container_prefix | default('dev') }}"
     # Secrets injected from encrypted Ansible vault at runtime
-    # NOTE: Zero Trust auth - no client secrets needed
     POSTGRES_PASSWORD: "{{ secrets.postgresql.password | default('') }}"
     MINIO_ACCESS_KEY: "{{ secrets.minio.root_user | default('minioadmin') }}"
     MINIO_SECRET_KEY: "{{ secrets.minio.root_password | default('') }}"
@@ -38,8 +33,8 @@
     AUTHZ_MASTER_KEY: "{{ secrets.authz_master_key | default('') }}"
     LITELLM_API_KEY: "{{ secrets.litellm_api_key | default('') }}"
     LITELLM_MASTER_KEY: "{{ secrets.litellm_api_key | default('') }}"
-    GITHUB_AUTH_TOKEN: "{{ secrets.github.personal_access_token | default('') }}"
-    ADMIN_EMAIL: "{{ secrets.admin_email | default('') }}"
+    GITHUB_AUTH_TOKEN: "{{ secrets.github.personal_access_token | default(github_token) | default('') }}"
+    ADMIN_EMAIL: "{{ secrets.admin_emails | default(secrets.admin_email) | default('') }}"
     ALLOWED_EMAIL_DOMAINS: "{{ secrets.allowed_email_domains | default('*') }}"
   register: _exec_result
   changed_when: false

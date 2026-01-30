@@ -98,7 +98,13 @@ services:
       # NOTE: NEXT_PUBLIC_BASE_PATH is set per-app in core-apps-entrypoint.sh
       # because both apps run in the same container but need different values
       # (/portal for ai-portal, /agents for agent-manager)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # Access host's localhost from container
     ports:
+      # Nginx ports (main entry points)
+      - "80:80"
+      - "443:443"
+      # Direct app ports (for debugging)
       - "3000:3000"  # AI Portal
       - "3001:3001"  # Agent Manager
     volumes:
@@ -111,14 +117,19 @@ services:
       # Preserve .next build caches
       - ai-portal-next-cache:/srv/ai-portal/.next
       - agent-manager-next-cache:/srv/agent-manager/.next
+      # Mount nginx config (allows live editing of nginx config)
+      - ${BUSIBOX_DIR:-.}/config/nginx-local.conf:/etc/nginx/nginx.conf:ro
+      - ${BUSIBOX_DIR:-.}/config/nginx-sites:/etc/nginx/conf.d:ro
+      - ${BUSIBOX_DIR:-.}/config/nginx-sites/apps:/etc/nginx/conf.d/apps:rw
+      - ${BUSIBOX_DIR:-.}/ssl:/etc/nginx/ssl:ro
     depends_on:
       postgres:
         condition: service_healthy
       authz-api:
         condition: service_healthy
     healthcheck:
-      # Check both apps are responding at their health endpoints
-      test: ["CMD", "sh", "-c", "curl -f http://localhost:3000/portal/api/health && curl -f http://localhost:3001/agents/api/health"]
+      # Check nginx and both apps are responding
+      test: ["CMD", "sh", "-c", "curl -f http://localhost:80/health && curl -f http://localhost:3000/portal/api/health && curl -f http://localhost:3001/agents/api/health"]
       interval: 30s
       timeout: 10s
       start_period: 120s
@@ -127,8 +138,9 @@ services:
       busibox-net:
         aliases:
           - core-apps
-          - ai-portal      # For nginx routing to portal
-          - agent-manager  # For nginx routing to agents
+          - nginx          # nginx is now inside core-apps
+          - ai-portal      # For backward compatibility
+          - agent-manager  # For backward compatibility
 
   # User Apps - Development Mode
   # Mount dev-apps directory for local app development with hot-reload

@@ -9,15 +9,9 @@
 #       docker_wait_service: "postgres"
 #       docker_wait_timeout: 60
 
-- name: Check if environment file exists
-  ansible.builtin.stat:
-    path: "{{ docker_env_file }}"
-  register: _env_file_stat
-
 - name: Set compose command arguments
   ansible.builtin.set_fact:
     docker_compose_file_args: "{{ docker_compose_files_list | map('regex_replace', '^(.*)$', '-f \\1') | join(' ') }}"
-    docker_compose_env_args: "{{ '--env-file ' ~ docker_env_file if _env_file_stat.stat.exists else '' }}"
 
 - name: Wait for {{ docker_wait_service }} to be healthy
   ansible.builtin.shell: |
@@ -27,7 +21,7 @@
     while [ $elapsed -lt $timeout ]; do
       # Docker compose ps --format json returns either an object (single) or array (multiple)
       # Use jq to handle both: if array, get first element; if object, use directly
-      json_output=$(docker compose {{ docker_compose_file_args }} {{ docker_compose_env_args }} \
+      json_output=$(docker compose {{ docker_compose_file_args }} \
         ps --format json {{ docker_wait_service }} 2>/dev/null)
       health=$(echo "$json_output" | jq -r 'if type == "array" then .[0].Health else .Health end // "none"')
       
@@ -59,10 +53,10 @@
     chdir: "{{ docker_compose_dir }}"
     executable: /bin/bash
   environment:
-    # Secrets injected from encrypted Ansible vault at runtime
+    CONTAINER_PREFIX: "{{ container_prefix | default('dev') }}"
     POSTGRES_PASSWORD: "{{ secrets.postgresql.password | default('') }}"
     MINIO_ACCESS_KEY: "{{ secrets.minio.root_user | default('minioadmin') }}"
     MINIO_SECRET_KEY: "{{ secrets.minio.root_password | default('') }}"
-    GITHUB_AUTH_TOKEN: "{{ secrets.github.personal_access_token | default('') }}"
+    GITHUB_AUTH_TOKEN: "{{ secrets.github.personal_access_token | default(github_token) | default('') }}"
   register: wait_result
   changed_when: false

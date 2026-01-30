@@ -13,27 +13,22 @@
 # Secrets are injected from the encrypted Ansible vault at runtime.
 # No secrets are stored in .env files.
 
-- name: Check if environment file exists
-  ansible.builtin.stat:
-    path: "{{ docker_env_file }}"
-  register: _env_file_stat
-
 - name: Set compose command arguments
   ansible.builtin.set_fact:
     docker_compose_file_args: "{{ docker_compose_files_list | map('regex_replace', '^(.*)$', '-f \\1') | join(' ') }}"
-    docker_compose_env_args: "{{ '--env-file ' ~ docker_env_file if _env_file_stat.stat.exists else '' }}"
     _services_arg: "{{ docker_services_to_start | default([]) | join(' ') }}"
 
 - name: Build services (if requested)
   ansible.builtin.shell: |
     cd {{ docker_compose_dir }}
-    docker compose {{ docker_compose_file_args }} {{ docker_compose_env_args }} \
+    docker compose {{ docker_compose_file_args }} \
       build {{ '--no-cache' if docker_build_no_cache else '' }} {{ _services_arg }}
   args:
     chdir: "{{ docker_compose_dir }}"
   environment: &docker_secrets_env
+    # Container naming
+    CONTAINER_PREFIX: "{{ container_prefix | default('dev') }}"
     # Secrets injected from encrypted Ansible vault at runtime
-    # These override any values in the .env file
     POSTGRES_PASSWORD: "{{ secrets.postgresql.password | default('') }}"
     MINIO_ACCESS_KEY: "{{ secrets.minio.root_user | default('minioadmin') }}"
     MINIO_SECRET_KEY: "{{ secrets.minio.root_password | default('') }}"
@@ -41,8 +36,8 @@
     AUTHZ_MASTER_KEY: "{{ secrets.authz_master_key | default('') }}"
     LITELLM_API_KEY: "{{ secrets.litellm_api_key | default('') }}"
     LITELLM_MASTER_KEY: "{{ secrets.litellm_api_key | default('') }}"
-    GITHUB_AUTH_TOKEN: "{{ secrets.github.personal_access_token | default('') }}"
-    ADMIN_EMAIL: "{{ secrets.admin_email | default('') }}"
+    GITHUB_AUTH_TOKEN: "{{ secrets.github.personal_access_token | default(github_token) | default('') }}"
+    ADMIN_EMAIL: "{{ secrets.admin_emails | default(secrets.admin_email) | default('') }}"
     ALLOWED_EMAIL_DOMAINS: "{{ secrets.allowed_email_domains | default('*') }}"
   when: docker_build_first | default(false)
   register: build_result
@@ -52,15 +47,14 @@
 - name: Show docker compose command (debug)
   ansible.builtin.debug:
     msg: |
-      Running: docker compose {{ docker_compose_file_args }} {{ docker_compose_env_args }} up -d --no-deps {{ _services_arg }}
+      Running: docker compose {{ docker_compose_file_args }} up -d --no-deps {{ _services_arg }}
       Compose dir: {{ docker_compose_dir }}
-      Env file: {{ docker_env_file }} (exists: {{ _env_file_stat.stat.exists }})
       Note: Secrets are injected from vault at runtime (not shown)
 
 - name: Start services with docker compose up
   ansible.builtin.shell: |
     cd {{ docker_compose_dir }}
-    docker compose {{ docker_compose_file_args }} {{ docker_compose_env_args }} \
+    docker compose {{ docker_compose_file_args }} \
       up -d --no-deps {{ '--force-recreate' if docker_force_recreate else '' }} \
       {{ '--remove-orphans' if docker_remove_orphans else '' }} \
       {{ _services_arg }} 2>&1
@@ -80,7 +74,7 @@
   ansible.builtin.shell: |
     cd {{ docker_compose_dir }}
     # Docker compose ps --format json returns either an object (single) or array (multiple)
-    json_output=$(docker compose {{ docker_compose_file_args }} {{ docker_compose_env_args }} \
+    json_output=$(docker compose {{ docker_compose_file_args }} \
       ps --format json {{ _services_arg }})
     # Handle both array and object formats
     echo "$json_output" | jq -r 'if type == "array" then .[].Health else .Health end // "none"'
