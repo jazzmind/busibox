@@ -71,7 +71,7 @@ echo "==> Stopping container to configure GPU passthrough"
 pct stop "$CTID" || true
 sleep 2
 
-# Add GPUs 1+ passthrough (GPU 0 is reserved for ingest container)
+# Add GPUs 1+ passthrough (GPU 0 is reserved for data container)
 # vLLM needs 2+ GPUs for tensor parallelism and model sharding
 # Get total GPU count and use GPUs 1 onwards
 if command -v nvidia-smi &>/dev/null; then
@@ -88,14 +88,14 @@ if command -v nvidia-smi &>/dev/null; then
       GPU_LIST="1-${END_GPU}"
     fi
     
-    echo "==> Configuring GPUs ${GPU_LIST} for vLLM (GPU 0 reserved for ingest)"
+    echo "==> Configuring GPUs ${GPU_LIST} for vLLM (GPU 0 reserved for data)"
     add_gpus "$CTID" "$GPU_LIST" || {
       echo "ERROR: Failed to configure GPU passthrough"
       exit 1
     }
   else
     echo "WARNING: Only 1 GPU detected. vLLM needs 2+ GPUs for optimal performance."
-    echo "  Consider using GPU 0 for vLLM and disabling GPU for ingest if needed."
+    echo "  Consider using GPU 0 for vLLM and disabling GPU for data if needed."
     echo "  Configuring GPU 0 for vLLM (not recommended for production)"
     add_gpu_passthrough "$CTID" 0 || {
       echo "ERROR: Failed to configure GPU passthrough"
@@ -125,7 +125,7 @@ if command -v nvidia-smi &>/dev/null; then
   GPU_COUNT=$(nvidia-smi -L | wc -l)
   if [[ "$GPU_COUNT" -gt 1 ]]; then
     END_GPU=$((GPU_COUNT - 1))
-    echo "GPU Access: GPUs 1-${END_GPU} (GPU 0 reserved for ingest)"
+    echo "GPU Access: GPUs 1-${END_GPU} (GPU 0 reserved for data)"
   else
     echo "GPU Access: GPU 0 (WARNING: Only 1 GPU available)"
   fi

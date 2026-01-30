@@ -48,7 +48,7 @@ def mock_busibox_client():
     """Create a mock BusiboxClient."""
     client = MagicMock()
     client.search = AsyncMock(return_value={"results": [], "total_count": 0})
-    client.ingest_document = AsyncMock(return_value={"id": str(uuid.uuid4()), "status": "ingested"})
+    client.data_document = AsyncMock(return_value={"id": str(uuid.uuid4()), "status": "ingested"})
     client.rag_query = AsyncMock(return_value={"answer": "test answer"})
     return client
 
@@ -59,7 +59,7 @@ def mock_principal():
     from app.schemas.auth import Principal
     return Principal(
         sub="test-user-123",
-        scopes=["agent:read", "agent:write", "search.read", "ingest.write"],
+        scopes=["agent:read", "agent:write", "search.read", "data.write"],
         token="mock-token",
     )
 

@@ -29,7 +29,7 @@
     - minio
     - milvus
     - authz-api
-    - ingest-api
+    - data-api
   register: dns_check
   changed_when: false
   failed_when: false

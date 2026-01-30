@@ -46,7 +46,7 @@ async def create_async_client(
         AsyncClient configured for testing
         
     Example:
-        async with create_async_client(app, auth_client, audience="ingest-api") as client:
+        async with create_async_client(app, auth_client, audience="data-api") as client:
             response = await client.get("/health")
     """
     from httpx import AsyncClient, ASGITransport
@@ -132,8 +132,8 @@ def _guess_audience(app: "FastAPI") -> str:
     """
     title = getattr(app, "title", "").lower()
     
-    if "ingest" in title:
-        return "ingest-api"
+    if "data" in title:
+        return "data-api"
     elif "search" in title:
         return "search-api"
     elif "agent" in title:

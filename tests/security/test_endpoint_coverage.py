@@ -510,8 +510,8 @@ class TestAgentApiEndpoints:
         assert response.status_code in [401, 403, 422]
 
 
-class TestIngestApiEndpoints:
-    """Security tests for ALL Ingest API endpoints."""
+class TestDataApiEndpoints:
+    """Security tests for ALL Data API endpoints."""
     
     # =========================================================================
     # Upload Endpoints
@@ -520,7 +520,7 @@ class TestIngestApiEndpoints:
     @pytest.mark.auth
     def test_upload_requires_auth(self, http_client, endpoints):
         """POST /upload - Requires authentication."""
-        url = f"{endpoints.ingest}/upload"
+        url = f"{endpoints.data}/upload"
         response = http_client.post(url, data={})
         assert response.status_code in [401, 403, 422]
     
@@ -531,7 +531,7 @@ class TestIngestApiEndpoints:
     @pytest.mark.auth
     def test_status_requires_auth(self, http_client, endpoints):
         """GET /status/{fileId} - Requires authentication."""
-        url = f"{endpoints.ingest}/status/00000000-0000-0000-0000-000000000000"
+        url = f"{endpoints.data}/status/00000000-0000-0000-0000-000000000000"
         response = http_client.get(url)
         assert response.status_code in [401, 403, 404]
     
@@ -540,9 +540,9 @@ class TestIngestApiEndpoints:
     # =========================================================================
     
     @pytest.mark.auth
-    def test_ingest_search_requires_auth(self, http_client, endpoints):
+    def test_data_search_requires_auth(self, http_client, endpoints):
         """POST /search - Requires authentication."""
-        url = f"{endpoints.ingest}/search"
+        url = f"{endpoints.data}/search"
         response = http_client.post(url, json={"query": "test"})
         assert response.status_code in [401, 403]
     
@@ -553,7 +553,7 @@ class TestIngestApiEndpoints:
     @pytest.mark.auth
     def test_embeddings_requires_auth(self, http_client, endpoints):
         """POST /api/embeddings - Requires authentication."""
-        url = f"{endpoints.ingest}/api/embeddings"
+        url = f"{endpoints.data}/api/embeddings"
         response = http_client.post(url, json={"input": "test"})
         assert response.status_code in [401, 403]
     
@@ -564,63 +564,63 @@ class TestIngestApiEndpoints:
     @pytest.mark.auth
     def test_file_get_requires_auth(self, http_client, endpoints):
         """GET /files/{fileId} - Requires authentication."""
-        url = f"{endpoints.ingest}/files/00000000-0000-0000-0000-000000000000"
+        url = f"{endpoints.data}/files/00000000-0000-0000-0000-000000000000"
         response = http_client.get(url)
         assert response.status_code in [401, 403, 404]
     
     @pytest.mark.auth
     def test_file_delete_requires_auth(self, http_client, endpoints):
         """DELETE /files/{fileId} - Requires authentication."""
-        url = f"{endpoints.ingest}/files/00000000-0000-0000-0000-000000000000"
+        url = f"{endpoints.data}/files/00000000-0000-0000-0000-000000000000"
         response = http_client.delete(url)
         assert response.status_code in [401, 403, 404]
     
     @pytest.mark.auth
     def test_file_download_requires_auth(self, http_client, endpoints):
         """GET /files/{fileId}/download - Requires authentication."""
-        url = f"{endpoints.ingest}/files/00000000-0000-0000-0000-000000000000/download"
+        url = f"{endpoints.data}/files/00000000-0000-0000-0000-000000000000/download"
         response = http_client.get(url)
         assert response.status_code in [401, 403, 404]
     
     @pytest.mark.auth
     def test_file_chunks_requires_auth(self, http_client, endpoints):
         """GET /files/{fileId}/chunks - Requires authentication."""
-        url = f"{endpoints.ingest}/files/00000000-0000-0000-0000-000000000000/chunks"
+        url = f"{endpoints.data}/files/00000000-0000-0000-0000-000000000000/chunks"
         response = http_client.get(url)
         assert response.status_code in [401, 403, 404]
     
     @pytest.mark.auth
     def test_file_search_requires_auth(self, http_client, endpoints):
         """POST /files/{fileId}/search - Requires authentication."""
-        url = f"{endpoints.ingest}/files/00000000-0000-0000-0000-000000000000/search"
+        url = f"{endpoints.data}/files/00000000-0000-0000-0000-000000000000/search"
         response = http_client.post(url, json={"query": "test"})
         assert response.status_code in [401, 403, 404]
     
     @pytest.mark.auth
     def test_file_reprocess_requires_auth(self, http_client, endpoints):
         """POST /files/{fileId}/reprocess - Requires authentication."""
-        url = f"{endpoints.ingest}/files/00000000-0000-0000-0000-000000000000/reprocess"
+        url = f"{endpoints.data}/files/00000000-0000-0000-0000-000000000000/reprocess"
         response = http_client.post(url, json={})
         assert response.status_code in [401, 403, 404]
     
     @pytest.mark.auth
     def test_file_export_requires_auth(self, http_client, endpoints):
         """GET /files/{fileId}/export - Requires authentication."""
-        url = f"{endpoints.ingest}/files/00000000-0000-0000-0000-000000000000/export"
+        url = f"{endpoints.data}/files/00000000-0000-0000-0000-000000000000/export"
         response = http_client.get(url, params={"format": "markdown"})
         assert response.status_code in [401, 403, 404]
     
     @pytest.mark.auth
     def test_file_markdown_requires_auth(self, http_client, endpoints):
         """GET /files/{fileId}/markdown - Requires authentication."""
-        url = f"{endpoints.ingest}/files/00000000-0000-0000-0000-000000000000/markdown"
+        url = f"{endpoints.data}/files/00000000-0000-0000-0000-000000000000/markdown"
         response = http_client.get(url)
         assert response.status_code in [401, 403, 404]
     
     @pytest.mark.auth
     def test_file_roles_requires_auth(self, http_client, endpoints):
         """GET/PUT /files/{fileId}/roles - Requires authentication."""
-        url = f"{endpoints.ingest}/files/00000000-0000-0000-0000-000000000000/roles"
+        url = f"{endpoints.data}/files/00000000-0000-0000-0000-000000000000/roles"
         
         response = http_client.get(url)
         assert response.status_code in [401, 403, 404]
@@ -631,7 +631,7 @@ class TestIngestApiEndpoints:
     @pytest.mark.auth
     def test_file_share_requires_auth(self, http_client, endpoints):
         """POST /files/{fileId}/share - Requires authentication."""
-        url = f"{endpoints.ingest}/files/00000000-0000-0000-0000-000000000000/share"
+        url = f"{endpoints.data}/files/00000000-0000-0000-0000-000000000000/share"
         response = http_client.post(url, json={"role_ids": [], "role_names": []})
         assert response.status_code in [401, 403, 404]
     
@@ -642,7 +642,7 @@ class TestIngestApiEndpoints:
     @pytest.mark.auth
     def test_extract_requires_auth(self, http_client, endpoints):
         """POST /extract - Requires authentication."""
-        url = f"{endpoints.ingest}/extract"
+        url = f"{endpoints.data}/extract"
         response = http_client.post(url, data={})
         assert response.status_code in [401, 403, 422]
     
@@ -653,7 +653,7 @@ class TestIngestApiEndpoints:
     @pytest.mark.auth
     def test_authz_check_requires_auth(self, http_client, endpoints):
         """POST /authz/check - Requires authentication."""
-        url = f"{endpoints.ingest}/authz/check"
+        url = f"{endpoints.data}/authz/check"
         response = http_client.post(url, json={
             "resource_type": "file",
             "resource_id": "00000000-0000-0000-0000-000000000000",
@@ -667,9 +667,9 @@ class TestIngestApiEndpoints:
     
     def test_health_public(self, http_client, endpoints):
         """GET /health - Should be public."""
-        response = http_client.get(f"{endpoints.ingest}/health")
+        response = http_client.get(f"{endpoints.data}/health")
         assert response.status_code == 200
-        SecurityAssertions.assert_no_sensitive_data(response.text, "ingest_health")
+        SecurityAssertions.assert_no_sensitive_data(response.text, "data_health")
 
 
 class TestSearchApiEndpoints:
@@ -790,9 +790,9 @@ class TestEndpointCoverageSummary:
         ]
         assert len(agent_endpoints) == 26, "Agent endpoint count changed"
     
-    def test_ingest_endpoint_count(self):
-        """Verify Ingest endpoints are covered."""
-        ingest_endpoints = [
+    def test_data_endpoint_count(self):
+        """Verify Data endpoints are covered."""
+        data_endpoints = [
             "/upload",
             "/status/{fileId}",
             "/search",
@@ -810,7 +810,7 @@ class TestEndpointCoverageSummary:
             "/authz/check",
             "/health",
         ]
-        assert len(ingest_endpoints) == 16, "Ingest endpoint count changed"
+        assert len(data_endpoints) == 16, "Data endpoint count changed"
     
     def test_search_endpoint_count(self):
         """Verify Search endpoints are covered."""

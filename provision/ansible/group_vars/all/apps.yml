@@ -22,7 +22,7 @@ applications:
   # ============================================================================
   # Internal API Services
   # ============================================================================
-  # Note: Agent API has its own dedicated role (agent_api) like search_api and ingest_api
+  # Note: Agent API has its own dedicated role (agent_api) like search_api and data_api
  
   # ============================================================================
   # Public Web Applications
@@ -46,7 +46,6 @@ applications:
         strip_path: false  # Keep /portal path - ai-portal will use basePath
     secrets:
       - database_url
-      - better_auth_secret
       - sso_jwt_secret
       - litellm_api_key
       - openai_api_key
@@ -65,7 +64,6 @@ applications:
       - apps_container_ip
       - agent_container_ip
       - postgres_container_ip
-      - authz_admin_token
     optional_secrets:
       - resend_api_key
       - microsoft_client_id
@@ -84,7 +82,7 @@ applications:
       AUTHZ_BASE_URL: "http://{{ authz_ip }}:8010"
       AUTHZ_CLIENT_ID: "ai-portal"
       # Log viewing - hosts for remote journalctl access
-      INGEST_API_HOST: "{{ ingest_ip }}"
+      DATA_API_HOST: "{{ data_ip }}"
       MILVUS_HOST: "{{ milvus_ip }}"
       AGENT_HOST: "{{ agent_ip }}"
       # Agent API Configuration
@@ -92,8 +90,8 @@ applications:
       AGENT_API_HOST: "{{ agent_ip }}"
       AGENT_API_PORT: "{{ agent_api_port }}"
       NEXT_PUBLIC_AGENT_API_URL: "http://{{ agent_ip }}:{{ agent_api_port }}"
-      # Ingest API
-      NEXT_PUBLIC_INGEST_API_URL: "http://{{ ingest_ip }}:8002"
+      # Data API
+      NEXT_PUBLIC_DATA_API_URL: "http://{{ data_ip }}:8002"
       DEPLOYMENT_MODE: "busibox"
       NEXT_PUBLIC_BASE_PATH: "/portal"
       # Search API (deployed to milvus-lxc, colocated with Milvus for low-latency)
@@ -129,14 +127,10 @@ applications:
       - jwt_secret
       - session_secret
       - sso_jwt_secret
-      - oauth_client_secret
-      - admin_client_id       # OAuth client credentials (maps to AUTHZ_CLIENT_ID)
-      - admin_client_secret   # OAuth client credentials (maps to AUTHZ_CLIENT_SECRET)
       - litellm_api_key       # LiteLLM API key
     optional_secrets:
       - resend_api_key        # Email service (optional)
       - email_from            # Email sender address (optional)
-      - authz_admin_token     # AuthZ admin token (optional, for admin operations)
     env:
       NODE_ENV: "{{ node_env }}"
       # Agent API Configuration
@@ -166,36 +160,4 @@ applications:
       # Enable verbose authz logging for debugging
       VERBOSE_AUTHZ_LOGGING: "true"
   
-  - name: estimator
-    github_repo: jazzmind/estimator
-    container: core-apps-lxc
-    container_ip: "{{ core_apps_ip }}"
-    port: 3007
-    deploy_path: /srv/apps/estimator
-    health_endpoint: /api/health
-    build_command: "npm run build"
-    start_command: "node .next/standalone/server.js"  # Standalone mode for Next.js
-    process_manager: systemd  # Use systemd for consistent logging via journalctl
-    auto_deploy: false  # Manual deployment for now - enable when ready
-    routes:
-      - type: path
-        domain: "{{ full_domain }}"
-        path: /estimator
-        strip_path: false  # Keep /estimator path - Next.js handles basePath
-    secrets:
-      - database_url       # PostgreSQL connection string
-    optional_secrets: []
-    env:
-      NODE_ENV: "{{ node_env }}"
-      PORT: "3007"
-      APP_NAME: "estimator"
-      APP_MODE: "prisma"
-      # URLs
-      NEXT_PUBLIC_APP_URL: "https://{{ full_domain }}/estimator"
-      NEXT_PUBLIC_BASE_PATH: "/estimator"
-      NEXT_PUBLIC_AI_PORTAL_URL: "https://{{ full_domain }}/portal"
-      # AuthZ Service Configuration (Zero Trust - no client secret needed)
-      AUTHZ_BASE_URL: "http://{{ authz_ip }}:8010"
-      # Enable verbose authz logging for debugging (staging)
-      VERBOSE_AUTHZ_LOGGING: "true"
   

@@ -354,7 +354,7 @@ export_state() {
 
 # Save test result for a service
 # Usage: save_test_result "authz" "passed"
-# Usage: save_test_result "ingest" "failed"
+# Usage: save_test_result "data" "failed"
 save_test_result() {
     local service="$1"
     local result="$2"  # "passed" or "failed"
@@ -380,7 +380,7 @@ get_test_time() {
 
 # Get list of failed services
 # Usage: failed_services=($(get_failed_services))
-# Optional: get_failed_services "services_only" to get only authz/ingest/search/agent (no subtests)
+# Optional: get_failed_services "services_only" to get only authz/data/search/agent (no subtests)
 get_failed_services() {
     local filter="${1:-}"
     init_state
@@ -389,8 +389,8 @@ get_failed_services() {
         sed 's/^TEST_RESULT_//; s/=failed$//' || true)
     
     if [[ "$filter" == "services_only" ]]; then
-        # Only return core service tests without subtests (authz, ingest, search, agent)
-        # Exclude entries with colons (like ingest:unit, agent:integration)
+        # Only return core service tests without subtests (authz, data, search, agent)
+        # Exclude entries with colons (like data:unit, agent:integration)
         echo "$results" | grep -E "^(authz|ingest|search|agent)$" | grep -v ":" | tr '\n' ' '
     else
         echo "$results" | tr '\n' ' '
@@ -399,7 +399,7 @@ get_failed_services() {
 
 # Get list of passed services
 # Usage: passed_services=($(get_passed_services))
-# Optional: get_passed_services "services_only" to get only authz/ingest/search/agent (no subtests)
+# Optional: get_passed_services "services_only" to get only authz/data/search/agent (no subtests)
 get_passed_services() {
     local filter="${1:-}"
     init_state
@@ -408,8 +408,8 @@ get_passed_services() {
         sed 's/^TEST_RESULT_//; s/=passed$//' || true)
     
     if [[ "$filter" == "services_only" ]]; then
-        # Only return core service tests without subtests (authz, ingest, search, agent)
-        # Exclude entries with colons (like ingest:unit, agent:integration)
+        # Only return core service tests without subtests (authz, data, search, agent)
+        # Exclude entries with colons (like data:unit, agent:integration)
         echo "$results" | grep -E "^(authz|ingest|search|agent)$" | grep -v ":" | tr '\n' ' '
     else
         echo "$results" | tr '\n' ' '

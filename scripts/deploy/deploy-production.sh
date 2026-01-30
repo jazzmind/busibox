@@ -404,7 +404,7 @@ LLM Services:
 
 Services:
   - Authz:    10.96.200.210
-  - Ingest:   10.96.200.206
+  - Data:   10.96.200.206
   - Files:    10.96.200.205
   - PostgreSQL: 10.96.200.203
   - Milvus:    10.96.200.204

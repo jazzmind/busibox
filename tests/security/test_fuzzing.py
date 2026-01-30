@@ -96,13 +96,13 @@ class TestSearchApiFuzzing:
         SecurityAssertions.assert_no_sensitive_data(response.text, "hypothesis_search")
 
 
-class TestIngestApiFuzzing:
-    """Fuzz testing for Ingest API."""
+class TestDataApiFuzzing:
+    """Fuzz testing for Data API."""
     
     @pytest.mark.fuzz
     def test_fuzz_file_id_parameter(self, http_client, endpoints, auth_headers):
         """Fuzz the file ID path parameter."""
-        fuzzer = Fuzzer(http_client, endpoints.ingest, auth_headers)
+        fuzzer = Fuzzer(http_client, endpoints.data, auth_headers)
         
         report = fuzzer.fuzz_path_parameter(
             HttpMethod.GET,
@@ -120,7 +120,7 @@ class TestIngestApiFuzzing:
     @pytest.mark.fuzz
     def test_fuzz_upload_metadata(self, http_client, endpoints, auth_headers):
         """Fuzz the upload metadata parameter."""
-        fuzzer = Fuzzer(http_client, endpoints.ingest, auth_headers)
+        fuzzer = Fuzzer(http_client, endpoints.data, auth_headers)
         
         # Test various malformed JSON in metadata
         malformed_metadata = [
@@ -134,7 +134,7 @@ class TestIngestApiFuzzing:
         ]
         
         for metadata in malformed_metadata:
-            url = f"{endpoints.ingest}/upload"
+            url = f"{endpoints.data}/upload"
             response = http_client.post(
                 url,
                 data={"metadata": metadata},
@@ -160,7 +160,7 @@ class TestIngestApiFuzzing:
         ]
         
         for role_ids in malicious_role_ids:
-            url = f"{endpoints.ingest}/upload"
+            url = f"{endpoints.data}/upload"
             response = http_client.post(
                 url,
                 data={
@@ -385,7 +385,7 @@ class TestBoundaryConditions:
     @pytest.mark.fuzz
     def test_empty_body_post_requests(self, http_client, endpoints, auth_headers):
         """Test POST endpoints handle empty bodies."""
-        # Note: /search endpoint is on search-api (not ingest-api)
+        # Note: /search endpoint is on search-api (not data-api)
         post_endpoints = [
             f"{endpoints.search}/search",
             f"{endpoints.agent}/runs",

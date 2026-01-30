@@ -7,11 +7,11 @@ def test_oauth_token_request_normalizes_scope():
         grant_type=TOKEN_EXCHANGE_GRANT,
         client_id="c1",
         client_secret="s1",
-        scope="ingest.write  search.read ingest.write",
-        audience="ingest-api",
+        scope="data.write  search.read data.write",
+        audience="data-api",
         requested_subject="11111111-1111-1111-1111-111111111111",
     )
-    assert req.scope == "ingest.write search.read"
+    assert req.scope == "data.write search.read"
 
 
 def test_access_token_claims_contract_parses():
@@ -19,19 +19,19 @@ def test_access_token_claims_contract_parses():
     claims = AccessTokenClaims(
         iss="busibox-authz",
         sub="11111111-1111-1111-1111-111111111111",
-        aud="ingest-api",
+        aud="data-api",
         exp=2000000000,
         iat=1999999000,
         jti="jti-1",
-        scope="ingest.write ingest.read search.read",
+        scope="data.write data.read search.read",
         roles=[
             RoleClaim(id="r1", name="Editors"),
         ],
     )
     assert claims.typ == "access"
     # Scopes are at the token level, not embedded in roles
-    assert "ingest.write" in claims.scope
-    assert "ingest.read" in claims.scope
+    assert "data.write" in claims.scope
+    assert "data.read" in claims.scope
     # Roles contain only id and name for data access filtering
     assert claims.roles[0].id == "r1"
     assert claims.roles[0].name == "Editors"

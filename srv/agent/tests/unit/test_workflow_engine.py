@@ -165,8 +165,8 @@ def test_validate_workflow_steps_valid():
     
     # Multiple steps
     steps = [
-        {"id": "ingest", "type": "tool", "tool": "ingest", "args": {"path": "/doc.pdf"}},
-        {"id": "analyze", "type": "agent", "agent": "analyzer", "input": "$.ingest.doc_id"},
+        {"id": "data", "type": "tool", "tool": "data", "args": {"path": "/doc.pdf"}},
+        {"id": "analyze", "type": "agent", "agent": "analyzer", "input": "$.data.doc_id"},
     ]
     validate_workflow_steps(steps)  # Should not raise
 
@@ -211,7 +211,7 @@ def test_validate_workflow_steps_duplicate_ids():
     """Test validate_workflow_steps rejects duplicate step IDs."""
     steps = [
         {"id": "step1", "type": "tool", "tool": "search"},
-        {"id": "step1", "type": "tool", "tool": "ingest"},  # Duplicate
+        {"id": "step1", "type": "tool", "tool": "data"},  # Duplicate
     ]
     
     with pytest.raises(ValueError, match="Duplicate step ID: step1"):

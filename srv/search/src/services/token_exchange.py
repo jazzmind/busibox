@@ -1,7 +1,7 @@
 """
 Token Exchange Service for service-to-service authentication.
 
-When the search service needs to call other services (like ingest for embeddings),
+When the search service needs to call other services (like data for embeddings),
 it uses OAuth2 Token Exchange (RFC 8693) to get a token with:
 - The correct audience for the target service
 - The original user's identity (sub) and roles preserved
@@ -45,7 +45,7 @@ class TokenExchangeService:
         
         Args:
             user_id: The user ID to impersonate (from the incoming request's JWT)
-            target_audience: The audience of the target service (e.g., "ingest-api")
+            target_audience: The audience of the target service (e.g., "data-api")
             scope: Requested scopes (optional)
         
         Returns:

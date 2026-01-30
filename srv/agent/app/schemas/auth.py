@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 class TokenExchangeRequest(BaseModel):
     scopes: List[str] = Field(default_factory=list)
     purpose: str = Field(
-        ..., description="Description of the downstream purpose (e.g., search, ingest, rag)"
+        ..., description="Description of the downstream purpose (e.g., search, data, rag)"
     )
 
 

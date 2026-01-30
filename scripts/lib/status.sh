@@ -317,8 +317,8 @@ check_service_status() {
                 redis) container_name="${container_prefix}-redis" ;;
                 milvus) container_name="${container_prefix}-milvus" ;;
                 minio) container_name="${container_prefix}-minio" ;;
-                ingest-api) container_name="${container_prefix}-ingest-api" ;;
-                ingest-worker) container_name="${container_prefix}-ingest-worker" ;;
+                data-api) container_name="${container_prefix}-data-api" ;;
+                data-worker) container_name="${container_prefix}-data-worker" ;;
                 search-api) container_name="${container_prefix}-search-api" ;;
                 agent-api) container_name="${container_prefix}-agent-api" ;;
                 deploy-api) container_name="${container_prefix}-deploy-api" ;;
@@ -384,7 +384,7 @@ check_service_status() {
                         echo "down"
                     fi
                     ;;
-                ingest-api|search-api|agent-api|docs-api)
+                data-api|search-api|agent-api|docs-api)
                     # API services use systemd with the exact service name
                     if timeout $SSH_TIMEOUT ssh -o ConnectTimeout=$SSH_TIMEOUT -o StrictHostKeyChecking=no "root@${container_ip}" "systemctl is-active ${service}" 2>/dev/null | grep -q "^active$"; then
                         echo "up"
@@ -392,9 +392,9 @@ check_service_status() {
                         echo "down"
                     fi
                     ;;
-                ingest-worker)
-                    # Ingest worker uses systemd
-                    if timeout $SSH_TIMEOUT ssh -o ConnectTimeout=$SSH_TIMEOUT -o StrictHostKeyChecking=no "root@${container_ip}" "systemctl is-active ingest-worker" 2>/dev/null | grep -q "^active$"; then
+                data-worker)
+                    # Data worker uses systemd
+                    if timeout $SSH_TIMEOUT ssh -o ConnectTimeout=$SSH_TIMEOUT -o StrictHostKeyChecking=no "root@${container_ip}" "systemctl is-active data-worker" 2>/dev/null | grep -q "^active$"; then
                         echo "up"
                     else
                         echo "down"
@@ -683,8 +683,8 @@ get_deployed_version() {
                 redis) container_name="${container_prefix}-redis" ;;
                 milvus) container_name="${container_prefix}-milvus" ;;
                 minio) container_name="${container_prefix}-minio" ;;
-                ingest-api) container_name="${container_prefix}-ingest-api" ;;
-                ingest-worker) container_name="${container_prefix}-ingest-worker" ;;
+                data-api) container_name="${container_prefix}-data-api" ;;
+                data-worker) container_name="${container_prefix}-data-worker" ;;
                 search-api) container_name="${container_prefix}-search-api" ;;
                 agent-api) container_name="${container_prefix}-agent-api" ;;
                 litellm) container_name="${container_prefix}-litellm" ;;
@@ -706,7 +706,7 @@ get_deployed_version() {
             local service_path
             case "$service" in
                 authz) service_path="authz" ;;
-                ingest-api) service_path="ingest-api" ;;
+                data-api) service_path="data-api" ;;
                 search-api) service_path="search-api" ;;
                 agent-api) service_path="agent-api" ;;
                 docs-api) service_path="docs-api" ;;
@@ -731,12 +731,12 @@ get_deployed_version() {
             # Different version detection strategies based on service type
             case "$service" in
                 # Python API services - read .deploy_version file from multiple possible locations
-                authz|ingest-api|ingest-worker|search-api|agent-api|docs-api)
+                authz|data-api|data-worker|search-api|agent-api|docs-api)
                     # Try multiple paths - different deployments use different locations
                     local version_paths
                     case "$service" in
                         authz) version_paths="/opt/authz/.deploy_version /srv/authz/.deploy_version" ;;
-                        ingest-api|ingest-worker) version_paths="/srv/ingest/.deploy_version /srv/ingest-api/.deploy_version /opt/ingest-api/.deploy_version" ;;
+                        data-api|data-worker) version_paths="/srv/data/.deploy_version /srv/data-api/.deploy_version /opt/data-api/.deploy_version" ;;
                         search-api) version_paths="/opt/search-api/.deploy_version /srv/search-api/.deploy_version" ;;
                         agent-api) version_paths="/opt/agent-api/.deploy_version /srv/agent-api/.deploy_version" ;;
                         docs-api) version_paths="/opt/docs-api/.deploy_version /srv/docs-api/.deploy_version" ;;
@@ -886,8 +886,8 @@ get_current_version() {
     
     # Handle services with dashes in their names
     case "$service" in
-        # Ingest services come from busibox repo
-        ingest-api|ingest-worker)
+        # Data services come from busibox repo
+        data-api|data-worker)
             if [[ -d "${REPO_ROOT}/.git" ]]; then
                 (cd "${REPO_ROOT}" && git rev-parse --short HEAD 2>/dev/null) || echo "unknown"
             else

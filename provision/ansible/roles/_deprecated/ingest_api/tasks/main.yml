@@ -1,0 +1,144 @@
+# Python Environment for Data API
+- name: Install Python and dependencies
+  apt:
+    name:
+      - python3
+      - python3-pip
+      - python3-venv
+      - python3-dev
+      - build-essential
+      - postgresql-client  # For running migrations
+    state: present
+
+# Database Migrations
+- name: Include database migrations
+  include_tasks: ../../data/tasks/migrations.yml
+  tags: [data_api, data_migrations]
+
+- name: Create data API directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - /srv/data-api
+    - /opt/data-api
+
+- name: Create Python virtual environment
+  shell: python3 -m venv /srv/data-api/venv
+  args:
+    creates: /srv/data-api/venv/bin/python
+
+- name: Copy data API source code
+  copy:
+    src: "{{ playbook_dir }}/../../srv/data/src/"
+    dest: /srv/data-api/src/
+    mode: "0644"
+  notify: Restart data API
+
+- name: Copy requirements.txt
+  copy:
+    src: "{{ playbook_dir }}/../../srv/data/requirements.txt"
+    dest: /srv/data-api/requirements.txt
+    mode: "0644"
+
+- name: Install Python dependencies
+  pip:
+    requirements: /srv/data-api/requirements.txt
+    virtualenv: /srv/data-api/venv
+  notify: Restart data API
+
+- name: Create data API environment file
+  template:
+    src: data-api.env.j2
+    dest: /srv/data-api/.env
+    mode: "0600"
+  notify: Restart data API
+
+- name: Create systemd service for data API
+  template:
+    src: data-api.service.j2
+    dest: /etc/systemd/system/data-api.service
+  register: data_api_service_file
+  notify: Restart data API
+
+- name: Reload systemd daemon if service file changed
+  systemd:
+    daemon_reload: yes
+  when: data_api_service_file.changed
+
+- name: Enable data API service
+  systemd:
+    name: data-api
+    enabled: yes
+    daemon_reload: yes
+
+- name: Write deployment version file to /opt (for status detection)
+  copy:
+    content: |
+      {
+        "commit": "{{ lookup('pipe', 'git rev-parse --short HEAD', cwd=playbook_dir + '/../..') }}",
+        "branch": "{{ lookup('pipe', 'git branch --show-current', cwd=playbook_dir + '/../..') }}",
+        "timestamp": "{{ ansible_date_time.iso8601 }}",
+        "deployed_by": "ansible"
+      }
+    dest: /opt/data-api/.deploy_version
+    mode: "0644"
+
+- name: Write deployment version file to /srv/data (shared location)
+  copy:
+    content: |
+      {
+        "commit": "{{ lookup('pipe', 'git rev-parse --short HEAD', cwd=playbook_dir + '/../..') }}",
+        "branch": "{{ lookup('pipe', 'git branch --show-current', cwd=playbook_dir + '/../..') }}",
+        "timestamp": "{{ ansible_date_time.iso8601 }}",
+        "deployed_by": "ansible"
+      }
+    dest: /srv/data/.deploy_version
+    mode: "0644"
+
+- name: Restart data API service (always restart on deploy)
+  systemd:
+    name: data-api
+    state: restarted
+
+- name: Create data API health check script
+  copy:
+    dest: /usr/local/bin/data-api-health-check
+    content: |
+      #!/bin/bash
+      curl -f -s http://localhost:8000/health > /dev/null
+    mode: "0755"
+
+# Nginx configuration for API documentation
+- name: Install nginx
+  apt:
+    name: nginx
+    state: present
+
+- name: Create nginx configuration for data API
+  template:
+    src: nginx-data-api.conf.j2
+    dest: /etc/nginx/sites-available/data-api
+    mode: "0644"
+  notify: Reload nginx
+
+- name: Enable nginx site
+  file:
+    src: /etc/nginx/sites-available/data-api
+    dest: /etc/nginx/sites-enabled/data-api
+    state: link
+  notify: Reload nginx
+
+- name: Remove default nginx site
+  file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: Reload nginx
+
+- name: Ensure nginx is enabled and started
+  systemd:
+    name: nginx
+    enabled: yes
+    state: started
+

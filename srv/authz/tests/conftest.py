@@ -34,7 +34,7 @@ def set_env(monkeypatch):
     monkeypatch.setenv("AUTHZ_SIGNING_ALG", "RS256")
     monkeypatch.setenv("AUTHZ_RSA_KEY_SIZE", "2048")
     # Zero Trust: allowed audiences for token exchange (no client auth)
-    monkeypatch.setenv("AUTHZ_ALLOWED_AUDIENCES", "test-audience,ingest-api,search-api,agent-api")
+    monkeypatch.setenv("AUTHZ_ALLOWED_AUDIENCES", "test-audience,data-api,search-api,agent-api")
     monkeypatch.setenv("POSTGRES_HOST", "localhost")
     monkeypatch.setenv("POSTGRES_USER", "test_user")
     monkeypatch.setenv("POSTGRES_PASSWORD", "test_pass")

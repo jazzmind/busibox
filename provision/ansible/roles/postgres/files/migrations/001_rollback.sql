@@ -6,7 +6,7 @@
 -- Only run this if you need to completely reset the database.
 
 -- Drop tables in reverse dependency order
-DROP TABLE IF EXISTS ingestion_jobs;
+DROP TABLE IF EXISTS data_jobs;
 DROP TABLE IF EXISTS chunks;
 DROP TABLE IF EXISTS files;
 DROP TABLE IF EXISTS user_roles;

@@ -119,7 +119,7 @@ async def test_document_search_with_uploaded_pdf(client):
     
     This test:
     1. Creates a sample PDF document
-    2. Uploads it to ingest API
+    2. Uploads it to data API
     3. Waits for processing
     4. Performs document search via chat
     5. Verifies results contain document content
@@ -152,25 +152,25 @@ async def test_document_search_with_uploaded_pdf(client):
     strategy while exploring new market opportunities.
     """
     
-    # Step 2: Upload document to ingest API
-    # Note: This requires ingest API to be running
+    # Step 2: Upload document to data API
+    # Note: This requires data API to be running
     try:
         async with httpx.AsyncClient(timeout=60.0) as http_client:
-            # Create a simple text file (ingest API can process text files)
+            # Create a simple text file (data API can process text files)
             files = {
                 'file': ('sample_report.txt', sample_pdf_content.encode(), 'text/plain')
             }
             
-            # TODO: Update to use Bearer token when ingest-api security is upgraded
-            # Currently ingest-api still accepts X-User-Id header
+            # TODO: Update to use Bearer token when data-api security is upgraded
+            # Currently data-api still accepts X-User-Id header
             upload_response = await http_client.post(
-                f"{settings.ingest_api_url}/upload",
+                f"{settings.data_api_url}/upload",
                 files=files,
                 headers={"X-User-Id": "test-user-123"}
             )
             
             if upload_response.status_code != 200:
-                pytest.skip(f"Ingest API unavailable: {upload_response.status_code}")
+                pytest.skip(f"Data API unavailable: {upload_response.status_code}")
             
             upload_data = upload_response.json()
             file_id = upload_data.get("file_id")
@@ -212,10 +212,10 @@ async def test_document_search_with_uploaded_pdf(client):
             assert "doc_search" in selected_tools or len(selected_tools) > 0
             
             # Cleanup: Delete the uploaded file
-            # TODO: Update to use Bearer token when ingest-api security is upgraded
+            # TODO: Update to use Bearer token when data-api security is upgraded
             try:
                 delete_response = await http_client.delete(
-                    f"{settings.ingest_api_url}/files/{file_id}",
+                    f"{settings.data_api_url}/files/{file_id}",
                     headers={"X-User-Id": "test-user-123"}
                 )
                 print(f"✅ Document cleaned up")
@@ -223,7 +223,7 @@ async def test_document_search_with_uploaded_pdf(client):
                 pass  # Cleanup is best effort
             
     except httpx.ConnectError:
-        pytest.skip("Ingest API not available")
+        pytest.skip("Data API not available")
     except Exception as e:
         pytest.skip(f"Test skipped due to: {str(e)}")
 

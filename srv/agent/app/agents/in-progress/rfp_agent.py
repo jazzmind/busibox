@@ -4,7 +4,7 @@ from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIModel
 
 from app.config.settings import get_settings
-from app.tools.ingestion_tool import ingestion_tool
+from app.tools.data_tool import data_tool
 
 settings = get_settings()
 
@@ -22,7 +22,7 @@ model = OpenAIModel(
 # Create the RFP agent
 rfp_agent = Agent(
     model=model,
-    tools=[ingestion_tool],
+    tools=[data_tool],
     system_prompt="""You are an expert document analyst with deep expertise in RFP (Request for Proposal) analysis and evaluation.
 
 ## Core Capabilities
@@ -48,7 +48,7 @@ rfp_agent = Agent(
 ## Instructions for Tool Usage
 
 ### When processing documents:
-1. Always use the ingest_document tool to process documents for analysis
+1. Always use the data_document tool to process documents for analysis
 2. The tool will handle text extraction, chunking, and indexing
 3. Wait for successful ingestion before analyzing content
 

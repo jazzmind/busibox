@@ -165,7 +165,7 @@ def create_service_auth_fixture(service_name: str):
     Create a service-specific auth environment fixture.
     
     Args:
-        service_name: Service name for audience (e.g., "search", "ingest")
+        service_name: Service name for audience (e.g., "search", "data")
     
     Returns:
         Fixture function that sets service-specific auth env
@@ -198,7 +198,7 @@ def get_service_config(service_name: str) -> Dict[str, Any]:
     Get standard configuration values for a service.
     
     Args:
-        service_name: Service name ("authz", "ingest", "search", "agent")
+        service_name: Service name ("authz", "data", "search", "agent")
     
     Returns:
         Dict with configuration values from environment
@@ -215,7 +215,7 @@ def get_service_config(service_name: str) -> Dict[str, Any]:
     }
     
     # Service-specific database
-    if service_name in ("ingest", "search"):
+    if service_name in ("data", "search"):
         config["postgres_db"] = os.getenv("POSTGRES_DB", "files")
     elif service_name == "authz":
         config["postgres_db"] = os.getenv("POSTGRES_DB", "authz")

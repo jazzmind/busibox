@@ -443,7 +443,7 @@ check_missing_containers_proxmox() {
             "303:${prefix}pg-lxc"
             "304:${prefix}milvus-lxc"
             "305:${prefix}files-lxc"
-            "306:${prefix}ingest-lxc"
+            "306:${prefix}data-lxc"
             "307:${prefix}litellm-lxc"
             "310:${prefix}authz-lxc"
             "312:${prefix}user-apps-lxc"
@@ -457,7 +457,7 @@ check_missing_containers_proxmox() {
             "203:pg-lxc"
             "204:milvus-lxc"
             "205:files-lxc"
-            "206:ingest-lxc"
+            "206:data-lxc"
             "207:litellm-lxc"
             "210:authz-lxc"
             "212:user-apps-lxc"
@@ -594,7 +594,7 @@ update_proxmox() {
         }
     fi
     
-    show_stage 50 "Deploying API Services" "Updating AuthZ, Ingest, Search, Agent, and Docs APIs."
+    show_stage 50 "Deploying API Services" "Updating AuthZ, Data, Search, Agent, and Docs APIs."
     
     info "Running: make apis INV=${inventory}"
     if [[ "$VERBOSE" == true ]]; then
@@ -840,8 +840,8 @@ stop_updatable_services() {
         "core-apps"
         "agent-api"
         "search-api"
-        "ingest-api"
-        "ingest-worker"
+        "data-api"
+        "data-worker"
         "authz-api"
         "deploy-api"
         "docs-api"
@@ -994,7 +994,7 @@ start_data_services() {
 }
 
 start_api_services() {
-    show_stage 70 "Starting API Services" "Starting AuthZ, Ingest, Search, Agent, and other APIs."
+    show_stage 70 "Starting API Services" "Starting AuthZ, Data, Search, Agent, and other APIs."
     
     local container_prefix
     container_prefix=$(get_container_prefix)
@@ -1017,7 +1017,7 @@ start_api_services() {
     cd "$REPO_ROOT"
     
     # Start API services in order
-    local api_services=("authz-api" "embedding-api" "ingest-api" "ingest-worker" "search-api" "agent-api" "deploy-api" "docs-api")
+    local api_services=("authz-api" "embedding-api" "data-api" "data-worker" "search-api" "agent-api" "deploy-api" "docs-api")
     
     for service in "${api_services[@]}"; do
         info "Starting ${service}..."
@@ -1863,7 +1863,7 @@ main() {
             simple_empty
             simple_line "This will run Ansible playbooks to update:" 2
             simple_line "• Core services (nginx, storage, database)" 4
-            simple_line "• API services (authz, ingest, search, agent)" 4
+            simple_line "• API services (authz, data, search, agent)" 4
             simple_line "• LLM services (if configured)" 4
             simple_line "• Frontend apps (ai-portal, agent-manager)" 4
             simple_empty

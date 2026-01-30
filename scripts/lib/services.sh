@@ -28,9 +28,9 @@ _SERVICE_postgres="203:busibox::/health:5432"
 _SERVICE_redis="206:busibox::/health:6379"
 _SERVICE_milvus="204:milvus::/healthz:9091"
 _SERVICE_minio="205:minio::/minio/health/live:9000"
-_SERVICE_ingest="206:busibox:srv/ingest:/health:8002"  # Placeholder for consolidated ingest display
-_SERVICE_ingest_api="206:busibox:srv/ingest:/health:8002"
-_SERVICE_ingest_worker="206:busibox:srv/ingest::8002"
+_SERVICE_data="206:busibox:srv/data:/health:8002"  # Placeholder for consolidated data display
+_SERVICE_data_api="206:busibox:srv/data:/health:8002"
+_SERVICE_data_worker="206:busibox:srv/data::8002"
 _SERVICE_search_api="204:busibox:srv/search:/health:8003"
 _SERVICE_agent_api="202:busibox:srv/agent:/health:8000"
 _SERVICE_deploy_api="201:busibox:srv/deploy:/health/live:8011"
@@ -50,9 +50,9 @@ _NAME_postgres="PostgreSQL"
 _NAME_redis="Redis"
 _NAME_milvus="Milvus"
 _NAME_minio="MinIO"
-_NAME_ingest="Ingest API & Worker"  # Consolidated display name
-_NAME_ingest_api="Ingest API"
-_NAME_ingest_worker="Ingest Worker"
+_NAME_data="Data API & Worker"  # Consolidated display name
+_NAME_data_api="Data API"
+_NAME_data_worker="Data Worker"
 _NAME_search_api="Search API"
 _NAME_agent_api="Agent API"
 _NAME_litellm="LiteLLM"
@@ -70,7 +70,7 @@ _NAME_deploy_api="Deploy API"
 # Service categories (reorganized per user request)
 # Core: authz, postgres, redis, milvus, minio
 # LLM: litellm, mlx/vllm (platform-dependent), embedding
-# API: deploy, ingest, search, agent, docs
+# API: deploy, data, search, agent, docs
 # App: nginx, ai-portal, agent-manager
 _CORE_SERVICES="authz postgres redis milvus minio"
 # LLM services - mlx or vllm depends on platform (detected at runtime)
@@ -78,12 +78,12 @@ _LLM_SERVICES_BASE="litellm"
 _LLM_SERVICES_GPU="vllm"     # For Linux with NVIDIA GPU
 _LLM_SERVICES_APPLE="mlx"    # For Apple Silicon
 _LLM_SERVICES_SUFFIX="embedding"
-_API_SERVICES="deploy-api ingest search-api agent-api docs-api"
+_API_SERVICES="deploy-api data search-api agent-api docs-api"
 _APP_SERVICES="nginx ai-portal agent-manager"
 
 # All services combined (includes individual services for status checking)
-# Note: "ingest" is used for display, but we check "ingest-api" and "ingest-worker" individually
-ALL_SERVICES="authz postgres redis milvus minio nginx litellm vllm mlx embedding ingest-api ingest-worker search-api agent-api deploy-api docs-api ai-portal agent-manager"
+# Note: "data" is used for display, but we check "data-api" and "data-worker" individually
+ALL_SERVICES="authz postgres redis milvus minio nginx litellm vllm mlx embedding data-api data-worker search-api agent-api deploy-api docs-api ai-portal agent-manager"
 
 # ============================================================================
 # Service Metadata Functions

@@ -90,8 +90,8 @@
         "Cached models for instant startup"
       ]
     },
-    "ingest-api": {
-      "title": "Ingest API",
+    "data-api": {
+      "title": "Data API",
       "tagline": "Intelligent document processing",
       "description": "Upload PDFs, Word docs, images, and more. AI-powered extraction with layout preservation.",
       "features": [

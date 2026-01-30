@@ -125,11 +125,11 @@ BUILTIN_TOOL_METADATA = {
             }
         }
     },
-    "ingestion_tool": {
-        "name": "ingest_document",
+    "data_tool": {
+        "name": "data_document",
         "description": "Ingest and process a document file for analysis and search. Handles PDF, DOCX, TXT, MD, and other text formats.",
-        "entrypoint": "app.tools.ingestion_tool:ingest_document",
-        "scopes": ["ingest:write"],
+        "entrypoint": "app.tools.data_tool:data_document",
+        "scopes": ["data:write"],
         "version": 1,
         "schema": {
             "input": {
@@ -137,7 +137,7 @@ BUILTIN_TOOL_METADATA = {
                 "properties": {
                     "file_path": {
                         "type": "string",
-                        "description": "Path to the file to ingest"
+                        "description": "Path to the file to data"
                     },
                     "metadata": {
                         "type": "object",
@@ -211,7 +211,7 @@ BUILTIN_TOOL_METADATA = {
         "name": "create_data_document",
         "description": "Create a new structured data document for storing records (like a database table or Notion database).",
         "entrypoint": "app.tools.data_tool:create_data_document",
-        "scopes": ["ingest:write"],
+        "scopes": ["data:write"],
         "version": 1,
         "schema": {
             "input": {
@@ -240,7 +240,7 @@ BUILTIN_TOOL_METADATA = {
         "name": "query_data",
         "description": "Query records from a data document with SQL-like filtering, sorting, and pagination.",
         "entrypoint": "app.tools.data_tool:query_data",
-        "scopes": ["ingest:read"],
+        "scopes": ["data:read"],
         "version": 1,
         "schema": {
             "input": {
@@ -272,7 +272,7 @@ BUILTIN_TOOL_METADATA = {
         "name": "insert_records",
         "description": "Insert records into a data document.",
         "entrypoint": "app.tools.data_tool:insert_records",
-        "scopes": ["ingest:write"],
+        "scopes": ["data:write"],
         "version": 1,
         "schema": {
             "input": {
@@ -298,7 +298,7 @@ BUILTIN_TOOL_METADATA = {
         "name": "update_records",
         "description": "Update records in a data document matching a filter.",
         "entrypoint": "app.tools.data_tool:update_records",
-        "scopes": ["ingest:write"],
+        "scopes": ["data:write"],
         "version": 1,
         "schema": {
             "input": {
@@ -324,7 +324,7 @@ BUILTIN_TOOL_METADATA = {
         "name": "delete_records",
         "description": "Delete records from a data document by filter or IDs.",
         "entrypoint": "app.tools.data_tool:delete_records",
-        "scopes": ["ingest:write"],
+        "scopes": ["data:write"],
         "version": 1,
         "schema": {
             "input": {
@@ -350,7 +350,7 @@ BUILTIN_TOOL_METADATA = {
         "name": "list_data_documents",
         "description": "List available data documents accessible to the user.",
         "entrypoint": "app.tools.data_tool:list_data_documents",
-        "scopes": ["ingest:read"],
+        "scopes": ["data:read"],
         "version": 1,
         "schema": {
             "input": {
@@ -376,7 +376,7 @@ BUILTIN_TOOL_METADATA = {
         "name": "get_data_document",
         "description": "Get a data document with schema, metadata, and optionally all records.",
         "entrypoint": "app.tools.data_tool:get_data_document",
-        "scopes": ["ingest:read"],
+        "scopes": ["data:read"],
         "version": 1,
         "schema": {
             "input": {
@@ -496,7 +496,7 @@ def get_tool_executor(tool_name: str) -> Optional[Callable]:
         "web_search": ("app.tools.web_search_tool", "search_web"),
         "document_search": ("app.tools.document_search_tool", "search_documents"),
         "get_weather": ("app.tools.weather_tool", "get_weather"),
-        "ingest_document": ("app.tools.ingestion_tool", "ingest_document"),
+        "data_document": ("app.tools.data_tool", "data_document"),
         "web_scraper": ("app.tools.web_scraper_tool", "scrape_webpage"),
         # Data management tools
         "create_data_document": ("app.tools.data_tool", "create_data_document"),

@@ -5,7 +5,7 @@
 # Deployment order organized into 4 groups:
 #   1. CORE: nginx, minio, postgres, milvus (infrastructure)
 #   2. LLM: vllm, litellm, colpali, embedding (AI/ML services)
-#   3. APIs: authz, ingest, search, agent, docs (application services)
+#   3. APIs: authz, data, search, agent, docs (application services)
 #   4. APPS: ai-portal, agent-manager (frontend applications)
 #
 # Web installs start with nginx first so the install UI can drive the rest.
@@ -265,14 +265,14 @@
     - role: deploy_api
       tags: [apis, apis_deploy, deploy, deploy_api]
 
-# 3.2 Ingest (file ingestion + embedding)
-- hosts: ingest
-  tags: [apis, apis_ingest]
+# 3.2 Data (file ingestion + embedding)
+- hosts: data
+  tags: [apis, apis_data]
   roles:
-    - role: ingest
-      tags: [apis, apis_ingest, ingest, ingest_api, ingest_worker]
+    - role: data
+      tags: [apis, apis_data, data, data_api, data_worker]
     - role: embedding_api
-      tags: [apis, apis_ingest, ingest, embedding_api, embedding]
+      tags: [apis, apis_data, data, embedding_api, embedding]
 
 # 3.3 Search API
 - hosts: milvus

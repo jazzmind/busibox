@@ -1,7 +1,7 @@
 ---
 # SSH key setup for container-to-container communication
 # Enables apps container to SSH to other containers for log viewing via journalctl
-# Target containers: ingest-lxc, agent-lxc, milvus-lxc
+# Target containers: data-lxc, agent-lxc, milvus-lxc
 
 - name: Generate SSH key pair on apps container for root user
   openssh_keypair:
@@ -22,25 +22,25 @@
   tags: [apps, apps_ssh]
 
 # ============================================================================
-# Ingest Container (ingest-lxc) - for ingest-api and ingest-worker logs
+# Data Container (data-lxc) - for data-api and data-worker logs
 # ============================================================================
 
-- name: Ensure .ssh directory exists on ingest container
+- name: Ensure .ssh directory exists on data container
   file:
     path: /root/.ssh
     state: directory
     mode: '0700'
     owner: root
     group: root
-  delegate_to: "{{ ingest_ip }}"
+  delegate_to: "{{ data_ip }}"
   tags: [apps, apps_ssh]
 
-- name: Add apps container public key to ingest container authorized_keys
+- name: Add apps container public key to data container authorized_keys
   authorized_key:
     user: root
     key: "{{ apps_public_key.content | b64decode }}"
     state: present
-  delegate_to: "{{ ingest_ip }}"
+  delegate_to: "{{ data_ip }}"
   tags: [apps, apps_ssh]
 
 # ============================================================================
@@ -92,9 +92,9 @@
 # ============================================================================
 
 - name: Test SSH connection from apps to ingest
-  shell: "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{{ ingest_ip }} 'echo SSH_OK'"
+  shell: "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{{ data_ip }} 'echo SSH_OK'"
   delegate_to: "{{ apps_ip }}"
-  register: ssh_test_ingest
+  register: ssh_test_data
   changed_when: false
   failed_when: false
   tags: [apps, apps_ssh]
@@ -117,6 +117,6 @@
 
 - name: Display SSH test results
   debug:
-    msg: "SSH Tests - Ingest: {{ 'OK' if ssh_test_ingest.rc == 0 else 'FAILED' }}, Agent: {{ 'OK' if ssh_test_agent.rc == 0 else 'FAILED' }}, Milvus: {{ 'OK' if ssh_test_milvus.rc == 0 else 'FAILED' }}"
+    msg: "SSH Tests - Data: {{ 'OK' if ssh_test_data.rc == 0 else 'FAILED' }}, Agent: {{ 'OK' if ssh_test_agent.rc == 0 else 'FAILED' }}, Milvus: {{ 'OK' if ssh_test_milvus.rc == 0 else 'FAILED' }}"
   tags: [apps, apps_ssh]
 

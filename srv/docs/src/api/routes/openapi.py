@@ -52,7 +52,7 @@ async def list_openapi_specs():
 
 
 @router.get("/{service}", response_class=PlainTextResponse)
-async def get_openapi_spec(service: Literal["agent", "authz", "ingest", "search", "docs"]):
+async def get_openapi_spec(service: Literal["agent", "authz", "data", "search", "docs"]):
     """
     Get an OpenAPI specification by service name.
     

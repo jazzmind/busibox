@@ -49,8 +49,8 @@ class TestAuthenticationBypass:
                 )
     
     @pytest.mark.auth
-    def test_ingest_api_no_auth(self, http_client, endpoints):
-        """Test Ingest API endpoints require authentication."""
+    def test_data_api_no_auth(self, http_client, endpoints):
+        """Test Data API endpoints require authentication."""
         protected_endpoints = [
             "/upload",
             "/search",
@@ -58,7 +58,7 @@ class TestAuthenticationBypass:
         ]
         
         for endpoint in protected_endpoints:
-            url = f"{endpoints.ingest}{endpoint}"
+            url = f"{endpoints.data}{endpoint}"
             if "upload" in endpoint or "search" in endpoint:
                 response = http_client.post(url, json={})
             else:
@@ -146,7 +146,7 @@ class TestInvalidTokens:
         
         # Test against services with POST endpoints that require auth
         services = [
-            (endpoints.ingest, "/search"),
+            (endpoints.data, "/search"),
             (endpoints.search, "/search"),
         ]
         
@@ -187,7 +187,7 @@ class TestBrokenObjectLevelAuthorization:
         # Try to access a file with a different user's ID
         other_user_file_id = "00000000-0000-0000-0000-000000000001"
         
-        url = f"{endpoints.ingest}/files/{other_user_file_id}"
+        url = f"{endpoints.data}/files/{other_user_file_id}"
         response = http_client.get(url, headers=auth_headers)
         
         # Should get 401, 403, or 404 - not 200 with another user's data
@@ -216,7 +216,7 @@ class TestBrokenObjectLevelAuthorization:
         """Test deleting another user's resource via IDOR."""
         other_user_file_id = "00000000-0000-0000-0000-000000000001"
         
-        url = f"{endpoints.ingest}/files/{other_user_file_id}"
+        url = f"{endpoints.data}/files/{other_user_file_id}"
         response = http_client.delete(url, headers=auth_headers)
         
         # 401, 403, 404 = all indicate rejection (secure)
@@ -231,7 +231,7 @@ class TestBrokenObjectLevelAuthorization:
         malicious_uuids = PayloadGenerator.MALICIOUS_UUIDS
         
         for uuid in malicious_uuids:
-            url = f"{endpoints.ingest}/files/{uuid}"
+            url = f"{endpoints.data}/files/{uuid}"
             response = http_client.get(url, headers=auth_headers)
             
             # Should handle gracefully - 400, 401, 403, 404, or 422
@@ -347,7 +347,7 @@ class TestHealthEndpointSecurity:
         """Test health endpoints don't expose sensitive information."""
         health_endpoints = [
             (endpoints.agent, "/health"),
-            (endpoints.ingest, "/health"),
+            (endpoints.data, "/health"),
             (endpoints.search, "/health"),
             (endpoints.authz, "/health/live"),
             (endpoints.authz, "/health/ready"),

@@ -18,10 +18,10 @@ postgres_db: busibox
 postgres_user: app_user
 # postgres_password is defined in inventory group_vars
 
-# Embedding service (embedding-api on ingest-lxc)
+# Embedding service (embedding-api on data-lxc)
 # The embedding-api service runs on port 8005 and provides the /embed endpoint
 # Note: embedding_model and dimension are derived from model_registry.yml in the template
-embedding_service_url: "http://{{ hostvars[groups['ingest'][0]]['ansible_host'] }}:8005"
+embedding_service_url: "http://{{ hostvars[groups['data'][0]]['ansible_host'] }}:8005"
 
 # Reranking settings
 # Local reranker model (for RerankingService)
@@ -31,7 +31,7 @@ enable_reranking: true
 # Note: liteLLM reranker uses "reranking" model purpose (hardcoded in MilvusSearchService)
 
 # Redis (optional)
-redis_host: "{{ hostvars[groups['ingest'][0]]['ansible_host'] if 'ingest' in groups else '' }}"
+redis_host: "{{ hostvars[groups['data'][0]]['ansible_host'] if 'data' in groups else '' }}"
 redis_port: 6379
 enable_caching: false
 

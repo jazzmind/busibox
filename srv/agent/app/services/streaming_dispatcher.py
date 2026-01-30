@@ -40,7 +40,7 @@ TOOL_DISPLAY_NAMES = {
     "web_search": "Web Search",
     "document_search": "Document Search",
     "get_weather": "Weather",
-    "ingest_document": "Document Ingestion",
+    "data_document": "Document Data",
     "web_scraper": "Web Page Reader",
 }
 

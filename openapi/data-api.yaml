@@ -50,8 +50,8 @@ info:
     email: infra@busibox.local
     
 servers:
-  - url: http://ingest-lxc:8002
-    description: Production (ingest-lxc container)
+  - url: http://data-lxc:8002
+    description: Production (data-lxc container)
   - url: http://10.96.200.29:8002
     description: Test environment
   - url: http://localhost:8002
@@ -467,7 +467,7 @@ paths:
     post:
       summary: Reprocess document
       description: |
-        Delete chunks and vectors, then re-run ingestion pipeline.
+        Delete chunks and vectors, then re-run data pipeline.
         Useful for applying new extraction strategies or fixing processing errors.
         Requires update permission on the document.
       tags: [Files]

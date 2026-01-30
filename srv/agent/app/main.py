@@ -33,8 +33,8 @@ async def lifespan(app: FastAPI):
     logger.info("Agent registry initialized")
     
     # Initialize insights service
-    # Use dedicated embedding API if configured, otherwise fall back to ingest API
-    embedding_url = settings.embedding_api_url or str(settings.ingest_api_url)
+    # Use dedicated embedding API if configured, otherwise fall back to data API
+    embedding_url = settings.embedding_api_url or str(settings.data_api_url)
     insights_config = {
         "milvus_host": settings.milvus_host,
         "milvus_port": settings.milvus_port,

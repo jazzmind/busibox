@@ -313,13 +313,12 @@ validate_vault_secrets() {
         "secrets.minio.root_user"
         "secrets.minio.root_password"
         "secrets.jwt_secret"
-        "secrets.better_auth_secret"
     )
     
     local optional_secrets=(
-        "secrets.authz_admin_token"
         "secrets.authz_master_key"
         "secrets.litellm_api_key"
+        "secrets.litellm_master_key"
         "secrets.encryption_key"
     )
     
@@ -560,7 +559,6 @@ sync_secrets_to_vault() {
     # Auth secrets
     if [[ -n "${SSO_JWT_SECRET:-}" ]]; then
         values_to_update+=("secrets.jwt_secret=${SSO_JWT_SECRET}")
-        values_to_update+=("secrets.better_auth_secret=${SSO_JWT_SECRET}")
         values_to_update+=("secrets.session_secret=${SSO_JWT_SECRET}")
     fi
     
@@ -656,7 +654,6 @@ setup_vault_secrets() {
     if ! has_vault_secret "secrets.jwt_secret"; then
         local jwt=$(generate_secret 32)
         new_secrets+=("secrets.jwt_secret=$jwt")
-        new_secrets+=("secrets.better_auth_secret=$jwt")
         new_secrets+=("secrets.session_secret=$jwt")
     fi
     if ! has_vault_secret "secrets.authz_master_key"; then

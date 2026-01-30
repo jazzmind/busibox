@@ -42,7 +42,7 @@ get_ansible_tag() {
         # APIs
         authz|authz-api) echo "authz" ;;
         agent|agent-api) echo "agent" ;;
-        ingest|ingest-api) echo "ingest" ;;
+        ingest|data-api) echo "data" ;;
         search|search-api) echo "search" ;;
         deploy|deploy-api) echo "deploy" ;;
         docs|docs-api) echo "docs" ;;
@@ -91,7 +91,7 @@ expand_services() {
                 expanded="${expanded} postgres redis minio milvus"
                 ;;
             apis)
-                expanded="${expanded} authz agent ingest search deploy docs embedding"
+                expanded="${expanded} authz agent data search deploy docs embedding"
                 ;;
             llm)
                 expanded="${expanded} litellm"
@@ -100,7 +100,7 @@ expand_services() {
                 expanded="${expanded} core-apps nginx"
                 ;;
             all)
-                expanded="${expanded} postgres redis minio milvus authz agent ingest search deploy docs embedding litellm core-apps nginx"
+                expanded="${expanded} postgres redis minio milvus authz agent data search deploy docs embedding litellm core-apps nginx"
                 ;;
             *)
                 expanded="${expanded} ${svc}"
@@ -249,11 +249,11 @@ main() {
         echo ""
         echo "Examples:"
         echo "  make install SERVICE=authz"
-        echo "  make install SERVICE=authz,agent,ingest"
+        echo "  make install SERVICE=authz,agent,data"
         echo "  make install SERVICE=apis          # All API services"
         echo "  make install SERVICE=infrastructure  # postgres, redis, minio, milvus"
         echo ""
-        echo "Services: postgres, redis, minio, milvus, authz, agent, ingest,"
+        echo "Services: postgres, redis, minio, milvus, authz, agent, data,"
         echo "          search, deploy, docs, embedding, litellm, core-apps, nginx"
         echo ""
         echo "Groups: infrastructure, apis, llm, frontend, all"

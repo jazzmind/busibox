@@ -14,7 +14,7 @@
 #   bash configure-container-gpus.sh <container-id> [--skip-driver-install]
 #
 # EXAMPLES:
-#   # Configure GPUs for ingest container (206)
+#   # Configure GPUs for data container (206)
 #   bash configure-container-gpus.sh 206
 #
 #   # Configure GPUs but skip driver installation
@@ -66,7 +66,7 @@ This script will:
   3. Install CUDA toolkit if missing (unless --skip-driver-install)
 
 Examples:
-  # Configure GPUs for ingest container
+  # Configure GPUs for data container
   $0 206
 
   # Configure GPUs but skip driver installation

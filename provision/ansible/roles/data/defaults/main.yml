@@ -1,0 +1,28 @@
+---
+# Data Service Default Variables
+
+# GPU Configuration
+# CUDA_VISIBLE_DEVICES for data container (default: GPU 0)
+# Marker and ColPali share GPU 0 by default
+data_cuda_visible_devices: "0"
+
+# Virtual environment directory
+data_venv_dir: "/srv/data/venv"
+
+# Model registry configuration
+# Path where model registry JSON is deployed to containers
+model_registry_path: "/etc/data/model_registry.json"
+
+# LLM cleanup configuration
+# Enabled by default to fix text quality issues (smashed words, spacing, etc.)
+llm_cleanup_enabled: true
+
+# Embedding batch size (model is derived from model_registry.yml)
+embedding_batch_size: 32
+
+# Test document service
+test_docs_repo_path: "{{ lookup('env', 'BUSIBOX_TESTDOCS_PATH') | default(playbook_dir + '/../../busibox-testdocs', true) }}"
+test_docs_target_path: "/srv/test-docs"
+test_docs_repo_url: "https://github.com/jazzmind/busibox-testdocs.git"
+test_docs_state_path: "/srv/data/test-docs-state.json"
+

@@ -6,7 +6,7 @@
 #       name: docker_common
 #       tasks_from: compose_build
 #     vars:
-#       docker_services_to_build: ["agent-api", "ingest-api"]
+#       docker_services_to_build: ["agent-api", "data-api"]
 #       docker_build_no_cache: false
 #       docker_build_pull: true
 

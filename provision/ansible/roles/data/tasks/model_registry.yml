@@ -1,0 +1,33 @@
+---
+# Deploy model registry configuration to data service
+
+- name: Create data config directory
+  file:
+    path: /etc/data
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+  tags: [data, data_configure, model_registry]
+
+- name: Deploy model registry configuration
+  template:
+    src: model_registry.json.j2
+    dest: "{{ model_registry_path }}"
+    mode: '0644'
+    owner: root
+    group: root
+  notify: restart data services
+  tags: [data, data_configure, model_registry]
+
+- name: Verify model registry file
+  stat:
+    path: "{{ model_registry_path }}"
+  register: registry_file
+  tags: [data, data_configure, model_registry]
+
+- name: Display model registry status
+  debug:
+    msg: "Model registry deployed: {{ registry_file.stat.exists }}"
+  tags: [data, data_configure, model_registry]
+

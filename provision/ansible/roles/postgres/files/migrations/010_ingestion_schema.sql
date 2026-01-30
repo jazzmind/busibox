@@ -1,13 +1,13 @@
--- Migration 010: Ingestion Service Schema
+-- Migration 010: Data Service Schema
 -- Created: 2025-11-05
 -- Description: Create tables for production-grade document ingestion service with
 --              content deduplication, multi-language support, and real-time status tracking
 
 -- ============================================================================
--- Ingestion Files Table
+-- Data Files Table
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS ingestion_files (
+CREATE TABLE IF NOT EXISTS data_files (
   -- Primary key
   file_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   
@@ -51,11 +51,11 @@ CREATE TABLE IF NOT EXISTS ingestion_files (
 );
 
 -- ============================================================================
--- Ingestion Status Table
+-- Data Status Table
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS ingestion_status (
-  file_id UUID PRIMARY KEY REFERENCES ingestion_files(file_id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS data_status (
+  file_id UUID PRIMARY KEY REFERENCES data_files(file_id) ON DELETE CASCADE,
   
   -- Current processing state
   stage VARCHAR(50) NOT NULL CHECK (stage IN (
@@ -81,12 +81,12 @@ CREATE TABLE IF NOT EXISTS ingestion_status (
 );
 
 -- ============================================================================
--- Ingestion Chunks Table
+-- Data Chunks Table
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS ingestion_chunks (
+CREATE TABLE IF NOT EXISTS data_chunks (
   chunk_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  file_id UUID NOT NULL REFERENCES ingestion_files(file_id) ON DELETE CASCADE,
+  file_id UUID NOT NULL REFERENCES data_files(file_id) ON DELETE CASCADE,
   
   -- Chunk metadata
   chunk_index INTEGER NOT NULL,  -- Position in document (0-indexed)
@@ -112,44 +112,44 @@ CREATE TABLE IF NOT EXISTS ingestion_chunks (
 -- Indexes for Performance
 -- ============================================================================
 
--- Ingestion files indexes
-CREATE INDEX IF NOT EXISTS idx_ingestion_files_user_id ON ingestion_files(user_id);
-CREATE INDEX IF NOT EXISTS idx_ingestion_files_content_hash ON ingestion_files(content_hash);  -- For duplicate detection
-CREATE INDEX IF NOT EXISTS idx_ingestion_files_document_type ON ingestion_files(document_type);
-CREATE INDEX IF NOT EXISTS idx_ingestion_files_created_at ON ingestion_files(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_ingestion_files_primary_language ON ingestion_files(primary_language);
-CREATE INDEX IF NOT EXISTS idx_ingestion_files_detected_languages ON ingestion_files USING gin(detected_languages);  -- GIN index for array queries
+-- Data files indexes
+CREATE INDEX IF NOT EXISTS idx_data_files_user_id ON data_files(user_id);
+CREATE INDEX IF NOT EXISTS idx_data_files_content_hash ON data_files(content_hash);  -- For duplicate detection
+CREATE INDEX IF NOT EXISTS idx_data_files_document_type ON data_files(document_type);
+CREATE INDEX IF NOT EXISTS idx_data_files_created_at ON data_files(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_data_files_primary_language ON data_files(primary_language);
+CREATE INDEX IF NOT EXISTS idx_data_files_detected_languages ON data_files USING gin(detected_languages);  -- GIN index for array queries
 
 -- Full-text search on extracted metadata
-CREATE INDEX IF NOT EXISTS idx_ingestion_files_metadata_gin ON ingestion_files USING gin(metadata jsonb_path_ops);
+CREATE INDEX IF NOT EXISTS idx_data_files_metadata_gin ON data_files USING gin(metadata jsonb_path_ops);
 
--- Ingestion status indexes
-CREATE INDEX IF NOT EXISTS idx_ingestion_status_stage ON ingestion_status(stage);
-CREATE INDEX IF NOT EXISTS idx_ingestion_status_updated_at ON ingestion_status(updated_at DESC);
+-- Data status indexes
+CREATE INDEX IF NOT EXISTS idx_data_status_stage ON data_status(stage);
+CREATE INDEX IF NOT EXISTS idx_data_status_updated_at ON data_status(updated_at DESC);
 
--- Ingestion chunks indexes
-CREATE INDEX IF NOT EXISTS idx_ingestion_chunks_file_id ON ingestion_chunks(file_id);
-CREATE INDEX IF NOT EXISTS idx_ingestion_chunks_chunk_index ON ingestion_chunks(file_id, chunk_index);
-CREATE INDEX IF NOT EXISTS idx_ingestion_chunks_page_number ON ingestion_chunks(file_id, page_number);
+-- Data chunks indexes
+CREATE INDEX IF NOT EXISTS idx_data_chunks_file_id ON data_chunks(file_id);
+CREATE INDEX IF NOT EXISTS idx_data_chunks_chunk_index ON data_chunks(file_id, chunk_index);
+CREATE INDEX IF NOT EXISTS idx_data_chunks_page_number ON data_chunks(file_id, page_number);
 
 -- ============================================================================
 -- Triggers and Functions
 -- ============================================================================
 
 -- Function to update parent table timestamp
-CREATE OR REPLACE FUNCTION update_ingestion_file_timestamp()
+CREATE OR REPLACE FUNCTION update_data_file_timestamp()
 RETURNS TRIGGER AS $$
 BEGIN
-  UPDATE ingestion_files SET updated_at = NOW() WHERE file_id = NEW.file_id;
+  UPDATE data_files SET updated_at = NOW() WHERE file_id = NEW.file_id;
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
 -- Trigger to update parent table timestamp on status updates
-CREATE TRIGGER trigger_update_ingestion_file_timestamp
-AFTER UPDATE ON ingestion_status
+CREATE TRIGGER trigger_update_data_file_timestamp
+AFTER UPDATE ON data_status
 FOR EACH ROW
-EXECUTE FUNCTION update_ingestion_file_timestamp();
+EXECUTE FUNCTION update_data_file_timestamp();
 
 -- Function to notify on status updates (for SSE)
 CREATE OR REPLACE FUNCTION notify_status_update()
@@ -175,7 +175,7 @@ $$ LANGUAGE plpgsql;
 
 -- Trigger to send NOTIFY on status updates
 CREATE TRIGGER trigger_notify_status_update
-AFTER INSERT OR UPDATE ON ingestion_status
+AFTER INSERT OR UPDATE ON data_status
 FOR EACH ROW
 EXECUTE FUNCTION notify_status_update();
 
@@ -184,6 +184,6 @@ EXECUTE FUNCTION notify_status_update();
 -- ============================================================================
 
 INSERT INTO ansible_migrations (version, name, applied_at)
-VALUES (10, 'ingestion_schema', CURRENT_TIMESTAMP)
+VALUES (10, 'data_schema', CURRENT_TIMESTAMP)
 ON CONFLICT (version) DO NOTHING;
 

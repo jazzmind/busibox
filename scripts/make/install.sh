@@ -989,7 +989,6 @@ generate_secrets() {
     # Generate all secrets
     export POSTGRES_PASSWORD=$(openssl rand -base64 24 | tr -d '/+=')
     export SSO_JWT_SECRET=$(openssl rand -hex 32)
-    # Note: AUTHZ_ADMIN_TOKEN removed - we use direct PostgreSQL for bootstrap (Zero Trust)
     export AUTHZ_MASTER_KEY=$(openssl rand -base64 32)
     # LiteLLM uses master_key for authentication - services should use the same key
     export LITELLM_MASTER_KEY="sk-$(openssl rand -hex 16)"
@@ -1231,6 +1230,69 @@ _load_github_token_from_vault() {
     return 1
 }
 
+# Load admin config from vault (used during resume)
+# This sets ADMIN_EMAIL and ALLOWED_DOMAINS from vault if they're not set or are "null"
+_load_admin_config_from_vault() {
+    # Check if vault file exists
+    if [[ ! -f "$VAULT_FILE" ]]; then
+        return 0
+    fi
+    
+    # Set up vault password if needed (reuse logic from GitHub token loader)
+    if is_vault_encrypted && [[ -z "${ANSIBLE_VAULT_PASSWORD_FILE:-}" ]]; then
+        local found_pass_file=""
+        
+        # Try environment-specific vault pass file
+        local env_vault_pass
+        env_vault_pass=$(get_vault_pass_file 2>/dev/null || echo "")
+        if [[ -n "$env_vault_pass" && -f "$env_vault_pass" ]]; then
+            found_pass_file="$env_vault_pass"
+        fi
+        
+        # Try all known environment prefixes if not found
+        if [[ -z "$found_pass_file" ]]; then
+            for prefix in prod staging dev demo; do
+                local try_file="${HOME}/.busibox-vault-pass-${prefix}"
+                if [[ -f "$try_file" ]]; then
+                    found_pass_file="$try_file"
+                    break
+                fi
+            done
+        fi
+        
+        # Try the standard ~/.vault_pass location
+        if [[ -z "$found_pass_file" && -f "$HOME/.vault_pass" ]]; then
+            found_pass_file="$HOME/.vault_pass"
+        fi
+        
+        if [[ -n "$found_pass_file" ]]; then
+            export ANSIBLE_VAULT_PASSWORD_FILE="$found_pass_file"
+        else
+            return 1
+        fi
+    fi
+    
+    # Load admin_emails from vault if ADMIN_EMAIL is not set or is "null"
+    if [[ -z "${ADMIN_EMAIL:-}" ]] || [[ "${ADMIN_EMAIL}" == "null" ]]; then
+        local vault_admin_emails
+        vault_admin_emails=$(get_vault_secret "secrets.admin_emails" 2>/dev/null || echo "")
+        if [[ -n "$vault_admin_emails" ]] && [[ "$vault_admin_emails" != "null" ]] && [[ "$vault_admin_emails" != "CHANGE_ME"* ]]; then
+            ADMIN_EMAIL="$vault_admin_emails"
+        fi
+    fi
+    
+    # Load allowed_email_domains from vault if ALLOWED_DOMAINS is not set or is "null"  
+    if [[ -z "${ALLOWED_DOMAINS:-}" ]] || [[ "${ALLOWED_DOMAINS}" == "null" ]]; then
+        local vault_allowed_domains
+        vault_allowed_domains=$(get_vault_secret "secrets.allowed_email_domains" 2>/dev/null || echo "")
+        if [[ -n "$vault_allowed_domains" ]] && [[ "$vault_allowed_domains" != "null" ]] && [[ "$vault_allowed_domains" != "CHANGE_ME"* ]]; then
+            ALLOWED_DOMAINS="$vault_allowed_domains"
+        fi
+    fi
+    
+    return 0
+}
+
 # =============================================================================
 # DOCKER BOOTSTRAP (Ansible-based)
 # =============================================================================
@@ -1250,6 +1312,16 @@ bootstrap_docker_ansible() {
     export LLM_BACKEND="${LLM_BACKEND:-}"
     export GITHUB_AUTH_TOKEN="${GITHUB_AUTH_TOKEN:-}"
     export ADMIN_EMAIL="${ADMIN_EMAIL:-}"
+    
+    # Set Docker dev mode based on environment
+    # - local-dev: Uses local directory mounts for hot-reload (development)
+    # - github: Clones from GitHub at build time (staging/production)
+    if [[ "$ENVIRONMENT" == "development" ]]; then
+        export DOCKER_DEV_MODE="local-dev"
+    else
+        export DOCKER_DEV_MODE="github"
+    fi
+    info "Docker mode: ${DOCKER_DEV_MODE}"
     
     # Navigate to Ansible directory
     local ansible_dir="${REPO_ROOT}/provision/ansible"
@@ -1311,17 +1383,21 @@ bootstrap_docker_ansible() {
         return 0
     }
     
-    # Run deployment phases with progress display
+    # ==========================================================================
+    # MINIMAL BOOTSTRAP: Deploy only services needed for AI Portal to work
+    # The rest (MinIO, Milvus, Data-API, Search-API, Agent-API, LiteLLM, etc.)
+    # will be deployed via AI Portal setup wizard using deploy-api
+    # ==========================================================================
     
-    # Phase 1: Infrastructure
-    show_stage 40 "Deploying Infrastructure" "PostgreSQL, Redis, MinIO, Milvus via Ansible."
-    info "Running: ansible-playbook ... --tags infrastructure"
-    if ! run_ansible "infrastructure"; then
-        error "Infrastructure deployment failed"
+    # Phase 1: PostgreSQL (database)
+    show_stage 40 "Deploying PostgreSQL" "Enterprise-grade database with row-level security."
+    info "Running: ansible-playbook ... --tags postgres"
+    if ! run_ansible "postgres"; then
+        error "PostgreSQL deployment failed"
         return 1
     fi
     
-    # Phase 2: AuthZ API (needed for admin user creation)
+    # Phase 2: AuthZ API (needed for admin user creation and authentication)
     show_stage 55 "Deploying AuthZ API" "Zero-trust authentication with OAuth 2.0."
     info "Running: ansible-playbook ... --tags authz"
     if ! run_ansible "authz"; then
@@ -1350,33 +1426,45 @@ bootstrap_docker_ansible() {
         warn "Could not create admin user - you'll need to sign up manually"
     fi
     
-    # Phase 4: Remaining APIs
-    show_stage 70 "Deploying API Services" "Ingest, Search, Agent, Docs, Deploy APIs."
-    info "Running: ansible-playbook ... --tags apis"
-    if ! run_ansible "apis"; then
-        error "API deployment failed"
+    # Phase 4: Deploy API (service orchestration - needed to deploy remaining services)
+    show_stage 70 "Deploying Deploy API" "Service orchestration and deployment automation."
+    info "Running: ansible-playbook ... --tags deploy"
+    if ! run_ansible "deploy"; then
+        error "Deploy API deployment failed"
         return 1
     fi
     
-    # Phase 5: LLM Services
-    show_stage 80 "Deploying LLM Services" "LiteLLM gateway for unified LLM access."
-    info "Running: ansible-playbook ... --tags llm"
-    if ! run_ansible "llm"; then
-        error "LLM deployment failed"
+    # Wait for Deploy API to be ready
+    info "Waiting for Deploy API to be healthy..."
+    attempt=0
+    while [[ $attempt -lt 30 ]]; do
+        if curl -sf http://localhost:8011/health/live &>/dev/null; then
+            success "Deploy API is ready"
+            break
+        fi
+        sleep 1
+        ((attempt++))
+    done
+    
+    # Phase 5: Core Apps (AI Portal + Agent Manager)
+    show_stage 80 "Deploying AI Portal" "Your command center for managing Busibox."
+    info "Running: ansible-playbook ... --tags core-apps"
+    if ! run_ansible "core-apps"; then
+        error "Core apps deployment failed"
         return 1
     fi
     
-    # Phase 6: Frontend
-    show_stage 90 "Deploying Frontend" "AI Portal, Agent Manager, Nginx."
-    info "Running: ansible-playbook ... --tags frontend"
-    if ! run_ansible "frontend"; then
-        error "Frontend deployment failed"
+    # Phase 6: Nginx (reverse proxy)
+    show_stage 90 "Deploying Nginx" "Reverse proxy with SSL termination."
+    info "Running: ansible-playbook ... --tags nginx"
+    if ! run_ansible "nginx"; then
+        error "Nginx deployment failed"
         return 1
     fi
     
-    # Phase 7: Wait for AI Portal
+    # Phase 7: Wait for AI Portal to be ready
     show_stage 95 "Waiting for AI Portal" "Verifying services are healthy..."
-    info "Waiting for AI Portal to be healthy..."
+    info "Waiting for AI Portal to be healthy (this may take a minute on first run)..."
     max_attempts=90
     attempt=0
     while [[ $attempt -lt $max_attempts ]]; do
@@ -1386,11 +1474,18 @@ bootstrap_docker_ansible() {
         fi
         sleep 2
         ((attempt++))
+        if [[ $((attempt % 15)) -eq 0 ]]; then
+            echo -n "."
+        fi
     done
+    echo ""
     
     if [[ $attempt -ge $max_attempts ]]; then
         warn "AI Portal health check timed out, but it may still be starting"
     fi
+    
+    # Note: Additional services (MinIO, Milvus, Data-API, Search-API, Agent-API, 
+    # Docs-API, LiteLLM, etc.) will be deployed via AI Portal setup wizard
     
     cd "${REPO_ROOT}"
 }
@@ -1573,7 +1668,7 @@ bootstrap_proxmox_ansible() {
     fi
     
     # Phase 3: API Services
-    show_stage 65 "Deploying API Services" "AuthZ, Ingest, Search, Agent, Deploy APIs."
+    show_stage 65 "Deploying API Services" "AuthZ, Data, Search, Agent, Deploy APIs."
     info "Running: ansible-playbook ... --tags apis"
     if ! run_ansible_proxmox "apis"; then
         error "API deployment failed"
@@ -2277,6 +2372,103 @@ wait_for_model_download() {
     
     # Clear the PID from state
     set_state "MODEL_DOWNLOAD_PID" ""
+}
+
+# Global variable to track background embedding download PID
+EMBEDDING_DOWNLOAD_PID=""
+
+# Start downloading embedding model in background (called early in install)
+# This allows the embedding model to download while Docker containers are being built
+# Uses Docker because fastembed requires Python <3.13 (onnxruntime compatibility)
+start_embedding_download_background() {
+    # Check if Docker is available
+    if ! command -v docker &>/dev/null; then
+        warn "Docker not available - embedding model will be downloaded later"
+        return 0
+    fi
+    
+    # Check if Docker daemon is running
+    if ! docker info &>/dev/null 2>&1; then
+        warn "Docker daemon not running - embedding model will be downloaded later"
+        return 0
+    fi
+    
+    local embedding_model
+    embedding_model=$(get_embedding_model_for_env)
+    
+    # FastEmbed cache location
+    local fastembed_cache="${HOME}/.cache/fastembed"
+    mkdir -p "$fastembed_cache"
+    
+    # Check if model is already cached
+    local model_size=""
+    case "$embedding_model" in
+        *small*) model_size="small" ;;
+        *base*) model_size="base" ;;
+        *large*) model_size="large" ;;
+    esac
+    
+    if [[ -n "$model_size" ]]; then
+        if find "${fastembed_cache}" -name "model*.onnx" -path "*bge-${model_size}*" 2>/dev/null | grep -q .; then
+            info "Embedding model already cached, skipping background download"
+            return 0
+        fi
+    fi
+    
+    # Show size estimate
+    local size_info=""
+    case "$embedding_model" in
+        *small*) size_info="(~134MB)" ;;
+        *base*) size_info="(~438MB)" ;;
+        *large*) size_info="(~1.3GB)" ;;
+    esac
+    
+    info "Starting embedding model download in background: ${embedding_model} ${size_info}"
+    
+    # Start download in background using Docker
+    (
+        docker run --rm \
+            -v "${fastembed_cache}:/root/.cache/fastembed" \
+            python:3.11-slim \
+            bash -c "
+                pip install -q fastembed && \
+                python -c \"
+from fastembed import TextEmbedding
+model = '${embedding_model}'
+cache_dir = '/root/.cache/fastembed'
+embedder = TextEmbedding(model_name=model, cache_dir=cache_dir)
+list(embedder.embed(['warmup test']))
+\"
+            " &>/dev/null
+    ) &
+    
+    EMBEDDING_DOWNLOAD_PID=$!
+    set_state "EMBEDDING_DOWNLOAD_PID" "$EMBEDDING_DOWNLOAD_PID"
+    info "Embedding model download started in background (PID: ${EMBEDDING_DOWNLOAD_PID})"
+    
+    return 0
+}
+
+# Wait for background embedding download to complete
+wait_for_embedding_download() {
+    if [[ -z "$EMBEDDING_DOWNLOAD_PID" ]]; then
+        # Try to restore from state
+        EMBEDDING_DOWNLOAD_PID=$(get_state "EMBEDDING_DOWNLOAD_PID" "")
+    fi
+    
+    if [[ -z "$EMBEDDING_DOWNLOAD_PID" ]]; then
+        return 0
+    fi
+    
+    # Check if process is still running
+    if kill -0 "$EMBEDDING_DOWNLOAD_PID" 2>/dev/null; then
+        info "Waiting for background embedding model download to complete..."
+        wait "$EMBEDDING_DOWNLOAD_PID" 2>/dev/null || true
+        success "Embedding model download complete"
+    fi
+    
+    # Clear the PID from state
+    set_state "EMBEDDING_DOWNLOAD_PID" ""
 }
 
 # Get the appropriate embedding model based on environment
@@ -3070,9 +3262,10 @@ main() {
             ADMIN_EMAIL=$(get_state "ADMIN_EMAIL" "demo@localhost")
             BASE_DOMAIN=$(get_state "BASE_DOMAIN" "localhost")
             ALLOWED_DOMAINS=$(get_state "ALLOWED_DOMAINS" "*")
-            # Load GitHub token from vault (secrets are now in vault, not state)
-            # Token may not exist yet - that's OK, we'll prompt later
+            # Load secrets from vault (secrets are now in vault, not state)
+            # These may not exist yet - that's OK, we'll prompt later
             _load_github_token_from_vault || true
+            _load_admin_config_from_vault || true
         else
             setup_demo_mode
         fi
@@ -3091,9 +3284,10 @@ main() {
             ADMIN_EMAIL=$(get_state "ADMIN_EMAIL" "")
             BASE_DOMAIN=$(get_state "BASE_DOMAIN" "localhost")
             ALLOWED_DOMAINS=$(get_state "ALLOWED_DOMAINS" "*")
-            # Load GitHub token from vault (secrets are now in vault, not state)
-            # Token may not exist yet - that's OK, we'll prompt later
+            # Load secrets from vault (secrets are now in vault, not state)
+            # These may not exist yet - that's OK, we'll prompt later
             _load_github_token_from_vault || true
+            _load_admin_config_from_vault || true
             
             # Show what we restored
             info "Restored configuration from saved state:"
@@ -3199,11 +3393,15 @@ main() {
         DEV_APPS_DIR=""
     fi
     
-    # Start model download in background early (if MLX backend)
-    # This allows the model to download while Docker containers are being built
+    # Start model downloads in background early
+    # This allows models to download while Docker containers are being built
     if [[ "$LLM_BACKEND" == "mlx" ]]; then
         start_model_download_background
     fi
+    
+    # Start embedding model download in background (needed for data-api/embedding-api)
+    # This runs regardless of LLM backend since embeddings are always local
+    start_embedding_download_background
     
     # Generate secrets and create .env file
     # Skip if already done, but restore from vault if resuming

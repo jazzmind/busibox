@@ -68,7 +68,7 @@ async def test_create_workflow_duplicate_step_ids(test_client: AsyncClient, mock
         "name": "dup-workflow",
         "steps": [
             {"id": "step1", "type": "tool", "tool": "search"},
-            {"id": "step1", "type": "tool", "tool": "ingest"},  # Duplicate
+            {"id": "step1", "type": "tool", "tool": "data"},  # Duplicate
         ],
     }
     
@@ -164,7 +164,7 @@ async def test_execute_workflow_requires_auth(test_client: AsyncClient):
 def test_validate_workflow_steps_complex():
     """Test validate_workflow_steps with complex workflow."""
     steps = [
-        {"id": "ingest", "type": "tool", "tool": "ingest", "args": {"path": "$.input.path"}},
+        {"id": "data", "type": "tool", "tool": "data", "args": {"path": "$.input.path"}},
         {"id": "search", "type": "tool", "tool": "search", "args": {"query": "$.input.query"}},
         {"id": "analyze", "type": "agent", "agent": "analyzer", "input": "$.search.hits"},
         {"id": "summarize", "type": "agent", "agent": "summarizer", "input": "$.analyze.result"},
@@ -204,7 +204,7 @@ def test_validate_workflow_steps_all_error_cases():
     with pytest.raises(ValueError, match="Duplicate step ID"):
         validate_workflow_steps([
             {"id": "step1", "type": "tool", "tool": "search"},
-            {"id": "step1", "type": "tool", "tool": "ingest"},
+            {"id": "step1", "type": "tool", "tool": "data"},
         ])
 
 

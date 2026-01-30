@@ -1,0 +1,437 @@
+---
+# Busibox Data Service
+# Combines API (FastAPI) and Worker (Python) into a single service
+
+# ============================================================================
+# System Dependencies
+# ============================================================================
+- name: Install system dependencies
+  apt:
+    name:
+      - python3
+      - python3-pip
+      - python3-venv
+      - python3-dev
+      - build-essential
+      - nginx
+      - redis-server
+      - rsync  # Required for synchronize module
+      - postgresql-client  # For running migrations
+      - poppler-utils  # For pdf2image
+      - tesseract-ocr  # For pytesseract OCR
+    state: present
+    update_cache: yes
+  tags: [data, data_install]
+
+- name: Ensure Redis is enabled and started
+  systemd:
+    name: redis-server
+    enabled: yes
+    state: started
+  tags: [data, data_install]
+
+# ============================================================================
+# GPU and CUDA Support (for Marker PDF extraction)
+# ============================================================================
+- name: Install GPU and CUDA support
+  include_tasks: gpu.yml
+  tags: [data, data_gpu, data_install]
+
+- name: Create data service directory
+  file:
+    path: /srv/data
+    state: directory
+    mode: "0755"
+  tags: [data, data_install]
+
+- name: Create Python virtual environment
+  shell: python3 -m venv /srv/data/venv
+  args:
+    creates: /srv/data/venv/bin/python
+  tags: [data, data_install]
+
+# ============================================================================
+# Deploy Source Code
+# ============================================================================
+- name: Clean Python cache before source sync
+  shell: find /srv/data/src -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+  changed_when: false
+  tags: [data, data_deploy]
+
+- name: Sync data service source code (removes stale files)
+  synchronize:
+    src: "{{ playbook_dir }}/../../srv/data/src/"
+    dest: /srv/data/src/
+    delete: yes
+    rsync_opts:
+      - "--exclude=__pycache__"
+      - "--exclude=*.pyc"
+  notify:
+    - Restart data API
+    - Restart data worker
+  tags: [data, data_deploy]
+
+- name: Copy requirements.txt
+  copy:
+    src: "{{ playbook_dir }}/../../srv/data/requirements.txt"
+    dest: /srv/data/requirements.txt
+    mode: "0644"
+  tags: [data, data_deploy]
+
+- name: Clean Python cache before test sync
+  shell: find /srv/data/tests -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+  changed_when: false
+  tags: [data, data_deploy, data_tests, data_update_tests]
+
+- name: Sync test suite (removes stale files)
+  synchronize:
+    src: "{{ playbook_dir }}/../../srv/data/tests/"
+    dest: /srv/data/tests/
+    delete: yes
+    rsync_opts:
+      - "--exclude=__pycache__"
+      - "--exclude=*.pyc"
+  tags: [data, data_deploy, data_tests, data_update_tests]
+
+- name: Copy shared testing library
+  synchronize:
+    src: "{{ playbook_dir }}/../../srv/shared/testing/"
+    dest: /srv/data/src/testing/
+    delete: yes
+    rsync_opts:
+      - "--exclude=__pycache__"
+      - "--exclude=*.pyc"
+  tags: [data, data_deploy, data_tests]
+
+- name: Copy shared busibox_common library
+  synchronize:
+    src: "{{ playbook_dir }}/../../srv/shared/busibox_common/"
+    dest: /srv/data/src/busibox_common/
+    delete: yes
+    rsync_opts:
+      - "--exclude=__pycache__"
+      - "--exclude=*.pyc"
+  tags: [data, data_deploy]
+
+- name: Ensure test document repository is present on controller
+  git:
+    repo: "{{ test_docs_repo_url }}"
+    dest: "{{ test_docs_repo_path }}"
+    version: main
+    force: false
+  delegate_to: localhost
+  run_once: true
+  tags: [data, data_deploy, data_tests]
+
+- name: Copy test document repository
+  copy:
+    src: "{{ test_docs_repo_path }}/"
+    dest: "{{ test_docs_target_path }}/"
+    mode: "0644"
+  ignore_errors: true  # Allow deploy even if repo path is missing; surface via status API
+  tags: [data, data_deploy, data_tests]
+
+- name: Upgrade pip and install wheel in venv
+  pip:
+    name:
+      - pip>=24.0
+      - wheel
+      - setuptools
+    virtualenv: /srv/data/venv
+    state: latest
+  tags: [data, data_deploy]
+
+- name: Install Python dependencies (with caching and parallel downloads)
+  pip:
+    requirements: /srv/data/requirements.txt
+    virtualenv: /srv/data/venv
+    extra_args: "--prefer-binary --no-cache-dir"
+  environment:
+    PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  notify:
+    - Restart data API
+    - Restart data worker
+  tags: [data, data_deploy]
+
+- name: Download spaCy language model
+  shell: /srv/data/venv/bin/python -m spacy download en_core_web_sm
+  args:
+    creates: /srv/data/venv/lib/python3.11/site-packages/en_core_web_sm
+  retries: 3
+  delay: 5
+  register: spacy_download
+  until: spacy_download.rc == 0
+  tags: [data, data_deploy]
+
+- name: Verify spaCy model installation
+  shell: /srv/data/venv/bin/python -m spacy info en_core_web_sm
+  register: spacy_verify
+  changed_when: false
+  failed_when: spacy_verify.rc != 0
+  tags: [data, data_deploy]
+
+- name: Pre-download Marker models (CPU only - just downloading, not running inference)
+  shell: |
+    CUDA_VISIBLE_DEVICES="" /srv/data/venv/bin/python -c "
+    import os
+    import sys
+    
+    # Force CPU for model download (GPU not needed, and ColPali may be using GPU 0)
+    os.environ['TORCH_DEVICE'] = 'cpu'
+    os.environ['CUDA_VISIBLE_DEVICES'] = ''
+    
+    # Use shared HuggingFace cache from host
+    hf_home = os.environ.get('HF_HOME', '/var/lib/llm-models/huggingface')
+    os.environ['HF_HOME'] = hf_home
+    os.environ['TRANSFORMERS_CACHE'] = hf_home
+    os.environ['HF_HUB_CACHE'] = os.path.join(hf_home, 'hub')
+    
+    from marker.models import create_model_dict
+    import structlog
+    
+    logger = structlog.get_logger()
+    logger.info('Pre-downloading Marker models (CPU mode - GPU not needed for download)...')
+    logger.info(f'Using HF_HOME: {hf_home}')
+    
+    # This will download all required models (~1-2GB)
+    # Models are cached in HF_HOME (shared with LLM models)
+    # Force CPU device for download (no GPU needed for download)
+    try:
+        artifact_dict = create_model_dict(device='cpu')
+        logger.info('Marker models downloaded successfully')
+    except Exception as e:
+        logger.error(f'Failed to download Marker models: {e}')
+        sys.exit(1)
+    "
+  environment:
+    CUDA_VISIBLE_DEVICES: ""
+    TORCH_DEVICE: "cpu"
+    HF_HOME: "{{ data_huggingface_cache | default('/var/lib/llm-models/huggingface') }}"
+    TRANSFORMERS_CACHE: "{{ data_huggingface_cache | default('/var/lib/llm-models/huggingface') }}"
+    HF_HUB_CACHE: "{{ data_huggingface_cache | default('/var/lib/llm-models/huggingface') }}/hub"
+  args:
+    # Only run if models not already cached
+    creates: "{{ data_huggingface_cache | default('/var/lib/llm-models/huggingface') }}/hub/models--vikp--surya_det2"
+  retries: 3
+  delay: 10
+  register: marker_download
+  until: marker_download.rc == 0
+  tags: [data, data_deploy]
+
+# ============================================================================
+# Database Migrations
+# ============================================================================
+- name: Apply database migrations
+  include_tasks: migrations.yml
+  tags: [data, data_migrations, data_configure]
+
+# ============================================================================
+# Configuration
+# ============================================================================
+- name: Deploy model registry configuration
+  include_tasks: model_registry.yml
+  tags: [data, data_configure, model_registry]
+
+- name: Create data service environment file
+  template:
+    src: data.env.j2
+    dest: /srv/data/.env
+    mode: "0600"
+  notify:
+    - Restart data API
+    - Restart data worker
+  tags: [data, data_configure]
+
+# ============================================================================
+# API Service (FastAPI on port 8000)
+# ============================================================================
+- name: Create systemd service for data API
+  template:
+    src: data-api.service.j2
+    dest: /etc/systemd/system/data-api.service
+  register: data_api_service_file
+  notify: Restart data API
+  tags: [data, data_api, data_configure]
+
+- name: Enable and start data API service
+  systemd:
+    name: data-api
+    enabled: yes
+    state: started
+    daemon_reload: yes
+  tags: [data, data_api, data_start]
+
+# ============================================================================
+# Worker Service (Background job processor)
+# ============================================================================
+- name: Create systemd service for data worker
+  template:
+    src: data-worker.service.j2
+    dest: /etc/systemd/system/data-worker.service
+  register: data_worker_service_file
+  notify: Restart data worker
+  tags: [data, data_worker, data_configure]
+
+- name: Enable and start data worker service
+  systemd:
+    name: data-worker
+    enabled: yes
+    state: started
+    daemon_reload: yes
+  tags: [data, data_worker, data_start]
+
+# ============================================================================
+# Nginx Configuration (Port 80 for API docs)
+# ============================================================================
+- name: Create nginx configuration for data API
+  template:
+    src: nginx-data.conf.j2
+    dest: /etc/nginx/sites-available/data
+    mode: "0644"
+  notify: Reload nginx
+  tags: [data, data_configure]
+
+- name: Enable nginx site
+  file:
+    src: /etc/nginx/sites-available/data
+    dest: /etc/nginx/sites-enabled/data
+    state: link
+  notify: Reload nginx
+  tags: [data, data_configure]
+
+- name: Remove default nginx site
+  file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: Reload nginx
+  tags: [data, data_configure]
+
+- name: Ensure nginx is enabled and started
+  systemd:
+    name: nginx
+    enabled: yes
+    state: started
+  tags: [data, data_start]
+
+# ============================================================================
+# Health Check Scripts
+# ============================================================================
+- name: Create data API health check script
+  copy:
+    dest: /usr/local/bin/data-api-health
+    content: |
+      #!/bin/bash
+      curl -f -s http://localhost:8000/health > /dev/null
+    mode: "0755"
+  tags: [data, data_configure]
+
+- name: Create data worker health check script
+  copy:
+    dest: /usr/local/bin/data-worker-health
+    content: |
+      #!/bin/bash
+      systemctl is-active --quiet data-worker
+    mode: "0755"
+  tags: [data, data_configure]
+
+- name: Create combined data health check script
+  copy:
+    dest: /usr/local/bin/data-health
+    content: |
+      #!/bin/bash
+      # Check both API and worker are healthy
+      /usr/local/bin/data-api-health && /usr/local/bin/data-worker-health
+    mode: "0755"
+  tags: [data, data_configure]
+
+# ============================================================================
+# Testing Infrastructure
+# ============================================================================
+- name: Create test runner script
+  copy:
+    dest: /usr/local/bin/data-test
+    content: |
+      #!/bin/bash
+      # Run data service tests
+      cd /srv/data
+      source venv/bin/activate
+      
+      # Run tests with options
+      if [ "$1" == "coverage" ]; then
+        python -m pytest tests/test_chunker.py -v --cov=src --cov-report=term --cov-report=html
+        echo "Coverage report generated in /srv/data/htmlcov/index.html"
+      elif [ "$1" == "chunker" ]; then
+        python -m pytest tests/test_chunker.py -v
+      elif [ "$1" == "integration" ]; then
+        python -m pytest tests/integration/ -v
+      elif [ "$1" == "api" ]; then
+        python -m pytest tests/api/ -v
+      elif [ "$1" == "all" ]; then
+        # Run tests by category to avoid pytest collection order issues
+        echo "=== Running Unit Tests ==="
+        python -m pytest tests/test_*.py -v --tb=short
+        echo ""
+        echo "=== Running API Tests ==="
+        python -m pytest tests/api/ -v --tb=short
+        echo ""
+        echo "=== Running Integration Tests ==="
+        python -m pytest tests/integration/ -v --tb=short
+      elif [ "$1" == "quick" ]; then
+        python -m pytest tests/test_chunker.py -v --tb=short
+      else
+        # Default: run chunker tests (fast, validates core functionality)
+        python -m pytest tests/test_chunker.py -v "$@"
+      fi
+    mode: "0755"
+  tags: [data, data_configure, data_tests]
+
+- name: Copy pytest configuration from source
+  copy:
+    src: "{{ playbook_dir }}/../../srv/data/pytest.ini"
+    dest: /srv/data/pytest.ini
+    mode: "0644"
+  tags: [data, data_configure, data_tests, data_deploy, data_update_tests]
+
+# Post-Deployment Validation Tests (PVT)
+# Wait for service to be fully started before running tests
+- name: Wait for data API service to be ready
+  uri:
+    url: "http://localhost:{{ data_api_port | default('8002') }}/health"
+    method: GET
+    status_code: [200, 503]  # Accept degraded (503) as long as it responds
+  register: health_check
+  until: health_check.status in [200, 503]
+  retries: 30
+  delay: 2
+  failed_when: false
+  when: run_pvt_tests | default(true)
+  tags: [data, pvt]
+
+- name: Run PVT tests
+  shell: |
+    set -a
+    . /srv/data/.env
+    set +a
+    export PYTHONPATH=/srv/data/src
+    cd /srv/data
+    venv/bin/python -m pytest tests/integration/test_pvt.py -v --tb=short 2>&1
+  args:
+    executable: /bin/bash
+  register: data_pvt_result
+  failed_when: false
+  changed_when: false
+  when: run_pvt_tests | default(true)
+  tags: [data, pvt]
+
+- name: Display PVT test results
+  debug:
+    msg: "{{ data_pvt_result.stdout_lines | default([]) }}"
+  when: run_pvt_tests | default(true) and data_pvt_result.stdout is defined
+  tags: [data, pvt]
+
+- name: Fail if PVT tests failed
+  fail:
+    msg: "Post-deployment validation tests failed! Check logs above."
+  when: run_pvt_tests | default(true) and data_pvt_result.rc != 0
+  tags: [data, pvt]
+

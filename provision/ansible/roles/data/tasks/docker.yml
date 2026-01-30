@@ -1,0 +1,86 @@
+---
+# Data Services Docker Deployment Tasks
+#
+# Deploys Redis, Data API, Data Worker, and Embedding API via Docker Compose
+# Used when deploy_target == 'docker'
+
+- name: Start Redis container
+  include_role:
+    name: docker_common
+    tasks_from: compose_up
+  vars:
+    docker_services_to_start:
+      - redis
+    docker_wait_for_health: true
+
+- name: Wait for Redis to be ready
+  include_role:
+    name: docker_common
+    tasks_from: wait_healthy
+  vars:
+    docker_wait_service: redis
+    docker_wait_timeout: 30
+
+- name: Build Data services
+  include_role:
+    name: docker_common
+    tasks_from: compose_build
+  vars:
+    docker_services_to_build:
+      - embedding-api
+      - data-api
+      - data-worker
+    docker_build_no_cache: "{{ docker_force_rebuild | default(false) }}"
+
+- name: Start Embedding API container
+  include_role:
+    name: docker_common
+    tasks_from: compose_up
+  vars:
+    docker_services_to_start:
+      - embedding-api
+    docker_wait_for_health: true
+
+- name: Start Data API container
+  include_role:
+    name: docker_common
+    tasks_from: compose_up
+  vars:
+    docker_services_to_start:
+      - data-api
+    docker_wait_for_health: true
+
+- name: Start Data Worker container
+  include_role:
+    name: docker_common
+    tasks_from: compose_up
+  vars:
+    docker_services_to_start:
+      - data-worker
+    docker_wait_for_health: false
+
+- name: Wait for Data API to be ready
+  include_role:
+    name: docker_common
+    tasks_from: wait_healthy
+  vars:
+    docker_wait_service: data-api
+    docker_wait_timeout: 60
+
+- name: Verify Data API health endpoint
+  ansible.builtin.uri:
+    url: "http://localhost:{{ data_port }}/health"
+    method: GET
+    status_code: [200]
+  register: data_health
+  retries: 5
+  delay: 3
+  until: data_health.status == 200
+
+- name: Display Data services status
+  ansible.builtin.debug:
+    msg: |
+      Data services are running and ready
+      Redis: localhost:{{ redis_port }}
+      Embedding API: http://localhost:{{ embedding_port }}
+      Data API: http://localhost:{{ data_port }}

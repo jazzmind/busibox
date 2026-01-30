@@ -23,7 +23,7 @@ postgres_host: "172.20.0.10"
 minio_host: "172.20.0.11"
 milvus_host: "172.20.0.12"
 agent_api_host: "172.20.0.13"
-ingest_worker_host: "172.20.0.14"
+data_worker_host: "172.20.0.14"
 apps_host: "172.20.0.15"
 proxy_host: "172.20.0.16"
 
@@ -32,7 +32,7 @@ proxy_host: "172.20.0.16"
 # ============================================================================
 agent_api_port: 8000
 minio_api_port: 9000
-ingest_api_port: 8002
+data_api_port: 8002
 search_api_port: 8003
 authz_api_port: 8010
 minio_console_port: 9001
@@ -73,7 +73,6 @@ applications:
       MINIO_USE_SSL: "{{ minio_use_ssl }}"
     secrets:
       - database_url
-      - better_auth_secret
       - better_auth_url
       - email_from
       - sso_jwt_secret

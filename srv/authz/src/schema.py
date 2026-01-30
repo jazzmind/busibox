@@ -1,9 +1,10 @@
 """
 Authz Service Database Schema Definition.
 
-This module defines the database schema for the authz service using the
-shared SchemaManager pattern. The schema is applied idempotently on every
-service startup.
+This module defines the complete database schema for the authz service.
+The schema is applied idempotently on every service startup.
+
+All tables and indexes are defined here. No separate migration files needed.
 
 Usage:
     from schema import get_authz_schema
@@ -51,12 +52,19 @@ except ImportError:
         
         async def apply(self, conn) -> None:
             for sql in self._sql_statements:
-                await conn.execute(sql)
+                try:
+                    await conn.execute(sql)
+                except Exception as e:
+                    error_str = str(e).lower()
+                    if "already exists" in error_str or "does not exist" in error_str:
+                        pass
+                    else:
+                        raise
 
 
 def get_authz_schema() -> SchemaManager:
     """
-    Build and return the authz service schema definition.
+    Build and return the complete authz service schema definition.
     
     Returns:
         SchemaManager configured with all authz tables and indexes.
@@ -80,6 +88,14 @@ def get_authz_schema() -> SchemaManager:
             resource_type text NOT NULL,
             resource_id uuid NULL,
             details jsonb NOT NULL DEFAULT '{}'::jsonb,
+            event_type text NULL,
+            target_user_id uuid NULL,
+            target_role_id uuid NULL,
+            target_app_id uuid NULL,
+            ip_address text NULL,
+            user_agent text NULL,
+            success boolean NOT NULL DEFAULT true,
+            error_message text NULL,
             created_at timestamptz NOT NULL DEFAULT now()
         )
     """)
@@ -112,6 +128,7 @@ def get_authz_schema() -> SchemaManager:
             name text NOT NULL UNIQUE,
             description text NULL,
             scopes text[] NOT NULL DEFAULT '{}'::text[],
+            is_system boolean NOT NULL DEFAULT false,
             created_at timestamptz NOT NULL DEFAULT now(),
             updated_at timestamptz NOT NULL DEFAULT now()
         )
@@ -127,6 +144,9 @@ def get_authz_schema() -> SchemaManager:
             idp_object_id text NULL,
             idp_roles jsonb NOT NULL DEFAULT '[]'::jsonb,
             idp_groups jsonb NOT NULL DEFAULT '[]'::jsonb,
+            email_verified_at timestamptz NULL,
+            last_login_at timestamptz NULL,
+            pending_expires_at timestamptz NULL,
             created_at timestamptz NOT NULL DEFAULT now(),
             updated_at timestamptz NOT NULL DEFAULT now()
         )
@@ -136,6 +156,7 @@ def get_authz_schema() -> SchemaManager:
         CREATE TABLE IF NOT EXISTS authz_user_roles (
             user_id uuid NOT NULL REFERENCES authz_users(user_id) ON DELETE CASCADE,
             role_id uuid NOT NULL REFERENCES authz_roles(id) ON DELETE CASCADE,
+            assigned_by uuid NULL,
             created_at timestamptz NOT NULL DEFAULT now(),
             PRIMARY KEY (user_id, role_id)
         )
@@ -337,128 +358,37 @@ def get_authz_schema() -> SchemaManager:
     # Audit logs
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_audit_logs_actor_id ON audit_logs(actor_id)")
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at)")
+    schema.add_index("CREATE INDEX IF NOT EXISTS idx_audit_logs_event_type ON audit_logs(event_type)")
+    schema.add_index("CREATE INDEX IF NOT EXISTS idx_audit_logs_target_user ON audit_logs(target_user_id)")
+    
+    # Users
+    schema.add_index("CREATE INDEX IF NOT EXISTS idx_authz_users_email ON authz_users(email)")
+    schema.add_index("CREATE INDEX IF NOT EXISTS idx_authz_users_status ON authz_users(status)")
+    
+    # User roles
+    schema.add_index("CREATE INDEX IF NOT EXISTS idx_authz_user_roles_user ON authz_user_roles(user_id)")
+    schema.add_index("CREATE INDEX IF NOT EXISTS idx_authz_user_roles_role ON authz_user_roles(role_id)")
     
     # ==========================================================================
-    # Migrations (Inline ALTER TABLE patterns for existing deployments)
+    # Grants
     # ==========================================================================
     
-    # Add scopes column to authz_roles if missing
-    schema.add_migration("""
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns 
-                WHERE table_name = 'authz_roles' AND column_name = 'scopes'
-            ) THEN
-                ALTER TABLE authz_roles ADD COLUMN scopes text[] NOT NULL DEFAULT '{}'::text[];
-            END IF;
-        END $$
-    """)
-    
-    # Add extended user columns if missing
-    schema.add_migration("""
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns 
-                WHERE table_name = 'authz_users' AND column_name = 'email_verified_at'
-            ) THEN
-                ALTER TABLE authz_users ADD COLUMN email_verified_at timestamptz NULL;
-            END IF;
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns 
-                WHERE table_name = 'authz_users' AND column_name = 'last_login_at'
-            ) THEN
-                ALTER TABLE authz_users ADD COLUMN last_login_at timestamptz NULL;
-            END IF;
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns 
-                WHERE table_name = 'authz_users' AND column_name = 'pending_expires_at'
-            ) THEN
-                ALTER TABLE authz_users ADD COLUMN pending_expires_at timestamptz NULL;
-            END IF;
-        END $$
-    """)
-    
-    # Add is_system column to authz_roles if missing
-    schema.add_migration("""
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns 
-                WHERE table_name = 'authz_roles' AND column_name = 'is_system'
-            ) THEN
-                ALTER TABLE authz_roles ADD COLUMN is_system boolean NOT NULL DEFAULT false;
-            END IF;
-        END $$
-    """)
-    
-    # Add assigned_by column to authz_user_roles if missing
-    schema.add_migration("""
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns 
-                WHERE table_name = 'authz_user_roles' AND column_name = 'assigned_by'
-            ) THEN
-                ALTER TABLE authz_user_roles ADD COLUMN assigned_by uuid NULL;
-            END IF;
-        END $$
-    """)
-    
-    # Add extended audit_logs columns if missing
-    schema.add_migration("""
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns 
-                WHERE table_name = 'audit_logs' AND column_name = 'event_type'
-            ) THEN
-                ALTER TABLE audit_logs ADD COLUMN event_type text NULL;
-            END IF;
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns 
-                WHERE table_name = 'audit_logs' AND column_name = 'target_user_id'
-            ) THEN
-                ALTER TABLE audit_logs ADD COLUMN target_user_id uuid NULL;
-            END IF;
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns 
-                WHERE table_name = 'audit_logs' AND column_name = 'target_role_id'
-            ) THEN
-                ALTER TABLE audit_logs ADD COLUMN target_role_id uuid NULL;
-            END IF;
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns 
-                WHERE table_name = 'audit_logs' AND column_name = 'target_app_id'
-            ) THEN
-                ALTER TABLE audit_logs ADD COLUMN target_app_id uuid NULL;
-            END IF;
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns 
-                WHERE table_name = 'audit_logs' AND column_name = 'ip_address'
-            ) THEN
-                ALTER TABLE audit_logs ADD COLUMN ip_address text NULL;
-            END IF;
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns 
-                WHERE table_name = 'audit_logs' AND column_name = 'user_agent'
-            ) THEN
-                ALTER TABLE audit_logs ADD COLUMN user_agent text NULL;
-            END IF;
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns 
-                WHERE table_name = 'audit_logs' AND column_name = 'success'
-            ) THEN
-                ALTER TABLE audit_logs ADD COLUMN success boolean NOT NULL DEFAULT true;
-            END IF;
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns 
-                WHERE table_name = 'audit_logs' AND column_name = 'error_message'
-            ) THEN
-                ALTER TABLE audit_logs ADD COLUMN error_message text NULL;
-            END IF;
-        END $$
-    """)
+    schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON audit_logs TO busibox_user")
+    schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON authz_oauth_clients TO busibox_user")
+    schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON authz_signing_keys TO busibox_user")
+    schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON authz_roles TO busibox_user")
+    schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON authz_users TO busibox_user")
+    schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON authz_user_roles TO busibox_user")
+    schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON authz_key_encryption_keys TO busibox_user")
+    schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON authz_wrapped_data_keys TO busibox_user")
+    schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON authz_sessions TO busibox_user")
+    schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON authz_magic_links TO busibox_user")
+    schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON authz_passkeys TO busibox_user")
+    schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON authz_passkey_challenges TO busibox_user")
+    schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON authz_totp_codes TO busibox_user")
+    schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON authz_totp_secrets TO busibox_user")
+    schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON authz_delegation_tokens TO busibox_user")
+    schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON authz_email_domain_config TO busibox_user")
+    schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON authz_role_bindings TO busibox_user")
     
     return schema

@@ -21,7 +21,7 @@ from app.schemas.definitions import AgentDefinitionCreate
 def test_tool_registry_has_expected_tools():
     """Test TOOL_REGISTRY contains the core tools."""
     assert "search" in TOOL_REGISTRY
-    assert "ingest" in TOOL_REGISTRY
+    assert "data" in TOOL_REGISTRY
     assert "rag" in TOOL_REGISTRY
     assert len(TOOL_REGISTRY) == 3
 
@@ -29,7 +29,7 @@ def test_tool_registry_has_expected_tools():
 def test_validate_tool_references_success():
     """Test validate_tool_references passes with valid tools."""
     # Should not raise
-    validate_tool_references(["search", "ingest"])
+    validate_tool_references(["search", "data"])
     validate_tool_references(["rag"])
     validate_tool_references([])
 
@@ -51,7 +51,7 @@ def test_validate_tool_references_error_message():
     error_msg = str(exc_info.value)
     assert "Available tools:" in error_msg
     assert "search" in error_msg
-    assert "ingest" in error_msg
+    assert "data" in error_msg
     assert "rag" in error_msg
 
 
@@ -80,7 +80,7 @@ async def test_load_active_agents_with_agents(test_session: AsyncSession):
         name=f"test-agent-2-{unique_suffix}",
         model="fast",  # LiteLLM task purpose
         instructions="Another test",
-        tools={"names": ["ingest"]},
+        tools={"names": ["data"]},
         is_active=True,
     )
     # Inactive agent should not be loaded

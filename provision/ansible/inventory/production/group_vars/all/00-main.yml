@@ -30,7 +30,7 @@ postgres_ip: "{{ network_base_octets }}.203"
 milvus_ip: "{{ network_base_octets }}.204"
 search_api_ip: "{{ milvus_ip }}"  # Search API runs on milvus container
 minio_ip: "{{ network_base_octets }}.205"
-ingest_ip: "{{ network_base_octets }}.206"
+data_ip: "{{ network_base_octets }}.206"
 user_apps_ip: "{{ network_base_octets }}.212"  # User/external apps
 
 # LLM Service IPs: .207-.209 (to allow room for more infrastructure)
@@ -70,7 +70,7 @@ postgres_db: busibox
 postgres_user: busibox_user
 postgres_password: "{{ secrets.postgresql.password }}"
 
-# Files/Ingestion database
+# Files/ingestion database
 files_db: files
 files_user: "{{ postgres_user }}"
 files_password: "{{ secrets.postgresql.password }}"
@@ -85,7 +85,7 @@ minio_bucket: documents
 minio_root_user: "{{ secrets.minio.root_user }}"
 minio_root_password: "{{ secrets.minio.root_password }}"
 
-redis_host: "{{ ingest_ip }}"
+redis_host: "{{ data_ip }}"
 redis_port: 6379
 
 agent_api_host: "{{ agent_ip }}"
@@ -99,7 +99,7 @@ litellm_port: 4000
 litellm_drop_params: false  # CRITICAL: Must be false to pass tools to vLLM
 litellm_add_function_to_prompt: true  # Add function definitions to prompt for models that need it
 
-# Embedding Configuration (for ingest service)
+# Embedding Configuration (for data service)
 # Reference model registry for embedding model configuration
 # New structure: model_purposes.embedding -> model key, lookup in available_models
 embedding_model: "{{ available_models[model_purposes.embedding].model }}"

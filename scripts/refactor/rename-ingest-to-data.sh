@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Rename ingest-api to data-api across the busibox codebase
+# Rename data-api to data-api across the busibox codebase
 #
 # EXECUTION CONTEXT: Run from busibox root directory
 # PREREQUISITES: 
@@ -9,18 +9,18 @@
 #   - No uncommitted changes
 #
 # This script performs a comprehensive rename of:
-#   - Service names: ingest-api -> data-api, ingest-worker -> data-worker
-#   - Container names: ingest-lxc -> data-lxc
-#   - Environment variables: INGEST_* -> DATA_*
+#   - Service names: data-api -> data-api, data-worker -> data-worker
+#   - Container names: data-lxc -> data-lxc
+#   - Environment variables: DATA_* -> DATA_*
 #   - Ansible roles and groups
 #   - Configuration files
 #
 # USAGE:
 #   # Dry run (default) - shows what would be changed
-#   ./scripts/refactor/rename-ingest-to-data.sh
+#   ./scripts/refactor/rename-data-to-data.sh
 #
 #   # Execute the rename
-#   ./scripts/refactor/rename-ingest-to-data.sh --execute
+#   ./scripts/refactor/rename-data-to-data.sh --execute
 #
 # ROLLBACK:
 #   git checkout -- .
@@ -69,7 +69,7 @@ if [[ ! -f "CLAUDE.md" ]] || [[ ! -d "provision/ansible" ]]; then
     exit 1
 fi
 
-echo -e "${BLUE}=== Busibox Service Rename: ingest-api -> data-api ===${NC}"
+echo -e "${BLUE}=== Busibox Service Rename: data-api -> data-api ===${NC}"
 echo ""
 
 if $DRY_RUN; then
@@ -137,21 +137,21 @@ do_rename() {
 # ============================================================================
 echo -e "${GREEN}Step 1: Rename Ansible roles${NC}"
 
-# We'll keep the source code directory as srv/ingest for now
+# We'll keep the source code directory as srv/data for now
 # since changing it would require updating many imports
 
 # Rename role directories if they exist
-if [[ -d "provision/ansible/roles/ingest" ]]; then
-    echo "  Copying role: provision/ansible/roles/ingest -> provision/ansible/roles/data"
+if [[ -d "provision/ansible/roles/data" ]]; then
+    echo "  Copying role: provision/ansible/roles/data -> provision/ansible/roles/data"
     if ! $DRY_RUN; then
-        cp -r provision/ansible/roles/ingest provision/ansible/roles/data
+        cp -r provision/ansible/roles/data provision/ansible/roles/data
     fi
 fi
 
-if [[ -d "provision/ansible/roles/ingest_api" ]]; then
-    echo "  Copying role: provision/ansible/roles/ingest_api -> provision/ansible/roles/data_api"
+if [[ -d "provision/ansible/roles/data_api" ]]; then
+    echo "  Copying role: provision/ansible/roles/data_api -> provision/ansible/roles/data_api"
     if ! $DRY_RUN; then
-        cp -r provision/ansible/roles/ingest_api provision/ansible/roles/data_api
+        cp -r provision/ansible/roles/data_api provision/ansible/roles/data_api
     fi
 fi
 
@@ -163,18 +163,18 @@ echo -e "${GREEN}Step 2: Rename template files${NC}"
 
 # Rename files in the new data role (if created)
 if [[ -d "provision/ansible/roles/data/templates" ]]; then
-    for f in provision/ansible/roles/data/templates/ingest*; do
+    for f in provision/ansible/roles/data/templates/data*; do
         if [[ -f "$f" ]]; then
-            new_name="${f//ingest/data}"
+            new_name="${f//data/data}"
             do_rename "$f" "$new_name"
         fi
     done
 fi
 
 if [[ -d "provision/ansible/roles/data_api/templates" ]]; then
-    for f in provision/ansible/roles/data_api/templates/ingest*; do
+    for f in provision/ansible/roles/data_api/templates/data*; do
         if [[ -f "$f" ]]; then
-            new_name="${f//ingest/data}"
+            new_name="${f//data/data}"
             do_rename "$f" "$new_name"
         fi
     done
@@ -197,33 +197,33 @@ for compose_file in "${COMPOSE_FILES[@]}"; do
         echo "  Processing: $compose_file"
         
         # Service names
-        do_replace "ingest-api:" "data-api:" "$compose_file" && FILES_CHANGED+=1
-        do_replace "ingest-worker:" "data-worker:" "$compose_file" && FILES_CHANGED+=1
+        do_replace "data-api:" "data-api:" "$compose_file" && FILES_CHANGED+=1
+        do_replace "data-worker:" "data-worker:" "$compose_file" && FILES_CHANGED+=1
         
         # Container names
-        do_replace "container_name: \${CONTAINER_PREFIX:-dev}-ingest-api" "container_name: \${CONTAINER_PREFIX:-dev}-data-api" "$compose_file"
-        do_replace "container_name: \${CONTAINER_PREFIX:-dev}-ingest-worker" "container_name: \${CONTAINER_PREFIX:-dev}-data-worker" "$compose_file"
+        do_replace "container_name: \${CONTAINER_PREFIX:-dev}-data-api" "container_name: \${CONTAINER_PREFIX:-dev}-data-api" "$compose_file"
+        do_replace "container_name: \${CONTAINER_PREFIX:-dev}-data-worker" "container_name: \${CONTAINER_PREFIX:-dev}-data-worker" "$compose_file"
         
         # Hostnames
-        do_replace "hostname: ingest-api" "hostname: data-api" "$compose_file"
-        do_replace "hostname: ingest-worker" "hostname: data-worker" "$compose_file"
+        do_replace "hostname: data-api" "hostname: data-api" "$compose_file"
+        do_replace "hostname: data-worker" "hostname: data-worker" "$compose_file"
         
         # Dependencies
-        do_replace "depends_on:.*ingest-api" "depends_on:\n      data-api" "$compose_file"
+        do_replace "depends_on:.*data-api" "depends_on:\n      data-api" "$compose_file"
         
         # Volume names
-        do_replace "ingest_temp:" "data_temp:" "$compose_file"
-        do_replace "- ingest_temp" "- data_temp" "$compose_file"
+        do_replace "data_temp:" "data_temp:" "$compose_file"
+        do_replace "- data_temp" "- data_temp" "$compose_file"
         
         # Environment variables
-        do_replace "AUTHZ_AUDIENCE: ingest-api" "AUTHZ_AUDIENCE: data-api" "$compose_file"
-        do_replace "INGEST_API_URL" "DATA_API_URL" "$compose_file"
-        do_replace "INGEST_API_HOST" "DATA_API_HOST" "$compose_file"
-        do_replace "INGEST_API_PORT" "DATA_API_PORT" "$compose_file"
-        do_replace "NEXT_PUBLIC_INGEST_API_URL" "NEXT_PUBLIC_DATA_API_URL" "$compose_file"
+        do_replace "AUTHZ_AUDIENCE: data-api" "AUTHZ_AUDIENCE: data-api" "$compose_file"
+        do_replace "DATA_API_URL" "DATA_API_URL" "$compose_file"
+        do_replace "DATA_API_HOST" "DATA_API_HOST" "$compose_file"
+        do_replace "DATA_API_PORT" "DATA_API_PORT" "$compose_file"
+        do_replace "NEXT_PUBLIC_DATA_API_URL" "NEXT_PUBLIC_DATA_API_URL" "$compose_file"
         
         # Audience lists
-        do_replace "ingest-api" "data-api" "$compose_file"
+        do_replace "data-api" "data-api" "$compose_file"
     fi
 done
 
@@ -236,20 +236,20 @@ echo -e "${GREEN}Step 4: Update Ansible configuration${NC}"
 # site.yml
 if [[ -f "provision/ansible/site.yml" ]]; then
     echo "  Processing: provision/ansible/site.yml"
-    do_replace "hosts: ingest" "hosts: data" "provision/ansible/site.yml" && FILES_CHANGED+=1
-    do_replace "role: ingest" "role: data" "provision/ansible/site.yml"
-    do_replace "apis_ingest" "apis_data" "provision/ansible/site.yml"
-    do_replace "ingest_api" "data_api" "provision/ansible/site.yml"
-    do_replace "ingest_worker" "data_worker" "provision/ansible/site.yml"
+    do_replace "hosts: data" "hosts: data" "provision/ansible/site.yml" && FILES_CHANGED+=1
+    do_replace "role: data" "role: data" "provision/ansible/site.yml"
+    do_replace "apis_data" "apis_data" "provision/ansible/site.yml"
+    do_replace "data_api" "data_api" "provision/ansible/site.yml"
+    do_replace "data_worker" "data_worker" "provision/ansible/site.yml"
 fi
 
 # Makefile
 if [[ -f "provision/ansible/Makefile" ]]; then
     echo "  Processing: provision/ansible/Makefile"
-    do_replace "ingest-api" "data-api" "provision/ansible/Makefile" && FILES_CHANGED+=1
-    do_replace "ingest-worker" "data-worker" "provision/ansible/Makefile"
-    do_replace "ingest-lxc" "data-lxc" "provision/ansible/Makefile"
-    do_replace "INGEST_IP" "DATA_IP" "provision/ansible/Makefile"
+    do_replace "data-api" "data-api" "provision/ansible/Makefile" && FILES_CHANGED+=1
+    do_replace "data-worker" "data-worker" "provision/ansible/Makefile"
+    do_replace "data-lxc" "data-lxc" "provision/ansible/Makefile"
+    do_replace "DATA_IP" "DATA_IP" "provision/ansible/Makefile"
 fi
 
 # Inventory files
@@ -267,21 +267,21 @@ for inv_dir in "${INVENTORY_DIRS[@]}"; do
         
         # hosts.yml
         if [[ -f "$inv_dir/hosts.yml" ]]; then
-            do_replace "ingest:" "data:" "$inv_dir/hosts.yml"
-            do_replace "ingest-lxc" "data-lxc" "$inv_dir/hosts.yml"
-            do_replace "STAGE-ingest-lxc" "STAGE-data-lxc" "$inv_dir/hosts.yml"
-            do_replace "local-ingest" "local-data" "$inv_dir/hosts.yml"
+            do_replace "data:" "data:" "$inv_dir/hosts.yml"
+            do_replace "data-lxc" "data-lxc" "$inv_dir/hosts.yml"
+            do_replace "STAGE-data-lxc" "STAGE-data-lxc" "$inv_dir/hosts.yml"
+            do_replace "local-data" "local-data" "$inv_dir/hosts.yml"
         fi
         
         # group_vars
         for gv_file in "$inv_dir"/group_vars/**/*.yml; do
             if [[ -f "$gv_file" ]]; then
-                do_replace "ingest_ip" "data_ip" "$gv_file"
-                do_replace "ingest_host" "data_host" "$gv_file"
-                do_replace "ingest_port" "data_port" "$gv_file"
-                do_replace "ingest_api_port" "data_api_port" "$gv_file"
-                do_replace "ingest_worker_host" "data_worker_host" "$gv_file"
-                do_replace "ingest-api" "data-api" "$gv_file"
+                do_replace "data_ip" "data_ip" "$gv_file"
+                do_replace "data_host" "data_host" "$gv_file"
+                do_replace "data_port" "data_port" "$gv_file"
+                do_replace "data_api_port" "data_api_port" "$gv_file"
+                do_replace "data_worker_host" "data_worker_host" "$gv_file"
+                do_replace "data-api" "data-api" "$gv_file"
             fi
         done
     fi
@@ -309,16 +309,16 @@ for role in "${ROLES_TO_UPDATE[@]}"; do
         
         # Update defaults
         if [[ -f "$role_path/defaults/main.yml" ]]; then
-            do_replace "ingest-api" "data-api" "$role_path/defaults/main.yml"
-            do_replace "ingest_api" "data_api" "$role_path/defaults/main.yml"
+            do_replace "data-api" "data-api" "$role_path/defaults/main.yml"
+            do_replace "data_api" "data_api" "$role_path/defaults/main.yml"
         fi
         
         # Update templates
         for tmpl in "$role_path"/templates/*.j2; do
             if [[ -f "$tmpl" ]]; then
-                do_replace "ingest-api" "data-api" "$tmpl"
-                do_replace "INGEST_API_URL" "DATA_API_URL" "$tmpl"
-                do_replace "ingest_api" "data_api" "$tmpl"
+                do_replace "data-api" "data-api" "$tmpl"
+                do_replace "DATA_API_URL" "DATA_API_URL" "$tmpl"
+                do_replace "data_api" "data_api" "$tmpl"
             fi
         done
     fi
@@ -347,14 +347,14 @@ SCRIPT_FILES=(
 for script_file in "${SCRIPT_FILES[@]}"; do
     if [[ -f "$script_file" ]]; then
         echo "  Processing: $script_file"
-        do_replace "ingest-api" "data-api" "$script_file" && FILES_CHANGED+=1
-        do_replace "ingest-worker" "data-worker" "$script_file"
-        do_replace "ingest-lxc" "data-lxc" "$script_file"
-        do_replace "ingest|ingest-api" "data|data-api" "$script_file"
-        do_replace "INGEST_API_URL" "DATA_API_URL" "$script_file"
-        do_replace "INGEST_API_HOST" "DATA_API_HOST" "$script_file"
-        do_replace "INGEST_API_PORT" "DATA_API_PORT" "$script_file"
-        do_replace "local-ingest-api" "local-data-api" "$script_file"
+        do_replace "data-api" "data-api" "$script_file" && FILES_CHANGED+=1
+        do_replace "data-worker" "data-worker" "$script_file"
+        do_replace "data-lxc" "data-lxc" "$script_file"
+        do_replace "ingest|data-api" "data|data-api" "$script_file"
+        do_replace "DATA_API_URL" "DATA_API_URL" "$script_file"
+        do_replace "DATA_API_HOST" "DATA_API_HOST" "$script_file"
+        do_replace "DATA_API_PORT" "DATA_API_PORT" "$script_file"
+        do_replace "local-data-api" "local-data-api" "$script_file"
     fi
 done
 
@@ -375,10 +375,10 @@ PCT_FILES=(
 for pct_file in "${PCT_FILES[@]}"; do
     if [[ -f "$pct_file" ]]; then
         echo "  Processing: $pct_file"
-        do_replace "ingest-lxc" "data-lxc" "$pct_file" && FILES_CHANGED+=1
-        do_replace "CT_INGEST" "CT_DATA" "$pct_file"
-        do_replace "IP_INGEST" "IP_DATA" "$pct_file"
-        do_replace "STAGE-ingest-lxc" "STAGE-data-lxc" "$pct_file"
+        do_replace "data-lxc" "data-lxc" "$pct_file" && FILES_CHANGED+=1
+        do_replace "CT_DATA" "CT_DATA" "$pct_file"
+        do_replace "IP_DATA" "IP_DATA" "$pct_file"
+        do_replace "STAGE-data-lxc" "STAGE-data-lxc" "$pct_file"
     fi
 done
 
@@ -391,16 +391,16 @@ echo -e "${GREEN}Step 8: Update Python test files${NC}"
 PYTHON_TEST_FILES=(
     "srv/authz/tests/conftest.py"
     "srv/authz/src/config.py"
-    "srv/ingest/tests/conftest.py"
-    "srv/ingest/tests/integration/test_pvt.py"
-    "srv/agent/tests/integration/test_token_exchange_ingest.py"
+    "srv/data/tests/conftest.py"
+    "srv/data/tests/integration/test_pvt.py"
+    "srv/agent/tests/integration/test_token_exchange_data.py"
 )
 
 for py_file in "${PYTHON_TEST_FILES[@]}"; do
     if [[ -f "$py_file" ]]; then
         echo "  Processing: $py_file"
-        do_replace "ingest-api" "data-api" "$py_file" && FILES_CHANGED+=1
-        do_replace "INGEST_API_URL" "DATA_API_URL" "$py_file"
+        do_replace "data-api" "data-api" "$py_file" && FILES_CHANGED+=1
+        do_replace "DATA_API_URL" "DATA_API_URL" "$py_file"
     fi
 done
 
@@ -412,12 +412,12 @@ echo -e "${GREEN}Step 9: Update documentation${NC}"
 
 # Find and update markdown files
 while IFS= read -r -d '' doc_file; do
-    if grep -q "ingest-api\|ingest-lxc\|INGEST_API" "$doc_file" 2>/dev/null; then
+    if grep -q "data-api\|data-lxc\|DATA_API" "$doc_file" 2>/dev/null; then
         echo "  Processing: $doc_file"
-        do_replace "ingest-api" "data-api" "$doc_file"
-        do_replace "ingest-lxc" "data-lxc" "$doc_file"
-        do_replace "ingest-worker" "data-worker" "$doc_file"
-        do_replace "INGEST_API_" "DATA_API_" "$doc_file"
+        do_replace "data-api" "data-api" "$doc_file"
+        do_replace "data-lxc" "data-lxc" "$doc_file"
+        do_replace "data-worker" "data-worker" "$doc_file"
+        do_replace "DATA_API_" "DATA_API_" "$doc_file"
         FILES_CHANGED+=1
     fi
 done < <(find docs -name "*.md" -print0 2>/dev/null)
@@ -425,11 +425,11 @@ done < <(find docs -name "*.md" -print0 2>/dev/null)
 # Update root files
 for root_doc in CLAUDE.md README.md; do
     if [[ -f "$root_doc" ]]; then
-        if grep -q "ingest-" "$root_doc" 2>/dev/null; then
+        if grep -q "data-" "$root_doc" 2>/dev/null; then
             echo "  Processing: $root_doc"
-            do_replace "ingest-api" "data-api" "$root_doc"
-            do_replace "ingest-lxc" "data-lxc" "$root_doc"
-            do_replace "ingest-worker" "data-worker" "$root_doc"
+            do_replace "data-api" "data-api" "$root_doc"
+            do_replace "data-lxc" "data-lxc" "$root_doc"
+            do_replace "data-worker" "data-worker" "$root_doc"
         fi
     fi
 done
@@ -449,8 +449,8 @@ if $DRY_RUN; then
     echo ""
     echo "After executing, you should:"
     echo "  1. Review changes with: git diff"
-    echo "  2. Run tests: make test-ingest  # or new test target"
-    echo "  3. Commit changes: git add -A && git commit -m 'refactor: rename ingest-api to data-api'"
+    echo "  2. Run tests: make test-data  # or new test target"
+    echo "  3. Commit changes: git add -A && git commit -m 'refactor: rename data-api to data-api'"
 else
     echo ""
     echo -e "${GREEN}Rename complete!${NC}"

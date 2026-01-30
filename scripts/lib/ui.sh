@@ -478,7 +478,7 @@ select_test_service() {
         box "Select Service to Test"
         echo ""
         echo -e "  ${CYAN}1)${NC} Authz   - Authorization & OAuth service"
-        echo -e "  ${CYAN}2)${NC} Ingest  - Document ingestion service"
+        echo -e "  ${CYAN}2)${NC} Data  - Document ingestion service"
         echo -e "  ${CYAN}3)${NC} Search  - Vector search service"
         echo -e "  ${CYAN}4)${NC} Agent   - AI agent service"
         echo -e "  ${CYAN}5)${NC} All     - Run all service tests"
@@ -490,7 +490,7 @@ select_test_service() {
         read choice < /dev/tty
         case $choice in
             1) echo "authz"; return 0 ;;
-            2) echo "ingest"; return 0 ;;
+            2) echo "data"; return 0 ;;
             3) echo "search"; return 0 ;;
             4) echo "agent"; return 0 ;;
             5) echo "all"; return 0 ;;
@@ -925,15 +925,15 @@ format_response_time() {
     fi
 }
 
-# Render consolidated ingest line (API + Worker)
-# Usage: render_consolidated_ingest_line "staging"
-render_consolidated_ingest_line() {
+# Render consolidated data line (API + Worker)
+# Usage: render_consolidated_data_line "staging"
+render_consolidated_data_line() {
     local env=$1
     
     # Get status for both API and Worker
     local api_status_json worker_status_json
-    api_status_json=$(get_service_status_from_cache "ingest-api" "$env" 2>/dev/null)
-    worker_status_json=$(get_service_status_from_cache "ingest-worker" "$env" 2>/dev/null)
+    api_status_json=$(get_service_status_from_cache "data-api" "$env" 2>/dev/null)
+    worker_status_json=$(get_service_status_from_cache "data-worker" "$env" 2>/dev/null)
     
     # Parse statuses
     local api_status worker_status api_version api_current api_sync
@@ -1002,7 +1002,7 @@ render_consolidated_ingest_line() {
     local col3_width=45  # Version info
     
     # Calculate spacing dynamically
-    local name_text="Ingest API & Worker"
+    local name_text="Data API & Worker"
     local name_text_len=${#name_text}
     local status_text_len=$(strip_ansi "$status_text" | wc -c | tr -d ' ')
     
@@ -1278,9 +1278,9 @@ render_service_category() {
     
     # Render each service (with special handling for consolidated services)
     for service in $services; do
-        # Special handling for ingest - consolidate API + Worker
-        if [[ "$service" == "ingest" ]]; then
-            render_consolidated_ingest_line "$env"
+        # Special handling for data - consolidate API + Worker
+        if [[ "$service" == "data" ]]; then
+            render_consolidated_data_line "$env"
         # Special handling for litellm - consolidate LiteLLM + vLLM
         elif [[ "$service" == "litellm" ]]; then
             render_consolidated_litellm_line "$env"
@@ -1423,14 +1423,14 @@ render_compact_service_line() {
     printf "%b %-14s %-6b %s" "$status_symbol" "$display_name" "$health_text" "$uptime_display"
 }
 
-# Compact consolidated ingest line (API + Worker)
-render_compact_ingest_line() {
+# Compact consolidated data line (API + Worker)
+render_compact_data_line() {
     local env=$1
     
     # Get status for both
     local api_json worker_json
-    api_json=$(get_service_status_from_cache "ingest-api" "$env" 2>/dev/null)
-    worker_json=$(get_service_status_from_cache "ingest-worker" "$env" 2>/dev/null)
+    api_json=$(get_service_status_from_cache "data-api" "$env" 2>/dev/null)
+    worker_json=$(get_service_status_from_cache "data-worker" "$env" 2>/dev/null)
     
     local api_status worker_status
     if command -v jq &>/dev/null; then
@@ -1446,7 +1446,7 @@ render_compact_ingest_line() {
     if [[ "$api_status" == "up" && "$worker_status" == "up" ]]; then
         status_symbol="${GREEN}●${NC}"
         health_text="${GREEN}up${NC}"
-        uptime_display=$(get_container_uptime "ingest-api")
+        uptime_display=$(get_container_uptime "data-api")
     elif [[ "$api_status" == "down" && "$worker_status" == "down" ]]; then
         status_symbol="${RED}○${NC}"
         health_text="${RED}down${NC}"
@@ -1456,13 +1456,13 @@ render_compact_ingest_line() {
     elif [[ "$worker_status" == "down" ]]; then
         status_symbol="${YELLOW}◐${NC}"
         health_text="${YELLOW}wrk↓${NC}"
-        uptime_display=$(get_container_uptime "ingest-api")
+        uptime_display=$(get_container_uptime "data-api")
     else
         status_symbol="${DIM}◷${NC}"
         health_text="${DIM}...${NC}"
     fi
     
-    printf "%b %-14s %-6b %s" "$status_symbol" "Ingest" "$health_text" "$uptime_display"
+    printf "%b %-14s %-6b %s" "$status_symbol" "Data" "$health_text" "$uptime_display"
 }
 
 # Two-column service status display for services menu
@@ -1508,10 +1508,10 @@ render_services_status_two_column() {
     # Add API services to right
     right_items+=("HEADER:API")
     for svc in $api_services; do
-        # Consolidate ingest-api and ingest-worker
-        if [[ "$svc" == "ingest-api" ]]; then
-            right_items+=("INGEST")
-        elif [[ "$svc" == "ingest-worker" ]]; then
+        # Consolidate data-api and data-worker
+        if [[ "$svc" == "data-api" ]]; then
+            right_items+=("DATA")
+        elif [[ "$svc" == "data-worker" ]]; then
             continue  # Skip, shown as consolidated
         else
             right_items+=("$svc")
@@ -1551,8 +1551,8 @@ render_services_status_two_column() {
             if [[ "$item" == HEADER:* ]]; then
                 local header_name="${item#HEADER:}"
                 right_line="${DIM}── $header_name ──${NC}"
-            elif [[ "$item" == "INGEST" ]]; then
-                right_line="$(render_compact_ingest_line "$env")"
+            elif [[ "$item" == "DATA" ]]; then
+                right_line="$(render_compact_data_line "$env")"
             else
                 right_line="$(render_compact_service_line "$item" "$env")"
             fi

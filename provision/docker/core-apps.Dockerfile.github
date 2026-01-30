@@ -26,6 +26,8 @@ ARG GITHUB_AUTH_TOKEN
 RUN if [ -n "$GITHUB_AUTH_TOKEN" ]; then \
         echo "//npm.pkg.github.com/:_authToken=${GITHUB_AUTH_TOKEN}" > /root/.npmrc && \
         echo "@jazzmind:registry=https://npm.pkg.github.com" >> /root/.npmrc; \
+    else \
+        touch /root/.npmrc; \
     fi
 
 # =============================================================================

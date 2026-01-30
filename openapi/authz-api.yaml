@@ -876,12 +876,12 @@ components:
           description: OAuth client secret
         audience:
           type: string
-          description: Target service (e.g., ingest-api, search-api, agent-api)
-          example: ingest-api
+          description: Target service (e.g., data-api, search-api, agent-api)
+          example: data-api
         scope:
           type: string
           description: Space-delimited OAuth2 scopes
-          example: ingest.write ingest.read
+          example: data.write data.read
         requested_subject:
           type: string
           format: uuid
@@ -917,7 +917,7 @@ components:
         scope:
           type: string
           description: Granted scopes (space-delimited)
-          example: ingest.write ingest.read
+          example: data.write data.read
         issued_token_type:
           type: string
           description: RFC 8693 issued token type
@@ -951,7 +951,7 @@ components:
         aud:
           type: string
           description: Audience (target service)
-          example: ingest-api
+          example: data-api
         exp:
           type: integer
           description: Expiration time (Unix timestamp)
@@ -975,7 +975,7 @@ components:
             Aggregated OAuth2 scopes (space-delimited). 
             For token-exchange, this is the union of scopes from all user roles.
             For client_credentials, this is the requested scope (validated against client's allowed_scopes).
-          example: ingest.read ingest.write search.read
+          example: data.read data.write search.read
         roles:
           type: array
           description: |
@@ -1011,7 +1011,7 @@ components:
           description: OAuth2 scopes granted by this role
           items:
             type: string
-          example: [ingest.read, ingest.write, search.read]
+          example: [data.read, data.write, search.read]
 
     RoleUpdate:
       type: object
@@ -1027,7 +1027,7 @@ components:
           description: OAuth2 scopes granted by this role
           items:
             type: string
-          example: [ingest.read, ingest.write, search.read]
+          example: [data.read, data.write, search.read]
 
     RoleResponse:
       type: object
@@ -1046,7 +1046,7 @@ components:
           description: OAuth2 scopes granted by this role
           items:
             type: string
-          example: [ingest.read, ingest.write, search.read]
+          example: [data.read, data.write, search.read]
         created_at:
           type: string
           format: date-time
@@ -1096,12 +1096,12 @@ components:
           type: array
           items:
             type: string
-          example: [ingest-api, search-api, agent-api]
+          example: [data-api, search-api, agent-api]
         allowed_scopes:
           type: array
           items:
             type: string
-          example: [ingest.read, ingest.write, search.read]
+          example: [data.read, data.write, search.read]
         auth_client_id:
           type: string
           description: Client ID for authentication (if not using admin token)

@@ -49,12 +49,12 @@ async def test_search_attaches_bearer(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ingest_document_payload(monkeypatch):
+async def test_data_document_payload(monkeypatch):
     stub_client = _StubAsyncClient()
     monkeypatch.setattr("app.clients.busibox.httpx.AsyncClient", lambda *args, **kwargs: stub_client)
 
     client = BusiboxClient("token-123")
-    await client.ingest_document(path="/tmp/file.pdf", metadata={"source": "test"})
+    await client.data_document(path="/tmp/file.pdf", metadata={"source": "test"})
 
     call = stub_client.calls[0]
     assert call["json"]["path"] == "/tmp/file.pdf"

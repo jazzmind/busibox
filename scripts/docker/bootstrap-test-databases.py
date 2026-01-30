@@ -42,8 +42,8 @@ TEST_DB_USER = os.getenv("TEST_DB_USER", "busibox_test_user")
 TEST_DB_PASSWORD = os.getenv("TEST_DB_PASSWORD", "testpassword")
 
 # Bootstrap OAuth client configuration (same as production)
-BOOTSTRAP_ALLOWED_AUDIENCES = ["ingest-api", "search-api", "agent-api"]
-BOOTSTRAP_ALLOWED_SCOPES = ["read", "write", "search.read", "ingest.write", "ingest.read", "agent.execute"]
+BOOTSTRAP_ALLOWED_AUDIENCES = ["data-api", "search-api", "agent-api"]
+BOOTSTRAP_ALLOWED_SCOPES = ["read", "write", "search.read", "data.write", "data.read", "agent.execute"]
 
 # Consistent test user credentials - used by all integration tests
 # Using a fixed UUID ensures tests can rely on this user existing
@@ -245,20 +245,20 @@ async def add_test_domains_to_production():
 
 
 async def check_files_schema_exists(conn):
-    """Check if the ingest/files schema tables exist."""
+    """Check if the data/files schema tables exist."""
     result = await conn.fetchval("""
         SELECT EXISTS (
             SELECT FROM information_schema.tables 
             WHERE table_schema = 'public' 
-            AND table_name = 'ingestion_files'
+            AND table_name = 'data_files'
         )
     """)
     return result
 
 
 async def apply_files_schema(conn):
-    """Apply the ingest/files schema to test_files database."""
-    print("  Applying ingest/files schema...")
+    """Apply the data/files schema to test_files database."""
+    print("  Applying data/files schema...")
     
     # Check if schema already exists
     if await check_files_schema_exists(conn):
@@ -281,7 +281,7 @@ async def apply_files_schema(conn):
     """)
     
     await conn.execute("""
-        CREATE TABLE IF NOT EXISTS ingestion_files (
+        CREATE TABLE IF NOT EXISTS data_files (
             file_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             user_id UUID NOT NULL,
             owner_id UUID,
@@ -317,8 +317,8 @@ async def apply_files_schema(conn):
     """)
     
     await conn.execute("""
-        CREATE TABLE IF NOT EXISTS ingestion_status (
-            file_id UUID PRIMARY KEY REFERENCES ingestion_files(file_id) ON DELETE CASCADE,
+        CREATE TABLE IF NOT EXISTS data_status (
+            file_id UUID PRIMARY KEY REFERENCES data_files(file_id) ON DELETE CASCADE,
             stage VARCHAR(50) NOT NULL DEFAULT 'queued',
             progress INTEGER NOT NULL DEFAULT 0 CHECK (progress >= 0 AND progress <= 100),
             chunks_processed INTEGER,
@@ -334,9 +334,9 @@ async def apply_files_schema(conn):
     """)
     
     await conn.execute("""
-        CREATE TABLE IF NOT EXISTS ingestion_chunks (
+        CREATE TABLE IF NOT EXISTS data_chunks (
             chunk_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            file_id UUID NOT NULL REFERENCES ingestion_files(file_id) ON DELETE CASCADE,
+            file_id UUID NOT NULL REFERENCES data_files(file_id) ON DELETE CASCADE,
             chunk_index INTEGER NOT NULL,
             text TEXT NOT NULL,
             char_offset INTEGER,
@@ -353,7 +353,7 @@ async def apply_files_schema(conn):
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS document_roles (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            file_id UUID NOT NULL REFERENCES ingestion_files(file_id) ON DELETE CASCADE,
+            file_id UUID NOT NULL REFERENCES data_files(file_id) ON DELETE CASCADE,
             role_id UUID NOT NULL,
             role_name VARCHAR(100) NOT NULL,
             added_at TIMESTAMP DEFAULT NOW(),
@@ -376,7 +376,7 @@ async def apply_files_schema(conn):
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS processing_history (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            file_id UUID NOT NULL REFERENCES ingestion_files(file_id) ON DELETE CASCADE,
+            file_id UUID NOT NULL REFERENCES data_files(file_id) ON DELETE CASCADE,
             stage VARCHAR(50) NOT NULL,
             status VARCHAR(20) NOT NULL DEFAULT 'started',
             started_at TIMESTAMP NOT NULL DEFAULT NOW(),
@@ -390,7 +390,7 @@ async def apply_files_schema(conn):
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS processing_strategy_results (
             result_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            file_id UUID NOT NULL REFERENCES ingestion_files(file_id) ON DELETE CASCADE,
+            file_id UUID NOT NULL REFERENCES data_files(file_id) ON DELETE CASCADE,
             processing_strategy VARCHAR(50) NOT NULL,
             success BOOLEAN NOT NULL DEFAULT false,
             text_length INTEGER,
@@ -407,15 +407,15 @@ async def apply_files_schema(conn):
     
     # Create indexes
     indexes = [
-        "CREATE INDEX IF NOT EXISTS idx_ingestion_files_user_id ON ingestion_files(user_id)",
-        "CREATE INDEX IF NOT EXISTS idx_ingestion_files_owner ON ingestion_files(owner_id)",
-        "CREATE INDEX IF NOT EXISTS idx_ingestion_files_content_hash ON ingestion_files(content_hash)",
-        "CREATE INDEX IF NOT EXISTS idx_ingestion_files_document_type ON ingestion_files(document_type)",
-        "CREATE INDEX IF NOT EXISTS idx_ingestion_files_created_at ON ingestion_files(created_at DESC)",
-        "CREATE INDEX IF NOT EXISTS idx_ingestion_files_visibility ON ingestion_files(visibility)",
-        "CREATE INDEX IF NOT EXISTS idx_ingestion_files_group ON ingestion_files(group_id)",
-        "CREATE INDEX IF NOT EXISTS idx_ingestion_status_stage ON ingestion_status(stage)",
-        "CREATE INDEX IF NOT EXISTS idx_ingestion_chunks_file_id ON ingestion_chunks(file_id)",
+        "CREATE INDEX IF NOT EXISTS idx_data_files_user_id ON data_files(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_data_files_owner ON data_files(owner_id)",
+        "CREATE INDEX IF NOT EXISTS idx_data_files_content_hash ON data_files(content_hash)",
+        "CREATE INDEX IF NOT EXISTS idx_data_files_document_type ON data_files(document_type)",
+        "CREATE INDEX IF NOT EXISTS idx_data_files_created_at ON data_files(created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_data_files_visibility ON data_files(visibility)",
+        "CREATE INDEX IF NOT EXISTS idx_data_files_group ON data_files(group_id)",
+        "CREATE INDEX IF NOT EXISTS idx_data_status_stage ON data_status(stage)",
+        "CREATE INDEX IF NOT EXISTS idx_data_chunks_file_id ON data_chunks(file_id)",
         "CREATE INDEX IF NOT EXISTS idx_document_roles_file ON document_roles(file_id)",
         "CREATE INDEX IF NOT EXISTS idx_document_roles_role ON document_roles(role_id)",
         "CREATE INDEX IF NOT EXISTS idx_document_roles_name ON document_roles(role_name)",
@@ -435,7 +435,7 @@ async def apply_files_schema(conn):
 
 
 async def bootstrap_test_files():
-    """Bootstrap the test_files database (for ingest/search)."""
+    """Bootstrap the test_files database (for data/search)."""
     print("\nBootstrapping test_files database...")
     
     try:
@@ -654,7 +654,7 @@ async def main():
     if not await bootstrap_test_authz():
         all_success = False
     
-    # Bootstrap test_files (for ingest/search)
+    # Bootstrap test_files (for data/search)
     if not await bootstrap_test_files():
         all_success = False
     

@@ -2,7 +2,7 @@
 Busibox Embedding API
 
 Dedicated embedding service that loads the FastEmbed model once at startup
-and provides HTTP API for all embedding consumers (ingest-api, ingest-worker, search-api).
+and provides HTTP API for all embedding consumers (data-api, data-worker, search-api).
 
 Endpoints:
 - POST /embed - Generate embeddings for single or batch text

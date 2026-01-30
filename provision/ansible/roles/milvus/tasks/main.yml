@@ -420,7 +420,7 @@
       1. SSH to milvus-lxc: ssh root@{{ milvus_ip }}
       2. Run with --drop flag (WARNING: deletes all data!):
          /opt/milvus-tools/bin/python /root/hybrid_schema.py --drop
-      3. Re-ingest all documents
+      3. Re-data all documents
       
       Or, if you want to keep existing data, the collection will work but
       keyword/BM25 search will return empty results (semantic search still works).

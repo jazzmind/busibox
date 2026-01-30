@@ -150,8 +150,8 @@ class TestOAuthClientOperations:
                 (client_id, client_secret_hash, allowed_audiences, allowed_scopes)
                 VALUES ($1, $2, $3, $4)
             """, client_id, client_secret_hash, 
-                ["ingest-api", "agent-api"],  # Pass as array, not JSON string
-                ["ingest.read", "agent.execute"])
+                ["data-api", "agent-api"],  # Pass as array, not JSON string
+                ["data.read", "agent.execute"])
             
             # Verify it was created
             row = await conn.fetchrow(
@@ -161,7 +161,7 @@ class TestOAuthClientOperations:
             
             assert row is not None
             assert row['client_id'] == client_id
-            assert row['allowed_audiences'] == ["ingest-api", "agent-api"]
+            assert row['allowed_audiences'] == ["data-api", "agent-api"]
     
     @pytest.mark.asyncio
     async def test_list_oauth_clients(self, db_pool, clean_test_data):

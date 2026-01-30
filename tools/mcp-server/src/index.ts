@@ -76,7 +76,7 @@ const DOC_NESTED_PATHS: Record<string, string[]> = {
   ],
   'guides': [
     'guides/agent-api',
-    'guides/ingest-api',
+    'guides/data-api',
     'guides/search-api',
     'guides/auth-api',
   ],
@@ -131,7 +131,7 @@ const CONTAINERS: ContainerConfig[] = [
     purpose: 'Next.js apps (AI Portal, Agent Manager, etc.)',
     ports: [{ port: 3000, service: 'Next.js apps (proxied via proxy-lxc)' }],
     services: ['nginx', 'ai-portal', 'agent-manager', 'doc-intel', 'foundation', 'project-analysis', 'innovation'],
-    notes: 'No direct access to ingest/search; proxies internal calls',
+    notes: 'No direct access to data/search; proxies internal calls',
   },
   {
     id: 202,
@@ -153,7 +153,7 @@ const CONTAINERS: ContainerConfig[] = [
     purpose: 'PostgreSQL database',
     ports: [{ port: 5432, service: 'PostgreSQL' }],
     services: ['postgresql'],
-    notes: 'RLS policies enforced; ingest/search/authz write here',
+    notes: 'RLS policies enforced; data/search/authz write here',
   },
   {
     id: 204,
@@ -187,15 +187,15 @@ const CONTAINERS: ContainerConfig[] = [
   {
     id: 206,
     testId: 306,
-    name: 'ingest-lxc',
+    name: 'data-lxc',
     ip: '10.96.200.206',
     testIp: '10.96.201.206',
-    purpose: 'Ingestion API + worker + Redis',
+    purpose: 'Data API + worker + Redis',
     ports: [
-      { port: 8000, service: 'Ingest API' },
+      { port: 8000, service: 'Data API' },
       { port: 6379, service: 'Redis' },
     ],
-    services: ['ingest-api', 'ingest-worker', 'redis'],
+    services: ['data-api', 'data-worker', 'redis'],
     notes: 'Internal-only API for upload/status/search/embeddings',
   },
   {
@@ -207,7 +207,7 @@ const CONTAINERS: ContainerConfig[] = [
     purpose: 'LiteLLM gateway',
     ports: [{ port: 4000, service: 'LiteLLM' }],
     services: ['litellm'],
-    notes: 'Fronts vLLM/Ollama/remote providers; used by ingest + search',
+    notes: 'Fronts vLLM/Ollama/remote providers; used by data + search',
   },
   {
     id: 208,
@@ -288,7 +288,7 @@ const MAIN_MAKEFILE_TARGETS: Record<string, {
     description: 'Deploy services via Ansible',
     category: 'deploy',
     variables: {
-      SERVICE: 'Service to deploy (authz, ingest, search, agent, etc.)',
+      SERVICE: 'Service to deploy (authz, data, search, agent, etc.)',
       INV: 'Inventory: staging or production',
     },
     examples: ['make deploy', 'make deploy SERVICE=authz INV=staging'],
@@ -299,7 +299,7 @@ const MAIN_MAKEFILE_TARGETS: Record<string, {
     description: 'Run tests on containers (via SSH)',
     category: 'test',
     variables: {
-      SERVICE: 'Service to test: authz, ingest, search, agent, all',
+      SERVICE: 'Service to test: authz, data, search, agent, all',
       INV: 'Inventory: staging or production',
       MODE: 'Test mode: container (default)',
       ARGS: 'Extra pytest arguments',
@@ -310,10 +310,10 @@ const MAIN_MAKEFILE_TARGETS: Record<string, {
     description: 'Run tests locally against remote containers',
     category: 'test',
     variables: {
-      SERVICE: 'Required: authz, ingest, search, agent, all',
+      SERVICE: 'Required: authz, data, search, agent, all',
       INV: 'Required: staging or production',
       FAST: 'Skip slow/GPU tests (default: 1)',
-      WORKER: 'Start local ingest worker (default: 0)',
+      WORKER: 'Start local data worker (default: 0)',
       ARGS: 'Extra pytest arguments',
     },
     examples: [
@@ -326,7 +326,7 @@ const MAIN_MAKEFILE_TARGETS: Record<string, {
     description: 'Run tests against local Docker services',
     category: 'test',
     variables: {
-      SERVICE: 'Required: authz, ingest, search, agent, all',
+      SERVICE: 'Required: authz, data, search, agent, all',
       FAST: 'Skip slow/GPU tests (default: 1)',
       ARGS: 'Extra pytest arguments',
     },
@@ -436,9 +436,9 @@ const MAKE_TARGETS: Record<string, { description: string; category: string; requ
   'search': { description: 'Deploy Milvus + Search API', category: 'deployment', requiresEnv: true },
   'search-api': { description: 'Deploy Search API only', category: 'deployment', requiresEnv: true },
   'agent': { description: 'Deploy Agent API', category: 'deployment', requiresEnv: true },
-  'ingest': { description: 'Deploy Ingest service', category: 'deployment', requiresEnv: true },
-  'ingest-api': { description: 'Deploy Ingest API only', category: 'deployment', requiresEnv: true },
-  'ingest-worker': { description: 'Deploy Ingest worker only', category: 'deployment', requiresEnv: true },
+  'data': { description: 'Deploy Data service', category: 'deployment', requiresEnv: true },
+  'data-api': { description: 'Deploy Data API only', category: 'deployment', requiresEnv: true },
+  'data-worker': { description: 'Deploy Data worker only', category: 'deployment', requiresEnv: true },
   'apps': { description: 'Deploy all Next.js apps', category: 'deployment', requiresEnv: true },
   
   // App deployment
@@ -457,9 +457,9 @@ const MAKE_TARGETS: Record<string, { description: string; category: string; requ
   
   // Testing
   'test-all': { description: 'Run all service tests', category: 'testing', requiresEnv: true },
-  'test-ingest': { description: 'Run ingest service tests', category: 'testing', requiresEnv: true },
-  'test-ingest-all': { description: 'Run all ingest tests including integration', category: 'testing', requiresEnv: true },
-  'test-ingest-coverage': { description: 'Run ingest tests with coverage', category: 'testing', requiresEnv: true },
+  'test-data': { description: 'Run data service tests', category: 'testing', requiresEnv: true },
+  'test-data-all': { description: 'Run all data tests including integration', category: 'testing', requiresEnv: true },
+  'test-data-coverage': { description: 'Run data tests with coverage', category: 'testing', requiresEnv: true },
   'test-search': { description: 'Run search service tests', category: 'testing', requiresEnv: true },
   'test-search-unit': { description: 'Run search unit tests only', category: 'testing', requiresEnv: true },
   'test-search-integration': { description: 'Run search integration tests', category: 'testing', requiresEnv: true },
@@ -1277,7 +1277,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {
             target: {
               type: 'string',
-              description: 'Make target to run (e.g., "all", "ingest", "test-ingest", "deploy-ai-portal")',
+              description: 'Make target to run (e.g., "all", "data", "test-data", "deploy-ai-portal")',
               enum: Object.keys(MAKE_TARGETS),
             },
             environment: {
@@ -1341,7 +1341,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {
             service: {
               type: 'string',
-              description: 'Service name (e.g., "postgresql", "milvus", "search-api", "ingest", "litellm")',
+              description: 'Service name (e.g., "postgresql", "milvus", "search-api", "data", "litellm")',
             },
             environment: {
               type: 'string',
@@ -1385,7 +1385,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {
             service: {
               type: 'string',
-              enum: ['authz', 'ingest', 'search', 'agent', 'all'],
+              enum: ['authz', 'data', 'search', 'agent', 'all'],
               description: 'Service to test',
             },
             fast: {
@@ -1408,7 +1408,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {
             service: {
               type: 'string',
-              enum: ['authz', 'ingest', 'search', 'agent', 'all'],
+              enum: ['authz', 'data', 'search', 'agent', 'all'],
               description: 'Service to test',
             },
             environment: {
@@ -1422,7 +1422,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             worker: {
               type: 'boolean',
-              description: 'Start local ingest worker for pipeline tests (default: false)',
+              description: 'Start local data worker for pipeline tests (default: false)',
             },
             pytest_args: {
               type: 'string',
@@ -1440,7 +1440,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {
             service: {
               type: 'string',
-              enum: ['authz', 'ingest', 'search', 'agent', 'all'],
+              enum: ['authz', 'data', 'search', 'agent', 'all'],
               description: 'Service to test',
             },
             environment: {
@@ -1469,7 +1469,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             service: {
               type: 'string',
-              description: 'Optional: specific service (e.g., authz-api, ingest-api, search-api, agent-api)',
+              description: 'Optional: specific service (e.g., authz-api, data-api, search-api, agent-api)',
             },
             no_cache: {
               type: 'boolean',
@@ -2392,7 +2392,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               examples: [
                 `make test-local SERVICE=${service} INV=${inv}`,
                 `make test-local SERVICE=${service} INV=${inv} FAST=0  # Include slow tests`,
-                `make test-local SERVICE=${service} INV=${inv} WORKER=1  # With ingest worker`,
+                `make test-local SERVICE=${service} INV=${inv} WORKER=1  # With data worker`,
               ],
             }, null, 2),
           },
@@ -2596,7 +2596,7 @@ make test-docker SERVICE=agent ARGS='-v --tb=short'
 
 ## Services in Docker
 - authz-api: http://localhost:8080
-- ingest-api: http://localhost:8001
+- data-api: http://localhost:8001
 - search-api: http://localhost:8003
 - agent-api: http://localhost:8000
 `,
@@ -2620,8 +2620,8 @@ make test-local SERVICE=agent INV=production
 # Include slow tests
 make test-local SERVICE=agent INV=staging FAST=0
 
-# With ingest worker (for pipeline tests)
-make test-local SERVICE=ingest INV=staging WORKER=1
+# With data worker (for pipeline tests)
+make test-local SERVICE=data INV=staging WORKER=1
 
 # Specific test
 make test-local SERVICE=agent INV=staging ARGS='-k test_weather'
@@ -2783,7 +2783,7 @@ server.setRequestHandler(ListPromptsRequestSchema, async () => {
         arguments: [
           {
             name: 'service',
-            description: 'Service to test (ingest, search, agent, apps, or all)',
+            description: 'Service to test (data, search, agent, apps, or all)',
             required: false,
           },
           {
@@ -2805,7 +2805,7 @@ server.setRequestHandler(ListPromptsRequestSchema, async () => {
           },
           {
             name: 'service',
-            description: 'Service to test: authz, ingest, search, agent, or all',
+            description: 'Service to test: authz, data, search, agent, or all',
             required: false,
           },
         ],
@@ -3098,9 +3098,9 @@ Use \`kebab-case\` for all documentation files.
 
 **Available Test Targets**:
 - \`test-all\`: All service tests
-- \`test-ingest\`: Ingest unit tests
-- \`test-ingest-all\`: Ingest including integration
-- \`test-ingest-coverage\`: Ingest with coverage
+- \`test-ingest\`: Data unit tests
+- \`test-data-all\`: Data including integration
+- \`test-data-coverage\`: Data with coverage
 - \`test-search\`: Search tests
 - \`test-search-unit\`: Search unit tests
 - \`test-search-integration\`: Search integration tests
@@ -3287,7 +3287,7 @@ make test-docker SERVICE=${service} ARGS='-v --tb=short'
 
 ## Available Services
 - \`authz\` - Authorization service tests
-- \`ingest\` - Ingestion pipeline tests
+- \`ingest\` - Data pipeline tests
 - \`search\` - Search API tests
 - \`agent\` - Agent API tests
 - \`all\` - All service tests
@@ -3328,7 +3328,7 @@ make test-local SERVICE=${service} INV=${environment} FAST=1
 # Include slow tests
 make test-local SERVICE=${service} INV=${environment} FAST=0
 
-# With ingest worker (for pipeline tests)
+# With data worker (for pipeline tests)
 make test-local SERVICE=${service} INV=${environment} WORKER=1
 
 # Specific test
@@ -3354,7 +3354,7 @@ PYTEST_ARGS='-k test_name' make test SERVICE=${service} INV=${environment}
 
 ## Available Services
 - \`authz\` - Authorization service
-- \`ingest\` - Ingestion pipeline
+- \`ingest\` - Data pipeline
 - \`search\` - Search API
 - \`agent\` - Agent API
 - \`all\` - All services
@@ -3368,7 +3368,7 @@ ${isStaging ? `
 - postgres: 10.96.201.203
 - milvus/search: 10.96.201.204
 - files: 10.96.201.205
-- ingest: 10.96.201.206
+- data: 10.96.201.206
 ` : `
 **Production (10.96.200.x)**:
 - proxy: 10.96.200.200
@@ -3377,7 +3377,7 @@ ${isStaging ? `
 - postgres: 10.96.200.203
 - milvus/search: 10.96.200.204
 - files: 10.96.200.205
-- ingest: 10.96.200.206
+- data: 10.96.200.206
 `}`,
             },
           },
@@ -3433,7 +3433,7 @@ make deploy SERVICE=<service> INV=${target}
 
 Available services:
 - \`authz\` - Authorization service
-- \`ingest\` - Ingestion API + worker
+- \`ingest\` - Data API + worker
 - \`search\` - Search API + Milvus
 - \`agent\` - Agent API
 - \`apps\` - All Next.js apps
@@ -3483,7 +3483,7 @@ curl -s http://${networkBase}.206:8000/health  # Ingest
 | PostgreSQL | ${networkBase}.203 | 5432 |
 | Milvus/Search | ${networkBase}.204 | 19530, 8003 |
 | Files (MinIO) | ${networkBase}.205 | 9000 |
-| Ingest | ${networkBase}.206 | 8000, 6379 |
+| Data | ${networkBase}.206 | 8000, 6379 |
 | LiteLLM | ${networkBase}.207 | 4000 |`,
             },
           },
@@ -3564,7 +3564,7 @@ make docker-down
 | Service | URL |
 |---------|-----|
 | AuthZ API | http://localhost:8080 |
-| Ingest API | http://localhost:8001 |
+| Data API | http://localhost:8001 |
 | Search API | http://localhost:8003 |
 | Agent API | http://localhost:8000 |
 | PostgreSQL | localhost:5432 |

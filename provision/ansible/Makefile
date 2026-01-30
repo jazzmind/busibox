@@ -1,4 +1,4 @@
-.PHONY: ping all files pg milvus nginx search search-api agent ingest ingest-api ingest-worker ingest-update-tests docs apps openwebui deploy-apps deploy-ai-portal deploy-agent-manager deploy-doc-intel deploy-foundation deploy-project-analysis deploy-innovation deploy-estimator verify verify-health verify-smoke service-start service-stop service-restart service-status service-logs service-health test test-menu test-ingest test-ingest-all test-ingest-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-authz test-apps test-security test-security-auth test-security-injection test-security-fuzz test-all configure generate-token-keys bootstrap-test-creds bridge tailscale test-bridge check-embeddings migrate-embeddings migrate-embeddings-force staging production env core core-nginx core-storage core-database core-vectorstore llm llm-vllm llm-litellm llm-colpali apis apis-authz apis-ingest apis-search apis-agent apis-docs apis-bridge apps-frontend
+.PHONY: ping all files pg milvus nginx search search-api agent data data-api data-worker data-update-tests docs apps openwebui deploy-apps deploy-ai-portal deploy-agent-manager deploy-doc-intel deploy-foundation deploy-project-analysis deploy-innovation deploy-estimator verify verify-health verify-smoke service-start service-stop service-restart service-status service-logs service-health test test-menu test-data test-data-all test-data-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-authz test-apps test-security test-security-auth test-security-injection test-security-fuzz test-all configure generate-token-keys bootstrap-test-creds bridge tailscale test-bridge check-embeddings migrate-embeddings migrate-embeddings-force staging production env core core-nginx core-storage core-database core-vectorstore llm llm-vllm llm-litellm llm-colpali apis apis-authz apis-data apis-search apis-agent apis-docs apis-bridge apps-frontend
 
 # ============================================================================
 # ENVIRONMENT SELECTION (persists between runs via .busibox-state)
@@ -41,7 +41,7 @@ EXTRA_ARGS=
 ifeq ($(INV),inventory/staging)
   # Staging IPs (10.96.201.0/21 network)
   PROXY_IP = 10.96.201.200
-  INGEST_IP = 10.96.201.206
+  DATA_IP = 10.96.201.206
   AGENT_IP = 10.96.201.202
   CORE_APPS_IP = 10.96.201.201
   USER_APPS_IP = 10.96.201.212
@@ -50,7 +50,7 @@ ifeq ($(INV),inventory/staging)
 else
   # Production IPs (10.96.200.0/21 network)
   PROXY_IP = 10.96.200.200
-  INGEST_IP = 10.96.200.206
+  DATA_IP = 10.96.200.206
   AGENT_IP = 10.96.200.202
   CORE_APPS_IP = 10.96.200.201
   USER_APPS_IP = 10.96.200.212
@@ -93,7 +93,7 @@ env:
 	@if [ "$(INV)" = "inventory/staging" ]; then \
 		echo "Network:   STAGING (10.96.201.x)"; \
 		echo ""; \
-		echo "  Ingest:     $(INGEST_IP)"; \
+		echo "  Data:     $(DATA_IP)"; \
 		echo "  Agent:      $(AGENT_IP)"; \
 		echo "  Core Apps:  $(CORE_APPS_IP)"; \
 		echo "  User Apps:  $(USER_APPS_IP)"; \
@@ -102,7 +102,7 @@ env:
 	else \
 		echo "Network:   PRODUCTION (10.96.200.x)"; \
 		echo ""; \
-		echo "  Ingest:     $(INGEST_IP)"; \
+		echo "  Data:     $(DATA_IP)"; \
 		echo "  Agent:      $(AGENT_IP)"; \
 		echo "  Core Apps:  $(CORE_APPS_IP)"; \
 		echo "  User Apps:  $(USER_APPS_IP)"; \
@@ -135,7 +135,7 @@ all:
 #
 # Group 1: CORE (nginx, minio, postgres, milvus) - infrastructure
 # Group 2: LLM (vllm, litellm, colpali) - AI/ML services  
-# Group 3: APIs (authz, ingest, search, agent, docs, bridge) - application services
+# Group 3: APIs (authz, data, search, agent, docs, bridge) - application services
 # Group 4: APPS (ai-portal, agent-manager, openwebui) - frontend applications
 
 # ----------------------------------------------------------------------------
@@ -195,7 +195,7 @@ llm-colpali:
 
 apis:
 	@echo "=============================================="
-	@echo "Deploying API services (authz, ingest, search, agent, docs)"
+	@echo "Deploying API services (authz, data, search, agent, docs)"
 	@echo "=============================================="
 	ansible-playbook -i $(INV) site.yml --tags apis $(VAULT_FLAGS)
 
@@ -203,9 +203,9 @@ apis-authz:
 	@echo "Deploying AuthZ (authentication)..."
 	ansible-playbook -i $(INV) -l authz site.yml --tags apis_authz $(VAULT_FLAGS)
 
-apis-ingest:
-	@echo "Deploying Ingest (file processing)..."
-	ansible-playbook -i $(INV) -l ingest site.yml --tags apis_ingest $(VAULT_FLAGS)
+apis-data:
+	@echo "Deploying Data (file processing)..."
+	ansible-playbook -i $(INV) -l data site.yml --tags apis_data $(VAULT_FLAGS)
 
 apis-search:
 	@echo "Deploying Search API..."
@@ -282,21 +282,21 @@ search-api:
 agent:
 	ansible-playbook -i $(INV) -l agent site.yml --tags apis_agent $(VAULT_FLAGS)
 
-ingest:
-	ansible-playbook -i $(INV) -l ingest site.yml --tags apis_ingest $(VAULT_FLAGS)
+data:
+	ansible-playbook -i $(INV) -l data site.yml --tags apis_data $(VAULT_FLAGS)
 
 embedding-api:
-	ansible-playbook -i $(INV) -l ingest site.yml --tags embedding_api $(VAULT_FLAGS)
+	ansible-playbook -i $(INV) -l data site.yml --tags embedding_api $(VAULT_FLAGS)
 
-ingest-api:
-	ansible-playbook -i $(INV) -l ingest site.yml --tags ingest_api $(VAULT_FLAGS)
+data-api:
+	ansible-playbook -i $(INV) -l data site.yml --tags data_api $(VAULT_FLAGS)
 
-ingest-worker:
-	ansible-playbook -i $(INV) -l ingest site.yml --tags ingest_worker $(VAULT_FLAGS)
+data-worker:
+	ansible-playbook -i $(INV) -l data site.yml --tags data_worker $(VAULT_FLAGS)
 
-ingest-update-tests:
-	@echo "Updating ingest test files..."
-	ansible-playbook -i $(INV) -l ingest site.yml --tags ingest_update_tests $(VAULT_FLAGS)
+data-update-tests:
+	@echo "Updating data test files..."
+	ansible-playbook -i $(INV) -l data site.yml --tags data_update_tests $(VAULT_FLAGS)
 	@echo "✓ Test files updated"
 
 # Docs API - Documentation service (runs on authz container)
@@ -449,21 +449,21 @@ verify-smoke:
 # Map service names to container IPs and service names
 SERVICE_MAP := \
   authz=authz@$(AUTHZ_IP) \
-  ingest-api=ingest-api@$(INGEST_IP) \
-  ingest-worker=ingest-worker@$(INGEST_IP) \
+  data-api=data-api@$(DATA_IP) \
+  data-worker=data-worker@$(DATA_IP) \
   search-api=search-api@$(MILVUS_IP) \
   agent-api=agent@$(AGENT_IP) \
   milvus=milvus@$(MILVUS_IP) \
   nginx=nginx@$(PROXY_IP) \
   postgresql=postgresql@10.96.200.203 \
-  redis=redis@$(INGEST_IP)
+  redis=redis@$(DATA_IP)
 
 service-start:
 ifndef SERVICE
 	@echo "Error: SERVICE is required"
 	@echo "Usage: make service-start SERVICE=<service>"
 	@echo ""
-	@echo "Available services: authz, ingest-api, ingest-worker, search-api, agent-api, milvus, nginx, postgresql, redis"
+	@echo "Available services: authz, data-api, data-worker, search-api, agent-api, milvus, nginx, postgresql, redis"
 	@exit 1
 endif
 	$(eval SVC_INFO := $(filter $(SERVICE)=%,$(SERVICE_MAP)))
@@ -534,7 +534,7 @@ endif
 	$(eval SVC_IP := $(word 3,$(subst @, ,$(subst =, ,$(SVC_INFO)))))
 	@if [ "$(SERVICE)" = "authz" ]; then \
 		curl -f -s http://$(SVC_IP):8010/health/live && echo "✓ $(SERVICE) is healthy"; \
-	elif [ "$(SERVICE)" = "ingest-api" ]; then \
+	elif [ "$(SERVICE)" = "data-api" ]; then \
 		curl -f -s http://$(SVC_IP):8000/health && echo "✓ $(SERVICE) is healthy"; \
 	elif [ "$(SERVICE)" = "search-api" ]; then \
 		curl -f -s http://$(SVC_IP):8003/health && echo "✓ $(SERVICE) is healthy"; \
@@ -552,41 +552,41 @@ endif
 # Test targets - run tests on remote containers
 # Note: Interactive test menu is now in scripts/test.sh (run via 'make test' from repo root)
 
-test-all-targets: test-ingest test-search test-agent-unit test-apps
+test-all-targets: test-data test-search test-agent-unit test-apps
 	@echo "================================"
 	@echo "All tests passed!"
 	@echo "================================"
 
-test-ingest:
-	@echo "Running ingest service tests (unit + integration)..."
-	@echo "Container: ingest-lxc ($(INGEST_IP))"
+test-data:
+	@echo "Running data service tests (unit + integration)..."
+	@echo "Container: data-lxc ($(DATA_IP))"
 	@echo ""
-	@if [ -z "$(INGEST_IP)" ] || [ "$(INGEST_IP)" = " " ]; then \
-		echo "ERROR: Could not resolve ingest-lxc IP address"; \
+	@if [ -z "$(DATA_IP)" ] || [ "$(DATA_IP)" = " " ]; then \
+		echo "ERROR: Could not resolve data-lxc IP address"; \
 		echo "Check inventory: $(INV)/hosts.yml"; \
 		exit 1; \
 	fi
-	@echo "=== Ingest Tests (unit + integration) ==="
-	@ssh root@$(INGEST_IP) 'ingest-test all' || (echo "Ingest tests FAILED" && exit 1)
-	@echo "✓ Ingest tests passed"
+	@echo "=== Data Tests (unit + integration) ==="
+	@ssh root@$(DATA_IP) 'data-test all' || (echo "Data tests FAILED" && exit 1)
+	@echo "✓ Data tests passed"
 	@echo ""
 
-test-ingest-all:
-	@echo "Running all ingest service tests (including integration)..."
-	@echo "Container: ingest-lxc ($(INGEST_IP))"
+test-data-all:
+	@echo "Running all data service tests (including integration)..."
+	@echo "Container: data-lxc ($(DATA_IP))"
 	@echo ""
-	@ssh root@$(INGEST_IP) 'ingest-test all' || (echo "Ingest integration tests FAILED" && exit 1)
-	@echo "✓ All ingest tests passed"
+	@ssh root@$(DATA_IP) 'data-test all' || (echo "Data integration tests FAILED" && exit 1)
+	@echo "✓ All data tests passed"
 	@echo ""
 
-test-ingest-coverage:
-	@echo "Running ingest tests with coverage..."
-	@echo "Container: ingest-lxc ($(INGEST_IP))"
+test-data-coverage:
+	@echo "Running data tests with coverage..."
+	@echo "Container: data-lxc ($(DATA_IP))"
 	@echo ""
-	@ssh root@$(INGEST_IP) 'ingest-test coverage' || (echo "Ingest tests FAILED" && exit 1)
-	@echo "✓ Ingest tests passed with coverage"
+	@ssh root@$(DATA_IP) 'data-test coverage' || (echo "Data tests FAILED" && exit 1)
+	@echo "✓ Data tests passed with coverage"
 	@echo ""
-	@echo "Coverage report: ssh root@$(INGEST_IP) and view /srv/ingest/htmlcov/index.html"
+	@echo "Coverage report: ssh root@$(DATA_IP) and view /srv/data/htmlcov/index.html"
 	@echo ""
 
 # Testdocs repository - cloned to server via git (more efficient than copying large files)
@@ -595,18 +595,18 @@ TESTDOCS_REPO = jazzmind/busibox-testdocs
 TESTDOCS_DIR = /tmp/testdocs
 SAMPLES_DIR = $(TESTDOCS_DIR)/pdf/general
 
-# Helper target to ensure testdocs are available on ingest server
+# Helper target to ensure testdocs are available on data server
 .PHONY: ensure-testdocs
 ensure-testdocs:
 	@echo "📦 Checking test documents on server..."
-	@if ssh root@$(INGEST_IP) '[ -d $(SAMPLES_DIR) ] && [ -f $(SAMPLES_DIR)/doc01_rfp_project_management/source.pdf ]' 2>/dev/null; then \
+	@if ssh root@$(DATA_IP) '[ -d $(SAMPLES_DIR) ] && [ -f $(SAMPLES_DIR)/doc01_rfp_project_management/source.pdf ]' 2>/dev/null; then \
 		echo "✓ Test documents already available, updating..."; \
-		ssh root@$(INGEST_IP) 'cd $(TESTDOCS_DIR) && git pull --quiet' || true; \
+		ssh root@$(DATA_IP) 'cd $(TESTDOCS_DIR) && git pull --quiet' || true; \
 	else \
 		echo "📥 Cloning testdocs repository to server..."; \
 		echo "   Repo: $(TESTDOCS_REPO)"; \
 		echo "   Destination: $(TESTDOCS_DIR)"; \
-		if ! ssh root@$(INGEST_IP) '\
+		if ! ssh root@$(DATA_IP) '\
 			TOKEN=""; \
 			if [ -f ~/.github_token ]; then \
 				TOKEN=$$(cat ~/.github_token); \
@@ -619,9 +619,9 @@ ensure-testdocs:
 			echo ""; \
 			echo "ERROR: Failed to clone testdocs repository"; \
 			echo ""; \
-			echo "Ensure GitHub token is deployed to ingest server:"; \
-			echo "  1. Run: make ingest  (deploys ~/.github_token from vault)"; \
-			echo "  2. Or manually: ssh root@$(INGEST_IP) and create ~/.github_token"; \
+			echo "Ensure GitHub token is deployed to data server:"; \
+			echo "  1. Run: make data  (deploys ~/.github_token from vault)"; \
+			echo "  2. Or manually: ssh root@$(DATA_IP) and create ~/.github_token"; \
 			echo ""; \
 			exit 1; \
 		fi; \
@@ -632,66 +632,66 @@ ensure-testdocs:
 test-extraction-simple: ensure-testdocs
 	@echo "=== Testing SIMPLE Extraction Strategy ==="
 	@echo "Running basic PDF extraction without LLM cleanup"
-	@echo "Container: ingest-lxc ($(INGEST_IP))"
+	@echo "Container: data-lxc ($(DATA_IP))"
 	@echo ""
-	@if [ -z "$(INGEST_IP)" ] || [ "$(INGEST_IP)" = " " ]; then \
-		echo "ERROR: Could not resolve ingest-lxc IP address"; \
+	@if [ -z "$(DATA_IP)" ] || [ "$(DATA_IP)" = " " ]; then \
+		echo "ERROR: Could not resolve data-lxc IP address"; \
 		echo "Check inventory: $(INV)/hosts.yml"; \
 		exit 1; \
 	fi
 	@echo ""
-	@ssh root@$(INGEST_IP) 'cd /srv/ingest && source venv/bin/activate && SAMPLES_DIR=$(SAMPLES_DIR) python -m pytest tests/test_pdf_extraction_simple.py -v --tb=short --capture=no' || (echo "SIMPLE extraction tests FAILED" && exit 1)
+	@ssh root@$(DATA_IP) 'cd /srv/data && source venv/bin/activate && SAMPLES_DIR=$(SAMPLES_DIR) python -m pytest tests/test_pdf_extraction_simple.py -v --tb=short --capture=no' || (echo "SIMPLE extraction tests FAILED" && exit 1)
 	@echo "✓ SIMPLE extraction tests passed"
 	@echo ""
 
 test-extraction-llm: ensure-testdocs
 	@echo "=== Testing SIMPLE + LLM Cleanup ==="
 	@echo "Running PDF extraction WITH LLM cleanup"
-	@echo "Container: ingest-lxc ($(INGEST_IP))"
+	@echo "Container: data-lxc ($(DATA_IP))"
 	@echo ""
 	@echo "⚠️  Requires: LiteLLM service running on litellm-lxc"
 	@echo ""
-	@if [ -z "$(INGEST_IP)" ] || [ "$(INGEST_IP)" = " " ]; then \
-		echo "ERROR: Could not resolve ingest-lxc IP address"; \
+	@if [ -z "$(DATA_IP)" ] || [ "$(DATA_IP)" = " " ]; then \
+		echo "ERROR: Could not resolve data-lxc IP address"; \
 		echo "Check inventory: $(INV)/hosts.yml"; \
 		exit 1; \
 	fi
-	@ssh root@$(INGEST_IP) 'cd /srv/ingest && source venv/bin/activate && SAMPLES_DIR=$(SAMPLES_DIR) python -m pytest tests/test_llm_cleanup.py -v --tb=short --capture=no' || (echo "LLM cleanup tests FAILED" && exit 1)
+	@ssh root@$(DATA_IP) 'cd /srv/data && source venv/bin/activate && SAMPLES_DIR=$(SAMPLES_DIR) python -m pytest tests/test_llm_cleanup.py -v --tb=short --capture=no' || (echo "LLM cleanup tests FAILED" && exit 1)
 	@echo "✓ LLM cleanup tests passed"
 	@echo ""
 
 test-extraction-marker: ensure-testdocs
 	@echo "=== Testing MARKER Extraction Strategy ==="
 	@echo "Running Marker PDF extraction (requires GPU/CPU resources)"
-	@echo "Container: ingest-lxc ($(INGEST_IP))"
+	@echo "Container: data-lxc ($(DATA_IP))"
 	@echo ""
 	@echo "⚠️  Warning: Marker requires significant resources"
 	@echo "   - 3.2GB model cache"
 	@echo "   - High memory/CPU during processing"
 	@echo "   - May fail on resource-constrained environments"
 	@echo ""
-	@if [ -z "$(INGEST_IP)" ] || [ "$(INGEST_IP)" = " " ]; then \
-		echo "ERROR: Could not resolve ingest-lxc IP address"; \
+	@if [ -z "$(DATA_IP)" ] || [ "$(DATA_IP)" = " " ]; then \
+		echo "ERROR: Could not resolve data-lxc IP address"; \
 		echo "Check inventory: $(INV)/hosts.yml"; \
 		exit 1; \
 	fi
-	@ssh root@$(INGEST_IP) 'cd /srv/ingest && source venv/bin/activate && SAMPLES_DIR=$(SAMPLES_DIR) python -m pytest tests/test_pdf_extraction_marker.py -v --tb=short --capture=no' || (echo "Marker extraction tests FAILED (may be expected on low-resource systems)" && exit 1)
+	@ssh root@$(DATA_IP) 'cd /srv/data && source venv/bin/activate && SAMPLES_DIR=$(SAMPLES_DIR) python -m pytest tests/test_pdf_extraction_marker.py -v --tb=short --capture=no' || (echo "Marker extraction tests FAILED (may be expected on low-resource systems)" && exit 1)
 	@echo "✓ Marker extraction tests passed"
 	@echo ""
 
 test-extraction-colpali: ensure-testdocs
 	@echo "=== Testing ColPali Visual Extraction ==="
 	@echo "Running ColPali visual embeddings extraction"
-	@echo "Container: ingest-lxc ($(INGEST_IP))"
+	@echo "Container: data-lxc ($(DATA_IP))"
 	@echo ""
 	@echo "⚠️  Requires: ColPali service running on vllm-lxc (GPU required)"
 	@echo ""
-	@if [ -z "$(INGEST_IP)" ] || [ "$(INGEST_IP)" = " " ]; then \
-		echo "ERROR: Could not resolve ingest-lxc IP address"; \
+	@if [ -z "$(DATA_IP)" ] || [ "$(DATA_IP)" = " " ]; then \
+		echo "ERROR: Could not resolve data-lxc IP address"; \
 		echo "Check inventory: $(INV)/hosts.yml"; \
 		exit 1; \
 	fi
-	@ssh root@$(INGEST_IP) 'cd /srv/ingest && source venv/bin/activate && SAMPLES_DIR=$(SAMPLES_DIR) python -m pytest tests/test_colpali.py -v --tb=short --capture=no' || (echo "ColPali extraction tests FAILED" && exit 1)
+	@ssh root@$(DATA_IP) 'cd /srv/data && source venv/bin/activate && SAMPLES_DIR=$(SAMPLES_DIR) python -m pytest tests/test_colpali.py -v --tb=short --capture=no' || (echo "ColPali extraction tests FAILED" && exit 1)
 	@echo "✓ ColPali extraction tests passed"
 	@echo ""
 
@@ -716,7 +716,7 @@ test-agent-integration:
 	@echo "Running agent integration tests..."
 	@echo "Container: agent-lxc ($(AGENT_IP))"
 	@echo ""
-	@echo "⚠️  Warning: Requires auth, search, ingest services running"
+	@echo "⚠️  Warning: Requires auth, search, data services running"
 	@echo ""
 	@ssh root@$(AGENT_IP) 'cd /srv/agent && bash scripts/run-tests.sh integration' || (echo "Agent integration tests FAILED" && exit 1)
 	@echo "✓ Agent integration tests passed"
@@ -798,7 +798,7 @@ test-search-coverage:
 	@echo "Coverage report: ssh root@$(MILVUS_IP) and view /opt/search/htmlcov/index.html"
 	@echo ""
 
-test-all: test-ingest test-search test-agent test-authz test-apps
+test-all: test-data test-search test-agent test-authz test-apps
 	@echo "================================"
 	@echo "All service tests passed!"
 	@echo "================================"
@@ -809,7 +809,7 @@ test-all: test-ingest test-search test-agent test-authz test-apps
 # Fast, lightweight tests that verify services are working after deployment.
 # Use client credentials (no admin token required).
 
-pvt-all: pvt-authz pvt-ingest pvt-search pvt-agent
+pvt-all: pvt-authz pvt-data pvt-search pvt-agent
 	@echo "================================"
 	@echo "All PVT tests passed!"
 	@echo "================================"
@@ -820,10 +820,10 @@ pvt-authz:
 	@echo "✓ AuthZ PVT passed"
 	@echo ""
 
-pvt-ingest:
-	@echo "Running Ingest PVT tests..."
-	@ssh root@$(INGEST_IP) 'cd /srv/ingest && source venv/bin/activate && set -a && source .env && set +a && pytest tests/integration/test_pvt.py -v --tb=short' || (echo "Ingest PVT FAILED" && exit 1)
-	@echo "✓ Ingest PVT passed"
+pvt-data:
+	@echo "Running Data PVT tests..."
+	@ssh root@$(DATA_IP) 'cd /srv/data && source venv/bin/activate && set -a && source .env && set +a && pytest tests/integration/test_pvt.py -v --tb=short' || (echo "Data PVT FAILED" && exit 1)
+	@echo "✓ Data PVT passed"
 	@echo ""
 
 pvt-search:
@@ -915,7 +915,7 @@ migrate-embeddings-force:
 # Environment Variables:
 #   CONTAINER_PREFIX   - Container name prefix (default: dev)
 #   GITHUB_AUTH_TOKEN  - GitHub token for private repos
-#   BUSIBOX_ENV        - Environment name (development, demo)
+#   BUSIBOX_ENV        - Environment name (development, production)
 
 # Docker inventory path
 DOCKER_INV = inventory/docker
@@ -946,7 +946,7 @@ docker-infrastructure:
 	ansible-playbook -i $(DOCKER_INV) docker.yml --tags infrastructure $(DOCKER_VAULT_FLAGS) $(DOCKER_VARS) $(EXTRA_ARGS)
 
 docker-apis:
-	@echo "Deploying Docker API services (authz, ingest, search, agent)..."
+	@echo "Deploying Docker API services (authz, data, search, agent)..."
 	ansible-playbook -i $(DOCKER_INV) docker.yml --tags apis $(DOCKER_VAULT_FLAGS) $(DOCKER_VARS) $(EXTRA_ARGS)
 
 docker-llm:

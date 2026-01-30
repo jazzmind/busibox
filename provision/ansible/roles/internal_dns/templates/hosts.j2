@@ -29,7 +29,7 @@ ff02::2     ip6-allrouters
 
 # Core API Services
 {{ authz_ip }}          authz-api authz authz-lxc
-{{ ingest_ip }}         ingest-api ingest ingest-lxc
+{{ data_ip }}         data-api data data-lxc
 {{ search_api_ip }}     search-api search
 {{ agent_ip }}          agent-api agent agent-lxc
 
@@ -41,7 +41,7 @@ ff02::2     ip6-allrouters
 # Embedded Services (share container with parent service)
 {{ milvus_ip }}         docs-api docs
 {{ authz_ip }}          deploy-api deploy
-{{ ingest_ip }}         embedding-api embedding
+{{ data_ip }}         embedding-api embedding
 
 # Application Services
 {{ core_apps_ip }}      ai-portal
@@ -58,7 +58,7 @@ ff02::2     ip6-allrouters
 {{ milvus_ip }}         STAGE-milvus-lxc
 {{ proxy_ip }}          STAGE-proxy-lxc
 {{ authz_ip }}          STAGE-authz-lxc
-{{ ingest_ip }}         STAGE-ingest-lxc
+{{ data_ip }}         STAGE-data-lxc
 {{ agent_ip }}          STAGE-agent-lxc
 {{ litellm_ip }}        STAGE-litellm-lxc
 {{ ollama_ip }}         STAGE-ollama-lxc

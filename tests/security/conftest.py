@@ -22,7 +22,7 @@ load_dotenv()
 class ServiceEndpoints:
     """Service endpoint configuration."""
     agent: str
-    ingest: str
+    data: str
     search: str
     authz: str
     files: str
@@ -33,7 +33,7 @@ class ServiceEndpoints:
         if env == "local":
             return cls(
                 agent=os.getenv("AGENT_API_URL", "http://localhost:8000"),
-                ingest=os.getenv("INGEST_API_URL", "http://localhost:8002"),
+                data=os.getenv("DATA_API_URL", "http://localhost:8002"),
                 search=os.getenv("SEARCH_API_URL", "http://localhost:8003"),
                 authz=os.getenv("AUTHZ_API_URL", "http://localhost:8010"),
                 files=os.getenv("FILES_API_URL", "http://localhost:9000"),
@@ -41,7 +41,7 @@ class ServiceEndpoints:
         elif env == "test":
             return cls(
                 agent="http://10.96.201.202:8000",
-                ingest="http://10.96.201.206:8002",
+                data="http://10.96.201.206:8002",
                 search="http://10.96.201.204:8003",
                 authz="http://10.96.201.210:8010",
                 files="http://10.96.201.205:9000",
@@ -49,7 +49,7 @@ class ServiceEndpoints:
         else:  # production
             return cls(
                 agent="http://10.96.200.202:8000",
-                ingest="http://10.96.200.206:8002",
+                data="http://10.96.200.206:8002",
                 search="http://10.96.200.204:8003",
                 authz="http://10.96.200.210:8010",
                 files="http://10.96.200.205:9000",
@@ -60,9 +60,6 @@ class ServiceEndpoints:
 class TestCredentials:
     """Test credentials for authentication."""
     valid_token: Optional[str] = None
-    admin_token: Optional[str] = None
-    client_id: Optional[str] = None
-    client_secret: Optional[str] = None
     user_id: str = "test-security-user"
     
     @classmethod
@@ -70,9 +67,6 @@ class TestCredentials:
         """Load credentials from environment."""
         return cls(
             valid_token=os.getenv("TEST_JWT_TOKEN"),
-            admin_token=os.getenv("AUTHZ_ADMIN_TOKEN"),
-            client_id=os.getenv("TEST_CLIENT_ID"),
-            client_secret=os.getenv("TEST_CLIENT_SECRET"),
             user_id=os.getenv("TEST_USER_ID", "test-security-user"),
         )
 

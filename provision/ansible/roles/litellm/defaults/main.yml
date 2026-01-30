@@ -22,8 +22,8 @@ litellm_home: /var/lib/litellm
 litellm_host: "0.0.0.0"
 litellm_port: 4000
 
-# Master Key (should be overridden with vault)
-litellm_master_key: "{{ secrets.litellm.master_key | default('sk-litellm-master-key-change-me') }}"
+# Master Key (from base secrets)
+litellm_master_key: "{{ secrets.litellm_master_key | default('sk-litellm-master-key-change-me') }}"
 
 # Backend Configuration
 # Note: Backends are now dynamically configured via litellm_models
@@ -64,8 +64,9 @@ litellm_memory_limit: "4G"
 litellm_cpu_limit: "2"
 
 # Database (optional - for cost tracking, caching)
+# Computed from base secrets (no longer in secrets.litellm)
 litellm_enable_database: true
-litellm_database_url: "{{ secrets.litellm.database_url | default('sqlite:///{{ litellm_home }}/litellm.db') }}"
+litellm_database_url: "postgresql://{{ postgres_user }}:{{ secrets.postgresql.password }}@{{ postgres_host }}:{{ postgres_port }}/litellm"
 
 # Proxy Features
 litellm_enable_swagger: true

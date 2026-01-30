@@ -14,8 +14,8 @@
 #   MILVUS_IP : Milvus server IP or "docker:container_name" for Docker environments
 #               Examples: "10.96.200.204" (proxmox), "docker:milvus" (docker)
 #               Default: 10.96.200.204 (production)
-#   INGEST_IP : Ingest API server IP or "docker:container_name" for Docker environments
-#               Examples: "10.96.200.206" (proxmox), "docker:ingest-api" (docker)
+#   DATA_IP : Data API server IP or "docker:container_name" for Docker environments
+#               Examples: "10.96.200.206" (proxmox), "docker:data-api" (docker)
 #
 # Exit codes:
 #   0 - No migration needed (or migration completed successfully)
@@ -129,10 +129,10 @@ USE_DOCKER=false
 if [[ "$MILVUS_IP" == docker:* ]]; then
     USE_DOCKER=true
     MILVUS_CONTAINER="${MILVUS_IP#docker:}"
-    INGEST_CONTAINER="${INGEST_IP#docker:}"
+    DATA_CONTAINER="${DATA_IP#docker:}"
     echo -e "Mode: ${BLUE}Docker${NC}"
     echo -e "Milvus container: ${BLUE}$MILVUS_CONTAINER${NC}"
-    echo -e "Ingest container: ${BLUE}$INGEST_CONTAINER${NC}"
+    echo -e "Data container: ${BLUE}$DATA_CONTAINER${NC}"
 elif [ -n "$MILVUS_IP" ]; then
     MILVUS_HOST="$MILVUS_IP"
     echo -e "Mode: ${BLUE}Proxmox/SSH${NC}"
@@ -146,15 +146,15 @@ fi
 echo ""
 
 # Helper function to run Python with pymilvus
-# In Docker: runs on ingest-api container (which has pymilvus) connecting to milvus container
+# In Docker: runs on data-api container (which has pymilvus) connecting to milvus container
 # In Proxmox: runs on milvus host with milvus-tools python
 run_python_milvus() {
     local python_code="$1"
     local milvus_host_for_code="$2"  # The host to connect to from within the code
     
     if [ "$USE_DOCKER" = true ]; then
-        # Run on ingest-api container, connect to milvus container by name
-        docker exec "$INGEST_CONTAINER" python3 -c "$python_code" 2>/dev/null
+        # Run on data-api container, connect to milvus container by name
+        docker exec "$DATA_CONTAINER" python3 -c "$python_code" 2>/dev/null
     else
         # On proxmox, use the milvus-tools python on the milvus host
         ssh -o ConnectTimeout=5 -o BatchMode=yes root@$MILVUS_HOST "/opt/milvus-tools/bin/python -c \"$python_code\"" 2>/dev/null
@@ -164,9 +164,9 @@ run_python_milvus() {
 # Check connectivity
 echo "Checking connectivity..."
 if [ "$USE_DOCKER" = true ]; then
-    # Check ingest-api container (we run pymilvus commands there)
-    if ! docker ps --format '{{.Names}}' | grep -q "^${INGEST_CONTAINER}$"; then
-        echo -e "${YELLOW}WARNING: Docker container '$INGEST_CONTAINER' is not running${NC}"
+    # Check data-api container (we run pymilvus commands there)
+    if ! docker ps --format '{{.Names}}' | grep -q "^${DATA_CONTAINER}$"; then
+        echo -e "${YELLOW}WARNING: Docker container '$DATA_CONTAINER' is not running${NC}"
         echo "Make sure:"
         echo "  1. Docker containers are running (make docker-up)"
         echo "  2. Container name is correct"
@@ -175,7 +175,7 @@ if [ "$USE_DOCKER" = true ]; then
         docker ps --format '  {{.Names}}'
         exit 2
     fi
-    echo -e "${GREEN}✓${NC} Docker container '$INGEST_CONTAINER' is running"
+    echo -e "${GREEN}✓${NC} Docker container '$DATA_CONTAINER' is running"
     
     # Also verify milvus container is running
     if ! docker ps --format '{{.Names}}' | grep -q "^${MILVUS_CONTAINER}$"; then
@@ -200,7 +200,7 @@ echo ""
 echo "Querying Milvus for current embedding dimension..."
 
 # Build the Python code for querying Milvus
-# Note: In Docker, ingest-api connects to 'milvus' container; in Proxmox, connect to localhost
+# Note: In Docker, data-api connects to 'milvus' container; in Proxmox, connect to localhost
 if [ "$USE_DOCKER" = true ]; then
     MILVUS_CONNECT_HOST="$MILVUS_CONTAINER"
 else
@@ -233,7 +233,7 @@ if [[ "$MILVUS_DIM" == ssh_error* ]] || [[ "$MILVUS_DIM" == error* ]] || [[ "$MI
     echo ""
     echo "Make sure Milvus is running and the pymilvus tools are installed."
     if [ "$USE_DOCKER" = true ]; then
-        echo "For Docker, verify pymilvus is installed in the ingest-api container."
+        echo "For Docker, verify pymilvus is installed in the data-api container."
     fi
     exit 2
 fi
@@ -279,7 +279,7 @@ else
         echo "  2. Recreate it with the new dimension ($CONFIGURED_DIM)"
         echo ""
         echo -e "${RED}WARNING: This will delete all existing embeddings!${NC}"
-        echo "You will need to re-ingest all documents after migration."
+        echo "You will need to re-data all documents after migration."
         exit 1
     fi
     
@@ -301,7 +301,7 @@ else
         
         # Drop and recreate the collection
         if [ "$USE_DOCKER" = true ]; then
-            # For Docker: run the migration Python code on ingest-api container (has pymilvus)
+            # For Docker: run the migration Python code on data-api container (has pymilvus)
             MIGRATE_CODE="
 from pymilvus import connections, Collection, utility, FieldSchema, CollectionSchema, DataType
 import os
@@ -337,7 +337,7 @@ col.create_index(field_name='text_sparse', index_params={'index_type': 'SPARSE_I
 
 print(f'Created documents collection with dimension {dim}')
 "
-            docker exec -e EMBEDDING_DIMENSION="$CONFIGURED_DIM" -e MILVUS_HOST="$MILVUS_CONTAINER" "$INGEST_CONTAINER" python3 -c "$MIGRATE_CODE" || {
+            docker exec -e EMBEDDING_DIMENSION="$CONFIGURED_DIM" -e MILVUS_HOST="$MILVUS_CONTAINER" "$DATA_CONTAINER" python3 -c "$MIGRATE_CODE" || {
                 echo -e "${RED}ERROR: Failed to recreate collection${NC}"
                 exit 2
             }
@@ -353,39 +353,39 @@ print(f'Created documents collection with dimension {dim}')
         echo -e "${GREEN}✓ Collection recreated with dimension $CONFIGURED_DIM${NC}"
         echo ""
         
-        # Step 2: Trigger re-embedding via the ingest API
+        # Step 2: Trigger re-embedding via the data API
         echo -e "${YELLOW}Step 2: Triggering re-embedding of all documents...${NC}"
         echo ""
         
-        # Determine ingest host/container
+        # Determine data host/container
         if [ "$USE_DOCKER" = true ]; then
-            # For Docker: call the API via localhost (ingest-api exposes port 8002)
-            INGEST_API_URL="http://localhost:8002/api/files/reprocess-all"
-            echo "Calling ingest API at: $INGEST_API_URL"
+            # For Docker: call the API via localhost (data-api exposes port 8002)
+            DATA_API_URL="http://localhost:8002/api/files/reprocess-all"
+            echo "Calling data API at: $DATA_API_URL"
             echo ""
             
             REEMBED_RESULT=$(curl -s -X POST \
                 -H 'Content-Type: application/json' \
                 -d '{"start_stage": "embedding"}' \
-                "$INGEST_API_URL" 2>/dev/null || echo '{"error": "curl_failed"}')
+                "$DATA_API_URL" 2>/dev/null || echo '{"error": "curl_failed"}')
         else
-            # For Proxmox: determine ingest IP
-            if [ -n "$INGEST_IP" ] && [[ "$INGEST_IP" != docker:* ]]; then
-                INGEST_HOST="$INGEST_IP"
+            # For Proxmox: determine data IP
+            if [ -n "$DATA_IP" ] && [[ "$DATA_IP" != docker:* ]]; then
+                DATA_HOST="$DATA_IP"
             elif [[ "$MILVUS_HOST" == 10.96.201.* ]]; then
-                INGEST_HOST="10.96.201.206"  # Staging
+                DATA_HOST="10.96.201.206"  # Staging
             else
-                INGEST_HOST="10.96.200.206"  # Production
+                DATA_HOST="10.96.200.206"  # Production
             fi
             
-            INGEST_API_URL="http://$INGEST_HOST:8002/api/files/reprocess-all"
-            echo "Calling ingest API at: $INGEST_API_URL"
+            DATA_API_URL="http://$DATA_HOST:8002/api/files/reprocess-all"
+            echo "Calling data API at: $DATA_API_URL"
             echo ""
             
             REEMBED_RESULT=$(ssh root@$MILVUS_HOST "curl -s -X POST \
                 -H 'Content-Type: application/json' \
                 -d '{\"start_stage\": \"embedding\"}' \
-                '$INGEST_API_URL'" 2>/dev/null || echo '{"error": "curl_failed"}')
+                '$DATA_API_URL'" 2>/dev/null || echo '{"error": "curl_failed"}')
         fi
         
         # Check if the call succeeded
@@ -396,10 +396,10 @@ print(f'Created documents collection with dimension {dim}')
             echo "Re-embedding is now running in the background."
             if [ "$USE_DOCKER" = true ]; then
                 echo "Monitor progress with:"
-                echo "  docker logs -f ingest-worker"
+                echo "  docker logs -f data-worker"
             else
                 echo "Monitor progress with:"
-                echo "  ssh root@$INGEST_HOST 'journalctl -u ingest-worker -f'"
+                echo "  ssh root@$DATA_HOST 'journalctl -u data-worker -f'"
             fi
             echo ""
         elif echo "$REEMBED_RESULT" | grep -q '"count": 0\|"queued": 0'; then
@@ -419,7 +419,7 @@ print(f'Created documents collection with dimension {dim}')
             echo "    curl -X POST -H 'Authorization: Bearer <token>' \\"
             echo "      -H 'Content-Type: application/json' \\"
             echo "      -d '{\"start_stage\": \"embedding\"}' \\"
-            echo "      '$INGEST_API_URL'"
+            echo "      '$DATA_API_URL'"
             echo ""
         else
             echo -e "${YELLOW}WARNING: Could not trigger automatic re-embedding${NC}"
@@ -428,7 +428,7 @@ print(f'Created documents collection with dimension {dim}')
             echo "Please trigger re-embedding manually:"
             echo "  curl -X POST -H 'Content-Type: application/json' \\"
             echo "    -d '{\"start_stage\": \"embedding\"}' \\"
-            echo "    '$INGEST_API_URL'"
+            echo "    '$DATA_API_URL'"
             echo ""
         fi
         

@@ -171,10 +171,10 @@
     mode: "0600"
   notify: Restart agent-api
 
-# Deploy model registry for embedding config (same as ingest)
+# Deploy model registry for embedding config (same as data)
 - name: Create config directory for model registry
   file:
-    path: /etc/ingest
+    path: /etc/data
     state: directory
     mode: '0755'
     owner: root
@@ -183,8 +183,8 @@
 
 - name: Deploy model registry configuration
   template:
-    src: "{{ playbook_dir }}/roles/ingest/templates/model_registry.json.j2"
-    dest: "{{ model_registry_path | default('/etc/ingest/model_registry.json') }}"
+    src: "{{ playbook_dir }}/roles/data/templates/model_registry.json.j2"
+    dest: "{{ model_registry_path | default('/etc/data/model_registry.json') }}"
     mode: '0644'
     owner: root
     group: root
@@ -371,7 +371,7 @@
   become: yes
   become_user: "{{ agent_api_user }}"
   environment:
-    DATABASE_URL: "{{ secrets['agent-server'].database_url }}"
+    DATABASE_URL: "postgresql+asyncpg://{{ postgres_user }}:{{ secrets.postgresql.password }}@{{ postgres_host }}:{{ postgres_port }}/agent_server"
   when: >
     tables_count.stdout|int > 0 and 
     (alembic_table_exists.stdout != 't' or 
@@ -396,7 +396,7 @@
   become: yes
   become_user: "{{ agent_api_user }}"
   environment:
-    DATABASE_URL: "{{ secrets['agent-server'].database_url }}"
+    DATABASE_URL: "postgresql+asyncpg://{{ postgres_user }}:{{ secrets.postgresql.password }}@{{ postgres_host }}:{{ postgres_port }}/agent_server"
     PYTHONPATH: "/srv/agent"
   register: migration_result
   changed_when: "'Running upgrade' in migration_result.stderr"

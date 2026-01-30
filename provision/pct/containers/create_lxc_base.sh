@@ -23,7 +23,7 @@
 # Containers Created (in order):
 #   1. Core Services:    proxy, apps, agent
 #   2. Data Services:    postgres, milvus, minio
-#   3. Worker Services:  ingest, litellm
+#   3. Worker Services:  data, litellm
 #   4. LLM Services:     vllm (ollama optional with --with-ollama)
 #
 # Notes:
@@ -107,7 +107,7 @@ bash "${SCRIPT_DIR}/create-data-services.sh" "$MODE" || {
 }
 
 # Step 3: Create worker services
-print_step "Creating Worker Services (ingest, litellm)"
+print_step "Creating Worker Services (data, litellm)"
 bash "${SCRIPT_DIR}/create-worker-services.sh" "$MODE" || {
   echo "ERROR: Failed to create worker services"
   exit 1
@@ -153,7 +153,7 @@ if [[ "$MODE" == "staging" ]]; then
   echo "    - STAGE-files-lxc  ($CT_FILES_STAGING @ $IP_FILES_STAGING)"
   echo ""
   echo "  Worker Services:"
-  echo "    - STAGE-ingest-lxc  ($CT_INGEST_STAGING @ $IP_INGEST_STAGING) [All GPUs, defaults to GPU 0]"
+  echo "    - STAGE-data-lxc  ($CT_DATA_STAGING @ $IP_DATA_STAGING) [All GPUs, defaults to GPU 0]"
   echo "    - STAGE-litellm-lxc ($CT_LITELLM_STAGING @ $IP_LITELLM_STAGING)"
   echo ""
   echo "  LLM Services:"
@@ -174,7 +174,7 @@ else
   echo "    - files-lxc  ($CT_FILES @ $IP_FILES)"
   echo ""
   echo "  Worker Services:"
-  echo "    - ingest-lxc ($CT_INGEST @ $IP_INGEST) [All GPUs, defaults to GPU 0]"
+  echo "    - data-lxc ($CT_DATA @ $IP_DATA) [All GPUs, defaults to GPU 0]"
   echo "    - litellm-lxc ($CT_LITELLM @ $IP_LITELLM)"
   echo ""
   echo "  LLM Services:"

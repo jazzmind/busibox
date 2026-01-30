@@ -118,7 +118,7 @@ start_services() {
     echo "  - AI Portal:      http://localhost:3000"
     echo "  - Agent Manager:  http://localhost:3001"
     echo "  - Agent API:      http://localhost:8000/docs"
-    echo "  - Ingest API:     http://localhost:8002/docs"
+    echo "  - Data API:     http://localhost:8002/docs"
     echo "  - Search API:     http://localhost:8003/docs"
     echo "  - AuthZ API:      http://localhost:8010/docs"
     echo "  - LiteLLM:        http://localhost:4000/docs"

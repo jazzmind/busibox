@@ -45,7 +45,7 @@ def verify_partition_support():
     if not check_collection_exists():
         print(f"⚠ Collection '{COLLECTION_NAME}' does not exist yet")
         print("  This is normal for initial deployment.")
-        print("  The collection will be created by the ingest service or hybrid_schema.py")
+        print("  The collection will be created by the data service or hybrid_schema.py")
         print("  Partitions will be created automatically when documents are uploaded.")
         return None  # None = collection doesn't exist yet (not an error)
     
@@ -90,7 +90,7 @@ def create_example_partitions():
     print("\nPartition Naming Convention:")
     print("  - Personal documents: personal_{user_id}")
     print("  - Group documents: group_{group_id}")
-    print("\nPartitions are created automatically by the ingest worker")
+    print("\nPartitions are created automatically by the data worker")
     print("when documents are uploaded.")
 
 

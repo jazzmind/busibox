@@ -171,7 +171,7 @@ def admin_principal() -> Principal:
         sub="admin-user-456",
         email="admin@example.com",
         roles=["admin", "user"],
-        scopes=["admin.read", "admin.write", "search.read", "ingest.write", "rag.query"],
+        scopes=["admin.read", "admin.write", "search.read", "data.write", "rag.query"],
         token="admin-access-token",  # Include token for auth checks
     )
 
@@ -336,8 +336,8 @@ async def test_agent(test_session: AsyncSession) -> AgentDefinition:
         description="Test agent for unit tests",
         model="agent",
         instructions="You are a test assistant. Be concise.",
-        tools={"names": ["search", "ingest"]},
-        scopes=["search.read", "ingest.write"],
+        tools={"names": ["search", "data"]},
+        scopes=["search.read", "data.write"],
         is_active=True,
     )
     test_session.add(agent)
@@ -366,7 +366,7 @@ async def test_run(test_session: AsyncSession, test_agent: AgentDefinition) -> R
 @pytest.fixture
 async def test_token(test_session: AsyncSession) -> TokenGrant:
     """Create test token grant."""
-    scopes = sorted(["aud:ingest-api", "read", "write"])
+    scopes = sorted(["aud:data-api", "read", "write"])
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     token = TokenGrant(
         subject=TEST_USER_ID,

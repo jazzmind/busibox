@@ -41,7 +41,6 @@ services:
       # Database
       DATABASE_URL: postgresql://${POSTGRES_USER:-busibox_user}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/ai_portal
       # Auth - use https://localhost for SSL
-      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-dev-secret-change-in-production}
       BETTER_AUTH_URL: https://localhost/portal
       # Email (optional - uses console logging in dev)
       RESEND_API_KEY: ${RESEND_API_KEY:-}
@@ -51,7 +50,6 @@ services:
       ALLOWED_EMAIL_DOMAINS: ${ALLOWED_EMAIL_DOMAINS:-*}
       # AuthZ - use internal container URLs
       AUTHZ_BASE_URL: http://authz-api:8010
-      AUTHZ_ADMIN_TOKEN: ${AUTHZ_ADMIN_TOKEN:-local-admin-token}
       # LiteLLM
       LITELLM_BASE_URL: http://litellm:4000/v1
       LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-local-dev-key}
@@ -66,8 +64,8 @@ services:
       # Backend service URLs (for server-side API calls)
       # Note: AGENT_API_URL overrides any .env file setting
       AGENT_API_URL: http://agent-api:8000
-      INGEST_API_HOST: ingest-api
-      INGEST_API_PORT: "8002"
+      DATA_API_HOST: data-api
+      DATA_API_PORT: "8002"
       SEARCH_API_HOST: search-api
       SEARCH_API_PORT: "8003"
       AGENT_API_HOST: agent-api
@@ -117,7 +115,7 @@ services:
       PORT: 3001
       # API URLs - use nginx proxy paths for CORS compliance
       NEXT_PUBLIC_AGENT_API_URL: https://localhost/api/agent
-      NEXT_PUBLIC_INGEST_API_URL: https://localhost/api/ingest
+      NEXT_PUBLIC_DATA_API_URL: https://localhost/api/data
       NEXT_PUBLIC_SEARCH_API_URL: https://localhost/api/search
       # AI Portal (SSO) via nginx
       NEXT_PUBLIC_AI_PORTAL_URL: https://localhost/portal

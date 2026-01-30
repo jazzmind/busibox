@@ -1,6 +1,6 @@
 ---
 # Embedding API deployment tasks
-# Deploys the FastEmbed-based embedding service to the ingest container
+# Deploys the FastEmbed-based embedding service to the data container
 
 - name: Create embedding user
   ansible.builtin.user:

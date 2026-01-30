@@ -77,7 +77,7 @@ TOOL_SCOPES: Dict[str, List[str]] = {
     "document_search": ["search.read"],
     "web_search": [],  # No auth needed
     "web_scraper": [],  # No auth needed
-    "ingest_document": ["ingest.write"],
+    "data_document": ["data.write"],
     "get_weather": [],  # No auth needed
     "rag_query": ["rag.read"],
     "create_task": ["task.write"],  # Create tasks

@@ -1,5 +1,5 @@
 .PHONY: menu help setup configure deploy test test-local test-docker test-security mcp \
-        docker-up docker-up-prod docker-start docker-down docker-down-all docker-restart docker-restart-apis docker-restart-ingest docker-build docker-logs docker-ps docker-ps-all docker-clean docker-clean-all \
+        docker-up docker-up-prod docker-start docker-down docker-down-all docker-restart docker-restart-apis docker-restart-data docker-build docker-logs docker-ps docker-ps-all docker-clean docker-clean-all \
         vault-generate-env vault-migrate vault-sync ssl-check \
         github-check github-ensure \
         install update manage recover-admin demo warmup demo-clean demo-status \
@@ -43,7 +43,7 @@ ARGS ?=
 # FAST mode: skip slow/gpu tests (default for local testing)
 FAST ?=
 
-# WORKER mode: start local ingest worker for integration tests
+# WORKER mode: start local data worker for integration tests
 WORKER ?=
 
 # Docker compose configuration
@@ -127,7 +127,7 @@ help:
 	@echo "  make manage SERVICE=authz ACTION=restart  # Direct service action"
 	@echo "  make test                    # Testing menu"
 	@echo ""
-	@echo "  Services: postgres, redis, minio, milvus, authz, agent, ingest,"
+	@echo "  Services: postgres, redis, minio, milvus, authz, agent, data,"
 	@echo "            search, deploy, docs, embedding, litellm, core-apps, nginx"
 	@echo "  Actions:  start, stop, restart, logs, redeploy, status"
 	@echo ""
@@ -194,7 +194,7 @@ help:
 	@echo ""
 	@echo "  Options:"
 	@echo "    FAST=0      Include slow/GPU tests (default: FAST=1 skips them)"
-	@echo "    WORKER=1    Start local ingest worker for pipeline tests"
+	@echo "    WORKER=1    Start local data worker for pipeline tests"
 	@echo "    ARGS='...'  Pass pytest arguments"
 	@echo ""
 	@echo "═══════════════════════════════════════════════════════════════════════"
@@ -271,14 +271,14 @@ ifndef SERVICE
 	@echo ""
 	@echo "Usage: make test-local SERVICE=<service> INV=<env>"
 	@echo ""
-	@echo "Services: authz, ingest, search, agent, all"
+	@echo "Services: authz, data, search, agent, all"
 	@echo "Environments: staging, production"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make test-local SERVICE=agent INV=staging"
 	@echo "  make test-local SERVICE=all INV=production"
 	@echo "  make test-local SERVICE=agent INV=staging ARGS='-k test_weather'"
-	@echo "  make test-local SERVICE=ingest INV=staging WORKER=1"
+	@echo "  make test-local SERVICE=data INV=staging WORKER=1"
 	@echo ""
 	@exit 1
 endif
@@ -305,7 +305,7 @@ ifndef SERVICE
 	@echo "Usage: make test-docker SERVICE=<service>"
 	@echo ""
 	@echo "Services:"
-	@echo "  Python APIs: authz, ingest, search, agent"
+	@echo "  Python APIs: authz, data, search, agent"
 	@echo "  Node.js apps: ai-portal, agent-manager, apps (both)"
 	@echo "  All: all"
 	@echo ""
@@ -414,12 +414,12 @@ endif
 # Use this when developing - embedding model stays loaded, so restarts are fast
 docker-restart-apis:
 	@echo "Restarting API services (infrastructure tier preserved)..."
-	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) restart authz-api deploy-api ingest-api ingest-worker search-api agent-api docs-api nginx
+	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) restart authz-api deploy-api data-api data-worker search-api agent-api docs-api nginx
 
-# Restart ingest services only
-docker-restart-ingest:
-	@echo "Restarting ingest services..."
-	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) restart ingest-api ingest-worker
+# Restart data services only
+docker-restart-data:
+	@echo "Restarting data services..."
+	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) restart data-api data-worker
 
 # Check/generate SSL certificates
 ssl-check:

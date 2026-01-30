@@ -1,6 +1,6 @@
 -- Migration 001: Initial Schema
 -- Created: 2025-10-14
--- Description: Create initial database schema with users, roles, files, chunks, and ingestion jobs
+-- Description: Create initial database schema with users, roles, files, chunks, and data jobs
 
 -- Enable UUID extension
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
@@ -82,11 +82,11 @@ CREATE TABLE IF NOT EXISTS chunks (
 );
 
 -- ============================================================================
--- Ingestion Jobs
+-- Data Jobs
 -- ============================================================================
 
--- Ingestion jobs table (complements Redis Streams)
-CREATE TABLE IF NOT EXISTS ingestion_jobs (
+-- Data jobs table (complements Redis Streams)
+CREATE TABLE IF NOT EXISTS data_jobs (
     id UUID PRIMARY KEY,
     file_id UUID REFERENCES files(id) ON DELETE CASCADE,
     status VARCHAR(50) NOT NULL DEFAULT 'queued',
@@ -121,10 +121,10 @@ CREATE INDEX IF NOT EXISTS idx_files_object_key ON files(bucket, object_key);
 CREATE INDEX IF NOT EXISTS idx_chunks_file ON chunks(file_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_file_index ON chunks(file_id, chunk_index);
 
--- Ingestion jobs indexes
-CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_file ON ingestion_jobs(file_id);
-CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_status ON ingestion_jobs(status);
-CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_started ON ingestion_jobs(started_at DESC);
+-- Data jobs indexes
+CREATE INDEX IF NOT EXISTS idx_data_jobs_file ON data_jobs(file_id);
+CREATE INDEX IF NOT EXISTS idx_data_jobs_status ON data_jobs(status);
+CREATE INDEX IF NOT EXISTS idx_data_jobs_started ON data_jobs(started_at DESC);
 
 -- ============================================================================
 -- Default Roles

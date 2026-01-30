@@ -205,7 +205,7 @@ Each service runs in an isolated LXC container:
 - **pg-lxc** (203): PostgreSQL database
 - **milvus-lxc** (204): Milvus vector database
 - **agent-lxc** (207): Agent API and liteLLM
-- **ingest-lxc** (206): Worker and Redis
+- **data-lxc** (206): Data API, Worker, and Redis
 - **apps-lxc** (202): nginx and Next.js apps
 - **proxy-lxc** (200): Main reverse proxy
 - **LLM containers** (210-219): Ollama, vLLM, etc.

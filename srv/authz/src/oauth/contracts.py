@@ -26,7 +26,7 @@ class OAuthTokenRequest(BaseModel):
 
     # Requested token restrictions
     scope: str = Field("", description="Space-delimited OAuth2 scopes")
-    audience: Optional[str] = Field(None, description="Requested audience/service identifier (e.g. ingest-api)")
+    audience: Optional[str] = Field(None, description="Requested audience/service identifier (e.g. data-api)")
 
     # Token exchange (OBO) inputs - RFC 8693
     # When subject_token is provided, client credentials are NOT required

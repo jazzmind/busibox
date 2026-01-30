@@ -76,8 +76,8 @@ class Settings(BaseSettings):
     jwt_issuer: str = "busibox-authz"
     jwt_audience: str = "voice-agent"
 
-    # Ingest API configuration (for transcript storage)
-    ingest_api_url: str = "http://10.96.200.206:8001"
+    # Data API configuration (for transcript storage)
+    data_api_url: str = "http://10.96.200.206:8001"
 
     # Call configuration
     max_parallel_calls: int = 3
