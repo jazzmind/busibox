@@ -5,7 +5,7 @@ Database Migration Tool: Separate Service Databases
 This script migrates services from the shared 'busibox' database to their own
 dedicated databases:
 - authz tables -> 'authz' database
-- ingest tables -> 'files' database
+- data tables -> 'files' database
 - agent tables -> 'agent_server' database (already separate)
 
 The migration:
@@ -113,15 +113,15 @@ SERVICES = {
             "audit_logs",
         ],
     },
-    "ingest": {
+    "data": {
         "database": "files",
         "owner": "busibox_user",
         "tables": [
             "groups",
             "group_memberships",
-            "ingestion_files",
-            "ingestion_status",
-            "ingestion_chunks",
+            "data_files",
+            "data_status",
+            "data_chunks",
             "document_roles",
             "processing_history",
             "processing_strategy_results",
@@ -130,9 +130,9 @@ SERVICES = {
         "migration_order": [
             "groups",
             "group_memberships",
-            "ingestion_files",
-            "ingestion_status",
-            "ingestion_chunks",
+            "data_files",
+            "data_status",
+            "data_chunks",
             "document_roles",
             "processing_history",
             "processing_strategy_results",
@@ -293,8 +293,8 @@ async def create_target_schema(
         
         if service_name == "authz":
             schema_path = Path(__file__).parent.parent.parent / "srv" / "authz" / "src" / "schema.py"
-        elif service_name == "ingest":
-            schema_path = Path(__file__).parent.parent.parent / "srv" / "ingest" / "src" / "schema.py"
+        elif service_name == "data":
+            schema_path = Path(__file__).parent.parent.parent / "srv" / "data" / "src" / "schema.py"
         else:
             log(f"Unknown service: {service_name}", "ERROR")
             return False
@@ -311,7 +311,7 @@ async def create_target_schema(
         if service_name == "authz":
             schema = schema_module.get_authz_schema()
         else:
-            schema = schema_module.get_ingest_schema()
+            schema = schema_module.get_data_schema()
         
         # Apply schema
         conn = await get_connection(db_name, SOURCE_USER, SOURCE_PASSWORD)

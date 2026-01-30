@@ -11,7 +11,7 @@
 #
 #   Direct:
 #     bash scripts/tests/run-local-tests.sh authz test
-#     bash scripts/tests/run-local-tests.sh ingest test --verbose
+#     bash scripts/tests/run-local-tests.sh data test --verbose
 #     bash scripts/tests/run-local-tests.sh search production -k test_hybrid
 #
 # This script:
@@ -71,14 +71,20 @@ fi
 
 # Validate service
 case "$SERVICE" in
-    authz|ingest|search|agent|ai-portal|agent-manager|apps|all)
+    authz|data|ingest|search|agent|ai-portal|agent-manager|apps|all)
         ;;
     *)
         error "Unknown service: $SERVICE"
-        echo "Valid services: authz, ingest, search, agent, ai-portal, agent-manager, apps, all"
+        echo "Valid services: authz, data, data, search, agent, ai-portal, agent-manager, apps, all"
         exit 1
         ;;
 esac
+
+# Map 'data' to 'data' for backward compatibility
+if [[ "$SERVICE" == "data" ]]; then
+    warn "Service 'data' is deprecated, using 'data' instead"
+    SERVICE="data"
+fi
 
 # Step 1: Generate environment file
 header "Step 1: Generate Environment" 70
@@ -114,13 +120,13 @@ if [[ "$ENV" == "docker" ]]; then
     export AUTHZ_JWKS_URL=http://localhost:8010/.well-known/jwks.json
     export AUTHZ_ISSUER=busibox-authz
     export AUTHZ_TOKEN_URL=http://localhost:8010/oauth/token
-    export AUTHZ_ADMIN_TOKEN=local-admin-token
     export TEST_AUTHZ_URL=http://localhost:8010
     export LITELLM_BASE_URL=http://localhost:4000
     export LITELLM_API_KEY=sk-local-dev-key
     export EMBEDDING_SERVICE_URL=http://localhost:8002
     export SEARCH_API_URL=http://localhost:8003
-    export INGEST_API_URL=http://localhost:8002
+    export DATA_API_URL=http://localhost:8002
+    export DATA_API_URL=http://localhost:8002  # Deprecated alias
     export AGENT_API_URL=http://localhost:8000
     
     # Agent API uses AUTH_* (without Z) for its own auth config
@@ -188,7 +194,7 @@ header "Step 2: Run Tests" 70
 
 # Function to start local worker
 start_local_worker() {
-    local service_dir="${REPO_ROOT}/srv/ingest"
+    local service_dir="${REPO_ROOT}/srv/data"
     local venv_dir="${service_dir}/test_venv"
     
     if [[ ! -d "$venv_dir" ]]; then
@@ -196,11 +202,11 @@ start_local_worker() {
     fi
     
     if [[ ! -d "$venv_dir" ]]; then
-        warn "No virtual environment found for ingest worker"
+        warn "No virtual environment found for data worker"
         return 1
     fi
     
-    info "Starting local ingest worker..."
+    info "Starting local data worker..."
     
     # Load environment
     set -a
@@ -215,7 +221,7 @@ start_local_worker() {
     
     # Start worker in background with explicitly exported environment
     # Export REDIS_STREAM to ensure worker uses the local stream
-    export REDIS_STREAM="${REDIS_STREAM:-jobs:ingestion:local}"
+    export REDIS_STREAM="${REDIS_STREAM:-jobs:data:local}"
     
     (
         cd "$service_dir"
@@ -281,7 +287,7 @@ run_service_tests() {
     fi
     
     # Start local worker if requested and testing ingest
-    if [[ "$START_LOCAL_WORKER" == "1" ]] && [[ "$service" == "ingest" ]]; then
+    if [[ "$START_LOCAL_WORKER" == "1" ]] && [[ "$service" == "data" ]]; then
         if [[ -z "$WORKER_PID" ]]; then
             start_local_worker
         fi
@@ -401,7 +407,8 @@ run_docker_container_tests() {
     local container_name=""
     case "$service" in
         authz)   container_name="local-authz-api" ;;
-        ingest)  container_name="local-ingest-api" ;;
+        data)    container_name="local-data-api" ;;
+        data)  container_name="local-data-api" ;;  # Deprecated alias
         search)  container_name="local-search-api" ;;
         agent)   container_name="local-agent-api" ;;
         *)
@@ -483,7 +490,7 @@ run_docker_container_tests() {
     local test_db_name="test_authz"
     case "$service" in
         authz)  test_db_name="test_authz" ;;
-        ingest) test_db_name="test_files" ;;
+        data) test_db_name="test_files" ;;
         search) test_db_name="test_files" ;;
         agent)  test_db_name="test_agent_server" ;;
     esac
@@ -514,7 +521,6 @@ run_docker_container_tests() {
         -e TEST_AUTHZ_URL=http://authz-api:8010 \
         -e AUTHZ_JWKS_URL=http://authz-api:8010/.well-known/jwks.json \
         -e TEST_USER_ID="$test_user_id" \
-        -e AUTHZ_ADMIN_TOKEN=local-admin-token \
         -e TEST_DOC_REPO_PATH=/testdocs \
         "$container_name" \
         sh -c "pip install -q pytest pytest-asyncio httpx 2>/dev/null; \
@@ -590,10 +596,11 @@ run_nodejs_app_tests() {
         -e AUTHZ_BASE_URL=http://authz-api:8010 \
         -e AUTHZ_JWKS_URL=http://authz-api:8010/.well-known/jwks.json \
         -e AUTHZ_ISSUER=busibox-authz \
-        -e AUTHZ_ADMIN_TOKEN=local-admin-token \
         -e DATABASE_URL="postgresql://busibox_user:devpassword@postgres:5432/busibox" \
-        -e INGEST_API_HOST=ingest-api \
-        -e INGEST_API_PORT=8002 \
+        -e DATA_API_HOST=data-api \
+        -e DATA_API_PORT=8002 \
+        -e DATA_API_HOST=data-api \
+        -e DATA_API_PORT=8002 \
         -e SEARCH_API_HOST=search-api \
         -e SEARCH_API_PORT=8003 \
         -e AGENT_API_HOST=agent-api \
@@ -613,7 +620,7 @@ FAILED_SERVICES=""
 
 if [[ "$SERVICE" == "all" ]]; then
     # Run Python service tests
-    for svc in authz ingest search agent; do
+    for svc in authz data search agent; do
         echo ""
         separator 70
         if ! run_service_tests "$svc"; then

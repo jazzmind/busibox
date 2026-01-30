@@ -1,0 +1,11 @@
+---
+- name: Restart data API
+  systemd:
+    name: data-api
+    state: restarted
+
+- name: Reload nginx
+  systemd:
+    name: nginx
+    state: reloaded
+

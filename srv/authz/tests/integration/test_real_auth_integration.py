@@ -1776,7 +1776,7 @@ class TestOAuthTokenExchange:
                 role_id,
                 role_name,
                 "Test role for token exchange",
-                ["ingest.read", "ingest.write", "search.read"],
+                ["data.read", "data.write", "search.read"],
             )
             
             # Create user
@@ -1817,7 +1817,7 @@ class TestOAuthTokenExchange:
                 f"{TEST_AUTHZ_URL}/oauth/token",
                 json={
                     "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-                    "audience": "ingest-api",
+                    "audience": "data-api",
                     "requested_subject": str(user_id),
                     "requested_purpose": "integration-test",
                 },
@@ -1846,8 +1846,8 @@ class TestOAuthTokenExchange:
             assert decoded["typ"] == "access"
             
             # Verify scopes are aggregated from role
-            assert "ingest.read" in decoded["scope"]
-            assert "ingest.write" in decoded["scope"]
+            assert "data.read" in decoded["scope"]
+            assert "data.write" in decoded["scope"]
             assert "search.read" in decoded["scope"]
             
             # Verify role is present
@@ -1876,7 +1876,7 @@ class TestOAuthTokenExchange:
                 role1_id,
                 f"Engineering_{role1_id}",
                 "Engineering role",
-                ["ingest.read", "search.read"],
+                ["data.read", "search.read"],
             )
             
             await conn.execute(
@@ -1953,7 +1953,7 @@ class TestOAuthTokenExchange:
             assert str(role2_id) in role_ids
             
             # Verify scopes are aggregated (union of both roles)
-            assert "ingest.read" in decoded["scope"]
+            assert "data.read" in decoded["scope"]
             assert "search.read" in decoded["scope"]
             assert "search.write" in decoded["scope"]
     
@@ -1968,7 +1968,7 @@ class TestOAuthTokenExchange:
                 headers=admin_headers,
                 json={
                     "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-                    "audience": "ingest-api",
+                    "audience": "data-api",
                     "requested_subject": fake_user_id,
                 },
                 timeout=30.0,
@@ -2380,7 +2380,7 @@ class TestOAuthFormEncoding:
                 "grant_type": "client_credentials",
                 "client_id": BOOTSTRAP_CLIENT_ID,
                 "client_secret": BOOTSTRAP_CLIENT_SECRET,
-                "audience": "ingest-api",
+                "audience": "data-api",
             }
             
             resp = await client.post(
@@ -2445,7 +2445,7 @@ class TestOAuthFormEncoding:
                 """,
                 uuid.UUID(role_id),
                 f"TestRole_form-{role_id[:8]}",
-                ["search.read", "ingest.read"],
+                ["search.read", "data.read"],
             )
             await conn.execute(
                 """

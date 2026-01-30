@@ -1,0 +1,24 @@
+[Unit]
+Description=Busibox Data API Server
+After=network-online.target redis-server.service
+Wants=network-online.target
+Requires=redis-server.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/srv/data/src
+EnvironmentFile=/srv/data/.env
+ExecStart=/srv/data/venv/bin/uvicorn api.main:app --host 0.0.0.0 --port 8002
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=data-api
+
+# Resource limits
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+

@@ -26,7 +26,7 @@ class BusiboxDeps:
     
     Provides:
     - principal: Authenticated user with roles/scopes
-    - busibox_client: HTTP client for Busibox services (search/ingest/RAG)
+    - busibox_client: HTTP client for Busibox services (search/data/RAG)
     """
 
     principal: Principal
@@ -121,7 +121,7 @@ async def search_tool(ctx: RunContext[BusiboxDeps], query: str, top_k: int = 5) 
     )
 
 
-async def ingest_tool(
+async def data_tool(
     ctx: RunContext[BusiboxDeps], path: str, metadata: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
@@ -137,7 +137,7 @@ async def ingest_tool(
     if not path or not path.strip():
         raise ValueError("Document path cannot be empty")
 
-    return await ctx.deps.busibox_client.ingest_document(path=path.strip(), metadata=metadata or {})
+    return await ctx.deps.busibox_client.data_document(path=path.strip(), metadata=metadata or {})
 
 
 async def rag_tool(
@@ -178,7 +178,7 @@ chat_agent = Agent[BusiboxDeps, ChatOutput](
 Your role:
 - Help users find, process, and analyze documents
 - Use search_tool to find relevant documents
-- Use ingest_tool to add new documents to the system
+- Use data_tool to add new documents to the system
 - Use rag_tool to answer questions using document context
 - Keep responses concise, actionable, and well-structured
 - Always cite sources when using RAG or search results
@@ -190,7 +190,7 @@ Guidelines:
 - Always validate tool inputs before calling
 - Return structured responses with clear formatting
 """,
-    tools=[search_tool, ingest_tool, rag_tool],
+    tools=[search_tool, data_tool, rag_tool],
 )
 
 

@@ -1,9 +1,9 @@
 openapi: 3.0.3
 info:
-  title: Busibox Ingestion Service API
+  title: Busibox Data Service API
   description: |
     Internal API for document upload, processing, and status tracking.
-    This API is deployed to ingest-lxc and accessible only within the container network.
+    This API is deployed to data-lxc and accessible only within the container network.
     
     ## Features
     - File upload with presigned MinIO URLs
@@ -15,8 +15,8 @@ info:
     name: Busibox Development
     
 servers:
-  - url: http://ingest-lxc:8002
-    description: Ingestion service (internal only)
+  - url: http://data-lxc:8002
+    description: Data service (internal only)
 
 tags:
   - name: Upload

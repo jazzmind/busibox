@@ -215,7 +215,7 @@ class TestDatabaseRLS:
                 # Don't set any RLS context
                 # Query should return empty results due to RLS
                 result = await conn.fetch(
-                    "SELECT file_id, filename FROM ingestion_files LIMIT 10"
+                    "SELECT file_id, filename FROM data_files LIMIT 10"
                 )
                 
                 # Without user context, RLS should block access
@@ -249,7 +249,7 @@ class TestDatabaseRLS:
             async with pool.acquire() as conn:
                 # Query should only return documents owned by this user
                 result = await conn.fetch(
-                    "SELECT file_id, owner_id FROM ingestion_files LIMIT 10"
+                    "SELECT file_id, owner_id FROM data_files LIMIT 10"
                 )
                 
                 # All returned documents should be owned by the test user
@@ -280,7 +280,7 @@ class TestDatabaseRLS:
             async with pool.acquire() as conn:
                 # Query should return no results (fake user owns nothing)
                 result = await conn.fetch(
-                    "SELECT file_id, owner_id FROM ingestion_files LIMIT 10"
+                    "SELECT file_id, owner_id FROM data_files LIMIT 10"
                 )
                 
                 assert len(result) == 0, \

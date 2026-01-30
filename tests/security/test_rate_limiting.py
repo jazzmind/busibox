@@ -75,7 +75,7 @@ class TestRateLimiting:
     @pytest.mark.slow
     def test_upload_rate_limiting(self, http_client, endpoints, auth_headers):
         """Test upload endpoint has rate limiting."""
-        url = f"{endpoints.ingest}/upload"
+        url = f"{endpoints.data}/upload"
         
         # Send rapid upload requests (without actual files)
         responses = []
@@ -275,7 +275,7 @@ class TestFileUploadLimits:
     @pytest.mark.rate_limit
     def test_upload_size_limit(self, http_client, endpoints, auth_headers):
         """Test that upload size limits are enforced."""
-        url = f"{endpoints.ingest}/upload"
+        url = f"{endpoints.data}/upload"
         
         # Try to upload large file (10MB)
         large_data = b"x" * (10 * 1024 * 1024)
@@ -301,7 +301,7 @@ class TestFileUploadLimits:
     @pytest.mark.rate_limit
     def test_upload_content_type_validation(self, http_client, endpoints, auth_headers):
         """Test that dangerous file types are rejected."""
-        url = f"{endpoints.ingest}/upload"
+        url = f"{endpoints.data}/upload"
         
         dangerous_files = [
             ("test.exe", b"MZ\x90\x00", "application/x-executable"),

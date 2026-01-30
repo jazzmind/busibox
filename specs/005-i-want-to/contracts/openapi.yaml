@@ -45,7 +45,7 @@ paths:
       summary: Exchange user token for downstream token
       description: |
         Exchange the current user's JWT token for a scoped downstream token
-        for calling Busibox services (search/ingest/RAG). Tokens are cached
+        for calling Busibox services (search/data/RAG). Tokens are cached
         and reused until expiry.
       requestBody:
         required: true
@@ -58,7 +58,7 @@ paths:
                   type: array
                   items:
                     type: string
-                  example: ["search.read", "ingest.write"]
+                  example: ["search.read", "data.write"]
                 purpose:
                   type: string
                   description: Purpose of token (e.g., "agent-run", "manual-search")
@@ -229,10 +229,10 @@ paths:
                   type: array
                   items:
                     type: string
-                  example: ["search.read", "ingest.write"]
+                  example: ["search.read", "data.write"]
                 purpose:
                   type: string
-                  example: scheduled-ingestion
+                  example: scheduled-data
               required:
                 - agent_id
                 - cron
@@ -317,7 +317,7 @@ components:
           type: array
           items:
             type: string
-          example: ["search.read", "ingest.write"]
+          example: ["search.read", "data.write"]
       required:
         - access_token
         - token_type
@@ -353,7 +353,7 @@ components:
               type: array
               items:
                 type: string
-              example: ["search", "ingest", "rag"]
+              example: ["search", "data", "rag"]
           default: {}
         workflow:
           type: object

@@ -210,7 +210,7 @@ try:
     # Add service dependencies (models used by services but not in registry)
     # These are hard dependencies that cannot be removed
     service_dependencies = [
-        'vikp/surya_det2',  # Marker PDF extraction (layout detection) - used by ingest service
+        'vikp/surya_det2',  # Marker PDF extraction (layout detection) - used by data service
     ]
     
     for dep_model in service_dependencies:

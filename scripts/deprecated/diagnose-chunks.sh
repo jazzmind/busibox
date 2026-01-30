@@ -45,14 +45,14 @@ SELECT
     file_id,
     original_filename,
     chunk_count,
-    ingestion_status,
+    data_status,
     error_message
 FROM files
 WHERE file_id = '$FILE_ID';
 \""
 
 echo ""
-echo "4. Milvus vectors (via ingest API):"
+echo "4. Milvus vectors (via data API):"
 ssh root@10.96.200.206 "curl -s 'http://localhost:8000/files/$FILE_ID/chunks?limit=10' | python3 -m json.tool"
 
 echo ""

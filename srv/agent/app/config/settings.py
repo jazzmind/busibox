@@ -38,9 +38,9 @@ class Settings(BaseSettings):
         "http://10.96.200.204:8003",
         description="Base URL for Busibox search API",
     )
-    ingest_api_url: AnyHttpUrl = Field(
+    data_api_url: AnyHttpUrl = Field(
         "http://10.96.200.206:8002",
-        description="Base URL for Busibox ingest API",
+        description="Base URL for Busibox data API",
     )
     rag_api_url: AnyHttpUrl = Field(
         "http://10.96.200.204:8003",

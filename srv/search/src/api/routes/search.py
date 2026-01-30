@@ -459,7 +459,7 @@ async def explain_result(
 
 
 async def _set_rls_session_vars(conn, request: Request):
-    """Set session variables for RLS on ingestion DB."""
+    """Set session variables for RLS on data DB."""
     user_id = getattr(request.state, "user_id", "")
     # Use role_ids (set by JWTAuthMiddleware) not readable_role_ids
     role_ids = getattr(request.state, "role_ids", [])
@@ -496,7 +496,7 @@ async def _enrich_results(results: list, request: Request) -> list:
             # Fetch filenames
             file_rows = await conn.fetch("""
                 SELECT file_id, filename
-                FROM ingestion_files
+                FROM data_files
                 WHERE file_id = ANY($1::uuid[])
             """, file_ids)
             

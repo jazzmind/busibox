@@ -4,17 +4,17 @@ from typing import Optional, Dict, Any
 from pydantic import BaseModel, Field
 from pydantic_ai import Tool
 
-from app.clients.ingest_client import IngestClient
+from app.clients.data_client import DataClient
 
 
-class IngestionInput(BaseModel):
+class DataInput(BaseModel):
     """Input schema for ingestion tool."""
-    file_path: str = Field(description="Path to the file to ingest")
+    file_path: str = Field(description="Path to the file to data")
     metadata: Optional[Dict[str, Any]] = Field(default=None, description="Optional metadata dictionary")
     force_reprocess: bool = Field(default=False, description="Force reprocessing even if duplicate")
 
 
-class IngestionOutput(BaseModel):
+class DataOutput(BaseModel):
     """Output schema for ingestion tool."""
     success: bool = Field(description="Whether ingestion was successful")
     file_id: str = Field(description="Unique identifier for the ingested file")
@@ -25,11 +25,11 @@ class IngestionOutput(BaseModel):
     error: Optional[str] = Field(default=None, description="Error message if failed")
 
 
-async def ingest_document(
+async def data_document(
     file_path: str,
     metadata: Optional[Dict[str, Any]] = None,
     force_reprocess: bool = False,
-) -> IngestionOutput:
+) -> DataOutput:
     """
     Ingest and process a document file.
     
@@ -47,20 +47,20 @@ async def ingest_document(
         force_reprocess: Force reprocessing even if content hash matches existing document
         
     Returns:
-        IngestionOutput with file_id and processing status
+        DataOutput with file_id and processing status
         
     Note:
         Processing happens asynchronously. Use the file_id to check status later.
     """
     try:
-        async with IngestClient() as client:
+        async with DataClient() as client:
             response = await client.upload_document(
                 file_path=file_path,
                 metadata=metadata,
                 force_reprocess=force_reprocess,
             )
         
-        return IngestionOutput(
+        return DataOutput(
             success=True,
             file_id=response.file_id,
             filename=response.filename,
@@ -70,7 +70,7 @@ async def ingest_document(
         )
     
     except FileNotFoundError as e:
-        return IngestionOutput(
+        return DataOutput(
             success=False,
             file_id="",
             filename="",
@@ -80,7 +80,7 @@ async def ingest_document(
         )
     
     except Exception as e:
-        return IngestionOutput(
+        return DataOutput(
             success=False,
             file_id="",
             filename="",
@@ -91,10 +91,10 @@ async def ingest_document(
 
 
 # Create the Pydantic AI tool
-ingestion_tool = Tool(
-    ingest_document,
+data_tool = Tool(
+    data_document,
     takes_ctx=False,
-    name="ingest_document",
+    name="data_document",
     description="""Ingest and process a document file for analysis and search.
 Use this tool when:
 - You need to process a new document for analysis

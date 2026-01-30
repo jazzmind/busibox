@@ -31,7 +31,7 @@ authz_rsa_key_size: 2048
 authz_key_encryption_passphrase: "{{ secrets.jwt_secret | default(secrets.sso.jwt_secret | default('change-me')) }}"
 
 # Bootstrap OAuth client for ai-portal
-authz_bootstrap_allowed_audiences: "ingest-api,search-api,agent-api,authz-api,deploy-api"
+authz_bootstrap_allowed_audiences: "data-api,search-api,agent-api,authz-api,deploy-api"
 authz_bootstrap_allowed_scopes: ""
 
 

@@ -205,7 +205,7 @@
   when: "'files' in (app_databases | default([]))"
   tags: [postgres]
 
-- name: Check if ingestion schema migration has been applied
+- name: Check if data schema migration has been applied
   become_user: postgres
   postgresql_query:
     db: files
@@ -221,9 +221,9 @@
   when: "'files' in (app_databases | default([]))"
   tags: [postgres]
 
-- name: Apply ingestion schema to files database
+- name: Apply data schema to files database
   become_user: postgres
-  command: psql -U postgres -d files -f /var/lib/postgresql/migrations/010_ingestion_schema.sql
+  command: psql -U postgres -d files -f /var/lib/postgresql/migrations/010_data_schema.sql
   when: >
     'files' in (app_databases | default([])) and
     (migration_check.query_result is not defined or 
@@ -234,7 +234,7 @@
 
 - name: Display migration result
   debug:
-    msg: "Ingestion schema migration: {{ 'applied' if files_migration_result.changed else 'already exists' }}"
+    msg: "Data schema migration: {{ 'applied' if files_migration_result.changed else 'already exists' }}"
   when: "'files' in (app_databases | default([]))"
   tags: [postgres]
 

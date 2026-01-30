@@ -58,7 +58,7 @@ run_health_checks() {
             "milvus:19530"
             "authz-api:8010"
             "agent-api:4111"
-            "ingest-api:8001"
+            "data-api:8001"
             "search-api:8003"
             "litellm:4000"
         )
@@ -154,7 +154,7 @@ run_service_tests() {
     echo ""
     
     local services=(
-        "ingest"
+        "data"
         "search"
         "agent"
         "authz"
@@ -177,9 +177,9 @@ run_service_tests() {
     case "$choice" in
         1)
             clear
-            info "Testing Ingest Service..."
+            info "Testing Data Service..."
             cd "$REPO_ROOT"
-            make test-ingest 2>&1 || true
+            make test-data 2>&1 || true
             echo ""
             read -n 1 -s -r -p "Press any key to continue..."
             ;;

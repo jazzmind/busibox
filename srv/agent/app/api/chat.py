@@ -877,12 +877,12 @@ async def generate_conversation_insights(
         # Generate insights
         insights_service = get_insights_service()
         
-        # Zero Trust: Exchange user's token for ingest-api audience
-        ingest_token = None
+        # Zero Trust: Exchange user's token for data-api audience
+        data_token = None
         if principal.token:
-            ingest_token = await exchange_token_zero_trust(
+            data_token = await exchange_token_zero_trust(
                 subject_token=principal.token,
-                target_audience="ingest-api",
+                target_audience="data-api",
                 user_id=principal.sub
             )
         

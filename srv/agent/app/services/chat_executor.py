@@ -378,7 +378,7 @@ async def execute_agent(
         
         # Set scopes based on whether agent uses tools
         if needs_token_exchange:
-            scopes = ["search:read", "ingest:write", "rag:read"]
+            scopes = ["search:read", "data:write", "rag:read"]
         else:
             scopes = []  # No tools = no downstream services = no token exchange needed
         
@@ -688,7 +688,7 @@ TOOL_DISPLAY_NAMES = {
     "web_search": "Web Search",
     "document_search": "Document Search",
     "get_weather": "Weather",
-    "ingest_document": "Document Ingestion",
+    "data_document": "Document Ingestion",
     "web_scraper": "Web Page Reader",
 }
 

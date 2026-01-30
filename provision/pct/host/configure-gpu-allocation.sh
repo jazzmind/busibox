@@ -3,31 +3,31 @@
 # Configure GPU Allocation for Busibox Services
 #
 # EXECUTION CONTEXT: Proxmox host (as root)
-# PURPOSE: Configure GPU passthrough, drivers, and allocation for ingest and vLLM containers
+# PURPOSE: Configure GPU passthrough, drivers, and allocation for data and vLLM containers
 #
 # This script:
-# 1. Configures GPU passthrough for ingest and vLLM containers
+# 1. Configures GPU passthrough for data and vLLM containers
 # 2. Installs NVIDIA drivers (CUDA toolkit) in both containers
 # 3. Configures GPU allocation (CUDA_VISIBLE_DEVICES) for services
 # 4. Calculates model sizes and validates GPU memory fits
 # 5. Configures vLLM model-to-GPU routing
 #
 # USAGE:
-#   bash configure-gpu-allocation.sh [--interactive] [--ingest-gpus=0] [--vllm-gpus=1,2] [--validate-only]
+#   bash configure-gpu-allocation.sh [--interactive] [--data-gpus=0] [--vllm-gpus=1,2] [--validate-only]
 #
 # EXAMPLES:
 #   # Interactive mode (recommended)
 #   bash configure-gpu-allocation.sh --interactive
 #
 #   # Configure specific GPU allocation
-#   bash configure-gpu-allocation.sh --ingest-gpus=0 --vllm-gpus=1,2
+#   bash configure-gpu-allocation.sh --data-gpus=0 --vllm-gpus=1,2
 #
 #   # Validate current configuration only
 #   bash configure-gpu-allocation.sh --validate-only
 #
 # REQUIREMENTS:
 #   - NVIDIA drivers installed on Proxmox host
-#   - Containers must exist (ingest-lxc, vllm-lxc)
+#   - Containers must exist (data-lxc, vllm-lxc)
 #   - Scripts: configure-gpu-passthrough.sh, install-nvidia-drivers.sh
 #
 set -euo pipefail
@@ -47,16 +47,16 @@ PCT_DIR="$(dirname "$SCRIPT_DIR")"
 # Source container IDs from vars.env
 if [ -f "${PCT_DIR}/vars.env" ]; then
     source "${PCT_DIR}/vars.env"
-    CT_INGEST="${CT_INGEST:-206}"
+    CT_DATA="${CT_DATA:-206}"
     CT_VLLM="${CT_VLLM:-208}"
 else
     # Defaults if vars.env not found
-    CT_INGEST="206"
+    CT_DATA="206"
     CT_VLLM="208"
 fi
 
 # Default GPU allocation
-INGEST_GPUS="${INGEST_GPUS:-0}"
+DATA_GPUS="${DATA_GPUS:-0}"
 VLLM_GPUS="${VLLM_GPUS:-}"
 INTERACTIVE=false
 VALIDATE_ONLY=false
@@ -102,11 +102,11 @@ usage() {
     cat <<EOF
 Usage: $0 [OPTIONS]
 
-Configure GPU allocation for Busibox services (ingest and vLLM).
+Configure GPU allocation for Busibox services (data and vLLM).
 
 OPTIONS:
     --interactive          Interactive mode - prompts for GPU allocation
-    --ingest-gpus=GPUS     GPUs for ingest container (e.g., "0" or "0,1")
+    --data-gpus=GPUS     GPUs for data container (e.g., "0" or "0,1")
     --vllm-gpus=GPUS       GPUs for vLLM container (e.g., "1,2" or "1-3")
     --validate-only        Only validate current configuration, don't make changes
     --help                 Show this help message
@@ -116,18 +116,18 @@ EXAMPLES:
     $0 --interactive
 
     # Configure specific allocation
-    $0 --ingest-gpus=0 --vllm-gpus=1,2
+    $0 --data-gpus=0 --vllm-gpus=1,2
 
     # Validate only
     $0 --validate-only
 
 GPU ALLOCATION STRATEGY:
     Standard (2+ GPUs):
-      - GPU 0: Ingest (Marker + ColPali) - ~18GB total
+      - GPU 0: Data (Marker + ColPali) - ~18GB total
       - GPU 1+: vLLM (LLM models) - model-dependent
 
     Minimum (2 GPUs):
-      - GPU 0: Ingest (Marker + ColPali)
+      - GPU 0: Data (Marker + ColPali)
       - GPU 1: vLLM (single GPU, limited parallelism)
 
 MODEL MEMORY REQUIREMENTS:
@@ -145,8 +145,8 @@ while [[ $# -gt 0 ]]; do
             INTERACTIVE=true
             shift
             ;;
-        --ingest-gpus=*)
-            INGEST_GPUS="${1#*=}"
+        --data-gpus=*)
+            DATA_GPUS="${1#*=}"
             shift
             ;;
         --vllm-gpus=*)
@@ -359,13 +359,13 @@ interactive_allocation() {
     detect_gpus
     
     echo "Current GPU allocation:"
-    echo "  Ingest: GPU(s) $INGEST_GPUS"
+    echo "  Data: GPU(s) $DATA_GPUS"
     echo "  vLLM: GPU(s) ${VLLM_GPUS:-auto (1+)}"
     echo ""
     
-    read -p "Configure ingest container GPUs (default: $INGEST_GPUS): " input_ingest
-    if [ -n "$input_ingest" ]; then
-        INGEST_GPUS="$input_ingest"
+    read -p "Configure data container GPUs (default: $DATA_GPUS): " input_data
+    if [ -n "$input_data" ]; then
+        DATA_GPUS="$input_data"
     fi
     
     read -p "Configure vLLM container GPUs (default: auto 1+): " input_vllm
@@ -383,14 +383,14 @@ interactive_allocation() {
                 VLLM_GPUS="1-${END_GPU}"
             fi
         else
-            error "Only 1 GPU detected. vLLM needs at least GPU 1 (GPU 0 for ingest)"
+            error "Only 1 GPU detected. vLLM needs at least GPU 1 (GPU 0 for data)"
             exit 1
         fi
     fi
     
     echo ""
     info "Allocation summary:"
-    echo "  Ingest: GPU(s) $INGEST_GPUS"
+    echo "  Data: GPU(s) $DATA_GPUS"
     echo "  vLLM: GPU(s) $VLLM_GPUS"
     echo ""
     
@@ -430,19 +430,19 @@ main() {
     
     # Validate GPU allocation doesn't overlap
     # Parse GPU lists and check for overlaps
-    local ingest_gpus_array=()
+    local data_gpus_array=()
     local vllm_gpus_array=()
     
-    # Parse ingest GPUs
-    if [[ "$INGEST_GPUS" =~ ^[0-9]+-[0-9]+$ ]]; then
-        IFS='-' read -r START END <<< "$INGEST_GPUS"
+    # Parse data GPUs
+    if [[ "$DATA_GPUS" =~ ^[0-9]+-[0-9]+$ ]]; then
+        IFS='-' read -r START END <<< "$DATA_GPUS"
         for ((i=START; i<=END; i++)); do
-            ingest_gpus_array+=("$i")
+            data_gpus_array+=("$i")
         done
-    elif [[ "$INGEST_GPUS" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
-        IFS=',' read -ra ingest_gpus_array <<< "$INGEST_GPUS"
+    elif [[ "$DATA_GPUS" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+        IFS=',' read -ra data_gpus_array <<< "$DATA_GPUS"
     else
-        ingest_gpus_array=("$INGEST_GPUS")
+        data_gpus_array=("$DATA_GPUS")
     fi
     
     # Parse vLLM GPUs
@@ -458,10 +458,10 @@ main() {
     fi
     
     # Check for overlaps
-    for ingest_gpu in "${ingest_gpus_array[@]}"; do
+    for data_gpu in "${data_gpus_array[@]}"; do
         for vllm_gpu in "${vllm_gpus_array[@]}"; do
-            if [ "$ingest_gpu" = "$vllm_gpu" ]; then
-                error "GPU overlap detected: GPU $ingest_gpu is allocated to both ingest and vLLM"
+            if [ "$data_gpu" = "$vllm_gpu" ]; then
+                error "GPU overlap detected: GPU $data_gpu is allocated to both data and vLLM"
                 exit 1
             fi
         done
@@ -469,10 +469,10 @@ main() {
     
     success "GPU allocation validated (no overlaps)"
     
-    # Configure ingest container
-    section "Configuring Ingest Container"
-    configure_gpu_passthrough "$CT_INGEST" "$INGEST_GPUS" "ingest-lxc"
-    install_drivers "$CT_INGEST" "ingest-lxc"
+    # Configure data container
+    section "Configuring Data Container"
+    configure_gpu_passthrough "$CT_DATA" "$DATA_GPUS" "data-lxc"
+    install_drivers "$CT_DATA" "data-lxc"
     
     # Configure vLLM container
     section "Configuring vLLM Container"
@@ -500,12 +500,12 @@ main() {
     # Summary
     section "Configuration Summary"
     success "GPU allocation configured:"
-    echo "  Ingest container ($CT_INGEST): GPU(s) $INGEST_GPUS"
+    echo "  Data container ($CT_DATA): GPU(s) $DATA_GPUS"
     echo "  vLLM container ($CT_VLLM): GPU(s) $VLLM_GPUS"
     echo ""
     info "Next steps:"
     echo "  1. Update Ansible variables (inventory/*/group_vars/all/00-main.yml):"
-    echo "     ingest_cuda_visible_devices: \"$INGEST_GPUS\""
+    echo "     data_cuda_visible_devices: \"$DATA_GPUS\""
     echo "     vllm_cuda_visible_devices: \"$VLLM_GPUS\""
     echo "     colpali_cuda_visible_devices: \"0\"  # Shares GPU 0 with Marker"
     echo ""
@@ -527,10 +527,10 @@ main() {
     echo ""
     echo "  3. Redeploy services:"
     echo "     cd provision/ansible"
-    echo "     ansible-playbook -i inventory/production/hosts.yml site.yml --tags ingest,vllm,litellm"
+    echo "     ansible-playbook -i inventory/production/hosts.yml site.yml --tags data,vllm,litellm"
     echo ""
     echo "  4. Verify GPU access:"
-    echo "     ssh root@<ingest-ip> nvidia-smi"
+    echo "     ssh root@<data-ip> nvidia-smi"
     echo "     ssh root@<vllm-ip> nvidia-smi"
     echo ""
     echo "  5. Verify LiteLLM routing:"

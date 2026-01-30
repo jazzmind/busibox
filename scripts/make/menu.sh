@@ -1246,7 +1246,7 @@ services_start_with_deps() {
             
             if echo "$_CORE_SERVICES" | grep -qw "$svc_normalized" || echo "$_CORE_SERVICES" | grep -qw "$svc"; then
                 core_svcs="$core_svcs $svc"
-            elif echo "$_API_SERVICES" | grep -qw "$svc_normalized" || echo "$_API_SERVICES" | grep -qw "$svc" || [[ "$svc" == "ingest-worker" ]] || [[ "$svc" == "embedding-api" ]]; then
+            elif echo "$_API_SERVICES" | grep -qw "$svc_normalized" || echo "$_API_SERVICES" | grep -qw "$svc" || [[ "$svc" == "data-worker" ]] || [[ "$svc" == "embedding-api" ]]; then
                 api_svcs="$api_svcs $svc"
             elif echo "$_APP_SERVICES" | grep -qw "$svc_normalized" || echo "$_APP_SERVICES" | grep -qw "$svc" || [[ "$svc" == "core-apps" ]]; then
                 app_svcs="$app_svcs $svc"
@@ -1316,7 +1316,7 @@ services_stop_group() {
             
             if echo "$_CORE_SERVICES" | grep -qw "$svc_normalized" || echo "$_CORE_SERVICES" | grep -qw "$svc"; then
                 core_svcs="$core_svcs $svc"
-            elif echo "$_API_SERVICES" | grep -qw "$svc_normalized" || echo "$_API_SERVICES" | grep -qw "$svc" || [[ "$svc" == "ingest-worker" ]] || [[ "$svc" == "embedding-api" ]]; then
+            elif echo "$_API_SERVICES" | grep -qw "$svc_normalized" || echo "$_API_SERVICES" | grep -qw "$svc" || [[ "$svc" == "data-worker" ]] || [[ "$svc" == "embedding-api" ]]; then
                 api_svcs="$api_svcs $svc"
             elif echo "$_APP_SERVICES" | grep -qw "$svc_normalized" || echo "$_APP_SERVICES" | grep -qw "$svc" || [[ "$svc" == "core-apps" ]]; then
                 app_svcs="$app_svcs $svc"
@@ -1510,8 +1510,8 @@ services_select_specific() {
             "$llm_backend_label" \
             "embedding-api" \
             "deploy-api" \
-            "ingest-api" \
-            "ingest-worker" \
+            "data-api" \
+            "data-worker" \
             "search-api" \
             "agent-api" \
             "docs-api" \
@@ -1541,8 +1541,8 @@ services_select_specific() {
                 ;;
             9) services_group_menu "embedding-api" "embedding-api" ;;
             10) services_group_menu "deploy-api" "deploy-api" ;;
-            11) services_group_menu "ingest-api" "ingest-api" ;;
-            12) services_group_menu "ingest-worker" "ingest-worker" ;;
+            11) services_group_menu "data-api" "data-api" ;;
+            12) services_group_menu "data-worker" "data-worker" ;;
             13) services_group_menu "search-api" "search-api" ;;
             14) services_group_menu "agent-api" "agent-api" ;;
             15) services_group_menu "docs-api" "docs-api" ;;
@@ -1563,8 +1563,8 @@ services_select_specific() {
             "litellm" \
             "embedding-api" \
             "deploy-api" \
-            "ingest-api" \
-            "ingest-worker" \
+            "data-api" \
+            "data-worker" \
             "search-api" \
             "agent-api" \
             "docs-api" \
@@ -1585,8 +1585,8 @@ services_select_specific() {
             7) services_group_menu "litellm" "litellm" ;;
             8) services_group_menu "embedding-api" "embedding-api" ;;
             9) services_group_menu "deploy-api" "deploy-api" ;;
-            10) services_group_menu "ingest-api" "ingest-api" ;;
-            11) services_group_menu "ingest-worker" "ingest-worker" ;;
+            10) services_group_menu "data-api" "data-api" ;;
+            11) services_group_menu "data-worker" "data-worker" ;;
             12) services_group_menu "search-api" "search-api" ;;
             13) services_group_menu "agent-api" "agent-api" ;;
             14) services_group_menu "docs-api" "docs-api" ;;
@@ -1641,7 +1641,7 @@ handle_services() {
                     "Specific Service" \
                     "Core Services (authz, postgres, redis, milvus, minio)" \
                     "LLM Services ($llm_desc)" \
-                    "API Services (deploy, ingest, search, agent, docs)" \
+                    "API Services (deploy, data, search, agent, docs)" \
                     "App Services (nginx, ai-portal, agent-manager)" \
                     "Back to Main Menu"
                 echo -e "  ${DIM}Press 's' to refresh status and return to main menu${NC}"
@@ -1677,7 +1677,7 @@ handle_services() {
                         [[ $? -eq $RETURN_TO_STATUS ]] && return $RETURN_TO_STATUS
                         ;;
                     5)
-                        services_group_menu "API Services" "deploy-api ingest-api ingest-worker search-api agent-api docs-api"
+                        services_group_menu "API Services" "deploy-api data-api data-worker search-api agent-api docs-api"
                         [[ $? -eq $RETURN_TO_STATUS ]] && return $RETURN_TO_STATUS
                         ;;
                     6)
@@ -1745,18 +1745,18 @@ _run_encryption_migration() {
     echo ""
     
     # Determine environment and container ID
-    local ingest_host ctid
+    local data_host ctid
     
     if [[ "$backend" == "docker" ]] || [[ "$env" == "development" ]] || [[ "$env" == "local" ]] || [[ "$env" == "demo" ]]; then
-        ingest_host="docker:${container_prefix}-ingest-api"
+        data_host="docker:${container_prefix}-data-api"
         info "Using Docker environment"
     elif [[ "$env" == "staging" ]] || [[ "$env" == "test" ]]; then
-        ingest_host="10.96.201.206"
-        ctid="306"  # TEST-ingest-lxc
+        data_host="10.96.201.206"
+        ctid="306"  # TEST-data-lxc
         info "Using staging/test environment (container $ctid)"
     else
-        ingest_host="10.96.200.206"
-        ctid="206"  # ingest-lxc
+        data_host="10.96.200.206"
+        ctid="206"  # data-lxc
         info "Using production environment (container $ctid)"
     fi
     echo ""
@@ -1775,18 +1775,18 @@ _run_encryption_migration() {
         local container_id="$ctid"
         
         # Create scripts directory if it doesn't exist
-        pct exec "$container_id" -- mkdir -p /srv/ingest/scripts 2>/dev/null || true
+        pct exec "$container_id" -- mkdir -p /srv/data/scripts 2>/dev/null || true
         
         # Copy script to container
         info "Copying encryption script to container $container_id..."
-        pct push "$container_id" "$encryption_script" "/srv/ingest/scripts/encrypt-existing-files.py" || {
+        pct push "$container_id" "$encryption_script" "/srv/data/scripts/encrypt-existing-files.py" || {
             error "Failed to copy script to container"
             return 1
         }
         
         # Run the script
         info "Running encryption script${dry_run_flag:+ (dry-run)}..."
-        pct exec "$container_id" -- bash -c "set -a && source /srv/ingest/.env && set +a && /srv/ingest/venv/bin/python /srv/ingest/scripts/encrypt-existing-files.py ${dry_run_flag} --verbose" || {
+        pct exec "$container_id" -- bash -c "set -a && source /srv/data/.env && set +a && /srv/data/venv/bin/python /srv/data/scripts/encrypt-existing-files.py ${dry_run_flag} --verbose" || {
             error "Script execution failed"
             return 1
         }
@@ -1796,7 +1796,7 @@ _run_encryption_migration() {
     # Helper function to run encryption on Docker
     _run_encryption_on_docker() {
         local dry_run_flag="${1:-}"
-        local container_name="${ingest_host#docker:}"
+        local container_name="${data_host#docker:}"
         
         # Copy script to container
         info "Copying encryption script to container..."
@@ -1818,7 +1818,7 @@ _run_encryption_migration() {
     if confirm "Run a dry-run first to see what would be encrypted?"; then
         echo ""
         
-        if [[ "$ingest_host" == docker:* ]]; then
+        if [[ "$data_host" == docker:* ]]; then
             _run_encryption_on_docker "--dry-run" || true
         else
             _run_encryption_on_proxmox "--dry-run" || true
@@ -1835,7 +1835,7 @@ _run_encryption_migration() {
         if confirm "Are you SURE you want to proceed?"; then
             echo ""
             
-            if [[ "$ingest_host" == docker:* ]]; then
+            if [[ "$data_host" == docker:* ]]; then
                 _run_encryption_on_docker "" && success "Encryption migration complete!" || error "Encryption migration failed"
             else
                 _run_encryption_on_proxmox "" && success "Encryption migration complete!" || error "Encryption migration failed"
@@ -2053,7 +2053,7 @@ handle_databases() {
         "Check Migration Status (dry run)" \
         "Verify Existing Migrations" \
         "Migrate AuthZ Service (busibox -> authz)" \
-        "Migrate Ingest Service (busibox -> files)" \
+        "Migrate Data Service (busibox -> files)" \
         "Migrate All Services" \
         "Cleanup Source (remove migrated tables from busibox)" \
         "Change Embedding Model [current: ${current_model##*/} (${current_dim}d)]" \
@@ -2112,10 +2112,10 @@ handle_databases() {
             ;;
         4)
             echo ""
-            header "Migrate Ingest Service" 70
+            header "Migrate Data Service" 70
             echo ""
-            if confirm "Migrate ingest tables from 'busibox' to 'files' database?"; then
-                $run_migration_cmd --service ingest || true
+            if confirm "Migrate data tables from 'busibox' to 'files' database?"; then
+                $run_migration_cmd --service data || true
             fi
             pause
             ;;
@@ -2235,7 +2235,7 @@ handle_databases() {
                 
                 # Step 2: Restart embedding-api
                 info "Step 2/4: Restarting embedding-api (this may take a minute to download the model)..."
-                local ingest_container="${container_prefix}-ingest-api"
+                local data_container="${container_prefix}-data-api"
                 local embedding_container="${container_prefix}-embedding-api"
                 local milvus_container="${container_prefix}-milvus"
                 
@@ -2316,12 +2316,12 @@ handle_databases() {
                 info "Step 4/4: Queuing all documents for re-embedding..."
                 
                 # Restart services that depend on Milvus (they need to reconnect)
-                (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local restart ingest-api search-api ingest-worker) || true
+                (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local restart data-api search-api data-worker) || true
                 
-                # Wait for ingest-api to be healthy
+                # Wait for data-api to be healthy
                 sleep 5
                 
-                docker exec "${ingest_container}" python -c "
+                docker exec "${data_container}" python -c "
 import asyncio
 import redis.asyncio as redis_async
 import asyncpg
@@ -2338,8 +2338,8 @@ async def requeue_all():
     
     files = await conn.fetch('''
         SELECT f.file_id, f.user_id, f.storage_path, f.original_filename, f.mime_type
-        FROM ingestion_files f
-        JOIN ingestion_status s ON f.file_id = s.file_id
+        FROM data_files f
+        JOIN data_status s ON f.file_id = s.file_id
         WHERE s.stage = 'completed'
     ''')
     
@@ -2356,20 +2356,20 @@ async def requeue_all():
         decode_responses=True,
     )
     
-    stream_name = os.environ.get('REDIS_STREAM', 'jobs:ingestion')
+    stream_name = os.environ.get('REDIS_STREAM', 'jobs:data')
     
     for file_row in files:
         file_id = str(file_row['file_id'])
         user_id = str(file_row['user_id'])
         
         await conn.execute('''
-            UPDATE ingestion_status
+            UPDATE data_status
             SET stage = 'queued', progress = 0, updated_at = NOW()
             WHERE file_id = \$1
         ''', file_row['file_id'])
         
         await conn.execute('''
-            UPDATE ingestion_files
+            UPDATE data_files
             SET vector_count = 0, updated_at = NOW()
             WHERE file_id = \$1
         ''', file_row['file_id'])
@@ -2402,7 +2402,7 @@ asyncio.run(requeue_all())
                 echo ""
                 info "New model: ${new_model} (${new_dim} dimensions)"
                 info "Documents are being re-embedded in the background."
-                info "Check progress: docker logs -f ${container_prefix}-ingest-worker"
+                info "Check progress: docker logs -f ${container_prefix}-data-worker"
             fi
             pause
             ;;
@@ -2418,26 +2418,26 @@ asyncio.run(requeue_all())
             echo ""
             
             # Determine environment and backend
-            local milvus_host ingest_host deploy_backend
+            local milvus_host data_host deploy_backend
             deploy_backend="${backend:-docker}"
             
             if [[ "$deploy_backend" == "docker" ]] || [[ "$env" == "development" ]] || [[ "$env" == "local" ]] || [[ "$env" == "demo" ]]; then
                 # Docker environment - use container names with container prefix
                 milvus_host="docker:${container_prefix}-milvus"
-                ingest_host="docker:${container_prefix}-ingest-api"
+                data_host="docker:${container_prefix}-data-api"
                 info "Using Docker environment"
             elif [[ "$env" == "staging" ]] || [[ "$env" == "test" ]]; then
                 milvus_host="10.96.201.204"
-                ingest_host="10.96.201.206"
+                data_host="10.96.201.206"
                 info "Using staging/test environment"
             else
                 milvus_host="10.96.200.204"
-                ingest_host="10.96.200.206"
+                data_host="10.96.200.206"
                 info "Using production environment"
             fi
             echo ""
             
-            MILVUS_IP="$milvus_host" INGEST_IP="$ingest_host" bash "${REPO_ROOT}/provision/ansible/scripts/check-embedding-migration.sh" --check || true
+            MILVUS_IP="$milvus_host" DATA_IP="$data_host" bash "${REPO_ROOT}/provision/ansible/scripts/check-embedding-migration.sh" --check || true
             pause
             ;;
         9)
@@ -2451,28 +2451,28 @@ asyncio.run(requeue_all())
             echo ""
             
             # Determine environment and backend
-            local milvus_host ingest_host deploy_backend
+            local milvus_host data_host deploy_backend
             deploy_backend="${backend:-docker}"
             
             if [[ "$deploy_backend" == "docker" ]] || [[ "$env" == "development" ]] || [[ "$env" == "local" ]] || [[ "$env" == "demo" ]]; then
                 # Docker environment - use container names with container prefix
                 milvus_host="docker:${container_prefix}-milvus"
-                ingest_host="docker:${container_prefix}-ingest-api"
+                data_host="docker:${container_prefix}-data-api"
                 info "Using Docker environment"
             elif [[ "$env" == "staging" ]] || [[ "$env" == "test" ]]; then
                 milvus_host="10.96.201.204"
-                ingest_host="10.96.201.206"
+                data_host="10.96.201.206"
                 info "Using staging/test environment"
             else
                 milvus_host="10.96.200.204"
-                ingest_host="10.96.200.206"
+                data_host="10.96.200.206"
                 info "Using production environment"
             fi
             echo ""
             
             if confirm "Are you sure you want to migrate embeddings?"; then
                 echo ""
-                MILVUS_IP="$milvus_host" INGEST_IP="$ingest_host" bash "${REPO_ROOT}/provision/ansible/scripts/check-embedding-migration.sh" --migrate || true
+                MILVUS_IP="$milvus_host" DATA_IP="$data_host" bash "${REPO_ROOT}/provision/ansible/scripts/check-embedding-migration.sh" --migrate || true
             fi
             pause
             ;;
@@ -2592,7 +2592,7 @@ connections.disconnect('default')
             echo "  3. Queue ALL documents for re-embedding"
             echo ""
             warn "This is safe because:"
-            echo "  - All document text is stored in PostgreSQL (ingestion_chunks)"
+            echo "  - All document text is stored in PostgreSQL (data_chunks)"
             echo "  - Embeddings can be regenerated from chunk text"
             echo "  - No data will be lost"
             echo ""
@@ -2600,22 +2600,22 @@ connections.disconnect('default')
             echo ""
             
             # Determine environment and backend
-            local milvus_host ingest_host deploy_backend milvus_container ingest_container
+            local milvus_host data_host deploy_backend milvus_container data_container
             deploy_backend="${backend:-docker}"
             milvus_container="${container_prefix}-milvus"
-            ingest_container="${container_prefix}-ingest-api"
+            data_container="${container_prefix}-data-api"
             
             if [[ "$deploy_backend" == "docker" ]] || [[ "$env" == "development" ]] || [[ "$env" == "local" ]] || [[ "$env" == "demo" ]]; then
                 milvus_host="docker:${milvus_container}"
-                ingest_host="docker:${ingest_container}"
+                data_host="docker:${data_container}"
                 info "Using Docker environment"
             elif [[ "$env" == "staging" ]] || [[ "$env" == "test" ]]; then
                 milvus_host="10.96.201.204"
-                ingest_host="10.96.201.206"
+                data_host="10.96.201.206"
                 info "Using staging/test environment"
             else
                 milvus_host="10.96.200.204"
-                ingest_host="10.96.200.206"
+                data_host="10.96.200.206"
                 info "Using production environment"
             fi
             echo ""
@@ -2679,7 +2679,7 @@ connections.disconnect('default')
                         
                         info "Step 5/5: Queuing all documents for re-embedding..."
                         # Call the reprocess-all endpoint
-                        docker exec "${ingest_container}" python -c "
+                        docker exec "${data_container}" python -c "
 import asyncio
 import redis.asyncio as redis_async
 import asyncpg
@@ -2692,15 +2692,15 @@ async def requeue_all():
         port=int(os.environ.get('POSTGRES_PORT', 5432)),
         user=os.environ.get('POSTGRES_USER', 'postgres'),
         password=os.environ.get('POSTGRES_PASSWORD', 'devpassword'),
-        database=os.environ.get('INGEST_DB', 'files'),
+        database=os.environ.get('DATA_DB', 'files'),
     )
     
     # Get all files that have completed processing
-    # Schema: ingestion_files has file metadata, ingestion_status has processing status
+    # Schema: data_files has file metadata, data_status has processing status
     files = await conn.fetch('''
         SELECT f.file_id, f.user_id, f.storage_path, f.original_filename, f.mime_type
-        FROM ingestion_files f
-        JOIN ingestion_status s ON f.file_id = s.file_id
+        FROM data_files f
+        JOIN data_status s ON f.file_id = s.file_id
         WHERE s.stage = 'completed'
     ''')
     
@@ -2719,24 +2719,24 @@ async def requeue_all():
     )
     
     # Queue each file for reprocessing from embedding stage
-    stream_name = os.environ.get('REDIS_STREAM', 'jobs:ingestion')
+    stream_name = os.environ.get('REDIS_STREAM', 'jobs:data')
     
     for file_row in files:
         file_id = str(file_row['file_id'])
         user_id = str(file_row['user_id'])
         
-        # Reset ingestion status in the ingestion_status table
+        # Reset ingestion status in the data_status table
         await conn.execute('''
-            UPDATE ingestion_status
+            UPDATE data_status
             SET stage = 'queued',
                 progress = 0,
                 updated_at = NOW()
             WHERE file_id = \$1
         ''', file_row['file_id'])
         
-        # Reset vector count in ingestion_files
+        # Reset vector count in data_files
         await conn.execute('''
-            UPDATE ingestion_files
+            UPDATE data_files
             SET vector_count = 0,
                 updated_at = NOW()
             WHERE file_id = \$1
@@ -2768,15 +2768,15 @@ asyncio.run(requeue_all())
                             return 1
                         }
                         
-                        # Restart ingest-worker to pick up the queued jobs
-                        info "Restarting ingest-worker to process queue..."
-                        (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local restart ingest-worker) || true
+                        # Restart data-worker to pick up the queued jobs
+                        info "Restarting data-worker to process queue..."
+                        (cd "$REPO_ROOT" && docker compose -f docker-compose.yml --env-file .env.local restart data-worker) || true
                         
                         success "Milvus rebuild complete!"
                         echo ""
                         info "Documents are now being re-embedded in the background."
-                        info "Check ingest-worker logs for progress:"
-                        echo "  docker logs -f ${container_prefix}-ingest-worker"
+                        info "Check data-worker logs for progress:"
+                        echo "  docker logs -f ${container_prefix}-data-worker"
                         
                     else
                         # Proxmox environment
@@ -2814,7 +2814,7 @@ asyncio.run(requeue_all())
 # Helper to run docker tests and save results
 # Usage: run_docker_test "service" ["pytest-args"]
 run_docker_test() {
-    local service_key="$1"  # Full key like "ingest:unit" or "agent"
+    local service_key="$1"  # Full key like "data:unit" or "agent"
     local pytest_args="${2:-}"
     
     # Extract base service name (before colon if present)
@@ -2896,7 +2896,7 @@ show_test_main_menu() {
             echo -e "  PVT: ${DIM}Not run${NC}"
         fi
         
-        # Service tests status (only authz, ingest, search, agent)
+        # Service tests status (only authz, data, search, agent)
         local failed_services=($(get_failed_services "services_only"))
         local passed_services=($(get_passed_services "services_only"))
         
@@ -2927,7 +2927,7 @@ show_test_main_menu() {
         echo ""
         menu "Select Test Category" \
             "PVT Tests (Post-Deployment Validation)" \
-            "Service Tests (AuthZ, Ingest, Search, Agent)" \
+            "Service Tests (AuthZ, Data, Search, Agent)" \
             "App Tests (AI Portal, Agent Manager)" \
             "Clear Test Results" \
             "Back to Main Menu"
@@ -2973,7 +2973,7 @@ handle_test_pvt() {
                 case "$backend" in
                     docker)
                         # Run PVT tests for each service (test_pvt.py file in integration/)
-                        local services=("authz" "ingest" "search" "agent")
+                        local services=("authz" "data" "search" "agent")
                         local failed=0
                         local cmd
                         
@@ -3048,7 +3048,7 @@ handle_test_services() {
         
         menu_items+=(
             "Test AuthZ Service"
-            "Test Ingest Service"
+            "Test Data Service"
             "Test Search Service"
             "Test Agent Service"
             "Back to Test Menu"
@@ -3067,7 +3067,7 @@ handle_test_services() {
             failed_opt=$opt; ((opt++))
         fi
         local authz_opt=$opt; ((opt++))
-        local ingest_opt=$opt; ((opt++))
+        local data_opt=$opt; ((opt++))
         local search_opt=$opt; ((opt++))
         local agent_opt=$opt; ((opt++))
         local back_opt=$opt
@@ -3118,8 +3118,8 @@ handle_test_services() {
                 esac
                 pause
                 ;;
-            $ingest_opt)
-                handle_test_ingest
+            $data_opt)
+                handle_test_data
                 ;;
             $search_opt)
                 echo ""
@@ -3146,20 +3146,20 @@ handle_test_services() {
     done
 }
 
-# Handle Ingest service tests with unit/integration submenu
-handle_test_ingest() {
+# Handle Data service tests with unit/integration submenu
+handle_test_data() {
     local env backend
     env=$(get_environment)
     backend=$(get_backend "$env")
     
     while true; do
         echo ""
-        header "Ingest Service Tests" 70
+        header "Data Service Tests" 70
         
-        # Show test status for ingest subtests
-        local unit_result=$(get_test_result "ingest:unit")
-        local integration_result=$(get_test_result "ingest:integration")
-        local all_result=$(get_test_result "ingest")
+        # Show test status for data subtests
+        local unit_result=$(get_test_result "data:unit")
+        local integration_result=$(get_test_result "data:integration")
+        local all_result=$(get_test_result "data")
         
         echo ""
         echo -e "${BOLD}Test Status:${NC}"
@@ -3188,8 +3188,8 @@ handle_test_ingest() {
         fi
         
         echo ""
-        menu "Ingest Test Options" \
-            "Run All Ingest Tests" \
+        menu "Data Test Options" \
+            "Run All Data Tests" \
             "Run Unit Tests Only" \
             "Run Integration Tests Only" \
             "Back to Service Tests"
@@ -3201,7 +3201,7 @@ handle_test_ingest() {
                 echo ""
                 case "$backend" in
                     docker)
-                        run_docker_test "ingest"
+                        run_docker_test "data"
                         ;;
                     proxmox)
                         bash "${SCRIPT_DIR}/test.sh" services ingest
@@ -3214,16 +3214,16 @@ handle_test_ingest() {
                 info "Running unit tests..."
                 case "$backend" in
                     docker)
-                        run_docker_test "ingest:unit" "tests/unit"
+                        run_docker_test "data:unit" "tests/unit"
                         ;;
                     proxmox)
-                        bash "${SCRIPT_DIR}/test.sh" services ingest "tests/unit"
+                        bash "${SCRIPT_DIR}/test.sh" services data "tests/unit"
                         ;;
                 esac
                 pause
                 ;;
             3)
-                handle_test_ingest_integration
+                handle_test_data_integration
                 ;;
             4)
                 return 0
@@ -3235,15 +3235,15 @@ handle_test_ingest() {
     done
 }
 
-# Handle Ingest integration tests with individual file selection
-handle_test_ingest_integration() {
+# Handle Data integration tests with individual file selection
+handle_test_data_integration() {
     local env backend
     env=$(get_environment)
     backend=$(get_backend "$env")
     
     while true; do
         echo ""
-        header "Ingest Integration Tests" 70
+        header "Data Integration Tests" 70
         
         # Show test status for integration test files
         echo ""
@@ -3260,7 +3260,7 @@ handle_test_ingest_integration() {
         local failed_count=0
         
         for test in "${test_files[@]}"; do
-            local result=$(get_test_result "ingest:integration:$test")
+            local result=$(get_test_result "data:integration:$test")
             if [[ "$result" == "passed" ]]; then
                 ((passed_count++))
             elif [[ "$result" == "failed" ]]; then
@@ -3279,7 +3279,7 @@ handle_test_ingest_integration() {
         fi
         
         echo ""
-        menu "Ingest Integration Test Options" \
+        menu "Data Integration Test Options" \
             "Run All Integration Tests" \
             "Run Failed Tests Only" \
             "─────────────────────" \
@@ -3301,7 +3301,7 @@ handle_test_ingest_integration() {
             "Test: status" \
             "Test: upload" \
             "─────────────────────" \
-            "Back to Ingest Tests"
+            "Back to Data Tests"
         
         read -p "$(echo -e "${BOLD}Select option [1-21]:${NC} ")" choice
         
@@ -3311,10 +3311,10 @@ handle_test_ingest_integration() {
                 info "Running all integration tests..."
                 case "$backend" in
                     docker)
-                        run_docker_test "ingest:integration" "tests/integration"
+                        run_docker_test "data:integration" "tests/integration"
                         ;;
                     proxmox)
-                        bash "${SCRIPT_DIR}/test.sh" services ingest "tests/integration"
+                        bash "${SCRIPT_DIR}/test.sh" services data "tests/integration"
                         ;;
                 esac
                 pause
@@ -3323,7 +3323,7 @@ handle_test_ingest_integration() {
                 echo ""
                 local failed_tests=()
                 for test in "${test_files[@]}"; do
-                    if [[ "$(get_test_result "ingest:integration:$test")" == "failed" ]]; then
+                    if [[ "$(get_test_result "data:integration:$test")" == "failed" ]]; then
                         failed_tests+=("$test")
                     fi
                 done
@@ -3336,10 +3336,10 @@ handle_test_ingest_integration() {
                         echo ""
                         case "$backend" in
                             docker)
-                                run_docker_test "ingest:integration:$test" "tests/integration/test_${test}.py"
+                                run_docker_test "data:integration:$test" "tests/integration/test_${test}.py"
                                 ;;
                             proxmox)
-                                bash "${SCRIPT_DIR}/test.sh" services ingest "tests/integration/test_${test}.py"
+                                bash "${SCRIPT_DIR}/test.sh" services data "tests/integration/test_${test}.py"
                                 ;;
                         esac
                     done
@@ -3356,10 +3356,10 @@ handle_test_ingest_integration() {
                 info "Running test: $test_name"
                 case "$backend" in
                     docker)
-                        run_docker_test "ingest:integration:$test_name" "tests/integration/test_${test_name}.py"
+                        run_docker_test "data:integration:$test_name" "tests/integration/test_${test_name}.py"
                         ;;
                     proxmox)
-                        bash "${SCRIPT_DIR}/test.sh" services ingest "tests/integration/test_${test_name}.py"
+                        bash "${SCRIPT_DIR}/test.sh" services data "tests/integration/test_${test_name}.py"
                         ;;
                 esac
                 pause

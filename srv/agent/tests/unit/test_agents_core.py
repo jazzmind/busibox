@@ -14,7 +14,7 @@ from app.agents.core import (
     SearchOutput,
     SearchToolResult,
     chat_agent,
-    ingest_tool,
+    data_tool,
     rag_agent,
     rag_tool,
     search_agent,
@@ -31,7 +31,7 @@ def mock_principal():
         sub="test-user",
         email="test@example.com",
         roles=["user", "admin"],
-        scopes=["search.read", "ingest.write"],
+        scopes=["search.read", "data.write"],
         token="test-token",
     )
 
@@ -148,10 +148,10 @@ async def test_search_tool_validates_inputs(mock_deps):
 
 
 @pytest.mark.asyncio
-async def test_ingest_tool_success(mock_deps):
-    """Test ingest_tool executes successfully with valid inputs."""
-    # Mock ingest response
-    mock_deps.busibox_client.ingest_document.return_value = {
+async def test_data_tool_success(mock_deps):
+    """Test data_tool executes successfully with valid inputs."""
+    # Mock data response
+    mock_deps.busibox_client.data_document.return_value = {
         "document_id": "doc123",
         "status": "success",
     }
@@ -161,27 +161,27 @@ async def test_ingest_tool_success(mock_deps):
     ctx.deps = mock_deps
 
     # Execute tool
-    result = await ingest_tool(ctx, path="/path/to/doc.pdf", metadata={"author": "test"})
+    result = await data_tool(ctx, path="/path/to/doc.pdf", metadata={"author": "test"})
 
     # Verify result
     assert result["document_id"] == "doc123"
     assert result["status"] == "success"
 
     # Verify client was called correctly
-    mock_deps.busibox_client.ingest_document.assert_called_once_with(
+    mock_deps.busibox_client.data_document.assert_called_once_with(
         path="/path/to/doc.pdf", metadata={"author": "test"}
     )
 
 
 @pytest.mark.asyncio
-async def test_ingest_tool_validates_path(mock_deps):
-    """Test ingest_tool validates path parameter."""
+async def test_data_tool_validates_path(mock_deps):
+    """Test data_tool validates path parameter."""
     ctx = MagicMock()
     ctx.deps = mock_deps
 
     # Empty path should fail
     with pytest.raises(ValueError, match="path cannot be empty"):
-        await ingest_tool(ctx, path="", metadata=None)
+        await data_tool(ctx, path="", metadata=None)
 
 
 @pytest.mark.asyncio
@@ -245,7 +245,7 @@ def test_chat_agent_has_all_tools():
     # Verify tool names
     tool_names = list(tools.keys())
     assert "search_tool" in tool_names
-    assert "ingest_tool" in tool_names
+    assert "data_tool" in tool_names
     assert "rag_tool" in tool_names
 
 

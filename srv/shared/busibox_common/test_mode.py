@@ -59,7 +59,7 @@ class TestModeConfig:
         if self.service_test_db_names is None:
             self.service_test_db_names = {
                 "authz": "test_authz",
-                "ingest": "test_files",
+                "data": "test_files",
                 "search": "test_files",
                 "agent": "test_agent_server",
             }
@@ -70,7 +70,7 @@ class TestModeConfig:
         Create TestModeConfig from environment variables.
         
         Args:
-            service_name: The service name (authz, ingest, search, agent)
+            service_name: The service name (authz, data, search, agent)
                          Used to determine the default test database name.
         """
         # Check service-specific or general test mode flag
@@ -82,7 +82,7 @@ class TestModeConfig:
         # Get default test DB name for this service
         default_test_db = {
             "authz": "test_authz",
-            "ingest": "test_files",
+            "data": "test_files",
             "search": "test_files",
             "agent": "test_agent_server",
         }.get(service_name, f"test_{service_name}")

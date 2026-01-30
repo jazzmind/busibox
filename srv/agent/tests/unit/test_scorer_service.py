@@ -204,7 +204,7 @@ def test_score_tool_usage_with_expected_partial_match():
         ],
     )
     
-    result = score_tool_usage(run_record, expected_tools=["search", "rag", "ingest"])
+    result = score_tool_usage(run_record, expected_tools=["search", "rag", "data"])
     
     # 1 out of 3 expected tools used
     assert result.score == pytest.approx(0.333, abs=0.01)

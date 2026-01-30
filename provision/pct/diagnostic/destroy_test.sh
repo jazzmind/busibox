@@ -28,7 +28,7 @@ TEST_CONTAINERS=(
   "$CT_PG_TEST"
   "$CT_MILVUS_TEST"
   "$CT_FILES_TEST"
-  "$CT_INGEST_TEST"
+  "$CT_DATA_TEST"
 )
 
 # Safety check - ensure we're only destroying test containers (ID >= 300)

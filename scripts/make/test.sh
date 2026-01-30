@@ -52,7 +52,7 @@ get_container_ip() {
         postgres) echo "${network_base}.203" ;;
         milvus)   echo "${network_base}.204" ;;
         minio)    echo "${network_base}.205" ;;
-        ingest)   echo "${network_base}.206" ;;
+        data)   echo "${network_base}.206" ;;
         litellm)  echo "${network_base}.207" ;;
         vllm)     echo "${network_base}.208" ;;
         ollama)   echo "${network_base}.209" ;;
@@ -96,18 +96,8 @@ try:
     print(f"POSTGRES_PASSWORD='{pg.get('password', '')}'")
     print(f"TEST_DB_PASSWORD='{pg.get('password', '')}'")
     
-    # Authz - check multiple possible locations
+    # Authz
     authz = secrets.get('authz', {})
-    test_creds = secrets.get('test_credentials', {})
-    ai_portal = secrets.get('ai-portal', {})
-    
-    # Admin token: check authz.admin_token, then test_credentials.authz_admin_token
-    admin_token = authz.get('admin_token', '')
-    if not admin_token:
-        admin_token = test_creds.get('authz_admin_token', '')
-    if not admin_token:
-        admin_token = ai_portal.get('authz_admin_token', '')
-    print(f"AUTHZ_ADMIN_TOKEN='{admin_token}'")
     
     # Master key for envelope encryption
     master_key = authz.get('master_key', '')
@@ -645,13 +635,13 @@ llm_tests_menu() {
     done
 }
 
-# Ingest service tests
-ingest_tests_menu() {
+# Data service tests
+data_tests_menu() {
     local env="$1"
     
     while true; do
         echo ""
-        menu "Ingest Service Tests - $env" \
+        menu "Data Service Tests - $env" \
             "Run Unit Tests" \
             "Run All Tests (Unit + Integration)" \
             "Run with Coverage" \
@@ -668,15 +658,15 @@ ingest_tests_menu() {
         
         case $choice in
             1)
-                make test-ingest INV="$inv"
+                make test-data INV="$inv"
                 pause
                 ;;
             2)
-                make test-ingest-all INV="$inv"
+                make test-data-all INV="$inv"
                 pause
                 ;;
             3)
-                make test-ingest-coverage INV="$inv"
+                make test-data-coverage INV="$inv"
                 pause
                 ;;
             4)
@@ -832,7 +822,7 @@ service_tests_menu() {
         menu "Service Tests - $env Environment" \
             "LLM Model Tests (LiteLLM/vLLM)" \
             "Authz Service Tests" \
-            "Ingest Service Tests" \
+            "Data Service Tests" \
             "Search Service Tests" \
             "Agent Service Tests" \
             "Apps Service Tests" \
@@ -899,7 +889,6 @@ service_tests_menu() {
                     test_env="${test_env} POSTGRES_USER=${db_user}"
                     test_env="${test_env} POSTGRES_DB=authz"
                     test_env="${test_env} POSTGRES_PASSWORD=${TEST_DB_PASSWORD}"
-                    test_env="${test_env} AUTHZ_ADMIN_TOKEN=${AUTHZ_ADMIN_TOKEN}"
                     test_env="${test_env} AUTHZ_MASTER_KEY=${AUTHZ_MASTER_KEY}"
                     test_env="${test_env} AUTHZ_SERVICE_URL=http://${authz_ip}:8010"
                     
@@ -912,7 +901,7 @@ service_tests_menu() {
                 pause
                 ;;
             3)
-                ingest_tests_menu "$env"
+                data_tests_menu "$env"
                 ;;
             4)
                 search_tests_menu "$env"
@@ -985,7 +974,7 @@ local_tests_menu() {
         echo ""
         menu "Local Tests - $env Environment (Run locally against containers)" \
             "Authz - Run authz tests locally" \
-            "Ingest - Run ingest tests locally" \
+            "Data - Run data tests locally" \
             "Search - Run search tests locally" \
             "Agent - Run agent tests locally" \
             "All Services - Run all tests locally" \
@@ -1005,10 +994,10 @@ local_tests_menu() {
                 pause
                 ;;
             2)
-                header "Local Ingest Tests" 70
+                header "Local Data Tests" 70
                 echo ""
-                info "Running ingest tests locally against $env containers..."
-                bash "${REPO_ROOT}/scripts/test/run-local-tests.sh" ingest "$env" || true
+                info "Running data tests locally against $env containers..."
+                bash "${REPO_ROOT}/scripts/test/run-local-tests.sh" data "$env" || true
                 pause
                 ;;
             3)
@@ -1039,7 +1028,7 @@ local_tests_menu() {
                 echo ""
                 info "Generating environment files for manual local testing..."
                 echo ""
-                for svc in authz ingest search agent; do
+                for svc in authz data search agent; do
                     bash "${REPO_ROOT}/scripts/test/generate-local-test-env.sh" "$svc" "$env" 2>/dev/null || true
                 done
                 echo ""
@@ -1047,7 +1036,7 @@ local_tests_menu() {
                 echo ""
                 info "Files created:"
                 echo "  - srv/authz/.env.local"
-                echo "  - srv/ingest/.env.local"
+                echo "  - srv/data/.env.local"
                 echo "  - srv/search/.env.local"
                 echo "  - srv/agent/.env.local"
                 echo ""
@@ -1177,10 +1166,10 @@ run_container_tests() {
     eval "$creds"
     
     # Get container IPs
-    local postgres_ip authz_ip ingest_ip search_ip agent_ip minio_ip milvus_ip
+    local postgres_ip authz_ip data_ip search_ip agent_ip minio_ip milvus_ip
     postgres_ip=$(get_container_ip postgres "$env")
     authz_ip=$(get_container_ip authz "$env")
-    ingest_ip=$(get_container_ip ingest "$env")
+    data_ip=$(get_container_ip data "$env")
     search_ip=$(get_container_ip search "$env")
     agent_ip=$(get_container_ip agent "$env")
     minio_ip=$(get_container_ip minio "$env")
@@ -1189,7 +1178,7 @@ run_container_tests() {
     # Database configuration for pytest
     # NOTE: Pytest tests run against isolated test databases owned by busibox_test_user:
     #   - test_authz (for authz service tests)
-    #   - test_files (for ingest/search service tests)
+    #   - test_files (for data/search service tests)
     #   - test_agent_server (for agent service tests)
     #
     # The test user has identical table structures but completely isolated data.
@@ -1213,7 +1202,6 @@ run_container_tests() {
             test_env="${test_env} POSTGRES_USER=${db_user}"
             test_env="${test_env} POSTGRES_PASSWORD=${db_password}"
             test_env="${test_env} POSTGRES_DB=test_authz"
-            test_env="${test_env} AUTHZ_ADMIN_TOKEN=${AUTHZ_ADMIN_TOKEN}"
             test_env="${test_env} AUTHZ_MASTER_KEY=${AUTHZ_MASTER_KEY}"
             test_env="${test_env} AUTHZ_SERVICE_URL=http://${authz_ip}:8010"
             test_env="${test_env} TEST_AUTHZ_URL=http://${authz_ip}:8010"
@@ -1232,15 +1220,11 @@ run_container_tests() {
                 return 1
             fi
             ;;
-        ingest)
-            header "Ingest Service Tests" 70
-            info "Running ingest tests on ${ingest_ip}..."
+        data)
+            header "Data Service Tests" 70
+            info "Running data tests on ${data_ip}..."
             
             # Validate required credentials
-            if [[ -z "${AUTHZ_ADMIN_TOKEN:-}" ]]; then
-                error "AUTHZ_ADMIN_TOKEN not found in vault. Run bootstrap-test-credentials.sh"
-                exit 1
-            fi
             if [[ -z "${TEST_USER_ID:-}" ]]; then
                 warn "TEST_USER_ID not found in vault. Running bootstrap to create test user..."
                 # Bootstrap test credentials if missing and capture TEST_USER_ID
@@ -1276,15 +1260,15 @@ run_container_tests() {
             local pytest_args="${PYTEST_ARGS:-}"
             
             # Run tests with wrapper that captures failures
-            if ssh "root@${ingest_ip}" "cd /srv/ingest && source venv/bin/activate && export PYTHONPATH=/srv/ingest/src && source .env && export ${test_env} && python -m pytest tests/ -v --tb=short ${pytest_args}"; then
-                success "Ingest tests passed!"
-                save_test_result "ingest" "passed"
+            if ssh "root@${data_ip}" "cd /srv/data && source venv/bin/activate && export PYTHONPATH=/srv/data/src && source .env && export ${test_env} && python -m pytest tests/ -v --tb=short ${pytest_args}"; then
+                success "Data tests passed!"
+                save_test_result "data" "passed"
             else
-                error "Ingest tests failed"
+                error "Data tests failed"
                 echo ""
                 warn "To rerun failed tests, check output above for pytest filter"
                 echo ""
-                save_test_result "ingest" "failed"
+                save_test_result "data" "failed"
                 # Don't exit - continue to show summary
                 return 1
             fi
@@ -1293,7 +1277,7 @@ run_container_tests() {
             header "Search Service Tests" 70
             info "Running search tests on ${search_ip}..."
             
-            # Validate required credentials (use same TEST_USER_ID as ingest)
+            # Validate required credentials (use same TEST_USER_ID as data)
             if [[ -z "${TEST_USER_ID:-}" ]]; then
                 warn "TEST_USER_ID not found. Running bootstrap to create test user..."
                 local bootstrap_output
@@ -1316,7 +1300,6 @@ run_container_tests() {
             test_env="${test_env} MILVUS_HOST=${milvus_ip}"
             test_env="${test_env} AUTHZ_URL=http://${authz_ip}:8010"
             test_env="${test_env} AUTHZ_JWKS_URL=http://${authz_ip}:8010/.well-known/jwks.json"
-            test_env="${test_env} AUTHZ_ADMIN_TOKEN=${AUTHZ_ADMIN_TOKEN}"
             test_env="${test_env} TEST_USER_ID=${TEST_USER_ID}"
             
             # Parse additional pytest args
@@ -1366,7 +1349,7 @@ run_container_tests() {
             test_env="${test_env} AUTHZ_URL=http://${authz_ip}:8010"
             test_env="${test_env} AUTHZ_JWKS_URL=http://${authz_ip}:8010/.well-known/jwks.json"
             test_env="${test_env} TEST_USER_ID=${TEST_USER_ID}"
-            test_env="${test_env} INGEST_URL=http://${ingest_ip}:8000"
+            test_env="${test_env} DATA_URL=http://${data_ip}:8000"
             test_env="${test_env} SEARCH_URL=http://${search_ip}:8003"  # Search is on port 8003
             
             # Parse additional pytest args
@@ -1388,7 +1371,7 @@ run_container_tests() {
             ;;
         all)
             local failed_services=()
-            for svc in authz ingest search agent; do
+            for svc in authz data search agent; do
                 if ! run_container_tests "$svc" "$env"; then
                     failed_services+=("$svc")
                 fi
@@ -1419,7 +1402,7 @@ run_container_tests() {
             ;;
         *)
             error "Unknown service: $service"
-            echo "Available services: authz, ingest, search, agent, all"
+            echo "Available services: authz, data, search, agent, all"
             exit 1
             ;;
     esac
@@ -1459,7 +1442,7 @@ docker_test_menu() {
         if [[ "$tests_enabled" == "true" ]]; then
             menu "Docker Test Suite - Local Development" \
                 "Authz - Run authz tests" \
-                "Ingest - Run ingest tests" \
+                "Data - Run data tests" \
                 "Search - Run search tests" \
                 "Agent - Run agent tests" \
                 "All Services - Run all tests" \
@@ -1497,11 +1480,11 @@ docker_test_menu() {
                 pause
                 ;;
             2)
-                header "Docker Ingest Tests" 70
+                header "Docker Data Tests" 70
                 echo ""
-                info "Running ingest tests against local Docker services..."
+                info "Running data tests against local Docker services..."
                 echo ""
-                bash "${REPO_ROOT}/scripts/test/run-local-tests.sh" ingest docker || true
+                bash "${REPO_ROOT}/scripts/test/run-local-tests.sh" data docker || true
                 pause
                 ;;
             3)

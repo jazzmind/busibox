@@ -25,7 +25,7 @@ async def exchange_token_zero_trust(
     
     Args:
         subject_token: The user's current JWT token
-        target_audience: Target service audience (e.g., "ingest-api")
+        target_audience: Target service audience (e.g., "data-api")
         user_id: User ID for logging purposes
         scopes: Requested scopes (optional, scopes come from RBAC)
         

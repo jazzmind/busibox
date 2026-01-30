@@ -63,7 +63,7 @@ def test_principal():
         sub="test-user-123",
         email="test@example.com",
         roles=["user"],
-        scopes=["search.read", "ingest.write"],
+        scopes=["search.read", "data.write"],
         token="test-jwt-token-12345",
     )
 
@@ -157,12 +157,12 @@ class TestAgentConfig:
             name="test",
             display_name="Test",
             instructions="Test",
-            tools=["document_search", "ingest_document"],
+            tools=["document_search", "data_document"],
         )
         
         scopes = config.get_required_scopes()
         assert "search.read" in scopes
-        assert "ingest.write" in scopes
+        assert "data.write" in scopes
     
     def test_get_required_scopes_no_auth_tools(self):
         """Test scopes for tools that don't need auth."""

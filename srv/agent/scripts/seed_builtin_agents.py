@@ -166,13 +166,13 @@ Core Capabilities:
 - Structure summaries for easy review and decision-making
 
 When analyzing RFPs:
-1. Use the ingestion_tool to process documents
+1. Use the data_tool to process documents
 2. Extract essential information based on requirements
 3. Maintain accuracy while condensing complex information
 4. Provide structured output for decision-making
 
 Be thorough, accurate, and focused on extracting actionable insights.""",
-        "tools": {"names": ["ingest"]},
+        "tools": {"names": ["data"]},
         "is_active": True,
         "is_builtin": True,
     },
@@ -198,7 +198,7 @@ When generating templates:
 5. Ensure templates are easy to use and customize
 
 Focus on creating practical, professional templates that meet user needs.""",
-        "tools": {"names": ["rag", "ingest"]},
+        "tools": {"names": ["rag", "data"]},
         "is_active": True,
         "is_builtin": True,
     },

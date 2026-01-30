@@ -25,7 +25,7 @@ def build_token(secret: str, extra_claims: dict | None = None, *, kid: str = "te
     claims = {
         "sub": "user-123",
         "email": "user@example.com",
-        "scope": "search.read ingest.write",
+        "scope": "search.read data.write",
         "roles": ["user"],
         "iss": settings.auth_issuer or "https://issuer.test",
         "aud": settings.auth_audience or "https://aud.test",
@@ -68,7 +68,7 @@ async def test_validate_bearer_success(monkeypatch):
         assert principal.sub == "user-123"
         assert principal.email == "user@example.com"
         assert "search.read" in principal.scopes
-        assert "ingest.write" in principal.scopes
+        assert "data.write" in principal.scopes
         assert principal.roles == ["user"]
         assert principal.token == token
     finally:

@@ -29,7 +29,7 @@ source "${REPO_ROOT}/scripts/lib/services.sh"
 # Service groups for organized display
 declare -A SERVICE_GROUPS=(
     ["Infrastructure"]="postgres redis minio milvus"
-    ["APIs"]="authz-api agent-api ingest-api search-api deploy-api docs-api embedding-api"
+    ["APIs"]="authz-api agent-api data-api search-api deploy-api docs-api embedding-api"
     ["LLM"]="litellm ollama vllm"
     ["Frontend"]="core-apps nginx"
     ["User Apps"]="user-apps"
@@ -110,7 +110,7 @@ get_proxmox_service_status() {
         minio|files) ip="${network_base}.205" ;;
         milvus) ip="${network_base}.204" ;;
         agent|agent-api) ip="${network_base}.202" ;;
-        ingest|ingest-api) ip="${network_base}.206" ;;
+        ingest|data-api) ip="${network_base}.206" ;;
         authz|authz-api) ip="${network_base}.210" ;;
         core-apps|apps) ip="${network_base}.201" ;;
         proxy|nginx) ip="${network_base}.200" ;;

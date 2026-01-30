@@ -1,0 +1,11 @@
+---
+- name: Restart Redis
+  systemd:
+    name: redis-server
+    state: restarted
+
+- name: Restart data worker
+  systemd:
+    name: data-worker
+    state: restarted
+

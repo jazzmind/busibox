@@ -49,7 +49,7 @@ class TestSQLInjection:
         payloads = PayloadGenerator.SQL_INJECTION_UUID
         
         for payload in payloads:
-            url = f"{endpoints.ingest}/files/{payload}"
+            url = f"{endpoints.data}/files/{payload}"
             response = http_client.get(url, headers=auth_headers)
             
             SecurityAssertions.assert_no_sql_errors(
@@ -172,7 +172,7 @@ class TestCommandInjection:
             import urllib.parse
             encoded = urllib.parse.quote(payload, safe="")
             
-            url = f"{endpoints.ingest}/files/{encoded}"
+            url = f"{endpoints.data}/files/{encoded}"
             response = http_client.get(url, headers=auth_headers)
             
             # Should handle gracefully without command execution
@@ -189,7 +189,7 @@ class TestCommandInjection:
         file_id = "00000000-0000-0000-0000-000000000000"
         
         for payload in payloads:
-            url = f"{endpoints.ingest}/files/{file_id}/export"
+            url = f"{endpoints.data}/files/{file_id}/export"
             response = http_client.get(
                 url,
                 params={"format": payload},
@@ -214,7 +214,7 @@ class TestPathTraversal:
             import urllib.parse
             encoded = urllib.parse.quote(payload, safe="")
             
-            url = f"{endpoints.ingest}/files/{encoded}"
+            url = f"{endpoints.data}/files/{encoded}"
             response = http_client.get(url, headers=auth_headers)
             
             # Should not expose system files
@@ -234,7 +234,7 @@ class TestPathTraversal:
             import urllib.parse
             encoded = urllib.parse.quote(payload, safe="")
             
-            url = f"{endpoints.ingest}/files/{encoded}/download"
+            url = f"{endpoints.data}/files/{encoded}/download"
             response = http_client.get(url, headers=auth_headers)
             
             # Should return error, not file content - 401 = auth check first (still secure)
@@ -275,7 +275,7 @@ class TestXSSVulnerabilities:
         # Try to trigger error with XSS in various parameters
         endpoints_to_test = [
             (f"{endpoints.agent}/agents/{xss_payload}", "GET"),
-            (f"{endpoints.ingest}/files/{xss_payload}", "GET"),
+            (f"{endpoints.data}/files/{xss_payload}", "GET"),
         ]
         
         for url, method in endpoints_to_test:
@@ -322,7 +322,7 @@ class TestSSRFVulnerabilities:
         # If there's a URL parameter anywhere, test it
         # For now, test via metadata that might be processed
         for payload in payloads:
-            url = f"{endpoints.ingest}/upload"
+            url = f"{endpoints.data}/upload"
             
             # Try to inject SSRF via metadata
             response = http_client.post(

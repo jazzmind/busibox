@@ -42,7 +42,7 @@ def get_service_endpoints(environment: str = 'production') -> Dict[str, str]:
             
             # APIs
             'AGENT_API_URL': 'http://agent-api:8000',
-            'INGEST_API_URL': 'http://ingest-api:8002',
+            'DATA_API_URL': 'http://data-api:8002',
             'SEARCH_API_URL': 'http://search-api:8003',
             
             # Storage
@@ -67,7 +67,7 @@ def get_service_endpoints(environment: str = 'production') -> Dict[str, str]:
             
             # APIs
             'AGENT_API_URL': f'http://{base}.202:8000',
-            'INGEST_API_URL': f'http://{base}.206:8002',
+            'DATA_API_URL': f'http://{base}.206:8002',
             'SEARCH_API_URL': f'http://{base}.204:8003',
             
             # Storage
@@ -132,7 +132,7 @@ def generate_env_vars(
         'AUTHZ_BASE_URL',
         'LITELLM_BASE_URL',
         'AGENT_API_URL',
-        'INGEST_API_URL',
+        'DATA_API_URL',
         'SEARCH_API_URL',
     ]
     

@@ -2,7 +2,7 @@
 Transcript Storage Service.
 
 Handles persistence of call transcripts and integration
-with the Ingest API for document storage and RAG search.
+with the Data API for document storage and RAG search.
 """
 
 import asyncio
@@ -27,7 +27,7 @@ class TranscriptStore:
     
     Provides:
     - Save transcripts to PostgreSQL
-    - Export transcripts to Ingest API
+    - Export transcripts to Data API
     - Generate summaries using LLM
     - Search transcripts via RAG
     """
@@ -35,7 +35,7 @@ class TranscriptStore:
     def __init__(self):
         settings = get_settings()
         
-        self._ingest_api_url = settings.ingest_api_url
+        self._data_api_url = settings.data_api_url
         self._litellm_url = settings.litellm_base_url
         self._litellm_key = settings.litellm_api_key
         self._model = settings.default_model
@@ -185,13 +185,13 @@ Respond in this JSON format:
         access_token: Optional[str] = None,
     ) -> Optional[str]:
         """
-        Export transcript to the document library via Ingest API.
+        Export transcript to the document library via Data API.
         
         Args:
             transcript: Transcript to export
             library_id: Target library ID (uses default if not specified)
             tags: Optional tags for the document
-            access_token: OAuth token for Ingest API
+            access_token: OAuth token for Data API
             
         Returns:
             Document ID if successful
@@ -225,9 +225,9 @@ Respond in this JSON format:
                 headers["Authorization"] = f"Bearer {access_token}"
             
             async with httpx.AsyncClient(timeout=60.0) as client:
-                # Create document in Ingest API
+                # Create document in Data API
                 response = await client.post(
-                    f"{self._ingest_api_url}/api/v1/documents",
+                    f"{self._data_api_url}/api/v1/documents",
                     headers=headers,
                     json={
                         "filename": filename,
@@ -289,7 +289,7 @@ Respond in this JSON format:
             List of search results
         """
         settings = get_settings()
-        search_api_url = settings.ingest_api_url.replace("ingest", "search")
+        search_api_url = settings.data_api_url.replace("data", "search")
         
         try:
             headers = {"Content-Type": "application/json"}

@@ -12,7 +12,7 @@
 #   docker run -p 8004:8004 busibox-embedding
 #
 # This service is designed to stay running during development while other
-# services (ingest-api, search-api) can be restarted without model reload delay.
+# services (data-api, search-api) can be restarted without model reload delay.
 #
 # =============================================================================
 

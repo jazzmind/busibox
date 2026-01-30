@@ -253,13 +253,13 @@ test_model_files() {
 run_python_tests() {
     print_section "6. Python Integration Tests"
     
-    if [[ ! -f "$PROJECT_ROOT/srv/ingest/tests/test_colpali.py" ]]; then
+    if [[ ! -f "$PROJECT_ROOT/srv/data/tests/test_colpali.py" ]]; then
         print_warning "Python tests not found"
         return 0
     fi
     
     echo "  Running pytest suite..."
-    cd "$PROJECT_ROOT/srv/ingest"
+    cd "$PROJECT_ROOT/srv/data"
     
     # Set environment variables
     export COLPALI_BASE_URL="$COLPALI_BASE_URL"

@@ -686,7 +686,7 @@ llm_services_menu() {
     done
 }
 
-# APIs submenu (authz, ingest, search, agent, docs, bridge)
+# APIs submenu (authz, data, search, agent, docs, bridge)
 # AuthZ is first since all other APIs depend on authentication
 apis_menu() {
     local env="$1"
@@ -696,12 +696,12 @@ apis_menu() {
         box "API Services - $env" 70
         echo ""
         info "Application services that depend on core + llm"
-        info "Order: authz -> ingest -> search -> agent -> docs"
+        info "Order: authz -> data -> search -> agent -> docs"
         echo ""
         
         echo -e "  ${CYAN}1)${NC} Deploy All APIs"
         echo -e "  ${CYAN}2)${NC} Deploy AuthZ (authentication)    ${DIM}[1st - required by all APIs]${NC}"
-        echo -e "  ${CYAN}3)${NC} Deploy Ingest (file processing)"
+        echo -e "  ${CYAN}3)${NC} Deploy Data (file processing)"
         echo -e "  ${CYAN}4)${NC} Deploy Search API"
         echo -e "  ${CYAN}5)${NC} Deploy Agent API"
         echo -e "  ${CYAN}6)${NC} Deploy Docs API"
@@ -714,7 +714,7 @@ apis_menu() {
         
         case "$choice" in
             1)
-                if confirm "Deploy ALL APIs (authz, ingest, search, agent, docs) to $env?"; then
+                if confirm "Deploy ALL APIs (authz, data, search, agent, docs) to $env?"; then
                     deploy_service "apis" "$env"
                 fi
                 pause
@@ -726,8 +726,8 @@ apis_menu() {
                 pause
                 ;;
             3)
-                if confirm "Deploy Ingest (file processing) to $env?"; then
-                    deploy_service "apis-ingest" "$env"
+                if confirm "Deploy Data (file processing) to $env?"; then
+                    deploy_service "apis-data" "$env"
                 fi
                 pause
                 ;;
@@ -860,7 +860,7 @@ deployment_menu() {
             "Deploy All Services (full deploy)" \
             "Deploy Core Services (nginx, minio, postgres, milvus)" \
             "Deploy LLM Services (vllm, litellm, colpali)" \
-            "Deploy APIs (authz, ingest, search, agent, docs)" \
+            "Deploy APIs (authz, data, search, agent, docs)" \
             "Deploy Apps (ai-portal, agent-manager)" \
             "Verify Deployment (Health Checks)" \
             "Back to Main Menu"
@@ -913,8 +913,8 @@ docker_select_service() {
         echo ""
         menu "Select Service to ${action_title}" \
             "authz-api" \
-            "ingest-api" \
-            "ingest-worker" \
+            "data-api" \
+            "data-worker" \
             "search-api" \
             "agent-api" \
             "docs-api" \
@@ -931,8 +931,8 @@ docker_select_service() {
         local service_name=""
         case $choice in
             1) service_name="authz-api" ;;
-            2) service_name="ingest-api" ;;
-            3) service_name="ingest-worker" ;;
+            2) service_name="data-api" ;;
+            3) service_name="data-worker" ;;
             4) service_name="search-api" ;;
             5) service_name="agent-api" ;;
             6) service_name="docs-api" ;;
@@ -1073,8 +1073,8 @@ docker_individual_service_menu() {
         echo ""
         menu "Select Service" \
             "authz-api" \
-            "ingest-api" \
-            "ingest-worker" \
+            "data-api" \
+            "data-worker" \
             "search-api" \
             "agent-api" \
             "docs-api" \
@@ -1091,8 +1091,8 @@ docker_individual_service_menu() {
         local service_name=""
         case $choice in
             1) service_name="authz-api" ;;
-            2) service_name="ingest-api" ;;
-            3) service_name="ingest-worker" ;;
+            2) service_name="data-api" ;;
+            3) service_name="data-worker" ;;
             4) service_name="search-api" ;;
             5) service_name="agent-api" ;;
             6) service_name="docs-api" ;;
@@ -1193,7 +1193,7 @@ docker_deploy_menu() {
                 docker_service_group_menu "All" ""
                 ;;
             2)  # All API Services
-                docker_service_group_menu "API" "authz-api ingest-api ingest-worker search-api agent-api docs-api"
+                docker_service_group_menu "API" "authz-api data-api data-worker search-api agent-api docs-api"
                 ;;
             3)  # All Data Services
                 docker_service_group_menu "Data" "postgres redis minio milvus"

@@ -5,10 +5,10 @@
 
 set -e
 
-INGEST_IP="10.96.200.206"
+DATA_IP="10.96.200.206"
 
 echo "================================"
-echo "Clear Failed Ingestion Jobs"
+echo "Clear Failed Data Jobs"
 echo "================================"
 echo ""
 
@@ -34,17 +34,17 @@ fi
 
 echo ""
 echo "=== Current Queue Status ==="
-ssh root@${INGEST_IP} << 'EOF'
+ssh root@${DATA_IP} << 'EOF'
 echo "Stream length:"
-redis-cli XLEN jobs:ingestion
+redis-cli XLEN jobs:data
 
 echo ""
 echo "Consumer group info:"
-redis-cli XINFO GROUPS jobs:ingestion 2>/dev/null || echo "No consumer group"
+redis-cli XINFO GROUPS jobs:data 2>/dev/null || echo "No consumer group"
 
 echo ""
 echo "Pending messages:"
-redis-cli XPENDING jobs:ingestion workers - + 10 2>/dev/null || echo "No pending messages"
+redis-cli XPENDING jobs:data workers - + 10 2>/dev/null || echo "No pending messages"
 EOF
 
 echo ""
@@ -52,28 +52,28 @@ echo "=== Clearing Jobs ==="
 
 if [[ "$CLEAR_ALL" == "true" ]]; then
   # Nuclear option - delete entire stream
-  ssh root@${INGEST_IP} << 'EOF'
+  ssh root@${DATA_IP} << 'EOF'
 echo "Deleting entire stream..."
-redis-cli DEL jobs:ingestion
+redis-cli DEL jobs:data
 echo "Recreating consumer group..."
-redis-cli XGROUP CREATE jobs:ingestion workers 0 MKSTREAM
+redis-cli XGROUP CREATE jobs:data workers 0 MKSTREAM
 echo "✅ All jobs cleared and stream reset"
 EOF
 else
   # Safe option - acknowledge pending messages
-  ssh root@${INGEST_IP} << 'EOF'
+  ssh root@${DATA_IP} << 'EOF'
 echo "Getting pending messages..."
-PENDING=$(redis-cli XPENDING jobs:ingestion workers - + 100)
+PENDING=$(redis-cli XPENDING jobs:data workers - + 100)
 
 if [[ -z "$PENDING" ]] || [[ "$PENDING" == *"no pending"* ]]; then
   echo "No pending messages to clear"
 else
   echo "Acknowledging pending messages..."
   # Extract message IDs and acknowledge them
-  redis-cli XPENDING jobs:ingestion workers - + 100 | while read -r line; do
+  redis-cli XPENDING jobs:data workers - + 100 | while read -r line; do
     if [[ $line =~ ^[0-9]+-[0-9]+$ ]]; then
       echo "Acknowledging message: $line"
-      redis-cli XACK jobs:ingestion workers "$line"
+      redis-cli XACK jobs:data workers "$line"
     fi
   done
   echo "✅ Pending messages acknowledged"
@@ -82,25 +82,25 @@ fi
 # Also trim old processed messages
 echo ""
 echo "Trimming old messages (keeping last 100)..."
-redis-cli XTRIM jobs:ingestion MAXLEN ~ 100
+redis-cli XTRIM jobs:data MAXLEN ~ 100
 echo "✅ Old messages trimmed"
 EOF
 fi
 
 echo ""
 echo "=== Updated Queue Status ==="
-ssh root@${INGEST_IP} << 'EOF'
+ssh root@${DATA_IP} << 'EOF'
 echo "Stream length:"
-redis-cli XLEN jobs:ingestion
+redis-cli XLEN jobs:data
 
 echo ""
 echo "Pending messages:"
-redis-cli XPENDING jobs:ingestion workers - + 10 2>/dev/null || echo "No pending messages"
+redis-cli XPENDING jobs:data workers - + 10 2>/dev/null || echo "No pending messages"
 EOF
 
 echo ""
 echo "=== Restart Worker ==="
-ssh root@${INGEST_IP} "systemctl restart ingest-worker"
+ssh root@${DATA_IP} "systemctl restart data-worker"
 echo "✅ Worker restarted"
 
 echo ""
@@ -108,7 +108,7 @@ echo "================================"
 echo "Queue cleanup complete!"
 echo ""
 echo "Next steps:"
-echo "1. Check worker logs: ssh root@${INGEST_IP} 'journalctl -u ingest-worker -f'"
+echo "1. Check worker logs: ssh root@${DATA_IP} 'journalctl -u data-worker -f'"
 echo "2. Re-upload failed documents from AI Portal"
 echo "3. Or manually reset document status in database if needed"
 echo "================================"

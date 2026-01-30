@@ -22,7 +22,7 @@ AGENT_IP="10.96.200.202"
 PG_IP="10.96.200.203"
 MILVUS_IP="10.96.200.204"
 MINIO_IP="10.96.200.205"
-INGEST_IP="10.96.200.206"
+DATA_IP="10.96.200.206"
 LITELLM_IP="10.96.200.207"
 VLLM_IP="10.96.200.208"
 OLLAMA_IP="10.96.200.209"
@@ -165,10 +165,10 @@ test_http "MinIO Health" "http://${MINIO_IP}:9000/minio/health/live" "200"
 
 echo ""
 
-# Redis (on ingest-lxc) - check from inside container since it may bind to localhost only
+# Redis (on data-lxc) - check from inside container since it may bind to localhost only
 TOTAL=$((TOTAL + 1))
-echo -n "Testing Redis (${INGEST_IP}:6379)... "
-if ssh root@${INGEST_IP} "redis-cli ping 2>/dev/null | grep -q PONG"; then
+echo -n "Testing Redis (${DATA_IP}:6379)... "
+if ssh root@${DATA_IP} "redis-cli ping 2>/dev/null | grep -q PONG"; then
     echo -e "${GREEN}✓${NC} (responding to PING)"
     PASSED=$((PASSED + 1))
 else
@@ -197,20 +197,20 @@ echo ""
 test_port "agent-server" "$AGENT_IP" "8000"
 test_http "agent-server Health" "http://${AGENT_IP}:8000/auth/health" "200"
 
-# Ingest Services
-test_port "ingest-api" "$INGEST_IP" "8002"
-test_http "ingest-api Health" "http://${INGEST_IP}:8002/health" "200"
+# Data Services
+test_port "data-api" "$DATA_IP" "8002"
+test_http "data-api Health" "http://${DATA_IP}:8002/health" "200"
 
-# Ingest Worker (systemd service)
+# Data Worker (systemd service)
 TOTAL=$((TOTAL + 1))
-echo -n "Testing ingest-worker service... "
-if ssh root@${INGEST_IP} "systemctl is-active ingest-worker 2>/dev/null | grep -q active"; then
+echo -n "Testing data-worker service... "
+if ssh root@${DATA_IP} "systemctl is-active data-worker 2>/dev/null | grep -q active"; then
     echo -e "${GREEN}✓${NC} (active)"
     PASSED=$((PASSED + 1))
 else
     echo -e "${RED}✗${NC} (not active)"
     FAILED=$((FAILED + 1))
-    FAILED_TESTS+=("ingest-worker: systemd service not active")
+    FAILED_TESTS+=("data-worker: systemd service not active")
 fi
 
 echo ""

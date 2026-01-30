@@ -8,7 +8,7 @@ Test user starts with NO roles - tests add roles as needed and clean up after.
 
 Requirements:
 - Milvus running and accessible
-- PostgreSQL running with ingest schema
+- PostgreSQL running with data schema
 - AuthZ service running with test user configured
 - Environment variables set (AUTHZ_JWKS_URL, TEST_USER_ID)
 

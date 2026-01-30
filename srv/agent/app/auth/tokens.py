@@ -164,14 +164,14 @@ def _audience_for_purpose(purpose: str, scopes: List[str]) -> str:
     (TokenGrant is keyed on scopes), while still ensuring tokens are audience-bound.
     """
     p = (purpose or "").lower()
-    if "ingest" in p:
-        return "ingest-api"
+    if "data" in p:
+        return "data-api"
     if "search" in p or "rag" in p:
         return "search-api"
     # fallback: infer by scope prefix
     for s in scopes:
-        if s.startswith("ingest."):
-            return "ingest-api"
+        if s.startswith("data."):
+            return "data-api"
         if s.startswith("search."):
             return "search-api"
     return "agent-api"
@@ -187,7 +187,7 @@ async def get_service_token(user_token: str, user_id: str, target_audience: str)
     Args:
         user_token: The user's current JWT token
         user_id: The user ID (for logging/caching)
-        target_audience: The target service audience (e.g., "ingest-api")
+        target_audience: The target service audience (e.g., "data-api")
         
     Returns:
         Bearer token string (without "Bearer " prefix)

@@ -35,7 +35,7 @@ def _principal(unique_id: str = None) -> Principal:
         sub=f"user-{unique_id}",
         email=f"user-{unique_id}@example.com",
         roles=["user"],
-        scopes=["search.read", "ingest.write"],
+        scopes=["search.read", "data.write"],
     )
 
 
@@ -48,11 +48,11 @@ async def test_returns_cached_token_when_valid(monkeypatch, test_session: AsyncS
     unique_token = f"cached-test-token-{unique_id}"
     
     # The token service adds "aud:{audience}" to the scopes key
-    # For purpose="ingest", the audience is "ingest-api"
-    # So the cache key scopes will be sorted(["search.read", "ingest.write", "aud:ingest-api"])
+    # For purpose="data", the audience is "data-api"
+    # So the cache key scopes will be sorted(["search.read", "data.write", "aud:data-api"])
     cached_token = TokenGrant(
         subject=principal.sub,
-        scopes=sorted(["aud:ingest-api", "ingest.write", "search.read"]),
+        scopes=sorted(["aud:data-api", "data.write", "search.read"]),
         token=unique_token,
         expires_at=_future(60),  # Valid for 60 more minutes
     )
@@ -68,8 +68,8 @@ async def test_returns_cached_token_when_valid(monkeypatch, test_session: AsyncS
     token = await get_or_exchange_token(
         session=test_session,
         principal=principal,
-        scopes=["ingest.write", "search.read"],  # order should be normalized
-        purpose="ingest",
+        scopes=["data.write", "search.read"],  # order should be normalized
+        purpose="data",
     )
 
     assert token.access_token == cached_token.token
@@ -83,7 +83,7 @@ async def test_exchanges_when_expired(monkeypatch, test_session: AsyncSession):
     principal = _principal(unique_id)
     expired = TokenGrant(
         subject=principal.sub,
-        scopes=["aud:ingest-api", "ingest.write", "search.read"],
+        scopes=["aud:data-api", "data.write", "search.read"],
         token=f"stale-token-{unique_id}",
         expires_at=_past(),
     )
@@ -103,8 +103,8 @@ async def test_exchanges_when_expired(monkeypatch, test_session: AsyncSession):
     token = await get_or_exchange_token(
         session=test_session,
         principal=principal,
-        scopes=["search.read", "ingest.write"],
-        purpose="ingest",
+        scopes=["search.read", "data.write"],
+        purpose="data",
     )
 
     assert token.access_token == f"fresh-token-{unique_id}"
@@ -123,7 +123,7 @@ async def test_refreshes_token_near_expiry(monkeypatch, test_session: AsyncSessi
     near_expiry_time = _now_naive() + EXPIRY_REFRESH_BUFFER / 2
     near_expiry = TokenGrant(
         subject=principal.sub,
-        scopes=["aud:ingest-api", "ingest.write", "search.read"],
+        scopes=["aud:data-api", "data.write", "search.read"],
         token=f"almost-expired-{unique_id}",
         expires_at=near_expiry_time,
     )
@@ -143,8 +143,8 @@ async def test_refreshes_token_near_expiry(monkeypatch, test_session: AsyncSessi
     token = await get_or_exchange_token(
         session=test_session,
         principal=principal,
-        scopes=["search.read", "ingest.write"],
-        purpose="ingest",
+        scopes=["search.read", "data.write"],
+        purpose="data",
     )
 
     assert token.access_token == "refreshed-token"

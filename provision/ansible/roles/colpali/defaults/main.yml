@@ -39,7 +39,7 @@ colpali_cpu_limit: "4"
 
 # CUDA Configuration
 # GPU allocation strategy:
-# - GPU 0: Ingest container (Marker PDF extraction + ColPali visual embeddings)
+# - GPU 0: Data container (Marker PDF extraction + ColPali visual embeddings)
 # - GPU 1+: vLLM container (LLM inference)
 # 
 # ColPali shares GPU 0 with Marker by default.

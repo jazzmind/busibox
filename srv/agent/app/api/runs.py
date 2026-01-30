@@ -63,7 +63,7 @@ async def run_agent(
             principal=principal,
             agent_id=payload.agent_id,
             payload=payload.input,
-            scopes=["search.read", "ingest.write", "rag.query"],
+            scopes=["search.read", "data.write", "rag.query"],
             purpose="agent-run",
             agent_tier=payload.agent_tier,
         )
@@ -347,7 +347,7 @@ async def execute_workflow_run(
     try:
         # Default scopes
         if not scopes:
-            scopes = ["agent.execute", "search.read", "ingest.write"]
+            scopes = ["agent.execute", "search.read", "data.write"]
         
         # Execute workflow
         run_record = await execute_workflow(

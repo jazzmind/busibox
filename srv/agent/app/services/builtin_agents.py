@@ -47,7 +47,7 @@ BUILTIN_AGENT_METADATA = {
         "description": "General purpose chat agent with access to web search, weather, document search, and ingestion tools",
         "model": "chat",
         "version": 1,
-        "tools": ["web_search", "get_weather", "document_search", "ingest_document"],
+        "tools": ["web_search", "get_weather", "document_search", "data_document"],
     },
     "document_agent": {
         "name": "document-agent",

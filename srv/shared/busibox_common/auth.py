@@ -2,7 +2,7 @@
 Shared Authentication Utilities for Busibox Services.
 
 This module provides common JWT authentication, token exchange, scope checking,
-and RLS utilities used across all busibox services (ingest, search, agent).
+and RLS utilities used across all busibox services (data, search, agent).
 
 Features:
 - JWT token validation via JWKS (using pyjwt library)
@@ -111,8 +111,8 @@ class UserContext:
         Check if user has a specific scope.
         
         Supports wildcard matching:
-        - Exact match: 'ingest.write' matches 'ingest.write'
-        - Wildcard: 'ingest.*' matches 'ingest.write', 'ingest.read', etc.
+        - Exact match: 'data.write' matches 'data.write'
+        - Wildcard: 'data.*' matches 'data.write', 'data.read', etc.
         - Nested wildcard: 'authz.*' matches 'authz.users.read', 'authz.roles.write', etc.
         - Full wildcard: '*' matches everything
         """
@@ -283,7 +283,7 @@ class TokenExchangeClient:
         client = TokenExchangeClient()
         token = await client.get_token_for_service(
             user_id="user-uuid",
-            target_audience="ingest-api",
+            target_audience="data-api",
         )
         if token:
             headers = {"Authorization": f"Bearer {token}"}
@@ -346,7 +346,7 @@ class TokenExchangeClient:
         
         Args:
             user_id: The user ID to impersonate (from the incoming request's JWT)
-            target_audience: The audience of the target service (e.g., "ingest-api")
+            target_audience: The audience of the target service (e.g., "data-api")
             scope: Requested scopes (space-separated)
             use_cache: Whether to use cached tokens (default True)
         
@@ -443,7 +443,7 @@ class TokenExchangeClient:
         Args:
             user_context: Current user context with token
             scopes: List of scopes to request
-            purpose: Purpose string (e.g., "ingest", "search", "rag")
+            purpose: Purpose string (e.g., "data", "search", "rag")
         
         Returns:
             Dict with access_token, token_type, expires_at, scopes or None
@@ -473,22 +473,22 @@ class TokenExchangeClient:
         Infer the downstream audience from purpose and/or scopes.
         
         Args:
-            purpose: Purpose string (e.g., "ingest", "search", "rag")
+            purpose: Purpose string (e.g., "data", "search", "rag")
             scopes: List of requested scopes
         
         Returns:
-            Target audience string (e.g., "ingest-api")
+            Target audience string (e.g., "data-api")
         """
         p = (purpose or "").lower()
-        if "ingest" in p:
-            return "ingest-api"
+        if "data" in p:
+            return "data-api"
         if "search" in p or "rag" in p:
             return "search-api"
         
         # Fallback: infer by scope prefix
         for s in scopes:
-            if s.startswith("ingest."):
-                return "ingest-api"
+            if s.startswith("data."):
+                return "data-api"
             if s.startswith("search."):
                 return "search-api"
         
@@ -535,7 +535,7 @@ async def exchange_token_zero_trust(
     
     Args:
         subject_token: The user's current JWT token (any audience accepted)
-        target_audience: Target service audience (e.g., "ingest-api", "search-api")
+        target_audience: Target service audience (e.g., "data-api", "search-api")
         user_id: User ID for logging and caching
         scopes: Requested scopes (optional, scopes come from RBAC)
         authz_url: Token endpoint URL (defaults to env var AUTHZ_TOKEN_URL)
@@ -656,7 +656,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
     
     Args:
         app: FastAPI/Starlette application
-        audience: Expected JWT audience (e.g., 'ingest-api', 'search-api')
+        audience: Expected JWT audience (e.g., 'data-api', 'search-api')
         jwks_url: Optional JWKS URL (defaults to env vars)
         skip_paths: List of path prefixes to skip auth (default: ['/health'])
     """
@@ -866,7 +866,7 @@ def require_scope(request: Request, scope: str) -> None:
     
     Args:
         request: FastAPI request with user context
-        scope: Required scope (e.g., 'ingest.write')
+        scope: Required scope (e.g., 'data.write')
     
     Raises:
         HTTPException: 403 if scope is missing
@@ -928,7 +928,7 @@ class ScopeChecker:
     
     Usage:
         @router.post("/upload")
-        async def upload(request: Request, _: None = Depends(ScopeChecker("ingest.write"))):
+        async def upload(request: Request, _: None = Depends(ScopeChecker("data.write"))):
             ...
     """
     
@@ -945,7 +945,7 @@ class AnyScopeChecker:
     
     Usage:
         @router.get("/files/{id}")
-        async def get_file(request: Request, _: None = Depends(AnyScopeChecker(["ingest.read", "search.read"]))):
+        async def get_file(request: Request, _: None = Depends(AnyScopeChecker(["data.read", "search.read"]))):
             ...
     """
     

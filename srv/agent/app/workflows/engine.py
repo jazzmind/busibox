@@ -502,8 +502,8 @@ async def execute_workflow(
                     # Call tool via Busibox client
                     if tool_name == "search":
                         result = await busibox_client.search(**resolved_args)
-                    elif tool_name == "ingest":
-                        result = await busibox_client.ingest_document(**resolved_args)
+                    elif tool_name == "data":
+                        result = await busibox_client.data_document(**resolved_args)
                     elif tool_name == "rag":
                         result = await busibox_client.rag_query(**resolved_args)
                     else:

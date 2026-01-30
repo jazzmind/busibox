@@ -2,20 +2,20 @@
 """
 Library Data Migration Script
 
-Migrates library data from AI Portal database to ingest-api database.
+Migrates library data from AI Portal database to data-api database.
 This is part of the library consolidation effort to move library management
-from AI Portal to ingest-api (future files-api).
+from AI Portal to data-api (future files-api).
 
 Usage:
-    python migrate_libraries_to_ingest.py [--dry-run] [--verbose]
+    python migrate_libraries_to_data.py [--dry-run] [--verbose]
 
 Environment variables:
     AI_PORTAL_DB_URL: AI Portal database connection URL
-    INGEST_DB_URL: Ingest service database connection URL
+    DATA_DB_URL: Data service database connection URL
 
     Or individual components:
     AI_PORTAL_DB_HOST, AI_PORTAL_DB_PORT, AI_PORTAL_DB_NAME, AI_PORTAL_DB_USER, AI_PORTAL_DB_PASSWORD
-    INGEST_DB_HOST, INGEST_DB_PORT, INGEST_DB_NAME, INGEST_DB_USER, INGEST_DB_PASSWORD
+    DATA_DB_HOST, DATA_DB_PORT, DATA_DB_NAME, DATA_DB_USER, DATA_DB_PASSWORD
 """
 
 import argparse
@@ -42,16 +42,16 @@ def get_ai_portal_db_url() -> str:
     return f"postgresql://{user}:{password}@{host}:{port}/{dbname}"
 
 
-def get_ingest_db_url() -> str:
-    """Get ingest service database connection URL."""
-    if url := os.environ.get("INGEST_DB_URL"):
+def get_data_db_url() -> str:
+    """Get data service database connection URL."""
+    if url := os.environ.get("DATA_DB_URL"):
         return url
     
-    host = os.environ.get("INGEST_DB_HOST", "localhost")
-    port = os.environ.get("INGEST_DB_PORT", "5432")
-    dbname = os.environ.get("INGEST_DB_NAME", "ingest")
-    user = os.environ.get("INGEST_DB_USER", "ingest")
-    password = os.environ.get("INGEST_DB_PASSWORD", "ingest")
+    host = os.environ.get("DATA_DB_HOST", "localhost")
+    port = os.environ.get("DATA_DB_PORT", "5432")
+    dbname = os.environ.get("DATA_DB_NAME", "data")
+    user = os.environ.get("DATA_DB_USER", "data")
+    password = os.environ.get("DATA_DB_PASSWORD", "data")
     
     return f"postgresql://{user}:{password}@{host}:{port}/{dbname}"
 
@@ -106,8 +106,8 @@ async def fetch_ai_portal_tag_caches(conn: asyncpg.Connection, verbose: bool = F
     return caches
 
 
-async def check_ingest_library_exists(conn: asyncpg.Connection, library_id: str) -> bool:
-    """Check if a library already exists in ingest database."""
+async def check_data_library_exists(conn: asyncpg.Connection, library_id: str) -> bool:
+    """Check if a library already exists in data database."""
     result = await conn.fetchval(
         "SELECT EXISTS(SELECT 1 FROM libraries WHERE id = $1)",
         library_id
@@ -115,20 +115,20 @@ async def check_ingest_library_exists(conn: asyncpg.Connection, library_id: str)
     return result
 
 
-async def insert_library_to_ingest(
+async def insert_library_to_data(
     conn: asyncpg.Connection,
     library: Dict,
     dry_run: bool = False,
     verbose: bool = False
 ) -> bool:
-    """Insert a library into ingest database."""
+    """Insert a library into data database."""
     library_id = library['id']
     
     # Check if already exists
-    exists = await check_ingest_library_exists(conn, library_id)
+    exists = await check_data_library_exists(conn, library_id)
     if exists:
         if verbose:
-            print(f"    Library {library_id} already exists in ingest DB, skipping")
+            print(f"    Library {library_id} already exists in data DB, skipping")
         return False
     
     if dry_run:
@@ -161,18 +161,18 @@ async def insert_library_to_ingest(
     return True
 
 
-async def insert_tag_cache_to_ingest(
+async def insert_tag_cache_to_data(
     conn: asyncpg.Connection,
     cache: Dict,
     dry_run: bool = False,
     verbose: bool = False
 ) -> bool:
-    """Insert a tag cache into ingest database."""
+    """Insert a tag cache into data database."""
     cache_id = cache['id']
     library_id = cache['library_id']
     
     # Check if library exists first
-    library_exists = await check_ingest_library_exists(conn, library_id)
+    library_exists = await check_data_library_exists(conn, library_id)
     if not library_exists:
         if verbose:
             print(f"    Warning: Library {library_id} not found, skipping tag cache")
@@ -217,17 +217,17 @@ async def insert_tag_cache_to_ingest(
     return True
 
 
-async def update_ingestion_files_library_ids(
-    ingest_conn: asyncpg.Connection,
+async def update_data_files_library_ids(
+    data_conn: asyncpg.Connection,
     portal_conn: asyncpg.Connection,
     dry_run: bool = False,
     verbose: bool = False
 ) -> int:
     """
-    Update library_id column in ingestion_files based on AI Portal Document records.
+    Update library_id column in data_files based on AI Portal Document records.
     
     AI Portal's Document table has libraryId which maps file IDs to libraries.
-    We need to propagate this to ingestion_files.library_id.
+    We need to propagate this to data_files.library_id.
     """
     # Get document-library mappings from AI Portal
     query = """
@@ -252,10 +252,10 @@ async def update_ingestion_files_library_ids(
             updated += 1
             continue
         
-        # Update the ingestion_files record
-        result = await ingest_conn.execute(
+        # Update the data_files record
+        result = await data_conn.execute(
             """
-            UPDATE ingestion_files
+            UPDATE data_files
             SET library_id = $1
             WHERE id = $2 AND library_id IS NULL
             """,
@@ -280,7 +280,7 @@ async def run_migration(dry_run: bool = False, verbose: bool = False) -> Tuple[i
         Tuple of (libraries_migrated, caches_migrated, files_updated)
     """
     print("=" * 60)
-    print("Library Migration: AI Portal -> Ingest Service")
+    print("Library Migration: AI Portal -> Data Service")
     print("=" * 60)
     
     if dry_run:
@@ -290,14 +290,14 @@ async def run_migration(dry_run: bool = False, verbose: bool = False) -> Tuple[i
     
     # Connect to both databases
     ai_portal_url = get_ai_portal_db_url()
-    ingest_url = get_ingest_db_url()
+    data_url = get_data_db_url()
     
     print(f"AI Portal DB: {ai_portal_url.split('@')[1] if '@' in ai_portal_url else ai_portal_url}")
-    print(f"Ingest DB: {ingest_url.split('@')[1] if '@' in ingest_url else ingest_url}")
+    print(f"Data DB: {data_url.split('@')[1] if '@' in data_url else data_url}")
     print()
     
     portal_conn = await asyncpg.connect(ai_portal_url)
-    ingest_conn = await asyncpg.connect(ingest_url)
+    data_conn = await asyncpg.connect(data_url)
     
     try:
         # Step 1: Migrate libraries
@@ -306,7 +306,7 @@ async def run_migration(dry_run: bool = False, verbose: bool = False) -> Tuple[i
         
         migrated_libs = 0
         for lib in libraries:
-            if await insert_library_to_ingest(ingest_conn, lib, dry_run, verbose):
+            if await insert_library_to_data(data_conn, lib, dry_run, verbose):
                 migrated_libs += 1
         
         print(f"  Migrated {migrated_libs} libraries")
@@ -318,16 +318,16 @@ async def run_migration(dry_run: bool = False, verbose: bool = False) -> Tuple[i
         
         migrated_caches = 0
         for cache in caches:
-            if await insert_tag_cache_to_ingest(ingest_conn, cache, dry_run, verbose):
+            if await insert_tag_cache_to_data(data_conn, cache, dry_run, verbose):
                 migrated_caches += 1
         
         print(f"  Migrated {migrated_caches} tag caches")
         print()
         
-        # Step 3: Update library_id in ingestion_files
-        print("Step 3: Updating library_id in ingestion_files...")
-        updated_files = await update_ingestion_files_library_ids(
-            ingest_conn, portal_conn, dry_run, verbose
+        # Step 3: Update library_id in data_files
+        print("Step 3: Updating library_id in data_files...")
+        updated_files = await update_data_files_library_ids(
+            data_conn, portal_conn, dry_run, verbose
         )
         print(f"  Updated {updated_files} file records")
         print()
@@ -336,12 +336,12 @@ async def run_migration(dry_run: bool = False, verbose: bool = False) -> Tuple[i
     
     finally:
         await portal_conn.close()
-        await ingest_conn.close()
+        await data_conn.close()
 
 
 async def main():
     parser = argparse.ArgumentParser(
-        description="Migrate library data from AI Portal to ingest service"
+        description="Migrate library data from AI Portal to data service"
     )
     parser.add_argument(
         "--dry-run",

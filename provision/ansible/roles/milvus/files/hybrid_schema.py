@@ -108,7 +108,7 @@ def create_collection(collection_name, config=None):
             name="file_id",
             dtype=DataType.VARCHAR,
             max_length=64,
-            description="Reference to ingestion_files.file_id"
+            description="Reference to data_files.file_id"
         ),
         FieldSchema(
             name="chunk_index",

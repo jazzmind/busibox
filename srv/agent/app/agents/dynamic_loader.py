@@ -7,7 +7,7 @@ from pydantic_ai.models.openai import OpenAIModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.core import BusiboxDeps, ingest_tool, rag_tool, search_tool
+from app.agents.core import BusiboxDeps, data_tool, rag_tool, search_tool
 from app.config.settings import get_settings
 from app.models.domain import AgentDefinition
 from app.schemas.definitions import AgentDefinitionCreate
@@ -17,7 +17,7 @@ settings = get_settings()
 # Registry of permitted tool adapters
 TOOL_REGISTRY = {
     "search": search_tool,
-    "ingest": ingest_tool,
+    "data": data_tool,
     "rag": rag_tool,
 }
 

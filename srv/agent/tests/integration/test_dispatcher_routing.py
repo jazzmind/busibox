@@ -211,13 +211,13 @@ async def test_file_attachment_routes_to_file_capable_tool(client: AsyncClient, 
         "/dispatcher/route",
         json={
             "query": "Analyze this document",
-            "available_tools": ["doc_search", "ingest"],
+            "available_tools": ["doc_search", "data"],
             "available_agents": [],
             "attachments": [
                 {"name": "report.pdf", "type": "pdf", "url": "s3://bucket/report.pdf"}
             ],
             "user_settings": {
-                "enabled_tools": ["doc_search", "ingest"],
+                "enabled_tools": ["doc_search", "data"],
                 "enabled_agents": []
             }
         },

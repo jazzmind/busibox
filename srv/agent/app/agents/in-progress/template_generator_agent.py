@@ -5,7 +5,7 @@ from pydantic_ai.models.openai import OpenAIModel
 
 from app.config.settings import get_settings
 from app.schemas.template import GeneratedTemplate
-from app.tools.ingestion_tool import ingestion_tool
+from app.tools.data_tool import data_tool
 
 settings = get_settings()
 
@@ -26,14 +26,14 @@ model = OpenAIModel(
 template_generator_agent: Agent[None, GeneratedTemplate] = Agent(
     model=model,
     output_type=GeneratedTemplate,
-    tools=[ingestion_tool],
+    tools=[data_tool],
     system_prompt="""You are an expert template generation specialist that analyzes summary documents and creates summary templates.
 
 ## Your Task
 Examine existing summary documents and generate templates that can capture similar information from future documents.
 
 ## Process
-1. Use the ingest_document tool to process the document and extract its structure
+1. Use the data_document tool to process the document and extract its structure
 2. Identify all major sections and subsections
 3. Analyze the type and format of information in each section
 4. Generate a template with 5-15 sections covering all major information categories

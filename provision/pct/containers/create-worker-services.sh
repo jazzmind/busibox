@@ -3,7 +3,7 @@
 # Create Worker Services LXC Containers
 #
 # Description:
-#   Creates worker service containers: ingest worker and liteLLM.
+#   Creates worker service containers: data worker and liteLLM.
 #   These handle background processing and LLM API gateway functionality.
 #
 # Execution Context: Proxmox VE Host
@@ -13,7 +13,7 @@
 #   bash provision/pct/containers/create-worker-services.sh [staging|production]
 #
 # Containers Created:
-#   - ingest-lxc  - Document ingestion worker with Redis
+#   - data-lxc  - Document ingestion worker with Redis
 #   - litellm-lxc - LiteLLM API gateway
 
 set -euo pipefail
@@ -31,10 +31,10 @@ if [[ "$MODE" == "staging" ]]; then
   source "${PCT_DIR}/stage-vars.env"
   PREFIX="${STAGE_PREFIX}"
   
-  CT_INGEST="$CT_INGEST_STAGING"
+  CT_DATA="$CT_DATA_STAGING"
   CT_LITELLM="$CT_LITELLM_STAGING"
   
-  IP_INGEST="$IP_INGEST_STAGING"
+  IP_DATA="$IP_DATA_STAGING"
   IP_LITELLM="$IP_LITELLM_STAGING"
 else
   echo "==> Creating worker services in PRODUCTION mode"
@@ -68,34 +68,34 @@ cleanup_on_error() {
   exit 1
 }
 
-# Create ingest worker container
-# Ingest needs more memory for Marker models (OCR, layout detection, etc.)
+# Create data worker container
+# Data needs more memory for Marker models (OCR, layout detection, etc.)
 # With 255GB system RAM available, give it 32GB for comfortable headroom
-MEM_MB_INGEST=32768
-create_ct "$CT_INGEST" "$IP_INGEST" "${PREFIX}ingest-lxc" unpriv || cleanup_on_error
-CREATED_CONTAINERS+=("$CT_INGEST")
+MEM_MB_DATA=32768
+create_ct "$CT_DATA" "$IP_DATA" "${PREFIX}data-lxc" unpriv || cleanup_on_error
+CREATED_CONTAINERS+=("$CT_DATA")
 
-# Increase memory allocation for ingest container (needs 32GB for Marker models)
-pct set "$CT_INGEST" -memory "$MEM_MB_INGEST"
-echo "  Increased ${PREFIX}ingest-lxc memory to ${MEM_MB_INGEST}MB (32GB) for ML models"
+# Increase memory allocation for data container (needs 32GB for Marker models)
+pct set "$CT_DATA" -memory "$MEM_MB_DATA"
+echo "  Increased ${PREFIX}data-lxc memory to ${MEM_MB_DATA}MB (32GB) for ML models"
 
 # Stop container to configure GPU passthrough
 echo "==> Stopping container to configure GPU passthrough"
-pct stop "$CT_INGEST" || true
+pct stop "$CT_DATA" || true
 sleep 2
 
-# Add ALL GPUs passthrough for ingest container
+# Add ALL GPUs passthrough for data container
 # All GPUs are passed through, but services default to GPU 0 via CUDA_VISIBLE_DEVICES
 # This allows flexibility to use other GPUs if needed
-add_all_gpus "$CT_INGEST" || {
-  echo "WARNING: Failed to configure GPU passthrough for ingest container"
+add_all_gpus "$CT_DATA" || {
+  echo "WARNING: Failed to configure GPU passthrough for data container"
   echo "  GPU passthrough can be configured manually later:"
-  echo "  bash provision/pct/host/configure-gpu-passthrough.sh $CT_INGEST"
+  echo "  bash provision/pct/host/configure-gpu-passthrough.sh $CT_DATA"
 }
 
 # Restart container
 echo "==> Starting container with GPU access"
-pct start "$CT_INGEST" || {
+pct start "$CT_DATA" || {
   echo "ERROR: Failed to start container"
   exit 1
 }
@@ -109,7 +109,7 @@ echo "=========================================="
 echo "Worker services created successfully!"
 echo "Mode: ${MODE}"
 echo "Containers:"
-echo "  - ${PREFIX}ingest-lxc:  $CT_INGEST @ $IP_INGEST"
+echo "  - ${PREFIX}data-lxc:  $CT_DATA @ $IP_DATA"
 echo "  - ${PREFIX}litellm-lxc: $CT_LITELLM @ $IP_LITELLM"
 echo "=========================================="
 

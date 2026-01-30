@@ -15,8 +15,8 @@ default_model: "research"
 # Service endpoints
 # Note: search-api runs on the milvus container (not a separate 'search' group)
 search_api_url: "http://{{ hostvars[groups['milvus'][0]]['ansible_host'] if 'milvus' in groups else '127.0.0.1' }}:8003"
-ingest_api_url: "http://{{ hostvars[groups['ingest'][0]]['ansible_host'] if 'ingest' in groups else '127.0.0.1' }}:8002"
-embedding_api_url: "http://{{ hostvars[groups['ingest'][0]]['ansible_host'] if 'ingest' in groups else '127.0.0.1' }}:8005"
+data_api_url: "http://{{ hostvars[groups['data'][0]]['ansible_host'] if 'data' in groups else '127.0.0.1' }}:8002"
+embedding_api_url: "http://{{ hostvars[groups['data'][0]]['ansible_host'] if 'data' in groups else '127.0.0.1' }}:8005"
 rag_api_url: "http://{{ hostvars[groups['milvus'][0]]['ansible_host'] if 'milvus' in groups else '127.0.0.1' }}:8004"
 
 # LiteLLM
@@ -25,7 +25,7 @@ litellm_port: 4000
 litellm_base_url: "http://{{ litellm_host }}:{{ litellm_port }}/v1"
 
 # Redis
-redis_host: "{{ hostvars[groups['ingest'][0]]['ansible_host'] if 'ingest' in groups else '127.0.0.1' }}"
+redis_host: "{{ hostvars[groups['data'][0]]['ansible_host'] if 'data' in groups else '127.0.0.1' }}"
 redis_port: 6379
 
 

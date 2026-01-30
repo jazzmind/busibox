@@ -60,7 +60,7 @@ class Config:
         # These are the services that can receive exchanged tokens.
         self.allowed_audiences: List[str] = [
             s.strip()
-            for s in (os.getenv("AUTHZ_ALLOWED_AUDIENCES", "ingest-api,search-api,agent-api,authz-api").split(","))
+            for s in (os.getenv("AUTHZ_ALLOWED_AUDIENCES", "data-api,search-api,agent-api,authz-api").split(","))
             if s.strip()
         ]
 

@@ -9,7 +9,7 @@ settings = get_settings()
 
 class BusiboxClient:
     """
-    Thin HTTP client for Busibox APIs (search, ingest, RAG).
+    Thin HTTP client for Busibox APIs (search, data, RAG).
     Attaches downstream bearer tokens obtained via token exchange.
     """
 
@@ -78,12 +78,12 @@ class BusiboxClient:
             resp.raise_for_status()
             return resp.json()
 
-    async def ingest_document(self, path: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def data_document(self, path: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Legacy file-based ingestion (for file paths).
         """
         # Remove trailing slash from base URL to avoid double slashes
-        base_url = str(settings.ingest_api_url).rstrip('/')
+        base_url = str(settings.data_api_url).rstrip('/')
         
         async with httpx.AsyncClient() as client:
             resp = await client.post(
@@ -95,7 +95,7 @@ class BusiboxClient:
             resp.raise_for_status()
             return resp.json()
     
-    async def ingest_content(
+    async def data_content(
         self,
         content: str,
         title: str,
@@ -105,7 +105,7 @@ class BusiboxClient:
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
-        Ingest text/markdown content as a document.
+        Data text/markdown content as a document.
         
         Used by web research workflows to store scraped content.
         
@@ -120,7 +120,7 @@ class BusiboxClient:
         Returns:
             Response with fileId, libraryId, status
         """
-        base_url = str(settings.ingest_api_url).rstrip('/')
+        base_url = str(settings.data_api_url).rstrip('/')
         
         payload: Dict[str, Any] = {
             "content": content,
@@ -137,7 +137,7 @@ class BusiboxClient:
         
         async with httpx.AsyncClient() as client:
             resp = await client.post(
-                f"{base_url}/ingest/content",
+                f"{base_url}/data/content",
                 json=payload,
                 headers=self._headers,
                 timeout=180,  # 3 minutes for content ingestion with embedding generation

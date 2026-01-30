@@ -389,8 +389,8 @@ def main():
     print("=" * 60)
     print()
     print("Next steps:")
-    print("  1. Update ingestion service configuration")
-    print("  2. Deploy updated code to ingest workers")
+    print("  1. Update data service configuration")
+    print("  2. Deploy updated code to data workers")
     print("  3. Start ingesting documents")
     print()
     

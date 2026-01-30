@@ -9,7 +9,7 @@
 # USAGE:
 #   bash scripts/test/generate-local-test-env.sh [service] [environment]
 #   bash scripts/test/generate-local-test-env.sh authz test
-#   bash scripts/test/generate-local-test-env.sh ingest test
+#   bash scripts/test/generate-local-test-env.sh data test
 #   bash scripts/test/generate-local-test-env.sh search test
 #   bash scripts/test/generate-local-test-env.sh agent test
 #
@@ -43,7 +43,7 @@ ENV="${2:-test}"
 if [[ -z "$SERVICE" ]]; then
     echo "Usage: $0 <service> [environment]"
     echo ""
-    echo "Services: authz, ingest, search, agent, all"
+    echo "Services: authz, data, search, agent, all"
     echo "Environments: test, production (default: test)"
     exit 1
 fi
@@ -68,7 +68,7 @@ AGENT_IP="${NETWORK_BASE}.202"
 POSTGRES_IP="${NETWORK_BASE}.203"
 MILVUS_IP="${NETWORK_BASE}.204"
 MINIO_IP="${NETWORK_BASE}.205"
-INGEST_IP="${NETWORK_BASE}.206"
+DATA_IP="${NETWORK_BASE}.206"
 LITELLM_IP="${NETWORK_BASE}.207"
 VLLM_IP="${NETWORK_BASE}.208"
 OLLAMA_IP="${NETWORK_BASE}.209"
@@ -183,18 +183,8 @@ try:
     print(f"LITELLM_API_KEY={secrets.get('litellm_api_key', '')}")
     print(f"LITELLM_MASTER_KEY={master_key}")
     
-    # Authz - check multiple possible locations
+    # Authz
     authz = secrets.get('authz', {})
-    test_creds = secrets.get('test_credentials', {})
-    ai_portal = secrets.get('ai-portal', {})
-    
-    # Admin token: check authz.admin_token, then test_credentials.authz_admin_token
-    admin_token = authz.get('admin_token', '')
-    if not admin_token:
-        admin_token = test_creds.get('authz_admin_token', '')
-    if not admin_token:
-        admin_token = ai_portal.get('authz_admin_token', '')
-    print(f"AUTHZ_ADMIN_TOKEN={admin_token}")
     
     # Master key for envelope encryption
     master_key = authz.get('master_key', '')
@@ -248,8 +238,8 @@ generate_env_file() {
         authz)
             env_file="${REPO_ROOT}/srv/authz/.env.local"
             ;;
-        ingest)
-            env_file="${REPO_ROOT}/srv/ingest/.env.local"
+        data)
+            env_file="${REPO_ROOT}/srv/data/.env.local"
             ;;
         search)
             env_file="${REPO_ROOT}/srv/search/.env.local"
@@ -269,8 +259,8 @@ generate_env_file() {
     # Determine the correct database for this service
     # Each service uses its own dedicated database:
     #   - authz: "authz" database (RBAC, OAuth, encryption keys)
-    #   - ingest: "files" database (documents, chunks)
-    #   - search: "files" database (reads from same as ingest)
+    #   - data: "files" database (documents, chunks)
+    #   - search: "files" database (reads from same as data)
     #   - agent: "agent_server" database
     case "$service" in
         ingest|search)
@@ -320,7 +310,7 @@ AGENT_IP=${AGENT_IP}
 POSTGRES_IP=${POSTGRES_IP}
 MILVUS_IP=${MILVUS_IP}
 MINIO_IP=${MINIO_IP}
-INGEST_IP=${INGEST_IP}
+DATA_IP=${DATA_IP}
 LITELLM_IP=${LITELLM_IP}
 VLLM_IP=${VLLM_IP}
 OLLAMA_IP=${OLLAMA_IP}
@@ -361,11 +351,11 @@ MINIO_BUCKET=documents
 # ============================================
 # Redis
 # ============================================
-REDIS_HOST=${INGEST_IP}
+REDIS_HOST=${DATA_IP}
 REDIS_PORT=6379
-REDIS_URL=redis://${INGEST_IP}:6379
+REDIS_URL=redis://${DATA_IP}:6379
 # Use a separate stream for local testing to avoid conflicts with container worker
-REDIS_STREAM=jobs:ingestion:local
+REDIS_STREAM=jobs:data:local
 
 # ============================================
 # LLM Services
@@ -399,9 +389,9 @@ AUTHZ_AUDIENCE=${SERVICE}-api
 # ============================================
 # Service URLs
 # ============================================
-INGEST_API_HOST=${INGEST_IP}
-INGEST_API_PORT=8002
-INGEST_API_URL=http://${INGEST_IP}:8002
+DATA_API_HOST=${DATA_IP}
+DATA_API_PORT=8002
+DATA_API_URL=http://${DATA_IP}:8002
 
 SEARCH_API_HOST=${MILVUS_IP}
 SEARCH_API_PORT=8003
@@ -421,7 +411,7 @@ COLPALI_API_KEY=EMPTY
 COLPALI_ENABLED=true
 
 # Marker PDF extraction configuration
-# When running locally, we can use GPU via ingest worker on production
+# When running locally, we can use GPU via data worker on production
 # For API tests, Marker runs in the service; for worker tests, it uses local/remote
 MARKER_ENABLED=true
 MARKER_USE_GPU=true

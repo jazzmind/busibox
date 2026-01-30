@@ -56,9 +56,7 @@ print_usage() {
     echo "Environment Variables:"
     echo "  SECURITY_TEST_ENV            Override target environment"
     echo "  TEST_JWT_TOKEN               Valid JWT token for authenticated tests"
-    echo "  AUTHZ_ADMIN_TOKEN            Admin token for admin endpoint tests"
-    echo "  TEST_CLIENT_ID               OAuth client ID"
-    echo "  TEST_CLIENT_SECRET           OAuth client secret"
+    echo "  TEST_USER_ID                 Test user ID"
     echo ""
 }
 
@@ -139,19 +137,19 @@ echo -e "${GREEN}Target Environment: $ENV${NC}"
 case $ENV in
     local)
         echo "  Agent API:  http://localhost:8000"
-        echo "  Ingest API: http://localhost:8002"
+        echo "  Data API: http://localhost:8002"
         echo "  Search API: http://localhost:8003"
         echo "  Authz API:  http://localhost:8010"
         ;;
     test)
         echo "  Agent API:  http://10.96.201.202:8000"
-        echo "  Ingest API: http://10.96.201.206:8002"
+        echo "  Data API: http://10.96.201.206:8002"
         echo "  Search API: http://10.96.201.204:8003"
         echo "  Authz API:  http://10.96.201.210:8010"
         ;;
     production)
         echo "  Agent API:  http://10.96.200.202:8000"
-        echo "  Ingest API: http://10.96.200.206:8002"
+        echo "  Data API: http://10.96.200.206:8002"
         echo "  Search API: http://10.96.200.204:8003"
         echo "  Authz API:  http://10.96.200.210:8010"
         ;;

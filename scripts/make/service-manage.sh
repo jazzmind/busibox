@@ -48,8 +48,8 @@ get_container_for_service() {
         # APIs
         authz|authz-api) echo "authz-api" ;;
         agent|agent-api) echo "agent-api" ;;
-        ingest|ingest-api) echo "ingest-api" ;;
-        ingest-worker) echo "ingest-worker" ;;
+        ingest|data-api) echo "data-api" ;;
+        data-worker) echo "data-worker" ;;
         search|search-api) echo "search-api" ;;
         deploy|deploy-api) echo "deploy-api" ;;
         docs|docs-api) echo "docs-api" ;;
@@ -182,7 +182,7 @@ get_ansible_tag() {
     case "$service" in
         authz*) echo "authz" ;;
         agent*) echo "agent" ;;
-        ingest*) echo "ingest" ;;
+        ingest*) echo "data" ;;
         search*) echo "search" ;;
         deploy*) echo "deploy" ;;
         docs*) echo "docs" ;;
@@ -360,7 +360,7 @@ main() {
         echo "  make manage SERVICE=authz ACTION=logs"
         echo "  make manage SERVICE=authz ACTION=status"
         echo ""
-        echo "Services: postgres, redis, minio, milvus, authz, agent, ingest,"
+        echo "Services: postgres, redis, minio, milvus, authz, agent, data,"
         echo "          search, deploy, docs, embedding, litellm, core-apps, nginx"
         echo ""
         echo "Actions: start, stop, restart, logs, status, redeploy"

@@ -97,22 +97,22 @@ async def _save_task_insight(
             )
             logger.info(f"Purged {purged} old insights for task {task.id}")
         
-        # Get an ingest-api audience token via Zero Trust token exchange
-        # The delegation token has agent-api audience, we exchange it for ingest-api
+        # Get an data-api audience token via Zero Trust token exchange
+        # The delegation token has agent-api audience, we exchange it for data-api
         try:
             if not task.delegation_token:
                 logger.warning(f"Task {task.id} has no delegation token for insight saving")
                 return None
                 
             from app.auth.tokens import get_service_token
-            ingest_token = await get_service_token(
+            data_token = await get_service_token(
                 user_token=task.delegation_token,
                 user_id=task.user_id,
-                target_audience="ingest-api",
+                target_audience="data-api",
             )
-            access_token = f"Bearer {ingest_token}"
+            access_token = f"Bearer {data_token}"
         except Exception as e:
-            logger.warning(f"Failed to get ingest-api token for task {task.id}: {e}")
+            logger.warning(f"Failed to get data-api token for task {task.id}: {e}")
             return None
         
         # Extract the actual content from the output (unwrap JSON/dict, strip code fences)
@@ -201,8 +201,8 @@ async def _save_task_output_to_library(
         # Get tags
         tags = output_saving_config.get("tags", [])
         
-        # Get an ingest-api audience token via Zero Trust token exchange
-        # The delegation token has agent-api audience, we exchange it for ingest-api
+        # Get an data-api audience token via Zero Trust token exchange
+        # The delegation token has agent-api audience, we exchange it for data-api
         try:
             if not task.delegation_token:
                 logger.warning(f"Task {task.id} has no delegation token for output saving")
@@ -212,17 +212,17 @@ async def _save_task_output_to_library(
             access_token = await get_service_token(
                 user_token=task.delegation_token,
                 user_id=task.user_id,
-                target_audience="ingest-api",
+                target_audience="data-api",
             )
         except Exception as e:
-            logger.warning(f"Failed to get ingest-api token for task {task.id} output saving: {e}")
+            logger.warning(f"Failed to get data-api token for task {task.id} output saving: {e}")
             return None
         
-        # Use the ingest content API via BusiboxClient
+        # Use the data content API via BusiboxClient
         client = BusiboxClient(access_token=access_token)
         
-        # Call the ingest content endpoint with folder="personal-tasks"
-        result = await client.ingest_content(
+        # Call the data content endpoint with folder="personal-tasks"
+        result = await client.data_content(
             content=formatted_content,
             title=title,
             folder="personal-tasks",  # This will be resolved to the Tasks library

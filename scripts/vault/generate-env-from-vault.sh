@@ -182,17 +182,10 @@ try:
     lines.append('# =============================================================================')
     lines.append('')
     if 'authz' in secrets:
-        lines.append(f'AUTHZ_ADMIN_TOKEN={secrets[\"authz\"].get(\"admin_token\", \"local-admin-token\")}')
         lines.append(f'AUTHZ_MASTER_KEY={secrets[\"authz\"].get(\"master_key\", \"local-master-key-change-in-production\")}')
     else:
-        lines.append('AUTHZ_ADMIN_TOKEN=local-admin-token')
         lines.append('AUTHZ_MASTER_KEY=local-master-key-change-in-production')
     lines.append('AUTHZ_ACCESS_TOKEN_TTL=900')
-    lines.append('')
-    
-    # Bootstrap OAuth client
-    oauth_client = secrets.get('oauth_client_id', 'ai-portal')
-    oauth_secret = secrets.get('oauth_client_secret', 'ai-portal-secret')
     lines.append('')
     
     # AI PORTAL CONFIGURATION

@@ -81,7 +81,7 @@ async def _ensure_bootstrap_roles() -> None:
     admin_scopes = [
         "*",           # Full wildcard - allows any scope
         "authz.*",     # All authz admin operations (users, roles, bindings, etc.)
-        "ingest.*",    # All ingest operations  
+        "data.*",    # All data operations  
         "search.*",    # All search operations
         "agent.*",     # All agent operations
         "workflow.*",  # All workflow operations
@@ -102,9 +102,9 @@ async def _ensure_bootstrap_roles() -> None:
             "description": "Standard user access",
             "scopes": [
                 "search.read", 
-                "ingest.read", 
-                "ingest.write",  # Required for document uploads
-                "ingest.delete",  # Required for deleting own documents
+                "data.read", 
+                "data.write",  # Required for document uploads
+                "data.delete",  # Required for deleting own documents
                 "agent.execute",
                 "libraries.read",  # Required for library access
                 "libraries.write",  # Required for personal library management

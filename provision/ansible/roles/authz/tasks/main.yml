@@ -1,5 +1,5 @@
 ---
-# Standalone authz service (separate from ingest)
+# Standalone authz service (separate from data)
 
 - name: Install rsync for synchronize module
   apt:

@@ -54,7 +54,7 @@ redis_host: redis
 minio_host: minio
 milvus_host: milvus
 authz_host: authz-api
-ingest_host: ingest-api
+data_host: data-api
 search_host: search-api
 agent_host: agent-api
 embedding_host: embedding-api
@@ -74,7 +74,7 @@ minio_port: 9000
 minio_console_port: 9001
 milvus_port: 19530
 authz_port: 8010
-ingest_port: 8002
+data_port: 8002
 search_port: 8003
 agent_port: 8000
 embedding_port: 8005
@@ -110,11 +110,11 @@ postgres_password: "{{ secrets.postgresql.password | default('devpassword') }}"
 postgres_databases:
   - busibox       # Main/default database
   - authz         # AuthZ service (authentication/authorization)
-  - files         # Ingest service (file metadata)
+  - files         # Data service (file metadata)
   - agent_server  # Agent API
   - litellm       # LiteLLM proxy
 
-# Files/Ingestion database
+# Files/ingestion database
 files_db: files
 files_user: "{{ postgres_user }}"
 files_password: "{{ postgres_password }}"
@@ -186,8 +186,8 @@ docker_services:
   apis:
     - authz-api
     - embedding-api
-    - ingest-api
-    - ingest-worker
+    - data-api
+    - data-worker
     - search-api
     - agent-api
     - docs-api
@@ -204,7 +204,7 @@ docker_services:
 docker_health_endpoints:
   postgres: "pg_isready -U postgres"
   authz-api: "http://localhost:{{ authz_port }}/health"
-  ingest-api: "http://localhost:{{ ingest_port }}/health"
+  data-api: "http://localhost:{{ data_port }}/health"
   search-api: "http://localhost:{{ search_port }}/health"
   agent-api: "http://localhost:{{ agent_port }}/health"
   ai-portal: "http://localhost:{{ ai_portal_port }}/api/health"

@@ -56,7 +56,7 @@ def is_core_app(app_id: str) -> bool:
         "ai-portal",
         "agent-manager",
         "authz-api",
-        "ingest-api",
+        "data-api",
         "search-api",
         "agent-api",
         "docs-api",

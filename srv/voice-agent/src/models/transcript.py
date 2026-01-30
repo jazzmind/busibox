@@ -2,7 +2,7 @@
 Transcript Models.
 
 Models for storing and managing call transcripts,
-including integration with the Ingest API for document storage.
+including integration with the Data API for document storage.
 """
 
 from datetime import datetime
@@ -75,7 +75,7 @@ class Transcript(BaseModel):
     
     # Storage integration
     saved_to_library: bool = False
-    document_id: Optional[str] = None  # ID in Ingest API
+    document_id: Optional[str] = None  # ID in Data API
     library_id: Optional[str] = None
     
     # Metadata

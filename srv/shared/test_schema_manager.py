@@ -6,7 +6,7 @@ Tests:
 1. SchemaManager can be imported
 2. SchemaManager can create tables in test databases
 3. Authz schema applies correctly
-4. Ingest schema applies correctly
+4. Data schema applies correctly
 5. Test database isolation is maintained
 """
 
@@ -18,7 +18,7 @@ from pathlib import Path
 # Add paths for imports
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "authz" / "src"))
-sys.path.insert(0, str(Path(__file__).parent.parent / "ingest" / "src"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "data" / "src"))
 
 # Test configuration
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
@@ -28,12 +28,12 @@ POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "testpassword")
 
 # Test databases
 TEST_AUTHZ_DB = "test_authz"
-TEST_INGEST_DB = "test_files"
+TEST_DATA_DB = "test_files"
 TEST_AGENT_DB = "test_agent_server"
 
 # Production databases (for isolation verification)
 PROD_AUTHZ_DB = "authz"
-PROD_INGEST_DB = "files"
+PROD_DATA_DB = "files"
 PROD_AGENT_DB = "agent_server"
 
 
@@ -178,18 +178,18 @@ async def test_authz_schema_apply() -> TestResult:
     return result
 
 
-async def test_ingest_schema_import() -> TestResult:
-    """Test 5: Verify ingest schema can be imported."""
-    result = TestResult("Import ingest schema")
+async def test_data_schema_import() -> TestResult:
+    """Test 5: Verify data schema can be imported."""
+    result = TestResult("Import data schema")
     try:
         import importlib.util
-        ingest_schema_path = Path(__file__).parent.parent / "ingest" / "src" / "schema.py"
+        data_schema_path = Path(__file__).parent.parent / "data" / "src" / "schema.py"
         
-        spec = importlib.util.spec_from_file_location("ingest_schema", ingest_schema_path)
-        ingest_schema_module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(ingest_schema_module)
+        spec = importlib.util.spec_from_file_location("data_schema", data_schema_path)
+        data_schema_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(data_schema_module)
         
-        schema = ingest_schema_module.get_ingest_schema()
+        schema = data_schema_module.get_data_schema()
         result.passed = True
         result.details.append(f"Extensions: {len(schema._extensions)}")
         result.details.append(f"Tables: {len(schema._tables)}")
@@ -200,28 +200,28 @@ async def test_ingest_schema_import() -> TestResult:
     return result
 
 
-async def test_ingest_schema_apply() -> TestResult:
-    """Test 6: Apply ingest schema to test database."""
-    result = TestResult("Apply ingest schema to test_files database")
+async def test_data_schema_apply() -> TestResult:
+    """Test 6: Apply data schema to test database."""
+    result = TestResult("Apply data schema to test_files database")
     try:
         import asyncpg
         import importlib.util
         
-        ingest_schema_path = Path(__file__).parent.parent / "ingest" / "src" / "schema.py"
-        spec = importlib.util.spec_from_file_location("ingest_schema", ingest_schema_path)
-        ingest_schema_module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(ingest_schema_module)
+        data_schema_path = Path(__file__).parent.parent / "data" / "src" / "schema.py"
+        spec = importlib.util.spec_from_file_location("data_schema", data_schema_path)
+        data_schema_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(data_schema_module)
         
         conn = await asyncpg.connect(
             host=POSTGRES_HOST,
             port=POSTGRES_PORT,
             user=POSTGRES_USER,
             password=POSTGRES_PASSWORD,
-            database=TEST_INGEST_DB,
+            database=TEST_DATA_DB,
         )
         
         try:
-            schema = ingest_schema_module.get_ingest_schema()
+            schema = data_schema_module.get_data_schema()
             await schema.apply(conn)
             
             # Verify tables were created
@@ -233,7 +233,7 @@ async def test_ingest_schema_apply() -> TestResult:
             table_names = [t['tablename'] for t in tables]
             
             expected_tables = [
-                'ingestion_files', 'ingestion_status', 'ingestion_chunks',
+                'data_files', 'data_status', 'data_chunks',
                 'document_roles', 'groups', 'group_memberships'
             ]
             
@@ -372,8 +372,8 @@ async def run_all_tests():
         test_schema_manager_basic,
         test_authz_schema_import,
         test_authz_schema_apply,
-        test_ingest_schema_import,
-        test_ingest_schema_apply,
+        test_data_schema_import,
+        test_data_schema_apply,
         test_database_isolation,
         test_agent_db_schema,
     ]

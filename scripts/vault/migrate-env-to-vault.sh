@@ -180,24 +180,17 @@ try:
         vault['secrets']['litellm']['master_key'] = litellm_key
     
     # AuthZ
-    authz_admin = get_env_value('AUTHZ_ADMIN_TOKEN')
     authz_master = get_env_value('AUTHZ_MASTER_KEY')
     
-    if authz_admin or authz_master:
+    if authz_master:
         if 'authz' not in vault['secrets']:
             vault['secrets']['authz'] = {}
-        if authz_admin:
-            vault['secrets']['authz']['admin_token'] = authz_admin
-        if authz_master:
-            vault['secrets']['authz']['master_key'] = authz_master
+        vault['secrets']['authz']['master_key'] = authz_master
     
-    # Better Auth / JWT
-    better_auth = get_env_value('BETTER_AUTH_SECRET')
+    # JWT
     sso_jwt = get_env_value('SSO_JWT_SECRET')
     jwt_secret = get_env_value('JWT_SECRET') or sso_jwt
     
-    if better_auth:
-        vault['secrets']['better_auth_secret'] = better_auth
     if jwt_secret:
         vault['secrets']['jwt_secret'] = jwt_secret
     

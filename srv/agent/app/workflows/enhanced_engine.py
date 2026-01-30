@@ -379,7 +379,7 @@ async def _execute_tool_step(
     Execute a tool call step.
     
     Supports both:
-    - Busibox client tools: search, ingest, rag (require authenticated client with proper audience)
+    - Busibox client tools: search, data, rag (require authenticated client with proper audience)
     - Direct tools from ToolRegistry: web_search, web_scraper (no auth needed)
     """
     tool_name = step.get("tool")
@@ -410,23 +410,23 @@ async def _execute_tool_step(
                 result = await busibox_client.search(**resolved_args)
             else:
                 result = await busibox_client.rag_query(**resolved_args)
-    elif tool_name == "ingest":
-        # Need ingest-api audience
+    elif tool_name == "data":
+        # Need data-api audience
         if session and principal:
             token_response = await get_or_exchange_token(
                 session=session,
                 principal=principal,
-                scopes=["ingest.write"],
-                purpose="ingest",
+                scopes=["data.write"],
+                purpose="data",
             )
-            ingest_client = BusiboxClient(access_token=token_response.access_token)
+            data_client = BusiboxClient(access_token=token_response.access_token)
         else:
-            ingest_client = busibox_client
+            data_client = busibox_client
         
         # Check if this is content-based ingestion (web research) or file-based
         if "content" in resolved_args:
             # Content-based ingestion (for scraped web content)
-            result = await ingest_client.ingest_content(
+            result = await data_client.data_content(
                 content=resolved_args.get("content", ""),
                 title=resolved_args.get("title", "Untitled"),
                 url=resolved_args.get("url"),
@@ -436,7 +436,7 @@ async def _execute_tool_step(
             )
         else:
             # Legacy file-based ingestion
-            result = await ingest_client.ingest_document(**resolved_args)
+            result = await data_client.data_document(**resolved_args)
     
     # Direct tools from ToolRegistry (no auth needed)
     elif tool_name == "web_search":

@@ -69,7 +69,7 @@ async def authenticated_client(test_principal):
     # Get a real JWT token for service-to-service calls (e.g., to embedding service)
     auth_client = AuthTestClient()
     try:
-        token = auth_client.get_token(audience="ingest-api")
+        token = auth_client.get_token(audience="data-api")
     except Exception:
         token = None  # If token fetch fails, proceed without (some tests may fail)
     
@@ -100,7 +100,7 @@ async def other_authenticated_client(other_principal):
     # Get a real JWT token for service-to-service calls
     auth_client = AuthTestClient()
     try:
-        token = auth_client.get_token(audience="ingest-api")
+        token = auth_client.get_token(audience="data-api")
     except Exception:
         token = None
     

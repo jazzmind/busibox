@@ -160,7 +160,7 @@ else
         -d "{
             \"client_id\": \"${SIGNAL_BOT_CLIENT_ID}\",
             \"client_secret\": \"${JWT_SECRET}\",
-            \"allowed_audiences\": [\"agent-api\", \"search-api\", \"ingest-api\"],
+            \"allowed_audiences\": [\"agent-api\", \"search-api\", \"data-api\"],
             \"allowed_scopes\": [\"agent.execute\", \"chat.write\", \"chat.read\", \"search.read\"]
         }" 2>&1)
     

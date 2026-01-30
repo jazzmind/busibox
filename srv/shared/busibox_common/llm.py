@@ -50,7 +50,7 @@ class ModelRegistry:
     Allows easy model swapping without code changes.
     
     The registry can be loaded from:
-    1. A JSON config file (deployed via Ansible to /etc/ingest/model_registry.json)
+    1. A JSON config file (deployed via Ansible to /etc/data/model_registry.json)
     2. Default fallback values (for development/testing)
     
     Usage:
@@ -61,7 +61,7 @@ class ModelRegistry:
     
     # Minimal fallback models (ONLY used if model_registry.json is not found)
     # The real model registry comes from provision/ansible/group_vars/all/model_registry.yml
-    # which is deployed as JSON to /etc/ingest/model_registry.json via Ansible
+    # which is deployed as JSON to /etc/data/model_registry.json via Ansible
     DEFAULT_MODELS = {
         "embedding": {"model": "embedding", "provider": "litellm"},
         "cleanup": {"model": "cleanup", "provider": "litellm", "temperature": 0.1, "max_tokens": 32768},

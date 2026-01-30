@@ -61,7 +61,7 @@ WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'agent_server')\gexec
 SELECT 'CREATE DATABASE authz OWNER busibox_user'
 WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'authz')\gexec
 
--- Create files database (for ingest/search service)
+-- Create files database (for data/search service)
 SELECT 'CREATE DATABASE files OWNER busibox_user'
 WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'files')\gexec
 

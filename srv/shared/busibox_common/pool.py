@@ -2,7 +2,7 @@
 Unified AsyncPG Connection Pool Manager for Busibox Services.
 
 This module provides a shared, standardized way to manage asyncpg connection pools
-across all Busibox services (ingest, search, authz, etc.).
+across all Busibox services (data, search, authz, etc.).
 
 Features:
 - Singleton pattern per database configuration

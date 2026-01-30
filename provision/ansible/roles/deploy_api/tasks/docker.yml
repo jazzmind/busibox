@@ -32,7 +32,7 @@
 
 - name: Verify Deploy API health endpoint
   ansible.builtin.uri:
-    url: "http://localhost:{{ deploy_port }}/health"
+    url: "http://localhost:{{ deploy_port }}/health/live"
     method: GET
     status_code: [200]
   register: deploy_health
@@ -45,5 +45,5 @@
   ansible.builtin.debug:
     msg: |
       Deploy API is running and ready
-      Health: http://localhost:{{ deploy_port }}/health
+      Health: http://localhost:{{ deploy_port }}/health/live
       API: http://localhost:{{ deploy_port }}

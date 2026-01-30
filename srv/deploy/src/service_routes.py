@@ -375,7 +375,7 @@ async def start_service(
             # Some services require multiple containers to be started together
             # Map logical service names to actual container(s) to start
             service_groups = {
-                'ingest-api': ['ingest-api', 'ingest-worker'],  # Ingest needs both API and worker
+                'data-api': ['data-api', 'data-worker'],  # Data needs both API and worker
             }
             services_to_start = service_groups.get(service, [service])
             
@@ -686,7 +686,7 @@ async def check_service_health(
             'litellm': {'port': 4000, 'endpoint': '/health/liveliness'},  # /health requires auth, /health/liveliness doesn't
             'embedding-api': {'port': 8005, 'endpoint': '/health'},
             'vllm': {'port': 8000, 'endpoint': '/health'},
-            'ingest-api': {'port': 8002, 'endpoint': '/health'},
+            'data-api': {'port': 8002, 'endpoint': '/health'},
             'search-api': {'port': 8003, 'endpoint': '/'},  # Uses root endpoint per docker-compose healthcheck
             'agent-api': {'port': 8000, 'endpoint': '/health'},  # Port 8000, not 4111
             'docs-api': {'port': 8004, 'endpoint': '/health/live'},  # Uses /health/live per docker-compose
@@ -994,7 +994,7 @@ async def start_service_sse(
                 # Some services require multiple containers to be started together
                 # Map logical service names to actual container(s) to start
                 service_groups = {
-                    'ingest-api': ['ingest-api', 'ingest-worker'],  # Ingest needs both API and worker
+                    'data-api': ['data-api', 'data-worker'],  # Data needs both API and worker
                 }
                 services_to_start = service_groups.get(service, [service])
                 
