@@ -26,17 +26,33 @@ source "${REPO_ROOT}/scripts/lib/services.sh"
 # Configuration
 # ============================================================================
 
-# Service groups for organized display
-declare -A SERVICE_GROUPS=(
-    ["Infrastructure"]="postgres redis minio milvus"
-    ["APIs"]="authz-api agent-api data-api search-api deploy-api docs-api embedding-api"
-    ["LLM"]="litellm ollama vllm"
-    ["Frontend"]="core-apps nginx"
-    ["User Apps"]="user-apps"
-)
-
 # Service group order
 SERVICE_GROUP_ORDER=("Infrastructure" "APIs" "LLM" "Frontend" "User Apps")
+
+# Get services for a group (replaces associative array for bash 3.2 compatibility)
+get_services_for_group() {
+    local group="$1"
+    case "$group" in
+        "Infrastructure")
+            echo "postgres redis minio milvus"
+            ;;
+        "APIs")
+            echo "authz-api agent-api data-api search-api deploy-api docs-api embedding-api"
+            ;;
+        "LLM")
+            echo "litellm ollama vllm"
+            ;;
+        "Frontend")
+            echo "core-apps nginx"
+            ;;
+        "User Apps")
+            echo "user-apps"
+            ;;
+        *)
+            echo ""
+            ;;
+    esac
+}
 
 # ============================================================================
 # Backend Detection
@@ -151,7 +167,8 @@ show_services_status() {
     echo ""
     
     for group in "${SERVICE_GROUP_ORDER[@]}"; do
-        local services="${SERVICE_GROUPS[$group]:-}"
+        local services
+        services=$(get_services_for_group "$group")
         
         printf "  ${BOLD}${group}${NC}\n"
         
@@ -422,7 +439,7 @@ select_service() {
     
     for group in "${SERVICE_GROUP_ORDER[@]}"; do
         printf "  ${BOLD}${group}${NC}\n"
-        for service in ${SERVICE_GROUPS[$group]:-}; do
+        for service in $(get_services_for_group "$group"); do
             services+=("$service")
             local status
             status=$(get_service_status "$service")
