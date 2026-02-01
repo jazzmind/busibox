@@ -27,10 +27,36 @@ else
   INV ?= inventory/production
 endif
 
-# Vault password file (optional, can also use --ask-vault-pass)
-# Create with: echo "password" > .vault_pass && chmod 600 .vault_pass
-VAULT_PASS_FILE=~/.vault_pass
-VAULT_FLAGS=$(shell [ -f $(VAULT_PASS_FILE) ] && echo "--vault-password-file $(VAULT_PASS_FILE)" || echo "--ask-vault-pass")
+# Vault password file - environment-specific
+# Automatically uses the correct password file based on inventory
+# Expected locations:
+#   ~/.busibox-vault-pass-prod for production
+#   ~/.busibox-vault-pass-staging for staging
+#   ~/.busibox-vault-pass-demo for demo
+#   ~/.busibox-vault-pass-dev for development
+# Fallback: ~/.vault_pass (legacy)
+ENV_NAME=$(shell basename $(INV))
+ifeq ($(ENV_NAME),production)
+  VAULT_PASS_FILE=~/.busibox-vault-pass-prod
+else ifeq ($(ENV_NAME),staging)
+  VAULT_PASS_FILE=~/.busibox-vault-pass-staging
+else ifeq ($(ENV_NAME),demo)
+  VAULT_PASS_FILE=~/.busibox-vault-pass-demo
+else
+  VAULT_PASS_FILE=~/.busibox-vault-pass-dev
+endif
+
+# Check if vault password file exists, fallback to legacy location
+VAULT_FLAGS=$(shell \
+  if [ -f $(VAULT_PASS_FILE) ]; then \
+    echo "--vault-password-file $(VAULT_PASS_FILE)"; \
+  elif [ -f ~/.vault_pass ]; then \
+    echo "--vault-password-file ~/.vault_pass"; \
+  else \
+    echo "ERROR: Vault password file not found at $(VAULT_PASS_FILE) or ~/.vault_pass" >&2; \
+    echo "--vault-password-file $(VAULT_PASS_FILE)"; \
+  fi \
+)
 
 # Extra arguments (can override with: make vllm-embedding EXTRA_ARGS="-e skip_model_check=true")
 EXTRA_ARGS=
