@@ -64,6 +64,23 @@ get_backend_type() {
     get_backend "$env" 2>/dev/null || echo "docker"
 }
 
+# Get container prefix based on environment
+get_container_prefix() {
+    local env
+    env=$(get_state "ENVIRONMENT" 2>/dev/null || echo "development")
+    
+    case "$env" in
+        production) echo "prod" ;;
+        staging) echo "staging" ;;
+        demo) echo "demo" ;;
+        development) echo "dev" ;;
+        *) echo "dev" ;;
+    esac
+}
+
+# Set CONTAINER_PREFIX for use by functions
+CONTAINER_PREFIX=$(get_container_prefix)
+
 # ============================================================================
 # Service Status
 # ============================================================================
