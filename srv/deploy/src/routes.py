@@ -4,12 +4,17 @@ Deployment Service Routes
 API endpoints for app deployment operations.
 
 Architecture:
-- Core apps (ai-portal, agent-manager, etc.) are deployed via bridge script -> Makefile -> Ansible
+- Core apps (ai-portal, agent-manager) are deployed via docker exec into core-apps container
 - User apps (external/untrusted) are deployed via docker exec into user-apps container
+- Both use runtime installation pattern (apps not baked into images)
 
 This provides security isolation:
-- Core apps have full host access through Ansible
+- Core apps run in core-apps container (trusted)
 - User apps are sandboxed in the user-apps container
+
+For Proxmox/LXC:
+- Core apps: SSH to apps-lxc, systemd for process management
+- User apps: SSH to user-apps-lxc, systemd for process management
 """
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, Request
@@ -31,7 +36,15 @@ from .models import (
 from .auth import verify_admin_token
 from .database import provision_database
 from .container_executor import deploy_app as container_deploy_app, is_docker_environment, undeploy_app as container_undeploy_app, stop_app as container_stop_app
-from .bridge_executor import is_core_app, deploy_core_app, undeploy_core_app, execute_via_bridge
+from .core_app_executor import (
+    is_core_app,
+    deploy_core_app,
+    undeploy_core_app,
+    stop_core_app,
+    restart_core_app,
+    reload_nginx,
+    check_core_app_health
+)
 from .env_generator import generate_env_vars
 from .nginx_config import NginxConfigurator
 from .config import config
@@ -171,21 +184,20 @@ async def execute_deployment(
         deploy_logs = []
         
         if app_is_core:
-            # Core app: Deploy via bridge script -> Makefile -> Ansible
-            logger.info(f"Deploying core app {manifest.name} via bridge executor")
-            status.logs.append(f"[{datetime.utcnow().isoformat()}] Using bridge executor for trusted deployment")
+            # Core app: Deploy via docker exec into core-apps container (runtime installation)
+            logger.info(f"Deploying core app {manifest.name} via core_app_executor")
+            status.logs.append(f"[{datetime.utcnow().isoformat()}] Using core_app_executor for runtime deployment")
             await broadcast_status(deployment_id)
             
-            # Determine environment
+            # Determine environment and git ref
             environment = deploy_config.environment or "docker"
-            branch = deploy_config.branch if hasattr(deploy_config, 'branch') else None
+            github_ref = deploy_config.githubBranch or "main"
             
             success, message = await deploy_core_app(
-                app_name=manifest.id,
-                environment=environment,
-                branch=branch,
-                force_rebuild=getattr(deploy_config, 'forceRebuild', False),
-                logs=deploy_logs
+                app_id=manifest.id,
+                github_ref=github_ref,
+                logs=deploy_logs,
+                environment=environment
             )
             
             if not success:
@@ -867,13 +879,13 @@ async def undeploy_app(
     
     try:
         if app_is_core:
-            # Core apps: Use bridge executor (limited operations)
-            logger.info(f"Undeploying core app {app_id} via bridge executor")
-            logs.append("Using bridge executor for core app")
+            # Core apps: Use core_app_executor
+            logger.info(f"Undeploying core app {app_id} via core_app_executor")
+            logs.append("Using core_app_executor for core app")
             
-            # For core apps, we typically don't fully undeploy - just stop
+            # For core apps, undeploy stops the service but keeps code in volume
             success, message = await undeploy_core_app(
-                app_name=app_id,
+                app_id=app_id,
                 environment="docker",  # TODO: Get from request
                 logs=logs
             )

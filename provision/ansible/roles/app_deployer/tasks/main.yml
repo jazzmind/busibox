@@ -1,7 +1,14 @@
 ---
 # App Deployer Role - Main Tasks
-# Purpose: Generate deploywatch scripts and .env files for all applications
+# Purpose: Deploy applications via Deploy API and generate .env files
 # Requirements: FR-001, FR-005, FR-030 (GitHub deployment, secrets as env vars, extensibility)
+#
+# NOTE: This role now uses Deploy API for app deployments instead of deploywatch scripts.
+# The deploywatch approach is deprecated - see provision/ansible/roles/_deprecated/deploywatch/
+#
+# Deployment modes:
+#   - use_deploy_api: true (default) - Deploy via Deploy API (recommended)
+#   - use_deploy_api: false - Use legacy deploywatch scripts (deprecated)
 
 - name: Check if applications are defined
   debug:
@@ -22,17 +29,20 @@
     - app_deployer
     - secrets
 
-- name: Create deploywatch apps directory
+# Legacy deploywatch directory (only needed for fallback mode)
+- name: Create deploywatch apps directory (legacy)
   file:
     path: "{{ deploywatch_apps_dir }}"
     state: directory
     mode: "0755"
     owner: root
     group: root
+  when: use_deploy_api is defined and not use_deploy_api
   tags:
-    - always  # Always run for any app deployment
+    - always
 
-- name: Generate deploywatch scripts for each application (non-local)
+# Legacy deploywatch script generation (deprecated)
+- name: Generate deploywatch scripts for each application (legacy - deprecated)
   template:
     src: deploywatch-app.sh.j2
     dest: "{{ deploywatch_apps_dir }}/{{ item.name }}.sh"
@@ -45,20 +55,23 @@
   vars:
     app: "{{ item }}"
   when: 
+    - use_deploy_api is defined and not use_deploy_api
     - applications | length > 0
     - item.local_src is not defined
   tags:
-    - always  # Always run for any app deployment
+    - always
 
-- name: Deploy deploywatch orchestrator script
+# Legacy deploywatch orchestrator (deprecated)
+- name: Deploy deploywatch orchestrator script (legacy - deprecated)
   template:
     src: deploywatch-orchestrator.sh.j2
     dest: /srv/deploywatch/deploywatch-orchestrator.sh
     mode: "0755"
     owner: root
     group: root
+  when: use_deploy_api is defined and not use_deploy_api
   tags:
-    - always  # Always run for any app deployment
+    - always
 
 - name: Create application deploy directories
   file:
@@ -118,39 +131,67 @@
   tags:
     - always  # Always run for any app deployment
 
-- name: Detect configuration changes
+- name: Display configuration summary
+  debug:
+    msg: |
+      ✅ App deployer configuration complete
+      - Applications configured: {{ applications | length }}
+      - Deployment mode: {{ 'Deploy API' if (use_deploy_api | default(true)) else 'Legacy deploywatch' }}
+      - Environment files deployed: {{ applications | length }}
+  when: applications | length > 0
+
+# =============================================================================
+# DEPLOY API MODE (Default - Recommended)
+# =============================================================================
+- name: Deploy applications via Deploy API
+  include_tasks: deploy_via_api.yml
+  loop: "{{ applications }}"
+  loop_control:
+    label: "{{ item.name }}"
+  vars:
+    app: "{{ item }}"
+  when:
+    - use_deploy_api | default(true)
+    - applications is defined
+    - applications | length > 0
+    - deploy_apps is not defined or deploy_apps | bool
+    - deploy_from_branch is not defined or not (deploy_from_branch | bool)
+    - deploy_app is not defined or deploy_app == item.name
+  tags:
+    - always
+    - deploy_via_api
+
+# =============================================================================
+# LEGACY DEPLOYWATCH MODE (Deprecated)
+# =============================================================================
+- name: Detect configuration changes (legacy)
   stat:
     path: "{{ deploywatch_apps_dir }}/{{ item.name }}.sh"
   register: deploywatch_scripts
   loop: "{{ applications }}"
   loop_control:
     label: "{{ item.name }}"
-  when: applications | length > 0
+  when:
+    - use_deploy_api is defined and not use_deploy_api
+    - applications | length > 0
 
-- name: Display configuration summary
-  debug:
-    msg: |
-      ✅ App deployer configuration complete
-      - Applications configured: {{ applications | length }}
-      - Deploywatch scripts generated: {{ deploywatch_apps_dir }}
-      - Environment files deployed: {{ applications | length }}
-  when: applications | length > 0
-
-- name: Deploy application from branch (when requested)
+- name: Deploy application from branch (legacy - when requested)
   include_tasks: deploy-branch.yml
   when: 
+    - use_deploy_api is defined and not use_deploy_api
     - deploy_from_branch is defined
     - deploy_from_branch | bool
     - deploy_app is defined
   tags:
-    - always  # Allow included tasks' tags to work
+    - always
 
-- name: Deploy applications (standard release deployment)
+- name: Deploy applications (legacy - deploywatch)
   include_tasks: deploy.yml
   when: 
+    - use_deploy_api is defined and not use_deploy_api
     - applications is defined
     - applications | length > 0
     - deploy_apps is not defined or deploy_apps | bool
     - deploy_from_branch is not defined or not (deploy_from_branch | bool)
   tags:
-    - always  # Allow included tasks' tags to work
+    - always

@@ -51,9 +51,9 @@ RUN if [ -n "$GITHUB_AUTH_TOKEN" ]; then \
         echo "WARNING: GITHUB_AUTH_TOKEN not set - npm install may fail for @jazzmind packages"; \
     fi
 
-# Copy nginx configuration (will be mounted as volume in dev mode)
-COPY config/nginx-local.conf /etc/nginx/nginx.conf
-COPY config/nginx-sites/ /etc/nginx/conf.d/
+# Copy nginx configuration for bundled mode (nginx in same container as apps)
+# In dev mode, this can be overridden via volume mount
+COPY config/nginx-bundled.conf /etc/nginx/nginx.conf
 
 # Copy entrypoint script
 COPY provision/docker/core-apps-entrypoint.sh /usr/local/bin/core-apps-entrypoint.sh
@@ -67,8 +67,9 @@ ENV NODE_ENV=development
 ENV HOSTNAME=0.0.0.0
 
 # Health check - check nginx and both apps
+# Note: Health endpoints are at /api/health (not /portal/api/health or /agents/api/health)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=5 \
-    CMD curl -f http://localhost:80/health && curl -f http://localhost:3000/portal/api/health && curl -f http://localhost:3001/agents/api/health || exit 1
+    CMD curl -f http://localhost:80/health && curl -f http://localhost:3000/api/health && curl -f http://localhost:3001/api/health || exit 1
 
 # Use entrypoint script to start nginx and both apps
 ENTRYPOINT ["/usr/local/bin/core-apps-entrypoint.sh"]

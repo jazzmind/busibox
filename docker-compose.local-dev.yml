@@ -129,7 +129,8 @@ services:
         condition: service_healthy
     healthcheck:
       # Check nginx and both apps are responding
-      test: ["CMD", "sh", "-c", "curl -f http://localhost:80/health && curl -f http://localhost:3000/portal/api/health && curl -f http://localhost:3001/agents/api/health"]
+      # Note: Health endpoints are at /api/health (not /portal/api/health or /agents/api/health)
+      test: ["CMD", "sh", "-c", "curl -f http://localhost:80/health && curl -f http://localhost:3000/api/health && curl -f http://localhost:3001/api/health"]
       interval: 30s
       timeout: 10s
       start_period: 120s

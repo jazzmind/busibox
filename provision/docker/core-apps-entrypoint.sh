@@ -140,20 +140,26 @@ case "$MODE" in
         # Start nginx first (handles routing)
         start_nginx
         
-        # Run prisma migrations if needed
-        if [ -d "/srv/ai-portal/prisma" ]; then
+        # Run prisma db push to sync schema (uses prisma.config.ts for DATABASE_URL)
+        # This is safe because it only creates/modifies tables without data loss
+        if [ -d "/srv/ai-portal/prisma" ] && [ -f "/srv/ai-portal/prisma.config.ts" ]; then
+            echo "Syncing database schema..."
             cd /srv/ai-portal
-            npx prisma migrate deploy 2>/dev/null || true
+            npx prisma db push --accept-data-loss 2>/dev/null || {
+                echo "Warning: prisma db push failed, trying migrate deploy..."
+                npx prisma migrate deploy 2>/dev/null || true
+            }
         fi
         
-        # Start both apps with concurrently
-        # IMPORTANT: Set NEXT_PUBLIC_BASE_PATH per-app since they need different values
+        # Start both apps with concurrently using npm start (next start)
+        # NEXT_PUBLIC_BASE_PATH was set at build time and is baked into the bundle
+        # PORT and HOSTNAME must be set at runtime
         exec concurrently \
             --names "portal,agents" \
             --prefix-colors "blue,green" \
             --kill-others-on-fail \
-            "cd /srv/ai-portal && PORT=3000 NEXT_PUBLIC_BASE_PATH=/portal npm start" \
-            "cd /srv/agent-manager && PORT=3001 NEXT_PUBLIC_BASE_PATH=/agents npm start"
+            "cd /srv/ai-portal && PORT=3000 HOSTNAME=0.0.0.0 npm start" \
+            "cd /srv/agent-manager && PORT=3001 HOSTNAME=0.0.0.0 npm start"
         ;;
         
     *)

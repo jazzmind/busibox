@@ -94,6 +94,26 @@ cd /root/busibox/provision/pct
 bash create_lxc_base.sh production  # or: staging
 ```
 
+**Core App Runtime Operations** (from `provision/ansible/`):
+```bash
+# Deploy/update core app at runtime (no container rebuild)
+make install SERVICE=ai-portal              # Deploy latest from main
+make install SERVICE=ai-portal REF=v1.2.3   # Deploy specific version
+
+# Manage core app processes
+make app-status                             # Show all app status
+make app-restart SERVICE=ai-portal          # Restart app
+make app-stop SERVICE=agent-manager         # Stop app
+make app-start SERVICE=agent-manager        # Start app
+make app-logs SERVICE=ai-portal             # View logs
+
+# Nginx operations
+make nginx-reload                           # Reload nginx config
+
+# Debug access
+make core-apps-shell                        # Open shell in core-apps container
+```
+
 ### MCP Server for Cursor
 
 **Busibox MCP Server** provides structured access to documentation and scripts for Cursor:
@@ -222,6 +242,39 @@ Each service runs in an isolated LXC container:
 - **Data Security**: PostgreSQL Row-Level Security (RLS)
 - **Network**: Container isolation, ufw firewall
 - **Secrets**: Ansible vault
+
+### Deployment Architecture
+
+**Unified Deploy API**: All application deployments (core and user apps) go through the Deploy API service:
+
+```
+┌─────────────────┐     ┌──────────────┐     ┌──────────────────┐
+│   AI Portal     │────▶│  Deploy API  │────▶│  core-apps       │
+│  Admin UI       │     │  (Python)    │     │  (supervisord)   │
+└─────────────────┘     └──────────────┘     └──────────────────┘
+                              │
+                              ▼
+                        ┌──────────────────┐
+                        │  user-apps       │
+                        │  (systemd)       │
+                        └──────────────────┘
+```
+
+**Runtime Installation Pattern**:
+- Apps are NOT baked into Docker images
+- Apps are cloned and built at runtime into persistent volumes
+- App updates don't require container rebuilds
+- Consistent approach for Docker and Proxmox environments
+
+**Core Apps (ai-portal, agent-manager)**:
+- Run in `core-apps` container
+- Managed by supervisord (Docker) or systemd (Proxmox)
+- Deployed via `make install SERVICE=ai-portal`
+
+**User Apps**:
+- Run in `user-apps` container
+- Deployed via Deploy API or AI Portal Admin UI
+- Sandboxed for security
 
 ## Development Workflow
 

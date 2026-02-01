@@ -1,0 +1,121 @@
+---
+# App Deployer - Deploy via Deploy API
+# Purpose: Deploy applications using the Deploy API instead of deploywatch scripts
+# This is the unified deployment approach for both Docker and Proxmox environments
+
+- name: Wait for Deploy API to be available
+  uri:
+    url: "http://{{ deploy_host }}:{{ deploy_port }}/api/v1/deployment/health"
+    method: GET
+    status_code: 200
+  register: deploy_api_health
+  retries: 30
+  delay: 2
+  until: deploy_api_health.status == 200
+  tags:
+    - deploy_via_api
+
+- name: Deploy application via Deploy API
+  uri:
+    url: "http://{{ deploy_host }}:{{ deploy_port }}/api/v1/deployment/deploy"
+    method: POST
+    body_format: json
+    body:
+      manifest:
+        id: "{{ app.name }}"
+        name: "{{ app.name }}"
+        version: "{{ app.version | default('0.0.0') }}"
+        description: "{{ app.description | default(app.name) }}"
+        defaultPath: "{{ app.default_path | default('/' + app.name) }}"
+        defaultPort: "{{ app.port }}"
+        healthEndpoint: "{{ app.health_endpoint | default('/api/health') }}"
+        startCommand: "{{ app.start_command | default('node server.js') }}"
+        buildCommand: "{{ app.build_command | default('npm run build') }}"
+        database:
+          required: "{{ app.database_required | default(false) }}"
+          schemaManagement: "{{ app.schema_management | default('prisma') }}"
+      config:
+        environment: "{{ deploy_environment | default('production') }}"
+        githubRepoOwner: "{{ app.github_repo.split('/')[0] }}"
+        githubRepoName: "{{ app.github_repo.split('/')[1] }}"
+        githubBranch: "{{ app.github_branch | default('main') }}"
+        githubToken: "{{ secrets.github.personal_access_token }}"
+        devMode: false
+        secrets: {}
+    headers:
+      Authorization: "Bearer {{ deploy_api_admin_token }}"
+      Content-Type: application/json
+    status_code: [200, 201, 202]
+    timeout: 60
+  register: deploy_result
+  tags:
+    - deploy_via_api
+
+- name: Store deployment ID
+  set_fact:
+    deployment_id: "{{ deploy_result.json.deploymentId }}"
+  when: deploy_result.json.deploymentId is defined
+  tags:
+    - deploy_via_api
+
+- name: Wait for deployment to complete
+  uri:
+    url: "http://{{ deploy_host }}:{{ deploy_port }}/api/v1/deployment/deploy/{{ deployment_id }}/status"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ deploy_api_admin_token }}"
+    status_code: 200
+  register: status_result
+  retries: 90  # 15 minutes max (90 * 10s)
+  delay: 10
+  until: status_result.json.status in ['completed', 'failed']
+  when: deployment_id is defined
+  tags:
+    - deploy_via_api
+
+- name: Display deployment result
+  debug:
+    msg: |
+      ✅ Deployment {{ 'completed' if status_result.json.status == 'completed' else 'FAILED' }}
+      App: {{ app.name }}
+      Status: {{ status_result.json.status }}
+      Progress: {{ status_result.json.progress }}%
+      {% if status_result.json.error %}
+      Error: {{ status_result.json.error }}
+      {% endif %}
+  when: status_result is defined
+  tags:
+    - deploy_via_api
+
+- name: Fail if deployment failed
+  fail:
+    msg: "Deployment failed: {{ status_result.json.error | default('Unknown error') }}"
+  when:
+    - status_result is defined
+    - status_result.json.status == 'failed'
+  tags:
+    - deploy_via_api
+
+- name: Wait for application to be healthy
+  uri:
+    url: "http://{{ app.container_ip | default('localhost') }}:{{ app.port }}{{ app.health_endpoint | default('/api/health') }}"
+    method: GET
+    status_code: 200
+  register: health_result
+  retries: 30
+  delay: 5
+  until: health_result.status == 200
+  ignore_errors: true
+  tags:
+    - deploy_via_api
+
+- name: Display health check result
+  debug:
+    msg: |
+      {% if health_result.status == 200 %}
+      ✅ {{ app.name }} is healthy and responding
+      {% else %}
+      ⚠️ {{ app.name }} health check did not pass - app may still be starting
+      {% endif %}
+  tags:
+    - deploy_via_api

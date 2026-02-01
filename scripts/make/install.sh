@@ -2185,9 +2185,9 @@ generate_admin_link() {
     
     # Return proper setup URL with magic link token
     if [[ "$BASE_DOMAIN" == "localhost" ]]; then
-        echo "https://localhost/portal/admin/setup?token=${token}"
+        echo "https://localhost/portal/verify?token=${token}"
     else
-        echo "https://${BASE_DOMAIN}/portal/admin/setup?token=${token}"
+        echo "https://${BASE_DOMAIN}/portal/verify?token=${token}"
     fi
 }
 
@@ -3008,6 +3008,91 @@ check_prerequisites() {
 # INSTALL STATE MANAGEMENT
 # =============================================================================
 
+# Define install order for services (used for health check validation)
+# Services are checked in this order; if any is unhealthy, we resume from there
+# Minimal bootstrap services deployed via CLI
+# Other services (redis, minio, milvus, litellm, data-api, search-api, agent-api, docs-api)
+# are managed by deploy-api after the initial bootstrap
+INSTALL_SERVICES_ORDER=(
+    "postgres:5432:infrastructure"
+    "authz-api:8010:apis"
+    "deploy-api:8011:apis"
+    "core-apps:443:frontend"  # Includes nginx, ai-portal, agent-manager
+)
+
+# Validate container health in installation order
+# Returns: 0 if all healthy, 1 if any unhealthy
+# Sets: FIRST_UNHEALTHY_SERVICE, FIRST_UNHEALTHY_PHASE
+validate_install_health() {
+    local env_prefix="$1"
+    
+    FIRST_UNHEALTHY_SERVICE=""
+    FIRST_UNHEALTHY_PHASE=""
+    
+    # Check if Docker daemon is running
+    if ! docker info &>/dev/null 2>&1; then
+        FIRST_UNHEALTHY_SERVICE="docker-daemon"
+        FIRST_UNHEALTHY_PHASE="infrastructure"
+        return 1
+    fi
+    
+    # Get running containers
+    export CONTAINER_PREFIX="$env_prefix"
+    local running_containers
+    running_containers=$(docker ps --format '{{.Names}}' 2>/dev/null | grep "^${env_prefix}-" || echo "")
+    
+    if [[ -z "$running_containers" ]]; then
+        FIRST_UNHEALTHY_SERVICE="all-containers"
+        FIRST_UNHEALTHY_PHASE="infrastructure"
+        return 1
+    fi
+    
+    # Check each service in order
+    for service_entry in "${INSTALL_SERVICES_ORDER[@]}"; do
+        local service_name="${service_entry%%:*}"
+        local rest="${service_entry#*:}"
+        local port="${rest%%:*}"
+        local phase="${rest#*:}"
+        
+        # Check if container exists and is running
+        local container_name="${env_prefix}-${service_name}"
+        
+        # Skip if service uses different container name
+        case "$service_name" in
+            core-apps)
+                # Check nginx port on core-apps
+                if ! echo "$running_containers" | grep -q "${env_prefix}-core-apps"; then
+                    FIRST_UNHEALTHY_SERVICE="$service_name"
+                    FIRST_UNHEALTHY_PHASE="$phase"
+                    return 1
+                fi
+                # Also check port health
+                if ! nc -z localhost "$port" 2>/dev/null && ! timeout 2 bash -c "echo > /dev/tcp/localhost/$port" 2>/dev/null; then
+                    FIRST_UNHEALTHY_SERVICE="$service_name"
+                    FIRST_UNHEALTHY_PHASE="$phase"
+                    return 1
+                fi
+                ;;
+            *)
+                # Standard container check
+                if ! echo "$running_containers" | grep -qE "(^|-)${service_name}$"; then
+                    FIRST_UNHEALTHY_SERVICE="$service_name"
+                    FIRST_UNHEALTHY_PHASE="$phase"
+                    return 1
+                fi
+                # Port check with short timeout
+                if ! nc -z localhost "$port" 2>/dev/null && ! timeout 2 bash -c "echo > /dev/tcp/localhost/$port" 2>/dev/null; then
+                    FIRST_UNHEALTHY_SERVICE="$service_name"
+                    FIRST_UNHEALTHY_PHASE="$phase"
+                    return 1
+                fi
+                ;;
+        esac
+    done
+    
+    return 0
+}
+
 # Check for existing installation and offer resume/restart options
 check_existing_install() {
     local env_prefix="$1"
@@ -3027,9 +3112,71 @@ check_existing_install() {
         return 1  # No meaningful state
     fi
     
-    # Check if bootstrap is complete
+    # Check if bootstrap is complete according to state
     if [[ "$install_status" == "installed" || "$install_phase" == "complete" ]]; then
-        # Installation complete - show magic link and open browser
+        # IMPORTANT: Validate that services are actually healthy
+        # State says "installed" but containers may be missing/stopped
+        info "Validating installation health (checking ${#INSTALL_SERVICES_ORDER[@]} services)..."
+        
+        if ! validate_install_health "$env_prefix"; then
+            # Services are unhealthy - treat as interrupted install
+            echo ""
+            echo -e "${YELLOW}╔══════════════════════════════════════════════════════════════════════════════╗${NC}"
+            box_line "                     ${BOLD}INSTALLATION INCOMPLETE${NC}" "double" "${YELLOW}"
+            echo -e "${YELLOW}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
+            echo ""
+            echo -e "  State file indicates installation is complete, but services are not healthy."
+            echo ""
+            echo -e "  First unhealthy service: ${BOLD}${FIRST_UNHEALTHY_SERVICE}${NC}"
+            echo -e "  Phase: ${BOLD}${FIRST_UNHEALTHY_PHASE}${NC}"
+            echo ""
+            
+            if [[ "$NO_PROMPT" != true ]]; then
+                echo -e "┌──────────────────────────────────────────────────────────────────────────────┐"
+                box_line "" "single"
+                box_line "  ${CYAN}1)${NC} Resume            Continue install from ${FIRST_UNHEALTHY_SERVICE}" "single"
+                box_line "  ${CYAN}2)${NC} Start fresh       Delete existing stack and start over" "single"
+                box_line "  ${CYAN}3)${NC} Exit              Do nothing" "single"
+                box_line "" "single"
+                echo -e "└──────────────────────────────────────────────────────────────────────────────┘"
+                echo ""
+                
+                while true; do
+                    read -p "$(echo -e "${BOLD}Choice [1]:${NC} ")" choice
+                    case "${choice:-1}" in
+                        1)
+                            info "Resuming installation from ${FIRST_UNHEALTHY_PHASE} phase..."
+                            # Update install phase to resume from the right point
+                            set_state "INSTALL_PHASE" "$FIRST_UNHEALTHY_PHASE"
+                            set_state "INSTALL_STATUS" "interrupted"
+                            return 0  # Resume
+                            ;;
+                        2)
+                            cleanup_existing_install "$env_prefix"
+                            return 1  # Start fresh
+                            ;;
+                        3)
+                            info "Exiting."
+                            exit 0
+                            ;;
+                        *)
+                            echo "Invalid choice. Please enter 1, 2, or 3."
+                            ;;
+                    esac
+                done
+            else
+                # Non-interactive mode - auto-resume from failed point
+                info "Auto-resuming installation from ${FIRST_UNHEALTHY_PHASE} phase..."
+                set_state "INSTALL_PHASE" "$FIRST_UNHEALTHY_PHASE"
+                set_state "INSTALL_STATUS" "interrupted"
+                return 0  # Resume
+            fi
+        fi
+        
+        # Services are healthy - installation is truly complete
+        success "All services are healthy"
+        
+        # Show magic link and open browser
         # Load BASE_DOMAIN from state for URL generation
         BASE_DOMAIN=$(get_state "BASE_DOMAIN" 2>/dev/null || echo "localhost")
         

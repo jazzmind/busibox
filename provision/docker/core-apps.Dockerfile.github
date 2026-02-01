@@ -87,7 +87,9 @@ RUN npm ci
 
 # Build the application with correct base path
 # NEXT_PUBLIC_BASE_PATH must be set at build time for Next.js
+# NEXT_PUBLIC_AI_PORTAL_URL is used for auth redirects back to portal
 ENV NEXT_PUBLIC_BASE_PATH=/agents
+ENV NEXT_PUBLIC_AI_PORTAL_URL=https://localhost/portal
 RUN npm run build
 
 # =============================================================================
@@ -110,24 +112,45 @@ RUN mkdir -p /srv/ai-portal /srv/agent-manager \
     /run/nginx \
     /var/log/nginx
 
-# Copy built AI Portal
+# =============================================================================
+# Copy AI Portal (standard build mode)
+# =============================================================================
+# Standard Next.js build output structure:
+#   .next/         - Contains all build artifacts
+#   node_modules/  - All dependencies (required for next start)
+#   public/        - Static public files
+# 
+# Run with: npm start (which runs next start)
+# =============================================================================
 WORKDIR /srv/ai-portal
+
+# Copy the full build output and dependencies
 COPY --from=build-ai-portal /build/ai-portal/.next ./.next
+COPY --from=build-ai-portal /build/ai-portal/node_modules ./node_modules
 COPY --from=build-ai-portal /build/ai-portal/public ./public
 COPY --from=build-ai-portal /build/ai-portal/package.json ./package.json
-COPY --from=build-ai-portal /build/ai-portal/node_modules ./node_modules
-COPY --from=build-ai-portal /build/ai-portal/prisma ./prisma
+COPY --from=build-ai-portal /build/ai-portal/next.config.ts ./next.config.ts
 
-# Copy built Agent Manager
+# Copy prisma files for database migrations
+COPY --from=build-ai-portal /build/ai-portal/prisma ./prisma
+COPY --from=build-ai-portal /build/ai-portal/prisma.config.ts ./prisma.config.ts
+
+# =============================================================================
+# Copy Agent Manager (standard build mode)
+# =============================================================================
 WORKDIR /srv/agent-manager
+
+# Copy the full build output and dependencies
 COPY --from=build-agent-manager /build/agent-manager/.next ./.next
+COPY --from=build-agent-manager /build/agent-manager/node_modules ./node_modules
 COPY --from=build-agent-manager /build/agent-manager/public ./public
 COPY --from=build-agent-manager /build/agent-manager/package.json ./package.json
-COPY --from=build-agent-manager /build/agent-manager/node_modules ./node_modules
+COPY --from=build-agent-manager /build/agent-manager/next.config.ts ./next.config.ts
 
-# Copy nginx configuration
-COPY config/nginx-local.conf /etc/nginx/nginx.conf
-COPY config/nginx-sites/ /etc/nginx/conf.d/
+# Copy nginx configuration for bundled mode (nginx in same container as apps)
+# This config uses localhost for frontend apps, Docker DNS for backend APIs
+COPY config/nginx-bundled.conf /etc/nginx/nginx.conf
+# Don't copy external site configs - bundled config has everything inline
 
 # Copy SSL certificates (self-signed will be generated if not present)
 COPY ssl/ /etc/nginx/ssl/
@@ -146,6 +169,8 @@ ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
 
 # Health check - check nginx and both apps
+# Note: With basePath configured, health endpoints are at /portal/api/health and /agents/api/health
+# because basePath affects all routes including API routes
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:80/health && curl -f http://localhost:3000/portal/api/health && curl -f http://localhost:3001/agents/api/health || exit 1
 

@@ -158,11 +158,18 @@ litellm_enable_database: true
 # ============================================================================
 # Deployment Configuration
 # ============================================================================
-# NOTE: deploywatch is deprecated for external/user apps.
-# Use the Deploy API (srv/deploy/) via AI Portal Admin UI instead.
-# deploywatch is still used for core apps (ai-portal, agent-manager) during
-# initial provisioning, but will eventually be fully replaced by Deploy API.
-deploywatch_check_interval: 300  # Check more frequently in test (5 minutes)
+# Deploy API is the unified deployment system for both Docker and Proxmox.
+# Set use_deploy_api: false to use legacy deploywatch scripts (deprecated).
+use_deploy_api: true
+
+# Deploy API connection settings
+deploy_host: "{{ core_apps_ip }}"  # Deploy API runs in core-apps container
+deploy_port: 8011
+deploy_api_admin_token: "{{ secrets.deploy_api.admin_token | default('') }}"
+deploy_environment: staging
+
+# Legacy deploywatch settings (deprecated - only used when use_deploy_api: false)
+deploywatch_check_interval: 300  # Check more frequently in staging (5 minutes)
 deploywatch_apps_dir: /srv/deploywatch/apps
 
 # Application Defaults

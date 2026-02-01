@@ -974,3 +974,165 @@ docker-clean:
 	@echo "Stopping all Docker containers..."
 	@docker compose -f ../../docker-compose.yml -f ../../docker-compose.local-dev.yml down --remove-orphans 2>/dev/null || true
 	@echo "Note: Data volumes are preserved. Use 'docker volume prune' to remove them."
+
+# =============================================================================
+# DOCKER RUNTIME OPERATIONS (Proxmox-style)
+# =============================================================================
+# Runtime app management for Docker containers without rebuild.
+# These commands use the Deploy API or docker exec to manage apps.
+#
+# For core apps (ai-portal, agent-manager):
+#   make install SERVICE=ai-portal            # Deploy/update via Deploy API
+#   make app-restart SERVICE=ai-portal        # Restart app via supervisorctl
+#   make app-status                           # Show all app status
+#   make app-logs SERVICE=ai-portal           # View app logs
+#   make nginx-reload                         # Reload nginx config
+#
+# These mirror the Proxmox deployment pattern where apps are installed
+# at runtime rather than baked into container images.
+
+.PHONY: install app-restart app-stop app-start app-status app-logs nginx-reload core-apps-shell
+
+# Install/update an app in running container via Deploy API
+install:
+ifndef SERVICE
+	@echo "╔══════════════════════════════════════════════════════════════════════╗"
+	@echo "║                    RUNTIME APP INSTALLATION                           ║"
+	@echo "╚══════════════════════════════════════════════════════════════════════╝"
+	@echo ""
+	@echo "Usage: make install SERVICE=<service> [REF=<git-ref>]"
+	@echo ""
+	@echo "Core apps: ai-portal, agent-manager"
+	@echo "User apps: Any app deployed via Deploy API"
+	@echo ""
+	@echo "REF: git branch or tag (default: main)"
+	@echo ""
+	@echo "Examples:"
+	@echo "  make install SERVICE=ai-portal"
+	@echo "  make install SERVICE=agent-manager REF=v1.2.3"
+	@echo "  make install SERVICE=ai-portal REF=feature/new-ui"
+else
+	@echo "🚀 Deploying $(SERVICE) via Deploy API..."
+	@REF=$${REF:-main}; \
+	if [ -f ../../docker-compose.yml ]; then \
+		echo "Using Docker environment (docker exec)"; \
+		docker compose -f ../../docker-compose.yml -f ../../docker-compose.github.yml \
+			exec core-apps /usr/local/bin/entrypoint.sh deploy $(SERVICE) $$REF; \
+	else \
+		echo "Using Proxmox environment (Deploy API)"; \
+		curl -X POST http://$(CORE_APPS_IP):8011/api/v1/deployment/deploy \
+			-H "Content-Type: application/json" \
+			-d '{"manifest": {"id": "$(SERVICE)", "name": "$(SERVICE)"}, "config": {"githubBranch": "'$$REF'"}}'; \
+	fi
+endif
+
+# Reload nginx config (no container rebuild)
+nginx-reload:
+	@echo "🔄 Reloading nginx configuration..."
+	@if [ -f ../../docker-compose.yml ]; then \
+		docker compose -f ../../docker-compose.yml -f ../../docker-compose.github.yml \
+			exec core-apps nginx -t && \
+		docker compose -f ../../docker-compose.yml -f ../../docker-compose.github.yml \
+			exec core-apps nginx -s reload; \
+		echo "✅ Nginx reloaded"; \
+	else \
+		ssh root@$(CORE_APPS_IP) 'nginx -t && nginx -s reload'; \
+		echo "✅ Nginx reloaded"; \
+	fi
+
+# View app logs
+app-logs:
+ifndef SERVICE
+	@echo "Viewing all supervisor logs..."
+	@if [ -f ../../docker-compose.yml ]; then \
+		docker compose -f ../../docker-compose.yml -f ../../docker-compose.github.yml \
+			exec core-apps tail -f /var/log/supervisor/*.log; \
+	else \
+		ssh root@$(CORE_APPS_IP) 'tail -f /var/log/supervisor/*.log'; \
+	fi
+else
+	@echo "Viewing $(SERVICE) logs..."
+	@if [ -f ../../docker-compose.yml ]; then \
+		docker compose -f ../../docker-compose.yml -f ../../docker-compose.github.yml \
+			exec core-apps tail -f /var/log/supervisor/$(SERVICE)*.log; \
+	else \
+		ssh root@$(CORE_APPS_IP) 'journalctl -u $(SERVICE) -f'; \
+	fi
+endif
+
+# Restart an app without rebuild
+app-restart:
+ifndef SERVICE
+	@echo "Error: SERVICE is required"
+	@echo "Usage: make app-restart SERVICE=<ai-portal|agent-manager>"
+	@exit 1
+else
+	@echo "🔄 Restarting $(SERVICE)..."
+	@if [ -f ../../docker-compose.yml ]; then \
+		docker compose -f ../../docker-compose.yml -f ../../docker-compose.github.yml \
+			exec core-apps supervisorctl restart $(SERVICE); \
+		echo "✅ $(SERVICE) restarted"; \
+	else \
+		ssh root@$(CORE_APPS_IP) 'systemctl restart $(SERVICE)'; \
+		echo "✅ $(SERVICE) restarted"; \
+	fi
+endif
+
+# Stop an app
+app-stop:
+ifndef SERVICE
+	@echo "Error: SERVICE is required"
+	@echo "Usage: make app-stop SERVICE=<ai-portal|agent-manager>"
+	@exit 1
+else
+	@echo "🛑 Stopping $(SERVICE)..."
+	@if [ -f ../../docker-compose.yml ]; then \
+		docker compose -f ../../docker-compose.yml -f ../../docker-compose.github.yml \
+			exec core-apps supervisorctl stop $(SERVICE); \
+		echo "✅ $(SERVICE) stopped"; \
+	else \
+		ssh root@$(CORE_APPS_IP) 'systemctl stop $(SERVICE)'; \
+		echo "✅ $(SERVICE) stopped"; \
+	fi
+endif
+
+# Start an app
+app-start:
+ifndef SERVICE
+	@echo "Error: SERVICE is required"
+	@echo "Usage: make app-start SERVICE=<ai-portal|agent-manager>"
+	@exit 1
+else
+	@echo "🚀 Starting $(SERVICE)..."
+	@if [ -f ../../docker-compose.yml ]; then \
+		docker compose -f ../../docker-compose.yml -f ../../docker-compose.github.yml \
+			exec core-apps supervisorctl start $(SERVICE); \
+		echo "✅ $(SERVICE) started"; \
+	else \
+		ssh root@$(CORE_APPS_IP) 'systemctl start $(SERVICE)'; \
+		echo "✅ $(SERVICE) started"; \
+	fi
+endif
+
+# Show app status
+app-status:
+	@echo "╔══════════════════════════════════════════════════════════════════════╗"
+	@echo "║                    CORE APP STATUS                                    ║"
+	@echo "╚══════════════════════════════════════════════════════════════════════╝"
+	@echo ""
+	@if [ -f ../../docker-compose.yml ]; then \
+		docker compose -f ../../docker-compose.yml -f ../../docker-compose.github.yml \
+			exec core-apps supervisorctl status; \
+	else \
+		ssh root@$(CORE_APPS_IP) 'systemctl status ai-portal agent-manager --no-pager'; \
+	fi
+
+# Open shell in core-apps container
+core-apps-shell:
+	@echo "Opening shell in core-apps container..."
+	@if [ -f ../../docker-compose.yml ]; then \
+		docker compose -f ../../docker-compose.yml -f ../../docker-compose.github.yml \
+			exec core-apps /bin/bash; \
+	else \
+		ssh root@$(CORE_APPS_IP); \
+	fi

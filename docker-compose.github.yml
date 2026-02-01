@@ -1,47 +1,60 @@
 # =============================================================================
-# Busibox GitHub Mode - Next.js Applications
+# Busibox GitHub Mode - Next.js Applications (Runtime Installation)
 # =============================================================================
 #
 # GitHub overlay for Next.js apps with:
-#   - Apps cloned from GitHub at build time
+#   - Apps cloned from GitHub at RUNTIME (not build time)
 #   - Published @jazzmind/busibox-app from npm registry
-#   - Production builds with turbopack
+#   - Production builds inside running container
+#   - Persistent volumes for app code (survives container restarts)
 #
 # Usage:
 #   docker compose -f docker-compose.yml -f docker-compose.github.yml up
 #   Or: make docker-up-github
 #
 # Configuration:
-#   Set these in .env.local to control which version to build:
+#   Set these in .env.local to control which version to deploy:
 #     AI_PORTAL_GITHUB_REF=main          # Branch name
 #     AI_PORTAL_GITHUB_REF=v1.2.3        # Release tag
 #     AGENT_MANAGER_GITHUB_REF=main      # Branch name
 #
 # Core Apps Architecture:
-#   - Single container runs both ai-portal (port 3000) and agent-manager (port 3001)
-#   - Mirrors Proxmox pattern where core-apps-lxc hosts multiple Next.js apps
-#   - Uses concurrently to manage both processes
+#   - Lightweight container with nginx and supervisord
+#   - Apps deployed at runtime via Deploy API or on first start
+#   - Supervisord manages nginx + app processes
+#   - Mirrors Proxmox pattern where apps-lxc hosts multiple Next.js apps
+#
+# First Start:
+#   - Container builds quickly (no app code)
+#   - Apps are cloned and built on first start (~3-5 min)
+#   - Subsequent starts are fast (apps in persistent volumes)
+#
+# Updating Apps:
+#   - Use Deploy API: POST /api/v1/deployment/deploy
+#   - Or: docker compose exec core-apps /usr/local/bin/entrypoint.sh deploy ai-portal main
+#   - No container rebuild needed!
 #
 # =============================================================================
 
 services:
-  # Core Apps - Nginx + AI Portal + Agent Manager (GitHub Build Mode)
-  # Single container running nginx and both Next.js apps, matching Proxmox apps-lxc architecture
+  # Core Apps - Nginx + AI Portal + Agent Manager (Runtime Installation Mode)
+  # Lightweight container with nginx + supervisord, apps deployed at runtime
   core-apps:
     build:
       context: .
-      dockerfile: provision/docker/core-apps.Dockerfile.github
-      args:
-        GITHUB_AUTH_TOKEN: ${GITHUB_AUTH_TOKEN:-}
-        AI_PORTAL_GITHUB_REF: ${AI_PORTAL_GITHUB_REF:-main}
-        AGENT_MANAGER_GITHUB_REF: ${AGENT_MANAGER_GITHUB_REF:-main}
+      dockerfile: provision/docker/core-apps.Dockerfile.runtime
     container_name: ${CONTAINER_PREFIX:-local}-core-apps
     hostname: core-apps
-    restart: unless-stopped
+    restart: "no"
     extra_hosts:
       - "host.docker.internal:host-gateway"  # Access host's localhost from container
     environment:
       NODE_ENV: production
+      # GitHub authentication for cloning repos and npm packages
+      GITHUB_AUTH_TOKEN: ${GITHUB_AUTH_TOKEN:-}
+      # Git refs for app deployment (used on first start)
+      AI_PORTAL_GITHUB_REF: ${AI_PORTAL_GITHUB_REF:-main}
+      AGENT_MANAGER_GITHUB_REF: ${AGENT_MANAGER_GITHUB_REF:-main}
       # =========================================================================
       # AI Portal Environment (PORT 3000)
       # =========================================================================
@@ -95,19 +108,28 @@ services:
       - "3000:3000"
       - "3001:3001"
     volumes:
+      # Persistent app directories - apps survive container restarts
+      - core-apps-portal:/srv/ai-portal
+      - core-apps-agent:/srv/agent-manager
+      # Supervisor logs (optional, for debugging)
+      - core-apps-logs:/var/log/supervisor
       # Dynamic app configs for nginx (deploy-api manages these)
       - ./config/nginx-sites/apps:/etc/nginx/conf.d/apps:rw
+      # SSL certificates (self-signed generated on first run)
+      - ./ssl:/etc/nginx/ssl:rw
     depends_on:
       postgres:
         condition: service_healthy
       authz-api:
         condition: service_healthy
     healthcheck:
-      # Check nginx and both apps are responding
-      test: ["CMD", "sh", "-c", "curl -f http://localhost:80/health && curl -f http://localhost:3000/portal/api/health && curl -f http://localhost:3001/agents/api/health"]
+      # Check nginx health first (apps may not be deployed yet on first start)
+      # Full health check includes apps once deployed
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
       interval: 30s
       timeout: 10s
-      start_period: 90s
+      # Longer start_period for first-time app deployment (clone + build)
+      start_period: 300s
       retries: 3
     networks:
       busibox-net:
@@ -123,3 +145,13 @@ networks:
   busibox-net:
     driver: bridge
     name: ${CONTAINER_PREFIX:-local}-busibox-net
+
+# Persistent volumes for app code and logs
+# Apps survive container restarts without needing to re-clone and rebuild
+volumes:
+  core-apps-portal:
+    name: ${CONTAINER_PREFIX:-local}-core-apps-portal
+  core-apps-agent:
+    name: ${CONTAINER_PREFIX:-local}-core-apps-agent
+  core-apps-logs:
+    name: ${CONTAINER_PREFIX:-local}-core-apps-logs
