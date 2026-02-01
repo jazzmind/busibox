@@ -1355,11 +1355,35 @@ bootstrap_docker_ansible() {
         local tags="$1"
         local log_file="${REPO_ROOT}/.ansible-${container_prefix}-${tags}.log"
         
+        # Build skip-tags list based on phases before FIRST_UNHEALTHY_PHASE
+        # This prevents Ansible from running tasks in healthy phases during reinstall
+        local skip_tags=""
+        if [[ -n "$FIRST_UNHEALTHY_PHASE" ]]; then
+            case "$FIRST_UNHEALTHY_PHASE" in
+                infrastructure)
+                    # Need to run infrastructure, no skips
+                    ;;
+                apis)
+                    # Skip infrastructure phase
+                    skip_tags="infrastructure"
+                    ;;
+                frontend)
+                    # Skip infrastructure and apis phases
+                    skip_tags="infrastructure,apis"
+                    ;;
+            esac
+        fi
+        
         # Always show full output for now - ansible filtering is tricky
         # Use -v for slightly more verbose output to see what's happening
         echo ""
         info "Running ansible with tags: $tags"
-        ANSIBLE_FORCE_COLOR=1 $playbook_cmd --tags "$tags" -v 2>&1 | tee "$log_file"
+        if [[ -n "$skip_tags" ]]; then
+            info "Skipping already-healthy phases: $skip_tags"
+            ANSIBLE_FORCE_COLOR=1 $playbook_cmd --tags "$tags" --skip-tags "$skip_tags" -v 2>&1 | tee "$log_file"
+        else
+            ANSIBLE_FORCE_COLOR=1 $playbook_cmd --tags "$tags" -v 2>&1 | tee "$log_file"
+        fi
         local exit_code=${PIPESTATUS[0]}
         
         if [[ $exit_code -ne 0 ]]; then
