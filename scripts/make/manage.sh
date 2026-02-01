@@ -455,7 +455,7 @@ select_service() {
     local idx=1
     
     for group in "${SERVICE_GROUP_ORDER[@]}"; do
-        printf "  ${BOLD}${group}${NC}\n"
+        echo -e "  ${BOLD}${group}${NC}"
         for service in $(get_services_for_group "$group"); do
             services+=("$service")
             local status
@@ -466,13 +466,13 @@ select_service() {
                 stopped|missing|unreachable) status_indicator="${RED}○${NC}" ;;
                 *) status_indicator="${YELLOW}●${NC}" ;;
             esac
-            printf "    ${BOLD}%2d)${NC} %s %-20s\n" "$idx" "$status_indicator" "$service"
+            echo -e "    ${BOLD}$(printf "%2d" "$idx")${NC}) ${status_indicator} ${service}"
             ((idx++))
         done
         echo ""
     done
     
-    printf "  ${DIM}b = back${NC}\n"
+    echo -e "  ${DIM}b = back${NC}"
     echo ""
     box_footer
     echo ""
