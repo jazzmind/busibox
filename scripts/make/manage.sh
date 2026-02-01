@@ -270,6 +270,12 @@ manage_service() {
         box_line "  ${BOLD}3)${NC} Restart"
         box_line "  ${BOLD}4)${NC} View Logs"
         box_line "  ${BOLD}5)${NC} Redeploy"
+        
+        # Add "Rebuild App" option for core-apps service
+        if [[ "$service" == "core-apps" ]]; then
+            box_line "  ${BOLD}6)${NC} Rebuild App (no container restart)"
+        fi
+        
         box_empty
         box_line "  ${DIM}b = back${NC}"
         box_empty
@@ -338,6 +344,65 @@ manage_service() {
                     make "deploy-${service}" INV="inventory/${env}"
                 fi
                 read -n 1 -s -r -p "Press any key to continue..."
+                ;;
+            6) # Rebuild App (only for core-apps)
+                if [[ "$service" != "core-apps" ]]; then
+                    continue
+                fi
+                
+                clear
+                box_start 70 double "$CYAN"
+                box_header "REBUILD APP"
+                box_empty
+                box_line "  ${BOLD}Select app to rebuild:${NC}"
+                box_empty
+                box_line "    ${BOLD}1)${NC} ai-portal"
+                box_line "    ${BOLD}2)${NC} agent-manager"
+                box_line "    ${BOLD}3)${NC} both"
+                box_empty
+                box_line "  ${DIM}b = back${NC}"
+                box_empty
+                box_footer
+                echo ""
+                
+                read -n 1 -s -r -p "Select app: " app_choice
+                echo ""
+                
+                case "$app_choice" in
+                    1) # ai-portal
+                        echo ""
+                        info "Rebuilding ai-portal..."
+                        local env
+                        env=$(get_state "ENVIRONMENT" || echo "staging")
+                        cd "${REPO_ROOT}/provision/ansible"
+                        make deploy-ai-portal INV="inventory/${env}"
+                        read -n 1 -s -r -p "Press any key to continue..."
+                        ;;
+                    2) # agent-manager
+                        echo ""
+                        info "Rebuilding agent-manager..."
+                        local env
+                        env=$(get_state "ENVIRONMENT" || echo "staging")
+                        cd "${REPO_ROOT}/provision/ansible"
+                        make deploy-agent-manager INV="inventory/${env}"
+                        read -n 1 -s -r -p "Press any key to continue..."
+                        ;;
+                    3) # both
+                        echo ""
+                        info "Rebuilding ai-portal..."
+                        local env
+                        env=$(get_state "ENVIRONMENT" || echo "staging")
+                        cd "${REPO_ROOT}/provision/ansible"
+                        make deploy-ai-portal INV="inventory/${env}"
+                        echo ""
+                        info "Rebuilding agent-manager..."
+                        make deploy-agent-manager INV="inventory/${env}"
+                        read -n 1 -s -r -p "Press any key to continue..."
+                        ;;
+                    b|B)
+                        # Go back to service menu
+                        ;;
+                esac
                 ;;
             b|B)
                 return
