@@ -305,9 +305,14 @@ manage_service() {
         box_line "  ${BOLD}4)${NC} View Logs"
         box_line "  ${BOLD}5)${NC} Redeploy"
         
-        # Add "Rebuild App" option for core-apps service
+        # Add options for core-apps service
         if [[ "$service" == "core-apps" ]]; then
-            box_line "  ${BOLD}6)${NC} Rebuild App (no container restart)"
+            # Option 6: Rebuild Container (Docker only)
+            if [[ "$backend" == "docker" ]]; then
+                box_line "  ${BOLD}6)${NC} Rebuild Container (full Docker rebuild)"
+            fi
+            # Option 7: Rebuild App (always available)
+            box_line "  ${BOLD}7)${NC} Rebuild App (from source, no container restart)"
         fi
         
         box_empty
@@ -379,79 +384,116 @@ manage_service() {
                 fi
                 read -n 1 -s -r -p "Press any key to continue..."
                 ;;
-            6) # Rebuild App (only for core-apps)
+            6) # Rebuild Container (only for core-apps + Docker)
+                if [[ "$service" != "core-apps" ]] || [[ "$backend" != "docker" ]]; then
+                    continue
+                fi
+                
+                echo ""
+                info "Rebuilding core-apps container (full Docker rebuild)..."
+                cd "$REPO_ROOT"
+                make docker-build SERVICE=core-apps && make docker-up SERVICE=core-apps
+                read -n 1 -s -r -p "Press any key to continue..."
+                ;;
+            7) # Rebuild App (only for core-apps)
                 if [[ "$service" != "core-apps" ]]; then
                     continue
                 fi
                 
-                # Check backend type
-                local backend
-                backend=$(get_backend_type)
+                clear
+                box_start 70 double "$CYAN"
+                box_header "REBUILD APP"
+                box_empty
+                box_line "  ${BOLD}Select app to rebuild:${NC}"
+                box_empty
+                box_line "    ${BOLD}1)${NC} ai-portal"
+                box_line "    ${BOLD}2)${NC} agent-manager"
+                box_line "    ${BOLD}3)${NC} both"
+                box_empty
+                box_line "  ${DIM}b = back${NC}"
+                box_empty
+                box_footer
+                echo ""
                 
-                if [[ "$backend" == "docker" ]]; then
-                    # Docker mode - just rebuild the container
-                    clear
-                    echo ""
-                    info "Rebuilding core-apps container..."
-                    cd "$REPO_ROOT"
-                    make docker-build SERVICE=core-apps && make docker-up SERVICE=core-apps
-                    read -n 1 -s -r -p "Press any key to continue..."
-                else
-                    # Proxmox/Ansible mode - deploy specific apps
-                    clear
-                    box_start 70 double "$CYAN"
-                    box_header "REBUILD APP"
-                    box_empty
-                    box_line "  ${BOLD}Select app to rebuild:${NC}"
-                    box_empty
-                    box_line "    ${BOLD}1)${NC} ai-portal"
-                    box_line "    ${BOLD}2)${NC} agent-manager"
-                    box_line "    ${BOLD}3)${NC} both"
-                    box_empty
-                    box_line "  ${DIM}b = back${NC}"
-                    box_empty
-                    box_footer
-                    echo ""
-                    
-                    read -n 1 -s -r -p "Select app: " app_choice
-                    echo ""
-                    
-                    case "$app_choice" in
-                        1) # ai-portal
-                            echo ""
-                            info "Rebuilding ai-portal..."
+                read -n 1 -s -r -p "Select app: " app_choice
+                echo ""
+                
+                case "$app_choice" in
+                    1) # ai-portal
+                        echo ""
+                        info "Rebuilding ai-portal from source..."
+                        if [[ "$backend" == "docker" ]]; then
+                            # Docker: exec into container and rebuild
+                            docker exec -it "${prefix}-core-apps" bash -c "
+                                cd /srv/apps/ai-portal && \
+                                git pull && \
+                                npm install && \
+                                npm run build && \
+                                pm2 restart ai-portal
+                            "
+                        else
+                            # Proxmox: use Ansible
                             local env
                             env=$(get_state "ENVIRONMENT" || echo "staging")
                             cd "${REPO_ROOT}/provision/ansible"
                             make deploy-ai-portal INV="inventory/${env}"
-                            read -n 1 -s -r -p "Press any key to continue..."
-                            ;;
-                        2) # agent-manager
-                            echo ""
-                            info "Rebuilding agent-manager..."
+                        fi
+                        read -n 1 -s -r -p "Press any key to continue..."
+                        ;;
+                    2) # agent-manager
+                        echo ""
+                        info "Rebuilding agent-manager from source..."
+                        if [[ "$backend" == "docker" ]]; then
+                            # Docker: exec into container and rebuild
+                            docker exec -it "${prefix}-core-apps" bash -c "
+                                cd /srv/apps/agent-manager && \
+                                git pull && \
+                                npm install && \
+                                npm run build && \
+                                pm2 restart agent-manager
+                            "
+                        else
+                            # Proxmox: use Ansible
                             local env
                             env=$(get_state "ENVIRONMENT" || echo "staging")
                             cd "${REPO_ROOT}/provision/ansible"
                             make deploy-agent-manager INV="inventory/${env}"
-                            read -n 1 -s -r -p "Press any key to continue..."
-                            ;;
-                        3) # both
-                            echo ""
-                            info "Rebuilding ai-portal..."
+                        fi
+                        read -n 1 -s -r -p "Press any key to continue..."
+                        ;;
+                    3) # both
+                        echo ""
+                        info "Rebuilding ai-portal from source..."
+                        if [[ "$backend" == "docker" ]]; then
+                            # Docker: exec into container and rebuild both
+                            docker exec -it "${prefix}-core-apps" bash -c "
+                                cd /srv/apps/ai-portal && \
+                                git pull && \
+                                npm install && \
+                                npm run build && \
+                                pm2 restart ai-portal && \
+                                cd /srv/apps/agent-manager && \
+                                git pull && \
+                                npm install && \
+                                npm run build && \
+                                pm2 restart agent-manager
+                            "
+                        else
+                            # Proxmox: use Ansible
                             local env
                             env=$(get_state "ENVIRONMENT" || echo "staging")
                             cd "${REPO_ROOT}/provision/ansible"
                             make deploy-ai-portal INV="inventory/${env}"
                             echo ""
-                            info "Rebuilding agent-manager..."
+                            info "Rebuilding agent-manager from source..."
                             make deploy-agent-manager INV="inventory/${env}"
-                            read -n 1 -s -r -p "Press any key to continue..."
-                            ;;
-                        b|B)
-                            # Go back to service menu
-                            ;;
-                    esac
-                fi
+                        fi
+                        read -n 1 -s -r -p "Press any key to continue..."
+                        ;;
+                    b|B)
+                        # Go back to service menu
+                        ;;
+                esac
                 ;;
             b|B)
                 return
