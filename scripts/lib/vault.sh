@@ -198,6 +198,66 @@ _vault_success() {
     fi
 }
 
+# Auto-install yq if not present (Linux only)
+ensure_yq_installed() {
+    # Check if yq is already available
+    if command -v yq &>/dev/null; then
+        return 0
+    fi
+    
+    _vault_info "yq not found, attempting to install..."
+    
+    # Detect OS
+    local os_type=$(uname -s)
+    
+    if [[ "$os_type" == "Linux" ]]; then
+        # Linux - use wget/curl to install from GitHub releases
+        local yq_version="v4.35.2"
+        local yq_binary="yq_linux_amd64"
+        local install_dir="/usr/local/bin"
+        
+        # Check if we have root access
+        if [[ $EUID -ne 0 ]]; then
+            _vault_error "Root access required to install yq to /usr/local/bin"
+            _vault_error "Please run: sudo wget https://github.com/mikefarah/yq/releases/download/${yq_version}/${yq_binary} -O /usr/local/bin/yq && sudo chmod +x /usr/local/bin/yq"
+            return 1
+        fi
+        
+        # Try to download and install
+        if command -v wget &>/dev/null; then
+            if wget -q "https://github.com/mikefarah/yq/releases/download/${yq_version}/${yq_binary}" -O "${install_dir}/yq" 2>/dev/null; then
+                chmod +x "${install_dir}/yq"
+                _vault_success "yq installed successfully to ${install_dir}/yq"
+                return 0
+            fi
+        elif command -v curl &>/dev/null; then
+            if curl -sL "https://github.com/mikefarah/yq/releases/download/${yq_version}/${yq_binary}" -o "${install_dir}/yq" 2>/dev/null; then
+                chmod +x "${install_dir}/yq"
+                _vault_success "yq installed successfully to ${install_dir}/yq"
+                return 0
+            fi
+        else
+            _vault_error "Neither wget nor curl found. Cannot auto-install yq."
+            _vault_error "Please install manually: wget https://github.com/mikefarah/yq/releases/download/${yq_version}/${yq_binary} -O /usr/local/bin/yq && chmod +x /usr/local/bin/yq"
+            return 1
+        fi
+        
+        _vault_error "Failed to download yq from GitHub"
+        _vault_error "Please install manually: wget https://github.com/mikefarah/yq/releases/download/${yq_version}/${yq_binary} -O /usr/local/bin/yq && chmod +x /usr/local/bin/yq"
+        return 1
+        
+    elif [[ "$os_type" == "Darwin" ]]; then
+        # macOS - suggest homebrew
+        _vault_error "yq is required for writing vault secrets."
+        _vault_error "On macOS, install with: brew install yq"
+        return 1
+    else
+        _vault_error "yq is required for writing vault secrets."
+        _vault_error "Please install from: https://github.com/mikefarah/yq/releases"
+        return 1
+    fi
+}
+
 # Check if ansible-vault is available
 check_ansible_vault() {
     if ! command -v ansible-vault &>/dev/null; then
@@ -585,8 +645,7 @@ write_vault_secret() {
     fi
     
     # Check if yq is available (required for writing)
-    if ! command -v yq &>/dev/null; then
-        _vault_error "yq is required for writing vault secrets. Install with: brew install yq"
+    if ! ensure_yq_installed; then
         return 1
     fi
     
@@ -650,8 +709,7 @@ update_vault_secrets() {
     fi
     
     # Check if yq is available (required for writing)
-    if ! command -v yq &>/dev/null; then
-        _vault_error "yq is required for writing vault secrets. Install with: brew install yq"
+    if ! ensure_yq_installed; then
         return 1
     fi
     
