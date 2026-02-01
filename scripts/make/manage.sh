@@ -151,7 +151,7 @@ show_services_status() {
     echo ""
     
     for group in "${SERVICE_GROUP_ORDER[@]}"; do
-        local services="${SERVICE_GROUPS[$group]}"
+        local services="${SERVICE_GROUPS[$group]:-}"
         
         printf "  ${BOLD}${group}${NC}\n"
         
@@ -422,7 +422,7 @@ select_service() {
     
     for group in "${SERVICE_GROUP_ORDER[@]}"; do
         printf "  ${BOLD}${group}${NC}\n"
-        for service in ${SERVICE_GROUPS[$group]}; do
+        for service in ${SERVICE_GROUPS[$group]:-}; do
             services+=("$service")
             local status
             status=$(get_service_status "$service")
