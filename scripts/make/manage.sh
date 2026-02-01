@@ -400,6 +400,17 @@ manage_service() {
                     continue
                 fi
                 
+                # For Docker, apps are built into the image, so we can't rebuild in-place
+                if [[ "$backend" == "docker" ]]; then
+                    echo ""
+                    warn "For Docker, apps are built into the container image."
+                    warn "Use option 6 'Rebuild Container' to rebuild with latest code."
+                    echo ""
+                    read -n 1 -s -r -p "Press any key to continue..."
+                    continue
+                fi
+                
+                # Proxmox/Ansible mode - deploy specific apps
                 clear
                 box_start 70 double "$CYAN"
                 box_header "REBUILD APP"
@@ -418,76 +429,32 @@ manage_service() {
                 read -n 1 -s -r -p "Select app: " app_choice
                 echo ""
                 
+                local env
+                env=$(get_state "ENVIRONMENT" || echo "staging")
+                
                 case "$app_choice" in
                     1) # ai-portal
                         echo ""
                         info "Rebuilding ai-portal from source..."
-                        if [[ "$backend" == "docker" ]]; then
-                            # Docker: exec into container and rebuild
-                            docker exec -it "${prefix}-core-apps" bash -c "
-                                cd /srv/apps/ai-portal && \
-                                git pull && \
-                                npm install && \
-                                npm run build && \
-                                pm2 restart ai-portal
-                            "
-                        else
-                            # Proxmox: use Ansible
-                            local env
-                            env=$(get_state "ENVIRONMENT" || echo "staging")
-                            cd "${REPO_ROOT}/provision/ansible"
-                            make deploy-ai-portal INV="inventory/${env}"
-                        fi
+                        cd "${REPO_ROOT}/provision/ansible"
+                        make deploy-ai-portal INV="inventory/${env}"
                         read -n 1 -s -r -p "Press any key to continue..."
                         ;;
                     2) # agent-manager
                         echo ""
                         info "Rebuilding agent-manager from source..."
-                        if [[ "$backend" == "docker" ]]; then
-                            # Docker: exec into container and rebuild
-                            docker exec -it "${prefix}-core-apps" bash -c "
-                                cd /srv/apps/agent-manager && \
-                                git pull && \
-                                npm install && \
-                                npm run build && \
-                                pm2 restart agent-manager
-                            "
-                        else
-                            # Proxmox: use Ansible
-                            local env
-                            env=$(get_state "ENVIRONMENT" || echo "staging")
-                            cd "${REPO_ROOT}/provision/ansible"
-                            make deploy-agent-manager INV="inventory/${env}"
-                        fi
+                        cd "${REPO_ROOT}/provision/ansible"
+                        make deploy-agent-manager INV="inventory/${env}"
                         read -n 1 -s -r -p "Press any key to continue..."
                         ;;
                     3) # both
                         echo ""
                         info "Rebuilding ai-portal from source..."
-                        if [[ "$backend" == "docker" ]]; then
-                            # Docker: exec into container and rebuild both
-                            docker exec -it "${prefix}-core-apps" bash -c "
-                                cd /srv/apps/ai-portal && \
-                                git pull && \
-                                npm install && \
-                                npm run build && \
-                                pm2 restart ai-portal && \
-                                cd /srv/apps/agent-manager && \
-                                git pull && \
-                                npm install && \
-                                npm run build && \
-                                pm2 restart agent-manager
-                            "
-                        else
-                            # Proxmox: use Ansible
-                            local env
-                            env=$(get_state "ENVIRONMENT" || echo "staging")
-                            cd "${REPO_ROOT}/provision/ansible"
-                            make deploy-ai-portal INV="inventory/${env}"
-                            echo ""
-                            info "Rebuilding agent-manager from source..."
-                            make deploy-agent-manager INV="inventory/${env}"
-                        fi
+                        cd "${REPO_ROOT}/provision/ansible"
+                        make deploy-ai-portal INV="inventory/${env}"
+                        echo ""
+                        info "Rebuilding agent-manager from source..."
+                        make deploy-agent-manager INV="inventory/${env}"
                         read -n 1 -s -r -p "Press any key to continue..."
                         ;;
                     b|B)
