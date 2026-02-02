@@ -850,60 +850,60 @@ sync_secrets_to_vault() {
     # ==========================================================================
     # APPLICATION SECRETS
     # These are application-specific secrets required by apps in apps.yml
-    # Format: secrets.{app_name}.{secret_key}
+    # Format: secrets.{app-name}.{secret_key} (use hyphens, not underscores!)
     # ==========================================================================
     
-    # AI Portal secrets
+    # AI Portal secrets (app name: ai-portal)
     if [[ -n "${POSTGRES_PASSWORD:-}" ]] && [[ -n "${POSTGRES_USER:-}" ]] && [[ -n "${POSTGRES_DB:-}" ]] && [[ -n "${POSTGRES_HOST:-}" ]] && [[ -n "${POSTGRES_PORT:-}" ]]; then
-        values_to_update+=("secrets.ai_portal.database_url=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}")
+        values_to_update+=("secrets.ai-portal.database_url=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}")
     fi
     if [[ -n "${SSO_JWT_SECRET:-}" ]]; then
-        values_to_update+=("secrets.ai_portal.sso_jwt_secret=${SSO_JWT_SECRET}")
+        values_to_update+=("secrets.ai-portal.sso_jwt_secret=${SSO_JWT_SECRET}")
     fi
     if [[ -n "${LITELLM_API_KEY:-}" ]]; then
-        values_to_update+=("secrets.ai_portal.litellm_api_key=${LITELLM_API_KEY}")
+        values_to_update+=("secrets.ai-portal.litellm_api_key=${LITELLM_API_KEY}")
     fi
     if [[ -n "${OPENAI_API_KEY:-}" ]]; then
-        values_to_update+=("secrets.ai_portal.openai_api_key=${OPENAI_API_KEY}")
+        values_to_update+=("secrets.ai-portal.openai_api_key=${OPENAI_API_KEY}")
     fi
     if [[ -n "${ALLOWED_DOMAINS:-}" ]]; then
-        values_to_update+=("secrets.ai_portal.allowed_email_domains=${ALLOWED_DOMAINS}")
+        values_to_update+=("secrets.ai-portal.allowed_email_domains=${ALLOWED_DOMAINS}")
     fi
     # Email/SMTP secrets - use defaults if not set
-    values_to_update+=("secrets.ai_portal.email_from=${EMAIL_FROM:-noreply@busibox.local}")
-    values_to_update+=("secrets.ai_portal.smtp_host=${SMTP_HOST:-localhost}")
-    values_to_update+=("secrets.ai_portal.smtp_port=${SMTP_PORT:-25}")
-    values_to_update+=("secrets.ai_portal.smtp_user=${SMTP_USER:-}")
-    values_to_update+=("secrets.ai_portal.smtp_password=${SMTP_PASSWORD:-}")
-    values_to_update+=("secrets.ai_portal.smtp_secure=${SMTP_SECURE:-false}")
+    values_to_update+=("secrets.ai-portal.email_from=${EMAIL_FROM:-noreply@busibox.local}")
+    values_to_update+=("secrets.ai-portal.smtp_host=${SMTP_HOST:-localhost}")
+    values_to_update+=("secrets.ai-portal.smtp_port=${SMTP_PORT:-25}")
+    values_to_update+=("secrets.ai-portal.smtp_user=${SMTP_USER:-}")
+    values_to_update+=("secrets.ai-portal.smtp_password=${SMTP_PASSWORD:-}")
+    values_to_update+=("secrets.ai-portal.smtp_secure=${SMTP_SECURE:-false}")
     # GitHub OAuth secrets - use placeholders if not set
-    values_to_update+=("secrets.ai_portal.github_client_id=${GITHUB_CLIENT_ID:-CHANGE_ME}")
-    values_to_update+=("secrets.ai_portal.github_client_secret=${GITHUB_CLIENT_SECRET:-CHANGE_ME}")
-    values_to_update+=("secrets.ai_portal.github_redirect_uri=${GITHUB_REDIRECT_URI:-https://localhost/portal/api/admin/github/callback}")
+    values_to_update+=("secrets.ai-portal.github_client_id=${GITHUB_CLIENT_ID:-CHANGE_ME}")
+    values_to_update+=("secrets.ai-portal.github_client_secret=${GITHUB_CLIENT_SECRET:-CHANGE_ME}")
+    values_to_update+=("secrets.ai-portal.github_redirect_uri=${GITHUB_REDIRECT_URI:-https://localhost/portal/api/admin/github/callback}")
     # Encryption key - generate if not set
     if [[ -n "${ENCRYPTION_KEY:-}" ]]; then
-        values_to_update+=("secrets.ai_portal.encryption_key=${ENCRYPTION_KEY}")
+        values_to_update+=("secrets.ai-portal.encryption_key=${ENCRYPTION_KEY}")
     elif [[ -n "${SSO_JWT_SECRET:-}" ]]; then
-        values_to_update+=("secrets.ai_portal.encryption_key=${SSO_JWT_SECRET}")
+        values_to_update+=("secrets.ai-portal.encryption_key=${SSO_JWT_SECRET}")
     fi
     # Container IPs - use variables that will be resolved by Ansible
-    values_to_update+=("secrets.ai_portal.current_container_ip={{ core_apps_ip }}")
-    values_to_update+=("secrets.ai_portal.apps_container_ip={{ core_apps_ip }}")
-    values_to_update+=("secrets.ai_portal.agent_container_ip={{ agent_ip }}")
-    values_to_update+=("secrets.ai_portal.postgres_container_ip={{ postgres_ip }}")
+    values_to_update+=("secrets.ai-portal.current_container_ip={{ core_apps_ip }}")
+    values_to_update+=("secrets.ai-portal.apps_container_ip={{ core_apps_ip }}")
+    values_to_update+=("secrets.ai-portal.agent_container_ip={{ agent_ip }}")
+    values_to_update+=("secrets.ai-portal.postgres_container_ip={{ postgres_ip }}")
     
-    # Agent Manager secrets
+    # Agent Manager secrets (app name: agent-manager)
     if [[ -n "${POSTGRES_PASSWORD:-}" ]] && [[ -n "${POSTGRES_USER:-}" ]] && [[ -n "${POSTGRES_DB:-}" ]] && [[ -n "${POSTGRES_HOST:-}" ]] && [[ -n "${POSTGRES_PORT:-}" ]]; then
-        values_to_update+=("secrets.agent_manager.database_url=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}")
+        values_to_update+=("secrets.agent-manager.database_url=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}")
     fi
-    values_to_update+=("secrets.agent_manager.agent_api_key=${LITELLM_API_KEY:-sk-agent-api-key}")
+    values_to_update+=("secrets.agent-manager.agent_api_key=${LITELLM_API_KEY:-sk-agent-api-key}")
     if [[ -n "${SSO_JWT_SECRET:-}" ]]; then
-        values_to_update+=("secrets.agent_manager.jwt_secret=${SSO_JWT_SECRET}")
-        values_to_update+=("secrets.agent_manager.session_secret=${SSO_JWT_SECRET}")
-        values_to_update+=("secrets.agent_manager.sso_jwt_secret=${SSO_JWT_SECRET}")
+        values_to_update+=("secrets.agent-manager.jwt_secret=${SSO_JWT_SECRET}")
+        values_to_update+=("secrets.agent-manager.session_secret=${SSO_JWT_SECRET}")
+        values_to_update+=("secrets.agent-manager.sso_jwt_secret=${SSO_JWT_SECRET}")
     fi
     if [[ -n "${LITELLM_API_KEY:-}" ]]; then
-        values_to_update+=("secrets.agent_manager.litellm_api_key=${LITELLM_API_KEY}")
+        values_to_update+=("secrets.agent-manager.litellm_api_key=${LITELLM_API_KEY}")
     fi
     
     if [[ ${#values_to_update[@]} -eq 0 ]]; then
