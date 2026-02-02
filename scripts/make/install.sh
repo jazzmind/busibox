@@ -96,6 +96,28 @@ _update_state_file_for_env() {
     # This configures VAULT_FILE and VAULT_PASS_FILE
     set_vault_environment "$prefix"
     export BUSIBOX_STATE_FILE
+    
+    # Ensure vault is encrypted if it exists
+    if [[ -f "$VAULT_FILE" ]] && ! is_vault_encrypted; then
+        warn "Vault exists but is not encrypted: $VAULT_FILE"
+        
+        # Ensure password file exists
+        local vault_pass_file="${HOME}/.busibox-vault-pass-${prefix}"
+        if [[ ! -f "$vault_pass_file" ]]; then
+            info "Creating vault password file: $vault_pass_file"
+            openssl rand -base64 32 > "$vault_pass_file"
+            chmod 600 "$vault_pass_file"
+        fi
+        
+        # Encrypt the vault
+        info "Encrypting vault..."
+        if ansible-vault encrypt --vault-password-file="$vault_pass_file" "$VAULT_FILE" 2>/dev/null; then
+            success "Vault encrypted: $VAULT_FILE"
+        else
+            error "Failed to encrypt vault"
+            exit 1
+        fi
+    fi
 }
 
 # =============================================================================
@@ -3635,9 +3657,6 @@ main() {
                 
                 cp "$VAULT_EXAMPLE" "$VAULT_FILE"
                 success "Vault file created: $VAULT_FILE"
-                
-                # Mark that we need to encrypt the vault after updating secrets
-                VAULT_NEEDS_ENCRYPTION=true
             else
                 error "Vault file not found and no example to copy from"
                 error "  Expected: $VAULT_EXAMPLE"
@@ -3647,7 +3666,6 @@ main() {
             fi
         else
             info "Using existing vault: $VAULT_FILE"
-            VAULT_NEEDS_ENCRYPTION=false
         fi
         
         # Set vault password for sync operation
@@ -3674,19 +3692,8 @@ main() {
         
         export ANSIBLE_VAULT_PASSWORD_FILE="$vault_pass_file"
         
-        # Sync generated secrets to vault
+        # Sync generated secrets to vault (will encrypt automatically)
         sync_secrets_to_vault
-        
-        # Encrypt the vault if it was just created (unencrypted)
-        if [[ "${VAULT_NEEDS_ENCRYPTION:-false}" == "true" ]]; then
-            info "Encrypting vault with environment password..."
-            if ansible-vault encrypt --vault-password-file="$vault_pass_file" "$VAULT_FILE" 2>/dev/null; then
-                success "Vault encrypted: $VAULT_FILE"
-            else
-                error "Failed to encrypt vault"
-                exit 1
-            fi
-        fi
         
         set_install_phase "secrets_generated"
     else
