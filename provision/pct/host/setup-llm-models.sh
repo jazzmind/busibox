@@ -39,6 +39,14 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 # Parse command line arguments
 CLEANUP_MODE=false
 DEDUPLICATE_MODE=false
+STAGE_ARG=""
+
+# First arg might be stage (production/staging/development)
+if [[ -n "${1:-}" ]] && [[ ! "$1" =~ ^-- ]]; then
+    STAGE_ARG="$1"
+    shift
+fi
+
 for arg in "$@"; do
     case "$arg" in
         --cleanup)
@@ -52,7 +60,8 @@ for arg in "$@"; do
             ;;
         *)
             log_error "Unknown argument: $arg"
-            echo "Usage: $0 [--cleanup|--deduplicate]"
+            echo "Usage: $0 [stage] [--cleanup|--deduplicate]"
+            echo "  stage: production|staging|development (optional)"
             exit 1
             ;;
     esac
@@ -86,8 +95,8 @@ detect_hardware() {
 }
 
 detect_stage() {
-    # Try to get stage from command line arg passed by install.sh
-    local stage="${1:-}"
+    # Use stage from command line arg if provided
+    local stage="${STAGE_ARG}"
     
     # If not provided, try to detect from hostname or default to production
     if [[ -z "$stage" ]]; then
@@ -104,7 +113,7 @@ detect_stage() {
 }
 
 HARDWARE=$(detect_hardware)
-STAGE=$(detect_stage "$1")
+STAGE=$(detect_stage)
 
 log_info "Hardware: ${HARDWARE}"
 log_info "Stage: ${STAGE}"
