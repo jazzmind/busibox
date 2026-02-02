@@ -7,10 +7,10 @@
 --
 -- Architecture:
 --   Production/Staging User: busibox_user
---     - Connects to: agent_server, authz, files, busibox, ai_portal
+--     - Connects to: agent, authz, files, busibox, ai_portal
 --   
 --   Pytest Test User: busibox_test_user
---     - Connects to: agent_server, authz, files (SAME names, different owner)
+--     - Connects to: agent, authz, files (SAME names, different owner)
 --     - Provides complete isolation for automated tests
 --
 -- =============================================================================
@@ -53,9 +53,9 @@ WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'busibox')\gexec
 SELECT 'CREATE DATABASE ai_portal OWNER busibox_user'
 WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'ai_portal')\gexec
 
--- Create agent_server database (for agent-api)
-SELECT 'CREATE DATABASE agent_server OWNER busibox_user'
-WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'agent_server')\gexec
+-- Create agent database (for agent-api)
+SELECT 'CREATE DATABASE agent OWNER busibox_user'
+WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'agent')\gexec
 
 -- Create authz database (for authz service)
 SELECT 'CREATE DATABASE authz OWNER busibox_user'
@@ -74,9 +74,9 @@ WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'litellm')\gexec
 -- Same table names as production, but completely isolated
 -- =============================================================================
 
--- Create test_agent_server database
-SELECT 'CREATE DATABASE test_agent_server OWNER busibox_test_user'
-WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'test_agent_server')\gexec
+-- Create test_agent database
+SELECT 'CREATE DATABASE test_agent OWNER busibox_test_user'
+WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'test_agent')\gexec
 
 -- Create test_authz database
 SELECT 'CREATE DATABASE test_authz OWNER busibox_test_user'
@@ -93,13 +93,13 @@ WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'test_files')\gexec
 -- Production databases
 GRANT ALL PRIVILEGES ON DATABASE busibox TO busibox_user;
 GRANT ALL PRIVILEGES ON DATABASE ai_portal TO busibox_user;
-GRANT ALL PRIVILEGES ON DATABASE agent_server TO busibox_user;
+GRANT ALL PRIVILEGES ON DATABASE agent TO busibox_user;
 GRANT ALL PRIVILEGES ON DATABASE authz TO busibox_user;
 GRANT ALL PRIVILEGES ON DATABASE files TO busibox_user;
 GRANT ALL PRIVILEGES ON DATABASE litellm TO busibox_user;
 
 -- Test databases
-GRANT ALL PRIVILEGES ON DATABASE test_agent_server TO busibox_test_user;
+GRANT ALL PRIVILEGES ON DATABASE test_agent TO busibox_test_user;
 GRANT ALL PRIVILEGES ON DATABASE test_authz TO busibox_test_user;
 GRANT ALL PRIVILEGES ON DATABASE test_files TO busibox_test_user;
 

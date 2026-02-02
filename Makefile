@@ -287,7 +287,7 @@ endif
 	@FAST=$${FAST:-1} WORKER=$${WORKER:-0} bash scripts/test/run-local-tests.sh $(SERVICE) $(INV) $(ARGS)
 
 # Bootstrap test databases (schema + OAuth clients + signing keys)
-# Run this before running tests to initialize test_authz, test_files, test_agent_server
+# Run this before running tests to initialize test_authz, test_files, test_agent
 test-db-init:
 	@echo "Bootstrapping test databases..."
 	@docker compose -f docker-compose.local.yml --env-file .env.local run --rm test-db-init

@@ -239,7 +239,7 @@ services:
     restart: "no"
 
   # Test Database Bootstrap (on-demand, run via: make test-db-init)
-  # Initializes test databases (test_authz, test_files, test_agent_server) with
+  # Initializes test databases (test_authz, test_files, test_agent) with
   # schema and bootstrap data for running integration tests
   # This container is NOT started automatically - use the test menu to run it
   test-db-init:
@@ -673,10 +673,10 @@ services:
       DEBUG: "true"
       LOG_LEVEL: INFO
       # Database
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-busibox_user}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/agent_server
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-busibox_user}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/agent
       # Test Mode Configuration (routes X-Test-Mode: true requests to test database)
       TEST_MODE_ENABLED: "true"
-      TEST_DATABASE_URL: postgresql+asyncpg://busibox_test_user:testpassword@postgres:5432/test_agent_server
+      TEST_DATABASE_URL: postgresql+asyncpg://busibox_test_user:testpassword@postgres:5432/test_agent
       # Redis
       REDIS_URL: redis://redis:6379/0
       # Busibox services
