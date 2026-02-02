@@ -29,20 +29,8 @@
     - /etc/nginx/sites-enabled
     - /etc/nginx/snippets
 
-- name: Detect SSL certificate mode
-  set_fact:
-    detected_ssl_mode: "{{ ssl_mode | default('selfsigned') }}"
-
-- name: Display SSL mode
-  debug:
-    msg: |
-      SSL Certificate Mode: {{ detected_ssl_mode }}
-      - letsencrypt: Automatic certificate acquisition and renewal
-      - provisioned: Use pre-existing certificates
-      - selfsigned: Generate self-signed certificates (development only)
-
-- name: Include SSL certificate tasks based on mode
-  include_tasks: "{{ detected_ssl_mode }}.yml"
+- name: Setup SSL certificates (discover from ssl/ or generate self-signed)
+  include_tasks: ssl-certificates.yml
 
 - name: Deploy main NGINX configuration
   template:

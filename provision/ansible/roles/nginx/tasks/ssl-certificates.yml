@@ -1,0 +1,181 @@
+---
+# SSL Certificate Discovery and Setup
+# Purpose: Find SSL certificates from ssl/ directory or generate self-signed
+# Priority:
+#   1. Exact domain match: {full_domain}.crt + {full_domain}.key
+#   2. Wildcard parent match: {parent_domain}.crt + {parent_domain}.key
+#   3. Self-signed fallback: Generate certificates
+
+- name: Determine SSL source directory
+  set_fact:
+    ssl_source_dir: "{{ ssl_certificates_path | default(playbook_dir + '/../../ssl') }}"
+
+- name: Resolve SSL source directory to absolute path
+  command: "realpath {{ ssl_source_dir }}"
+  register: ssl_dir_resolved
+  delegate_to: localhost
+  become: false
+  changed_when: false
+
+- name: Set resolved SSL source directory
+  set_fact:
+    ssl_source_dir: "{{ ssl_dir_resolved.stdout }}"
+
+- name: Extract parent domain for wildcard lookup
+  set_fact:
+    parent_domain: "{{ full_domain.split('.', 1)[1] if full_domain.split('.')|length > 2 else full_domain }}"
+
+- name: Debug SSL lookup
+  debug:
+    msg: |
+      SSL Certificate Lookup:
+      - Full domain: {{ full_domain }}
+      - Parent domain: {{ parent_domain }}
+      - Source directory: {{ ssl_source_dir }}
+
+- name: Check for exact domain certificate (with fullchain)
+  stat:
+    path: "{{ ssl_source_dir }}/{{ full_domain }}.fullchain.crt"
+  register: exact_fullchain_stat
+  delegate_to: localhost
+  become: false
+
+- name: Check for exact domain certificate (without fullchain)
+  stat:
+    path: "{{ ssl_source_dir }}/{{ full_domain }}.crt"
+  register: exact_cert_stat
+  delegate_to: localhost
+  become: false
+
+- name: Check for exact domain key
+  stat:
+    path: "{{ ssl_source_dir }}/{{ full_domain }}.key"
+  register: exact_key_stat
+  delegate_to: localhost
+  become: false
+
+- name: Check for wildcard parent certificate (with fullchain)
+  stat:
+    path: "{{ ssl_source_dir }}/{{ parent_domain }}.fullchain.crt"
+  register: wildcard_fullchain_stat
+  delegate_to: localhost
+  become: false
+  when: parent_domain != full_domain
+
+- name: Check for wildcard parent certificate (without fullchain)
+  stat:
+    path: "{{ ssl_source_dir }}/{{ parent_domain }}.crt"
+  register: wildcard_cert_stat
+  delegate_to: localhost
+  become: false
+  when: parent_domain != full_domain
+
+- name: Check for wildcard parent key
+  stat:
+    path: "{{ ssl_source_dir }}/{{ parent_domain }}.key"
+  register: wildcard_key_stat
+  delegate_to: localhost
+  become: false
+  when: parent_domain != full_domain
+
+# Determine which certificate to use
+- name: Use exact domain certificate (fullchain)
+  set_fact:
+    ssl_cert_source: "{{ ssl_source_dir }}/{{ full_domain }}.fullchain.crt"
+    ssl_key_source: "{{ ssl_source_dir }}/{{ full_domain }}.key"
+    ssl_mode_used: "exact-fullchain"
+  when:
+    - exact_fullchain_stat.stat.exists
+    - exact_key_stat.stat.exists
+
+- name: Use exact domain certificate (without fullchain)
+  set_fact:
+    ssl_cert_source: "{{ ssl_source_dir }}/{{ full_domain }}.crt"
+    ssl_key_source: "{{ ssl_source_dir }}/{{ full_domain }}.key"
+    ssl_mode_used: "exact"
+  when:
+    - ssl_mode_used is not defined
+    - exact_cert_stat.stat.exists
+    - exact_key_stat.stat.exists
+
+- name: Use wildcard parent certificate (fullchain)
+  set_fact:
+    ssl_cert_source: "{{ ssl_source_dir }}/{{ parent_domain }}.fullchain.crt"
+    ssl_key_source: "{{ ssl_source_dir }}/{{ parent_domain }}.key"
+    ssl_mode_used: "wildcard-fullchain"
+  when:
+    - ssl_mode_used is not defined
+    - parent_domain != full_domain
+    - wildcard_fullchain_stat.stat.exists
+    - wildcard_key_stat.stat.exists
+
+- name: Use wildcard parent certificate (without fullchain)
+  set_fact:
+    ssl_cert_source: "{{ ssl_source_dir }}/{{ parent_domain }}.crt"
+    ssl_key_source: "{{ ssl_source_dir }}/{{ parent_domain }}.key"
+    ssl_mode_used: "wildcard"
+  when:
+    - ssl_mode_used is not defined
+    - parent_domain != full_domain
+    - wildcard_cert_stat.stat.exists
+    - wildcard_key_stat.stat.exists
+
+- name: Generate self-signed certificate (fallback)
+  set_fact:
+    ssl_mode_used: "selfsigned"
+  when: ssl_mode_used is not defined
+
+- name: Display SSL certificate decision
+  debug:
+    msg: |
+      SSL Certificate Mode: {{ ssl_mode_used }}
+      {% if ssl_mode_used != 'selfsigned' %}
+      Certificate: {{ ssl_cert_source }}
+      Key: {{ ssl_key_source }}
+      {% else %}
+      Self-signed certificate will be generated for {{ full_domain }}
+      {% endif %}
+
+# Copy certificates if we found them
+- name: Create SSL directory on target
+  file:
+    path: /etc/ssl/busibox
+    state: directory
+    mode: "0755"
+    owner: root
+    group: root
+
+- name: Copy SSL certificate to target
+  copy:
+    src: "{{ ssl_cert_source }}"
+    dest: "/etc/ssl/busibox/{{ full_domain }}.crt"
+    mode: "0644"
+    owner: root
+    group: root
+  when: ssl_mode_used != 'selfsigned'
+
+- name: Copy SSL key to target
+  copy:
+    src: "{{ ssl_key_source }}"
+    dest: "/etc/ssl/busibox/{{ full_domain }}.key"
+    mode: "0600"
+    owner: root
+    group: root
+  when: ssl_mode_used != 'selfsigned'
+
+# Generate self-signed if needed
+- name: Generate self-signed certificate
+  command: >
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048
+    -keyout /etc/ssl/busibox/{{ full_domain }}.key
+    -out /etc/ssl/busibox/{{ full_domain }}.crt
+    -subj "/C=US/ST=State/L=City/O=Organization/CN={{ full_domain }}"
+  args:
+    creates: /etc/ssl/busibox/{{ full_domain }}.crt
+  when: ssl_mode_used == 'selfsigned'
+
+# Set final paths for nginx templates
+- name: Set SSL certificate paths for NGINX
+  set_fact:
+    ssl_certificate: "/etc/ssl/busibox/{{ full_domain }}.crt"
+    ssl_certificate_key: "/etc/ssl/busibox/{{ full_domain }}.key"
