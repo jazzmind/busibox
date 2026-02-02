@@ -63,6 +63,7 @@ class SchemaManager:
         self._indexes: List[str] = []
         self._migrations: List[str] = []  # Inline migrations (ALTER TABLE IF NOT EXISTS patterns)
         self._rls_policies: List[str] = []  # Row-Level Security policies
+        self._functions: List[str] = []  # Database functions and triggers
     
     def add_extension(self, name: str) -> "SchemaManager":
         """Add a PostgreSQL extension to be created."""
@@ -113,6 +114,24 @@ class SchemaManager:
         self._rls_policies.append(rls_sql.strip())
         return self
     
+    def add_function(self, function_sql: str) -> "SchemaManager":
+        """
+        Add database functions, triggers, or other procedural code.
+        
+        Examples:
+            schema.add_function('''
+                CREATE OR REPLACE FUNCTION update_modified_column()
+                RETURNS TRIGGER AS $$
+                BEGIN
+                    NEW.updated_at = now();
+                    RETURN NEW;
+                END;
+                $$ language 'plpgsql';
+            ''')
+        """
+        self._functions.append(function_sql.strip())
+        return self
+    
     async def apply(self, conn) -> None:
         """
         Apply all schema definitions to the database connection.
@@ -147,6 +166,11 @@ class SchemaManager:
         for rls_sql in self._rls_policies:
             await execute(rls_sql)
         logger.debug(f"RLS policies applied: {len(self._rls_policies)}")
+        
+        # Create functions
+        for function_sql in self._functions:
+            await execute(function_sql)
+        logger.debug(f"Functions created: {len(self._functions)}")
         
         logger.info("Schema initialization complete")
     
