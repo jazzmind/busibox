@@ -50,8 +50,8 @@ get_ansible_tag() {
         
         # LLM
         litellm) echo "litellm" ;;
-        ollama) echo "ollama" ;;
         vllm) echo "vllm" ;;
+        # NOTE: ollama is deprecated - use vLLM instead
         
         # Frontend
         core-apps|apps) echo "core-apps" ;;

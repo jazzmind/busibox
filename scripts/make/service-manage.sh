@@ -57,8 +57,8 @@ get_container_for_service() {
         
         # LLM
         litellm) echo "litellm" ;;
-        ollama) echo "ollama" ;;
         vllm) echo "vllm" ;;
+        # NOTE: ollama is deprecated - use vLLM instead
         
         # Frontend
         core-apps|apps|ai-portal|agent-manager) echo "core-apps" ;;

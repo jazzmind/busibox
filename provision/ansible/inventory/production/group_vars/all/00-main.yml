@@ -34,10 +34,10 @@ minio_ip: "{{ network_base_octets }}.205"
 data_ip: "{{ network_base_octets }}.206"
 user_apps_ip: "{{ network_base_octets }}.212"  # User/external apps
 
-# LLM Service IPs: .207-.209 (to allow room for more infrastructure)
+# LLM Service IPs: .207-.208 (to allow room for more infrastructure)
+# NOTE: .209 was previously ollama (now deprecated)
 litellm_ip: "{{ network_base_octets }}.207"
 vllm_ip: "{{ network_base_octets }}.208"
-ollama_ip: "{{ network_base_octets }}.209"
 
 # Authz Service IP
 authz_ip: "{{ network_base_octets }}.210"
@@ -110,8 +110,8 @@ litellm_add_function_to_prompt: true  # Add function definitions to prompt for m
 embedding_model: "{{ available_models[model_purposes.embedding].model }}"
 embedding_dimension: 4096  # Qwen3-Embedding-8B output dimension
 
-ollama_host: "{{ ollama_ip }}"
-ollama_port: 11434
+# NOTE: Ollama is DEPRECATED - use vLLM instead for local LLM inference
+# ollama_host and ollama_port have been removed
 
 vllm_host: "0.0.0.0"  # Listen on all interfaces for IP aliasing support
 # Note: vLLM ports are now configured via model_config.yml

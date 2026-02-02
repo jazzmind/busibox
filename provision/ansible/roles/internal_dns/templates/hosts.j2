@@ -36,7 +36,7 @@ ff02::2     ip6-allrouters
 # LLM Services
 {{ litellm_ip }}        litellm litellm-lxc
 {{ vllm_ip }}           vllm vllm-lxc
-{{ ollama_ip }}         ollama ollama-lxc
+# NOTE: Ollama is DEPRECATED - use vLLM instead
 
 # Embedded Services (share container with parent service)
 {{ milvus_ip }}         docs-api docs
@@ -61,7 +61,6 @@ ff02::2     ip6-allrouters
 {{ data_ip }}         STAGE-data-lxc
 {{ agent_ip }}          STAGE-agent-lxc
 {{ litellm_ip }}        STAGE-litellm-lxc
-{{ ollama_ip }}         STAGE-ollama-lxc
 {{ core_apps_ip }}      STAGE-core-apps-lxc
 {{ user_apps_ip }}      STAGE-user-apps-lxc
 {% endif %}

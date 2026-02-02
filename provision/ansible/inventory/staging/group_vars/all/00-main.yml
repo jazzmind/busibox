@@ -39,14 +39,14 @@ minio_ip: "{{ network_base_octets }}.205"
 data_ip: "{{ network_base_octets }}.206"
 user_apps_ip: "{{ network_base_octets }}.212"  # User/external apps
 
-# LLM Service IPs: .207-.209 (to allow room for more infrastructure)
+# LLM Service IPs: .207-.208 (to allow room for more infrastructure)
+# NOTE: .209 was previously ollama (now deprecated)
 litellm_ip: "{{ network_base_octets }}.207"
 # vLLM IP Configuration - Test environment can use production vLLM by default
 # Set use_production_vllm: true to use production vLLM (default, saves GPU memory)
 # Set use_production_vllm: false to use test vLLM container (requires manual deployment)
 use_production_vllm: true
 vllm_ip: "{{ (use_production_vllm | default(true)) | ternary(network_base_octets_production + '.208', network_base_octets + '.208') }}"
-ollama_ip: "{{ network_base_octets }}.209"
 
 # Authz Service IP
 authz_ip: "{{ network_base_octets }}.210"
@@ -112,8 +112,8 @@ litellm_add_function_to_prompt: true  # Add function definitions to prompt for m
 # Production has LLM cleanup enabled for better extraction quality
 llm_cleanup_enabled: false
 
-ollama_host: "{{ ollama_ip }}"
-ollama_port: 11434
+# NOTE: Ollama is DEPRECATED - use vLLM instead for local LLM inference
+# ollama_host and ollama_port have been removed
 
 vllm_host: "0.0.0.0"  # Listen on all interfaces for IP aliasing support
 # Note: vLLM ports are now configured via model_config.yml
@@ -147,10 +147,8 @@ colpali_enabled: false  # Disabled - test doesn't have GPU for visual embeddings
 # Token stored in vault at secrets.huggingface.token
 huggingface_token: "{{ secrets.huggingface.token }}"
 
-# Ollama Models (TEST - lightweight models)
-ollama_initial_models:
-  - name: "gemma:2b"
-    description: "Lightweight test model"
+# NOTE: Ollama is DEPRECATED - ollama_initial_models has been removed
+# Use vLLM for all local LLM inference
 
 # vLLM Model Configuration (TEST)
 # Note: vLLM configuration is now managed via model_config.yml
