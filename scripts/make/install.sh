@@ -3612,6 +3612,9 @@ main() {
         # Restore secrets and protected config from vault when resuming
         info "Restoring secrets and config from vault..."
         
+        # Initialize ANSIBLE_VAULT_PASSWORD_FILE to avoid unbound variable errors
+        export ANSIBLE_VAULT_PASSWORD_FILE="${ANSIBLE_VAULT_PASSWORD_FILE:-}"
+        
         # First check if vault is accessible
         if [[ -f "$VAULT_FILE" ]]; then
             # Try to read from vault (may be encrypted or unencrypted)

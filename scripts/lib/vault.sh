@@ -477,7 +477,7 @@ get_vault_secret() {
     fi
     
     # Ensure we have vault access
-    if [[ -z "$ANSIBLE_VAULT_PASSWORD_FILE" ]]; then
+    if [[ -z "${ANSIBLE_VAULT_PASSWORD_FILE:-}" ]]; then
         if ! is_vault_encrypted; then
             # Unencrypted - read directly
             :
@@ -489,7 +489,7 @@ get_vault_secret() {
     fi
     
     # Verify password file still exists
-    if [[ -n "$ANSIBLE_VAULT_PASSWORD_FILE" ]] && [[ ! -f "$ANSIBLE_VAULT_PASSWORD_FILE" ]]; then
+    if [[ -n "${ANSIBLE_VAULT_PASSWORD_FILE:-}" ]] && [[ ! -f "$ANSIBLE_VAULT_PASSWORD_FILE" ]]; then
         _vault_error "Vault password file not found: $ANSIBLE_VAULT_PASSWORD_FILE"
         return 1
     fi
