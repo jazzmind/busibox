@@ -208,17 +208,13 @@ COMPOSE_FILES_STR = os.getenv("COMPOSE_FILES", "-f docker-compose.yml -f docker-
 COMPOSE_FILES = COMPOSE_FILES_STR.split()
 
 def get_docker_compose_base_cmd(busibox_host_path: str) -> list:
-    """Build the base docker compose command with env file and compose files.
+    """Build the base docker compose command with compose files.
     
-    This ensures all docker compose calls use the correct env file for the environment.
+    Environment variables are passed through from the deploy-api container environment.
     """
-    container_prefix = os.getenv('CONTAINER_PREFIX', 'dev')
-    env_file = f'{busibox_host_path}/.env.{container_prefix}'
-    
     return [
         'docker', 'compose',
         '-p', COMPOSE_PROJECT_NAME,
-        '--env-file', env_file,
         '-f', f'{busibox_host_path}/docker-compose.yml',
         '-f', f'{busibox_host_path}/docker-compose.local-dev.yml'
     ]

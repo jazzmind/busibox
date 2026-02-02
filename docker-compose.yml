@@ -803,6 +803,9 @@ services:
       # POSTGRES_PASSWORD passed through so docker compose can use it for spawned services
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
       POSTGRES_USER: ${POSTGRES_USER:-busibox_user}
+      # MinIO credentials passed through so docker compose can use them for spawned services
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
       # Container IPs (use Docker service names in local dev)
       APPS_CONTAINER_IP: ${APPS_CONTAINER_IP:-host.docker.internal}
       APPS_CONTAINER_IP_STAGING: ${APPS_CONTAINER_IP_STAGING:-host.docker.internal}
