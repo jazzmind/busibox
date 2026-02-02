@@ -40,7 +40,7 @@ get_services_for_group() {
             echo "authz-api agent-api data-api search-api deploy-api docs-api embedding-api"
             ;;
         "LLM")
-            echo "litellm ollama vllm"
+            echo "litellm vllm"  # NOTE: ollama is deprecated, use vLLM instead
             ;;
         "Frontend")
             echo "core-apps nginx"
@@ -148,7 +148,7 @@ get_proxmox_service_status() {
         core-apps|apps) ip="${network_base}.201" ;;
         proxy|nginx) ip="${network_base}.200" ;;
         litellm) ip="${network_base}.207" ;;
-        ollama) ip="${network_base}.209" ;;
+        vllm) ip="${network_base}.208" ;;
         *) echo "unknown"; return ;;
     esac
     

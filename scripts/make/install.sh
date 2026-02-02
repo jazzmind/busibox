@@ -1719,38 +1719,18 @@ bootstrap_proxmox_ansible() {
     
     # Helper function to run ansible with proper output handling
     # CRITICAL: This function must properly propagate errors to stop the install
+    # Uses the same approach as Docker bootstrap - always show full output with tee
     run_ansible_proxmox() {
         local tags="$1"
         local log_file="${REPO_ROOT}/.ansible-${inventory_name}-${tags}.log"
         local exit_code=0
         
-        # Use a named pipe to capture exit code while still showing output
-        # This avoids the PIPESTATUS issues with multiple pipes
-        
-        if [[ "$VERBOSE" == true ]]; then
-            # Verbose mode: show all output with colors, capture exit code
-            echo ""
-            ANSIBLE_FORCE_COLOR=1 $playbook_cmd --tags "$tags" 2>&1 | tee "$log_file"
-            exit_code=${PIPESTATUS[0]}
-        else
-            # Quiet mode: run and show summary, save full log
-            # Run ansible in a subshell to capture its exact exit code
-            echo ""
-            (
-                set +e  # Don't exit on error in subshell
-                ANSIBLE_FORCE_COLOR=1 $playbook_cmd --tags "$tags" 2>&1
-            ) | tee "$log_file" | grep -E "^(TASK|PLAY|ok:|changed:|failed:|fatal:|skipping:|included:|\s+[✓✗])" || true
-            
-            # Check the log file for failure indicators since PIPESTATUS won't work across subshell
-            if grep -qE "(fatal:|failed:|FAILED!|unreachable:)" "$log_file" 2>/dev/null; then
-                exit_code=1
-            fi
-            
-            # Also check if ansible itself exited with error (look for error summary)
-            if grep -qE "failed=[1-9]|unreachable=[1-9]" "$log_file" 2>/dev/null; then
-                exit_code=1
-            fi
-        fi
+        # Always show full output for consistency with Docker deployment
+        # Use -v for slightly more verbose output to see what's happening
+        echo ""
+        info "Running ansible with tags: $tags"
+        ANSIBLE_FORCE_COLOR=1 $playbook_cmd --tags "$tags" -v 2>&1 | tee "$log_file"
+        exit_code=${PIPESTATUS[0]}
         
         if [[ $exit_code -ne 0 ]]; then
             error "Ansible failed (tags: $tags). See log: $log_file"
