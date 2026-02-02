@@ -3607,13 +3607,31 @@ main() {
         # Sync secrets to vault (vault is source of truth for secrets)
         # Ensure vault file exists first
         if [[ ! -f "$VAULT_FILE" ]]; then
+            # Ensure VAULT_EXAMPLE is set (should be set by set_vault_environment)
+            if [[ -z "${VAULT_EXAMPLE:-}" ]]; then
+                VAULT_EXAMPLE="${REPO_ROOT}/provision/ansible/roles/secrets/vars/vault.example.yml"
+                warn "VAULT_EXAMPLE was not set, using default: $VAULT_EXAMPLE"
+            fi
+            
             if [[ -f "$VAULT_EXAMPLE" ]]; then
                 info "Creating vault from example..."
+                info "  Source: $VAULT_EXAMPLE"
+                info "  Target: $VAULT_FILE"
+                
+                # Ensure target directory exists
+                mkdir -p "$(dirname "$VAULT_FILE")"
+                
                 cp "$VAULT_EXAMPLE" "$VAULT_FILE"
+                success "Vault file created: $VAULT_FILE"
             else
                 error "Vault file not found and no example to copy from"
+                error "  Expected: $VAULT_EXAMPLE"
+                error "  Looking in: $(dirname "$VAULT_EXAMPLE" 2>/dev/null || echo "N/A")"
+                ls -la "$(dirname "$VAULT_EXAMPLE" 2>/dev/null)" 2>/dev/null || true
                 exit 1
             fi
+        else
+            info "Using existing vault: $VAULT_FILE"
         fi
         
         # Set vault password for sync operation
