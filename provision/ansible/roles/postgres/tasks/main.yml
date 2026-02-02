@@ -209,7 +209,6 @@
         applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
   tags: [postgres]
-  tags: [postgres]
 
 - name: Check if data schema migration has been applied
   become_user: postgres
@@ -219,12 +218,10 @@
   register: migration_check
   failed_when: false
   tags: [postgres]
-  tags: [postgres]
 
 - name: Debug migration check result
   debug:
     msg: "Migration check: {{ migration_check }}"
-  tags: [postgres]
   tags: [postgres]
 
 - name: Apply data schema to data database
@@ -239,8 +236,7 @@
 
 - name: Display migration result
   debug:
-    msg: "Data schema migration: {{ 'applied' if files_migration_result.changed else 'already exists' }}"
-  tags: [postgres]
+    msg: "Data schema migration: {{ 'applied' if data_migration_result.changed else 'already exists' }}"
   tags: [postgres]
 
 - name: Grant ownership of all tables to postgres user (files database)
@@ -281,7 +277,6 @@
       -- Set default privileges for future objects
       ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO {{ postgres_user }};
       ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO {{ postgres_user }};
-  tags: [postgres]
   tags: [postgres]
 
 - name: Ensure ai_portal database exists with correct owner
