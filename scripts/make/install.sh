@@ -2135,6 +2135,21 @@ bootstrap_docker() {
 # ADMIN LINK GENERATION
 # =============================================================================
 
+# Helper function to generate UUIDs
+# Uses Python (available on Proxmox) with fallback to uuidgen (macOS/some Linux)
+_generate_uuid() {
+    if command -v python3 &>/dev/null; then
+        python3 -c "import uuid; print(str(uuid.uuid4()))"
+    elif command -v python &>/dev/null; then
+        python -c "import uuid; print(str(uuid.uuid4()))"
+    elif command -v uuidgen &>/dev/null; then
+        uuidgen | tr '[:upper:]' '[:lower:]'
+    else
+        # Last resort: generate UUID-like string from /dev/urandom
+        od -x /dev/urandom | head -1 | awk '{OFS="-"; print $2$3,$4,$5,$6,$7$8$9}'
+    fi
+}
+
 # Helper function to run SQL on PostgreSQL
 # Supports both Docker (docker exec) and Proxmox (ssh to pg-lxc)
 _run_pg_sql() {
@@ -2240,7 +2255,7 @@ create_admin_user() {
     sleep 3
     
     # Generate UUIDs and token
-    local user_id=$(uuidgen | tr '[:upper:]' '[:lower:]')
+    local user_id=$(_generate_uuid)
     local magic_link_token=$(openssl rand -base64 32 | tr -d '/+=' | head -c 43)
     local email_lower=$(echo "$email" | tr '[:upper:]' '[:lower:]')
     
@@ -2290,7 +2305,7 @@ create_admin_user() {
         
         if [[ -z "$existing_admin" || "$existing_admin" == *"ERROR"* ]]; then
             # Create new Admin role
-            admin_role_id=$(uuidgen | tr '[:upper:]' '[:lower:]')
+            admin_role_id=$(_generate_uuid)
             _run_pg_sql "INSERT INTO authz_roles (id, name, description, scopes) VALUES ('${admin_role_id}'::uuid, 'Admin', 'Full system administrator', ARRAY['authz.*', 'busibox-admin.*']);" authz >/dev/null
         else
             admin_role_id="$existing_admin"

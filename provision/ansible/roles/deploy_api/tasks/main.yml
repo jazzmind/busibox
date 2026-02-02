@@ -29,6 +29,24 @@
     - "{{ deploy_api_base_dir }}"
     - "{{ deploy_api_app_dir }}"
     - "{{ deploy_api_app_dir }}/src"
+    - "{{ deploy_api_app_dir }}/shared"
+  tags: [deploy_api]
+
+# =============================================================================
+# Shared Library (busibox_common)
+# =============================================================================
+
+- name: Sync busibox_common shared library
+  synchronize:
+    src: "{{ playbook_dir }}/../../srv/shared/"
+    dest: "{{ deploy_api_app_dir }}/shared/"
+    delete: yes
+    rsync_opts:
+      - "--exclude=__pycache__"
+      - "--exclude=*.pyc"
+      - "--exclude=.pytest_cache"
+  register: shared_lib_sync
+  notify: Restart deploy-api service
   tags: [deploy_api]
 
 # =============================================================================
@@ -66,6 +84,16 @@
   command: python3 -m venv "{{ deploy_api_venv_dir }}"
   args:
     creates: "{{ deploy_api_venv_dir }}/bin/activate"
+  tags: [deploy_api]
+
+- name: Install busibox_common shared library
+  pip:
+    name: "{{ deploy_api_app_dir }}/shared"
+    virtualenv: "{{ deploy_api_venv_dir }}"
+    state: present
+    extra_args: "-e"
+  register: shared_lib_install
+  notify: Restart deploy-api service
   tags: [deploy_api]
 
 - name: Install deploy-api dependencies
@@ -147,7 +175,32 @@
   wait_for:
     port: "{{ deploy_api_service_port }}"
     host: localhost
-    timeout: 30
+    timeout: 60
+  tags: [deploy_api]
+  register: deploy_api_wait
+  ignore_errors: true
+
+- name: Check deploy-api service status if wait failed
+  shell: |
+    echo "=== Service Status ==="
+    systemctl status {{ deploy_api_service_name }} || true
+    echo ""
+    echo "=== Recent Logs ==="
+    journalctl -u {{ deploy_api_service_name }} -n 30 --no-pager || true
+  register: deploy_api_debug_output
+  when: deploy_api_wait is failed
+  tags: [deploy_api]
+
+- name: Display deploy-api debug info
+  debug:
+    msg: "{{ deploy_api_debug_output.stdout_lines | default([]) }}"
+  when: deploy_api_wait is failed
+  tags: [deploy_api]
+
+- name: Fail if deploy-api did not start
+  fail:
+    msg: "Deploy API failed to start within 60 seconds. Check the debug output above."
+  when: deploy_api_wait is failed
   tags: [deploy_api]
 
 - name: Check deploy-api service health
