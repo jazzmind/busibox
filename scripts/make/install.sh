@@ -1649,53 +1649,78 @@ bootstrap_proxmox_ansible() {
     # PHASE 1: Create/Validate LXC Containers
     # =========================================================================
     # LXC containers must exist before Ansible can deploy to them
-    # This step creates containers if they don't exist, or validates existing ones
+    # Skip if containers were already created in a previous run
     
-    show_stage 15 "Creating LXC Containers" "Provisioning containers for ${inventory_name} environment."
+    local lxc_setup_done
+    lxc_setup_done=$(get_state "LXC_CONTAINERS_CREATED_${inventory_name^^}" "false")
     
-    local pct_dir="${REPO_ROOT}/provision/pct/containers"
-    local create_script="${pct_dir}/create_lxc_base.sh"
-    
-    if [[ ! -f "$create_script" ]]; then
-        error "Container creation script not found: $create_script"
-        return 1
+    if [[ "$lxc_setup_done" == "true" ]]; then
+        info "LXC containers already created for ${inventory_name} environment (skipping)"
+        
+        # Quick validation: check that at least pg container is running
+        local pg_ctid
+        case "$inventory_name" in
+            production) pg_ctid=203 ;;
+            staging) pg_ctid=303 ;;
+        esac
+        
+        if pct status "$pg_ctid" 2>/dev/null | grep -q "running"; then
+            success "LXC containers validated (pg-lxc is running)"
+        else
+            warn "pg-lxc container not running - attempting to start containers"
+            # Reset state so we re-run container creation
+            lxc_setup_done="false"
+        fi
     fi
     
-    info "Running container creation script for ${inventory_name}..."
-    
-    # Run container creation script
-    # This script is idempotent - it will skip existing containers
-    local create_log="${REPO_ROOT}/.lxc-create-${inventory_name}.log"
-    
-    if [[ "$VERBOSE" == true ]]; then
-        if ! bash "$create_script" "$inventory_name" 2>&1 | tee "$create_log"; then
-            error "LXC container creation failed. See log: $create_log"
-            tail -30 "$create_log"
+    if [[ "$lxc_setup_done" != "true" ]]; then
+        show_stage 15 "Creating LXC Containers" "Provisioning containers for ${inventory_name} environment."
+        
+        local pct_dir="${REPO_ROOT}/provision/pct/containers"
+        local create_script="${pct_dir}/create_lxc_base.sh"
+        
+        if [[ ! -f "$create_script" ]]; then
+            error "Container creation script not found: $create_script"
             return 1
         fi
-    else
-        echo ""
-        if ! bash "$create_script" "$inventory_name" 2>&1 | tee "$create_log" | grep -E "(Creating|Starting|Skipping|ERROR|SUCCESS|Step)" || true; then
-            # Check log for actual errors
-            if grep -qE "(ERROR|FAILED|failed to)" "$create_log" 2>/dev/null; then
+        
+        info "Running container creation script for ${inventory_name}..."
+        
+        # Run container creation script
+        # This script is idempotent - it will skip existing containers
+        local create_log="${REPO_ROOT}/.lxc-create-${inventory_name}.log"
+        
+        if [[ "$VERBOSE" == true ]]; then
+            if ! bash "$create_script" "$inventory_name" 2>&1 | tee "$create_log"; then
                 error "LXC container creation failed. See log: $create_log"
+                tail -30 "$create_log"
+                return 1
+            fi
+        else
+            echo ""
+            if ! bash "$create_script" "$inventory_name" 2>&1 | tee "$create_log" | grep -E "(Creating|Starting|Skipping|ERROR|SUCCESS|Step)" || true; then
+                # Check log for actual errors
+                if grep -qE "(ERROR|FAILED|failed to)" "$create_log" 2>/dev/null; then
+                    error "LXC container creation failed. See log: $create_log"
+                    tail -30 "$create_log"
+                    return 1
+                fi
+            fi
+            
+            # Verify script completed successfully by checking log
+            if grep -qE "(ERROR|FAILED|failed to)" "$create_log" 2>/dev/null; then
+                error "LXC container creation had errors. See log: $create_log"
                 tail -30 "$create_log"
                 return 1
             fi
         fi
         
-        # Verify script completed successfully by checking log
-        if grep -qE "(ERROR|FAILED|failed to)" "$create_log" 2>/dev/null; then
-            error "LXC container creation had errors. See log: $create_log"
-            tail -30 "$create_log"
-            return 1
-        fi
+        success "LXC containers ready"
+        set_state "LXC_CONTAINERS_CREATED_${inventory_name^^}" "true"
+        
+        # Brief pause to ensure containers are fully started
+        sleep 3
     fi
-    
-    success "LXC containers ready"
-    
-    # Brief pause to ensure containers are fully started
-    sleep 3
     
     # Check for vault password file
     local vault_args=""
@@ -2110,11 +2135,72 @@ bootstrap_docker() {
 # ADMIN LINK GENERATION
 # =============================================================================
 
+# Helper function to run SQL on PostgreSQL
+# Supports both Docker (docker exec) and Proxmox (ssh to pg-lxc)
+_run_pg_sql() {
+    local sql="$1"
+    local db="${2:-authz}"
+    local db_user="${POSTGRES_USER:-busibox_user}"
+    
+    if [[ "$PLATFORM" == "proxmox" ]]; then
+        # For Proxmox, run SQL via SSH on pg-lxc container
+        local pg_ip="${POSTGRES_HOST:-}"
+        if [[ -z "$pg_ip" ]]; then
+            case "$ENVIRONMENT" in
+                production) pg_ip="10.96.200.203" ;;
+                staging) pg_ip="10.96.201.203" ;;
+                *) pg_ip="10.96.201.203" ;;
+            esac
+        fi
+        ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "root@${pg_ip}" \
+            "sudo -u postgres psql -d ${db} -t -A -c \"${sql}\"" 2>/dev/null
+    else
+        # For Docker, use docker exec
+        local container_prefix="${CONTAINER_PREFIX:-local}"
+        docker exec "${container_prefix}-postgres" psql -U "$db_user" -d "$db" -t -A -c "$sql" 2>/dev/null
+    fi
+}
+
+# Helper function to check if PostgreSQL is ready
+_check_pg_ready() {
+    local db_user="${POSTGRES_USER:-busibox_user}"
+    
+    if [[ "$PLATFORM" == "proxmox" ]]; then
+        local pg_ip="${POSTGRES_HOST:-}"
+        if [[ -z "$pg_ip" ]]; then
+            case "$ENVIRONMENT" in
+                production) pg_ip="10.96.200.203" ;;
+                staging) pg_ip="10.96.201.203" ;;
+                *) pg_ip="10.96.201.203" ;;
+            esac
+        fi
+        ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "root@${pg_ip}" \
+            "pg_isready -U postgres" &>/dev/null
+    else
+        local container_prefix="${CONTAINER_PREFIX:-local}"
+        docker exec "${container_prefix}-postgres" pg_isready -U "$db_user" &>/dev/null
+    fi
+}
+
+# Helper function to get AuthZ health endpoint
+_get_authz_health_url() {
+    if [[ "$PLATFORM" == "proxmox" ]]; then
+        local authz_ip="${AUTHZ_BASE_URL:-}"
+        if [[ -z "$authz_ip" ]]; then
+            case "$ENVIRONMENT" in
+                production) authz_ip="http://10.96.200.210:8010" ;;
+                staging) authz_ip="http://10.96.201.210:8010" ;;
+                *) authz_ip="http://10.96.201.210:8010" ;;
+            esac
+        fi
+        echo "${authz_ip}/health/live"
+    else
+        echo "http://localhost:8010/health/live"
+    fi
+}
+
 create_admin_user() {
     local email="$1"
-    local container_prefix="${CONTAINER_PREFIX:-local}"
-    local db_user="${POSTGRES_USER:-busibox_user}"
-    local db_pass="${POSTGRES_PASSWORD:-devpassword}"
     local max_attempts=30
     local attempt=0
     
@@ -2122,7 +2208,7 @@ create_admin_user() {
     
     # Wait for postgres to be ready
     while [[ $attempt -lt $max_attempts ]]; do
-        if docker exec "${container_prefix}-postgres" pg_isready -U "$db_user" &>/dev/null; then
+        if _check_pg_ready; then
             break
         fi
         sleep 2
@@ -2135,9 +2221,11 @@ create_admin_user() {
     fi
     
     # Also wait for authz to bootstrap (creates Admin role)
+    local authz_health_url
+    authz_health_url=$(_get_authz_health_url)
     attempt=0
     while [[ $attempt -lt $max_attempts ]]; do
-        if curl -sf http://localhost:8010/health/live &>/dev/null; then
+        if curl -sf "$authz_health_url" &>/dev/null; then
             break
         fi
         sleep 2
@@ -2156,31 +2244,23 @@ create_admin_user() {
     local magic_link_token=$(openssl rand -base64 32 | tr -d '/+=' | head -c 43)
     local email_lower=$(echo "$email" | tr '[:upper:]' '[:lower:]')
     
-    # Execute SQL via docker exec to postgres container
-    # This is Zero Trust compliant - we're using direct DB access during bootstrap only
+    # Execute SQL - This is Zero Trust compliant (direct DB access during bootstrap only)
     local sql_result
     
     # First check if user already exists
     local existing_user_id
-    existing_user_id=$(docker exec "${container_prefix}-postgres" psql -U "$db_user" -d authz -t -A -c "
-        SELECT user_id::text FROM authz_users WHERE email = '${email_lower}';
-    " 2>&1 | grep -v "^$" | head -1)
+    existing_user_id=$(_run_pg_sql "SELECT user_id::text FROM authz_users WHERE email = '${email_lower}';" authz)
+    existing_user_id=$(echo "$existing_user_id" | grep -v "^$" | head -1)
     
     if [[ -n "$existing_user_id" && "$existing_user_id" != *"ERROR"* ]]; then
         # User exists, update status
         user_id=$(echo "$existing_user_id" | tr -d '[:space:]')
-        docker exec "${container_prefix}-postgres" psql -U "$db_user" -d authz -c "
-            UPDATE authz_users SET status = 'active', updated_at = now()
-            WHERE user_id = '${user_id}'::uuid;
-        " >/dev/null 2>&1
+        _run_pg_sql "UPDATE authz_users SET status = 'active', updated_at = now() WHERE user_id = '${user_id}'::uuid;" authz >/dev/null
         sql_result="$user_id"
     else
         # User doesn't exist, insert new
-        sql_result=$(docker exec "${container_prefix}-postgres" psql -U "$db_user" -d authz -t -A -c "
-            INSERT INTO authz_users (user_id, email, status)
-            VALUES ('${user_id}'::uuid, '${email_lower}', 'active')
-            RETURNING user_id::text;
-        " 2>&1 | grep -v "^$" | head -1)
+        sql_result=$(_run_pg_sql "INSERT INTO authz_users (user_id, email, status) VALUES ('${user_id}'::uuid, '${email_lower}', 'active') RETURNING user_id::text;" authz)
+        sql_result=$(echo "$sql_result" | grep -v "^$" | head -1)
     fi
     
     if [[ $? -ne 0 ]]; then
@@ -2189,7 +2269,6 @@ create_admin_user() {
     fi
     
     # Get the actual user_id (may differ if user already existed)
-    # Clean it up to remove any extra whitespace or newlines
     user_id=$(echo "$sql_result" | tr -d '[:space:]' | tr -d '\n' | tr -d '\r')
     
     if [[ -z "$user_id" ]]; then
@@ -2199,62 +2278,43 @@ create_admin_user() {
     
     # Get Admin role ID (created by authz bootstrap)
     local admin_role_id
-    admin_role_id=$(docker exec "${container_prefix}-postgres" psql -U "$db_user" -d authz -t -A -c "
-        SELECT id::text FROM authz_roles WHERE name = 'Admin' LIMIT 1;
-    " 2>&1 | grep -v "^$" | head -1)
+    admin_role_id=$(_run_pg_sql "SELECT id::text FROM authz_roles WHERE name = 'Admin' LIMIT 1;" authz)
+    admin_role_id=$(echo "$admin_role_id" | grep -v "^$" | head -1)
     
     if [[ -z "$admin_role_id" || "$admin_role_id" == *"ERROR"* ]]; then
         warn "Admin role not found - authz may not have bootstrapped yet"
         # Create Admin role manually as fallback
-        # First check if it exists
-        existing_admin=$(docker exec "${container_prefix}-postgres" psql -U "$db_user" -d authz -t -A -c "
-            SELECT id::text FROM authz_roles WHERE name = 'Admin' LIMIT 1;
-        " 2>&1 | grep -v "^$" | head -1)
+        local existing_admin
+        existing_admin=$(_run_pg_sql "SELECT id::text FROM authz_roles WHERE name = 'Admin' LIMIT 1;" authz)
+        existing_admin=$(echo "$existing_admin" | grep -v "^$" | head -1)
         
         if [[ -z "$existing_admin" || "$existing_admin" == *"ERROR"* ]]; then
             # Create new Admin role
             admin_role_id=$(uuidgen | tr '[:upper:]' '[:lower:]')
-            docker exec "${container_prefix}-postgres" psql -U "$db_user" -d authz -c "
-                INSERT INTO authz_roles (id, name, description, scopes)
-                VALUES ('${admin_role_id}'::uuid, 'Admin', 'Full system administrator', 
-                        ARRAY['authz.*', 'busibox-admin.*']);
-            " >/dev/null 2>&1
+            _run_pg_sql "INSERT INTO authz_roles (id, name, description, scopes) VALUES ('${admin_role_id}'::uuid, 'Admin', 'Full system administrator', ARRAY['authz.*', 'busibox-admin.*']);" authz >/dev/null
         else
             admin_role_id="$existing_admin"
         fi
     fi
     
-    # Clean up the admin_role_id to remove any extra whitespace or newlines
+    # Clean up the admin_role_id
     admin_role_id=$(echo "$admin_role_id" | tr -d '[:space:]' | tr -d '\n' | tr -d '\r')
     
     # Assign Admin role to user (check first to avoid constraint errors)
     local existing_role
-    existing_role=$(docker exec "${container_prefix}-postgres" psql -U "$db_user" -d authz -t -A -c "
-        SELECT 1 FROM authz_user_roles 
-        WHERE user_id = '${user_id}'::uuid AND role_id = '${admin_role_id}'::uuid;
-    " 2>&1)
+    existing_role=$(_run_pg_sql "SELECT 1 FROM authz_user_roles WHERE user_id = '${user_id}'::uuid AND role_id = '${admin_role_id}'::uuid;" authz)
     
     if [[ -z "$existing_role" || "$existing_role" == *"ERROR"* ]]; then
-        docker exec "${container_prefix}-postgres" psql -U "$db_user" -d authz -c "
-            INSERT INTO authz_user_roles (user_id, role_id)
-            VALUES ('${user_id}'::uuid, '${admin_role_id}'::uuid);
-        " >/dev/null 2>&1
+        _run_pg_sql "INSERT INTO authz_user_roles (user_id, role_id) VALUES ('${user_id}'::uuid, '${admin_role_id}'::uuid);" authz >/dev/null
     fi
     
     # Create magic link (24 hour expiry for initial setup)
-    # First delete any existing magic links for this user to avoid conflicts
-    docker exec "${container_prefix}-postgres" psql -U "$db_user" -d authz -c "
-        DELETE FROM authz_magic_links WHERE user_id = '${user_id}'::uuid;
-    " >/dev/null 2>&1
+    # First delete any existing magic links for this user
+    _run_pg_sql "DELETE FROM authz_magic_links WHERE user_id = '${user_id}'::uuid;" authz >/dev/null
     
     # Now insert the new magic link
     local magic_result
-    magic_result=$(docker exec "${container_prefix}-postgres" psql -U "$db_user" -d authz -c "
-        INSERT INTO authz_magic_links (user_id, token, email, expires_at)
-        VALUES ('${user_id}'::uuid, '${magic_link_token}', '${email_lower}', 
-                now() + interval '24 hours')
-        RETURNING token;
-    " 2>&1)
+    magic_result=$(_run_pg_sql "INSERT INTO authz_magic_links (user_id, token, email, expires_at) VALUES ('${user_id}'::uuid, '${magic_link_token}', '${email_lower}', now() + interval '24 hours') RETURNING token;" authz)
     
     if [[ $? -eq 0 && "$magic_result" == *"${magic_link_token}"* ]]; then
         set_state "ADMIN_USER_ID" "$user_id"
@@ -2293,9 +2353,7 @@ generate_admin_link() {
         # Verify token is still valid (not used/expired) if we have one
         if [[ -n "$token" ]]; then
             local is_valid
-            is_valid=$(docker exec "${CONTAINER_PREFIX}-postgres" psql -U postgres -d authz -t -A -c \
-                "SELECT COUNT(*) FROM authz_magic_links WHERE token = '$token' AND expires_at > now() AND used_at IS NULL;" \
-                2>/dev/null || echo "0")
+            is_valid=$(_run_pg_sql "SELECT COUNT(*) FROM authz_magic_links WHERE token = '$token' AND expires_at > now() AND used_at IS NULL;" authz 2>/dev/null || echo "0")
             
             if [[ "$is_valid" != "1" ]]; then
                 # Token is used or expired - need to regenerate
@@ -2310,16 +2368,10 @@ generate_admin_link() {
         token=$(openssl rand -base64 32 | tr -d '/+=' | cut -c1-43)
         
         # Delete any existing magic links for this user
-        docker exec "${CONTAINER_PREFIX}-postgres" psql -U postgres -d authz -c \
-            "DELETE FROM authz_magic_links WHERE user_id = (SELECT user_id FROM authz_users WHERE email = '$admin_email');" \
-            >/dev/null 2>&1 || true
+        _run_pg_sql "DELETE FROM authz_magic_links WHERE user_id = (SELECT user_id FROM authz_users WHERE email = '$admin_email');" authz >/dev/null 2>&1 || true
         
         # Insert new magic link
-        docker exec "${CONTAINER_PREFIX}-postgres" psql -U postgres -d authz -c \
-            "INSERT INTO authz_magic_links (user_id, email, token, expires_at) 
-             SELECT user_id, email, '$token', now() + interval '24 hours' 
-             FROM authz_users WHERE email = '$admin_email';" \
-            >/dev/null 2>&1
+        _run_pg_sql "INSERT INTO authz_magic_links (user_id, email, token, expires_at) SELECT user_id, email, '$token', now() + interval '24 hours' FROM authz_users WHERE email = '$admin_email';" authz >/dev/null 2>&1
         
         # Save to state
         set_state "MAGIC_LINK_TOKEN" "$token"
