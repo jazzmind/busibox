@@ -359,9 +359,9 @@ ifneq ($(DEV_APPS_DIR),)
 	@echo "Dev Apps Directory: $(DEV_APPS_DIR)"
 endif
 ifdef SERVICE
-	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" DEV_APPS_DIR="$(DEV_APPS_DIR)" BUSIBOX_HOST_PATH="$(PWD)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) up -d $(SERVICE)
+	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" DEV_APPS_DIR="$(DEV_APPS_DIR)" BUSIBOX_HOST_PATH="$(PWD)" CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) up -d $(SERVICE)
 else
-	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" DEV_APPS_DIR="$(DEV_APPS_DIR)" BUSIBOX_HOST_PATH="$(PWD)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) up -d
+	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" DEV_APPS_DIR="$(DEV_APPS_DIR)" BUSIBOX_HOST_PATH="$(PWD)" CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) up -d
 endif
 	@echo ""
 ifeq ($(ENV),development)
@@ -379,9 +379,9 @@ docker-up-prod: _ensure-env
 # Start Docker services without rebuilding (fast start)
 docker-start:
 ifdef SERVICE
-	DEV_APPS_DIR="$(DEV_APPS_DIR)" BUSIBOX_HOST_PATH="$(PWD)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) up -d --no-build $(SERVICE)
+	DEV_APPS_DIR="$(DEV_APPS_DIR)" BUSIBOX_HOST_PATH="$(PWD)" CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) up -d --no-build $(SERVICE)
 else
-	DEV_APPS_DIR="$(DEV_APPS_DIR)" BUSIBOX_HOST_PATH="$(PWD)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) up -d --no-build
+	DEV_APPS_DIR="$(DEV_APPS_DIR)" BUSIBOX_HOST_PATH="$(PWD)" CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) up -d --no-build
 endif
 	@echo ""
 	@echo "Services started ($(ENV) mode). Use 'make docker-ps' to check status."
@@ -407,21 +407,21 @@ docker-down-all:
 docker-restart: github-check
 	$(eval GITHUB_AUTH_TOKEN := $(shell bash scripts/lib/github.sh get 2>/dev/null))
 ifdef SERVICE
-	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" DEV_APPS_DIR="$(DEV_APPS_DIR)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) restart $(SERVICE)
+	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" DEV_APPS_DIR="$(DEV_APPS_DIR)" CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) restart $(SERVICE)
 else
-	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" DEV_APPS_DIR="$(DEV_APPS_DIR)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) restart
+	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" DEV_APPS_DIR="$(DEV_APPS_DIR)" CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) restart
 endif
 
 # Restart only API services (fast, preserves infrastructure like embedding-api, milvus, postgres)
 # Use this when developing - embedding model stays loaded, so restarts are fast
 docker-restart-apis:
 	@echo "Restarting API services (infrastructure tier preserved)..."
-	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) restart authz-api deploy-api data-api data-worker search-api agent-api docs-api nginx
+	CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) restart authz-api deploy-api data-api data-worker search-api agent-api docs-api nginx
 
 # Restart data services only
 docker-restart-data:
 	@echo "Restarting data services..."
-	docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) restart data-api data-worker
+	CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) restart data-api data-worker
 
 # Check/generate SSL certificates
 ssl-check:
@@ -455,20 +455,20 @@ docker-build: ssl-check github-check
 	@echo "Building with version: $(GIT_COMMIT) (ENV=$(ENV), overlay=$(notdir $(COMPOSE_OVERLAY)))"
 ifdef SERVICE
 ifdef NO_CACHE
-	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" GIT_COMMIT=$(GIT_COMMIT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) build --no-cache $(SERVICE)
+	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" GIT_COMMIT=$(GIT_COMMIT) CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) build --no-cache $(SERVICE)
 else
-	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" GIT_COMMIT=$(GIT_COMMIT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) build $(SERVICE)
+	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" GIT_COMMIT=$(GIT_COMMIT) CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) build $(SERVICE)
 endif
 	@echo "Recreating container to apply new image..."
-	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" GIT_COMMIT=$(GIT_COMMIT) BUSIBOX_HOST_PATH="$(PWD)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) up -d --no-deps $(SERVICE)
+	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" GIT_COMMIT=$(GIT_COMMIT) BUSIBOX_HOST_PATH="$(PWD)" CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) up -d --no-deps $(SERVICE)
 else
 ifdef NO_CACHE
-	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" GIT_COMMIT=$(GIT_COMMIT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) build --no-cache
+	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" GIT_COMMIT=$(GIT_COMMIT) CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) build --no-cache
 else
-	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" GIT_COMMIT=$(GIT_COMMIT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) build
+	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" GIT_COMMIT=$(GIT_COMMIT) CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) build
 endif
 	@echo "Recreating containers to apply new images..."
-	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" GIT_COMMIT=$(GIT_COMMIT) BUSIBOX_HOST_PATH="$(PWD)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) --env-file $(ENV_FILE) up -d
+	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" GIT_COMMIT=$(GIT_COMMIT) BUSIBOX_HOST_PATH="$(PWD)" CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) up -d
 endif
 
 # View Docker logs (uses environment-based overlay)
