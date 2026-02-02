@@ -68,6 +68,47 @@ HUGGINGFACE_CACHE="/var/lib/llm-models/huggingface"
 MODELS_DIR="${HUGGINGFACE_CACHE}/hub"
 VENV_DIR="/opt/model-downloader"
 
+# =============================================================================
+# HARDWARE & ENVIRONMENT DETECTION
+# =============================================================================
+
+detect_hardware() {
+    # Detect if Apple Silicon
+    if [[ "$(uname -m)" == "arm64" ]] && [[ "$(uname -s)" == "Darwin" ]]; then
+        echo "apple_silicon"
+    # Detect NVIDIA GPU
+    elif command -v nvidia-smi &>/dev/null; then
+        echo "nvidia"
+    # Default to CPU
+    else
+        echo "cpu"
+    fi
+}
+
+detect_stage() {
+    # Try to get stage from command line arg passed by install.sh
+    local stage="${1:-}"
+    
+    # If not provided, try to detect from hostname or default to production
+    if [[ -z "$stage" ]]; then
+        if [[ "$(hostname)" =~ -stage- ]] || [[ "$(hostname)" =~ STAGE ]]; then
+            stage="staging"
+        elif [[ "$(hostname)" =~ -dev- ]] || [[ "$(hostname)" =~ DEV ]]; then
+            stage="development"
+        else
+            stage="production"  # Default to production for safety
+        fi
+    fi
+    
+    echo "$stage"
+}
+
+HARDWARE=$(detect_hardware)
+STAGE=$(detect_stage "$1")
+
+log_info "Hardware: ${HARDWARE}"
+log_info "Stage: ${STAGE}"
+
 # HuggingFace token (required for gated models like PaliGemma)
 # Set HF_TOKEN environment variable or create /root/.huggingface/token file
 # Get token from: https://huggingface.co/settings/tokens
@@ -170,7 +211,12 @@ import yaml
 import sys
 import os
 
+hardware = "${HARDWARE}"
+stage = "${STAGE}"
 registry_file = "${registry_file}"
+
+print(f"# Filtering models for hardware={hardware}, stage={stage}", file=sys.stderr)
+
 if not os.path.exists(registry_file):
     print("ERROR: Registry file not found: ${registry_file}", file=sys.stderr)
     sys.exit(1)
@@ -187,14 +233,43 @@ try:
     # Providers that don't require local model downloads
     api_providers = {'bedrock', 'openai', 'anthropic', 'fastembed'}
     
+    # Hardware-specific providers
+    # mlx = Apple Silicon only, vllm = NVIDIA/CPU only
+    hardware_providers = {
+        'apple_silicon': {'mlx'},
+        'nvidia': {'vllm', 'litellm', 'local'},
+        'cpu': {'vllm', 'litellm', 'local'}
+    }
+    
+    allowed_providers = hardware_providers.get(hardware, {'vllm', 'litellm', 'local'})
+    
+    # Required models based on stage
+    # qwen3-0.6b is always downloaded as test model
+    required_models = {
+        'development': {'qwen3-0.6b'},
+        'staging': {'qwen3-0.6b', 'qwen3-30b', 'qwen3-reranker', 'phi-4'},
+        'production': {'qwen3-0.6b', 'qwen3-30b', 'qwen3-reranker', 'phi-4'}
+    }
+    
+    stage_models = required_models.get(stage, required_models['production'])
+    
     for model_key, model_config in available_models.items():
         provider = model_config.get('provider', '').lower()
         model_name = model_config.get('model_name')
         
-        # Only include models that need to be downloaded (not API-based)
-        # Accept both 'vllm' and 'litellm' as providers for local models
-        # (LiteLLM is the API gateway, vLLM is the inference engine)
-        if model_name and provider not in api_providers:
+        # Skip API-based providers
+        if provider in api_providers:
+            continue
+        
+        # Skip providers not compatible with hardware
+        if provider not in allowed_providers:
+            continue
+        
+        # Only download models required for this stage
+        if model_key not in stage_models:
+            continue
+        
+        if model_name:
             models.add(model_name)
     
     # Add PaliGemma base model (required by ColPali)

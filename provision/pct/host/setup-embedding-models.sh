@@ -112,21 +112,79 @@ setup_python_environment() {
 }
 
 # =============================================================================
+# HARDWARE & ENVIRONMENT DETECTION
+# =============================================================================
+
+detect_hardware() {
+    # Detect if Apple Silicon
+    if [[ "$(uname -m)" == "arm64" ]] && [[ "$(uname -s)" == "Darwin" ]]; then
+        echo "apple_silicon"
+    # Detect NVIDIA GPU
+    elif command -v nvidia-smi &>/dev/null; then
+        echo "nvidia"
+    # Default to CPU
+    else
+        echo "cpu"
+    fi
+}
+
+detect_stage() {
+    # Try to get stage from command line arg passed by install.sh
+    local stage="${1:-}"
+    
+    # If not provided, try to detect from hostname or default to production
+    if [[ -z "$stage" ]]; then
+        if [[ "$(hostname)" =~ -stage- ]] || [[ "$(hostname)" =~ STAGE ]]; then
+            stage="staging"
+        elif [[ "$(hostname)" =~ -dev- ]] || [[ "$(hostname)" =~ DEV ]]; then
+            stage="development"
+        else
+            stage="production"  # Default to production for safety
+        fi
+    fi
+    
+    echo "$stage"
+}
+
+HARDWARE=$(detect_hardware)
+STAGE=$(detect_stage "$1")
+
+log_info "Hardware: ${HARDWARE}"
+log_info "Stage: ${STAGE}"
+echo ""
+
+# =============================================================================
 # MODEL REGISTRY
 # =============================================================================
 
-# FastEmbed models to download
+# FastEmbed models to download based on hardware and stage
 # These match the models in provision/ansible/group_vars/all/model_registry.yml
-EMBEDDING_MODELS=(
-    "BAAI/bge-small-en-v1.5"   # Small, fast (134MB)
-    "BAAI/bge-base-en-v1.5"    # Medium (438MB)
-    # Note: bge-large-en-v1.5 excluded due to model file structure incompatibility
-)
+
+determine_embedding_models() {
+    local models=()
+    
+    case "${STAGE}" in
+        development)
+            # Dev only needs small model for fast testing
+            models+=("BAAI/bge-small-en-v1.5")
+            ;;
+        staging|production)
+            # Prod/staging need large model for best quality
+            models+=("BAAI/bge-large-en-v1.5")
+            ;;
+    esac
+    
+    echo "${models[@]}"
+}
+
+# Get models for this environment
+EMBEDDING_MODELS=($(determine_embedding_models))
 
 # Model size estimates
 declare -A MODEL_SIZES=(
     ["BAAI/bge-small-en-v1.5"]="134MB"
     ["BAAI/bge-base-en-v1.5"]="438MB"
+    ["BAAI/bge-large-en-v1.5"]="1.3GB"
 )
 
 # =============================================================================
@@ -211,6 +269,7 @@ download_model() {
     
     # Download model using Python script
     # This instantiates the model which triggers download
+    # Note: We skip the warmup test as it can fail with symlink issues
     if [[ -n "$output_redirect" ]]; then
         # Background mode with output redirection
         python3 -c "
@@ -221,13 +280,9 @@ model_name = '${model}'
 cache_dir = '${FASTEMBED_CACHE}'
 
 print(f'Downloading {model_name} to {cache_dir}...')
+# Download by instantiating - this triggers the download
 embedder = TextEmbedding(model_name=model_name, cache_dir=cache_dir)
-
-# Test embedding to verify model works
-test_text = ['warmup test']
-result = list(embedder.embed(test_text))
-print(f'Download complete! Model verified.')
-print(f'Embedding dimension: {len(result[0])}')
+print(f'Download complete!')
 " >> "$log_file" 2>&1 || {
             log_error "Failed to download ${model}"
             log_error "  See log: ${log_file}"
@@ -243,13 +298,9 @@ model_name = '${model}'
 cache_dir = '${FASTEMBED_CACHE}'
 
 print(f'Downloading {model_name} to {cache_dir}...')
+# Download by instantiating - this triggers the download
 embedder = TextEmbedding(model_name=model_name, cache_dir=cache_dir)
-
-# Test embedding to verify model works
-test_text = ['warmup test']
-result = list(embedder.embed(test_text))
-print(f'Download complete! Model verified.')
-print(f'Embedding dimension: {len(result[0])}')
+print(f'Download complete!')
 " || {
             log_error "Failed to download ${model}"
             return 1

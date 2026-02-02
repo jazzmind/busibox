@@ -1624,7 +1624,7 @@ bootstrap_proxmox_ansible() {
         local embedding_script="${REPO_ROOT}/provision/pct/host/setup-embedding-models.sh"
         if [[ -f "$embedding_script" ]]; then
             (
-                bash "$embedding_script" && set_state "EMBEDDING_MODELS_SETUP_${inventory_name^^}" "true"
+                bash "$embedding_script" "$inventory_name" && set_state "EMBEDDING_MODELS_SETUP_${inventory_name^^}" "true"
             ) &
             info "Embedding download started (PID: $!) - continuing with container creation"
         fi
@@ -1637,7 +1637,7 @@ bootstrap_proxmox_ansible() {
         local llm_script="${REPO_ROOT}/provision/pct/host/setup-llm-models.sh"
         if [[ -f "$llm_script" ]]; then
             (
-                bash "$llm_script" && set_state "LLM_MODELS_SETUP_${inventory_name^^}" "true"
+                bash "$llm_script" "$inventory_name" && set_state "LLM_MODELS_SETUP_${inventory_name^^}" "true"
             ) &
             info "LLM download started (PID: $!) - continuing with container creation"
         fi
