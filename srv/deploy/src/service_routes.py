@@ -1013,7 +1013,8 @@ async def start_service_sse(
                     build_cmd = compose_cmd.copy()
                     build_cmd.extend(['build'] + services_to_start)
                     
-                    yield f"data: {json.dumps({'type': 'info', 'message': f'Building container(s): {', '.join(services_to_start)}'})}\n\n"
+                    services_list = ', '.join(services_to_start)
+                    yield f"data: {json.dumps({'type': 'info', 'message': f'Building container(s): {services_list}'})}\n\n"
                     
                     build_process = await asyncio.create_subprocess_exec(
                         *build_cmd,
