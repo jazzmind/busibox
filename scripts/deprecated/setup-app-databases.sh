@@ -71,7 +71,7 @@ echo ""
 echo "==================================="
 echo "Database List:"
 echo "==================================="
-ssh root@${PG_IP} "su - postgres -c 'psql -c \"\\l\"'" | grep -E "agent_server|ai_portal|agent_client|doc_intel|innovation|litellm|files|Name" || true
+ssh root@${PG_IP} "su - postgres -c 'psql -c \"\\l\"'" | grep -E "agent|ai_portal|agent_manager|litellm|data|Name" || true
 
 echo ""
 echo "==================================="

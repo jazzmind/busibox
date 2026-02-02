@@ -191,7 +191,7 @@
 
 - name: Copy migration files
   copy:
-    src: "files/migrations/"
+    src: "data/migrations/"
     dest: /var/lib/postgresql/migrations/
     mode: "0644"
     owner: postgres
