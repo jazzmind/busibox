@@ -159,5 +159,42 @@ applications:
       DOCUMENTS_API_AUD: "https://busibox.local/documents"
       # Enable verbose authz logging for debugging
       VERBOSE_AUTHZ_LOGGING: "true"
-  
+
+  - name: project-analysis
+    github_repo: jazzmind/tabular-bells
+    container: core-apps-lxc
+    container_ip: "{{ core_apps_ip }}"
+    port: 3004
+    deploy_path: /srv/apps/project-analysis
+    health_endpoint: /api/health
+    build_command: "npm run build"
+    start_command: "node .next/standalone/server.js"
+    process_manager: systemd
+    auto_deploy: false  # Deploy only via web UI or explicit targeting
+    routes:
+      - type: path
+        domain: "{{ full_domain }}"
+        path: /projects
+        strip_path: false
+    secrets:
+      - sso_jwt_secret
+      - litellm_api_key
+    optional_secrets:
+      - resend_api_key
+    env:
+      NODE_ENV: "{{ node_env }}"
+      PORT: "3004"
+      NEXT_PUBLIC_BASE_PATH: "/projects"
+      AUTHZ_BASE_URL: "http://{{ authz_ip }}:8010"
+      AUTHZ_CLIENT_ID: "project-analysis"
+      DATA_API_URL: "http://{{ data_ip }}:8002"
+      NEXT_PUBLIC_DATA_API_URL: "http://{{ data_ip }}:8002"
+      LITELLM_BASE_URL: "http://{{ litellm_ip }}:{{ litellm_port }}/v1"
+      NEXT_PUBLIC_AI_PORTAL_URL: "https://{{ full_domain }}"
+      AI_PORTAL_URL: "https://{{ full_domain }}"
+      NEXT_PUBLIC_APP_URL: "https://{{ full_domain }}/projects"
+      DEPLOYMENT_MODE: "busibox"
+      SSO_TOKEN_EXPIRY: "900"
+      VERBOSE_AUTHZ_LOGGING: "true"
+
   
