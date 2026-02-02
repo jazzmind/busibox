@@ -355,9 +355,9 @@ _ensure-env:
 docker-up:
 	@echo "Starting Docker services (ENV=$(ENV), overlay=$(notdir $(COMPOSE_OVERLAY)))..."
 	$(eval GITHUB_AUTH_TOKEN := $(shell bash scripts/lib/github.sh get 2>/dev/null))
-	$(eval POSTGRES_PASSWORD := $(shell bash scripts/lib/vault.sh get secrets.postgres.password 2>/dev/null || echo "devpassword"))
-	$(eval MINIO_SECRET_KEY := $(shell bash scripts/lib/vault.sh get secrets.minio.secret_key 2>/dev/null || echo "minioadmin"))
-	$(eval AUTHZ_MASTER_KEY := $(shell bash scripts/lib/vault.sh get secrets.authz.master_key 2>/dev/null || echo "local-master-key-change-in-production"))
+	$(eval POSTGRES_PASSWORD := $(shell bash -c 'source scripts/lib/vault.sh && set_vault_environment $(ENV_PREFIX) && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.postgresql.password 2>/dev/null || echo "devpassword"'))
+	$(eval MINIO_SECRET_KEY := $(shell bash -c 'source scripts/lib/vault.sh && set_vault_environment $(ENV_PREFIX) && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.minio.root_password 2>/dev/null || echo "minioadmin"'))
+	$(eval AUTHZ_MASTER_KEY := $(shell bash -c 'source scripts/lib/vault.sh && set_vault_environment $(ENV_PREFIX) && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.authz_master_key 2>/dev/null || echo "local-master-key-change-in-production"'))
 	@if [ -z "$(GITHUB_AUTH_TOKEN)" ]; then \
 		echo "[ERROR] No GitHub token found"; \
 		echo ""; \
@@ -389,9 +389,9 @@ docker-up-prod: _ensure-env
 
 # Start Docker services without rebuilding (fast start)
 docker-start:
-	$(eval POSTGRES_PASSWORD := $(shell bash scripts/lib/vault.sh get secrets.postgres.password 2>/dev/null || echo "devpassword"))
-	$(eval MINIO_SECRET_KEY := $(shell bash scripts/lib/vault.sh get secrets.minio.secret_key 2>/dev/null || echo "minioadmin"))
-	$(eval AUTHZ_MASTER_KEY := $(shell bash scripts/lib/vault.sh get secrets.authz.master_key 2>/dev/null || echo "local-master-key-change-in-production"))
+	$(eval POSTGRES_PASSWORD := $(shell bash -c 'source scripts/lib/vault.sh && set_vault_environment $(ENV_PREFIX) && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.postgresql.password 2>/dev/null || echo "devpassword"'))
+	$(eval MINIO_SECRET_KEY := $(shell bash -c 'source scripts/lib/vault.sh && set_vault_environment $(ENV_PREFIX) && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.minio.root_password 2>/dev/null || echo "minioadmin"'))
+	$(eval AUTHZ_MASTER_KEY := $(shell bash -c 'source scripts/lib/vault.sh && set_vault_environment $(ENV_PREFIX) && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.authz_master_key 2>/dev/null || echo "local-master-key-change-in-production"'))
 ifdef SERVICE
 	DEV_APPS_DIR="$(DEV_APPS_DIR)" BUSIBOX_HOST_PATH="$(PWD)" CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" MINIO_SECRET_KEY="$(MINIO_SECRET_KEY)" AUTHZ_MASTER_KEY="$(AUTHZ_MASTER_KEY)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) up -d --no-build $(SERVICE)
 else
@@ -420,9 +420,9 @@ docker-down-all:
 # Restart Docker services (simple restart, no recreation)
 docker-restart:
 	$(eval GITHUB_AUTH_TOKEN := $(shell bash scripts/lib/github.sh get 2>/dev/null))
-	$(eval POSTGRES_PASSWORD := $(shell bash scripts/lib/vault.sh get secrets.postgres.password 2>/dev/null || echo "devpassword"))
-	$(eval MINIO_SECRET_KEY := $(shell bash scripts/lib/vault.sh get secrets.minio.secret_key 2>/dev/null || echo "minioadmin"))
-	$(eval AUTHZ_MASTER_KEY := $(shell bash scripts/lib/vault.sh get secrets.authz.master_key 2>/dev/null || echo "local-master-key-change-in-production"))
+	$(eval POSTGRES_PASSWORD := $(shell bash -c 'source scripts/lib/vault.sh && set_vault_environment $(ENV_PREFIX) && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.postgresql.password 2>/dev/null || echo "devpassword"'))
+	$(eval MINIO_SECRET_KEY := $(shell bash -c 'source scripts/lib/vault.sh && set_vault_environment $(ENV_PREFIX) && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.minio.root_password 2>/dev/null || echo "minioadmin"'))
+	$(eval AUTHZ_MASTER_KEY := $(shell bash -c 'source scripts/lib/vault.sh && set_vault_environment $(ENV_PREFIX) && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.authz_master_key 2>/dev/null || echo "local-master-key-change-in-production"'))
 ifdef SERVICE
 	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" DEV_APPS_DIR="$(DEV_APPS_DIR)" CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" MINIO_SECRET_KEY="$(MINIO_SECRET_KEY)" AUTHZ_MASTER_KEY="$(AUTHZ_MASTER_KEY)" docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) restart $(SERVICE)
 else
@@ -469,9 +469,9 @@ github-ensure:
 docker-build: ssl-check
 	$(eval GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown"))
 	$(eval GITHUB_AUTH_TOKEN := $(shell bash scripts/lib/github.sh get 2>/dev/null))
-	$(eval POSTGRES_PASSWORD := $(shell bash scripts/lib/vault.sh get secrets.postgres.password 2>/dev/null || echo "devpassword"))
-	$(eval MINIO_SECRET_KEY := $(shell bash scripts/lib/vault.sh get secrets.minio.secret_key 2>/dev/null || echo "minioadmin"))
-	$(eval AUTHZ_MASTER_KEY := $(shell bash scripts/lib/vault.sh get secrets.authz.master_key 2>/dev/null || echo "local-master-key-change-in-production"))
+	$(eval POSTGRES_PASSWORD := $(shell bash -c 'source scripts/lib/vault.sh && set_vault_environment $(ENV_PREFIX) && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.postgresql.password 2>/dev/null || echo "devpassword"'))
+	$(eval MINIO_SECRET_KEY := $(shell bash -c 'source scripts/lib/vault.sh && set_vault_environment $(ENV_PREFIX) && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.minio.root_password 2>/dev/null || echo "minioadmin"'))
+	$(eval AUTHZ_MASTER_KEY := $(shell bash -c 'source scripts/lib/vault.sh && set_vault_environment $(ENV_PREFIX) && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.authz_master_key 2>/dev/null || echo "local-master-key-change-in-production"'))
 	@if [ -z "$(GITHUB_AUTH_TOKEN)" ]; then \
 		echo "[ERROR] No GitHub token found"; \
 		echo ""; \
