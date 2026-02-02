@@ -374,8 +374,10 @@ manage_service() {
                 echo ""
                 info "Redeploying ${service}..."
                 if [[ "$backend" == "docker" ]]; then
+                    local env
+                    env=$(get_state "ENVIRONMENT" || echo "development")
                     cd "$REPO_ROOT"
-                    make docker-build SERVICE="$service" && make docker-up SERVICE="$service"
+                    make docker-build SERVICE="$service" ENV="$env" && make docker-up SERVICE="$service" ENV="$env"
                 else
                     local env
                     env=$(get_state "ENVIRONMENT" || echo "staging")
@@ -391,8 +393,10 @@ manage_service() {
                 
                 echo ""
                 info "Rebuilding core-apps container (full Docker rebuild)..."
+                local env
+                env=$(get_state "ENVIRONMENT" || echo "development")
                 cd "$REPO_ROOT"
-                make docker-build SERVICE=core-apps && make docker-up SERVICE=core-apps
+                make docker-build SERVICE=core-apps ENV="$env" && make docker-up SERVICE=core-apps ENV="$env"
                 read -n 1 -s -r -p "Press any key to continue..."
                 ;;
             7) # Rebuild App (only for core-apps)
