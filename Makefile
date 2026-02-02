@@ -352,9 +352,17 @@ _ensure-env:
 # ENV=development -> dev overlay (volume mounts, npm-linked busibox-app)
 # ENV=demo/staging/production -> prod overlay (apps built from GitHub)
 # Requires valid GitHub token for private repos
-docker-up: github-check
+docker-up:
 	@echo "Starting Docker services (ENV=$(ENV), overlay=$(notdir $(COMPOSE_OVERLAY)))..."
 	$(eval GITHUB_AUTH_TOKEN := $(shell bash scripts/lib/github.sh get 2>/dev/null))
+	@if [ -z "$(GITHUB_AUTH_TOKEN)" ]; then \
+		echo "[ERROR] No GitHub token found"; \
+		echo ""; \
+		echo "Set GITHUB_AUTH_TOKEN with: export GITHUB_AUTH_TOKEN=ghp_your_token"; \
+		echo "Create a token at: https://github.com/settings/tokens/new"; \
+		echo "Required scopes: repo, read:packages"; \
+		exit 1; \
+	fi
 ifneq ($(DEV_APPS_DIR),)
 	@echo "Dev Apps Directory: $(DEV_APPS_DIR)"
 endif
@@ -404,7 +412,7 @@ docker-down-all:
 	docker compose -p prod-busibox down 2>/dev/null || true
 
 # Restart Docker services (simple restart, no recreation)
-docker-restart: github-check
+docker-restart:
 	$(eval GITHUB_AUTH_TOKEN := $(shell bash scripts/lib/github.sh get 2>/dev/null))
 ifdef SERVICE
 	GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)" DEV_APPS_DIR="$(DEV_APPS_DIR)" CONTAINER_PREFIX=$(CONTAINER_PREFIX) COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT) docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OVERLAY) restart $(SERVICE)
@@ -449,9 +457,17 @@ github-ensure:
 # Build Docker images based on environment
 # ENV=development -> dev overlay, ENV=demo/staging/production -> prod overlay
 # Requires valid GitHub token for private repos
-docker-build: ssl-check github-check
+docker-build: ssl-check
 	$(eval GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown"))
 	$(eval GITHUB_AUTH_TOKEN := $(shell bash scripts/lib/github.sh get 2>/dev/null))
+	@if [ -z "$(GITHUB_AUTH_TOKEN)" ]; then \
+		echo "[ERROR] No GitHub token found"; \
+		echo ""; \
+		echo "Set GITHUB_AUTH_TOKEN with: export GITHUB_AUTH_TOKEN=ghp_your_token"; \
+		echo "Create a token at: https://github.com/settings/tokens/new"; \
+		echo "Required scopes: repo, read:packages"; \
+		exit 1; \
+	fi
 	@echo "Building with version: $(GIT_COMMIT) (ENV=$(ENV), overlay=$(notdir $(COMPOSE_OVERLAY)))"
 ifdef SERVICE
 ifdef NO_CACHE
