@@ -140,23 +140,32 @@ check_model_cached() {
     # FastEmbed stores models using HuggingFace Hub cache structure:
     # models--{org}--{model_name}/snapshots/{hash}/
     # e.g., models--BAAI--bge-small-en-v1.5/snapshots/.../model.onnx
+    #
+    # NOTE: FastEmbed may use different model sources (e.g., qdrant/... instead of BAAI/...)
+    # so we search for any matching model name pattern
     
-    # Convert model name to HuggingFace Hub format
-    # "BAAI/bge-small-en-v1.5" -> "models--BAAI--bge-small-en-v1.5"
-    local hub_name
-    hub_name="models--$(echo "$model" | tr '/' '--')"
+    # Extract just the model name (e.g., "bge-small-en-v1.5" from "BAAI/bge-small-en-v1.5")
+    local model_name
+    model_name="$(echo "$model" | cut -d'/' -f2)"
     
     # Check if cache directory exists
     if [[ ! -d "${FASTEMBED_CACHE}" ]]; then
         return 1
     fi
     
-    # Check if this specific model directory exists and has model files
-    if [[ -d "${FASTEMBED_CACHE}/${hub_name}" ]]; then
-        # Verify it has actual model files (not just empty directory)
-        if find "${FASTEMBED_CACHE}/${hub_name}" -type f -name "*.onnx" 2>/dev/null | grep -q .; then
-            return 0
-        fi
+    # Look for any model directory containing this model name
+    # This handles cases where FastEmbed uses different sources (qdrant vs BAAI, etc.)
+    local matching_dirs
+    matching_dirs=$(find "${FASTEMBED_CACHE}" -maxdepth 1 -type d -name "*${model_name}*" 2>/dev/null)
+    
+    if [[ -n "$matching_dirs" ]]; then
+        # Check if any matching directory has model files
+        # Follow symlinks (-L) since HuggingFace Hub uses symlinks to blobs
+        while IFS= read -r dir; do
+            if find "$dir" -L -type f \( -name "*.onnx" -o -name "*model*.onnx" \) 2>/dev/null | grep -q .; then
+                return 0
+            fi
+        done <<< "$matching_dirs"
     fi
     
     return 1
