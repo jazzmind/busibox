@@ -814,9 +814,15 @@ async def start_service_sse(
     SSE endpoint for starting a Docker Compose service with real-time output.
     
     Streams docker compose output line-by-line to the client via Server-Sent Events.
-    Query params: token (required for auth)
+    Query params:
+      - token (required for auth)
+      - rebuild (optional, boolean): if true, rebuilds the container before starting
     """
     logger.info(f"[SSE] Received request to start service: {service}")
+    
+    # Check if rebuild is requested
+    rebuild = request.query_params.get('rebuild', '').lower() == 'true'
+    logger.info(f"[SSE] Rebuild requested: {rebuild}")
     
     # Get token from query params (EventSource doesn't support custom headers)
     token = request.query_params.get('token')
@@ -954,6 +960,10 @@ async def start_service_sse(
                 # Regular Docker service deployment
                 yield f"data: {json.dumps({'type': 'info', 'message': f'Starting {service}...'})}\n\n"
                 
+                # If rebuild is requested, build the container first
+                if rebuild:
+                    yield f"data: {json.dumps({'type': 'info', 'message': f'Rebuilding {service} container...'})}\n\n"
+                
                 # Start docker compose with real-time output
                 # Pass environment variables so docker compose can validate all services
                 env = os.environ.copy()
@@ -997,6 +1007,64 @@ async def start_service_sse(
                     'data-api': ['data-api', 'data-worker'],  # Data needs both API and worker
                 }
                 services_to_start = service_groups.get(service, [service])
+                
+                # If rebuild requested, build the container(s) first
+                if rebuild:
+                    build_cmd = compose_cmd.copy()
+                    build_cmd.extend(['build'] + services_to_start)
+                    
+                    yield f"data: {json.dumps({'type': 'info', 'message': f'Building container(s): {', '.join(services_to_start)}'})}\n\n"
+                    
+                    build_process = await asyncio.create_subprocess_exec(
+                        *build_cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                        env=env,
+                        cwd=busibox_host_path,
+                    )
+                    
+                    # Stream build output
+                    build_queue = asyncio.Queue()
+                    
+                    async def read_build_stream(stream, stream_type):
+                        while True:
+                            line = await stream.readline()
+                            if not line:
+                                break
+                            message = line.decode('utf-8', errors='replace').rstrip()
+                            if message:
+                                await build_queue.put({
+                                    'type': 'log',
+                                    'stream': stream_type,
+                                    'message': message
+                                })
+                        await build_queue.put(None)
+                    
+                    build_stdout_task = asyncio.create_task(read_build_stream(build_process.stdout, "stdout"))
+                    build_stderr_task = asyncio.create_task(read_build_stream(build_process.stderr, "stderr"))
+                    
+                    # Yield build messages
+                    build_done_count = 0
+                    while build_done_count < 2:
+                        try:
+                            msg = await asyncio.wait_for(build_queue.get(), timeout=0.1)
+                            if msg is None:
+                                build_done_count += 1
+                            else:
+                                yield f"data: {json.dumps(msg)}\n\n"
+                        except asyncio.TimeoutError:
+                            if build_stdout_task.done() and build_stderr_task.done():
+                                break
+                            continue
+                    
+                    # Wait for build to complete
+                    build_returncode = await build_process.wait()
+                    
+                    if build_returncode != 0:
+                        yield f"data: {json.dumps({'type': 'error', 'message': f'Build failed with exit code {build_returncode}', 'done': True})}\n\n"
+                        return
+                    
+                    yield f"data: {json.dumps({'type': 'success', 'message': 'Build completed successfully'})}\n\n"
                 
                 # For services with infra deps, let docker compose start dependencies
                 # For API services, use --no-deps to avoid restarting already-running services
