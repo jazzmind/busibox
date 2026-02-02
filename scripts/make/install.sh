@@ -1591,18 +1591,27 @@ bootstrap_proxmox_ansible() {
     # PHASE 0: Setup Proxmox Host (if needed)
     # =========================================================================
     # Setup ZFS datasets and host directories before creating containers
+    # Only runs once per environment to avoid redundant checks
     
-    local host_setup_script="${REPO_ROOT}/provision/pct/host/setup-proxmox-host.sh"
-    if [[ -f "$host_setup_script" ]]; then
-        info "Checking Proxmox host setup (ZFS datasets, directories)..."
-        if bash "$host_setup_script" "$inventory_name"; then
-            success "Proxmox host setup complete"
+    local host_setup_done
+    host_setup_done=$(get_state "PROXMOX_HOST_SETUP_${inventory_name^^}" "false")
+    
+    if [[ "$host_setup_done" != "true" ]]; then
+        local host_setup_script="${REPO_ROOT}/provision/pct/host/setup-proxmox-host.sh"
+        if [[ -f "$host_setup_script" ]]; then
+            info "Running Proxmox host setup (ZFS datasets, directories)..."
+            if bash "$host_setup_script" "$inventory_name"; then
+                success "Proxmox host setup complete"
+                set_state "PROXMOX_HOST_SETUP_${inventory_name^^}" "true"
+            else
+                warn "Host setup script reported issues (may be non-critical)"
+            fi
         else
-            warn "Host setup script reported issues (may be non-critical)"
+            warn "Host setup script not found: $host_setup_script"
+            warn "Skipping host setup - containers may not have required datasets"
         fi
     else
-        warn "Host setup script not found: $host_setup_script"
-        warn "Skipping host setup - containers may not have required datasets"
+        info "Proxmox host already setup for ${inventory_name} environment (skipping)"
     fi
     
     # =========================================================================
