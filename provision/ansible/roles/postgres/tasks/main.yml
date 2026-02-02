@@ -78,16 +78,6 @@
     role_attr_flags: "LOGIN,CREATEDB"
     state: present
 
-- name: Create busibox database
-  become_user: postgres
-  postgresql_db:
-    name: "{{ postgres_db }}"
-    owner: "{{ postgres_user }}"
-    encoding: UTF8
-    lc_collate: en_US.UTF-8
-    lc_ctype: en_US.UTF-8
-    template: template0
-
 - name: Create service-specific databases
   become_user: postgres
   postgresql_db:
@@ -99,9 +89,9 @@
     template: template0
     state: present
   loop:
-    - "{{ files_db | default('files') }}"
-    - agent_server
-    - authz
+    - data      # Data API database (files/documents/chunks)
+    - agent     # Agent API database
+    - authz     # AuthZ API database
   tags: [postgres]
 
 # =============================================================================
@@ -114,8 +104,8 @@
 # table names so test code doesn't need to change.
 #
 # Architecture:
-#   busibox_user     -> agent_server, authz, files (production/staging)
-#   busibox_test_user -> test_agent_server, test_authz, test_files (pytest)
+#   busibox_user     -> data, agent, authz (production/staging)
+#   busibox_test_user -> test_data, test_agent, test_authz (pytest)
 
 - name: Create pytest test user
   become_user: postgres
@@ -138,9 +128,9 @@
     template: template0
     state: present
   loop:
-    - test_agent_server
-    - test_authz
-    - test_files
+    - test_data      # Test database for data API
+    - test_agent     # Test database for agent API
+    - test_authz     # Test database for authz API
   when: enable_pytest_databases | default(false)
   tags: [postgres, pytest_databases]
 
@@ -208,17 +198,17 @@
     group: postgres
   tags: [postgres]
 
-- name: Create migrations table in data/files database
+- name: Create migrations table in data database
   become_user: postgres
   postgresql_query:
-    db: "{{ files_db | default('files') }}"
+    db: data
     query: |
       CREATE TABLE IF NOT EXISTS ansible_migrations (
         version INTEGER PRIMARY KEY,
         name VARCHAR(255) NOT NULL,
         applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
-  when: files_db is defined
+  tags: [postgres]
   tags: [postgres]
 
 - name: Check if data schema migration has been applied
@@ -228,13 +218,13 @@
     query: "SELECT COUNT(*) as count FROM ansible_migrations WHERE version = 10"
   register: migration_check
   failed_when: false
-  when: files_db is defined
+  tags: [postgres]
   tags: [postgres]
 
 - name: Debug migration check result
   debug:
     msg: "Migration check: {{ migration_check }}"
-  when: files_db is defined
+  tags: [postgres]
   tags: [postgres]
 
 - name: Apply data schema to files database
@@ -251,7 +241,7 @@
 - name: Display migration result
   debug:
     msg: "Data schema migration: {{ 'applied' if files_migration_result.changed else 'already exists' }}"
-  when: files_db is defined
+  tags: [postgres]
   tags: [postgres]
 
 - name: Grant ownership of all tables to postgres user (files database)
@@ -292,7 +282,7 @@
       -- Set default privileges for future objects
       ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO {{ postgres_user }};
       ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO {{ postgres_user }};
-  when: files_db is defined
+  tags: [postgres]
   tags: [postgres]
 
 - name: Ensure ai_portal database exists with correct owner
@@ -350,15 +340,15 @@
       ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO {{ postgres_user }};
   tags: [postgres]
 
-- name: Apply database migrations (main database)
+- name: Apply database migrations (data database)
   become_user: postgres
   shell: |
     # Check if migration {{ item.version }} has been applied
-    APPLIED=$(psql -U postgres -d {{ postgres_db }} -t -c "SELECT COUNT(*) FROM ansible_migrations WHERE version = {{ item.version }}" 2>/dev/null || echo "0")
+    APPLIED=$(psql -U postgres -d data -t -c "SELECT COUNT(*) FROM ansible_migrations WHERE version = {{ item.version }}" 2>/dev/null || echo "0")
     
     if [ "$APPLIED" -eq "0" ]; then
       echo "Applying migration {{ item.version }}: {{ item.name }}"
-      psql -U postgres -d {{ postgres_db }} -f /var/lib/postgresql/migrations/{{ item.file }}
+      psql -U postgres -d data -f /var/lib/postgresql/migrations/{{ item.file }}
       if [ $? -eq 0 ]; then
         echo "Migration {{ item.version }} applied successfully"
       else
@@ -376,10 +366,10 @@
   register: migration_result
   changed_when: "'applied successfully' in migration_result.stdout"
 
-- name: Grant ownership of all tables to application user (main database)
+- name: Grant ownership of all tables to application user (data database)
   become_user: postgres
   postgresql_query:
-    db: "{{ postgres_db }}"
+    db: data
     query: |
       -- Grant ownership of all tables in public schema
       DO $$
@@ -415,10 +405,10 @@
       ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO {{ postgres_user }};
       ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO {{ postgres_user }};
 
-- name: Grant ownership of all tables to postgres user (files database)
+- name: Grant ownership of all tables to postgres user (data database)
   become_user: postgres
   postgresql_query:
-    db: "{{ files_db | default('files') }}"
+    db: data
     query: |
       -- Grant ownership of all tables in public schema
       DO $$
