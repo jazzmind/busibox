@@ -87,7 +87,7 @@
   debug:
     msg: |
       ✅ NGINX configuration complete
-      - SSL Mode: {{ detected_ssl_mode }}
+      - SSL Mode: {{ ssl_mode_used | default('auto-discovered') }}
       - Applications configured: {{ applications | selectattr('routes', 'defined') | selectattr('routes', 'ne', []) | list | length }}
       - HTTP to HTTPS redirect: enabled
       

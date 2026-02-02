@@ -3,12 +3,6 @@
 # Purpose: Generate vhost and location configs for all applications
 # Requirements: FR-014, FR-015 (subdomain and path routing)
 
-- name: Load secrets for SSL certificate deployment
-  include_vars:
-    file: "{{ playbook_dir }}/roles/secrets/vars/vault.yml"
-  no_log: true
-  when: detected_ssl_mode == 'provisioned'
-
 - name: Find existing site configurations
   find:
     paths: /etc/nginx/sites-enabled

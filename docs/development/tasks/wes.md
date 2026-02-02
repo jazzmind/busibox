@@ -1,15 +1,11 @@
 # Wes's Tasks
 issues:
- - health check on service page 
 
+[ ] get staging deployed
+  [ ] make sure we didn't mess up docker
+  [ ] make sure we can deploy app-template on both
 
-[ ] get full make install flow working
-
-
-
-[ ] get app deployer to work with sample
-[ ] update project-analysis to match app-template & deploy
-[ ] same for estimator
+[ ] do castle p&l analysis project
 [ ] improve project-analysis
     [ ] needs to work with local llm
     [ ] report view
