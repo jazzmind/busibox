@@ -100,6 +100,13 @@ pct start "$CT_DATA" || {
   exit 1
 }
 
+# Mount embedding model cache from host
+echo "==> Mounting embedding model cache"
+add_data_mount "$CT_DATA" "/var/lib/embedding-models/fastembed" "/var/lib/embedding-models/fastembed" "0" || {
+  echo "WARNING: Failed to mount embedding model cache"
+  echo "  Mount can be configured manually later"
+}
+
 # Create liteLLM container
 create_ct "$CT_LITELLM" "$IP_LITELLM" "${PREFIX}litellm-lxc" unpriv || cleanup_on_error
 CREATED_CONTAINERS+=("$CT_LITELLM")

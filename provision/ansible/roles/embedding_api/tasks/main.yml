@@ -24,7 +24,7 @@
     - "{{ embedding_api_src_path }}"
     - "{{ embedding_api_log_path }}"
     - /etc/embedding
-    - /home/{{ embedding_api_user }}/.cache
+    - "{{ embedding_cache_dir }}"
 
 - name: Install system dependencies
   ansible.builtin.apt:
