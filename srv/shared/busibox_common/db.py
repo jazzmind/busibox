@@ -62,6 +62,7 @@ class SchemaManager:
         self._tables: List[str] = []
         self._indexes: List[str] = []
         self._migrations: List[str] = []  # Inline migrations (ALTER TABLE IF NOT EXISTS patterns)
+        self._rls_policies: List[str] = []  # Row-Level Security policies
     
     def add_extension(self, name: str) -> "SchemaManager":
         """Add a PostgreSQL extension to be created."""
@@ -98,6 +99,20 @@ class SchemaManager:
         self._migrations.append(migration_sql.strip())
         return self
     
+    def add_rls(self, rls_sql: str) -> "SchemaManager":
+        """
+        Add Row-Level Security (RLS) policies.
+        
+        Examples:
+            schema.add_rls("ALTER TABLE users ENABLE ROW LEVEL SECURITY")
+            schema.add_rls('''
+                CREATE POLICY IF NOT EXISTS users_isolation ON users
+                USING (organization_id = current_setting('app.current_organization_id')::UUID)
+            ''')
+        """
+        self._rls_policies.append(rls_sql.strip())
+        return self
+    
     async def apply(self, conn) -> None:
         """
         Apply all schema definitions to the database connection.
@@ -127,6 +142,11 @@ class SchemaManager:
         for migration_sql in self._migrations:
             await execute(migration_sql)
         logger.debug(f"Migrations applied: {len(self._migrations)}")
+        
+        # Apply RLS policies
+        for rls_sql in self._rls_policies:
+            await execute(rls_sql)
+        logger.debug(f"RLS policies applied: {len(self._rls_policies)}")
         
         logger.info("Schema initialization complete")
     
