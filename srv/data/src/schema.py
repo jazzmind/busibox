@@ -380,38 +380,6 @@ def get_data_schema() -> SchemaManager:
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_record_history_batch ON data_record_history(batch_id) WHERE batch_id IS NOT NULL")
     
     # ==========================================================================
-    # Foreign Key for groups (added after groups table exists)
-    # ==========================================================================
-    schema.add_migration("""
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM pg_constraint 
-                WHERE conname = 'data_files_group_id_fkey'
-            ) THEN
-                ALTER TABLE data_files 
-                ADD CONSTRAINT data_files_group_id_fkey 
-                FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE SET NULL;
-            END IF;
-        END $$
-    """)
-    
-    # Foreign key for libraries
-    schema.add_migration("""
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM pg_constraint 
-                WHERE conname = 'data_files_library_id_fkey'
-            ) THEN
-                ALTER TABLE data_files 
-                ADD CONSTRAINT data_files_library_id_fkey 
-                FOREIGN KEY (library_id) REFERENCES libraries(id) ON DELETE SET NULL;
-            END IF;
-        END $$
-    """)
-    
-    # ==========================================================================
     # Row-Level Security (RLS)
     # ==========================================================================
     
@@ -723,22 +691,5 @@ def get_data_schema() -> SchemaManager:
             FOR EACH ROW
             EXECUTE FUNCTION check_document_has_roles()
     """)
-    
-    # ==========================================================================
-    # Grants
-    # ==========================================================================
-    
-    schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON data_files TO busibox_user")
-    schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON data_chunks TO busibox_user")
-    schema.add_migration("GRANT SELECT, INSERT, UPDATE ON data_status TO busibox_user")
-    schema.add_migration("GRANT SELECT, INSERT ON processing_history TO busibox_user")
-    schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON document_roles TO busibox_user")
-    schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON groups TO busibox_user")
-    schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON group_memberships TO busibox_user")
-    schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON processing_strategy_results TO busibox_user")
-    schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON libraries TO busibox_user")
-    schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON library_tag_cache TO busibox_user")
-    schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON data_document_cache TO busibox_user")
-    schema.add_migration("GRANT SELECT, INSERT ON data_record_history TO busibox_user")
     
     return schema
