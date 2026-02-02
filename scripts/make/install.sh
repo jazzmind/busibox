@@ -1743,39 +1743,43 @@ bootstrap_proxmox_ansible() {
         return 0
     }
     
-    # Run deployment phases with progress display
+    # ==========================================================================
+    # MINIMAL BOOTSTRAP: Deploy only services needed for AI Portal to work
+    # The rest (MinIO, Milvus, Data-API, Search-API, Agent-API, LiteLLM, etc.)
+    # will be deployed via AI Portal setup wizard using deploy-api
+    # This matches the Docker bootstrap pattern.
+    # ==========================================================================
     
-    # Phase 1: Core Infrastructure (nginx first for web-driven recovery)
-    show_stage 30 "Deploying Core Infrastructure" "Nginx, MinIO, PostgreSQL, Milvus via Ansible."
-    info "Running: ansible-playbook ... --tags core"
-    if ! run_ansible_proxmox "core"; then
-        error "Core infrastructure deployment failed"
+    # Get environment-specific IPs
+    local authz_ip portal_ip proxy_ip
+    case "$ENVIRONMENT" in
+        production)
+            authz_ip="10.96.200.210"
+            portal_ip="10.96.200.201"
+            proxy_ip="10.96.200.200"
+            ;;
+        staging)
+            authz_ip="10.96.201.210"
+            portal_ip="10.96.201.201"
+            proxy_ip="10.96.201.200"
+            ;;
+    esac
+    
+    # Phase 1: PostgreSQL (database)
+    show_stage 40 "Deploying PostgreSQL" "Enterprise-grade database with row-level security."
+    if ! run_ansible_proxmox "postgres"; then
+        error "PostgreSQL deployment failed"
         return 1
     fi
     
-    # Phase 2: LLM Services
-    show_stage 50 "Deploying LLM Services" "vLLM, LiteLLM, ColPali via Ansible."
-    info "Running: ansible-playbook ... --tags llm"
-    if ! run_ansible_proxmox "llm"; then
-        error "LLM deployment failed"
-        return 1
-    fi
-    
-    # Phase 3: API Services
-    show_stage 65 "Deploying API Services" "AuthZ, Data, Search, Agent, Deploy APIs."
-    info "Running: ansible-playbook ... --tags apis"
-    if ! run_ansible_proxmox "apis"; then
-        error "API deployment failed"
+    # Phase 2: AuthZ API (needed for admin user creation and authentication)
+    show_stage 55 "Deploying AuthZ API" "Zero-trust authentication with OAuth 2.0."
+    if ! run_ansible_proxmox "authz"; then
+        error "AuthZ deployment failed"
         return 1
     fi
     
     # Wait for AuthZ to be ready before creating admin user
-    local authz_ip
-    case "$ENVIRONMENT" in
-        production) authz_ip="10.96.200.210" ;;
-        staging) authz_ip="10.96.201.210" ;;
-    esac
-    
     info "Waiting for AuthZ API to be healthy at ${authz_ip}..."
     local max_attempts=30
     local attempt=0
@@ -1788,9 +1792,8 @@ bootstrap_proxmox_ansible() {
         ((attempt++))
     done
     
-    # Phase 4: Create Admin User
-    show_stage 75 "Creating Admin User" "Setting up admin account with magic link."
-    # For Proxmox, we need to call the remote AuthZ API
+    # Phase 3: Create Admin User
+    show_stage 65 "Creating Admin User" "Setting up admin account with magic link."
     export AUTHZ_BASE_URL="http://${authz_ip}:8010"
     if create_admin_user "$ADMIN_EMAIL"; then
         success "Admin user created successfully"
@@ -1798,21 +1801,40 @@ bootstrap_proxmox_ansible() {
         warn "Could not create admin user - you'll need to sign up manually"
     fi
     
-    # Phase 5: Frontend Apps
-    show_stage 85 "Deploying Frontend Apps" "AI Portal, Agent Manager via Ansible."
-    info "Running: ansible-playbook ... --tags apps"
-    if ! run_ansible_proxmox "apps"; then
-        error "Frontend deployment failed"
+    # Phase 4: Deploy API (service orchestration - needed to deploy remaining services)
+    show_stage 70 "Deploying Deploy API" "Service orchestration and deployment automation."
+    if ! run_ansible_proxmox "deploy"; then
+        error "Deploy API deployment failed"
         return 1
     fi
     
-    # Phase 6: Wait for AI Portal
-    local portal_ip
-    case "$ENVIRONMENT" in
-        production) portal_ip="10.96.200.201" ;;
-        staging) portal_ip="10.96.201.201" ;;
-    esac
+    # Wait for Deploy API to be ready
+    info "Waiting for Deploy API to be healthy at ${authz_ip}:8011..."
+    attempt=0
+    while [[ $attempt -lt 30 ]]; do
+        if curl -sf "http://${authz_ip}:8011/health/live" &>/dev/null; then
+            success "Deploy API is ready"
+            break
+        fi
+        sleep 1
+        ((attempt++))
+    done
     
+    # Phase 5: Nginx (reverse proxy - needed before apps can be accessed)
+    show_stage 75 "Deploying Nginx" "Reverse proxy for secure access."
+    if ! run_ansible_proxmox "nginx"; then
+        error "Nginx deployment failed"
+        return 1
+    fi
+    
+    # Phase 6: Core Apps (AI Portal + Agent Manager)
+    show_stage 85 "Deploying Core Apps" "AI Portal and Agent Manager."
+    if ! run_ansible_proxmox "apps"; then
+        error "Core apps deployment failed"
+        return 1
+    fi
+    
+    # Phase 7: Wait for AI Portal to be ready
     show_stage 95 "Waiting for AI Portal" "Verifying services are healthy..."
     info "Waiting for AI Portal to be healthy at ${portal_ip}..."
     max_attempts=90
@@ -1824,11 +1846,18 @@ bootstrap_proxmox_ansible() {
         fi
         sleep 2
         ((attempt++))
+        if [[ $((attempt % 15)) -eq 0 ]]; then
+            echo -n "."
+        fi
     done
+    echo ""
     
     if [[ $attempt -ge $max_attempts ]]; then
         warn "AI Portal health check timed out, but it may still be starting"
     fi
+    
+    # Note: Additional services (MinIO, Milvus, Data-API, Search-API, Agent-API, 
+    # Docs-API, LiteLLM, vLLM, etc.) will be deployed via AI Portal setup wizard
     
     cd "${REPO_ROOT}"
 }
