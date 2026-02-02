@@ -746,13 +746,19 @@ update_vault_secrets() {
         fi
     done
     
-    # Re-encrypt if it was encrypted
+    # Re-encrypt if it was encrypted, OR encrypt if password file is available
     if [[ "$was_encrypted" == "true" ]]; then
         # Copy back and encrypt in place to avoid vault-id conflicts
         cp "$tmp_file" "$VAULT_FILE"
         rm -f "$tmp_file"
         if ! ansible-vault encrypt --vault-password-file="$vault_pass_file" --encrypt-vault-id default "$VAULT_FILE" 2>/dev/null; then
             _vault_error "Failed to re-encrypt vault"
+            return 1
+        fi
+    elif [[ -n "$vault_pass_file" ]] && [[ -f "$vault_pass_file" ]]; then
+        # Vault wasn't encrypted but we have a password file - encrypt it now
+        if ! ansible-vault encrypt --vault-password-file="$vault_pass_file" --encrypt-vault-id default "$VAULT_FILE" 2>/dev/null; then
+            _vault_error "Failed to encrypt vault"
             return 1
         fi
     fi
