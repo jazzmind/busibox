@@ -3635,6 +3635,9 @@ main() {
                 
                 cp "$VAULT_EXAMPLE" "$VAULT_FILE"
                 success "Vault file created: $VAULT_FILE"
+                
+                # Mark that we need to encrypt the vault after updating secrets
+                VAULT_NEEDS_ENCRYPTION=true
             else
                 error "Vault file not found and no example to copy from"
                 error "  Expected: $VAULT_EXAMPLE"
@@ -3644,6 +3647,7 @@ main() {
             fi
         else
             info "Using existing vault: $VAULT_FILE"
+            VAULT_NEEDS_ENCRYPTION=false
         fi
         
         # Set vault password for sync operation
@@ -3672,6 +3676,17 @@ main() {
         
         # Sync generated secrets to vault
         sync_secrets_to_vault
+        
+        # Encrypt the vault if it was just created (unencrypted)
+        if [[ "${VAULT_NEEDS_ENCRYPTION:-false}" == "true" ]]; then
+            info "Encrypting vault with environment password..."
+            if ansible-vault encrypt --vault-password-file="$vault_pass_file" "$VAULT_FILE" 2>/dev/null; then
+                success "Vault encrypted: $VAULT_FILE"
+            else
+                error "Failed to encrypt vault"
+                exit 1
+            fi
+        fi
         
         set_install_phase "secrets_generated"
     else
