@@ -239,10 +239,10 @@
     msg: "Data schema migration: {{ 'applied' if data_migration_result.changed else 'already exists' }}"
   tags: [postgres]
 
-- name: Grant ownership of all tables to postgres user (files database)
+- name: Grant ownership of all tables to postgres user (data database)
   become_user: postgres
   postgresql_query:
-    db: files
+    db: data
     query: |
       -- Grant ownership of all tables in public schema
       DO $$
