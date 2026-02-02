@@ -3606,6 +3606,15 @@ main() {
         
         # Sync secrets to vault (vault is source of truth for secrets)
         # Ensure vault file exists first
+        
+        # For fresh install, force environment-specific vault (don't use legacy)
+        local env_vault_path="${REPO_ROOT}/provision/ansible/roles/secrets/vars/vault.${TARGET_ENV}.yml"
+        if [[ ! -f "$env_vault_path" ]] && [[ "$VAULT_FILE" != "$env_vault_path" ]]; then
+            warn "Legacy vault detected, but environment-specific vault doesn't exist"
+            info "Creating new environment-specific vault: vault.${TARGET_ENV}.yml"
+            VAULT_FILE="$env_vault_path"
+        fi
+        
         if [[ ! -f "$VAULT_FILE" ]]; then
             # Ensure VAULT_EXAMPLE is set (should be set by set_vault_environment)
             if [[ -z "${VAULT_EXAMPLE:-}" ]]; then
@@ -3635,13 +3644,18 @@ main() {
         fi
         
         # Set vault password for sync operation
-        local vault_pass_file
-        vault_pass_file=$(get_vault_pass_file)
-        if [[ -f "$vault_pass_file" ]]; then
-            export ANSIBLE_VAULT_PASSWORD_FILE="$vault_pass_file"
-        elif [[ -f "${HOME}/.vault_pass" ]]; then
-            export ANSIBLE_VAULT_PASSWORD_FILE="${HOME}/.vault_pass"
+        # Use environment-specific vault password file
+        local vault_pass_file="${HOME}/.busibox-vault-pass-${TARGET_ENV}"
+        
+        # Generate vault password if it doesn't exist
+        if [[ ! -f "$vault_pass_file" ]]; then
+            info "Generating vault password for $TARGET_ENV environment..."
+            openssl rand -base64 32 > "$vault_pass_file"
+            chmod 600 "$vault_pass_file"
+            success "Vault password generated: $vault_pass_file"
         fi
+        
+        export ANSIBLE_VAULT_PASSWORD_FILE="$vault_pass_file"
         
         # Sync generated secrets to vault
         sync_secrets_to_vault
