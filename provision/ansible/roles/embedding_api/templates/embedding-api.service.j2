@@ -31,7 +31,7 @@ NoNewPrivileges=true
 PrivateTmp=false
 
 # Allow write to model cache and temp directories
-ReadWritePaths=/home/{{ embedding_api_user }}/.cache /tmp /var/tmp
+ReadWritePaths={{ embedding_cache_dir }} /tmp /var/tmp
 
 # Logging
 StandardOutput=journal

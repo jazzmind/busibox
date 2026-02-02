@@ -7,6 +7,11 @@ embedding_api_venv_path: /opt/embedding/venv
 embedding_api_src_path: /opt/embedding/src
 embedding_api_log_path: /var/log/embedding
 
+# FastEmbed cache directory
+# For Proxmox: Shared cache mounted from host at /var/lib/embedding-models/fastembed
+# For Docker: Local cache in user home directory
+embedding_cache_dir: "{{ '/var/lib/embedding-models/fastembed' if ansible_connection != 'docker' else '/home/' + embedding_api_user + '/.cache/fastembed' }}"
+
 # FastEmbed model configuration (derived from model_registry.yml in template)
 # Default values if model_registry not available
 embedding_model: "BAAI/bge-large-en-v1.5"

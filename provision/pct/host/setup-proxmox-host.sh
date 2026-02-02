@@ -251,12 +251,24 @@ if command -v zfs &>/dev/null && zfs list rpool &>/dev/null 2>&1; then
         echo "  ✓ Dataset rpool/llm-models already exists"
     fi
     
+    # Setup embedding models dataset
+    if ! zfs list rpool/embedding-models &>/dev/null 2>&1; then
+        echo "  Creating dataset: rpool/embedding-models"
+        zfs create -o mountpoint=/var/lib/embedding-models rpool/embedding-models
+        zfs create rpool/embedding-models/fastembed
+        zfs set compression=lz4 rpool/embedding-models
+        echo "    ✓ /var/lib/embedding-models (for embedding models)"
+    else
+        echo "  ✓ Dataset rpool/embedding-models already exists"
+    fi
+    
     echo ""
     echo "  ✓ ZFS storage configured"
     echo ""
     echo "  Dataset summary:"
     zfs list -o name,used,avail,compressratio,mountpoint rpool/data 2>/dev/null || true
     zfs list -o name,used,avail,compressratio,mountpoint rpool/llm-models 2>/dev/null || true
+    zfs list -o name,used,avail,compressratio,mountpoint rpool/embedding-models 2>/dev/null || true
     
 else
     echo "⚠ ZFS not detected - using regular directories"
@@ -270,6 +282,7 @@ else
     mkdir -p /var/lib/data/milvus
     mkdir -p /var/lib/llm-models/ollama
     mkdir -p /var/lib/llm-models/huggingface
+    mkdir -p /var/lib/embedding-models/fastembed
     echo "  ✓ Directories created"
 fi
 

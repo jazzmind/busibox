@@ -2386,7 +2386,29 @@ EMBEDDING_DOWNLOAD_PID=""
 # This allows the embedding model to download while Docker containers are being built
 # Uses Docker because fastembed requires Python <3.13 (onnxruntime compatibility)
 start_embedding_download_background() {
-    # Check if Docker is available
+    # For Proxmox, use the host-based download script
+    if [[ "$PLATFORM" == "proxmox" ]]; then
+        info "Downloading embedding models to Proxmox host cache..."
+        local setup_script="${REPO_ROOT}/provision/pct/host/setup-embedding-models.sh"
+        
+        if [[ ! -f "$setup_script" ]]; then
+            warn "Embedding model setup script not found: ${setup_script}"
+            warn "Models will be downloaded on first container start"
+            return 0
+        fi
+        
+        # Run the setup script in background
+        (
+            bash "$setup_script" 2>&1 | sed 's/^/  /'
+        ) &
+        EMBEDDING_DOWNLOAD_PID=$!
+        set_state "EMBEDDING_DOWNLOAD_PID" "$EMBEDDING_DOWNLOAD_PID"
+        
+        info "Embedding model download started in background (PID: ${EMBEDDING_DOWNLOAD_PID})"
+        return 0
+    fi
+    
+    # For Docker, check if Docker is available
     if ! command -v docker &>/dev/null; then
         warn "Docker not available - embedding model will be downloaded later"
         return 0
