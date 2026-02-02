@@ -158,15 +158,26 @@ check_model_cached() {
     local matching_dirs
     matching_dirs=$(find "${FASTEMBED_CACHE}" -maxdepth 1 -type d -name "*${model_name}*" 2>/dev/null)
     
-    if [[ -n "$matching_dirs" ]]; then
-        # Check if any matching directory has model files
-        # Follow symlinks (-L) since HuggingFace Hub uses symlinks to blobs
-        while IFS= read -r dir; do
-            if find "$dir" -L -type f \( -name "*.onnx" -o -name "*model*.onnx" \) 2>/dev/null | grep -q .; then
-                return 0
-            fi
-        done <<< "$matching_dirs"
+    if [[ -z "$matching_dirs" ]]; then
+        return 1
     fi
+    
+    # Check if any matching directory has model files
+    # HuggingFace Hub uses symlinks to blobs, so check for both files and symlinks
+    while IFS= read -r dir; do
+        [[ -z "$dir" ]] && continue
+        
+        # Look for .onnx files or symlinks (don't follow symlinks with -L, just find them)
+        # Check snapshots directory specifically where the symlinks are
+        if find "$dir/snapshots" -name "*.onnx" 2>/dev/null | grep -q .; then
+            return 0
+        fi
+        
+        # Also check for direct .onnx files (in case structure differs)
+        if find "$dir" -name "*.onnx" 2>/dev/null | grep -q .; then
+            return 0
+        fi
+    done <<< "$matching_dirs"
     
     return 1
 }
