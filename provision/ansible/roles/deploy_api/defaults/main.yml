@@ -31,7 +31,8 @@ deploy_api_apps_container_ip_staging: "{{ hostvars[groups['core_apps'][0]]['ansi
 deploy_api_ssh_key_path: /root/.ssh/id_rsa
 
 # Nginx configuration
-deploy_api_nginx_host: "{{ hostvars[groups['nginx'][0]]['ansible_host'] | default('10.96.200.200') }}"
+# Note: Use 'proxy' group (not 'nginx') - inventories use 'proxy' as the group name
+deploy_api_nginx_host: "{{ hostvars[groups['proxy'][0]]['ansible_host'] | default('10.96.200.200') }}"
 deploy_api_nginx_config_dir: /etc/nginx/sites-available/apps
 deploy_api_nginx_enabled_dir: /etc/nginx/sites-enabled
 
