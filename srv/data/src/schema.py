@@ -353,7 +353,7 @@ def get_data_schema() -> SchemaManager:
     # processing_history indexes
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_processing_history_file_id ON processing_history(file_id)")
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_processing_history_stage ON processing_history(stage)")
-    schema.add_index("CREATE INDEX IF NOT EXISTS idx_processing_history_created_at ON processing_history(created_at DESC)")
+    schema.add_index("CREATE INDEX IF NOT EXISTS idx_processing_history_started_at ON processing_history(started_at DESC)")
     
     # processing_strategy_results indexes
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_strategy_results_file ON processing_strategy_results(file_id)")
