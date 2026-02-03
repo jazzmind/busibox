@@ -38,7 +38,10 @@
         healthEndpoint: "{{ app.health_endpoint | default('/api/health') }}"
         startCommand: "{{ app.start_command | default('node .next/standalone/server.js') }}"
         buildCommand: "{{ app.build_command | default('npm run build') }}"
-        database: "{{ {'required': app.database_required | default(false), 'preferredName': app.database_name | default(app.name | replace('-', '_')), 'schemaManagement': app.schema_management | default('prisma')} if app.database_required | default(false) else omit }}"
+        database:
+          required: "{{ app.database_required | default(false) }}"
+          schemaManagement: "{{ app.schema_management | default('prisma') }}"
+          seedCommand: "{{ app.seed_command | default(omit) }}"
       config:
         environment: "{{ deploy_environment | default('production') }}"
         githubRepoOwner: "{{ app.github_repo.split('/')[0] }}"
