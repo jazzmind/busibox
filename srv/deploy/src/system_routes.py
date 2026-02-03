@@ -57,18 +57,19 @@ async def get_setup_complete_status():
     Used by middleware to decide whether to redirect to setup wizard.
     No authentication required - only returns boolean setup status.
     
-    Returns setupComplete=true if:
+    Returns setupComplete=true ONLY if:
     - INSTALL_PHASE is "complete" (preferred check)
     - OR SETUP_COMPLETE is explicitly set to "true" in state file
-    - OR the state file doesn't exist (no state = default to complete to avoid blocking users)
+    
+    If state file is missing or empty, returns false to ensure setup is completed.
     """
     state = await read_state()
     
-    # If state file is empty (doesn't exist), default to complete
-    # This prevents blocking users when state file is missing
+    # If state file is empty (doesn't exist), default to NOT complete
+    # This ensures users must complete setup before accessing the portal
     if not state:
-        logger.info("State file empty or missing, defaulting setupComplete to true")
-        return {"setupComplete": True}
+        logger.info("State file empty or missing, defaulting setupComplete to false (setup required)")
+        return {"setupComplete": False}
     
     # Check phase first (preferred), then fall back to SETUP_COMPLETE flag
     phase = state.get("INSTALL_PHASE", "")
