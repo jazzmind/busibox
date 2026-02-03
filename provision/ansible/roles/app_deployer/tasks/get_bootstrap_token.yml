@@ -50,10 +50,17 @@
   delay: 2
   until: login_initiate_result.status in [200, 201]
 
+- name: Debug login initiate response
+  debug:
+    msg: "Login initiate response keys: {{ login_initiate_result.json.keys() | list }}"
+
 - name: Extract magic link token
   set_fact:
     magic_link_token: "{{ login_initiate_result.json.magic_link_token }}"
-  no_log: true
+
+- name: Debug magic link token (first 10 chars)
+  debug:
+    msg: "Magic link token starts with: {{ magic_link_token[:10] }}..."
 
 - name: Use magic link to get session JWT
   uri:
@@ -62,7 +69,6 @@
     status_code: [200, 201]
     timeout: 30
   register: magic_link_result
-  no_log: true
 
 - name: Extract session token
   set_fact:
