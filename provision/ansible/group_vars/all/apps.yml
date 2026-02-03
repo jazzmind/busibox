@@ -39,6 +39,9 @@ applications:
     start_command: "node .next/standalone/server.js"  # Standalone mode for Next.js
     process_manager: systemd  # Use systemd for consistent logging via journalctl
     auto_deploy: true  # Deploy by default
+    database_required: true
+    schema_management: prisma
+    seed_command: "npm run db:seed"  # Seeds built-in apps (chat, documents, video, agent-manager)
     routes:
       - type: path
         domain: "{{ full_domain }}"

@@ -44,6 +44,20 @@
     msg: "{{ exec_result.stdout | default('Migration completed') }}"
   when: exec_result is defined
 
+- name: Seed AI Portal database with built-in apps
+  include_role:
+    name: docker_common
+    tasks_from: compose_exec
+  vars:
+    docker_exec_service: core-apps
+    docker_exec_command: "sh -c 'cd /srv/ai-portal && npm run db:seed'"
+    docker_exec_fail_on_error: false
+
+- name: Display seed result
+  ansible.builtin.debug:
+    msg: "{{ exec_result.stdout | default('Seed completed') }}"
+  when: exec_result is defined
+
 - name: Verify AI Portal health endpoint
   ansible.builtin.uri:
     url: "http://localhost:{{ ai_portal_port }}/api/health"

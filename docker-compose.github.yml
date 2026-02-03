@@ -122,6 +122,8 @@ services:
         condition: service_healthy
       authz-api:
         condition: service_healthy
+      deploy-api:
+        condition: service_healthy
     healthcheck:
       # Check nginx health first (apps may not be deployed yet on first start)
       # Full health check includes apps once deployed

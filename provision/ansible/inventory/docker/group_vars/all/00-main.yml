@@ -151,6 +151,16 @@ log_level: debug
 structured_logging: true
 
 # ============================================================================
+# Deployment Configuration
+# ============================================================================
+# Deploy API is the unified deployment system for both Docker and Proxmox.
+use_deploy_api: true
+
+# Deploy API connection settings
+# In Docker, use container service name; entrypoint handles token acquisition
+deploy_environment: docker
+
+# ============================================================================
 # GitHub Configuration
 # ============================================================================
 github_token: "{{ secrets.github.personal_access_token | default(lookup('env', 'GITHUB_AUTH_TOKEN')) | default('') }}"

@@ -1,0 +1,78 @@
+---
+# Get Bootstrap Token for Deploy API
+# 
+# During initial bootstrap, we need an admin JWT to authenticate with Deploy API.
+# This task:
+# 1. Initiates login for admin email (creates magic link token)
+# 2. Uses the magic link to get a session JWT
+# 3. Exchanges session JWT for deploy-api scoped token
+#
+# Requires: AuthZ API running, admin user created
+
+- name: Get admin email from secrets
+  set_fact:
+    bootstrap_admin_email: "{{ (secrets.admin_emails | default('')).split(',') | first | trim }}"
+  no_log: true
+
+- name: Fail if no admin email configured
+  fail:
+    msg: "No admin email configured in secrets.admin_emails - cannot get bootstrap token"
+  when: bootstrap_admin_email | length == 0
+
+- name: Initiate login for admin user
+  uri:
+    url: "http://{{ authz_ip }}:8010/auth/login/initiate"
+    method: POST
+    body_format: json
+    body:
+      email: "{{ bootstrap_admin_email }}"
+    status_code: [200, 201]
+    timeout: 30
+  register: login_initiate_result
+  retries: 3
+  delay: 2
+  until: login_initiate_result.status in [200, 201]
+
+- name: Extract magic link token
+  set_fact:
+    magic_link_token: "{{ login_initiate_result.json.magic_link_token }}"
+  no_log: true
+
+- name: Use magic link to get session JWT
+  uri:
+    url: "http://{{ authz_ip }}:8010/auth/magic-links/{{ magic_link_token }}/use"
+    method: POST
+    status_code: [200, 201]
+    timeout: 30
+  register: magic_link_result
+  no_log: true
+
+- name: Extract session token
+  set_fact:
+    session_token: "{{ magic_link_result.json.session.token }}"
+  no_log: true
+
+- name: Exchange session token for deploy-api scoped token
+  uri:
+    url: "http://{{ authz_ip }}:8010/oauth/token"
+    method: POST
+    body_format: json
+    body:
+      grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+      subject_token: "{{ session_token }}"
+      subject_token_type: "urn:ietf:params:oauth:token-type:access_token"
+      audience: "deploy-api"
+    status_code: [200, 201]
+    timeout: 30
+  register: token_exchange_result
+  no_log: true
+
+- name: Set deploy API admin token
+  set_fact:
+    deploy_api_admin_token: "{{ token_exchange_result.json.access_token }}"
+  no_log: true
+
+- name: Verify token was obtained
+  debug:
+    msg: "Successfully obtained deploy-api bootstrap token for {{ bootstrap_admin_email }}"
+  when: deploy_api_admin_token | length > 0

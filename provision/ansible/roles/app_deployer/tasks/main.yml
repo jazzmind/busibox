@@ -29,6 +29,21 @@
     - app_deployer
     - secrets
 
+# =============================================================================
+# GET BOOTSTRAP TOKEN FOR DEPLOY API
+# =============================================================================
+# During initial bootstrap, get an admin JWT from AuthZ to authenticate with Deploy API.
+# This is a Zero Trust flow: login → magic link → session JWT → token exchange
+
+- name: Get bootstrap token for Deploy API
+  include_tasks: get_bootstrap_token.yml
+  when:
+    - use_deploy_api | default(true)
+    - deploy_api_admin_token is not defined or deploy_api_admin_token | length == 0
+  tags:
+    - app_deployer
+    - deploy_via_api
+
 # Legacy deploywatch directory (only needed for fallback mode)
 - name: Create deploywatch apps directory (legacy)
   file:
