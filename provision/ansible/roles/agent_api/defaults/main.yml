@@ -23,6 +23,8 @@ rag_api_url: "http://{{ hostvars[groups['milvus'][0]]['ansible_host'] if 'milvus
 litellm_host: "{{ hostvars[groups['litellm'][0]]['ansible_host'] if 'litellm' in groups else '127.0.0.1' }}"
 litellm_port: 4000
 litellm_base_url: "http://{{ litellm_host }}:{{ litellm_port }}/v1"
+# LiteLLM database for spend tracking (admin stats endpoint)
+litellm_database_url: "postgresql://{{ postgres_user }}:{{ secrets.postgresql.password }}@{{ postgres_host }}:{{ postgres_port }}/litellm"
 
 # Redis
 redis_host: "{{ hostvars[groups['data'][0]]['ansible_host'] if 'data' in groups else '127.0.0.1' }}"

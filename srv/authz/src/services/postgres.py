@@ -1,3 +1,4 @@
+import asyncio
 import json
 import uuid
 from contextlib import asynccontextmanager
@@ -10,6 +11,10 @@ from busibox_common import AsyncPGPoolManager
 from middleware.rls import set_rls_session_vars
 
 logger = structlog.get_logger()
+
+# Module-level lock to prevent concurrent schema initialization
+_schema_lock = asyncio.Lock()
+_schema_initialized = False
 
 
 def validate_uuid(value: str, field_name: str = "id") -> uuid.UUID:
@@ -90,18 +95,34 @@ class PostgresService:
 
         Uses the shared SchemaManager pattern for idempotent schema creation.
         The schema is defined in schema.py and applied on every startup.
+        
+        Uses a lock to prevent concurrent schema migrations which can cause
+        "tuple concurrently updated" errors in PostgreSQL.
         """
+        global _schema_initialized
+        
         if not self._pool_manager.is_connected:
             # connect() will call ensure_schema() again; avoid recursion
             return
         
-        from schema import get_authz_schema
+        # Fast path: schema already initialized
+        if _schema_initialized:
+            return
         
-        schema = get_authz_schema()
-        async with self._pool_manager.acquire() as conn:
-            await schema.apply(conn)
-        
-        logger.info("Authz schema initialization complete")
+        # Use lock to prevent concurrent schema initialization
+        async with _schema_lock:
+            # Double-check after acquiring lock
+            if _schema_initialized:
+                return
+            
+            from schema import get_authz_schema
+            
+            schema = get_authz_schema()
+            async with self._pool_manager.acquire() as conn:
+                await schema.apply(conn)
+            
+            _schema_initialized = True
+            logger.info("Authz schema initialization complete")
 
     # ---------------------------------------------------------------------
     # Audit

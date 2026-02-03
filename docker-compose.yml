@@ -692,6 +692,8 @@ services:
       LITELLM_BASE_URL: http://litellm:4000/v1
       LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-local-dev-key}
       DEFAULT_MODEL: agent
+      # LiteLLM database for spend tracking (admin stats)
+      LITELLM_DATABASE_URL: postgresql://${POSTGRES_USER:-busibox_user}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/litellm
       # AuthZ
       AUTH_JWKS_URL: http://authz-api:8010/.well-known/jwks.json
       AUTH_ISSUER: busibox-authz
