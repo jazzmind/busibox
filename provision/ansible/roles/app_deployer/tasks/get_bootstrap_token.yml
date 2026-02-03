@@ -9,14 +9,31 @@
 #
 # Requires: AuthZ API running, admin user created
 
-- name: Get admin email from secrets
+- name: Get admin email from secrets (try multiple sources)
   set_fact:
-    bootstrap_admin_email: "{{ (secrets.admin_emails | default('')).split(',') | first | trim }}"
+    # Try in order: admin_emails (plural), admin_email (singular), or empty
+    bootstrap_admin_email: >-
+      {%- set email = '' -%}
+      {%- if secrets is defined -%}
+        {%- if secrets.admin_emails is defined and secrets.admin_emails | length > 0 -%}
+          {%- set email = (secrets.admin_emails.split(',') | first | trim) -%}
+        {%- elif secrets.admin_email is defined and secrets.admin_email | length > 0 -%}
+          {%- set email = (secrets.admin_email.split(',') | first | trim) -%}
+        {%- endif -%}
+      {%- endif -%}
+      {{ email }}
   no_log: true
+
+- name: Debug bootstrap admin email (masked)
+  debug:
+    msg: "Bootstrap admin email configured: {{ 'yes' if bootstrap_admin_email | length > 0 else 'no' }}"
 
 - name: Fail if no admin email configured
   fail:
-    msg: "No admin email configured in secrets.admin_emails - cannot get bootstrap token"
+    msg: |
+      No admin email configured - cannot get bootstrap token.
+      Please set secrets.admin_emails or secrets.admin_email in vault.yml.
+      Example: admin_emails: "admin@example.com"
   when: bootstrap_admin_email | length == 0
 
 - name: Initiate login for admin user
