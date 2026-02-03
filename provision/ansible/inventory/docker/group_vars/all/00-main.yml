@@ -211,4 +211,4 @@ docker_health_endpoints:
   data-api: "http://localhost:{{ data_port }}/health"
   search-api: "http://localhost:{{ search_port }}/health"
   agent-api: "http://localhost:{{ agent_port }}/health"
-  ai-portal: "http://localhost:{{ ai_portal_port }}/api/health"
+  ai-portal: "http://localhost:{{ ai_portal_port }}/portal/api/health"

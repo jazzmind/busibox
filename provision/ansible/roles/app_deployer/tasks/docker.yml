@@ -60,7 +60,8 @@
 
 - name: Verify AI Portal health endpoint
   ansible.builtin.uri:
-    url: "http://localhost:{{ ai_portal_port }}/api/health"
+    # Use basePath-aware endpoint since AI Portal runs with NEXT_PUBLIC_BASE_PATH=/portal
+    url: "http://localhost:{{ ai_portal_port }}/portal/api/health"
     method: GET
     status_code: [200]
     timeout: 10
