@@ -318,6 +318,7 @@ docker_action() {
             tag=$(get_ansible_tag "$service")
             
             export CONTAINER_PREFIX="$prefix"
+            export COMPOSE_PROJECT_NAME="${prefix}-busibox"
             export BUSIBOX_ENV="$env"
             
             # For non-dev environments, don't use local-dev mode

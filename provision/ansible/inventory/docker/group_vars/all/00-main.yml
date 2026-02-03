@@ -22,7 +22,7 @@ node_env: "{{ 'production' if busibox_env == 'demo' else 'development' }}"
 # ============================================================================
 # Container prefix for naming (dev-, staging-, prod-)
 container_prefix: "{{ lookup('env', 'CONTAINER_PREFIX') | default('dev', true) }}"
-compose_project_name: "{{ container_prefix }}"
+compose_project_name: "{{ container_prefix }}-busibox"
 
 # Docker Compose files to use
 docker_compose_dir: "{{ playbook_dir }}/../.."
