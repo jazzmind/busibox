@@ -1340,6 +1340,10 @@ bootstrap_docker_ansible() {
     
     info "Deploying via Ansible (unified deployment system)..."
     
+    # Initialize health tracking variables (may be set by validate_install_health later)
+    FIRST_UNHEALTHY_SERVICE="${FIRST_UNHEALTHY_SERVICE:-}"
+    FIRST_UNHEALTHY_PHASE="${FIRST_UNHEALTHY_PHASE:-}"
+    
     # Set environment variables for Ansible
     export CONTAINER_PREFIX="$container_prefix"
     export COMPOSE_PROJECT_NAME="${container_prefix}-busibox"

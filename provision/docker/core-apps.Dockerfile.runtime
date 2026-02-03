@@ -39,6 +39,9 @@ RUN apk add --no-cache \
     supervisor \
     openssh-client
 
+# Install tsx globally for running TypeScript seed scripts
+RUN npm install -g tsx
+
 # Create directory structure
 # Apps will be installed into these directories (persistent volumes)
 RUN mkdir -p \
