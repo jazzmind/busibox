@@ -30,8 +30,9 @@ docker_compose_dir: "{{ playbook_dir }}/../.."
 # Development mode: local-dev (volume mounts) or github (clone at build)
 # - local-dev: Mounts local directories for hot-reload development
 # - github: Clones from GitHub at build time (staging/production)
-# Priority: extra var > environment variable > default
-docker_dev_mode: "{{ docker_dev_mode | default(lookup('env', 'DOCKER_DEV_MODE')) | default('local-dev', true) }}"
+# Priority: environment variable > default
+# Note: Can be overridden via --extra-vars "docker_dev_mode=github"
+docker_dev_mode: "{{ lookup('env', 'DOCKER_DEV_MODE') | default('local-dev', true) }}"
 
 # List of compose files to use (required by docker_common role)
 # Dynamically selected based on docker_dev_mode

@@ -26,6 +26,61 @@ set -eo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
+# Auto-detect deployed environment BEFORE sourcing state library
+# This allows the state library to use the correct state file
+_auto_detect_env() {
+    # If BUSIBOX_ENV is already set, use it
+    if [[ -n "${BUSIBOX_ENV:-}" ]]; then
+        echo "$BUSIBOX_ENV"
+        return
+    fi
+    
+    # Look for state files in order of likelihood
+    # Note: Check prod first since it's most critical to get right
+    if [[ -f "${REPO_ROOT}/.busibox-state-prod" ]]; then
+        # Check if prod containers are actually running
+        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^prod-"; then
+            echo "production"
+            return
+        fi
+    fi
+    
+    if [[ -f "${REPO_ROOT}/.busibox-state-staging" ]]; then
+        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^staging-"; then
+            echo "staging"
+            return
+        fi
+    fi
+    
+    if [[ -f "${REPO_ROOT}/.busibox-state-demo" ]]; then
+        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^demo-"; then
+            echo "demo"
+            return
+        fi
+    fi
+    
+    if [[ -f "${REPO_ROOT}/.busibox-state-dev" ]]; then
+        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^dev-"; then
+            echo "development"
+            return
+        fi
+    fi
+    
+    # Fallback: check which containers are actually running
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^prod-"; then
+        echo "production"
+    elif docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^staging-"; then
+        echo "staging"
+    elif docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^demo-"; then
+        echo "demo"
+    else
+        echo "development"
+    fi
+}
+
+# Set environment before sourcing state library
+export BUSIBOX_ENV="${BUSIBOX_ENV:-$(_auto_detect_env)}"
+
 # Source libraries
 source "${REPO_ROOT}/scripts/lib/ui.sh"
 source "${REPO_ROOT}/scripts/lib/state.sh"
@@ -265,11 +320,24 @@ docker_action() {
             export CONTAINER_PREFIX="$prefix"
             export BUSIBOX_ENV="$env"
             
+            # For non-dev environments, don't use local-dev mode
+            if [[ "$prefix" != "dev" ]]; then
+                export DOCKER_DEV_MODE="github"
+            fi
+            
             cd "${REPO_ROOT}/provision/ansible"
             local cmd="ansible-playbook -i ${inventory} ${playbook} --tags ${tag}"
             
-            if [[ -f "$HOME/.vault_pass" ]]; then
+            # Check for environment-specific vault password file
+            local vault_pass_file="$HOME/.busibox-vault-pass-${prefix}"
+            if [[ -f "$vault_pass_file" ]]; then
+                cmd="${cmd} --vault-password-file ${vault_pass_file}"
+            elif [[ -f "$HOME/.vault_pass" ]]; then
+                # Legacy fallback
                 cmd="${cmd} --vault-password-file $HOME/.vault_pass"
+            else
+                warn "No vault password file found at ${vault_pass_file}"
+                warn "Attempting without vault password (may fail if vault is encrypted)"
             fi
             
             echo "Running: ${cmd}"
