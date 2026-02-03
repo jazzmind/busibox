@@ -93,6 +93,13 @@ class Settings(BaseSettings):
         description="SQLAlchemy connection URL",
     )
     
+    # LiteLLM database for spend tracking queries (read-only access)
+    # Uses asyncpg directly (not SQLAlchemy) for raw queries against LiteLLM's Prisma schema
+    litellm_database_url: Optional[str] = Field(
+        None,
+        description="PostgreSQL connection URL for LiteLLM spend database (e.g., postgresql://user:pass@host:5432/litellm)",
+    )
+    
     # Test mode configuration
     # When enabled, requests with X-Test-Mode: true header will use test database
     test_mode_enabled: bool = Field(
