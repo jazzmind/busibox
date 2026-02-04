@@ -20,9 +20,12 @@ enable_pytest_databases: true  # Create *_test databases for running automated t
 node_env: development  # For Node.js applications
 
 # ============================================================================
-# Network Configuration - Test
+# Network Configuration - Staging
 # ============================================================================
-# Base IP from vault (deployment-specific)
+# Network base octets from environment variable or extra-vars
+# Set NETWORK_BASE_OCTETS_STAGING env var or pass -e network_base_octets_staging=...
+network_base_octets_staging: "{{ lookup('env', 'NETWORK_BASE_OCTETS_STAGING') | default('10.96.201', true) }}"
+network_base_octets_production: "{{ lookup('env', 'NETWORK_BASE_OCTETS_PRODUCTION') | default('10.96.200', true) }}"
 network_base_octets: "{{ network_base_octets_staging }}"
 internal_network: "{{ network_base_octets }}.0/21"
 internal_gateway: "{{ network_base_octets }}.1"
@@ -46,7 +49,8 @@ litellm_ip: "{{ network_base_octets }}.207"
 # Set use_production_vllm: true to use production vLLM (default, saves GPU memory)
 # Set use_production_vllm: false to use test vLLM container (requires manual deployment)
 use_production_vllm: true
-vllm_ip: "{{ (use_production_vllm | default(true)) | ternary(network_base_octets_production + '.208', network_base_octets + '.208') }}"
+# Note: network_base_octets_production comes from local.yml (if using prod vLLM, else uses staging base)
+vllm_ip: "{{ (use_production_vllm | default(true)) | ternary(network_base_octets_production | default(network_base_octets) + '.208', network_base_octets + '.208') }}"
 
 # Authz Service IP
 authz_ip: "{{ network_base_octets }}.210"
