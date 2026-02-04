@@ -151,6 +151,11 @@
     enabled: true
   tags: [deploy_api]
 
+# Flush handlers to ensure service restarts with new .env before apps deploy
+- name: Flush handlers (restart deploy-api if .env changed)
+  meta: flush_handlers
+  tags: [deploy_api]
+
 # =============================================================================
 # Start Service
 # =============================================================================

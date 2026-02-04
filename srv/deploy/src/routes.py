@@ -221,6 +221,12 @@ async def execute_deployment(
                 logger.error(f"container_deploy_app raised exception: {e}", exc_info=True)
                 raise
             
+            # Always attach executor logs before failing, otherwise we lose
+            # the diagnostics/log-tail context in the UI.
+            for log in deploy_logs:
+                status.logs.append(f"[{datetime.utcnow().isoformat()}] {log}")
+            await broadcast_status(deployment_id)
+
             if not success:
                 # Find the most relevant error log.
                 # Many failures emit ⚠️/Failed without a ❌ marker, so fall back gracefully.
@@ -240,10 +246,11 @@ async def execute_deployment(
                 )
                 raise Exception(f"Deployment failed: {error_detail}")
         
-        # Add logs to status
-        for log in deploy_logs:
-            status.logs.append(f"[{datetime.utcnow().isoformat()}] {log}")
-        await broadcast_status(deployment_id)
+        # Add logs to status (core app path - user app logs are attached above)
+        if app_is_core:
+            for log in deploy_logs:
+                status.logs.append(f"[{datetime.utcnow().isoformat()}] {log}")
+            await broadcast_status(deployment_id)
         
         status.progress = 80
         await broadcast_status(deployment_id)

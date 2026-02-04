@@ -1038,6 +1038,36 @@ if command -v lsof &>/dev/null; then
     lsof -ti:{port} | xargs kill -9 2>/dev/null || true
 elif command -v fuser &>/dev/null; then
     fuser -k {port}/tcp 2>/dev/null || true
+elif command -v ss &>/dev/null; then
+    # Extract pid=XXXX from ss output
+    PIDS=$(ss -H -ltnp "sport = :{port}" 2>/dev/null | sed -n 's/.*pid=\\([0-9]\\+\\).*/\\1/p' | sort -u)
+    for P in $PIDS; do
+        kill -9 $P 2>/dev/null || true
+    done
+elif command -v netstat &>/dev/null; then
+    # netstat output includes PID/Program at the end (e.g. 1234/node)
+    PIDS=$(netstat -tlnp 2>/dev/null | grep -E "[:.]{port}\\s" | awk '{{print $7}}' | cut -d/ -f1 | grep -E '^[0-9]+$' | sort -u)
+    for P in $PIDS; do
+        kill -9 $P 2>/dev/null || true
+    done
+else
+    # Fallback: find LISTEN socket inode(s) for port in /proc/net/tcp* and map inode -> PID by scanning /proc/*/fd.
+    # This is slower but works in minimal containers without lsof/fuser/ss.
+    PORT_HEX=$(printf '%04X' {port} | tr '[:lower:]' '[:upper:]')
+    INODES=$(awk -v p=":$PORT_HEX" '$4=="0A" && $2 ~ p {{print $10}}' /proc/net/tcp 2>/dev/null || true)
+    INODES="$INODES $(awk -v p=":$PORT_HEX" '$4=="0A" && $2 ~ p {{print $10}}' /proc/net/tcp6 2>/dev/null || true)"
+    for INO in $INODES; do
+        [ -n "$INO" ] || continue
+        for PD in /proc/[0-9]*; do
+            PID=$(basename "$PD")
+            for FD in "$PD"/fd/*; do
+                TARGET=$(readlink "$FD" 2>/dev/null || true)
+                case "$TARGET" in
+                    socket:\\[$INO\\]) kill -9 "$PID" 2>/dev/null || true ;;
+                esac
+            done
+        done
+    done
 fi
 """
         await execute_in_container(stop_command)
