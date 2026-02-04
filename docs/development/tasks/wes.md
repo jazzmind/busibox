@@ -4,11 +4,13 @@ issues:
 [ ] get staging deployed
   [ ] make sure we didn't mess up docker
   [ ] make sure we can deploy app-template on both
+  [ ] app-template needs to use our data-api so we can prove that works
 
-[ ] do castle p&l analysis project
+[ ] We need a status tracker app
 [ ] improve project-analysis
     [ ] needs to work with local llm
     [ ] report view
+    [ ] do castle p&l analysis project
 
 ## Active Tasks
 
@@ -18,7 +20,7 @@ issues:
   - have it do a doc search to find related
   - do a web search to get deeper info
   - summarize
-[ ] claude code via busibox? clawd.bot?
+[ ] claude code via busibox? 
 
  
 ## Future features
