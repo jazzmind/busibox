@@ -141,17 +141,6 @@
     state: latest
   tags: [data, data_deploy]
 
-- name: Install busibox_common shared library
-  pip:
-    name: "/srv/data/src/shared"
-    virtualenv: /srv/data/venv
-    state: present
-    extra_args: "-e"
-  notify:
-    - Restart data API
-    - Restart data worker
-  tags: [data, data_deploy]
-
 - name: Install Python dependencies (with caching and parallel downloads)
   pip:
     requirements: /srv/data/requirements.txt
