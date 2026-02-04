@@ -1079,6 +1079,19 @@ echo $APP_PID
         # Extract just the PID from the last line of output
         pid = stdout.strip().split('\n')[-1].strip()
         logs.append(f"📝 Started process with PID: {pid}")
+
+        # If we didn't get a sane PID, fail early with context
+        if not pid.isdigit():
+            logs.append("❌ Failed to start app: invalid PID returned from start command")
+            if stdout.strip():
+                logs.append("📋 Start command output:")
+                for line in stdout.strip().split('\n')[-20:]:
+                    logs.append(f"   {line}")
+            if stderr.strip():
+                logs.append("📋 Start command stderr:")
+                for line in stderr.strip().split('\n')[-20:]:
+                    logs.append(f"   {line}")
+            return False
         
         # Register this app so it can be restarted after container recreation
         register_running_app(app_id, app_path, start_command, env_vars or {})
@@ -1119,7 +1132,21 @@ fi
             
             return True
         else:
-            logs.append(f"⚠️ Application may not have started correctly")
+            logs.append(f"❌ Application failed to start (PID: {pid}, port: {port})")
+
+            # Lightweight diagnostics that work in slim containers (no lsof required)
+            diag_cmd = f"""
+echo "[diag] /proc/{pid}: $([ -d /proc/{pid} ] && echo yes || echo no)"
+ps -p {pid} -o pid=,cmd= 2>/dev/null || true
+# Test whether port is accepting TCP connections (bash /dev/tcp)
+bash -c 'echo > /dev/tcp/127.0.0.1/{port}' >/dev/null 2>&1 && echo "[diag] port {port}: open" || echo "[diag] port {port}: closed"
+"""
+            diag_out, _, _ = await execute_in_container(diag_cmd)
+            if diag_out.strip():
+                logs.append("📋 Diagnostics:")
+                for line in diag_out.strip().split('\n')[-20:]:
+                    logs.append(f"   {line}")
+
             # Show log output to help diagnose
             log_cmd = f"cat {log_file} 2>/dev/null | tail -30"
             log_stdout, _, _ = await execute_in_container(log_cmd)
@@ -1127,6 +1154,8 @@ fi
                 logs.append(f"📋 Log output:")
                 for line in log_stdout.strip().split('\n'):
                     logs.append(f"   {line}")
+            else:
+                logs.append("📋 Log output: (empty)")
             return False
     else:
         # LXC: Use systemd

@@ -222,9 +222,22 @@ async def execute_deployment(
                 raise
             
             if not success:
-                # Find the last error log (starts with ❌)
+                # Find the most relevant error log.
+                # Many failures emit ⚠️/Failed without a ❌ marker, so fall back gracefully.
                 error_logs = [log for log in deploy_logs if '❌' in log]
-                error_detail = error_logs[-1] if error_logs else "Unknown error - check logs"
+                fallback_logs = [
+                    log for log in deploy_logs
+                    if ('⚠️' in log)
+                    or ('Failed' in log)
+                    or ('failed' in log)
+                    or ('Error' in log)
+                    or ('error' in log)
+                ]
+                error_detail = (
+                    error_logs[-1]
+                    if error_logs
+                    else (fallback_logs[-1] if fallback_logs else (deploy_logs[-1] if deploy_logs else "Unknown error - check logs"))
+                )
                 raise Exception(f"Deployment failed: {error_detail}")
         
         # Add logs to status
