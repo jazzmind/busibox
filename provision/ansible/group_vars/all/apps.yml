@@ -161,3 +161,5 @@ applications:
       DOCUMENTS_API_AUD: "https://busibox.local/documents"
       # Enable verbose authz logging for debugging
       VERBOSE_AUTHZ_LOGGING: "true"
+      # Skip TLS verification for self-signed certs (internal services)
+      NODE_TLS_REJECT_UNAUTHORIZED: "0"
