@@ -121,6 +121,44 @@
   tags:
     - deploy_via_api
 
+# =============================================================================
+# SYSTEMD SERVICE SETUP (for Proxmox LXC deployments)
+# The Deploy API clones/builds the app, but Ansible manages the systemd service
+# =============================================================================
+
+- name: Deploy systemd service file for application
+  template:
+    src: app-systemd.service.j2
+    dest: "/etc/systemd/system/{{ app.name }}.service"
+    mode: "0644"
+    owner: root
+    group: root
+  register: systemd_service_file
+  when:
+    - app.process_manager | default('systemd') == 'systemd'
+    - status_result.json.status == 'completed'
+  tags:
+    - deploy_via_api
+
+- name: Reload systemd daemon
+  systemd:
+    daemon_reload: true
+  when:
+    - systemd_service_file is changed
+  tags:
+    - deploy_via_api
+
+- name: Start and enable application service
+  systemd:
+    name: "{{ app.name }}"
+    state: started
+    enabled: true
+  when:
+    - app.process_manager | default('systemd') == 'systemd'
+    - status_result.json.status == 'completed'
+  tags:
+    - deploy_via_api
+
 - name: Wait for application to be healthy
   uri:
     url: "http://{{ app.container_ip | default('localhost') }}:{{ app.port }}{{ app.health_endpoint | default('/api/health') }}"
