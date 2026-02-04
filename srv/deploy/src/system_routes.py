@@ -57,9 +57,12 @@ async def get_setup_complete_status():
     Used by middleware to decide whether to redirect to setup wizard.
     No authentication required - only returns boolean setup status.
     
-    Returns setupComplete=true ONLY if:
-    - INSTALL_PHASE is "complete" (preferred check)
-    - OR SETUP_COMPLETE is explicitly set to "true" in state file
+    Returns setupComplete=true ONLY if SETUP_COMPLETE is explicitly set to "true".
+    
+    Note: INSTALL_PHASE tracks Ansible/infrastructure deployment, while
+    SETUP_COMPLETE tracks the user-facing setup wizard (passkey registration,
+    portal customization, etc.). The portal should only be accessible after
+    SETUP_COMPLETE=true, regardless of INSTALL_PHASE.
     
     If state file is missing or empty, returns false to ensure setup is completed.
     """
@@ -71,12 +74,14 @@ async def get_setup_complete_status():
         logger.info("State file empty or missing, defaulting setupComplete to false (setup required)")
         return {"setupComplete": False}
     
-    # Check phase first (preferred), then fall back to SETUP_COMPLETE flag
-    phase = state.get("INSTALL_PHASE", "")
-    setup_complete_flag = state.get("SETUP_COMPLETE") == "true"
+    # ONLY check SETUP_COMPLETE flag - this is set by the setup wizard
+    # after user completes passkey registration and portal configuration
+    setup_complete = state.get("SETUP_COMPLETE") == "true"
+    
+    logger.debug(f"Setup complete check: SETUP_COMPLETE={state.get('SETUP_COMPLETE')}, returning {setup_complete}")
     
     return {
-        "setupComplete": phase == "complete" or setup_complete_flag,
+        "setupComplete": setup_complete,
     }
 
 
