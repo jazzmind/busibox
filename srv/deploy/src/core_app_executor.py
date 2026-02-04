@@ -156,7 +156,8 @@ async def deploy_core_app(
     app_id: str,
     github_ref: str = "main",
     logs: Optional[List[str]] = None,
-    environment: str = "docker"
+    environment: str = "docker",
+    github_token: Optional[str] = None
 ) -> Tuple[bool, str]:
     """
     Deploy a core app by executing inside the running core-apps container.
@@ -194,6 +195,13 @@ async def deploy_core_app(
         # Proxmox: Execute deployment steps directly
         app_info = CORE_APPS[app_id]
         repo = app_info['github_repo']
+        
+        # Use authenticated URL if token provided (for private repos)
+        if github_token:
+            repo_url = f"https://{github_token}@github.com/{repo}.git"
+        else:
+            repo_url = f"https://github.com/{repo}.git"
+        
         command = f"""
             set -e
             
@@ -212,7 +220,7 @@ async def deploy_core_app(
             else
                 echo "Cloning repository..."
                 rm -rf "$APP_DIR"  # Clean up any partial clone
-                git clone https://github.com/{repo}.git "$APP_DIR"
+                git clone {repo_url} "$APP_DIR"
                 cd "$APP_DIR"
                 git checkout {github_ref}
             fi

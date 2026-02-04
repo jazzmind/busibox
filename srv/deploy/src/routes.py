@@ -197,7 +197,8 @@ async def execute_deployment(
                 app_id=manifest.id,
                 github_ref=github_ref,
                 logs=deploy_logs,
-                environment=environment
+                environment=environment,
+                github_token=deploy_config.githubToken
             )
             
             if not success:

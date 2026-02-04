@@ -785,30 +785,60 @@ echo "@jazzmind:registry=https://npm.pkg.github.com" >> /root/.npmrc
     
     if lock_exists == 0:
         # Has package-lock.json, use npm ci for reproducible builds
-        # IMPORTANT: Clear node_modules contents first because it's a Docker volume
-        # npm ci tries to remove node_modules entirely which fails with ENOTEMPTY
-        # when node_modules is a volume mount point
+        # IMPORTANT: Be robust to both:
+        # - node_modules as a normal directory (safe to rm -rf the directory)
+        # - node_modules as a Docker volume mount point (rm -rf directory may fail)
         logs.append("📦 Using npm ci (package-lock.json found)")
         logs.append("🧹 Clearing node_modules (Docker volume)...")
-        clear_cmd = f"rm -rf {app_path}/node_modules/* {app_path}/node_modules/.* 2>/dev/null || true"
+        clear_cmd = f"""
+# Try to remove node_modules entirely (best for normal dirs)
+rm -rf {app_path}/node_modules 2>/dev/null && mkdir -p {app_path}/node_modules || true
+
+# If node_modules is a mount point and couldn't be removed, clear contents safely.
+# Avoid globs that match '.' or '..' (which can lead to partial cleanup).
+rm -rf {app_path}/node_modules/* \
+       {app_path}/node_modules/.[!.]* \
+       {app_path}/node_modules/..?* \
+       2>/dev/null || true
+"""
         await execute_in_container(clear_cmd)
         
         # Use --include=dev to ensure devDependencies are installed (needed for build tools like tailwindcss)
-        command = f"""
-cd {app_path} && \
-{token_env}npm ci --legacy-peer-deps --include=dev 2>&1
-"""
+        npm_cmd = f"{token_env}npm ci --legacy-peer-deps --include=dev"
     else:
         # No package-lock.json, use npm install
         # Use --include=dev to ensure devDependencies are installed (needed for build tools like tailwindcss)
         logs.append("📦 Using npm install (no package-lock.json)")
-        command = f"""
+        npm_cmd = f"{token_env}npm install --legacy-peer-deps --include=dev"
+    
+    # Run install with one retry for flaky FS errors (ENOTEMPTY/EBUSY) that can
+    # happen with large node_modules trees in Docker volumes.
+    async def _run_npm_install(attempt: int, extra_flags: str = "") -> tuple[str, str, int]:
+        cmd = f"""
 cd {app_path} && \
-{token_env}npm install --legacy-peer-deps --include=dev 2>&1
+{npm_cmd} {extra_flags} 2>&1
 """
-    
-    stdout, stderr, code = await execute_in_container(command, timeout=600)
-    
+        logs.append(f"📦 Running npm ({attempt}/2)...")
+        return await execute_in_container(cmd, timeout=600)
+
+    stdout, stderr, code = await _run_npm_install(1)
+
+    if code != 0:
+        combined = (stderr or stdout or "").strip()
+        # Retry on transient directory cleanup issues
+        if "ENOTEMPTY" in combined or "EBUSY" in combined:
+            logs.append("⚠️ npm failed with ENOTEMPTY/EBUSY; retrying after full cleanup...")
+            retry_cleanup = f"""
+rm -rf {app_path}/node_modules 2>/dev/null || true
+rm -rf {app_path}/node_modules/* \
+       {app_path}/node_modules/.[!.]* \
+       {app_path}/node_modules/..?* \
+       2>/dev/null || true
+npm cache clean --force 2>/dev/null || true
+"""
+            await execute_in_container(retry_cleanup)
+            stdout, stderr, code = await _run_npm_install(2, extra_flags="--force")
+
     if code != 0:
         logs.append(f"❌ npm install failed: {stderr or stdout}")
         return False
