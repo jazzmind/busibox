@@ -16,6 +16,22 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
+# Simple state file for storing last used environment
+BUSIBOX_SIMPLE_STATE="${REPO_ROOT}/.busibox-state"
+
+# Read last environment from simple state file
+_read_last_env() {
+    if [[ -f "$BUSIBOX_SIMPLE_STATE" ]]; then
+        local last_env
+        last_env=$(grep "^LAST_ENV=" "$BUSIBOX_SIMPLE_STATE" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+        if [[ -n "$last_env" ]]; then
+            echo "$last_env"
+            return
+        fi
+    fi
+    echo ""
+}
+
 # Auto-detect deployed environment BEFORE sourcing state library
 # This allows the state library to use the correct state file
 _auto_detect_env() {
@@ -25,47 +41,16 @@ _auto_detect_env() {
         return
     fi
     
-    # Look for state files in order of likelihood
-    # Note: Check prod first since it's most critical to get right
-    if [[ -f "${REPO_ROOT}/.busibox-state-prod" ]]; then
-        # Check if prod containers are actually running
-        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^prod-"; then
-            echo "production"
-            return
-        fi
+    # Check for last used environment in simple state file
+    local last_env
+    last_env=$(_read_last_env)
+    if [[ -n "$last_env" ]]; then
+        echo "$last_env"
+        return
     fi
     
-    if [[ -f "${REPO_ROOT}/.busibox-state-staging" ]]; then
-        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^staging-"; then
-            echo "staging"
-            return
-        fi
-    fi
-    
-    if [[ -f "${REPO_ROOT}/.busibox-state-demo" ]]; then
-        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^demo-"; then
-            echo "demo"
-            return
-        fi
-    fi
-    
-    if [[ -f "${REPO_ROOT}/.busibox-state-dev" ]]; then
-        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^dev-"; then
-            echo "development"
-            return
-        fi
-    fi
-    
-    # Fallback: check which containers are actually running
-    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^prod-"; then
-        echo "production"
-    elif docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^staging-"; then
-        echo "staging"
-    elif docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^demo-"; then
-        echo "demo"
-    else
-        echo "development"
-    fi
+    # No saved environment - return empty to trigger environment selector
+    echo ""
 }
 
 # Set environment before sourcing state library
@@ -780,6 +765,14 @@ show_manage_menu() {
 }
 
 main() {
+    # If no environment is set, show error and exit
+    if [[ -z "$BUSIBOX_ENV" ]]; then
+        echo ""
+        echo "No environment configured."
+        echo "Run 'make' to select an environment first."
+        exit 1
+    fi
+    
     while true; do
         show_manage_menu
         echo ""

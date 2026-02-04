@@ -124,6 +124,29 @@ _update_state_file_for_env() {
 # HELPER FUNCTIONS
 # =============================================================================
 
+# Simple state file for storing last used environment
+BUSIBOX_SIMPLE_STATE="${REPO_ROOT}/.busibox-state"
+
+# Read last environment from simple state file
+_read_last_env() {
+    if [[ -f "$BUSIBOX_SIMPLE_STATE" ]]; then
+        local last_env
+        last_env=$(grep "^LAST_ENV=" "$BUSIBOX_SIMPLE_STATE" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+        if [[ -n "$last_env" ]]; then
+            echo "$last_env"
+            return
+        fi
+    fi
+    echo ""
+}
+
+# Save environment to simple state file
+_save_last_env() {
+    local env="$1"
+    echo "# Busibox - Last used environment" > "$BUSIBOX_SIMPLE_STATE"
+    echo "LAST_ENV=$env" >> "$BUSIBOX_SIMPLE_STATE"
+}
+
 # Portable uppercase first letter (works on bash 3.x / macOS)
 # Usage: ucfirst "hello" -> "Hello"
 ucfirst() {
@@ -379,6 +402,8 @@ wizard_environment() {
         
         # Update state file path for this environment
         _update_state_file_for_env
+        # Save to simple state file for next time
+        _save_last_env "$ENVIRONMENT"
         
         echo ""
         echo -e "┌─ ${BOLD}ENVIRONMENT${NC} ────────────────────────────────────────────────────────────────┐"
@@ -403,6 +428,27 @@ wizard_environment() {
         return
     fi
     
+    # Check for last used environment from simple state file
+    local last_env
+    last_env=$(_read_last_env)
+    if [[ -n "$last_env" ]]; then
+        echo ""
+        echo -e "┌─ ${BOLD}ENVIRONMENT${NC} ────────────────────────────────────────────────────────────────┐"
+        box_line "" "single"
+        box_line "  Last used: ${CYAN}$(ucfirst "$last_env")${NC}" "single"
+        box_line "" "single"
+        echo -e "└──────────────────────────────────────────────────────────────────────────────┘"
+        echo ""
+        
+        read -p "$(echo -e "${BOLD}Continue with ${CYAN}$last_env${NC}? [Y/n]:${NC} ")" confirm
+        if [[ "${confirm:-y}" =~ ^[Yy]$ ]] || [[ -z "${confirm:-}" ]]; then
+            ENVIRONMENT="$last_env"
+            _update_state_file_for_env
+            return
+        fi
+        # User said no, continue to show full menu
+    fi
+    
     echo ""
     echo -e "┌─ ${BOLD}ENVIRONMENT${NC} ────────────────────────────────────────────────────────────────┐"
     box_line "" "single"
@@ -425,6 +471,8 @@ wizard_environment() {
     
     # Update state file path for this environment
     _update_state_file_for_env
+    # Save to simple state file for next time
+    _save_last_env "$ENVIRONMENT"
 }
 
 wizard_platform() {

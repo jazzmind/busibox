@@ -59,6 +59,20 @@ if [[ -f "${SCRIPT_DIR}/../lib/versions.sh" ]]; then
 fi
 
 # =============================================================================
+# SIMPLE STATE FILE
+# =============================================================================
+
+# Simple state file for storing last used environment
+BUSIBOX_SIMPLE_STATE="${REPO_ROOT}/.busibox-state"
+
+# Save environment to simple state file
+_save_last_env() {
+    local env="$1"
+    echo "# Busibox - Last used environment" > "$BUSIBOX_SIMPLE_STATE"
+    echo "LAST_ENV=$env" >> "$BUSIBOX_SIMPLE_STATE"
+}
+
+# =============================================================================
 # CONFIGURATION
 # =============================================================================
 
@@ -1483,12 +1497,14 @@ select_environment_menu() {
                 ENV="staging"
                 export ENV
                 set_state "ENVIRONMENT" "staging"
+                _save_last_env "staging"
                 success "Environment set to: staging"
                 ;;
             2) 
                 ENV="production"
                 export ENV
                 set_state "ENVIRONMENT" "production"
+                _save_last_env "production"
                 success "Environment set to: production"
                 ;;
             3)
@@ -1496,6 +1512,7 @@ select_environment_menu() {
                     ENV="development"
                     export ENV
                     set_state "ENVIRONMENT" "development"
+                    _save_last_env "development"
                     success "Environment set to: development"
                 else
                     echo -e "  ${_RED}Invalid selection${_NC}"
@@ -1507,6 +1524,7 @@ select_environment_menu() {
                     ENV="demo"
                     export ENV
                     set_state "ENVIRONMENT" "demo"
+                    _save_last_env "demo"
                     success "Environment set to: demo"
                 else
                     echo -e "  ${_RED}Invalid selection${_NC}"

@@ -19,6 +19,29 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
+# Simple state file for storing last used environment
+BUSIBOX_SIMPLE_STATE="${REPO_ROOT}/.busibox-state"
+
+# Read last environment from simple state file
+_read_last_env() {
+    if [[ -f "$BUSIBOX_SIMPLE_STATE" ]]; then
+        local last_env
+        last_env=$(grep "^LAST_ENV=" "$BUSIBOX_SIMPLE_STATE" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+        if [[ -n "$last_env" ]]; then
+            echo "$last_env"
+            return
+        fi
+    fi
+    echo ""
+}
+
+# Save environment to simple state file
+_save_last_env() {
+    local env="$1"
+    echo "# Busibox - Last used environment" > "$BUSIBOX_SIMPLE_STATE"
+    echo "LAST_ENV=$env" >> "$BUSIBOX_SIMPLE_STATE"
+}
+
 # Auto-detect deployed environment BEFORE sourcing state library
 # This allows the state library to use the correct state file
 _auto_detect_env() {
@@ -28,47 +51,16 @@ _auto_detect_env() {
         return
     fi
     
-    # Look for state files in order of likelihood
-    # Note: Check prod first since it's most critical to get right
-    if [[ -f "${REPO_ROOT}/.busibox-state-prod" ]]; then
-        # Check if prod containers are actually running
-        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^prod-"; then
-            echo "production"
-            return
-        fi
+    # Check for last used environment in simple state file
+    local last_env
+    last_env=$(_read_last_env)
+    if [[ -n "$last_env" ]]; then
+        echo "$last_env"
+        return
     fi
     
-    if [[ -f "${REPO_ROOT}/.busibox-state-staging" ]]; then
-        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^staging-"; then
-            echo "staging"
-            return
-        fi
-    fi
-    
-    if [[ -f "${REPO_ROOT}/.busibox-state-demo" ]]; then
-        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^demo-"; then
-            echo "demo"
-            return
-        fi
-    fi
-    
-    if [[ -f "${REPO_ROOT}/.busibox-state-dev" ]]; then
-        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^dev-"; then
-            echo "development"
-            return
-        fi
-    fi
-    
-    # Fallback: check which containers are actually running
-    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^prod-"; then
-        echo "production"
-    elif docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^staging-"; then
-        echo "staging"
-    elif docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^demo-"; then
-        echo "demo"
-    else
-        echo "development"
-    fi
+    # No saved environment - return empty to trigger environment selector
+    echo ""
 }
 
 # Set environment before sourcing state library
@@ -471,6 +463,7 @@ select_environment() {
         1)
             set_state "ENVIRONMENT" "development"
             set_state "BACKEND_DEVELOPMENT" "docker"
+            _save_last_env "development"
             export BUSIBOX_ENV="development"
             export CONTAINER_PREFIX="dev"
             info "Switched to development environment"
@@ -478,6 +471,7 @@ select_environment() {
             ;;
         2)
             set_state "ENVIRONMENT" "staging"
+            _save_last_env "staging"
             export BUSIBOX_ENV="staging"
             export CONTAINER_PREFIX="staging"
             # Always ask for backend to allow changing it
@@ -487,6 +481,7 @@ select_environment() {
             ;;
         3)
             set_state "ENVIRONMENT" "production"
+            _save_last_env "production"
             export BUSIBOX_ENV="production"
             export CONTAINER_PREFIX="prod"
             # Always ask for backend to allow changing it
@@ -733,6 +728,19 @@ handle_test() {
 main() {
     # Initialize state if needed
     init_state
+    
+    # If no environment is set, show environment selector first
+    if [[ -z "$BUSIBOX_ENV" ]]; then
+        select_environment
+        # If user didn't select anything (pressed b), exit
+        if [[ -z "$BUSIBOX_ENV" ]]; then
+            echo ""
+            echo "No environment selected. Exiting."
+            exit 0
+        fi
+        # Re-source state library with new environment
+        source "${REPO_ROOT}/scripts/lib/state.sh"
+    fi
     
     while true; do
         clear
