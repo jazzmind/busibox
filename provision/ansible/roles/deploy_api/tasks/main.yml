@@ -117,6 +117,34 @@
   when: secrets.ssh is defined and secrets.ssh.private_key is defined
   tags: [deploy_api]
 
+# Generate SSH key if not provided in secrets
+- name: Generate SSH key pair for deploy-api
+  openssh_keypair:
+    path: /root/.ssh/id_rsa
+    type: rsa
+    size: 4096
+    state: present
+    force: false
+  register: deploy_api_ssh_key
+  when: secrets.ssh is not defined or secrets.ssh.private_key is not defined
+  tags: [deploy_api]
+
+# Read the public key
+- name: Read deploy-api SSH public key
+  slurp:
+    src: /root/.ssh/id_rsa.pub
+  register: deploy_api_public_key
+  tags: [deploy_api]
+
+# Add deploy-api public key to core-apps authorized_keys
+- name: Add deploy-api public key to core-apps container
+  authorized_key:
+    user: root
+    key: "{{ deploy_api_public_key.content | b64decode }}"
+    state: present
+  delegate_to: "{{ core_apps_ip }}"
+  tags: [deploy_api]
+
 # =============================================================================
 # Service Configuration
 # =============================================================================

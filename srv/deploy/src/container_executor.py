@@ -1399,17 +1399,47 @@ fi
         return False
 
 
-async def check_app_health(app_id: str, port: int, health_endpoint: str, logs: List[str]) -> bool:
+async def check_app_health(
+    app_id: str,
+    port: int,
+    health_endpoint: str,
+    logs: List[str],
+    base_path: Optional[str] = None,
+) -> bool:
     """Check if app is healthy
     
     For dev mode, Next.js takes time to compile on first request.
     We use fewer attempts with shorter waits for faster feedback.
     """
-    logs.append(f"🔍 Checking application health at localhost:{port}{health_endpoint}...")
+    # Health endpoints can live at either:
+    # - /api/health (no basePath)
+    # - /<basePath>/api/health (when Next.js basePath is configured)
+    # Try both when base_path is provided.
+    candidates: list[str] = [health_endpoint]
+    if base_path and base_path != "/" and not health_endpoint.startswith(base_path):
+        # Join safely (avoid double slashes)
+        joined = f"{base_path.rstrip('/')}/{health_endpoint.lstrip('/')}"
+        candidates.append(joined)
+
+    logs.append(
+        f"🔍 Checking application health at localhost:{port}"
+        + (f" (candidates: {', '.join(candidates)})" if candidates else "")
+        + "..."
+    )
     
     # First, check if the port is listening at all (fast check)
-    port_check = f"lsof -ti:{port} 2>/dev/null"
-    port_stdout, _, port_code = await execute_in_container(port_check)
+    port_check = f"""
+if command -v lsof >/dev/null 2>&1; then
+  lsof -ti:{port} 2>/dev/null | head -n 1
+elif command -v ss >/dev/null 2>&1; then
+  ss -H -ltnp "sport = :{port}" 2>/dev/null | head -n 1
+elif command -v netstat >/dev/null 2>&1; then
+  netstat -tlnp 2>/dev/null | grep -E "[:.]{port}[[:space:]]" | head -n 1
+else
+  bash -c 'echo > /dev/tcp/127.0.0.1/{port}' >/dev/null 2>&1 && echo "open" || echo ""
+fi
+"""
+    port_stdout, _, _ = await execute_in_container(port_check)
     
     if not port_stdout.strip():
         logs.append(f"⏳ Port {port} not yet listening, waiting for app to start...")
@@ -1421,20 +1451,21 @@ async def check_app_health(app_id: str, port: int, health_endpoint: str, logs: L
             for line in log_stdout.strip().split('\n')[-5:]:
                 logs.append(f"   {line}")
     else:
-        logs.append(f"✅ Port {port} is listening (PID: {port_stdout.strip()})")
+        logs.append(f"✅ Port {port} appears to be listening ({port_stdout.strip()})")
     
     # Use fewer attempts for faster feedback - Next.js dev startup can be slow
     max_attempts = 15  # 15 attempts x 2 seconds = 30 seconds max
     
     for attempt in range(max_attempts):
-        # Use curl with shorter timeout - try both with and without basePath
-        # The health endpoint might be at /api/health or /myapp/api/health depending on basePath
-        command = f"curl -sf --max-time 5 http://localhost:{port}{health_endpoint} 2>&1"
-        stdout, stderr, code = await execute_in_container(command)
-        
-        if code == 0:
-            logs.append(f"✅ Health check passed on attempt {attempt + 1}")
-            return True
+        # Use curl with shorter timeout - try all candidate paths
+        last_err = ""
+        for candidate in candidates:
+            command = f"curl -sf --max-time 5 http://localhost:{port}{candidate} 2>&1"
+            stdout, stderr, code = await execute_in_container(command)
+            if code == 0:
+                logs.append(f"✅ Health check passed on attempt {attempt + 1} ({candidate})")
+                return True
+            last_err = (stdout or stderr or "").strip() or last_err
         
         # Log progress every 5 attempts with more info
         if (attempt + 1) % 5 == 0:
@@ -1450,6 +1481,8 @@ async def check_app_health(app_id: str, port: int, health_endpoint: str, logs: L
                     logs.append(f"📋 Recent log output:")
                     for line in log_stdout.strip().split('\n')[-10:]:
                         logs.append(f"   {line}")
+                if last_err:
+                    logs.append(f"📋 Last health-check error: {last_err[:200]}")
                 break
         
         if attempt < max_attempts - 1:
@@ -1459,14 +1492,15 @@ async def check_app_health(app_id: str, port: int, health_endpoint: str, logs: L
     
     # Show diagnostic info
     # Check what's on the port
-    port_stdout, _, _ = await execute_in_container(f"lsof -ti:{port} 2>/dev/null")
+    port_stdout, _, _ = await execute_in_container(port_check)
     if port_stdout.strip():
-        logs.append(f"📊 Process on port {port}: PID {port_stdout.strip()}")
+        logs.append(f"📊 Port {port} appears to have a listener: {port_stdout.strip()}")
         # Try to get response body
-        curl_cmd = f"curl -s --max-time 3 http://localhost:{port}{health_endpoint} 2>&1 | head -5"
-        curl_stdout, _, _ = await execute_in_container(curl_cmd)
-        if curl_stdout.strip():
-            logs.append(f"📋 Response: {curl_stdout.strip()[:200]}")
+        for candidate in candidates:
+            curl_cmd = f"curl -s --max-time 3 http://localhost:{port}{candidate} 2>&1 | head -5"
+            curl_stdout, _, _ = await execute_in_container(curl_cmd)
+            if curl_stdout.strip():
+                logs.append(f"📋 Response ({candidate}): {curl_stdout.strip()[:200]}")
     else:
         logs.append(f"⚠️ No process listening on port {port}")
     
@@ -1635,7 +1669,13 @@ async def deploy_app(
     # Direct requests to the container (curl http://localhost:PORT/api/health) bypass nginx.
     health_endpoint = manifest.healthEndpoint  # e.g., "/api/health" - no basePath prefix
     
-    if not await check_app_health(manifest.id, manifest.defaultPort, health_endpoint, logs):
+    if not await check_app_health(
+        manifest.id,
+        manifest.defaultPort,
+        health_endpoint,
+        logs,
+        base_path=manifest.defaultPath,
+    ):
         logs.append("⚠️ App started but health check failed - check logs")
         # Don't fail deployment for health check - app might just be slow to start
     
