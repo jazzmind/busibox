@@ -196,28 +196,40 @@ async def deploy_core_app(
         repo = app_info['github_repo']
         command = f"""
             set -e
+            
+            # Ensure /srv/apps directory exists
+            mkdir -p /srv/apps
+            
             APP_DIR="/srv/apps/{app_id}"
             
             # Clone or update repository
-            if [ -d "$APP_DIR" ]; then
+            if [ -d "$APP_DIR/.git" ]; then
+                echo "Updating existing repository..."
                 cd "$APP_DIR"
                 git fetch origin
                 git checkout {github_ref}
                 git pull origin {github_ref}
             else
+                echo "Cloning repository..."
+                rm -rf "$APP_DIR"  # Clean up any partial clone
                 git clone https://github.com/{repo}.git "$APP_DIR"
                 cd "$APP_DIR"
                 git checkout {github_ref}
             fi
             
+            cd "$APP_DIR"
+            
             # Install dependencies
+            echo "Installing dependencies..."
             npm install
             
             # Build application
+            echo "Building application..."
             npm run build
             
             # Restart with systemd (on Proxmox, apps run as systemd services)
-            systemctl restart {app_id} || true
+            echo "Restarting service..."
+            systemctl restart {app_id} || echo "Service restart skipped (may not exist yet)"
         """
     
     stdout, stderr, code = await execute_in_core_apps(
