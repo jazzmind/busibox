@@ -3,9 +3,6 @@
 -- Description: Add config table for runtime configuration that can be changed after installation
 -- This replaces runtime secrets in Ansible vault with database-stored configuration
 
--- Ensure we're using the correct database
-\c busibox
-
 -- Create config table
 CREATE TABLE IF NOT EXISTS config (
     key VARCHAR(255) PRIMARY KEY,

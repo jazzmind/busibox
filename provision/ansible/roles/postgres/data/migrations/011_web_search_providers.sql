@@ -2,9 +2,6 @@
 -- Created: 2025-12-15
 -- Description: Add web_search_providers table for centralized web search API key management
 
--- Ensure we're using the correct database
-\c busibox
-
 -- Create web_search_providers table
 CREATE TABLE IF NOT EXISTS web_search_providers (
     id SERIAL PRIMARY KEY,

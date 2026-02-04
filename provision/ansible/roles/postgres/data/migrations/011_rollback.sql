@@ -1,9 +1,6 @@
 -- Rollback Migration 011: Web Search Providers Table
 -- Description: Remove web_search_providers table and related objects
 
--- Ensure we're using the correct database
-\c busibox
-
 -- Drop trigger
 DROP TRIGGER IF EXISTS trigger_update_web_search_providers_updated_at ON web_search_providers;
 
