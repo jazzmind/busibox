@@ -23,7 +23,7 @@
 
 - name: Load secrets for environment file generation
   include_vars:
-    file: "{{ playbook_dir }}/roles/secrets/vars/vault.{{ deployment_environment | default('staging') }}.yml"
+    file: "{{ playbook_dir }}/roles/secrets/vars/vault.{{ deployment_environment | default('dev') }}.yml"
   no_log: true
   tags:
     - always  # Must always run since .env deployment has 'always' tag

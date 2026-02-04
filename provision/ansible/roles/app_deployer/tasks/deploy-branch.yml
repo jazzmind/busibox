@@ -5,7 +5,7 @@
 
 - name: Load secrets for GitHub authentication
   include_vars:
-    file: "{{ playbook_dir }}/roles/secrets/vars/vault.{{ deployment_environment | default('staging') }}.yml"
+    file: "{{ playbook_dir }}/roles/secrets/vars/vault.{{ deployment_environment | default('dev') }}.yml"
   no_log: true
   tags:
     - always
