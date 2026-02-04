@@ -144,6 +144,7 @@ check_proxmox_containers_exist() {
 
 # Detect installation status for current environment
 # Returns: not_installed, partial, installed
+# Strategy: Check if core services are running. If yes, system is installed.
 detect_installation_status() {
     local env backend
     env=$(get_state "ENVIRONMENT" || echo "")
@@ -154,65 +155,7 @@ detect_installation_status() {
         return
     fi
     
-    # Check INSTALL_STATUS from state first - this is the authoritative source
-    # Only consider "installed" if the install actually completed successfully
-    local install_status
-    install_status=$(get_state "INSTALL_STATUS" "not_installed")
-    
-    # If state says installed, verify containers are actually running
-    # If state says not_installed or partial, trust it even if containers exist
-    if [[ "$install_status" != "installed" ]]; then
-        # Install didn't complete - check if there are partial containers
-        local env_upper
-        env_upper=$(echo "$env" | tr '[:lower:]' '[:upper:]')
-        backend=$(get_state "BACKEND_${env_upper}" || echo "")
-        
-        # Development always uses docker
-        if [[ "$env" == "development" ]]; then
-            backend="docker"
-        fi
-        
-        if [[ -z "$backend" ]]; then
-            echo "not_installed"
-            return
-        fi
-        
-        # Check if there are partial containers (install started but didn't finish)
-        case "$backend" in
-            docker)
-                if check_docker_available 2>/dev/null; then
-                    local prefix
-                    case "$env" in
-                        development) prefix="dev" ;;
-                        staging) prefix="staging" ;;
-                        production) prefix="prod" ;;
-                    esac
-                    local running
-                    running=$(docker ps --filter "name=${prefix}-" --format '{{.Names}}' 2>/dev/null | wc -l | tr -d ' ')
-                    if [[ "$running" -gt 0 ]]; then
-                        echo "partial"  # Containers exist but install not complete
-                    else
-                        echo "not_installed"
-                    fi
-                else
-                    echo "not_installed"
-                fi
-                ;;
-            proxmox)
-                if check_proxmox_available 2>/dev/null && check_proxmox_containers_exist "$env" 2>/dev/null; then
-                    echo "partial"  # Containers exist but install not complete
-                else
-                    echo "not_installed"
-                fi
-                ;;
-            *)
-                echo "not_installed"
-                ;;
-        esac
-        return
-    fi
-    
-    # Install status says installed - verify containers are running
+    # Determine backend
     local env_upper
     env_upper=$(echo "$env" | tr '[:lower:]' '[:upper:]')
     backend=$(get_state "BACKEND_${env_upper}" || echo "")
@@ -222,42 +165,69 @@ detect_installation_status() {
         backend="docker"
     fi
     
+    if [[ -z "$backend" ]]; then
+        echo "not_installed"
+        return
+    fi
+    
+    # Check if core services are running
     case "$backend" in
         docker)
             if ! check_docker_available 2>/dev/null; then
-                echo "partial"  # Installed but Docker not available
+                echo "not_installed"
                 return
             fi
+            
             local prefix
             case "$env" in
                 development) prefix="dev" ;;
                 staging) prefix="staging" ;;
                 production) prefix="prod" ;;
+                demo) prefix="demo" ;;
+                *) prefix="dev" ;;
             esac
-            local running
-            running=$(docker ps --filter "name=${prefix}-" --format '{{.Names}}' 2>/dev/null | wc -l | tr -d ' ')
-            if [[ "$running" -gt 0 ]]; then
+            
+            # Check for core services that must be running
+            # postgres, authz-api, core-apps are essential
+            local core_services=("postgres" "authz-api" "core-apps")
+            local running=0
+            local total=${#core_services[@]}
+            
+            for service in "${core_services[@]}"; do
+                if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${prefix}-${service}$"; then
+                    ((running++))
+                fi
+            done
+            
+            # If all core services are running, system is installed
+            if [[ $running -eq $total ]]; then
                 echo "installed"
+            elif [[ $running -gt 0 ]]; then
+                echo "partial"  # Some services running
             else
-                echo "partial"  # Installed but containers stopped
+                echo "not_installed"
             fi
             ;;
         proxmox)
             if ! check_proxmox_available 2>/dev/null; then
-                echo "partial"
+                echo "not_installed"
                 return
             fi
+            
             local base_ctid
             case "$env" in
                 production) base_ctid=200 ;;
                 staging) base_ctid=300 ;;
+                *) base_ctid=300 ;;
             esac
+            
+            # Check if proxy container is running
             local status
             status=$(pct status "$base_ctid" 2>/dev/null | awk '{print $2}')
             if [[ "$status" == "running" ]]; then
                 echo "installed"
             else
-                echo "partial"
+                echo "not_installed"
             fi
             ;;
         *)
