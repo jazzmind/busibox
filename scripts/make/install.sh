@@ -725,6 +725,11 @@ wizard_network() {
         return
     fi
     
+    # Load saved values as defaults
+    local saved_production saved_staging
+    saved_production=$(get_state "NETWORK_BASE_OCTETS_PRODUCTION" "10.96.200")
+    saved_staging=$(get_state "NETWORK_BASE_OCTETS_STAGING" "10.96.201")
+    
     echo ""
     echo -e "┌─ ${BOLD}NETWORK CONFIGURATION${NC} ──────────────────────────────────────────────────────┐"
     box_line "" "single"
@@ -734,11 +739,11 @@ wizard_network() {
     echo -e "└──────────────────────────────────────────────────────────────────────────────┘"
     echo ""
     
-    read -p "$(echo -e "${BOLD}Production network base [10.96.200]:${NC} ")" NETWORK_PRODUCTION
-    NETWORK_PRODUCTION="${NETWORK_PRODUCTION:-10.96.200}"
+    read -p "$(echo -e "${BOLD}Production network base [${saved_production}]:${NC} ")" NETWORK_PRODUCTION
+    NETWORK_PRODUCTION="${NETWORK_PRODUCTION:-${saved_production}}"
     
-    read -p "$(echo -e "${BOLD}Staging network base [10.96.201]:${NC} ")" NETWORK_STAGING
-    NETWORK_STAGING="${NETWORK_STAGING:-10.96.201}"
+    read -p "$(echo -e "${BOLD}Staging network base [${saved_staging}]:${NC} ")" NETWORK_STAGING
+    NETWORK_STAGING="${NETWORK_STAGING:-${saved_staging}}"
 }
 
 wizard_domain() {
@@ -1575,6 +1580,12 @@ bootstrap_proxmox_ansible() {
     export GITHUB_AUTH_TOKEN="${GITHUB_AUTH_TOKEN:-}"
     export ADMIN_EMAIL="${ADMIN_EMAIL:-}"
     
+    # Export network octets for Ansible inventory parsing
+    # These are loaded from state file during wizard or restore
+    export NETWORK_BASE_OCTETS_STAGING="${NETWORK_STAGING:-10.96.201}"
+    export NETWORK_BASE_OCTETS_PRODUCTION="${NETWORK_PRODUCTION:-10.96.200}"
+    export BASE_DOMAIN="${BASE_DOMAIN:-localhost}"
+    
     # Navigate to Ansible directory
     local ansible_dir="${REPO_ROOT}/provision/ansible"
     
@@ -1741,6 +1752,12 @@ bootstrap_proxmox_ansible() {
     playbook_cmd+=" -e busibox_env=${ENVIRONMENT}"
     playbook_cmd+=" -e github_token=${GITHUB_AUTH_TOKEN:-}"
     playbook_cmd+=" -e admin_email=${ADMIN_EMAIL:-}"
+    
+    # Pass network octets and base domain from state file
+    # These are needed for IP address calculation in inventory
+    playbook_cmd+=" -e network_base_octets_staging=${NETWORK_STAGING:-10.96.201}"
+    playbook_cmd+=" -e network_base_octets_production=${NETWORK_PRODUCTION:-10.96.200}"
+    playbook_cmd+=" -e base_domain=${BASE_DOMAIN:-localhost}"
     
     if [[ -n "$vault_args" ]]; then
         playbook_cmd+=" $vault_args"
@@ -3659,6 +3676,13 @@ main() {
             echo -e "  Base Domain:     ${CYAN}${BASE_DOMAIN}${NC}"
             echo -e "  Admin Email:     ${CYAN}${ADMIN_EMAIL:-not set}${NC}"
             echo -e "  Allowed Domains: ${CYAN}${ALLOWED_DOMAINS}${NC}"
+            if [[ "$PLATFORM" == "proxmox" ]]; then
+                # Load network octets for display
+                NETWORK_PRODUCTION=$(get_state "NETWORK_BASE_OCTETS_PRODUCTION" "10.96.200")
+                NETWORK_STAGING=$(get_state "NETWORK_BASE_OCTETS_STAGING" "10.96.201")
+                echo -e "  Network (prod): ${CYAN}${NETWORK_PRODUCTION}${NC}"
+                echo -e "  Network (stag): ${CYAN}${NETWORK_STAGING}${NC}"
+            fi
             [[ -n "${GITHUB_AUTH_TOKEN:-}" ]] && echo -e "  GitHub Token:    ${CYAN}saved${NC}"
             echo ""
         else
@@ -3678,6 +3702,11 @@ main() {
             set_state "ADMIN_EMAIL" "$ADMIN_EMAIL"
             set_state "BASE_DOMAIN" "$BASE_DOMAIN"
             set_state "ALLOWED_DOMAINS" "${ALLOWED_DOMAINS:-*}"
+            # Save network octets for Proxmox
+            if [[ "$PLATFORM" == "proxmox" ]]; then
+                set_state "NETWORK_BASE_OCTETS_PRODUCTION" "$NETWORK_PRODUCTION"
+                set_state "NETWORK_BASE_OCTETS_STAGING" "$NETWORK_STAGING"
+            fi
             set_install_phase "wizard_complete"
         fi
     fi

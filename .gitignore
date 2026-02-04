@@ -56,8 +56,10 @@ provision/ansible/roles/secrets/vars/vault.yml
 provision/ansible/roles/secrets/vars/vault.*.yml
 !provision/ansible/roles/secrets/vars/vault.example.yml
 provision/ansible/roles/secrets/vars/backups/
-provision/ansible/inventory/*/group_vars/all/vault.yml
 ssl
+
+# Local installation config (generated from state file, contains network octets)
+provision/ansible/inventory/*/group_vars/all/local.yml
 
 # Machine-generated model configuration
 provision/ansible/group_vars/all/model_config.yml

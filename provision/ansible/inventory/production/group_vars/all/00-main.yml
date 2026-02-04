@@ -17,7 +17,10 @@ node_env: production  # For Node.js applications
 # ============================================================================
 # Network Configuration - Production
 # ============================================================================
-# Base IP from vault (deployment-specific)
+# Network base octets from environment variable or extra-vars
+# Set NETWORK_BASE_OCTETS_PRODUCTION env var or pass -e network_base_octets_production=...
+network_base_octets_staging: "{{ lookup('env', 'NETWORK_BASE_OCTETS_STAGING') | default('10.96.201', true) }}"
+network_base_octets_production: "{{ lookup('env', 'NETWORK_BASE_OCTETS_PRODUCTION') | default('10.96.200', true) }}"
 network_base_octets: "{{ network_base_octets_production }}"
 internal_network: "{{ network_base_octets }}.0/21"
 internal_gateway: "{{ network_base_octets }}.1"
