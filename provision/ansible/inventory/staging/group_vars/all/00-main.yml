@@ -166,7 +166,7 @@ litellm_enable_database: true
 use_deploy_api: true
 
 # Deploy API connection settings
-deploy_host: "{{ core_apps_ip }}"  # Deploy API runs in core-apps container
+deploy_host: "{{ authz_ip }}"  # Deploy API runs on authz container
 deploy_port: 8011
 deploy_api_admin_token: "{{ secrets.deploy_api.admin_token | default('') }}"
 deploy_environment: staging
