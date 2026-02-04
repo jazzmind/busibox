@@ -204,16 +204,19 @@ async def deploy_core_app(
             logs.append(f"⚠️ No GitHub token - attempting public clone")
             repo_url = f"https://github.com/{repo}.git"
         
-        # Create npmrc content for GitHub Package Registry authentication
-        npmrc_setup = ""
+        # Build npmrc setup commands only if we have a token
+        npmrc_commands = ""
         if github_token:
-            npmrc_setup = f"""
-            # Configure npm for GitHub Package Registry
+            npmrc_commands = f"""
+            # Configure npm for GitHub Package Registry (for @jazzmind packages)
             echo "Configuring npm for GitHub Package Registry..."
-            cat > ~/.npmrc << 'NPMRC'
-//npm.pkg.github.com/:_authToken={github_token}
-@jazzmind:registry=https://npm.pkg.github.com
-NPMRC
+            echo '//npm.pkg.github.com/:_authToken={github_token}' > ~/.npmrc
+            echo '@jazzmind:registry=https://npm.pkg.github.com' >> ~/.npmrc
+            echo "npmrc configured with token (first 10 chars): $(head -c 50 ~/.npmrc)"
+            """
+        else:
+            npmrc_commands = """
+            echo "WARNING: No GitHub token provided - private packages will fail!"
             """
         
         command = f"""
@@ -223,7 +226,7 @@ NPMRC
             mkdir -p /srv/apps
             
             APP_DIR="/srv/apps/{app_id}"
-            {npmrc_setup}
+            {npmrc_commands}
             # Clone or update repository
             if [ -d "$APP_DIR/.git" ]; then
                 echo "Updating existing repository..."
