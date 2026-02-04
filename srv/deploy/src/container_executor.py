@@ -817,12 +817,29 @@ cd {app_path} && \
     return True
 
 
-async def run_build(app_path: str, build_command: str, logs: List[str]) -> bool:
-    """Run build command"""
-    logs.append(f"🔨 Building application...")
+async def run_build(
+    app_path: str,
+    build_command: str,
+    logs: List[str],
+    env_vars: Optional[Dict[str, str]] = None,
+) -> bool:
+    """Run build command
     
+    Important: Next.js reads `next.config.*` at build time. For apps that use
+    `process.env.NEXT_PUBLIC_BASE_PATH` in `next.config.ts`, we must ensure
+    `NEXT_PUBLIC_BASE_PATH` is present during build as well as at runtime,
+    otherwise the generated output may target the wrong path.
+    """
+    logs.append(f"🔨 Building application...")
+
+    export_lines = ""
+    if env_vars:
+        # Only export string values; wrap in double quotes.
+        export_lines = "\n".join([f'export {k}="{v}"' for k, v in env_vars.items()])
+
     command = f"""
-cd {app_path} && \
+cd {app_path}
+{export_lines}
 {build_command} 2>&1
 """
     
@@ -1453,6 +1470,12 @@ async def deploy_app(
     success, app_path = await clone_or_update_repo(manifest, deploy_config, logs)
     if not success:
         return False
+
+    # Portal URL for auth redirects (used both at build-time and runtime)
+    portal_url = os.environ.get("NEXT_PUBLIC_AI_PORTAL_URL", "")
+    if not portal_url and is_docker_environment():
+        # Docker dev default - goes through nginx at /portal
+        portal_url = "https://localhost/portal"
     
     # Step 1.5: For Docker dev mode, set up dynamic volumes for node_modules and .next
     # This solves the platform mismatch (macOS host vs Linux container) by keeping
@@ -1496,7 +1519,15 @@ async def deploy_app(
     if is_dev_mode:
         logs.append("⏭️ Skipping build (dev mode - will run dev server)")
     else:
-        if not await run_build(app_path, manifest.buildCommand, logs):
+        build_env = {
+            # Ensure basePath/assetPrefix match the proxy path at build time
+            "NEXT_PUBLIC_BASE_PATH": manifest.defaultPath,
+            # Ensure auth redirect targets are consistent
+            "NEXT_PUBLIC_AI_PORTAL_URL": portal_url,
+            # Ensure audience claim validation stays consistent
+            "APP_NAME": manifest.name,
+        }
+        if not await run_build(app_path, manifest.buildCommand, logs, env_vars=build_env):
             return False
     
     # Step 4: Migrations
@@ -1504,14 +1535,6 @@ async def deploy_app(
         return False
     
     # Build environment variables
-    # Get portal URL from environment - this is the main AI Portal URL
-    # In Docker: https://localhost/portal (via nginx)
-    # In LXC: http://10.96.X00.201:3000
-    portal_url = os.environ.get("NEXT_PUBLIC_AI_PORTAL_URL", "")
-    if not portal_url and is_docker_environment():
-        # Docker dev default - goes through nginx at /portal
-        portal_url = "https://localhost/portal"
-    
     env_vars = {
         "NODE_ENV": "production" if deploy_config.environment == "production" else "development",
         "PORT": str(manifest.defaultPort),

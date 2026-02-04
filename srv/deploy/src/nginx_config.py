@@ -17,7 +17,16 @@ logger = logging.getLogger(__name__)
 
 # Container prefix for Docker container names
 CONTAINER_PREFIX = os.environ.get("CONTAINER_PREFIX", "dev")
-NGINX_CONTAINER = f"{CONTAINER_PREFIX}-nginx"
+
+# In modern Busibox Docker deployments, nginx is bundled inside the core-apps container.
+# The standalone nginx container only exists in "hybrid" profile.
+#
+# Allow override in case an installation runs nginx elsewhere.
+NGINX_CONTAINER_OVERRIDE = os.environ.get("BUSIBOX_NGINX_CONTAINER", "").strip()
+DEFAULT_NGINX_CONTAINERS = [
+    f"{CONTAINER_PREFIX}-core-apps",  # nginx inside core-apps (default)
+    f"{CONTAINER_PREFIX}-nginx",      # standalone nginx (hybrid profile)
+]
 
 
 def is_docker_environment() -> bool:
@@ -214,20 +223,43 @@ ln -s {source} {target}
                 
                 logger.info(f"Wrote nginx config to {config_path}")
                 
-                # Reload nginx via docker exec
+                # Reload nginx via docker exec.
+                # nginx lives inside core-apps in standard Busibox Docker mode.
                 import subprocess
-                reload_result = subprocess.run(
-                    ['docker', 'exec', NGINX_CONTAINER, 'nginx', '-s', 'reload'],
-                    capture_output=True,
-                    text=True
+
+                containers_to_try = (
+                    [NGINX_CONTAINER_OVERRIDE]
+                    if NGINX_CONTAINER_OVERRIDE
+                    else list(DEFAULT_NGINX_CONTAINERS)
                 )
-                
-                if reload_result.returncode == 0:
-                    logger.info("Nginx reloaded successfully")
-                    return True, f"App configured at {manifest.defaultPath}"
-                else:
-                    logger.error(f"Failed to reload nginx: {reload_result.stderr}")
-                    return False, f"Config written but reload failed: {reload_result.stderr}"
+
+                last_error = ""
+                for container in containers_to_try:
+                    # First validate config so reload errors are actionable
+                    test_result = subprocess.run(
+                        ['docker', 'exec', container, 'nginx', '-t'],
+                        capture_output=True,
+                        text=True
+                    )
+                    if test_result.returncode != 0:
+                        last_error = (test_result.stderr or test_result.stdout or "").strip()
+                        logger.warning(f"Nginx config test failed in {container}: {last_error}")
+                        continue
+
+                    reload_result = subprocess.run(
+                        ['docker', 'exec', container, 'nginx', '-s', 'reload'],
+                        capture_output=True,
+                        text=True
+                    )
+
+                    if reload_result.returncode == 0:
+                        logger.info(f"Nginx reloaded successfully in {container}")
+                        return True, f"App configured at {manifest.defaultPath}"
+
+                    last_error = (reload_result.stderr or reload_result.stdout or "").strip()
+                    logger.warning(f"Nginx reload failed in {container}: {last_error}")
+
+                return False, f"Config written but reload failed: {last_error or 'unknown error'}"
                     
             except Exception as e:
                 logger.error(f"Failed to write nginx config: {e}")
