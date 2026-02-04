@@ -793,16 +793,18 @@ echo "@jazzmind:registry=https://npm.pkg.github.com" >> /root/.npmrc
         clear_cmd = f"rm -rf {app_path}/node_modules/* {app_path}/node_modules/.* 2>/dev/null || true"
         await execute_in_container(clear_cmd)
         
+        # Use --include=dev to ensure devDependencies are installed (needed for build tools like tailwindcss)
         command = f"""
 cd {app_path} && \
-{token_env}npm ci --legacy-peer-deps 2>&1
+{token_env}npm ci --legacy-peer-deps --include=dev 2>&1
 """
     else:
         # No package-lock.json, use npm install
+        # Use --include=dev to ensure devDependencies are installed (needed for build tools like tailwindcss)
         logs.append("📦 Using npm install (no package-lock.json)")
         command = f"""
 cd {app_path} && \
-{token_env}npm install --legacy-peer-deps 2>&1
+{token_env}npm install --legacy-peer-deps --include=dev 2>&1
 """
     
     stdout, stderr, code = await execute_in_container(command, timeout=600)
