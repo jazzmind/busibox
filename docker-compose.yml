@@ -799,8 +799,9 @@ services:
       # Ansible
       ANSIBLE_DIR: /ansible
       # PostgreSQL (for database provisioning)
+      # Uses busibox_user which has CREATEDB permission (see init-databases.sql)
       POSTGRES_HOST: postgres
-      POSTGRES_ADMIN_USER: postgres
+      POSTGRES_ADMIN_USER: ${POSTGRES_USER:-busibox_user}
       POSTGRES_ADMIN_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
       # POSTGRES_PASSWORD passed through so docker compose can use it for spawned services
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
@@ -889,7 +890,9 @@ services:
     # - Dropped capabilities
     # - Isolated network (only reaches internal services)
     # =========================================================================
-    image: node:20-slim
+    build:
+      context: .
+      dockerfile: provision/docker/user-apps.Dockerfile
     container_name: ${CONTAINER_PREFIX:-dev}-user-apps
     hostname: user-apps
     labels:
@@ -903,10 +906,6 @@ services:
       - user_apps_logs:/var/log/user-apps
     environment:
       NODE_ENV: production
-    # Container stays running - deploy-api uses docker exec to manage apps
-    command: ["sleep", "infinity"]
-    # Install common tools needed for app deployment
-    entrypoint: ["/bin/bash", "-c", "apt-get update && apt-get install -y git curl procps && exec sleep infinity"]
     restart: unless-stopped
     networks:
       - busibox-net

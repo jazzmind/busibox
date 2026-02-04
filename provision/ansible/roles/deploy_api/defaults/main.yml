@@ -17,9 +17,10 @@ deploy_api_src_dir: "{{ playbook_dir }}/../../srv/deploy"
 deploy_api_authz_url: "http://localhost:{{ authz_service_port | default(8010) }}"
 
 # PostgreSQL (for database provisioning)
+# Uses busibox_user which has CREATEDB permission (see init-databases.sql)
 deploy_api_postgres_host: "{{ hostvars[groups['pg'][0]]['ansible_host'] | default('10.96.200.202') }}"
 deploy_api_postgres_port: 5432
-deploy_api_postgres_admin_user: postgres
+deploy_api_postgres_admin_user: "{{ secrets.postgresql.user | default('busibox_user') }}"
 deploy_api_postgres_admin_password: "{{ secrets.postgresql.password | default('') }}"
 
 # Container IPs

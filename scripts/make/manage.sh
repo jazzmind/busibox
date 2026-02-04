@@ -29,6 +29,14 @@ source "${REPO_ROOT}/scripts/lib/services.sh"
 # Service group order
 SERVICE_GROUP_ORDER=("Infrastructure" "APIs" "LLM" "Frontend" "User Apps")
 
+# Detect if running on Apple Silicon
+is_apple_silicon() {
+    local os arch
+    os=$(uname -s)
+    arch=$(uname -m)
+    [[ "$os" == "Darwin" && ("$arch" == "arm64" || "$arch" == "aarch64") ]]
+}
+
 # Get services for a group (replaces associative array for bash 3.2 compatibility)
 get_services_for_group() {
     local group="$1"
@@ -40,10 +48,15 @@ get_services_for_group() {
             echo "authz-api agent-api data-api search-api deploy-api docs-api embedding-api"
             ;;
         "LLM")
-            echo "litellm vllm"  # NOTE: ollama is deprecated, use vLLM instead
+            # Show MLX on Apple Silicon, vLLM otherwise
+            if is_apple_silicon; then
+                echo "litellm mlx"
+            else
+                echo "litellm vllm"
+            fi
             ;;
         "Frontend")
-            echo "core-apps nginx"
+            echo "core-apps"  # nginx is part of core-apps container now
             ;;
         "User Apps")
             echo "user-apps"
@@ -176,7 +189,7 @@ get_service_status() {
 # Service Display
 # ============================================================================
 
-# Display all services with status
+# Display all services with status (in 2 columns)
 show_services_status() {
     local backend
     backend=$(get_backend_type)
@@ -189,22 +202,53 @@ show_services_status() {
         
         printf "  ${BOLD}${group}${NC}\n"
         
+        # Collect services into an array
+        local services_arr=()
         for service in $services; do
-            local status
-            status=$(get_service_status "$service")
-            
-            local status_icon status_color
-            case "$status" in
-                healthy)    status_icon="●" ; status_color="${GREEN}" ;;
-                running)    status_icon="●" ; status_color="${GREEN}" ;;
-                stopped)    status_icon="○" ; status_color="${RED}" ;;
-                unhealthy)  status_icon="●" ; status_color="${YELLOW}" ;;
-                missing)    status_icon="○" ; status_color="${DIM}" ;;
-                unreachable) status_icon="○" ; status_color="${RED}" ;;
-                *)          status_icon="?" ; status_color="${DIM}" ;;
+            services_arr+=("$service")
+        done
+        
+        # Display in 2 columns
+        local i=0
+        local count=${#services_arr[@]}
+        while [[ $i -lt $count ]]; do
+            local service1="${services_arr[$i]}"
+            local status1
+            status1=$(get_service_status "$service1")
+            local status_icon1 status_color1
+            case "$status1" in
+                healthy)    status_icon1="●" ; status_color1="${GREEN}" ;;
+                running)    status_icon1="●" ; status_color1="${GREEN}" ;;
+                stopped)    status_icon1="○" ; status_color1="${RED}" ;;
+                unhealthy)  status_icon1="●" ; status_color1="${YELLOW}" ;;
+                missing)    status_icon1="○" ; status_color1="${DIM}" ;;
+                unreachable) status_icon1="○" ; status_color1="${RED}" ;;
+                *)          status_icon1="?" ; status_color1="${DIM}" ;;
             esac
             
-            printf "    ${status_color}${status_icon}${NC} %-20s ${DIM}%s${NC}\n" "$service" "$status"
+            # Second column (if exists)
+            if [[ $((i+1)) -lt $count ]]; then
+                local service2="${services_arr[$((i+1))]}"
+                local status2
+                status2=$(get_service_status "$service2")
+                local status_icon2 status_color2
+                case "$status2" in
+                    healthy)    status_icon2="●" ; status_color2="${GREEN}" ;;
+                    running)    status_icon2="●" ; status_color2="${GREEN}" ;;
+                    stopped)    status_icon2="○" ; status_color2="${RED}" ;;
+                    unhealthy)  status_icon2="●" ; status_color2="${YELLOW}" ;;
+                    missing)    status_icon2="○" ; status_color2="${DIM}" ;;
+                    unreachable) status_icon2="○" ; status_color2="${RED}" ;;
+                    *)          status_icon2="?" ; status_color2="${DIM}" ;;
+                esac
+                printf "    ${status_color1}${status_icon1}${NC} %-18s ${DIM}%-10s${NC}  ${status_color2}${status_icon2}${NC} %-18s ${DIM}%s${NC}\n" \
+                    "$service1" "$status1" "$service2" "$status2"
+            else
+                # Single item on last row
+                printf "    ${status_color1}${status_icon1}${NC} %-18s ${DIM}%s${NC}\n" "$service1" "$status1"
+            fi
+            
+            i=$((i+2))
         done
         
         echo ""
@@ -316,7 +360,7 @@ manage_service() {
         fi
         
         box_empty
-        box_line "  ${DIM}b = back${NC}"
+        box_line "  ${DIM}b = back to service list    m = main menu${NC}"
         box_empty
         box_footer
         echo ""
@@ -480,53 +524,81 @@ manage_service() {
                 esac
                 ;;
             b|B)
+                # Return to select_service (the calling function loops back)
                 return
+                ;;
+            m|M)
+                # Return to main menu (return 1 to signal main menu)
+                return 1
                 ;;
         esac
     done
 }
 
-# Select a service to manage
+# Select a service to manage (in 2 columns, no status check)
 select_service() {
-    clear
-    box_header "SELECT SERVICE"
-    echo ""
-    
-    local services=()
-    local idx=1
-    
-    for group in "${SERVICE_GROUP_ORDER[@]}"; do
-        echo -e "  ${BOLD}${group}${NC}"
-        for service in $(get_services_for_group "$group"); do
-            services+=("$service")
-            local status
-            status=$(get_service_status "$service")
-            local status_indicator
-            case "$status" in
-                healthy|running) status_indicator="${GREEN}●${NC}" ;;
-                stopped|missing|unreachable) status_indicator="${RED}○${NC}" ;;
-                *) status_indicator="${YELLOW}●${NC}" ;;
-            esac
-            echo -e "    ${BOLD}$(printf "%2d" "$idx")${NC}) ${status_indicator} ${service}"
-            ((idx++))
-        done
+    while true; do
+        clear
+        box_header "SELECT SERVICE"
         echo ""
+        
+        local services=()
+        local idx=1
+        
+        for group in "${SERVICE_GROUP_ORDER[@]}"; do
+            echo -e "  ${BOLD}${group}${NC}"
+            
+            # Collect services for this group
+            local group_services=()
+            for service in $(get_services_for_group "$group"); do
+                services+=("$service")
+                group_services+=("$service:$idx")
+                ((idx++))
+            done
+            
+            # Display in 2 columns
+            local i=0
+            local count=${#group_services[@]}
+            while [[ $i -lt $count ]]; do
+                local entry1="${group_services[$i]}"
+                local service1="${entry1%%:*}"
+                local num1="${entry1##*:}"
+                
+                if [[ $((i+1)) -lt $count ]]; then
+                    local entry2="${group_services[$((i+1))]}"
+                    local service2="${entry2%%:*}"
+                    local num2="${entry2##*:}"
+                    printf "    ${BOLD}%2d)${NC} %-20s  ${BOLD}%2d)${NC} %s\n" "$num1" "$service1" "$num2" "$service2"
+                else
+                    printf "    ${BOLD}%2d)${NC} %s\n" "$num1" "$service1"
+                fi
+                
+                i=$((i+2))
+            done
+            echo ""
+        done
+        
+        echo -e "  ${DIM}b = back to main menu${NC}"
+        echo ""
+        box_footer
+        echo ""
+        
+        read -p "Enter service number: " choice
+        
+        if [[ "$choice" == "b" ]] || [[ "$choice" == "B" ]]; then
+            return
+        fi
+        
+        if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#services[@]} )); then
+            manage_service "${services[$((choice-1))]}"
+            local ret=$?
+            # If manage_service returned 1, user wants to go to main menu
+            if [[ $ret -eq 1 ]]; then
+                return
+            fi
+            # Otherwise loop back to select_service (don't return to main)
+        fi
     done
-    
-    echo -e "  ${DIM}b = back${NC}"
-    echo ""
-    box_footer
-    echo ""
-    
-    read -p "Enter service number: " choice
-    
-    if [[ "$choice" == "b" ]] || [[ "$choice" == "B" ]]; then
-        return
-    fi
-    
-    if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#services[@]} )); then
-        manage_service "${services[$((choice-1))]}"
-    fi
 }
 
 # ============================================================================

@@ -38,7 +38,8 @@ END
 $$;
 
 -- Grant permissions to users
-ALTER ROLE busibox_user CREATEDB;
+-- busibox_user needs CREATEDB and CREATEROLE for deploy-api to provision app databases
+ALTER ROLE busibox_user CREATEDB CREATEROLE;
 ALTER ROLE busibox_test_user CREATEDB;
 
 -- =============================================================================
