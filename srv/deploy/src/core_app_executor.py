@@ -205,22 +205,46 @@ async def deploy_core_app(
             repo_url = f"https://github.com/{repo}.git"
         
         # Build npmrc setup commands only if we have a token
+        # CRITICAL: Use /root/.npmrc explicitly (not ~) since SSH may not expand ~ correctly
         npmrc_commands = ""
         if github_token:
+            # Mask token in logs (show first 4 and last 4 chars)
+            token_preview = f"{github_token[:4]}...{github_token[-4:]}" if len(github_token) > 8 else "***"
+            logs.append(f"📝 Setting up .npmrc with token: {token_preview}")
+            
             npmrc_commands = f"""
             # Configure npm for GitHub Package Registry (for @jazzmind packages)
+            echo "=== NPMRC SETUP START ==="
             echo "Configuring npm for GitHub Package Registry..."
-            echo '//npm.pkg.github.com/:_authToken={github_token}' > ~/.npmrc
-            echo '@jazzmind:registry=https://npm.pkg.github.com' >> ~/.npmrc
-            echo "npmrc configured with token (first 10 chars): $(head -c 50 ~/.npmrc)"
+            echo "Home directory: $HOME"
+            echo "Current user: $(whoami)"
+            
+            # Create .npmrc in /root explicitly (SSH runs as root on LXC)
+            cat > /root/.npmrc << 'NPMRC_EOF'
+//npm.pkg.github.com/:_authToken={github_token}
+@jazzmind:registry=https://npm.pkg.github.com
+NPMRC_EOF
+            
+            echo "npmrc created at /root/.npmrc"
+            echo "npmrc contents (masked):"
+            head -1 /root/.npmrc | sed 's/=.*/=***MASKED***/'
+            tail -1 /root/.npmrc
+            ls -la /root/.npmrc
+            echo "=== NPMRC SETUP END ==="
             """
         else:
             npmrc_commands = """
-            echo "WARNING: No GitHub token provided - private packages will fail!"
+            echo "=== WARNING: No GitHub token provided - private packages will fail! ==="
             """
         
         command = f"""
             set -e
+            
+            echo "=== DEPLOY SCRIPT START ==="
+            echo "App: {app_id}"
+            echo "Environment: {environment}"
+            echo "GitHub ref: {github_ref}"
+            echo "Token provided: {'yes' if github_token else 'no'}"
             
             # Ensure /srv/apps directory exists
             mkdir -p /srv/apps
@@ -245,12 +269,24 @@ async def deploy_core_app(
             cd "$APP_DIR"
             
             # Install dependencies
-            echo "Installing dependencies..."
+            echo "=== NPM INSTALL START ==="
+            echo "Current directory: $(pwd)"
+            echo "Checking for .npmrc files..."
+            echo "Global .npmrc (/root/.npmrc):"
+            cat /root/.npmrc 2>/dev/null | sed 's/_authToken=.*/_authToken=***MASKED***/' || echo "  (not found)"
+            echo "Project .npmrc ($APP_DIR/.npmrc):"
+            cat .npmrc 2>/dev/null | sed 's/_authToken=.*/_authToken=***MASKED***/' || echo "  (not found)"
+            echo "npm config list:"
+            npm config list 2>&1 | head -20 || echo "  (failed to get config)"
+            echo ""
+            echo "Running: npm install"
             npm install
+            echo "=== NPM INSTALL END ==="
             
             # Build application
-            echo "Building application..."
+            echo "=== NPM BUILD START ==="
             npm run build
+            echo "=== NPM BUILD END ==="
             
             # Restart with systemd (on Proxmox, apps run as systemd services)
             echo "Restarting service..."
