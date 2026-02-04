@@ -36,7 +36,7 @@ applications:
     deploy_path: /srv/apps/ai-portal
     health_endpoint: /portal/api/health  # Include basePath since Next.js runs with NEXT_PUBLIC_BASE_PATH=/portal
     build_command: "npm run build"
-    start_command: "node .next/standalone/server.js"  # Standalone mode for Next.js
+    start_command: "npm start"  # Standard Next.js start (not standalone mode)
     process_manager: systemd  # Use systemd for consistent logging via journalctl
     auto_deploy: true  # Deploy by default
     routes:
@@ -110,7 +110,7 @@ applications:
     deploy_path: /srv/apps/agent-manager
     health_endpoint: /agents/api/health  # Include basePath since Next.js runs with NEXT_PUBLIC_BASE_PATH=/agents
     build_command: "npm run build"
-    start_command: "node .next/standalone/server.js"  # Standalone mode for Next.js
+    start_command: "npm start"  # Standard Next.js start (not standalone mode)
     process_manager: systemd  # Use systemd for consistent logging via journalctl
     auto_deploy: false  # Deploy via web UI after initial setup (like Docker mode)
     routes:
@@ -161,5 +161,3 @@ applications:
       DOCUMENTS_API_AUD: "https://busibox.local/documents"
       # Enable verbose authz logging for debugging
       VERBOSE_AUTHZ_LOGGING: "true"
-      # Skip TLS verification for self-signed certs (internal services)
-      NODE_TLS_REJECT_UNAUTHORIZED: "0"
