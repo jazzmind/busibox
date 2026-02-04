@@ -271,11 +271,15 @@ NPMRC_EOF
             # Install dependencies
             echo "=== NPM INSTALL START ==="
             echo "Current directory: $(pwd)"
-            echo "Checking for .npmrc files..."
-            echo "Global .npmrc (/root/.npmrc):"
-            cat /root/.npmrc 2>/dev/null | sed 's/_authToken=.*/_authToken=***MASKED***/' || echo "  (not found)"
-            echo "Project .npmrc ($APP_DIR/.npmrc):"
-            cat .npmrc 2>/dev/null | sed 's/_authToken=.*/_authToken=***MASKED***/' || echo "  (not found)"
+            
+            # The project .npmrc uses $GITHUB_AUTH_TOKEN env var for authentication
+            # We need to export this env var, not modify the .npmrc file
+            export GITHUB_AUTH_TOKEN='{github_token}'
+            echo "GITHUB_AUTH_TOKEN env var set (length: $(echo -n "$GITHUB_AUTH_TOKEN" | wc -c))"
+            
+            echo "Project .npmrc contents:"
+            cat .npmrc 2>/dev/null || echo "  (no .npmrc found)"
+            
             echo "npm config list:"
             npm config list 2>&1 | head -20 || echo "  (failed to get config)"
             echo ""
