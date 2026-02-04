@@ -207,6 +207,11 @@ async def execute_deployment(
                 github_token=deploy_config.githubToken
             )
             
+            # ALWAYS attach deploy_logs to status.logs so we can see stdout/stderr
+            for log in deploy_logs:
+                status.logs.append(f"[{datetime.utcnow().isoformat()}] {log}")
+            await broadcast_status(deployment_id)
+            
             if not success:
                 raise Exception(f"Core app deployment failed: {message}")
                 
