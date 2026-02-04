@@ -143,6 +143,17 @@
 # =============================================================================
 # DEPLOY API MODE (Default - Recommended)
 # =============================================================================
+
+# Get bootstrap token for Deploy API authentication
+- name: Get bootstrap token for Deploy API
+  include_tasks: get_bootstrap_token.yml
+  when:
+    - use_deploy_api | default(true)
+    - deploy_api_admin_token is not defined
+  tags:
+    - always
+    - deploy_via_api
+
 - name: Deploy applications via Deploy API
   include_tasks: deploy_via_api.yml
   loop: "{{ applications }}"
