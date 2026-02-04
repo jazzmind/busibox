@@ -186,8 +186,39 @@ async def deploy_core_app(
     
     logs.append(f"🚀 Deploying {app_id} (ref: {github_ref})...")
     
-    # Use the entrypoint script's deploy command
-    command = f"/usr/local/bin/entrypoint.sh deploy {app_id} {github_ref}"
+    # Determine deployment command based on environment
+    if is_docker_environment():
+        # Docker: Use entrypoint script
+        command = f"/usr/local/bin/entrypoint.sh deploy {app_id} {github_ref}"
+    else:
+        # Proxmox: Execute deployment steps directly
+        app_info = CORE_APPS[app_id]
+        repo = app_info['github_repo']
+        command = f"""
+            set -e
+            APP_DIR="/srv/apps/{app_id}"
+            
+            # Clone or update repository
+            if [ -d "$APP_DIR" ]; then
+                cd "$APP_DIR"
+                git fetch origin
+                git checkout {github_ref}
+                git pull origin {github_ref}
+            else
+                git clone https://github.com/{repo}.git "$APP_DIR"
+                cd "$APP_DIR"
+                git checkout {github_ref}
+            fi
+            
+            # Install dependencies
+            npm install
+            
+            # Build application
+            npm run build
+            
+            # Restart with systemd (on Proxmox, apps run as systemd services)
+            systemctl restart {app_id} || true
+        """
     
     stdout, stderr, code = await execute_in_core_apps(
         command,

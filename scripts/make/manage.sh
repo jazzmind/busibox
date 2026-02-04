@@ -293,8 +293,7 @@ show_services_status() {
         done
     done
     
-    # Run health checks in parallel and store results
-    declare -A service_status_map
+    # Run health checks in parallel and store results in temp files
     local tmpdir=$(mktemp -d)
     
     for service in "${all_services[@]}"; do
@@ -307,17 +306,15 @@ show_services_status() {
     # Wait for all background jobs to complete
     wait
     
-    # Read results
-    for service in "${all_services[@]}"; do
+    # Helper function to get status from temp file (Bash 3.2 compatible)
+    get_cached_status() {
+        local service="$1"
         if [[ -f "$tmpdir/$service.status" ]]; then
-            service_status_map["$service"]=$(cat "$tmpdir/$service.status")
+            cat "$tmpdir/$service.status"
         else
-            service_status_map["$service"]="unknown"
+            echo "unknown"
         fi
-    done
-    
-    # Clean up temp files
-    rm -rf "$tmpdir"
+    }
     
     # Count statuses
     local running_count=0
@@ -325,7 +322,7 @@ show_services_status() {
     local stopped_services=()
     
     for service in "${all_services[@]}"; do
-        local status="${service_status_map[$service]}"
+        local status=$(get_cached_status "$service")
         case "$status" in
             healthy|running)
                 ((running_count++))
@@ -363,7 +360,7 @@ show_services_status() {
         local count=${#services_arr[@]}
         while [[ $i -lt $count ]]; do
             local service1="${services_arr[$i]}"
-            local status1="${service_status_map[$service1]}"
+            local status1=$(get_cached_status "$service1")
             local status_icon1 status_color1
             case "$status1" in
                 healthy)    status_icon1="●" ; status_color1="${GREEN}" ;;
@@ -378,7 +375,7 @@ show_services_status() {
             # Second column (if exists)
             if [[ $((i+1)) -lt $count ]]; then
                 local service2="${services_arr[$((i+1))]}"
-                local status2="${service_status_map[$service2]}"
+                local status2=$(get_cached_status "$service2")
                 local status_icon2 status_color2
                 case "$status2" in
                     healthy)    status_icon2="●" ; status_color2="${GREEN}" ;;
@@ -401,6 +398,9 @@ show_services_status() {
         
         echo ""
     done
+    
+    # Clean up temp files
+    rm -rf "$tmpdir"
 }
 
 # ============================================================================
