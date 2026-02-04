@@ -26,8 +26,7 @@
     file: "{{ playbook_dir }}/roles/secrets/vars/vault.{{ deployment_environment | default('staging') }}.yml"
   no_log: true
   tags:
-    - app_deployer
-    - secrets
+    - always  # Must always run since .env deployment has 'always' tag
 
 # Legacy deploywatch directory (only needed for fallback mode)
 - name: Create deploywatch apps directory (legacy)
