@@ -59,7 +59,7 @@
   ansible.builtin.command:
     cmd: >
       docker exec {{ user_apps_container }}
-      sh -c "cd {{ app_path }} && {{ install_command }}"
+      sh -c "cd {{ app_path }} && NODE_OPTIONS='--max-old-space-size=2048' {{ install_command }}"
   register: install_result
   changed_when: true
 
@@ -76,7 +76,7 @@
   ansible.builtin.command:
     cmd: >
       docker exec {{ user_apps_container }}
-      sh -c "cd {{ app_path }} && {{ build_command }}"
+      sh -c "cd {{ app_path }} && NODE_OPTIONS='--max-old-space-size=2048' {{ build_command }}"
   when: has_build.rc == 0
   register: build_result
   changed_when: true

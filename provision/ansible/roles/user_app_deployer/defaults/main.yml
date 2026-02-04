@@ -40,7 +40,7 @@ port_range_end: 4999
 
 # Resource limits (Docker mode)
 cpu_limit: "1.0"          # CPU cores
-memory_limit: "1g"        # Memory limit
+memory_limit: "2g"        # Memory limit (increased for Next.js apps)
 
 # Process management
 process_manager: "{{ 'nohup' if deploy_target == 'docker' else 'systemd' }}"
