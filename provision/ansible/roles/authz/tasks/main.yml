@@ -204,15 +204,6 @@
     creates: "{{ authz_venv_dir }}/bin/activate"
   tags: [authz]
 
-- name: Install busibox_common shared library
-  pip:
-    name: "{{ authz_app_dir }}/shared"
-    virtualenv: "{{ authz_venv_dir }}"
-    state: present
-    extra_args: "-e"
-  notify: Restart authz service
-  tags: [authz]
-
 - name: Install authz dependencies
   pip:
     requirements: "{{ authz_app_dir }}/requirements.txt"

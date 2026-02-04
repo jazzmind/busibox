@@ -86,16 +86,6 @@
     creates: "{{ deploy_api_venv_dir }}/bin/activate"
   tags: [deploy_api]
 
-- name: Install busibox_common shared library
-  pip:
-    name: "{{ deploy_api_app_dir }}/shared"
-    virtualenv: "{{ deploy_api_venv_dir }}"
-    state: present
-    extra_args: "-e"
-  register: shared_lib_install
-  notify: Restart deploy-api service
-  tags: [deploy_api]
-
 - name: Install deploy-api dependencies
   pip:
     requirements: "{{ deploy_api_app_dir }}/requirements.txt"
