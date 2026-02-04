@@ -722,8 +722,14 @@ git clone --branch {deploy_config.githubBranch} --depth 1 {repo_url} {app_path}
     return True, app_path
 
 
-async def install_dependencies(app_path: str, logs: List[str]) -> bool:
-    """Install npm dependencies"""
+async def install_dependencies(app_path: str, logs: List[str], github_token: Optional[str] = None) -> bool:
+    """Install npm dependencies
+    
+    Args:
+        app_path: Path to the app directory
+        logs: List to append log messages
+        github_token: Optional GitHub token for npm authentication with GitHub Package Registry
+    """
     logs.append(f"📦 Installing dependencies...")
     
     # Check for package.json
@@ -734,9 +740,48 @@ async def install_dependencies(app_path: str, logs: List[str]) -> bool:
         logs.append("⚠️ No package.json found, skipping npm install")
         return True
     
+    # Set up npm authentication for GitHub Package Registry if token provided
+    # This is needed for private packages like @jazzmind/busibox-app
+    if github_token:
+        logs.append("🔐 Setting up npm authentication for GitHub Package Registry...")
+        # Create .npmrc with GitHub token for authentication
+        npmrc_setup = f"""
+echo "//npm.pkg.github.com/:_authToken={github_token}" > /root/.npmrc && \
+echo "@jazzmind:registry=https://npm.pkg.github.com" >> /root/.npmrc
+"""
+        stdout, stderr, code = await execute_in_container(npmrc_setup)
+        if code != 0:
+            logs.append(f"⚠️ Failed to set up npm auth: {stderr or stdout}")
+            # Continue anyway - might not need private packages
+        else:
+            logs.append("✅ npm auth configured")
+    else:
+        # Fall back to environment variable if no token passed
+        env_token = os.environ.get("GITHUB_AUTH_TOKEN", "")
+        if env_token:
+            logs.append("🔐 Using GITHUB_AUTH_TOKEN from environment for npm auth...")
+            npmrc_setup = f"""
+echo "//npm.pkg.github.com/:_authToken={env_token}" > /root/.npmrc && \
+echo "@jazzmind:registry=https://npm.pkg.github.com" >> /root/.npmrc
+"""
+            stdout, stderr, code = await execute_in_container(npmrc_setup)
+            if code != 0:
+                logs.append(f"⚠️ Failed to set up npm auth: {stderr or stdout}")
+            else:
+                logs.append("✅ npm auth configured from environment")
+        else:
+            logs.append("⚠️ No GitHub token available for npm auth - private packages may fail")
+    
     # Check for package-lock.json to decide between npm ci and npm install
     check_lock_cmd = f"test -f {app_path}/package-lock.json"
     _, _, lock_exists = await execute_in_container(check_lock_cmd)
+    
+    # Determine which token to use for npm auth (project .npmrc uses ${GITHUB_AUTH_TOKEN} env var)
+    effective_token = github_token or os.environ.get("GITHUB_AUTH_TOKEN", "")
+    
+    # Build the npm command with GITHUB_AUTH_TOKEN env var
+    # This is needed because project-level .npmrc files reference ${GITHUB_AUTH_TOKEN}
+    token_env = f'GITHUB_AUTH_TOKEN="{effective_token}" ' if effective_token else ''
     
     if lock_exists == 0:
         # Has package-lock.json, use npm ci for reproducible builds
@@ -750,14 +795,14 @@ async def install_dependencies(app_path: str, logs: List[str]) -> bool:
         
         command = f"""
 cd {app_path} && \
-npm ci --legacy-peer-deps 2>&1
+{token_env}npm ci --legacy-peer-deps 2>&1
 """
     else:
         # No package-lock.json, use npm install
         logs.append("📦 Using npm install (no package-lock.json)")
         command = f"""
 cd {app_path} && \
-npm install --legacy-peer-deps 2>&1
+{token_env}npm install --legacy-peer-deps 2>&1
 """
     
     stdout, stderr, code = await execute_in_container(command, timeout=600)
@@ -1433,14 +1478,16 @@ async def deploy_app(
     # may have native binaries (e.g., lightningcss) built for a different platform.
     # The Docker container is Linux, but the host may be macOS/Windows.
     # With dynamic volumes, npm install writes to the Docker volume, not the host.
+    # Pass GitHub token for npm authentication with GitHub Package Registry
+    github_token = deploy_config.githubToken if deploy_config else None
     if is_dev_mode and is_docker_environment():
         logs.append("📦 Installing dependencies to Docker volume (Linux-native binaries)...")
-        if not await install_dependencies(app_path, logs):
+        if not await install_dependencies(app_path, logs, github_token=github_token):
             return False
     elif is_dev_mode:
         logs.append("⏭️ Skipping npm install (dev mode - use local node_modules)")
     else:
-        if not await install_dependencies(app_path, logs):
+        if not await install_dependencies(app_path, logs, github_token=github_token):
             return False
     
     # Step 3: Build (skip for dev mode - use local dev server)

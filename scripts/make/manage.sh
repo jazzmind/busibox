@@ -16,6 +16,61 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
+# Auto-detect deployed environment BEFORE sourcing state library
+# This allows the state library to use the correct state file
+_auto_detect_env() {
+    # If BUSIBOX_ENV is already set, use it
+    if [[ -n "${BUSIBOX_ENV:-}" ]]; then
+        echo "$BUSIBOX_ENV"
+        return
+    fi
+    
+    # Look for state files in order of likelihood
+    # Note: Check prod first since it's most critical to get right
+    if [[ -f "${REPO_ROOT}/.busibox-state-prod" ]]; then
+        # Check if prod containers are actually running
+        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^prod-"; then
+            echo "production"
+            return
+        fi
+    fi
+    
+    if [[ -f "${REPO_ROOT}/.busibox-state-staging" ]]; then
+        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^staging-"; then
+            echo "staging"
+            return
+        fi
+    fi
+    
+    if [[ -f "${REPO_ROOT}/.busibox-state-demo" ]]; then
+        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^demo-"; then
+            echo "demo"
+            return
+        fi
+    fi
+    
+    if [[ -f "${REPO_ROOT}/.busibox-state-dev" ]]; then
+        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^dev-"; then
+            echo "development"
+            return
+        fi
+    fi
+    
+    # Fallback: check which containers are actually running
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^prod-"; then
+        echo "production"
+    elif docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^staging-"; then
+        echo "staging"
+    elif docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^demo-"; then
+        echo "demo"
+    else
+        echo "development"
+    fi
+}
+
+# Set environment before sourcing state library
+export BUSIBOX_ENV="${BUSIBOX_ENV:-$(_auto_detect_env)}"
+
 # Source libraries
 source "${REPO_ROOT}/scripts/lib/ui.sh"
 source "${REPO_ROOT}/scripts/lib/state.sh"
@@ -103,6 +158,38 @@ get_docker_service_status() {
     local service="$1"
     local prefix="${CONTAINER_PREFIX:-dev}"
     local container_name="${prefix}-${service}"
+    
+    # Special case: MLX runs on host, not in Docker container
+    # Check via direct HTTP call to the MLX server on localhost
+    if [[ "$service" == "mlx" ]]; then
+        # Try host-agent status endpoint first
+        local host_agent_port
+        host_agent_port=$(get_state "HOST_AGENT_PORT" "8089")
+        local host_agent_token
+        host_agent_token=$(get_state "HOST_AGENT_TOKEN" "")
+        
+        if [[ -n "$host_agent_token" ]]; then
+            local response
+            response=$(curl -s -w "%{http_code}" -o /dev/null \
+                -H "Authorization: Bearer $host_agent_token" \
+                "http://localhost:${host_agent_port}/mlx/status" 2>/dev/null || echo "000")
+            if [[ "$response" == "200" ]]; then
+                echo "running"
+                return
+            fi
+        fi
+        
+        # Fallback: direct MLX health check on localhost:8080
+        local mlx_response
+        mlx_response=$(curl -s -w "%{http_code}" -o /dev/null --max-time 2 \
+            "http://localhost:8080/v1/models" 2>/dev/null || echo "000")
+        if [[ "$mlx_response" == "200" ]]; then
+            echo "running"
+        else
+            echo "stopped"
+        fi
+        return
+    fi
     
     # Check if container exists
     if ! docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${container_name}$"; then
