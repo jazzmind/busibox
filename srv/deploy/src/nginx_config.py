@@ -24,9 +24,14 @@ CONTAINER_PREFIX = os.environ.get("CONTAINER_PREFIX", "dev")
 #
 # Allow override in case an installation runs nginx elsewhere.
 NGINX_CONTAINER_OVERRIDE = os.environ.get("BUSIBOX_NGINX_CONTAINER", "").strip()
+
+# Prefer core-apps (bundled nginx). Include a few sensible fallbacks for
+# installations that don't set CONTAINER_PREFIX or use the default names.
 DEFAULT_NGINX_CONTAINERS = [
     f"{CONTAINER_PREFIX}-core-apps",  # nginx inside core-apps (default)
+    "core-apps",                     # fallback (no prefix)
     f"{CONTAINER_PREFIX}-nginx",      # standalone nginx (hybrid profile)
+    "nginx",                         # fallback (no prefix)
 ]
 
 
@@ -239,7 +244,9 @@ ln -s {source} {target}
                 )
 
                 last_error = ""
+                tried: list[str] = []
                 for container in containers_to_try:
+                    tried.append(container)
                     # Ensure the config is present inside the nginx container.
                     # In some environments, the host bind-mount path can differ from
                     # what core-apps/nginx is mounting, so writing to the host path
@@ -251,6 +258,13 @@ ln -s {source} {target}
                         text=True,
                     )
                     if exists_result.returncode != 0:
+                        # If the container doesn't exist, skip quickly.
+                        exists_err = (exists_result.stderr or exists_result.stdout or "").strip()
+                        if "No such container" in exists_err:
+                            last_error = exists_err
+                            logger.warning(f"Nginx container not found ({container}): {exists_err}")
+                            continue
+
                         # Write config into the container directly.
                         heredoc_cmd = (
                             f"cat > {shlex.quote(target_path)} << 'NGINX_EOF'\n"
@@ -291,7 +305,8 @@ ln -s {source} {target}
                     last_error = (reload_result.stderr or reload_result.stdout or "").strip()
                     logger.warning(f"Nginx reload failed in {container}: {last_error}")
 
-                return False, f"Config written but reload failed: {last_error or 'unknown error'}"
+                tried_str = ", ".join(tried) if tried else "(none)"
+                return False, f"Config written but reload failed (tried: {tried_str}): {last_error or 'unknown error'}"
                     
             except Exception as e:
                 logger.error(f"Failed to write nginx config: {e}")
