@@ -193,6 +193,12 @@ async def execute_deployment(
             environment = deploy_config.environment or "docker"
             github_ref = deploy_config.githubBranch or "main"
             
+            # Log GitHub token status
+            has_token = bool(deploy_config.githubToken and len(deploy_config.githubToken) > 0)
+            logger.info(f"GitHub token provided: {has_token}")
+            status.logs.append(f"[{datetime.utcnow().isoformat()}] GitHub token provided: {'yes' if has_token else 'NO - private repos will fail!'}")
+            await broadcast_status(deployment_id)
+            
             success, message = await deploy_core_app(
                 app_id=manifest.id,
                 github_ref=github_ref,

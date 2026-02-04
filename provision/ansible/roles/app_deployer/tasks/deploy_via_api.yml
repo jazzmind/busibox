@@ -46,6 +46,12 @@
   tags:
     - deploy_via_api
 
+- name: Debug GitHub token availability
+  debug:
+    msg: "GitHub token configured: {{ 'yes' if (secrets.github is defined and secrets.github.personal_access_token is defined and secrets.github.personal_access_token | length > 0) else 'NO - MISSING!' }}"
+  tags:
+    - deploy_via_api
+
 - name: Deploy application via Deploy API
   uri:
     url: "http://{{ deploy_host }}:{{ deploy_port }}/api/v1/deployment/deploy"
