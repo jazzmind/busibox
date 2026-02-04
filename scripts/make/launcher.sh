@@ -578,10 +578,10 @@ handle_install() {
     backend=$(get_current_backend "$env")
     
     if [[ "$install_status" == "installed" ]]; then
-        # Show uninstall/reinstall submenu
+        # Show install options submenu
         clear
         box_start 70 double "$CYAN"
-        box_header "UNINSTALL / REINSTALL"
+        box_header "INSTALL OPTIONS"
         box_empty
         if [[ -n "$env" ]]; then
             box_line "  ${CYAN}Environment:${NC} $env ($backend)"
@@ -589,8 +589,9 @@ handle_install() {
             box_separator
             box_empty
         fi
-        box_line "  ${BOLD}1)${NC} Reinstall (preserve data)"
-        box_line "  ${BOLD}2)${NC} Full uninstall (remove all data)"
+        box_line "  ${BOLD}1)${NC} Continue Install - pick up from where we last failed"
+        box_line "  ${BOLD}2)${NC} Full Install - redeploy all services, keep config & data"
+        box_line "  ${BOLD}3)${NC} Clean Install - clear everything and start fresh"
         box_empty
         box_line "  ${DIM}b = back${NC}"
         box_empty
@@ -602,20 +603,61 @@ handle_install() {
         
         case "$choice" in
             1)
-                # Reinstall - use install script with env
+                # Continue - resume from current install phase
                 if [[ -n "$env" ]]; then
-                    exec bash "${SCRIPT_DIR}/install.sh" --env "$env" --backend "$backend" --reinstall
+                    exec bash "${SCRIPT_DIR}/install.sh" --env "$env" --backend "$backend"
                 else
-                    exec bash "${SCRIPT_DIR}/install.sh" --reinstall
+                    exec bash "${SCRIPT_DIR}/install.sh"
                 fi
                 ;;
             2)
-                # Full uninstall
+                # Full Install - reset install phase but keep config
                 echo ""
-                printf "${YELLOW}Warning: This will remove ALL data including databases.${NC}\n"
-                read -p "Type 'UNINSTALL' to confirm: " confirm
-                if [[ "$confirm" == "UNINSTALL" ]]; then
+                printf "${YELLOW}This will redeploy all services but preserve your configuration and data.${NC}\n"
+                read -p "Continue? [y/N]: " confirm
+                if [[ "${confirm,,}" == "y" ]]; then
+                    # Reset install phase to force full redeploy
+                    set_state "INSTALL_PHASE" "wizard_complete"
+                    # Clear container creation flags to force service redeploy
+                    if [[ "$backend" == "proxmox" ]]; then
+                        # Keep LXC containers but force service redeploy
+                        set_state "LXC_CONTAINERS_CREATED_${env^^}" "true"
+                    fi
+                    if [[ -n "$env" ]]; then
+                        exec bash "${SCRIPT_DIR}/install.sh" --env "$env" --backend "$backend" --full-install
+                    else
+                        exec bash "${SCRIPT_DIR}/install.sh" --full-install
+                    fi
+                else
+                    echo "Cancelled."
+                    sleep 1
+                fi
+                ;;
+            3)
+                # Clean Install - full uninstall then fresh install
+                echo ""
+                printf "${RED}Warning: This will remove ALL containers, data, and configuration.${NC}\n"
+                read -p "Type 'CLEAN' to confirm: " confirm
+                if [[ "$confirm" == "CLEAN" ]]; then
                     perform_uninstall "$env" "$backend"
+                    # Clear all state files for this environment
+                    local state_prefix
+                    case "$env" in
+                        development) state_prefix="dev" ;;
+                        staging) state_prefix="staging" ;;
+                        production) state_prefix="prod" ;;
+                        demo) state_prefix="demo" ;;
+                        *) state_prefix="dev" ;;
+                    esac
+                    local state_file="${REPO_ROOT}/.busibox-state-${state_prefix}"
+                    if [[ -f "$state_file" ]]; then
+                        info "Removing state file: $state_file"
+                        rm -f "$state_file"
+                    fi
+                    echo ""
+                    info "Starting fresh install..."
+                    sleep 1
+                    exec bash "${SCRIPT_DIR}/install.sh"
                 else
                     echo "Cancelled."
                     sleep 1

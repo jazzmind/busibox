@@ -191,6 +191,15 @@
   meta: flush_handlers
   tags: [deploy_api]
 
+# Force restart if requested (used by Full Install to ensure fresh service state)
+- name: Force restart deploy-api if requested
+  systemd:
+    name: "{{ deploy_api_service_name }}"
+    state: restarted
+    daemon_reload: true
+  when: force_service_restart | default(false) | bool
+  tags: [deploy_api]
+
 # =============================================================================
 # Start Service
 # =============================================================================

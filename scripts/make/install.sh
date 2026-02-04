@@ -147,6 +147,7 @@ NO_PROMPT=false
 WARMUP_ONLY=false
 VERBOSE=false
 REINSTALL=false
+FULL_INSTALL=false
 ENV_FROM_LAUNCHER=""
 BACKEND_FROM_LAUNCHER=""
 
@@ -183,6 +184,10 @@ parse_args() {
                 ;;
             --reinstall)
                 REINSTALL=true
+                shift
+                ;;
+            --full-install)
+                FULL_INSTALL=true
                 shift
                 ;;
             --env)
@@ -1758,6 +1763,12 @@ bootstrap_proxmox_ansible() {
     playbook_cmd+=" -e network_base_octets_staging=${NETWORK_STAGING:-10.96.201}"
     playbook_cmd+=" -e network_base_octets_production=${NETWORK_PRODUCTION:-10.96.200}"
     playbook_cmd+=" -e base_domain=${BASE_DOMAIN:-localhost}"
+    
+    # Force service restarts in Full Install mode
+    # This ensures deploy-api and other services are restarted even if files haven't changed
+    if [[ "$FULL_INSTALL" == true ]]; then
+        playbook_cmd+=" -e force_service_restart=true"
+    fi
     
     if [[ -n "$vault_args" ]]; then
         playbook_cmd+=" $vault_args"
@@ -3714,9 +3725,30 @@ main() {
     # Now check prerequisites (after PLATFORM is determined)
     check_prerequisites
     
+    # Handle --full-install flag: reset deployment states but keep configuration
+    # This forces a full redeploy of all services while preserving config
+    if [[ "$FULL_INSTALL" == true ]]; then
+        info "Full Install mode: resetting deployment states while preserving configuration..."
+        
+        # Reset install phase to force full deployment
+        set_install_phase "wizard_complete"
+        
+        # Reset proxmox-specific deployment states (these control whether phases are skipped)
+        # Keep: LXC_CONTAINERS_CREATED (containers exist), PROXMOX_HOST_SETUP (host is ready)
+        # Keep: EMBEDDING_MODELS_SETUP, LLM_MODELS_SETUP (models already downloaded)
+        
+        # Reset states that track service deployment
+        # The ansible roles will redeploy everything
+        
+        # Note: We don't reset LXC_CONTAINERS_CREATED because containers still exist
+        # and we want to redeploy services INTO them, not recreate them
+        
+        success "Deployment states reset - will perform full service redeploy"
+    fi
+    
     # Check what phase we're resuming from
     local current_phase=""
-    if [[ "$resuming" == true ]]; then
+    if [[ "$resuming" == true && "$FULL_INSTALL" != true ]]; then
         current_phase=$(get_install_phase)
     fi
     
