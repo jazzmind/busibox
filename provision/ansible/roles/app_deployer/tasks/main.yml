@@ -149,7 +149,7 @@
   include_tasks: get_bootstrap_token.yml
   when:
     - use_deploy_api | default(true)
-    - deploy_api_admin_token is not defined
+    - deploy_api_admin_token is not defined or deploy_api_admin_token | length == 0
   tags:
     - always
     - deploy_via_api
