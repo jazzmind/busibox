@@ -3,12 +3,12 @@
 # Core Apps Runtime Entrypoint Script
 # =============================================================================
 #
-# Starts nginx via supervisord, then deploys apps via Deploy API.
+# Starts nginx via supervisord, then deploys apps if not already present.
 # Apps are installed at runtime into persistent volumes, not baked into image.
 #
 # This mirrors the Proxmox pattern where:
 #   - Container starts with just runtime dependencies
-#   - Apps are deployed via Deploy API on first start
+#   - Apps are cloned and built on first start
 #   - Subsequent starts use existing apps from persistent volumes
 #
 # Modes:
@@ -18,9 +18,6 @@
 #   bash    - Start bash shell for debugging
 #
 # Environment variables:
-#   DEPLOY_API_URL - URL to Deploy API (required for deploy via API)
-#   AUTHZ_BASE_URL - URL to AuthZ API (required for bootstrap token)
-#   ADMIN_EMAIL - Admin email for bootstrap token (required for Deploy API auth)
 #   GITHUB_AUTH_TOKEN - Required for cloning private repos and npm packages
 #   AI_PORTAL_GITHUB_REF - Git ref for ai-portal (default: main)
 #   AGENT_MANAGER_GITHUB_REF - Git ref for agent-manager (default: main)
@@ -33,13 +30,6 @@ set -euo pipefail
 # Default GitHub refs
 AI_PORTAL_GITHUB_REF="${AI_PORTAL_GITHUB_REF:-main}"
 AGENT_MANAGER_GITHUB_REF="${AGENT_MANAGER_GITHUB_REF:-main}"
-
-# Deploy API URL (from docker-compose.github.yml)
-DEPLOY_API_URL="${DEPLOYMENT_SERVICE_URL:-http://deploy-api:8011/api/v1/deployment}"
-AUTHZ_BASE_URL="${AUTHZ_BASE_URL:-http://authz-api:8010}"
-
-# Admin email from environment (for bootstrap token)
-ADMIN_EMAIL="${ADMIN_EMAIL:-admin@localhost}"
 
 # Logging functions
 log_info() {
@@ -92,206 +82,16 @@ setup_npm_auth() {
 }
 
 # =============================================================================
-# Wait for Deploy API
+# App Deployment
 # =============================================================================
-wait_for_deploy_api() {
-    local max_attempts=60
-    local attempt=1
-    local deploy_health_url="${DEPLOY_API_URL}/health"
-    
-    log_info "Waiting for Deploy API at ${deploy_health_url}..."
-    
-    while [ $attempt -le $max_attempts ]; do
-        if curl -sf "${deploy_health_url}" > /dev/null 2>&1; then
-            log_success "Deploy API is ready"
-            return 0
-        fi
-        
-        log_info "Waiting for Deploy API... (attempt ${attempt}/${max_attempts})"
-        sleep 5
-        attempt=$((attempt + 1))
-    done
-    
-    log_error "Deploy API not available after ${max_attempts} attempts"
-    return 1
-}
-
-# =============================================================================
-# Get Bootstrap Token from AuthZ
-# =============================================================================
-# Zero Trust flow: login → magic link → session JWT → token exchange
-get_bootstrap_token() {
-    log_info "Getting bootstrap token from AuthZ for ${ADMIN_EMAIL}..."
-    
-    # Step 1: Initiate login (creates magic link)
-    local login_response
-    login_response=$(curl -sf -X POST "${AUTHZ_BASE_URL}/auth/login/initiate" \
-        -H "Content-Type: application/json" \
-        -d "{\"email\": \"${ADMIN_EMAIL}\"}" 2>&1) || {
-        log_error "Failed to initiate login: ${login_response}"
-        return 1
-    }
-    
-    local magic_link_token
-    magic_link_token=$(echo "$login_response" | grep -o '"magic_link_token":"[^"]*"' | cut -d'"' -f4)
-    
-    if [ -z "$magic_link_token" ]; then
-        log_error "No magic_link_token in response: ${login_response}"
-        return 1
-    fi
-    
-    # Step 2: Use magic link to get session JWT
-    local session_response
-    session_response=$(curl -sf -X POST "${AUTHZ_BASE_URL}/auth/magic-links/${magic_link_token}/use" 2>&1) || {
-        log_error "Failed to use magic link: ${session_response}"
-        return 1
-    }
-    
-    local session_token
-    session_token=$(echo "$session_response" | grep -o '"token":"[^"]*"' | head -1 | cut -d'"' -f4)
-    
-    if [ -z "$session_token" ]; then
-        log_error "No session token in response: ${session_response}"
-        return 1
-    fi
-    
-    # Step 3: Exchange session token for deploy-api scoped token
-    local exchange_response
-    exchange_response=$(curl -sf -X POST "${AUTHZ_BASE_URL}/oauth/token" \
-        -H "Content-Type: application/json" \
-        -d "{
-            \"grant_type\": \"urn:ietf:params:oauth:grant-type:token-exchange\",
-            \"subject_token\": \"${session_token}\",
-            \"subject_token_type\": \"urn:ietf:params:oauth:token-type:access_token\",
-            \"audience\": \"deploy-api\"
-        }" 2>&1) || {
-        log_error "Failed to exchange token: ${exchange_response}"
-        return 1
-    }
-    
-    local access_token
-    access_token=$(echo "$exchange_response" | grep -o '"access_token":"[^"]*"' | cut -d'"' -f4)
-    
-    if [ -z "$access_token" ]; then
-        log_error "No access_token in response: ${exchange_response}"
-        return 1
-    fi
-    
-    log_success "Bootstrap token obtained"
-    echo "$access_token"
-}
-
-# =============================================================================
-# Deploy App via Deploy API
-# =============================================================================
-deploy_app_via_api() {
-    local app_name="$1"
-    local github_ref="${2:-main}"
-    local token="$3"
-    
-    log_info "=== Deploying ${app_name} (ref: ${github_ref}) via Deploy API ==="
-    
-    # Map app names to GitHub repos
-    local github_owner="jazzmind"
-    local github_repo="${app_name}"
-    
-    # Deploy via API
-    local deploy_response
-    deploy_response=$(curl -sf -X POST "${DEPLOY_API_URL}/deploy" \
-        -H "Authorization: Bearer ${token}" \
-        -H "Content-Type: application/json" \
-        -d "{
-            \"manifest\": {
-                \"id\": \"${app_name}\",
-                \"name\": \"${app_name}\",
-                \"version\": \"1.0.0\",
-                \"defaultPath\": \"/${app_name}\",
-                \"runtime\": {
-                    \"type\": \"nextjs\",
-                    \"nodeVersion\": \"20\"
-                },
-                \"build\": {
-                    \"command\": \"npm run build\"
-                },
-                \"run\": {
-                    \"command\": \"npm start\"
-                }
-            },
-            \"config\": {
-                \"environment\": \"docker\",
-                \"githubRepoOwner\": \"${github_owner}\",
-                \"githubRepoName\": \"${github_repo}\",
-                \"githubBranch\": \"${github_ref}\",
-                \"githubToken\": \"${GITHUB_AUTH_TOKEN:-}\",
-                \"devMode\": false,
-                \"secrets\": {}
-            }
-        }" 2>&1) || {
-        log_error "Deploy API call failed: ${deploy_response}"
-        return 1
-    }
-    
-    # Extract deployment ID
-    local deployment_id
-    deployment_id=$(echo "$deploy_response" | grep -o '"deploymentId":"[^"]*"' | cut -d'"' -f4)
-    
-    if [ -z "$deployment_id" ]; then
-        log_error "No deploymentId in response: ${deploy_response}"
-        return 1
-    fi
-    
-    log_info "Deployment started: ${deployment_id}"
-    
-    # Poll for completion
-    local max_polls=120  # 10 minutes (5s interval)
-    local poll=1
-    
-    while [ $poll -le $max_polls ]; do
-        local status_response
-        status_response=$(curl -sf "${DEPLOY_API_URL}/deploy/${deployment_id}/status" \
-            -H "Authorization: Bearer ${token}" 2>&1) || {
-            log_info "Status check failed, retrying..."
-            sleep 5
-            poll=$((poll + 1))
-            continue
-        }
-        
-        local status
-        status=$(echo "$status_response" | grep -o '"status":"[^"]*"' | cut -d'"' -f4)
-        
-        case "$status" in
-            completed|success)
-                log_success "=== ${app_name} deployed successfully ==="
-                return 0
-                ;;
-            failed|error)
-                local error_msg
-                error_msg=$(echo "$status_response" | grep -o '"error":"[^"]*"' | cut -d'"' -f4)
-                log_error "Deployment failed: ${error_msg:-unknown error}"
-                return 1
-                ;;
-            *)
-                log_info "Deployment status: ${status} (poll ${poll}/${max_polls})"
-                sleep 5
-                poll=$((poll + 1))
-                ;;
-        esac
-    done
-    
-    log_error "Deployment timed out"
-    return 1
-}
-
-# =============================================================================
-# Fallback: Direct GitHub Deploy (if Deploy API unavailable)
-# =============================================================================
-deploy_app_direct() {
+# Deploys an app by cloning from GitHub, installing deps, and building
+deploy_app() {
     local app_name="$1"
     local github_ref="${2:-main}"
     local app_dir="/srv/${app_name}"
     local github_repo="jazzmind/${app_name}"
     
-    log_info "=== Deploying ${app_name} (ref: ${github_ref}) directly from GitHub ==="
+    log_info "=== Deploying ${app_name} (ref: ${github_ref}) ==="
     
     # Validate GitHub token
     if [ -z "${GITHUB_AUTH_TOKEN:-}" ]; then
@@ -357,6 +157,7 @@ deploy_app_direct() {
     case "${app_name}" in
         ai-portal)
             export NEXT_PUBLIC_BASE_PATH=/portal
+            # DATABASE_URL needed for prisma at build time (use dummy if not set)
             export DATABASE_URL="${DATABASE_URL:-postgresql://dummy:dummy@localhost:5432/dummy}"
             ;;
         agent-manager)
@@ -441,7 +242,6 @@ start_app() {
 deploy_if_needed() {
     local app_name="$1"
     local github_ref="$2"
-    local token="$3"
     
     if is_app_deployed "${app_name}"; then
         log_info "${app_name} already deployed, starting..."
@@ -453,20 +253,11 @@ deploy_if_needed() {
         # App failed to start - force redeploy
         log_info "${app_name} failed to start, forcing redeploy..."
         rm -rf "/srv/${app_name}/.next" "/srv/${app_name}/node_modules"
+        deploy_app "${app_name}" "${github_ref}"
     else
         log_info "${app_name} not found, deploying..."
+        deploy_app "${app_name}" "${github_ref}"
     fi
-    
-    # Try Deploy API first, fallback to direct if unavailable
-    if [ -n "$token" ]; then
-        if deploy_app_via_api "${app_name}" "${github_ref}" "$token"; then
-            return 0
-        fi
-        log_info "Deploy API failed, falling back to direct deployment..."
-    fi
-    
-    # Fallback to direct deployment
-    deploy_app_direct "${app_name}" "${github_ref}"
 }
 
 # =============================================================================
@@ -492,23 +283,10 @@ case "${1:-start}" in
         # Wait for supervisor to be ready
         sleep 3
         
-        # Try to get bootstrap token from AuthZ via Deploy API
-        BOOTSTRAP_TOKEN=""
-        
-        log_info "Attempting to use Deploy API for app deployment..."
-        if wait_for_deploy_api; then
-            BOOTSTRAP_TOKEN=$(get_bootstrap_token) || {
-                log_info "Could not get bootstrap token, will use direct deployment"
-                BOOTSTRAP_TOKEN=""
-            }
-        else
-            log_info "Deploy API not available, will use direct deployment"
-        fi
-        
         # Check and deploy apps if needed
         log_info "Checking app deployments..."
-        deploy_if_needed "ai-portal" "${AI_PORTAL_GITHUB_REF}" "${BOOTSTRAP_TOKEN}"
-        deploy_if_needed "agent-manager" "${AGENT_MANAGER_GITHUB_REF}" "${BOOTSTRAP_TOKEN}"
+        deploy_if_needed "ai-portal" "${AI_PORTAL_GITHUB_REF}"
+        deploy_if_needed "agent-manager" "${AGENT_MANAGER_GITHUB_REF}"
         
         log_success "Core apps started"
         
@@ -531,17 +309,7 @@ case "${1:-start}" in
         # Setup npm auth first
         setup_npm_auth
         
-        # Try to get bootstrap token
-        BOOTSTRAP_TOKEN=""
-        if wait_for_deploy_api; then
-            BOOTSTRAP_TOKEN=$(get_bootstrap_token) || BOOTSTRAP_TOKEN=""
-        fi
-        
-        if [ -n "$BOOTSTRAP_TOKEN" ]; then
-            deploy_app_via_api "${APP_NAME}" "${GITHUB_REF}" "${BOOTSTRAP_TOKEN}"
-        else
-            deploy_app_direct "${APP_NAME}" "${GITHUB_REF}"
-        fi
+        deploy_app "${APP_NAME}" "${GITHUB_REF}"
         ;;
         
     nginx-reload)

@@ -135,11 +135,13 @@ huggingface_token: "{{ secrets.huggingface.token }}"
 # Deployment Configuration
 # ============================================================================
 # Deploy API is the unified deployment system for both Docker and Proxmox.
+# Set use_deploy_api: false to use legacy deploywatch scripts (deprecated).
 use_deploy_api: true
 
 # Deploy API connection settings
-deploy_host: "{{ authz_ip }}"  # Deploy API runs on authz container (with authz and docs services)
+deploy_host: "{{ core_apps_ip }}"  # Deploy API runs in core-apps container
 deploy_port: 8011
+deploy_api_admin_token: "{{ secrets.deploy_api.admin_token | default('') }}"
 deploy_environment: production
 
 # Legacy deploywatch settings (deprecated - only used when use_deploy_api: false)

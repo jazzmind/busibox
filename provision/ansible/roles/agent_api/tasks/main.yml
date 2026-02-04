@@ -142,8 +142,16 @@
   become_user: "{{ agent_api_user }}"
   when: agent_deployment_needed
 
-# Note: busibox_common is copied directly to app/busibox_common/ (task above),
-# so it's available via PYTHONPATH without pip install. Dependencies are in requirements.txt.
+- name: Install busibox_common shared library
+  pip:
+    name: "{{ agent_api_src_path }}/shared"
+    virtualenv: "{{ agent_api_venv_path }}"
+    state: present
+    extra_args: "-e"
+  become: yes
+  become_user: "{{ agent_api_user }}"
+  notify: Restart agent-api
+  when: agent_deployment_needed
 
 - name: Install agent service dependencies
   pip:

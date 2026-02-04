@@ -10,14 +10,14 @@
     size: 4096
     state: present
     force: false  # Don't overwrite existing key
-  delegate_to: "{{ core_apps_ip }}"
+  delegate_to: "{{ apps_ip }}"
   register: ssh_key_result
   tags: [apps, apps_ssh]
 
 - name: Read public key from apps container
   slurp:
     src: /root/.ssh/id_rsa.pub
-  delegate_to: "{{ core_apps_ip }}"
+  delegate_to: "{{ apps_ip }}"
   register: apps_public_key
   tags: [apps, apps_ssh]
 
@@ -93,7 +93,7 @@
 
 - name: Test SSH connection from apps to ingest
   shell: "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{{ data_ip }} 'echo SSH_OK'"
-  delegate_to: "{{ core_apps_ip }}"
+  delegate_to: "{{ apps_ip }}"
   register: ssh_test_data
   changed_when: false
   failed_when: false
@@ -101,7 +101,7 @@
 
 - name: Test SSH connection from apps to agent
   shell: "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{{ agent_ip }} 'echo SSH_OK'"
-  delegate_to: "{{ core_apps_ip }}"
+  delegate_to: "{{ apps_ip }}"
   register: ssh_test_agent
   changed_when: false
   failed_when: false
@@ -109,7 +109,7 @@
 
 - name: Test SSH connection from apps to milvus
   shell: "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{{ milvus_ip }} 'echo SSH_OK'"
-  delegate_to: "{{ core_apps_ip }}"
+  delegate_to: "{{ apps_ip }}"
   register: ssh_test_milvus
   changed_when: false
   failed_when: false

@@ -2,8 +2,15 @@
 Deployment Service Authentication
 
 Uses busibox_common for JWT validation and admin role checking.
+
+Bootstrap Mode:
+During initial system bootstrap (before any users exist), we need to deploy
+core apps. This is enabled by setting DEPLOY_BOOTSTRAP_TOKEN in the environment.
+When this is set, requests with "Bearer bootstrap" will be accepted as admin.
+This should only be used during initial Ansible provisioning.
 """
 
+import os
 import logging
 from fastapi import HTTPException, Depends, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -24,6 +31,9 @@ security = HTTPBearer()
 # Create JWKS client for JWT validation
 jwks_client = None
 
+# Bootstrap token for initial setup (from environment)
+BOOTSTRAP_TOKEN = os.getenv("DEPLOY_BOOTSTRAP_TOKEN", "")
+
 def get_jwks_client():
     """Lazy-load JWKS client."""
     global jwks_client
@@ -39,12 +49,25 @@ async def verify_admin_token(
     """
     Verify that the request has a valid admin token.
     
-    Uses busibox_common to parse and validate JWT, then checks for Admin role.
+    Supports two modes:
+    1. Bootstrap mode: If DEPLOY_BOOTSTRAP_TOKEN env var is set and the token matches,
+       allow access without JWT validation. Used during initial Ansible provisioning.
+    2. Normal mode: Uses busibox_common to parse and validate JWT, then checks for Admin role.
     
     Returns the validated token payload with user context.
     Raises HTTPException if invalid or not admin.
     """
     token = credentials.credentials
+    
+    # Check for bootstrap mode first
+    if BOOTSTRAP_TOKEN and token == BOOTSTRAP_TOKEN:
+        logger.info("[AUTH] Bootstrap token accepted for deployment")
+        return {
+            "user_id": "bootstrap",
+            "email": "bootstrap@system",
+            "roles": [{"id": "bootstrap", "name": "Admin"}],
+            "scopes": ["deploy:*"],
+        }
     
     try:
         # Parse and validate JWT using busibox_common

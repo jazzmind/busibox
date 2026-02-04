@@ -20,8 +20,7 @@ deploy_api_authz_url: "http://localhost:{{ authz_service_port | default(8010) }}
 deploy_api_postgres_host: "{{ hostvars[groups['pg'][0]]['ansible_host'] | default('10.96.200.202') }}"
 deploy_api_postgres_port: 5432
 deploy_api_postgres_admin_user: postgres
-# Try multiple paths for postgres password - vault uses 'postgresql' but some envs use 'postgres'
-deploy_api_postgres_admin_password: "{{ secrets.postgresql.password | default(secrets.postgres.admin_password | default(secrets.postgres.password | default(''))) }}"
+deploy_api_postgres_admin_password: "{{ secrets.postgres.admin_password | default('') }}"
 
 # Container IPs
 # Note: Use core_apps group (not apps) - staging/production inventories use this group name
@@ -45,3 +44,8 @@ deploy_api_rate_limit_minutes: 5
 
 # Debug mode
 deploy_api_debug: false
+
+# Bootstrap token for Ansible provisioning
+# This allows initial app deployment without a real user JWT
+# Derived from jwt_secret for determinism (same value each run)
+deploy_api_bootstrap_token: "{{ secrets.deploy_api.bootstrap_token | default('bootstrap-' + (secrets.jwt_secret | default('default-jwt-secret') | hash('sha256'))[:56]) }}"

@@ -1,101 +1,26 @@
 ---
 # Get Bootstrap Token for Deploy API
 # 
-# During initial bootstrap, we need an admin JWT to authenticate with Deploy API.
-# This task:
-# 1. Initiates login for admin email (creates magic link token)
-# 2. Uses the magic link to get a session JWT
-# 3. Exchanges session JWT for deploy-api scoped token
+# During initial bootstrap, we use a pre-shared bootstrap token to authenticate
+# with Deploy API. This token is set in deploy-api's environment and allows
+# Ansible to deploy apps without going through the normal user authentication flow.
 #
-# Requires: AuthZ API running, admin user created
+# The bootstrap token is derived deterministically from jwt_secret so both
+# deploy_api and app_deployer roles calculate the same value.
 
-- name: Get admin email from secrets (try multiple sources)
+- name: Generate bootstrap token (derived from jwt_secret)
   set_fact:
-    # Try in order: admin_emails (plural), admin_email (singular), or empty
-    bootstrap_admin_email: >-
-      {%- set email = '' -%}
-      {%- if secrets is defined -%}
-        {%- if secrets.admin_emails is defined and secrets.admin_emails | length > 0 -%}
-          {%- set email = (secrets.admin_emails.split(',') | first | trim) -%}
-        {%- elif secrets.admin_email is defined and secrets.admin_email | length > 0 -%}
-          {%- set email = (secrets.admin_email.split(',') | first | trim) -%}
-        {%- endif -%}
-      {%- endif -%}
-      {{ email }}
+    # Same formula as deploy_api/defaults/main.yml
+    deploy_api_admin_token: "{{ secrets.deploy_api.bootstrap_token | default('bootstrap-' + (secrets.jwt_secret | default('default-jwt-secret') | hash('sha256'))[:56]) }}"
   no_log: true
 
-- name: Debug bootstrap admin email (masked)
+- name: Verify bootstrap token is available
   debug:
-    msg: "Bootstrap admin email configured: {{ 'yes' if bootstrap_admin_email | length > 0 else 'no' }}"
+    msg: "Bootstrap token configured: {{ 'yes' if deploy_api_admin_token | length > 0 else 'no' }} (length: {{ deploy_api_admin_token | length }})"
 
-- name: Fail if no admin email configured
+- name: Fail if no bootstrap token configured
   fail:
     msg: |
-      No admin email configured - cannot get bootstrap token.
-      Please set secrets.admin_emails or secrets.admin_email in vault.yml.
-      Example: admin_emails: "admin@example.com"
-  when: bootstrap_admin_email | length == 0
-
-- name: Initiate login for admin user
-  uri:
-    url: "http://{{ authz_ip }}:8010/auth/login/initiate"
-    method: POST
-    body_format: json
-    body:
-      email: "{{ bootstrap_admin_email }}"
-    status_code: [200, 201]
-    timeout: 30
-  register: login_initiate_result
-  retries: 3
-  delay: 2
-  until: login_initiate_result.status in [200, 201]
-
-- name: Debug login initiate response
-  debug:
-    msg: "Login initiate response keys: {{ login_initiate_result.json.keys() | list }}"
-
-- name: Extract magic link token
-  set_fact:
-    magic_link_token: "{{ login_initiate_result.json.magic_link_token }}"
-
-- name: Debug magic link token (first 10 chars)
-  debug:
-    msg: "Magic link token starts with: {{ magic_link_token[:10] }}..."
-
-- name: Use magic link to get session JWT
-  uri:
-    url: "http://{{ authz_ip }}:8010/auth/magic-links/{{ magic_link_token }}/use"
-    method: POST
-    status_code: [200, 201]
-    timeout: 30
-  register: magic_link_result
-
-- name: Extract session token
-  set_fact:
-    session_token: "{{ magic_link_result.json.session.token }}"
-  no_log: true
-
-- name: Exchange session token for deploy-api scoped token
-  uri:
-    url: "http://{{ authz_ip }}:8010/oauth/token"
-    method: POST
-    body_format: json
-    body:
-      grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-      subject_token: "{{ session_token }}"
-      subject_token_type: "urn:ietf:params:oauth:token-type:access_token"
-      audience: "deploy-api"
-    status_code: [200, 201]
-    timeout: 30
-  register: token_exchange_result
-  no_log: true
-
-- name: Set deploy API admin token
-  set_fact:
-    deploy_api_admin_token: "{{ token_exchange_result.json.access_token }}"
-  no_log: true
-
-- name: Verify token was obtained
-  debug:
-    msg: "Successfully obtained deploy-api bootstrap token for {{ bootstrap_admin_email }}"
-  when: deploy_api_admin_token | length > 0
+      No bootstrap token configured.
+      Make sure secrets.jwt_secret is set in vault.yml.
+  when: deploy_api_admin_token | length == 0

@@ -141,8 +141,16 @@
     state: latest
   tags: [data, data_deploy]
 
-# Note: busibox_common is copied directly to src/busibox_common/ (task above),
-# so it's available via PYTHONPATH without pip install. Dependencies are in requirements.txt.
+- name: Install busibox_common shared library
+  pip:
+    name: "/srv/data/src/shared"
+    virtualenv: /srv/data/venv
+    state: present
+    extra_args: "-e"
+  notify:
+    - Restart data API
+    - Restart data worker
+  tags: [data, data_deploy]
 
 - name: Install Python dependencies (with caching and parallel downloads)
   pip:

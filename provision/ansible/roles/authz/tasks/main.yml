@@ -204,8 +204,14 @@
     creates: "{{ authz_venv_dir }}/bin/activate"
   tags: [authz]
 
-# Note: busibox_common is copied directly to src/busibox_common/ (task above),
-# so it's available via PYTHONPATH without pip install. Dependencies are in requirements.txt.
+- name: Install busibox_common shared library
+  pip:
+    name: "{{ authz_app_dir }}/shared"
+    virtualenv: "{{ authz_venv_dir }}"
+    state: present
+    extra_args: "-e"
+  notify: Restart authz service
+  tags: [authz]
 
 - name: Install authz dependencies
   pip:

@@ -115,8 +115,15 @@
     group: "{{ search_api_user }}"
     mode: "0644"
 
-# Note: busibox_common is copied directly to src/busibox_common/ (task above),
-# so it's available via PYTHONPATH without pip install. Dependencies are in requirements.txt.
+- name: Install busibox_common shared library
+  pip:
+    name: "/opt/search/shared"
+    virtualenv: "{{ search_api_venv_path }}"
+    state: present
+    extra_args: "-e"
+  become: yes
+  become_user: "{{ search_api_user }}"
+  notify: Restart search-api
 
 - name: Install/Upgrade Python dependencies
   pip:

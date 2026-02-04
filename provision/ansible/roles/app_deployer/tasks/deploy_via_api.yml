@@ -20,37 +20,28 @@
   tags:
     - deploy_via_api
 
-- name: Build manifest for Deploy API
-  set_fact:
-    deploy_manifest:
-      id: "{{ app.name }}"
-      name: "{{ app.name }}"
-      version: "{{ app.version | default('0.0.0') }}"
-      description: "{{ app.description | default(app.name) }}"
-      icon: "{{ app.icon | default('Box') }}"
-      appMode: "{{ app.app_mode | default('frontend') }}"
-      defaultPath: "{{ app.default_path | default('/' + app.name) }}"
-      defaultPort: "{{ app.port }}"
-      healthEndpoint: "{{ app.health_endpoint | default('/api/health') }}"
-      startCommand: "{{ app.start_command | default('node .next/standalone/server.js') }}"
-      buildCommand: "{{ app.build_command | default('npm run build') }}"
-  tags:
-    - deploy_via_api
-
-- name: Add database config to manifest (if required)
-  set_fact:
-    deploy_manifest: "{{ deploy_manifest | combine({'database': {'required': true, 'preferredName': app.database_name | default(app.name | replace('-', '_')), 'schemaManagement': app.schema_management | default('prisma')}}) }}"
-  when: app.database_required | default(false) | bool
-  tags:
-    - deploy_via_api
-
 - name: Deploy application via Deploy API
   uri:
     url: "http://{{ deploy_host }}:{{ deploy_port }}/api/v1/deployment/deploy"
     method: POST
     body_format: json
     body:
-      manifest: "{{ deploy_manifest }}"
+      manifest:
+        id: "{{ app.name }}"
+        name: "{{ app.name }}"
+        version: "{{ app.version | default('0.0.0') }}"
+        description: "{{ app.description | default(app.name) }}"
+        icon: "{{ app.icon | default('Box') }}"
+        appMode: "{{ app.app_mode | default('frontend') }}"
+        defaultPath: "{{ app.default_path | default('/' + app.name) }}"
+        defaultPort: "{{ app.port }}"
+        healthEndpoint: "{{ app.health_endpoint | default('/api/health') }}"
+        startCommand: "{{ app.start_command | default('node .next/standalone/server.js') }}"
+        buildCommand: "{{ app.build_command | default('npm run build') }}"
+        database:
+          required: "{{ app.database_required | default(false) }}"
+          schemaManagement: "{{ app.schema_management | default('prisma') }}"
+          seedCommand: "{{ app.seed_command | default(omit) }}"
       config:
         environment: "{{ deploy_environment | default('production') }}"
         githubRepoOwner: "{{ app.github_repo.split('/')[0] }}"

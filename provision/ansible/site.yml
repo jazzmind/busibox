@@ -258,8 +258,6 @@
 - hosts: authz
   tags: [apis, apis_authz]
   roles:
-    - role: secrets
-      tags: [apis, apis_authz, authz, secrets]
     - role: authz
       tags: [apis, apis_authz, authz]
     - role: docs_api
