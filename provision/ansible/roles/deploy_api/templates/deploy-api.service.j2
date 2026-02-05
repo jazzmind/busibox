@@ -8,8 +8,9 @@ User=root
 Group=root
 WorkingDirectory={{ deploy_api_app_dir }}
 EnvironmentFile={{ deploy_api_base_dir }}/.env
-# Use --app-dir to set Python path so busibox_common is importable
-ExecStart={{ deploy_api_venv_dir }}/bin/uvicorn main:app --host 0.0.0.0 --port {{ deploy_api_service_port }} --app-dir {{ deploy_api_app_dir }}/src
+# Add src to PYTHONPATH so busibox_common is importable alongside relative imports
+Environment="PYTHONPATH={{ deploy_api_app_dir }}/src"
+ExecStart={{ deploy_api_venv_dir }}/bin/uvicorn src.main:app --host 0.0.0.0 --port {{ deploy_api_service_port }}
 Restart=always
 RestartSec=5
 
