@@ -251,6 +251,15 @@ NPMRC_EOF
             
             APP_DIR="/srv/apps/{app_id}"
             {npmrc_commands}
+            
+            # Preserve .env file if it exists (Ansible creates it before deploy)
+            ENV_FILE_BACKUP=""
+            if [ -f "$APP_DIR/.env" ]; then
+                echo "Preserving existing .env file..."
+                ENV_FILE_BACKUP=$(mktemp)
+                cp "$APP_DIR/.env" "$ENV_FILE_BACKUP"
+            fi
+            
             # Clone or update repository
             if [ -d "$APP_DIR/.git" ]; then
                 echo "Updating existing repository..."
@@ -266,7 +275,26 @@ NPMRC_EOF
                 git checkout {github_ref}
             fi
             
+            # Restore .env file if it was backed up
+            if [ -n "$ENV_FILE_BACKUP" ] && [ -f "$ENV_FILE_BACKUP" ]; then
+                echo "Restoring .env file..."
+                cp "$ENV_FILE_BACKUP" "$APP_DIR/.env"
+                rm -f "$ENV_FILE_BACKUP"
+                echo ".env file restored"
+            else
+                echo "No .env file to restore (will use environment variables or fail)"
+            fi
+            
             cd "$APP_DIR"
+            
+            # Source .env file if present (for npm install / prisma generate)
+            if [ -f ".env" ]; then
+                echo "Loading environment from .env file..."
+                set -a  # Export all variables
+                source .env
+                set +a
+                echo "DATABASE_URL is set: $(if [ -n \"$DATABASE_URL\" ]; then echo 'yes'; else echo 'NO'; fi)"
+            fi
             
             # Install dependencies
             echo "=== NPM INSTALL START ==="

@@ -52,6 +52,51 @@
   tags:
     - deploy_via_api
 
+# =============================================================================
+# PRE-DEPLOYMENT: Create directory and .env file BEFORE Deploy API call
+# The Deploy API runs npm install which triggers postinstall scripts (e.g., prisma generate)
+# These scripts need environment variables like DATABASE_URL to be available
+# =============================================================================
+
+- name: Ensure application directory exists
+  file:
+    path: "{{ app.deploy_path }}"
+    state: directory
+    mode: "0755"
+    owner: root
+    group: root
+  tags:
+    - deploy_via_api
+
+- name: Deploy application environment file (.env) before build
+  template:
+    src: "{{ playbook_dir }}/roles/secrets/templates/app.env.j2"
+    dest: "{{ app.deploy_path }}/.env"
+    mode: "0600"
+    owner: root
+    group: root
+  no_log: true
+  tags:
+    - deploy_via_api
+
+- name: Confirm .env file exists
+  stat:
+    path: "{{ app.deploy_path }}/.env"
+  register: env_file_stat
+  tags:
+    - deploy_via_api
+
+- name: Fail if .env file was not created
+  fail:
+    msg: "Failed to create .env file at {{ app.deploy_path }}/.env"
+  when: not env_file_stat.stat.exists
+  tags:
+    - deploy_via_api
+
+# =============================================================================
+# END PRE-DEPLOYMENT
+# =============================================================================
+
 - name: Deploy application via Deploy API
   uri:
     url: "http://{{ deploy_host }}:{{ deploy_port }}/api/v1/deployment/deploy"

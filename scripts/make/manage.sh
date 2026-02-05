@@ -112,15 +112,34 @@ get_services_for_group() {
 # ============================================================================
 
 get_backend_type() {
-    local env
-    env=$(get_state "ENVIRONMENT" || echo "development")
-    get_backend "$env" 2>/dev/null || echo "docker"
+    local env="${BUSIBOX_ENV:-}"
+    if [[ -z "$env" ]]; then
+        env=$(get_state "ENVIRONMENT" "development")
+    fi
+    
+    # First check state file for configured backend
+    local backend
+    backend=$(get_backend "$env" 2>/dev/null)
+    
+    if [[ -n "$backend" ]]; then
+        echo "$backend"
+        return
+    fi
+    
+    # Auto-detect: if pct command exists, we're on Proxmox
+    if command -v pct &>/dev/null; then
+        echo "proxmox"
+    else
+        echo "docker"
+    fi
 }
 
 # Get container prefix based on environment
 get_container_prefix() {
-    local env
-    env=$(get_state "ENVIRONMENT" 2>/dev/null || echo "development")
+    local env="${BUSIBOX_ENV:-}"
+    if [[ -z "$env" ]]; then
+        env=$(get_state "ENVIRONMENT" "development")
+    fi
     
     case "$env" in
         production) echo "prod" ;;
@@ -202,8 +221,10 @@ get_docker_service_status() {
 # Get status of a single service (Proxmox LXC)
 get_proxmox_service_status() {
     local service="$1"
-    local env
-    env=$(get_state "ENVIRONMENT" || echo "staging")
+    local env="${BUSIBOX_ENV:-}"
+    if [[ -z "$env" ]]; then
+        env=$(get_state "ENVIRONMENT" "staging")
+    fi
     
     # Map service to LXC container name
     local lxc_prefix
@@ -310,10 +331,10 @@ show_services_status() {
         local status=$(get_cached_status "$service")
         case "$status" in
             healthy|running)
-                ((running_count++))
+                running_count=$((running_count + 1))
                 ;;
             stopped|missing|unreachable)
-                ((stopped_count++))
+                stopped_count=$((stopped_count + 1))
                 stopped_services+=("$service")
                 ;;
         esac
@@ -741,8 +762,10 @@ select_service() {
 show_manage_menu() {
     local backend
     backend=$(get_backend_type)
-    local env
-    env=$(get_state "ENVIRONMENT" || echo "development")
+    local env="${BUSIBOX_ENV:-}"
+    if [[ -z "$env" ]]; then
+        env=$(get_state "ENVIRONMENT" "development")
+    fi
     
     clear
     box_header "BUSIBOX - SERVICE MANAGEMENT"
