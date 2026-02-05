@@ -73,7 +73,9 @@ applications:
     env:
       NODE_ENV: "{{ node_env }}"
       LITELLM_BASE_URL: "http://{{ litellm_ip }}:{{ litellm_port }}/v1"
-      BETTER_AUTH_URL: "https://{{ full_domain }}/portal"
+      # APP_URL is runtime-only (server-side) - used for passkeys, email links, etc.
+      # NEXT_PUBLIC_APP_URL is baked at build time for client-side code
+      APP_URL: "https://{{ full_domain }}/portal"
       NEXT_PUBLIC_APP_URL: "https://{{ full_domain }}/portal"
       BASE_URL: "https://{{ full_domain }}/portal"
       SSO_TOKEN_EXPIRY: "900"

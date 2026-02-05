@@ -2,9 +2,12 @@
 # SSL Certificate Discovery and Setup
 # Purpose: Find SSL certificates from ssl/ directory or generate self-signed
 # Priority:
-#   1. Exact domain match: {full_domain}.crt + {full_domain}.key
-#   2. Wildcard parent match: {parent_domain}.crt + {parent_domain}.key
+#   1. Exact domain match: {full_domain}.crt + {full_domain}.key (with cert/key verification)
+#   2. Wildcard parent match: {parent_domain}.crt + {parent_domain}.key (with cert/key verification)
 #   3. Self-signed fallback: Generate certificates
+#
+# Note: For each candidate, we verify that the certificate and key modulus match
+# before using them. This prevents deployment failures from mismatched cert/key pairs.
 
 - name: Determine SSL source directory
   set_fact:
@@ -33,6 +36,7 @@
       - Parent domain: {{ parent_domain }}
       - Source directory: {{ ssl_source_dir }}
 
+# Check file existence
 - name: Check for exact domain certificate (with fullchain)
   stat:
     path: "{{ ssl_source_dir }}/{{ full_domain }}.fullchain.crt"
@@ -78,27 +82,84 @@
   become: false
   when: parent_domain != full_domain
 
-# Determine which certificate to use
-- name: Use exact domain certificate (fullchain)
+# Verify cert/key pairs match (modulus comparison)
+- name: Verify exact fullchain cert matches key
+  shell: |
+    cert_mod=$(openssl x509 -noout -modulus -in "{{ ssl_source_dir }}/{{ full_domain }}.fullchain.crt" 2>/dev/null | md5sum | cut -d' ' -f1)
+    key_mod=$(openssl rsa -noout -modulus -in "{{ ssl_source_dir }}/{{ full_domain }}.key" 2>/dev/null | md5sum | cut -d' ' -f1)
+    [ "$cert_mod" = "$key_mod" ] && echo "MATCH" || echo "MISMATCH"
+  register: exact_fullchain_verify
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  when:
+    - exact_fullchain_stat.stat.exists | default(false)
+    - exact_key_stat.stat.exists | default(false)
+
+- name: Verify exact cert matches key
+  shell: |
+    cert_mod=$(openssl x509 -noout -modulus -in "{{ ssl_source_dir }}/{{ full_domain }}.crt" 2>/dev/null | md5sum | cut -d' ' -f1)
+    key_mod=$(openssl rsa -noout -modulus -in "{{ ssl_source_dir }}/{{ full_domain }}.key" 2>/dev/null | md5sum | cut -d' ' -f1)
+    [ "$cert_mod" = "$key_mod" ] && echo "MATCH" || echo "MISMATCH"
+  register: exact_cert_verify
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  when:
+    - exact_cert_stat.stat.exists | default(false)
+    - exact_key_stat.stat.exists | default(false)
+
+- name: Verify wildcard fullchain cert matches key
+  shell: |
+    cert_mod=$(openssl x509 -noout -modulus -in "{{ ssl_source_dir }}/{{ parent_domain }}.fullchain.crt" 2>/dev/null | md5sum | cut -d' ' -f1)
+    key_mod=$(openssl rsa -noout -modulus -in "{{ ssl_source_dir }}/{{ parent_domain }}.key" 2>/dev/null | md5sum | cut -d' ' -f1)
+    [ "$cert_mod" = "$key_mod" ] && echo "MATCH" || echo "MISMATCH"
+  register: wildcard_fullchain_verify
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  when:
+    - parent_domain != full_domain
+    - wildcard_fullchain_stat.stat.exists | default(false)
+    - wildcard_key_stat.stat.exists | default(false)
+
+- name: Verify wildcard cert matches key
+  shell: |
+    cert_mod=$(openssl x509 -noout -modulus -in "{{ ssl_source_dir }}/{{ parent_domain }}.crt" 2>/dev/null | md5sum | cut -d' ' -f1)
+    key_mod=$(openssl rsa -noout -modulus -in "{{ ssl_source_dir }}/{{ parent_domain }}.key" 2>/dev/null | md5sum | cut -d' ' -f1)
+    [ "$cert_mod" = "$key_mod" ] && echo "MATCH" || echo "MISMATCH"
+  register: wildcard_cert_verify
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  when:
+    - parent_domain != full_domain
+    - wildcard_cert_stat.stat.exists | default(false)
+    - wildcard_key_stat.stat.exists | default(false)
+
+# Determine which certificate to use (with verification)
+- name: Use exact domain certificate (fullchain) if verified
   set_fact:
     ssl_cert_source: "{{ ssl_source_dir }}/{{ full_domain }}.fullchain.crt"
     ssl_key_source: "{{ ssl_source_dir }}/{{ full_domain }}.key"
     ssl_mode_used: "exact-fullchain"
   when:
-    - exact_fullchain_stat.stat.exists
-    - exact_key_stat.stat.exists
+    - exact_fullchain_stat.stat.exists | default(false)
+    - exact_key_stat.stat.exists | default(false)
+    - exact_fullchain_verify.stdout | default('') == 'MATCH'
 
-- name: Use exact domain certificate (without fullchain)
+- name: Use exact domain certificate (without fullchain) if verified
   set_fact:
     ssl_cert_source: "{{ ssl_source_dir }}/{{ full_domain }}.crt"
     ssl_key_source: "{{ ssl_source_dir }}/{{ full_domain }}.key"
     ssl_mode_used: "exact"
   when:
     - ssl_mode_used is not defined
-    - exact_cert_stat.stat.exists
-    - exact_key_stat.stat.exists
+    - exact_cert_stat.stat.exists | default(false)
+    - exact_key_stat.stat.exists | default(false)
+    - exact_cert_verify.stdout | default('') == 'MATCH'
 
-- name: Use wildcard parent certificate (fullchain)
+- name: Use wildcard parent certificate (fullchain) if verified
   set_fact:
     ssl_cert_source: "{{ ssl_source_dir }}/{{ parent_domain }}.fullchain.crt"
     ssl_key_source: "{{ ssl_source_dir }}/{{ parent_domain }}.key"
@@ -106,10 +167,11 @@
   when:
     - ssl_mode_used is not defined
     - parent_domain != full_domain
-    - wildcard_fullchain_stat.stat.exists
-    - wildcard_key_stat.stat.exists
+    - wildcard_fullchain_stat.stat.exists | default(false)
+    - wildcard_key_stat.stat.exists | default(false)
+    - wildcard_fullchain_verify.stdout | default('') == 'MATCH'
 
-- name: Use wildcard parent certificate (without fullchain)
+- name: Use wildcard parent certificate (without fullchain) if verified
   set_fact:
     ssl_cert_source: "{{ ssl_source_dir }}/{{ parent_domain }}.crt"
     ssl_key_source: "{{ ssl_source_dir }}/{{ parent_domain }}.key"
@@ -117,13 +179,41 @@
   when:
     - ssl_mode_used is not defined
     - parent_domain != full_domain
-    - wildcard_cert_stat.stat.exists
-    - wildcard_key_stat.stat.exists
+    - wildcard_cert_stat.stat.exists | default(false)
+    - wildcard_key_stat.stat.exists | default(false)
+    - wildcard_cert_verify.stdout | default('') == 'MATCH'
 
 - name: Generate self-signed certificate (fallback)
   set_fact:
     ssl_mode_used: "selfsigned"
   when: ssl_mode_used is not defined
+
+- name: Warn if certificates found but not verified
+  debug:
+    msg: |
+      ⚠️  WARNING: SSL certificates found but cert/key modulus mismatch detected!
+      Falling back to self-signed certificate.
+      Please verify your SSL certificate and key files match.
+      
+      Checked files:
+      {% if exact_fullchain_stat.stat.exists | default(false) and exact_key_stat.stat.exists | default(false) %}
+      - {{ full_domain }}.fullchain.crt + .key: {{ exact_fullchain_verify.stdout | default('NOT CHECKED') }}
+      {% endif %}
+      {% if exact_cert_stat.stat.exists | default(false) and exact_key_stat.stat.exists | default(false) %}
+      - {{ full_domain }}.crt + .key: {{ exact_cert_verify.stdout | default('NOT CHECKED') }}
+      {% endif %}
+      {% if parent_domain != full_domain and wildcard_fullchain_stat.stat.exists | default(false) and wildcard_key_stat.stat.exists | default(false) %}
+      - {{ parent_domain }}.fullchain.crt + .key: {{ wildcard_fullchain_verify.stdout | default('NOT CHECKED') }}
+      {% endif %}
+      {% if parent_domain != full_domain and wildcard_cert_stat.stat.exists | default(false) and wildcard_key_stat.stat.exists | default(false) %}
+      - {{ parent_domain }}.crt + .key: {{ wildcard_cert_verify.stdout | default('NOT CHECKED') }}
+      {% endif %}
+  when:
+    - ssl_mode_used == 'selfsigned'
+    - (exact_fullchain_stat.stat.exists | default(false) and exact_key_stat.stat.exists | default(false)) or
+      (exact_cert_stat.stat.exists | default(false) and exact_key_stat.stat.exists | default(false)) or
+      (parent_domain != full_domain and wildcard_fullchain_stat.stat.exists | default(false) and wildcard_key_stat.stat.exists | default(false)) or
+      (parent_domain != full_domain and wildcard_cert_stat.stat.exists | default(false) and wildcard_key_stat.stat.exists | default(false))
 
 - name: Display SSL certificate decision
   debug:
