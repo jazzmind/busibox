@@ -80,6 +80,9 @@ is_apple_silicon() {
 # Get services for a group (replaces associative array for bash 3.2 compatibility)
 get_services_for_group() {
     local group="$1"
+    local backend
+    backend=$(get_backend_type)
+    
     case "$group" in
         "Infrastructure")
             echo "postgres redis minio milvus"
@@ -96,7 +99,12 @@ get_services_for_group() {
             fi
             ;;
         "Frontend")
-            echo "core-apps"  # nginx is part of core-apps container now
+            # On Proxmox, nginx is a separate container; on Docker, it's bundled
+            if [[ "$backend" == "docker" ]]; then
+                echo "core-apps"  # nginx is part of core-apps container in Docker
+            else
+                echo "nginx core-apps"  # nginx is separate on Proxmox
+            fi
             ;;
         "User Apps")
             echo "user-apps"
@@ -575,7 +583,21 @@ manage_service() {
                     local env
                     env=$(get_current_env)
                     cd "${REPO_ROOT}/provision/ansible"
-                    make "deploy-${service}" INV="inventory/${env}"
+                    # Map service to correct make target
+                    local make_target
+                    case "$service" in
+                        core-apps|apps) make_target="apps" ;;
+                        nginx|proxy) make_target="nginx" ;;
+                        postgres|pg) make_target="pg" ;;
+                        minio|files) make_target="files" ;;
+                        authz*) make_target="authz" ;;
+                        agent*) make_target="agent" ;;
+                        data*|ingest*) make_target="data" ;;
+                        search*) make_target="search-api" ;;
+                        docs*) make_target="docs" ;;
+                        *) make_target="$service" ;;
+                    esac
+                    make "$make_target" INV="inventory/${env}"
                 fi
                 read -n 1 -s -r -p "Press any key to continue..."
                 ;;
