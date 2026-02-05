@@ -87,7 +87,9 @@ get_state() {
 # Get network octets from state file
 NETWORK_BASE_STAGING=$(get_state "NETWORK_BASE_OCTETS_STAGING" "")
 NETWORK_BASE_PRODUCTION=$(get_state "NETWORK_BASE_OCTETS_PRODUCTION" "")
-BASE_DOMAIN=$(get_state "BASE_DOMAIN" "")
+# Check SITE_DOMAIN first, fall back to BASE_DOMAIN for backwards compatibility
+SITE_DOMAIN=$(get_state "SITE_DOMAIN" "")
+[[ -z "$SITE_DOMAIN" ]] && SITE_DOMAIN=$(get_state "BASE_DOMAIN" "")
 
 # Check required values
 MISSING=""
@@ -126,13 +128,13 @@ cat > "$LOCAL_CONFIG" << EOF
 network_base_octets_staging: "${NETWORK_BASE_STAGING}"
 network_base_octets_production: "${NETWORK_BASE_PRODUCTION}"
 
-# Base Domain (installation-specific)
+# Site Domain (the full domain for this environment, e.g., staging.ai.example.com)
 EOF
 
-if [[ -n "$BASE_DOMAIN" ]]; then
-    echo "base_domain: \"${BASE_DOMAIN}\"" >> "$LOCAL_CONFIG"
+if [[ -n "$SITE_DOMAIN" ]]; then
+    echo "site_domain: \"${SITE_DOMAIN}\"" >> "$LOCAL_CONFIG"
 else
-    echo "# base_domain: \"example.com\"  # Add to state file if needed" >> "$LOCAL_CONFIG"
+    echo "# site_domain: \"staging.ai.example.com\"  # Add to state file if needed" >> "$LOCAL_CONFIG"
 fi
 
 info "Done! Generated $LOCAL_CONFIG"

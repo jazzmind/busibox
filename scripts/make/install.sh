@@ -180,7 +180,7 @@ PLATFORM=""
 LLM_BACKEND=""
 LLM_TIER=""
 ADMIN_EMAIL=""
-BASE_DOMAIN=""
+SITE_DOMAIN=""  # Full domain for this environment (e.g., staging.ai.example.com or ai.example.com)
 SSL_EMAIL=""
 NETWORK_PRODUCTION=""
 NETWORK_STAGING=""
@@ -802,32 +802,37 @@ wizard_network() {
 wizard_domain() {
     # Development environment always uses localhost - skip the prompt
     if [[ "$ENVIRONMENT" == "development" ]]; then
-        BASE_DOMAIN="localhost"
+        SITE_DOMAIN="localhost"
         return
     fi
     
-    # Load saved value as default
+    # Load saved value as default (check new SITE_DOMAIN first, fall back to old BASE_DOMAIN)
     local saved_domain
-    saved_domain=$(get_state "BASE_DOMAIN" "localhost")
+    saved_domain=$(get_state "SITE_DOMAIN" "")
+    if [[ -z "$saved_domain" ]]; then
+        saved_domain=$(get_state "BASE_DOMAIN" "localhost")
+    fi
     
     echo ""
     echo -e "┌─ ${BOLD}DOMAIN CONFIGURATION${NC} ───────────────────────────────────────────────────────┐"
     box_line "" "single"
-    box_line "  Your Busibox deployment needs a domain name for HTTPS and external access." "single"
+    box_line "  Enter the FULL domain name for this ${ENVIRONMENT} environment." "single"
+    box_line "  This is the exact domain users will access (DNS must point here)." "single"
     box_line "" "single"
     box_line "  Examples:" "single"
-    box_line "    - ${CYAN}localhost${NC}           Local development only (self-signed SSL)" "single"
-    box_line "    - ${CYAN}ai.company.com${NC}      Production with proper SSL certificate" "single"
-    box_line "    - ${CYAN}busibox.local${NC}       Internal network (requires DNS/hosts setup)" "single"
+    box_line "    - ${CYAN}localhost${NC}                    Local development (self-signed SSL)" "single"
+    box_line "    - ${CYAN}ai.company.com${NC}               Production site" "single"
+    box_line "    - ${CYAN}staging.ai.company.com${NC}       Staging environment" "single"
+    box_line "    - ${CYAN}test.myapp.io${NC}                Test environment" "single"
     box_line "" "single"
     echo -e "└──────────────────────────────────────────────────────────────────────────────┘"
     echo ""
     
-    read -p "$(echo -e "${BOLD}Base domain [${saved_domain}]:${NC} ")" BASE_DOMAIN
-    BASE_DOMAIN="${BASE_DOMAIN:-${saved_domain}}"
+    read -p "$(echo -e "${BOLD}Domain for ${ENVIRONMENT} [${saved_domain}]:${NC} ")" SITE_DOMAIN
+    SITE_DOMAIN="${SITE_DOMAIN:-${saved_domain}}"
     
     echo ""
-    echo -e "  ${DIM}AI Portal will be available at:${NC} ${CYAN}https://${BASE_DOMAIN}/portal${NC}"
+    echo -e "  ${DIM}AI Portal will be available at:${NC} ${CYAN}https://${SITE_DOMAIN}/portal${NC}"
 }
 
 wizard_admin() {
@@ -1106,7 +1111,7 @@ generate_secrets() {
     export ENCRYPTION_KEY="${ENCRYPTION_KEY:-${SSO_JWT_SECRET}}"
     
     # Export configuration values for vault sync
-    export BASE_DOMAIN
+    export SITE_DOMAIN
     export SSL_EMAIL
     
     success "All secrets generated"
@@ -1637,7 +1642,7 @@ bootstrap_proxmox_ansible() {
     # These are loaded from state file during wizard or restore
     export NETWORK_BASE_OCTETS_STAGING="${NETWORK_STAGING:-10.96.201}"
     export NETWORK_BASE_OCTETS_PRODUCTION="${NETWORK_PRODUCTION:-10.96.200}"
-    export BASE_DOMAIN="${BASE_DOMAIN:-localhost}"
+    export SITE_DOMAIN="${SITE_DOMAIN:-localhost}"
     
     # Navigate to Ansible directory
     local ansible_dir="${REPO_ROOT}/provision/ansible"
@@ -1806,11 +1811,11 @@ bootstrap_proxmox_ansible() {
     playbook_cmd+=" -e github_token=${GITHUB_AUTH_TOKEN:-}"
     playbook_cmd+=" -e admin_email=${ADMIN_EMAIL:-}"
     
-    # Pass network octets and base domain from state file
+    # Pass network octets and site domain from state file
     # These are needed for IP address calculation in inventory
     playbook_cmd+=" -e network_base_octets_staging=${NETWORK_STAGING:-10.96.201}"
     playbook_cmd+=" -e network_base_octets_production=${NETWORK_PRODUCTION:-10.96.200}"
-    playbook_cmd+=" -e base_domain=${BASE_DOMAIN:-localhost}"
+    playbook_cmd+=" -e site_domain=${SITE_DOMAIN:-localhost}"
     
     # Force service restarts in Full Install mode
     # This ensures deploy-api and other services are restarted even if files haven't changed
@@ -2439,10 +2444,10 @@ generate_admin_link() {
     
     if [[ -z "$admin_email" ]]; then
         # No admin email configured - return portal URL without token
-        if [[ "$BASE_DOMAIN" == "localhost" ]]; then
+        if [[ "$SITE_DOMAIN" == "localhost" ]]; then
             echo "https://localhost/portal/"
         else
-            echo "https://${BASE_DOMAIN}/portal/"
+            echo "https://${SITE_DOMAIN}/portal/"
         fi
         return
     fi
@@ -2483,10 +2488,10 @@ generate_admin_link() {
     fi
     
     # Return proper setup URL with magic link token
-    if [[ "$BASE_DOMAIN" == "localhost" ]]; then
+    if [[ "$SITE_DOMAIN" == "localhost" ]]; then
         echo "https://localhost/portal/verify?token=${token}"
     else
-        echo "https://${BASE_DOMAIN}/portal/verify?token=${token}"
+        echo "https://${SITE_DOMAIN}/portal/verify?token=${token}"
     fi
 }
 
@@ -3197,7 +3202,7 @@ setup_demo_mode() {
     
     ENVIRONMENT="demo"
     PLATFORM="docker"
-    BASE_DOMAIN="localhost"
+    SITE_DOMAIN="localhost"
     ADMIN_EMAIL="demo@localhost"
     ALLOWED_DOMAINS="*"
     
@@ -3225,7 +3230,7 @@ setup_demo_mode() {
     set_state "LLM_BACKEND" "$LLM_BACKEND"
     set_state "LLM_TIER" "${LLM_TIER:-}"
     set_state "ADMIN_EMAIL" "$ADMIN_EMAIL"
-    set_state "BASE_DOMAIN" "$BASE_DOMAIN"
+    set_state "SITE_DOMAIN" "$SITE_DOMAIN"
     set_state "ALLOWED_DOMAINS" "$ALLOWED_DOMAINS"
     set_install_phase "wizard_complete"
 }
@@ -3506,8 +3511,8 @@ check_existing_install() {
         success "All services are healthy"
         
         # Show magic link and open browser
-        # Load BASE_DOMAIN from state for URL generation
-        BASE_DOMAIN=$(get_state "BASE_DOMAIN" 2>/dev/null || echo "localhost")
+        # Load SITE_DOMAIN from state for URL generation (fall back to BASE_DOMAIN for backwards compat)
+        SITE_DOMAIN=$(get_state "SITE_DOMAIN" 2>/dev/null || get_state "BASE_DOMAIN" 2>/dev/null || echo "localhost")
         
         echo ""
         echo -e "${GREEN}╔══════════════════════════════════════════════════════════════════════════════╗${NC}"
@@ -3717,7 +3722,9 @@ main() {
             LLM_BACKEND=$(get_state "LLM_BACKEND" "$DETECTED_LLM_BACKEND")
             LLM_TIER=$(get_state "LLM_TIER" "$DETECTED_LLM_TIER")
             ADMIN_EMAIL=$(get_state "ADMIN_EMAIL" "demo@localhost")
-            BASE_DOMAIN=$(get_state "BASE_DOMAIN" "localhost")
+            # Check SITE_DOMAIN first, fall back to BASE_DOMAIN for backwards compatibility
+            SITE_DOMAIN=$(get_state "SITE_DOMAIN" "")
+            [[ -z "$SITE_DOMAIN" ]] && SITE_DOMAIN=$(get_state "BASE_DOMAIN" "localhost")
             ALLOWED_DOMAINS=$(get_state "ALLOWED_DOMAINS" "*")
             # Load secrets from vault (secrets are now in vault, not state)
             # These may not exist yet - that's OK, we'll prompt later
@@ -3739,7 +3746,9 @@ main() {
             LLM_BACKEND=$(get_state "LLM_BACKEND" "")
             LLM_TIER=$(get_state "LLM_TIER" "")
             ADMIN_EMAIL=$(get_state "ADMIN_EMAIL" "")
-            BASE_DOMAIN=$(get_state "BASE_DOMAIN" "localhost")
+            # Check SITE_DOMAIN first, fall back to BASE_DOMAIN for backwards compatibility
+            SITE_DOMAIN=$(get_state "SITE_DOMAIN" "")
+            [[ -z "$SITE_DOMAIN" ]] && SITE_DOMAIN=$(get_state "BASE_DOMAIN" "localhost")
             ALLOWED_DOMAINS=$(get_state "ALLOWED_DOMAINS" "*")
             # Load secrets from vault (secrets are now in vault, not state)
             # These may not exist yet - that's OK, we'll prompt later
@@ -3750,7 +3759,7 @@ main() {
             info "Restored configuration from saved state:"
             echo -e "  Platform:        ${CYAN}${PLATFORM}${NC}"
             echo -e "  LLM Backend:     ${CYAN}${LLM_BACKEND:-not set}${NC}"
-            echo -e "  Base Domain:     ${CYAN}${BASE_DOMAIN}${NC}"
+            echo -e "  Site Domain:     ${CYAN}${SITE_DOMAIN}${NC}"
             echo -e "  Admin Email:     ${CYAN}${ADMIN_EMAIL:-not set}${NC}"
             echo -e "  Allowed Domains: ${CYAN}${ALLOWED_DOMAINS}${NC}"
             if [[ "$PLATFORM" == "proxmox" ]]; then
@@ -3777,7 +3786,7 @@ main() {
             set_state "LLM_BACKEND" "$LLM_BACKEND"
             set_state "LLM_TIER" "${LLM_TIER:-}"
             set_state "ADMIN_EMAIL" "$ADMIN_EMAIL"
-            set_state "BASE_DOMAIN" "$BASE_DOMAIN"
+            set_state "SITE_DOMAIN" "$SITE_DOMAIN"
             set_state "ALLOWED_DOMAINS" "${ALLOWED_DOMAINS:-*}"
             # Save network octets for Proxmox
             if [[ "$PLATFORM" == "proxmox" ]]; then
@@ -4042,7 +4051,7 @@ main() {
     set_state "LLM_BACKEND" "$LLM_BACKEND"
     set_state "LLM_TIER" "${LLM_TIER:-}"
     set_state "ADMIN_EMAIL" "$ADMIN_EMAIL"
-    set_state "BASE_DOMAIN" "$BASE_DOMAIN"
+    set_state "SITE_DOMAIN" "$SITE_DOMAIN"
     set_state "ALLOWED_DOMAINS" "${ALLOWED_DOMAINS:-*}"
     
     # Bootstrap based on platform

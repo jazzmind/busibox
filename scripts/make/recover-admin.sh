@@ -66,9 +66,10 @@ main() {
     
     info "Generating recovery link for: ${admin_email}"
     
-    # Get base domain
-    local base_domain
-    base_domain=$(get_state "BASE_DOMAIN" "localhost")
+    # Get site domain (check SITE_DOMAIN first, fall back to BASE_DOMAIN for backwards compatibility)
+    local site_domain
+    site_domain=$(get_state "SITE_DOMAIN" "")
+    [[ -z "$site_domain" ]] && site_domain=$(get_state "BASE_DOMAIN" "localhost")
     
     # TODO: Magic link flow not yet implemented in AI Portal
     # For now, just point to the portal login page
@@ -78,10 +79,10 @@ main() {
     # 3. AI Portal validates token and creates session
     
     local portal_url
-    if [[ "$base_domain" == "localhost" ]]; then
+    if [[ "$site_domain" == "localhost" ]]; then
         portal_url="https://localhost/portal/"
     else
-        portal_url="https://${base_domain}/portal/"
+        portal_url="https://${site_domain}/portal/"
     fi
     
     echo ""

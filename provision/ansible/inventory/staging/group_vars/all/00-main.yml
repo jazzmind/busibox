@@ -58,10 +58,10 @@ authz_ip: "{{ network_base_octets }}.210"
 # ============================================================================
 # Domain Configuration - Staging
 # ============================================================================
-# Base domain from vault (deployment-specific)
-env_suffix: staging
-domain: "ai.{{ base_domain }}"
-full_domain: "{{ env_suffix }}.{{ domain }}"
+# full_domain is the complete domain for this environment (e.g., staging.ai.jaycashman.com)
+# It comes from the FULL_DOMAIN value set during installation
+# For backwards compatibility, we also check base_domain and build up if full_domain not set
+full_domain: "{{ site_domain | default(base_domain) }}"
 www_domain: "www.{{ full_domain }}"
 env_subdomain_suffix: "-staging"  # Suffix for staging subdomains (e.g., "agents-staging")
 

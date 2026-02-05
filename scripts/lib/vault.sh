@@ -783,9 +783,9 @@ sync_secrets_to_vault() {
     # TOP-LEVEL CONFIGURATION (from install.sh prompts)
     # ==========================================================================
     
-    # Base domain
-    if [[ -n "${BASE_DOMAIN:-}" ]]; then
-        values_to_update+=("base_domain=${BASE_DOMAIN}")
+    # Site domain (the full domain for this environment)
+    if [[ -n "${SITE_DOMAIN:-}" ]]; then
+        values_to_update+=("site_domain=${SITE_DOMAIN}")
     fi
     
     # SSL email

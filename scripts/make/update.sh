@@ -1423,10 +1423,12 @@ show_completion() {
         box_line "Check service status with:" "left" "$_GREEN" 2
         box_line "cd provision/ansible && make verify-health INV=inventory/${environment}" "left" "$_GREEN" 4
     else
-        local base_domain
-        base_domain=$(get_state "BASE_DOMAIN" "localhost")
+        local site_domain
+        # Check SITE_DOMAIN first, fall back to BASE_DOMAIN for backwards compatibility
+        site_domain=$(get_state "SITE_DOMAIN" "")
+        [[ -z "$site_domain" ]] && site_domain=$(get_state "BASE_DOMAIN" "localhost")
         box_line "Open the AI Portal:" "left" "$_GREEN" 2
-        box_line "https://${base_domain}/portal/" "left" "$_GREEN" 4
+        box_line "https://${site_domain}/portal/" "left" "$_GREEN" 4
     fi
     
     box_border "bottom" "$_GREEN"
@@ -1912,9 +1914,11 @@ main() {
         save_all_deployed_versions
         
         # Open browser for Docker
-        local base_domain
-        base_domain=$(get_state "BASE_DOMAIN" "localhost")
-        local portal_url="https://${base_domain}/portal/"
+        local site_domain
+        # Check SITE_DOMAIN first, fall back to BASE_DOMAIN for backwards compatibility
+        site_domain=$(get_state "SITE_DOMAIN" "")
+        [[ -z "$site_domain" ]] && site_domain=$(get_state "BASE_DOMAIN" "localhost")
+        local portal_url="https://${site_domain}/portal/"
         
         info "Opening browser..."
         local os_type
