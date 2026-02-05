@@ -67,41 +67,43 @@
     app_env_vars: >-
       {{
         app_env_vars | combine({
-          item | upper:
-            (secrets[app.name][item] if (secrets[app.name] is defined and secrets[app.name][item] is defined) else
-            ('postgresql://' ~ postgres_user ~ ':' ~ secrets.postgresql.password ~ '@' ~ postgres_host ~ ':' ~ postgres_port ~ '/' ~ (app.name | replace('-', '_'))) if item == 'database_url' else
-            secrets.jwt_secret if item == 'jwt_secret' else
-            secrets.session_secret if item == 'session_secret' else
-            secrets.jwt_secret if item == 'sso_jwt_secret' else
-            secrets.litellm_api_key if item == 'litellm_api_key' else
-            secrets.encryption_key if item == 'encryption_key' else
-            (secrets.allowed_email_domains | default('')) if item == 'allowed_email_domains' else
-            (secrets.smtp.from_email | default('')) if item == 'email_from' else
-            (secrets.smtp.host | default('')) if item == 'smtp_host' else
-            (secrets.smtp.port | default('')) if item == 'smtp_port' else
-            (secrets.smtp.user | default('')) if item == 'smtp_user' else
-            (secrets.smtp.password | default('')) if item == 'smtp_password' else
-            (secrets.smtp.secure | default('true')) if item == 'smtp_secure' else
-            (secrets.microsoft.client_id | default('')) if item == 'microsoft_client_id' else
-            (secrets.microsoft.client_secret | default('')) if item == 'microsoft_client_secret' else
-            (secrets.microsoft.tenant_id | default('')) if item == 'microsoft_tenant_id' else
-            (secrets.github.client_id | default('')) if item == 'github_client_id' else
-            (secrets.github.client_secret | default('')) if item == 'github_client_secret' else
-            ('https://' ~ full_domain ~ '/portal/api/admin/github/callback') if item == 'github_redirect_uri' else
-            (secrets.openai.api_key | default('')) if item == 'openai_api_key' else
-            (secrets.resend_api_key | default('')) if item == 'resend_api_key' else
-            core_apps_ip if item == 'current_container_ip' else
-            core_apps_ip if item == 'apps_container_ip' else
-            agent_ip if item == 'agent_container_ip' else
-            postgres_host if item == 'postgres_container_ip' else
-            (secrets.container_ssh_private_key | default('')) if item == 'container_ssh_private_key' else
-            secrets.jwt_secret if item == 'agent_api_key' else
-            secrets.minio.root_user if item == 'minio_access_key' else
-            secrets.minio.root_password if item == 'minio_secret_key' else
+          secret_key | upper:
+            (secrets[app.name][secret_key] if (secrets[app.name] is defined and secrets[app.name][secret_key] is defined) else
+            ('postgresql://' ~ postgres_user ~ ':' ~ secrets.postgresql.password ~ '@' ~ postgres_host ~ ':' ~ postgres_port ~ '/' ~ (app.name | replace('-', '_'))) if secret_key == 'database_url' else
+            secrets.jwt_secret if secret_key == 'jwt_secret' else
+            secrets.session_secret if secret_key == 'session_secret' else
+            secrets.jwt_secret if secret_key == 'sso_jwt_secret' else
+            secrets.litellm_api_key if secret_key == 'litellm_api_key' else
+            secrets.encryption_key if secret_key == 'encryption_key' else
+            (secrets.allowed_email_domains | default('')) if secret_key == 'allowed_email_domains' else
+            (secrets.smtp.from_email | default('')) if secret_key == 'email_from' else
+            (secrets.smtp.host | default('')) if secret_key == 'smtp_host' else
+            (secrets.smtp.port | default('')) if secret_key == 'smtp_port' else
+            (secrets.smtp.user | default('')) if secret_key == 'smtp_user' else
+            (secrets.smtp.password | default('')) if secret_key == 'smtp_password' else
+            (secrets.smtp.secure | default('true')) if secret_key == 'smtp_secure' else
+            (secrets.microsoft.client_id | default('')) if secret_key == 'microsoft_client_id' else
+            (secrets.microsoft.client_secret | default('')) if secret_key == 'microsoft_client_secret' else
+            (secrets.microsoft.tenant_id | default('')) if secret_key == 'microsoft_tenant_id' else
+            (secrets.github.client_id | default('')) if secret_key == 'github_client_id' else
+            (secrets.github.client_secret | default('')) if secret_key == 'github_client_secret' else
+            ('https://' ~ full_domain ~ '/portal/api/admin/github/callback') if secret_key == 'github_redirect_uri' else
+            (secrets.openai.api_key | default('')) if secret_key == 'openai_api_key' else
+            (secrets.resend_api_key | default('')) if secret_key == 'resend_api_key' else
+            core_apps_ip if secret_key == 'current_container_ip' else
+            core_apps_ip if secret_key == 'apps_container_ip' else
+            agent_ip if secret_key == 'agent_container_ip' else
+            postgres_host if secret_key == 'postgres_container_ip' else
+            (secrets.container_ssh_private_key | default('')) if secret_key == 'container_ssh_private_key' else
+            secrets.jwt_secret if secret_key == 'agent_api_key' else
+            secrets.minio.root_user if secret_key == 'minio_access_key' else
+            secrets.minio.root_password if secret_key == 'minio_secret_key' else
             '')
         })
       }}
   loop: "{{ app.secrets | default([]) }}"
+  loop_control:
+    loop_var: secret_key
   no_log: true
   tags:
     - deploy_via_api
@@ -112,41 +114,43 @@
     app_env_vars: >-
       {{
         app_env_vars | combine({
-          item | upper:
-            (secrets[app.name][item] if (secrets[app.name] is defined and secrets[app.name][item] is defined) else
-            ('postgresql://' ~ postgres_user ~ ':' ~ secrets.postgresql.password ~ '@' ~ postgres_host ~ ':' ~ postgres_port ~ '/' ~ (app.name | replace('-', '_'))) if item == 'database_url' else
-            secrets.jwt_secret if item == 'jwt_secret' else
-            secrets.session_secret if item == 'session_secret' else
-            secrets.jwt_secret if item == 'sso_jwt_secret' else
-            secrets.litellm_api_key if item == 'litellm_api_key' else
-            secrets.encryption_key if item == 'encryption_key' else
-            (secrets.allowed_email_domains | default('')) if item == 'allowed_email_domains' else
-            (secrets.smtp.from_email | default('')) if item == 'email_from' else
-            (secrets.smtp.host | default('')) if item == 'smtp_host' else
-            (secrets.smtp.port | default('')) if item == 'smtp_port' else
-            (secrets.smtp.user | default('')) if item == 'smtp_user' else
-            (secrets.smtp.password | default('')) if item == 'smtp_password' else
-            (secrets.smtp.secure | default('true')) if item == 'smtp_secure' else
-            (secrets.microsoft.client_id | default('')) if item == 'microsoft_client_id' else
-            (secrets.microsoft.client_secret | default('')) if item == 'microsoft_client_secret' else
-            (secrets.microsoft.tenant_id | default('')) if item == 'microsoft_tenant_id' else
-            (secrets.github.client_id | default('')) if item == 'github_client_id' else
-            (secrets.github.client_secret | default('')) if item == 'github_client_secret' else
-            ('https://' ~ full_domain ~ '/portal/api/admin/github/callback') if item == 'github_redirect_uri' else
-            (secrets.openai.api_key | default('')) if item == 'openai_api_key' else
-            (secrets.resend_api_key | default('')) if item == 'resend_api_key' else
-            core_apps_ip if item == 'current_container_ip' else
-            core_apps_ip if item == 'apps_container_ip' else
-            agent_ip if item == 'agent_container_ip' else
-            postgres_host if item == 'postgres_container_ip' else
-            (secrets.container_ssh_private_key | default('')) if item == 'container_ssh_private_key' else
-            secrets.jwt_secret if item == 'agent_api_key' else
-            secrets.minio.root_user if item == 'minio_access_key' else
-            secrets.minio.root_password if item == 'minio_secret_key' else
+          opt_secret_key | upper:
+            (secrets[app.name][opt_secret_key] if (secrets[app.name] is defined and secrets[app.name][opt_secret_key] is defined) else
+            ('postgresql://' ~ postgres_user ~ ':' ~ secrets.postgresql.password ~ '@' ~ postgres_host ~ ':' ~ postgres_port ~ '/' ~ (app.name | replace('-', '_'))) if opt_secret_key == 'database_url' else
+            secrets.jwt_secret if opt_secret_key == 'jwt_secret' else
+            secrets.session_secret if opt_secret_key == 'session_secret' else
+            secrets.jwt_secret if opt_secret_key == 'sso_jwt_secret' else
+            secrets.litellm_api_key if opt_secret_key == 'litellm_api_key' else
+            secrets.encryption_key if opt_secret_key == 'encryption_key' else
+            (secrets.allowed_email_domains | default('')) if opt_secret_key == 'allowed_email_domains' else
+            (secrets.smtp.from_email | default('')) if opt_secret_key == 'email_from' else
+            (secrets.smtp.host | default('')) if opt_secret_key == 'smtp_host' else
+            (secrets.smtp.port | default('')) if opt_secret_key == 'smtp_port' else
+            (secrets.smtp.user | default('')) if opt_secret_key == 'smtp_user' else
+            (secrets.smtp.password | default('')) if opt_secret_key == 'smtp_password' else
+            (secrets.smtp.secure | default('true')) if opt_secret_key == 'smtp_secure' else
+            (secrets.microsoft.client_id | default('')) if opt_secret_key == 'microsoft_client_id' else
+            (secrets.microsoft.client_secret | default('')) if opt_secret_key == 'microsoft_client_secret' else
+            (secrets.microsoft.tenant_id | default('')) if opt_secret_key == 'microsoft_tenant_id' else
+            (secrets.github.client_id | default('')) if opt_secret_key == 'github_client_id' else
+            (secrets.github.client_secret | default('')) if opt_secret_key == 'github_client_secret' else
+            ('https://' ~ full_domain ~ '/portal/api/admin/github/callback') if opt_secret_key == 'github_redirect_uri' else
+            (secrets.openai.api_key | default('')) if opt_secret_key == 'openai_api_key' else
+            (secrets.resend_api_key | default('')) if opt_secret_key == 'resend_api_key' else
+            core_apps_ip if opt_secret_key == 'current_container_ip' else
+            core_apps_ip if opt_secret_key == 'apps_container_ip' else
+            agent_ip if opt_secret_key == 'agent_container_ip' else
+            postgres_host if opt_secret_key == 'postgres_container_ip' else
+            (secrets.container_ssh_private_key | default('')) if opt_secret_key == 'container_ssh_private_key' else
+            secrets.jwt_secret if opt_secret_key == 'agent_api_key' else
+            secrets.minio.root_user if opt_secret_key == 'minio_access_key' else
+            secrets.minio.root_password if opt_secret_key == 'minio_secret_key' else
             '')
         })
       }}
   loop: "{{ app.optional_secrets | default([]) }}"
+  loop_control:
+    loop_var: opt_secret_key
   no_log: true
   tags:
     - deploy_via_api
