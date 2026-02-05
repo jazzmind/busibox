@@ -308,9 +308,19 @@ NPMRC_EOF
             npm install
             echo "=== NPM INSTALL END ==="
             
+            # Regenerate Prisma client if prisma is present (ensures fresh client after schema changes)
+            if [ -f "prisma/schema.prisma" ] || [ -f "prisma/schema" ]; then
+                echo "=== PRISMA GENERATE START ==="
+                # Clean stale Prisma client to force regeneration
+                rm -rf node_modules/.prisma 2>/dev/null || true
+                npx prisma generate
+                echo "=== PRISMA GENERATE END ==="
+            fi
+            
             # Build application
+            # Always build in production mode regardless of NODE_ENV setting
             echo "=== NPM BUILD START ==="
-            npm run build
+            NODE_ENV=production npm run build
             echo "=== NPM BUILD END ==="
             
             # Restart with systemd (on Proxmox, apps run as systemd services)
