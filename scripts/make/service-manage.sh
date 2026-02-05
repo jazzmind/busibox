@@ -231,7 +231,7 @@ get_docker_status() {
     fi
 }
 
-# Map service to ansible tag
+# Map service to ansible tag (for Docker deployment)
 get_ansible_tag() {
     local service="$1"
     case "$service" in
@@ -244,6 +244,39 @@ get_ansible_tag() {
         embedding*) echo "embedding" ;;
         postgres|pg) echo "postgres" ;;
         minio|files) echo "minio" ;;
+        *) echo "$service" ;;
+    esac
+}
+
+# Map service to Ansible make target (for Proxmox deployment)
+get_proxmox_make_target() {
+    local service="$1"
+    case "$service" in
+        # Infrastructure
+        postgres|pg) echo "pg" ;;
+        minio|files) echo "files" ;;
+        milvus) echo "milvus" ;;
+        redis) echo "data" ;;  # redis is part of data container
+        
+        # APIs
+        authz|authz-api) echo "authz" ;;
+        agent|agent-api) echo "agent" ;;
+        ingest|data-api) echo "data" ;;
+        data-worker) echo "data" ;;
+        search|search-api) echo "search-api" ;;
+        deploy|deploy-api) echo "deploy-api" ;;
+        docs|docs-api) echo "docs" ;;
+        embedding|embedding-api) echo "embedding-api" ;;
+        
+        # LLM
+        litellm) echo "litellm" ;;
+        vllm) echo "vllm" ;;
+        
+        # Frontend
+        core-apps|apps) echo "apps" ;;
+        nginx|proxy) echo "nginx" ;;
+        
+        # Default - use as-is
         *) echo "$service" ;;
     esac
 }
@@ -352,6 +385,64 @@ docker_action() {
     esac
 }
 
+# Get network base IP for environment
+get_network_base() {
+    local env="$1"
+    case "$env" in
+        staging) echo "10.96.201" ;;
+        production) echo "10.96.200" ;;
+        *) echo "10.96.201" ;;
+    esac
+}
+
+# Get container IP for a service
+get_service_ip() {
+    local service="$1"
+    local env="$2"
+    local network_base
+    network_base=$(get_network_base "$env")
+    
+    case "$service" in
+        postgres|pg) echo "${network_base}.203" ;;
+        minio|files) echo "${network_base}.205" ;;
+        milvus) echo "${network_base}.204" ;;
+        agent|agent-api) echo "${network_base}.202" ;;
+        ingest|data-api|data-worker|redis) echo "${network_base}.206" ;;
+        authz|authz-api|deploy|deploy-api|docs|docs-api) echo "${network_base}.210" ;;
+        search|search-api|embedding|embedding-api) echo "${network_base}.204" ;;  # on milvus container
+        core-apps|apps|ai-portal|agent-manager) echo "${network_base}.201" ;;
+        nginx|proxy) echo "${network_base}.200" ;;
+        litellm) echo "${network_base}.207" ;;
+        vllm) echo "${network_base}.208" ;;
+        *) echo "" ;;
+    esac
+}
+
+# Get systemd service name for a service
+get_systemd_service_name() {
+    local service="$1"
+    case "$service" in
+        authz|authz-api) echo "authz" ;;
+        agent|agent-api) echo "agent" ;;
+        ingest|data-api) echo "data-api" ;;
+        data-worker) echo "data-worker" ;;
+        search|search-api) echo "search-api" ;;
+        deploy|deploy-api) echo "deploy-api" ;;
+        docs|docs-api) echo "docs-api" ;;
+        embedding|embedding-api) echo "embedding-api" ;;
+        nginx|proxy) echo "nginx" ;;
+        ai-portal) echo "ai-portal" ;;
+        agent-manager) echo "agent-manager" ;;
+        postgres|pg) echo "postgresql" ;;
+        minio|files) echo "minio" ;;
+        milvus) echo "milvus" ;;
+        litellm) echo "litellm" ;;
+        vllm) echo "vllm" ;;
+        redis) echo "redis" ;;
+        *) echo "$service" ;;
+    esac
+}
+
 # Execute action on a service (Proxmox/Ansible)
 proxmox_action() {
     local service="$1"
@@ -365,47 +456,84 @@ proxmox_action() {
         *) inventory="inventory/staging" ;;
     esac
     
+    # Get container IP and systemd service name
+    local container_ip
+    container_ip=$(get_service_ip "$service" "$env")
+    local systemd_service
+    systemd_service=$(get_systemd_service_name "$service")
+    
     cd "${REPO_ROOT}/provision/ansible"
     
     case "$action" in
         start)
             info "Starting ${service}..."
-            make "start-${service}" INV="$inventory" || error "Failed to start"
+            if [[ -n "$container_ip" ]]; then
+                ssh "root@${container_ip}" "systemctl start ${systemd_service}" 2>/dev/null || error "Failed to start"
+                success "Service started"
+            else
+                error "Unknown service IP for ${service}"
+            fi
             ;;
         
         stop)
             info "Stopping ${service}..."
-            make "stop-${service}" INV="$inventory" || error "Failed to stop"
+            if [[ -n "$container_ip" ]]; then
+                ssh "root@${container_ip}" "systemctl stop ${systemd_service}" 2>/dev/null || error "Failed to stop"
+                success "Service stopped"
+            else
+                error "Unknown service IP for ${service}"
+            fi
             ;;
         
         restart)
             info "Restarting ${service}..."
-            make "restart-${service}" INV="$inventory" || error "Failed to restart"
+            if [[ -n "$container_ip" ]]; then
+                ssh "root@${container_ip}" "systemctl restart ${systemd_service}" 2>/dev/null || error "Failed to restart"
+                success "Service restarted"
+            else
+                error "Unknown service IP for ${service}"
+            fi
             ;;
         
         logs)
-            info "Showing logs for ${service}..."
-            echo "(This may require SSH access to the container)"
-            make "logs-${service}" INV="$inventory" 2>/dev/null || {
-                warn "Log target not available, trying direct SSH..."
-                local container_ip
-                container_ip=$(grep -A2 "${service}" "$inventory/hosts.yml" 2>/dev/null | grep "ansible_host" | awk '{print $2}' || echo "")
-                if [[ -n "$container_ip" ]]; then
-                    ssh "root@${container_ip}" "journalctl -u ${service} -f --no-pager -n 100" 2>/dev/null || error "Could not get logs"
-                fi
-            }
+            info "Showing logs for ${service} (Ctrl+C to exit)..."
+            echo ""
+            if [[ -n "$container_ip" ]]; then
+                ssh "root@${container_ip}" "journalctl -u ${systemd_service} -f --no-pager -n 100" 2>/dev/null || error "Could not get logs"
+            else
+                error "Unknown service IP for ${service}"
+            fi
             ;;
         
         status)
-            info "Checking status of ${service}..."
-            make "status-${service}" INV="$inventory" 2>/dev/null || {
-                make "health-${service}" INV="$inventory" 2>/dev/null || echo "  Status: unknown"
-            }
+            if [[ -n "$container_ip" ]]; then
+                local status
+                status=$(ssh "root@${container_ip}" "systemctl is-active ${systemd_service}" 2>/dev/null || echo "unknown")
+                echo "  ${BOLD}${service}${NC}: ${status}"
+            else
+                echo "  ${BOLD}${service}${NC}: unknown (no IP mapping)"
+            fi
             ;;
         
         redeploy)
             info "Redeploying ${service}..."
-            make "deploy-${service}" INV="$inventory" || error "Failed to redeploy"
+            local make_target
+            make_target=$(get_proxmox_make_target "$service")
+            
+            # Check for environment-specific vault password file
+            local vault_pass_file="$HOME/.busibox-vault-pass-${env}"
+            if [[ ! -f "$vault_pass_file" ]]; then
+                # Try legacy location
+                vault_pass_file="$HOME/.vault_pass"
+            fi
+            
+            if [[ -f "$vault_pass_file" ]]; then
+                make "$make_target" INV="$inventory" || error "Failed to redeploy"
+            else
+                warn "No vault password file found"
+                make "$make_target" INV="$inventory" || error "Failed to redeploy"
+            fi
+            success "Service redeployed"
             ;;
     esac
 }
