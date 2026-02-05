@@ -230,21 +230,24 @@ get_proxmox_service_status() {
     local env
     env=$(get_current_env)
     
-    # Normalize service name for lookup
-    local lookup_service="$service"
+    # Normalize service name for lookup in service registry
+    # The registry uses underscores (e.g., agent_api, ai_portal)
+    # The menu uses hyphens (e.g., agent-api, ai-portal)
+    # First convert hyphens to underscores, then handle special cases
+    local lookup_service="${service//-/_}"
     case "$service" in
         pg) lookup_service="postgres" ;;
         files) lookup_service="minio" ;;
-        agent) lookup_service="agent-api" ;;
-        ingest|data) lookup_service="data-api" ;;
-        authz) lookup_service="authz" ;;  # Keep as authz, not authz-api
-        apps) lookup_service="ai-portal" ;;  # Check portal health for core-apps
+        # Short names that need expansion
+        agent) lookup_service="agent_api" ;;
+        ingest|data) lookup_service="data_api" ;;
+        search) lookup_service="search_api" ;;
+        deploy) lookup_service="deploy_api" ;;
+        docs) lookup_service="docs_api" ;;
+        # App services
+        apps) lookup_service="ai_portal" ;;
         proxy) lookup_service="nginx" ;;
-        search) lookup_service="search-api" ;;
-        deploy) lookup_service="deploy-api" ;;
-        docs) lookup_service="docs-api" ;;
-        embedding) lookup_service="embedding" ;;
-        core-apps) lookup_service="ai-portal" ;;  # Check portal for core-apps status
+        core-apps) lookup_service="ai_portal" ;;
     esac
     
     # Get health URL from service registry

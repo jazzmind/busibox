@@ -294,12 +294,39 @@ async def _ensure_bootstrap_admin_users() -> None:
 async def _ensure_bootstrap() -> None:
     """
     Ensure authz has at least one active signing key and (optionally) a bootstrap OAuth client.
+    
+    If an existing key cannot be decrypted (e.g., passphrase changed), it will be
+    deleted and a new key generated.
     """
     await _pg.connect()
 
-    # 1) signing key
+    # 1) signing key - check if we have one and can decrypt it
     active_key = await _pg.get_active_signing_key()
-    if not active_key:
+    need_new_key = False
+    
+    if active_key:
+        # Verify we can actually decrypt the key with current passphrase
+        try:
+            load_private_key(active_key["private_key_pem"], config.key_encryption_passphrase)
+            logger.info("Verified existing signing key can be decrypted", kid=active_key["kid"])
+        except Exception as e:
+            logger.warning(
+                "Existing signing key cannot be decrypted - will regenerate",
+                kid=active_key["kid"],
+                error=str(e),
+            )
+            # Delete the unusable key
+            async with _pg.acquire(None, None) as conn:
+                await conn.execute(
+                    "DELETE FROM authz_signing_keys WHERE kid = $1",
+                    active_key["kid"],
+                )
+            logger.info("Deleted unusable signing key", kid=active_key["kid"])
+            need_new_key = True
+    else:
+        need_new_key = True
+    
+    if need_new_key:
         if config.signing_alg != "RS256":
             raise RuntimeError(f"Unsupported signing alg for bootstrap: {config.signing_alg}")
         sk = generate_rsa_signing_key(
@@ -314,7 +341,7 @@ async def _ensure_bootstrap() -> None:
             public_jwk=sk.public_jwk,
             is_active=True,
         )
-        logger.info("Generated initial authz signing key", kid=sk.kid, alg=sk.alg)
+        logger.info("Generated new authz signing key", kid=sk.kid, alg=sk.alg)
 
 
     # 4) bootstrap essential roles

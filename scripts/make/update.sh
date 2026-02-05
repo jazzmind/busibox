@@ -536,10 +536,10 @@ update_proxmox() {
             echo "    - Auth secrets (JWT, session keys)"
             echo "    - MinIO credentials"
             echo ""
-            echo "  To set up vault:"
-            echo "    1. Copy example: cp provision/ansible/roles/secrets/vars/vault.example.yml provision/ansible/roles/secrets/vars/vault.yml"
+            echo "  To set up vault for your environment:"
+            echo "    1. Copy example: cp provision/ansible/roles/secrets/vars/vault.example.yml provision/ansible/roles/secrets/vars/vault.{staging,prod}.yml"
             echo "    2. Edit with your secrets"
-            echo "    3. Encrypt: ansible-vault encrypt provision/ansible/roles/secrets/vars/vault.yml"
+            echo "    3. Encrypt: ansible-vault encrypt provision/ansible/roles/secrets/vars/vault.{staging,prod}.yml"
             return 1
         fi
     fi

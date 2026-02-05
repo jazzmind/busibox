@@ -24,6 +24,7 @@ _SERVICES_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Service definitions as simple variables
 _SERVICE_authz="210:busibox:srv/authz:/health/live:8010"
+_SERVICE_authz_api="210:busibox:srv/authz:/health/live:8010"  # Alias for consistency
 _SERVICE_postgres="203:busibox::/health:5432"
 _SERVICE_redis="206:busibox::/health:6379"
 _SERVICE_milvus="204:milvus::/healthz:9091"
@@ -40,6 +41,7 @@ _SERVICE_vllm="210:vllm::/health:8000"
 _SERVICE_mlx="211:mlx::/v1/models:8080"
 _SERVICE_host_agent="0:busibox:scripts/host-agent:/health:8089"
 _SERVICE_embedding="208:busibox:srv/embedding:/health:8005"
+_SERVICE_embedding_api="208:busibox:srv/embedding:/health:8005"  # Alias for consistency
 _SERVICE_nginx="200:busibox:provision/ansible/roles/nginx:/:80"
 _SERVICE_ai_portal="201:ai-portal::/portal/api/health:3000"
 _SERVICE_agent_manager="201:agent-manager::/agents/api/health:3001"

@@ -71,6 +71,7 @@ source "${SCRIPT_DIR}/../lib/ui.sh"
 source "${SCRIPT_DIR}/../lib/state.sh"
 source "${SCRIPT_DIR}/../lib/vault.sh"    # Must be before github.sh for vault functions
 source "${SCRIPT_DIR}/../lib/github.sh"
+source "${SCRIPT_DIR}/../lib/services.sh"  # Service registry for health checks
 
 # =============================================================================
 # STATE FILE MANAGEMENT
@@ -1127,7 +1128,7 @@ create_env_file() {
     
     # NOTE: This file contains ONLY non-secret configuration.
     # All secrets are stored in the Ansible vault and injected at deployment time.
-    # See: provision/ansible/roles/secrets/vars/vault.yml
+    # See: provision/ansible/roles/secrets/vars/vault.{staging,prod}.yml
     
     cat > "$env_file" << EOF
 # Busibox Environment Configuration
@@ -1135,7 +1136,7 @@ create_env_file() {
 #
 # IMPORTANT: This file contains NON-SECRET configuration only.
 # All secrets are stored in the encrypted Ansible vault:
-#   provision/ansible/roles/secrets/vars/vault.yml
+#   provision/ansible/roles/secrets/vars/vault.{staging,prod}.yml
 #
 # Secrets are injected at deployment time by Ansible.
 
@@ -1870,35 +1871,29 @@ bootstrap_proxmox_ansible() {
     # This matches the Docker bootstrap pattern.
     # ==========================================================================
     
-    # Get environment-specific IPs
-    local authz_ip portal_ip proxy_ip pg_ip
-    case "$ENVIRONMENT" in
-        production)
-            pg_ip="10.96.200.203"
-            authz_ip="10.96.200.210"
-            portal_ip="10.96.200.201"
-            proxy_ip="10.96.200.200"
-            ;;
-        staging)
-            pg_ip="10.96.201.203"
-            authz_ip="10.96.201.210"
-            portal_ip="10.96.201.201"
-            proxy_ip="10.96.201.200"
-            ;;
-    esac
+    # Get environment-specific IPs from service registry
+    local pg_ip authz_ip portal_ip proxy_ip
+    pg_ip=$(get_service_ip "postgres" "$ENVIRONMENT" "proxmox")
+    authz_ip=$(get_service_ip "authz" "$ENVIRONMENT" "proxmox")
+    portal_ip=$(get_service_ip "ai_portal" "$ENVIRONMENT" "proxmox")
+    proxy_ip=$(get_service_ip "nginx" "$ENVIRONMENT" "proxmox")
     
     # Helper function to check if a service is healthy before deploying
+    # Uses the shared service registry for health URLs
     # Returns 0 if healthy (skip), 1 if not healthy (deploy)
     is_service_healthy() {
         local service="$1"
-        local health_url="$2"
-        local check_type="${3:-http}"  # http or tcp
+        local check_type="${2:-http}"  # http or tcp
+        
+        # Get health URL from service registry
+        local health_url
+        health_url=$(get_service_health_url "$service" "$ENVIRONMENT" "proxmox" 2>/dev/null)
         
         if [[ "$check_type" == "tcp" ]]; then
             # TCP port check (for postgres)
             local host port
-            host=$(echo "$health_url" | sed -E 's|.*://([^:]+):([0-9]+).*|\1|')
-            port=$(echo "$health_url" | sed -E 's|.*://([^:]+):([0-9]+).*|\2|')
+            host=$(get_service_ip "$service" "$ENVIRONMENT" "proxmox" 2>/dev/null)
+            port=$(get_service_port "$service" 2>/dev/null)
             if nc -z -w 2 "$host" "$port" 2>/dev/null || timeout 2 bash -c "echo > /dev/tcp/${host}/${port}" 2>/dev/null; then
                 return 0  # Healthy
             fi
@@ -1918,7 +1913,7 @@ bootstrap_proxmox_ansible() {
     local attempt=0
     
     # Phase 1: PostgreSQL (database)
-    if is_service_healthy "postgres" "http://${pg_ip}:5432" "tcp"; then
+    if is_service_healthy "postgres" "tcp"; then
         info "PostgreSQL is already healthy - skipping deployment"
     else
         show_stage 40 "Deploying PostgreSQL" "Enterprise-grade database with row-level security."
@@ -1929,7 +1924,7 @@ bootstrap_proxmox_ansible() {
     fi
     
     # Phase 2: AuthZ API (needed for admin user creation and authentication)
-    if is_service_healthy "authz" "http://${authz_ip}:8010/health/live"; then
+    if is_service_healthy "authz"; then
         info "AuthZ API is already healthy - skipping deployment"
     else
         show_stage 55 "Deploying AuthZ API" "Zero-trust authentication with OAuth 2.0."
@@ -1939,10 +1934,12 @@ bootstrap_proxmox_ansible() {
         fi
         
         # Wait for AuthZ to be ready before creating admin user
+        local authz_health_url
+        authz_health_url=$(get_service_health_url "authz" "$ENVIRONMENT" "proxmox")
         info "Waiting for AuthZ API to be healthy at ${authz_ip}..."
         attempt=0
         while [[ $attempt -lt $max_attempts ]]; do
-            if curl -sf "http://${authz_ip}:8010/health/live" &>/dev/null; then
+            if curl -sf "$authz_health_url" &>/dev/null; then
                 success "AuthZ API is ready"
                 break
             fi
@@ -1953,7 +1950,7 @@ bootstrap_proxmox_ansible() {
     
     # Phase 3: Create Admin User (always run to ensure user exists)
     show_stage 65 "Creating Admin User" "Setting up admin account with magic link."
-    export AUTHZ_BASE_URL="http://${authz_ip}:8010"
+    export AUTHZ_BASE_URL="http://${authz_ip}:$(get_service_port authz)"
     if create_admin_user "$ADMIN_EMAIL"; then
         success "Admin user created successfully"
     else
@@ -1961,7 +1958,7 @@ bootstrap_proxmox_ansible() {
     fi
     
     # Phase 4: Deploy API (service orchestration - needed to deploy remaining services)
-    if is_service_healthy "deploy-api" "http://${authz_ip}:8011/health/live"; then
+    if is_service_healthy "deploy_api"; then
         info "Deploy API is already healthy - skipping deployment"
     else
         show_stage 70 "Deploying Deploy API" "Service orchestration and deployment automation."
@@ -1971,10 +1968,12 @@ bootstrap_proxmox_ansible() {
         fi
         
         # Wait for Deploy API to be ready
-        info "Waiting for Deploy API to be healthy at ${authz_ip}:8011..."
+        local deploy_health_url
+        deploy_health_url=$(get_service_health_url "deploy_api" "$ENVIRONMENT" "proxmox")
+        info "Waiting for Deploy API to be healthy..."
         attempt=0
         while [[ $attempt -lt 30 ]]; do
-            if curl -sf "http://${authz_ip}:8011/health/live" &>/dev/null; then
+            if curl -sf "$deploy_health_url" &>/dev/null; then
                 success "Deploy API is ready"
                 break
             fi
@@ -1984,7 +1983,7 @@ bootstrap_proxmox_ansible() {
     fi
     
     # Phase 5: Nginx (reverse proxy - needed before apps can be accessed)
-    if is_service_healthy "nginx" "http://${proxy_ip}:80/"; then
+    if is_service_healthy "nginx"; then
         info "Nginx is already healthy - skipping deployment"
     else
         show_stage 75 "Deploying Nginx" "Reverse proxy for secure access."
@@ -1995,7 +1994,7 @@ bootstrap_proxmox_ansible() {
     fi
     
     # Phase 6: Core Apps (AI Portal + Agent Manager)
-    if is_service_healthy "ai-portal" "http://${portal_ip}:3000/portal/api/health"; then
+    if is_service_healthy "ai_portal"; then
         info "AI Portal is already healthy - skipping deployment"
     else
         show_stage 85 "Deploying Core Apps" "AI Portal and Agent Manager."
@@ -2006,11 +2005,13 @@ bootstrap_proxmox_ansible() {
         
         # Phase 7: Wait for AI Portal to be ready
         show_stage 95 "Waiting for AI Portal" "Verifying services are healthy..."
+        local portal_health_url
+        portal_health_url=$(get_service_health_url "ai_portal" "$ENVIRONMENT" "proxmox")
         info "Waiting for AI Portal to be healthy at ${portal_ip}..."
         max_attempts=90
         attempt=0
         while [[ $attempt -lt $max_attempts ]]; do
-            if curl -sf "http://${portal_ip}:3000/portal/api/health" &>/dev/null; then
+            if curl -sf "$portal_health_url" &>/dev/null; then
                 success "AI Portal is ready"
                 break
             fi
@@ -3399,23 +3400,16 @@ INSTALL_SERVICES_ORDER=(
     "core-apps:443:frontend"  # Includes nginx, ai-portal, agent-manager
 )
 
-# Proxmox services (uses actual health endpoint URLs)
-# Format: "service_name|health_url|phase|ansible_tag" (using | as delimiter since URLs contain :)
-# Note: IPs are placeholders - actual IPs are calculated based on environment
-PROXMOX_SERVICES_ORDER_PRODUCTION=(
-    "postgres|http://10.96.200.203:5432|infrastructure|postgres"
-    "authz|http://10.96.200.210:8010/health/live|apis|authz"
-    "deploy-api|http://10.96.200.210:8011/health/live|apis|deploy"
-    "nginx|http://10.96.200.200:80/|frontend|nginx"
-    "ai-portal|http://10.96.200.201:3000/portal/api/health|frontend|apps"
-)
-
-PROXMOX_SERVICES_ORDER_STAGING=(
-    "postgres|http://10.96.201.203:5432|infrastructure|postgres"
-    "authz|http://10.96.201.210:8010/health/live|apis|authz"
-    "deploy-api|http://10.96.201.210:8011/health/live|apis|deploy"
-    "nginx|http://10.96.201.200:80/|frontend|nginx"
-    "ai-portal|http://10.96.201.201:3000/portal/api/health|frontend|apps"
+# Proxmox services installation order
+# Format: "service_name|phase|ansible_tag"
+# Health URLs are dynamically generated from the shared service registry (services.sh)
+# This ensures consistency between install.sh and manage.sh
+PROXMOX_SERVICES_INSTALL_ORDER=(
+    "postgres|infrastructure|postgres"
+    "authz|apis|authz"
+    "deploy_api|apis|deploy"
+    "nginx|frontend|nginx"
+    "ai_portal|frontend|apps"
 )
 
 # Validate container health in installation order
@@ -3492,6 +3486,7 @@ validate_install_health() {
 }
 
 # Validate Proxmox installation health using actual HTTP health checks
+# Uses the shared service registry (services.sh) for health URLs
 # Returns: 0 if all healthy, 1 if any unhealthy
 # Sets: FIRST_UNHEALTHY_SERVICE, FIRST_UNHEALTHY_PHASE, FIRST_UNHEALTHY_TAG
 validate_proxmox_install_health() {
@@ -3501,39 +3496,36 @@ validate_proxmox_install_health() {
     FIRST_UNHEALTHY_PHASE=""
     FIRST_UNHEALTHY_TAG=""
     
-    # Select services order based on environment
-    local -a services_order
-    if [[ "$env" == "production" ]]; then
-        services_order=("${PROXMOX_SERVICES_ORDER_PRODUCTION[@]}")
-    else
-        services_order=("${PROXMOX_SERVICES_ORDER_STAGING[@]}")
-    fi
+    info "Validating Proxmox installation health (${#PROXMOX_SERVICES_INSTALL_ORDER[@]} services)..."
     
-    info "Validating Proxmox installation health (${#services_order[@]} services)..."
-    
-    for service_entry in "${services_order[@]}"; do
-        # Parse: "service_name|health_url|phase|ansible_tag" (using | as delimiter)
+    for service_entry in "${PROXMOX_SERVICES_INSTALL_ORDER[@]}"; do
+        # Parse: "service_name|phase|ansible_tag"
         local service_name="${service_entry%%|*}"
         local rest="${service_entry#*|}"
-        local health_url="${rest%%|*}"
-        rest="${rest#*|}"
         local phase="${rest%%|*}"
         local ansible_tag="${rest#*|}"
         
+        # Get health URL from shared service registry
+        local health_url
+        health_url=$(get_service_health_url "$service_name" "$env" "proxmox" 2>/dev/null)
+        
+        # Display name for user output (convert underscores to hyphens)
+        local display_name="${service_name//_/-}"
+        
         # Special handling for postgres (TCP check, not HTTP)
         if [[ "$service_name" == "postgres" ]]; then
-            # Extract host and port from URL format http://host:port
+            # Get IP and port from service registry
             local pg_host
             local pg_port
-            pg_host=$(echo "$health_url" | sed -E 's|https?://([^:]+):([0-9]+).*|\1|')
-            pg_port=$(echo "$health_url" | sed -E 's|https?://([^:]+):([0-9]+).*|\2|')
+            pg_host=$(get_service_ip "$service_name" "$env" "proxmox" 2>/dev/null)
+            pg_port=$(get_service_port "$service_name" 2>/dev/null)
             
             # Check if postgres port is accessible
             if nc -z -w 2 "$pg_host" "$pg_port" 2>/dev/null || timeout 2 bash -c "echo > /dev/tcp/${pg_host}/${pg_port}" 2>/dev/null; then
-                echo "  ✓ $service_name is healthy"
+                echo "  ✓ $display_name is healthy"
             else
-                warn "  ✗ $service_name is not accessible at ${pg_host}:${pg_port}"
-                FIRST_UNHEALTHY_SERVICE="$service_name"
+                warn "  ✗ $display_name is not accessible at ${pg_host}:${pg_port}"
+                FIRST_UNHEALTHY_SERVICE="$display_name"
                 FIRST_UNHEALTHY_PHASE="$phase"
                 FIRST_UNHEALTHY_TAG="$ansible_tag"
                 return 1
@@ -3547,18 +3539,18 @@ validate_proxmox_install_health() {
         
         case "$http_code" in
             200|301|302|401|403)
-                echo "  ✓ $service_name is healthy (HTTP $http_code)"
+                echo "  ✓ $display_name is healthy (HTTP $http_code)"
                 ;;
             000)
-                warn "  ✗ $service_name is not responding at $health_url"
-                FIRST_UNHEALTHY_SERVICE="$service_name"
+                warn "  ✗ $display_name is not responding at $health_url"
+                FIRST_UNHEALTHY_SERVICE="$display_name"
                 FIRST_UNHEALTHY_PHASE="$phase"
                 FIRST_UNHEALTHY_TAG="$ansible_tag"
                 return 1
                 ;;
             *)
-                warn "  ✗ $service_name returned HTTP $http_code at $health_url"
-                FIRST_UNHEALTHY_SERVICE="$service_name"
+                warn "  ✗ $display_name returned HTTP $http_code at $health_url"
+                FIRST_UNHEALTHY_SERVICE="$display_name"
                 FIRST_UNHEALTHY_PHASE="$phase"
                 FIRST_UNHEALTHY_TAG="$ansible_tag"
                 return 1
