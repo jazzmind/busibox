@@ -199,12 +199,16 @@ async def execute_deployment(
             status.logs.append(f"[{datetime.utcnow().isoformat()}] GitHub token provided: {'yes' if has_token else 'NO - private repos will fail!'}")
             await broadcast_status(deployment_id)
             
+            # Merge secrets and envVars (envVars takes precedence)
+            env_vars = {**deploy_config.secrets, **deploy_config.envVars}
+            
             success, message = await deploy_core_app(
                 app_id=manifest.id,
                 github_ref=github_ref,
                 logs=deploy_logs,
                 environment=environment,
-                github_token=deploy_config.githubToken
+                github_token=deploy_config.githubToken,
+                env_vars=env_vars
             )
             
             # ALWAYS attach deploy_logs to status.logs so we can see stdout/stderr

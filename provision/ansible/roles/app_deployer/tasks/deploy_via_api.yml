@@ -52,50 +52,110 @@
   tags:
     - deploy_via_api
 
-# =============================================================================
-# PRE-DEPLOYMENT: Create directory and .env file BEFORE Deploy API call
-# The Deploy API runs npm install which triggers postinstall scripts (e.g., prisma generate)
-# These scripts need environment variables like DATABASE_URL to be available
-# =============================================================================
-
-- name: Ensure application directory exists
-  file:
-    path: "{{ app.deploy_path }}"
-    state: directory
-    mode: "0755"
-    owner: root
-    group: root
+# Build environment variables for the app
+# Start with the static env vars from app config
+- name: Build app environment variables
+  set_fact:
+    app_env_vars: "{{ app.env | default({}) }}"
   tags:
     - deploy_via_api
 
-- name: Deploy application environment file (.env) before build
-  template:
-    src: "{{ playbook_dir }}/roles/secrets/templates/app.env.j2"
-    dest: "{{ app.deploy_path }}/.env"
-    mode: "0600"
-    owner: root
-    group: root
+# Resolve secrets and add to environment
+# This replicates the compute_secret macro logic from app.env.j2
+- name: Resolve secrets for app deployment
+  set_fact:
+    app_env_vars: >-
+      {{
+        app_env_vars | combine({
+          item | upper:
+            (secrets[app.name][item] if (secrets[app.name] is defined and secrets[app.name][item] is defined) else
+            ('postgresql://' ~ postgres_user ~ ':' ~ secrets.postgresql.password ~ '@' ~ postgres_host ~ ':' ~ postgres_port ~ '/' ~ (app.name | replace('-', '_'))) if item == 'database_url' else
+            secrets.jwt_secret if item == 'jwt_secret' else
+            secrets.session_secret if item == 'session_secret' else
+            secrets.jwt_secret if item == 'sso_jwt_secret' else
+            secrets.litellm_api_key if item == 'litellm_api_key' else
+            secrets.encryption_key if item == 'encryption_key' else
+            (secrets.allowed_email_domains | default('')) if item == 'allowed_email_domains' else
+            (secrets.smtp.from_email | default('')) if item == 'email_from' else
+            (secrets.smtp.host | default('')) if item == 'smtp_host' else
+            (secrets.smtp.port | default('')) if item == 'smtp_port' else
+            (secrets.smtp.user | default('')) if item == 'smtp_user' else
+            (secrets.smtp.password | default('')) if item == 'smtp_password' else
+            (secrets.smtp.secure | default('true')) if item == 'smtp_secure' else
+            (secrets.microsoft.client_id | default('')) if item == 'microsoft_client_id' else
+            (secrets.microsoft.client_secret | default('')) if item == 'microsoft_client_secret' else
+            (secrets.microsoft.tenant_id | default('')) if item == 'microsoft_tenant_id' else
+            (secrets.github.client_id | default('')) if item == 'github_client_id' else
+            (secrets.github.client_secret | default('')) if item == 'github_client_secret' else
+            ('https://' ~ full_domain ~ '/portal/api/admin/github/callback') if item == 'github_redirect_uri' else
+            (secrets.openai.api_key | default('')) if item == 'openai_api_key' else
+            (secrets.resend_api_key | default('')) if item == 'resend_api_key' else
+            core_apps_ip if item == 'current_container_ip' else
+            core_apps_ip if item == 'apps_container_ip' else
+            agent_ip if item == 'agent_container_ip' else
+            postgres_host if item == 'postgres_container_ip' else
+            (secrets.container_ssh_private_key | default('')) if item == 'container_ssh_private_key' else
+            secrets.jwt_secret if item == 'agent_api_key' else
+            secrets.minio.root_user if item == 'minio_access_key' else
+            secrets.minio.root_password if item == 'minio_secret_key' else
+            '')
+        })
+      }}
+  loop: "{{ app.secrets | default([]) }}"
   no_log: true
   tags:
     - deploy_via_api
 
-- name: Confirm .env file exists
-  stat:
-    path: "{{ app.deploy_path }}/.env"
-  register: env_file_stat
+# Also resolve optional_secrets (same logic, but these may be empty)
+- name: Resolve optional secrets for app deployment
+  set_fact:
+    app_env_vars: >-
+      {{
+        app_env_vars | combine({
+          item | upper:
+            (secrets[app.name][item] if (secrets[app.name] is defined and secrets[app.name][item] is defined) else
+            ('postgresql://' ~ postgres_user ~ ':' ~ secrets.postgresql.password ~ '@' ~ postgres_host ~ ':' ~ postgres_port ~ '/' ~ (app.name | replace('-', '_'))) if item == 'database_url' else
+            secrets.jwt_secret if item == 'jwt_secret' else
+            secrets.session_secret if item == 'session_secret' else
+            secrets.jwt_secret if item == 'sso_jwt_secret' else
+            secrets.litellm_api_key if item == 'litellm_api_key' else
+            secrets.encryption_key if item == 'encryption_key' else
+            (secrets.allowed_email_domains | default('')) if item == 'allowed_email_domains' else
+            (secrets.smtp.from_email | default('')) if item == 'email_from' else
+            (secrets.smtp.host | default('')) if item == 'smtp_host' else
+            (secrets.smtp.port | default('')) if item == 'smtp_port' else
+            (secrets.smtp.user | default('')) if item == 'smtp_user' else
+            (secrets.smtp.password | default('')) if item == 'smtp_password' else
+            (secrets.smtp.secure | default('true')) if item == 'smtp_secure' else
+            (secrets.microsoft.client_id | default('')) if item == 'microsoft_client_id' else
+            (secrets.microsoft.client_secret | default('')) if item == 'microsoft_client_secret' else
+            (secrets.microsoft.tenant_id | default('')) if item == 'microsoft_tenant_id' else
+            (secrets.github.client_id | default('')) if item == 'github_client_id' else
+            (secrets.github.client_secret | default('')) if item == 'github_client_secret' else
+            ('https://' ~ full_domain ~ '/portal/api/admin/github/callback') if item == 'github_redirect_uri' else
+            (secrets.openai.api_key | default('')) if item == 'openai_api_key' else
+            (secrets.resend_api_key | default('')) if item == 'resend_api_key' else
+            core_apps_ip if item == 'current_container_ip' else
+            core_apps_ip if item == 'apps_container_ip' else
+            agent_ip if item == 'agent_container_ip' else
+            postgres_host if item == 'postgres_container_ip' else
+            (secrets.container_ssh_private_key | default('')) if item == 'container_ssh_private_key' else
+            secrets.jwt_secret if item == 'agent_api_key' else
+            secrets.minio.root_user if item == 'minio_access_key' else
+            secrets.minio.root_password if item == 'minio_secret_key' else
+            '')
+        })
+      }}
+  loop: "{{ app.optional_secrets | default([]) }}"
+  no_log: true
   tags:
     - deploy_via_api
 
-- name: Fail if .env file was not created
-  fail:
-    msg: "Failed to create .env file at {{ app.deploy_path }}/.env"
-  when: not env_file_stat.stat.exists
+- name: Debug env vars count
+  debug:
+    msg: "Passing {{ app_env_vars | length }} environment variables to Deploy API for {{ app.name }}"
   tags:
     - deploy_via_api
-
-# =============================================================================
-# END PRE-DEPLOYMENT
-# =============================================================================
 
 - name: Deploy application via Deploy API
   uri:
@@ -111,7 +171,7 @@
         githubBranch: "{{ app.github_branch | default('main') }}"
         githubToken: "{{ (secrets.github.personal_access_token | default('')) if secrets.github is defined else '' }}"
         devMode: false
-        secrets: {}
+        envVars: "{{ app_env_vars }}"
     headers:
       Authorization: "Bearer {{ deploy_api_admin_token }}"
       Content-Type: application/json

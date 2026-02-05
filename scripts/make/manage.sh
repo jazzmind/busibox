@@ -111,35 +111,32 @@ get_services_for_group() {
 # Backend Detection
 # ============================================================================
 
-get_backend_type() {
-    local env="${BUSIBOX_ENV:-}"
+# Get current environment with fallback to BUSIBOX_ENV
+# This handles the case where ENVIRONMENT isn't set in the state file yet
+get_current_env() {
+    local env
+    env=$(get_state "ENVIRONMENT")
     if [[ -z "$env" ]]; then
-        env=$(get_state "ENVIRONMENT" "development")
+        env="${BUSIBOX_ENV:-staging}"
     fi
-    
-    # First check state file for configured backend
+    echo "$env"
+}
+
+get_backend_type() {
+    local env
+    env=$(get_current_env)
     local backend
     backend=$(get_backend "$env" 2>/dev/null)
-    
-    if [[ -n "$backend" ]]; then
-        echo "$backend"
-        return
+    if [[ -z "$backend" ]]; then
+        backend="docker"
     fi
-    
-    # Auto-detect: if pct command exists, we're on Proxmox
-    if command -v pct &>/dev/null; then
-        echo "proxmox"
-    else
-        echo "docker"
-    fi
+    echo "$backend"
 }
 
 # Get container prefix based on environment
 get_container_prefix() {
-    local env="${BUSIBOX_ENV:-}"
-    if [[ -z "$env" ]]; then
-        env=$(get_state "ENVIRONMENT" "development")
-    fi
+    local env
+    env=$(get_current_env)
     
     case "$env" in
         production) echo "prod" ;;
@@ -221,10 +218,8 @@ get_docker_service_status() {
 # Get status of a single service (Proxmox LXC)
 get_proxmox_service_status() {
     local service="$1"
-    local env="${BUSIBOX_ENV:-}"
-    if [[ -z "$env" ]]; then
-        env=$(get_state "ENVIRONMENT" "staging")
-    fi
+    local env
+    env=$(get_current_env)
     
     # Map service to LXC container name
     local lxc_prefix
@@ -426,7 +421,7 @@ start_all_services() {
         make docker-up
     else
         local env
-        env=$(get_state "ENVIRONMENT" || echo "staging")
+        env=$(get_current_env)
         cd "${REPO_ROOT}/provision/ansible"
         make start-all INV="inventory/${env}"
     fi
@@ -448,7 +443,7 @@ stop_all_services() {
         make docker-down
     else
         local env
-        env=$(get_state "ENVIRONMENT" || echo "staging")
+        env=$(get_current_env)
         cd "${REPO_ROOT}/provision/ansible"
         make stop-all INV="inventory/${env}"
     fi
@@ -470,7 +465,7 @@ restart_all_services() {
         make docker-restart
     else
         local env
-        env=$(get_state "ENVIRONMENT" || echo "staging")
+        env=$(get_current_env)
         cd "${REPO_ROOT}/provision/ansible"
         make restart-all INV="inventory/${env}"
     fi
@@ -528,7 +523,7 @@ manage_service() {
                     docker start "${prefix}-${service}" 2>/dev/null || echo "Failed to start"
                 else
                     local env
-                    env=$(get_state "ENVIRONMENT" || echo "staging")
+                    env=$(get_current_env)
                     cd "${REPO_ROOT}/provision/ansible"
                     make "start-${service}" INV="inventory/${env}" 2>/dev/null || echo "Failed to start"
                 fi
@@ -539,7 +534,7 @@ manage_service() {
                     docker stop "${prefix}-${service}" 2>/dev/null || echo "Failed to stop"
                 else
                     local env
-                    env=$(get_state "ENVIRONMENT" || echo "staging")
+                    env=$(get_current_env)
                     cd "${REPO_ROOT}/provision/ansible"
                     make "stop-${service}" INV="inventory/${env}" 2>/dev/null || echo "Failed to stop"
                 fi
@@ -550,7 +545,7 @@ manage_service() {
                     docker restart "${prefix}-${service}" 2>/dev/null || echo "Failed to restart"
                 else
                     local env
-                    env=$(get_state "ENVIRONMENT" || echo "staging")
+                    env=$(get_current_env)
                     cd "${REPO_ROOT}/provision/ansible"
                     make "restart-${service}" INV="inventory/${env}" 2>/dev/null || echo "Failed to restart"
                 fi
@@ -564,7 +559,7 @@ manage_service() {
                     docker logs -f "${prefix}-${service}" 2>/dev/null || echo "No logs available"
                 else
                     local env
-                    env=$(get_state "ENVIRONMENT" || echo "staging")
+                    env=$(get_current_env)
                     ssh "root@${service}" "journalctl -u ${service} -f" 2>/dev/null || echo "No logs available"
                 fi
                 ;;
@@ -573,12 +568,12 @@ manage_service() {
                 info "Redeploying ${service}..."
                 if [[ "$backend" == "docker" ]]; then
                     local env
-                    env=$(get_state "ENVIRONMENT" || echo "development")
+                    env=$(get_current_env)
                     cd "$REPO_ROOT"
                     make docker-build SERVICE="$service" ENV="$env" && make docker-up SERVICE="$service" ENV="$env"
                 else
                     local env
-                    env=$(get_state "ENVIRONMENT" || echo "staging")
+                    env=$(get_current_env)
                     cd "${REPO_ROOT}/provision/ansible"
                     make "deploy-${service}" INV="inventory/${env}"
                 fi
@@ -592,7 +587,7 @@ manage_service() {
                 echo ""
                 info "Rebuilding core-apps container (full Docker rebuild)..."
                 local env
-                env=$(get_state "ENVIRONMENT" || echo "development")
+                env=$(get_current_env)
                 cd "$REPO_ROOT"
                 make docker-build SERVICE=core-apps ENV="$env" && make docker-up SERVICE=core-apps ENV="$env"
                 read -n 1 -s -r -p "Press any key to continue..."
@@ -630,7 +625,7 @@ manage_service() {
                         else
                             # Proxmox: use Ansible
                             local env
-                            env=$(get_state "ENVIRONMENT" || echo "staging")
+                            env=$(get_current_env)
                             cd "${REPO_ROOT}/provision/ansible"
                             make deploy-ai-portal INV="inventory/${env}"
                         fi
@@ -645,7 +640,7 @@ manage_service() {
                         else
                             # Proxmox: use Ansible
                             local env
-                            env=$(get_state "ENVIRONMENT" || echo "staging")
+                            env=$(get_current_env)
                             cd "${REPO_ROOT}/provision/ansible"
                             make deploy-agent-manager INV="inventory/${env}"
                         fi
@@ -663,7 +658,7 @@ manage_service() {
                         else
                             # Proxmox: use Ansible
                             local env
-                            env=$(get_state "ENVIRONMENT" || echo "staging")
+                            env=$(get_current_env)
                             cd "${REPO_ROOT}/provision/ansible"
                             make deploy-ai-portal INV="inventory/${env}"
                             echo ""
@@ -762,10 +757,8 @@ select_service() {
 show_manage_menu() {
     local backend
     backend=$(get_backend_type)
-    local env="${BUSIBOX_ENV:-}"
-    if [[ -z "$env" ]]; then
-        env=$(get_state "ENVIRONMENT" "development")
-    fi
+    local env
+    env=$(get_current_env)
     
     clear
     box_header "BUSIBOX - SERVICE MANAGEMENT"
@@ -794,6 +787,13 @@ main() {
         echo "No environment configured."
         echo "Run 'make' to select an environment first."
         exit 1
+    fi
+    
+    # Ensure ENVIRONMENT is set in state file if BUSIBOX_ENV is known
+    local current_env
+    current_env=$(get_state "ENVIRONMENT")
+    if [[ -z "$current_env" ]] && [[ -n "$BUSIBOX_ENV" ]]; then
+        set_state "ENVIRONMENT" "$BUSIBOX_ENV"
     fi
     
     while true; do

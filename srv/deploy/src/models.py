@@ -43,7 +43,8 @@ class DeploymentConfig(BaseModel):
     githubBranch: str = 'main'
     githubToken: Optional[str] = None
     environment: Literal['production', 'staging'] = 'production'
-    secrets: Dict[str, str] = {}  # Additional env vars
+    secrets: Dict[str, str] = {}  # Legacy: Additional env vars (use envVars instead)
+    envVars: Dict[str, str] = {}  # Environment variables for build and runtime
     # Local development mode
     localDevDir: Optional[str] = None  # Directory name in /srv/dev-apps/
     devMode: bool = False
