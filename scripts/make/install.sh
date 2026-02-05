@@ -3400,22 +3400,22 @@ INSTALL_SERVICES_ORDER=(
 )
 
 # Proxmox services (uses actual health endpoint URLs)
-# Format: "service_name:health_url:phase:ansible_tag"
+# Format: "service_name|health_url|phase|ansible_tag" (using | as delimiter since URLs contain :)
 # Note: IPs are placeholders - actual IPs are calculated based on environment
 PROXMOX_SERVICES_ORDER_PRODUCTION=(
-    "postgres:http://10.96.200.203:5432:infrastructure:postgres"
-    "authz:http://10.96.200.210:8010/health/live:apis:authz"
-    "deploy-api:http://10.96.200.210:8011/health/live:apis:deploy"
-    "nginx:http://10.96.200.200:80/:frontend:nginx"
-    "ai-portal:http://10.96.200.201:3000/portal/api/health:frontend:apps"
+    "postgres|http://10.96.200.203:5432|infrastructure|postgres"
+    "authz|http://10.96.200.210:8010/health/live|apis|authz"
+    "deploy-api|http://10.96.200.210:8011/health/live|apis|deploy"
+    "nginx|http://10.96.200.200:80/|frontend|nginx"
+    "ai-portal|http://10.96.200.201:3000/portal/api/health|frontend|apps"
 )
 
 PROXMOX_SERVICES_ORDER_STAGING=(
-    "postgres:http://10.96.201.203:5432:infrastructure:postgres"
-    "authz:http://10.96.201.210:8010/health/live:apis:authz"
-    "deploy-api:http://10.96.201.210:8011/health/live:apis:deploy"
-    "nginx:http://10.96.201.200:80/:frontend:nginx"
-    "ai-portal:http://10.96.201.201:3000/portal/api/health:frontend:apps"
+    "postgres|http://10.96.201.203:5432|infrastructure|postgres"
+    "authz|http://10.96.201.210:8010/health/live|apis|authz"
+    "deploy-api|http://10.96.201.210:8011/health/live|apis|deploy"
+    "nginx|http://10.96.201.200:80/|frontend|nginx"
+    "ai-portal|http://10.96.201.201:3000/portal/api/health|frontend|apps"
 )
 
 # Validate container health in installation order
@@ -3512,13 +3512,13 @@ validate_proxmox_install_health() {
     info "Validating Proxmox installation health (${#services_order[@]} services)..."
     
     for service_entry in "${services_order[@]}"; do
-        # Parse: "service_name:health_url:phase:ansible_tag"
-        local service_name="${service_entry%%:*}"
-        local rest="${service_entry#*:}"
-        local health_url="${rest%%:*}"
-        rest="${rest#*:}"
-        local phase="${rest%%:*}"
-        local ansible_tag="${rest#*:}"
+        # Parse: "service_name|health_url|phase|ansible_tag" (using | as delimiter)
+        local service_name="${service_entry%%|*}"
+        local rest="${service_entry#*|}"
+        local health_url="${rest%%|*}"
+        rest="${rest#*|}"
+        local phase="${rest%%|*}"
+        local ansible_tag="${rest#*|}"
         
         # Special handling for postgres (TCP check, not HTTP)
         if [[ "$service_name" == "postgres" ]]; then
