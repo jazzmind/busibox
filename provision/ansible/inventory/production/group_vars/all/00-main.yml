@@ -49,9 +49,10 @@ authz_ip: "{{ network_base_octets }}.210"
 # Domain Configuration - Production
 # ============================================================================
 # full_domain is the complete domain for this environment (e.g., ai.jaycashman.com)
-# It comes from the FULL_DOMAIN value set during installation
+# It comes from the SITE_DOMAIN value set during installation
 # For backwards compatibility, we also check base_domain and build up if full_domain not set
 full_domain: "{{ site_domain | default(base_domain) }}"
+domain: "{{ full_domain }}"  # Alias for templates that use 'domain'
 www_domain: "www.{{ full_domain }}"
 env_subdomain_suffix: ""  # No suffix for production (e.g., "agents" not "agents-prod")
 
