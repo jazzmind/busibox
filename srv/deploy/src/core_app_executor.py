@@ -285,7 +285,8 @@ NPMRC_EOF
                 cd "$APP_DIR"
                 git fetch origin
                 git checkout {github_ref}
-                git pull origin {github_ref}
+                # Use reset --hard to discard local changes (e.g., package-lock.json from npm install)
+                git reset --hard origin/{github_ref}
             else
                 echo "Cloning repository from GitHub..."
                 rm -rf "$APP_DIR"  # Clean up any partial clone
