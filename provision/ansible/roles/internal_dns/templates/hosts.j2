@@ -66,6 +66,13 @@ ff02::2     ip6-allrouters
 {% endif %}
 
 # =============================================================================
+# Proxmox Host (for deploy-api to run make install commands)
+# =============================================================================
+{% if proxmox_host is defined and proxmox_host %}
+{{ proxmox_host }}         proxmox pve hypervisor
+{% endif %}
+
+# =============================================================================
 # Cross-Environment Access (if needed)
 # =============================================================================
 {% if busibox_env == 'staging' and use_production_vllm | default(false) %}
