@@ -17,10 +17,19 @@ _SERVICES_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ============================================================================
 # Format: "container_id:repo:path:health_endpoint:port"
 # - container_id: Base container ID (200 for prod, 300 for staging)
+#   NOTE: Container IDs are only used as fallback when DNS is unavailable.
+#   Primary resolution uses hostnames (e.g., 'deploy-api') via /etc/hosts.
 # - repo: Git repository (busibox, ai-portal, agent-manager, etc.)
 # - path: Path within repo (srv/authz, etc.) - empty for external repos
 # - health_endpoint: Health check path
 # - port: Service port
+#
+# DNS RESOLUTION (PREFERRED):
+# Services are primarily resolved via DNS hostnames defined in the internal_dns
+# Ansible role. The /etc/hosts file on each container (and Proxmox host) contains
+# mappings like: "10.96.201.210  deploy-api deploy authz-api authz"
+# This allows using hostnames like 'deploy-api' regardless of network configuration.
+# See: provision/ansible/roles/internal_dns/templates/hosts.j2
 
 # Service definitions as simple variables
 _SERVICE_authz="210:busibox:srv/authz:/health/live:8010"
@@ -180,8 +189,43 @@ get_service_display_name() {
     echo "${name:-$service}"
 }
 
+# Get service hostname (DNS alias)
+# Usage: get_service_hostname "deploy_api"
+# Returns: deploy-api (matches /etc/hosts entries from internal_dns role)
+get_service_hostname() {
+    local service=$1
+    
+    # Map service names to DNS hostnames (from internal_dns role)
+    case "$service" in
+        authz|authz_api)     echo "authz-api" ;;
+        deploy|deploy_api)   echo "deploy-api" ;;
+        docs|docs_api)       echo "docs-api" ;;
+        data|data_api)       echo "data-api" ;;
+        search|search_api)   echo "search-api" ;;
+        agent|agent_api)     echo "agent-api" ;;
+        embedding|embedding_api) echo "embedding-api" ;;
+        postgres|pg)         echo "postgres" ;;
+        redis)               echo "redis" ;;
+        milvus)              echo "milvus" ;;
+        minio|files)         echo "minio" ;;
+        nginx|proxy)         echo "nginx" ;;
+        litellm)             echo "litellm" ;;
+        vllm)                echo "vllm" ;;
+        mlx)                 echo "mlx" ;;
+        ai_portal)           echo "ai-portal" ;;
+        agent_manager)       echo "agent-manager" ;;
+        *)                   echo "$service" ;;
+    esac
+}
+
 # Get container IP for service
 # Usage: get_service_ip "authz" "staging" "proxmox"
+# 
+# For Proxmox: Uses DNS hostnames from /etc/hosts (set by internal_dns role)
+# For Docker: Uses localhost
+#
+# NOTE: The Proxmox host must have /etc/hosts configured with these entries.
+# Run 'make install SERVICE=internal_dns' or ensure hosts file is set up.
 get_service_ip() {
     local service=$1
     local env=${2:-production}
@@ -193,15 +237,25 @@ get_service_ip() {
         return 0
     fi
     
-    # Proxmox uses container IPs
-    local container_id=$(get_service_container_id "$service" "$env")
+    # Proxmox: Use DNS hostname (resolved via /etc/hosts)
+    # This avoids hardcoding IP addresses and network octets
+    local hostname
+    hostname=$(get_service_hostname "$service")
     
-    if [[ "$env" == "staging" ]]; then
-        # Staging: Container IDs are production + 100 (e.g., 201 -> 301)
-        # IP last octet is container_id - 100 (e.g., 301 -> .201)
-        echo "10.96.201.$((container_id - 100))"
+    # Check if hostname is resolvable, fall back to computed IP if not
+    if getent hosts "$hostname" &>/dev/null 2>&1; then
+        echo "$hostname"
     else
-        echo "10.96.200.$container_id"
+        # Fallback: compute IP from container ID (legacy behavior)
+        # This handles cases where /etc/hosts isn't set up yet
+        local container_id
+        container_id=$(get_service_container_id "$service" "$env")
+        
+        if [[ "$env" == "staging" ]]; then
+            echo "10.96.201.$((container_id - 100))"
+        else
+            echo "10.96.200.$container_id"
+        fi
     fi
 }
 
