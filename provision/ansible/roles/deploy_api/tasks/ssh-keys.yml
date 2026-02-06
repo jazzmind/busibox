@@ -38,10 +38,17 @@
   become: true
   tags: [deploy_api, deploy_api_ssh]
 
+- name: Scan Proxmox host SSH key from authz container
+  shell: "ssh-keyscan -t ed25519,rsa {{ deploy_api_proxmox_host }} 2>/dev/null"
+  register: proxmox_host_keys
+  changed_when: false
+  failed_when: proxmox_host_keys.stdout == ""
+  tags: [deploy_api, deploy_api_ssh]
+
 - name: Add Proxmox host to known_hosts on authz container
   known_hosts:
     name: "{{ deploy_api_proxmox_host }}"
-    key: "{{ lookup('pipe', 'ssh-keyscan -t ed25519,rsa ' + deploy_api_proxmox_host + ' 2>/dev/null') }}"
+    key: "{{ proxmox_host_keys.stdout }}"
     state: present
   tags: [deploy_api, deploy_api_ssh]
 
