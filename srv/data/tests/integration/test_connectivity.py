@@ -30,7 +30,7 @@ def test_postgres_connectivity():
     """Test PostgreSQL connectivity."""
     import asyncpg
     
-    host = os.getenv("POSTGRES_HOST", "10.96.201.203")
+    host = os.getenv("POSTGRES_HOST", "postgres")
     port = int(os.getenv("POSTGRES_PORT", "5432"))
     database = os.getenv("POSTGRES_DB", "agent")
     user = os.getenv("POSTGRES_USER", "busibox_test_user")
@@ -81,7 +81,7 @@ def test_milvus_connectivity():
     """Test Milvus connectivity."""
     from pymilvus import connections, utility
     
-    host = os.getenv("MILVUS_HOST", "10.96.201.204")
+    host = os.getenv("MILVUS_HOST", "milvus")
     port = int(os.getenv("MILVUS_PORT", "19530"))
     
     logger.info("Testing Milvus connectivity", host=host, port=port)
@@ -200,7 +200,7 @@ def test_redis_connectivity():
     
     # Redis might be on data container or separate
     # Try common locations
-    host = os.getenv("REDIS_HOST", "10.96.201.206")
+    host = os.getenv("REDIS_HOST", "redis")
     port = int(os.getenv("REDIS_PORT", "6379"))
     
     logger.info("Testing Redis connectivity", host=host, port=port)
@@ -239,7 +239,7 @@ def test_minio_connectivity():
     from minio.error import S3Error
     
     # MinIO is on files container
-    endpoint = os.getenv("MINIO_ENDPOINT", "10.96.201.205:9000")
+    endpoint = os.getenv("MINIO_ENDPOINT", "minio:9000")
     access_key = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
     secret_key = os.getenv("MINIO_SECRET_KEY", "minioadminchange")
     secure = os.getenv("MINIO_SECURE", "false").lower() == "true"

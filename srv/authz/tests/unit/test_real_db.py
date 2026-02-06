@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 # owned by busibox_test_user - completely separate from production data
 # For Proxmox: defaults point to staging test database
 # For Docker: TEST_DB_* env vars are set by run-local-tests.sh
-TEST_DB_HOST = os.getenv("TEST_DB_HOST", "10.96.201.203")
+TEST_DB_HOST = os.getenv("TEST_DB_HOST", "postgres")
 TEST_DB_PORT = int(os.getenv("TEST_DB_PORT", "5432"))
 TEST_DB_NAME = os.getenv("TEST_DB_NAME", "test_authz")
 TEST_DB_USER = os.getenv("TEST_DB_USER", "busibox_test_user")

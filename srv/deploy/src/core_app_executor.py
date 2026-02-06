@@ -75,9 +75,16 @@ def is_core_app(app_id: str) -> bool:
 
 
 def is_docker_environment() -> bool:
-    """Check if running in Docker (local development)"""
-    # In Docker, POSTGRES_HOST is typically 'postgres' (container name) not an IP
-    return not config.postgres_host.startswith('10.')
+    """Check if running in Docker (local development).
+    
+    Uses config.is_docker_backend() which checks:
+    1. DEPLOYMENT_BACKEND environment variable (explicit setting)
+    2. Auto-detection based on POSTGRES_HOST and other indicators
+    
+    Returns:
+        True if Docker backend, False if Proxmox/LXC
+    """
+    return config.is_docker_backend()
 
 
 async def execute_docker_command(command: str, timeout: int = 600) -> Tuple[str, str, int]:

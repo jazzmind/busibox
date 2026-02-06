@@ -66,7 +66,7 @@ logger = structlog.get_logger()
 class PoolConfig:
     """Configuration for AsyncPG connection pool."""
     
-    host: str = "10.96.200.203"
+    host: str = "postgres"
     port: int = 5432
     database: str = "busibox"
     user: str = "app_user"
@@ -88,7 +88,7 @@ class PoolConfig:
         Supports common config key patterns used across services.
         """
         return cls(
-            host=config.get("postgres_host", config.get("host", "10.96.200.203")),
+            host=config.get("postgres_host", config.get("host", "postgres")),
             port=int(config.get("postgres_port", config.get("port", 5432))),
             database=config.get("postgres_db", config.get("database", "busibox")),
             user=config.get("postgres_user", config.get("user", "app_user")),
@@ -104,7 +104,7 @@ class PoolConfig:
     def from_env(cls) -> "PoolConfig":
         """Create PoolConfig from environment variables."""
         return cls(
-            host=os.environ.get("POSTGRES_HOST", "10.96.200.203"),
+            host=os.environ.get("POSTGRES_HOST", "postgres"),
             port=int(os.environ.get("POSTGRES_PORT", "5432")),
             database=os.environ.get("POSTGRES_DB", "busibox"),
             user=os.environ.get("POSTGRES_USER", "app_user"),

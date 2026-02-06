@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     debug: bool = False
 
     # PostgreSQL configuration
-    postgres_host: str = "10.96.200.203"
+    postgres_host: str = "postgres"
     postgres_port: int = 5432
     postgres_db: str = "voice_agent"
     postgres_user: str = "busibox_user"

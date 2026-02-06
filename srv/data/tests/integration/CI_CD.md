@@ -56,29 +56,29 @@ export ANSIBLE_VAULT_PASSWORD_FILE=<(echo "$ANSIBLE_VAULT_PASSWORD")
 # Load Ansible variables
 cd provision/ansible
 
-# Export PostgreSQL config
-export POSTGRES_HOST=$(ansible-inventory -i inventory/test/hosts.yml --list | jq -r '.all.vars.postgres_host // "10.96.201.203"')
+# Export PostgreSQL config (use DNS hostnames from internal_dns role)
+export POSTGRES_HOST=$(ansible-inventory -i inventory/test/hosts.yml --list | jq -r '.all.vars.postgres_host // "postgres"')
 export POSTGRES_PORT=$(ansible-inventory -i inventory/test/hosts.yml --list | jq -r '.all.vars.postgres_port // "5432"')
 export POSTGRES_DB=$(ansible-inventory -i inventory/test/hosts.yml --list | jq -r '.all.vars.postgres_db // "busibox_test"')
 export POSTGRES_USER=$(ansible-inventory -i inventory/test/hosts.yml --list | jq -r '.all.vars.postgres_user // "busibox_test_user"')
 export POSTGRES_PASSWORD=$(ansible-vault view roles/secrets/vars/vault.yml | grep -A 1 "postgresql:" | grep "password:" | awk '{print $2}' | tr -d '"')
 
-# Export Milvus config
-export MILVUS_HOST=$(ansible-inventory -i inventory/test/hosts.yml --list | jq -r '.all.vars.milvus_host // "10.96.201.204"')
+# Export Milvus config (use DNS hostnames from internal_dns role)
+export MILVUS_HOST=$(ansible-inventory -i inventory/test/hosts.yml --list | jq -r '.all.vars.milvus_host // "milvus"')
 export MILVUS_PORT=$(ansible-inventory -i inventory/test/hosts.yml --list | jq -r '.all.vars.milvus_port // "19530"')
 export MILVUS_COLLECTION=$(ansible-inventory -i inventory/test/hosts.yml --list | jq -r '.all.vars.milvus_collection // "documents"')
 
-# Export Redis config
-export REDIS_HOST=$(ansible-inventory -i inventory/test/hosts.yml --list | jq -r '.all.vars.redis_host // "10.96.201.206"')
+# Export Redis config (use DNS hostnames from internal_dns role)
+export REDIS_HOST=$(ansible-inventory -i inventory/test/hosts.yml --list | jq -r '.all.vars.redis_host // "redis"')
 export REDIS_PORT=$(ansible-inventory -i inventory/test/hosts.yml --list | jq -r '.all.vars.redis_port // "6379"')
 
-# Export MinIO config
-export MINIO_ENDPOINT=$(ansible-inventory -i inventory/test/hosts.yml --list | jq -r '.all.vars.minio_host // "10.96.201.205"):$(ansible-inventory -i inventory/test/hosts.yml --list | jq -r '.all.vars.minio_port // "9000"')
+# Export MinIO config (use DNS hostnames from internal_dns role)
+export MINIO_ENDPOINT=$(ansible-inventory -i inventory/test/hosts.yml --list | jq -r '.all.vars.minio_host // "minio"):$(ansible-inventory -i inventory/test/hosts.yml --list | jq -r '.all.vars.minio_port // "9000"')
 export MINIO_ACCESS_KEY=$(ansible-inventory -i inventory/test/hosts.yml --list | jq -r '.all.vars.minio_root_user // "minioadmin"')
 export MINIO_SECRET_KEY=$(ansible-inventory -i inventory/test/hosts.yml --list | jq -r '.all.vars.minio_root_password // "minioadminchange"')
 
 # Export liteLLM config
-export LITELLM_BASE_URL="http://$(ansible-inventory -i inventory/test/hosts.yml --list | jq -r '.all.vars.litellm_host // "10.96.201.207"):$(ansible-inventory -i inventory/test/hosts.yml --list | jq -r '.all.vars.litellm_port // "4000"')"
+export LITELLM_BASE_URL="http://$(ansible-inventory -i inventory/test/hosts.yml --list | jq -r '.all.vars.litellm_host // "litellm"):$(ansible-inventory -i inventory/test/hosts.yml --list | jq -r '.all.vars.litellm_port // "4000"')"
 export LITELLM_API_KEY=$(ansible-vault view roles/secrets/vars/vault.yml | grep "litellm_api_key:" | awk '{print $2}' | tr -d '"')
 
 echo "Environment variables exported successfully"

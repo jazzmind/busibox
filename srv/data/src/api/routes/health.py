@@ -35,7 +35,7 @@ async def check_postgres() -> Dict[str, any]:
         
         start = time.time()
         conn = await asyncpg.connect(
-            host=config.get("postgres_host", "10.96.200.203"),
+            host=config.get("postgres_host", "postgres"),
             port=config.get("postgres_port", 5432),
             database=config.get("postgres_db", "busibox"),
             user=config.get("postgres_user", "postgres"),
@@ -113,7 +113,7 @@ async def check_milvus() -> Dict[str, any]:
         try:
             connections.connect(
                 "health_check",
-                host=config.get("milvus_host", "10.96.200.204"),
+                host=config.get("milvus_host", "milvus"),
                 port=config.get("milvus_port", "19530"),
                 timeout=2,
             )

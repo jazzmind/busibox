@@ -18,22 +18,26 @@ deploy_api_authz_url: "http://localhost:{{ authz_service_port | default(8010) }}
 
 # PostgreSQL (for database provisioning)
 # Uses busibox_user which has CREATEDB permission (see init-databases.sql)
-deploy_api_postgres_host: "{{ hostvars[groups['pg'][0]]['ansible_host'] | default('10.96.200.202') }}"
+# Prefer DNS hostname 'postgres' (resolved via /etc/hosts from internal_dns role)
+# Falls back to Ansible host IP if DNS not available
+deploy_api_postgres_host: "{{ 'postgres' if (lookup('pipe', 'getent hosts postgres 2>/dev/null || true') | length > 0) else (hostvars[groups['pg'][0]]['ansible_host'] | default('postgres')) }}"
 deploy_api_postgres_port: 5432
 deploy_api_postgres_admin_user: "{{ secrets.postgresql.user | default('busibox_user') }}"
 deploy_api_postgres_admin_password: "{{ secrets.postgresql.password | default('') }}"
 
-# Container IPs
+# Container hosts (prefer DNS hostnames from internal_dns role)
 # Note: Use core_apps group (not apps) - staging/production inventories use this group name
-deploy_api_apps_container_ip: "{{ hostvars[groups['core_apps'][0]]['ansible_host'] | default('10.96.200.201') }}"
-deploy_api_apps_container_ip_staging: "{{ hostvars[groups['core_apps'][0]]['ansible_host'] | default('10.96.201.201') }}"
+# DNS hostnames like 'ai-portal' are resolved via /etc/hosts on each container
+deploy_api_apps_container_ip: ai-portal
+deploy_api_apps_container_ip_staging: ai-portal
 
 # SSH key for remote operations
 deploy_api_ssh_key_path: /root/.ssh/id_rsa
 
 # Nginx configuration
 # Note: Use 'proxy' group (not 'nginx') - inventories use 'proxy' as the group name
-deploy_api_nginx_host: "{{ hostvars[groups['proxy'][0]]['ansible_host'] | default('10.96.200.200') }}"
+# Prefer DNS hostname 'nginx' (resolved via /etc/hosts from internal_dns role)
+deploy_api_nginx_host: nginx
 deploy_api_nginx_config_dir: /etc/nginx/sites-available/apps
 deploy_api_nginx_enabled_dir: /etc/nginx/sites-enabled
 

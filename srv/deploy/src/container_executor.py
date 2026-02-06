@@ -115,9 +115,11 @@ def get_app_volume_names(app_id: str) -> Dict[str, str]:
 
 
 def is_docker_environment() -> bool:
-    """Check if running in Docker (local development)"""
-    # In Docker, POSTGRES_HOST is typically 'postgres' (container name) not an IP
-    return not config.postgres_host.startswith('10.')
+    """Check if running in Docker (local development).
+    
+    Uses config.is_docker_backend() for robust detection.
+    """
+    return config.is_docker_backend()
 
 
 async def create_app_volumes(app_id: str, logs: List[str]) -> bool:

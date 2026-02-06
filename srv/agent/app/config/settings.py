@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     
     # Milvus configuration (for insights)
     milvus_host: str = Field(
-        "10.96.200.204",
+        "milvus",
         description="Milvus host for insights storage",
     )
     milvus_port: int = Field(

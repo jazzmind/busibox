@@ -6,27 +6,32 @@ Generates environment variables for deployed apps based on:
 - Known service endpoints
 - Database credentials
 - Container configuration
+
+DNS Hostnames:
+--------------
+On Proxmox, services are accessed via DNS hostnames defined in /etc/hosts
+(configured by the internal_dns Ansible role). This allows consistent
+configuration regardless of network topology.
 """
 
 import logging
 from typing import Dict, Optional
 from .models import BusiboxManifest, DeploymentConfig
 from .config import config
+from .core_app_executor import is_docker_environment
 
 logger = logging.getLogger(__name__)
-
-
-def is_docker_environment() -> bool:
-    """Check if running in Docker (local development)"""
-    return not config.postgres_host.startswith('10.')
 
 
 def get_service_endpoints(environment: str = 'production') -> Dict[str, str]:
     """
     Get service endpoint URLs based on environment.
     
-    In Docker: Use container hostnames
-    In Proxmox: Use container IPs
+    In Docker: Use container hostnames (Docker's internal DNS)
+    In Proxmox: Use DNS hostnames (resolved via /etc/hosts from internal_dns role)
+    
+    Note: Both environments now use hostnames - the main difference is the
+    DNS resolution mechanism (Docker internal DNS vs /etc/hosts).
     """
     if is_docker_environment():
         return {
@@ -51,28 +56,28 @@ def get_service_endpoints(environment: str = 'production') -> Dict[str, str]:
             'REDIS_PORT': '6379',
         }
     else:
-        # Proxmox LXC environment - use IPs from config
-        # These would typically be set via Ansible vars
-        base = '10.96.200' if environment == 'production' else '10.96.201'
+        # Proxmox LXC environment - use DNS hostnames from internal_dns role
+        # These hostnames are resolved via /etc/hosts on each container
+        # No need for hardcoded IPs - hostnames work across environments
         return {
             # Database
-            'POSTGRES_HOST': f'{base}.203',
+            'POSTGRES_HOST': 'postgres',
             'POSTGRES_PORT': '5432',
             
             # Auth
-            'AUTHZ_BASE_URL': f'http://{base}.210:8010',
+            'AUTHZ_BASE_URL': 'http://authz-api:8010',
             
             # LLM
-            'LITELLM_BASE_URL': f'http://{base}.207:4000/v1',
+            'LITELLM_BASE_URL': 'http://litellm:4000/v1',
             
             # APIs
-            'AGENT_API_URL': f'http://{base}.202:8000',
-            'DATA_API_URL': f'http://{base}.206:8002',
-            'SEARCH_API_URL': f'http://{base}.204:8003',
+            'AGENT_API_URL': 'http://agent-api:8000',
+            'DATA_API_URL': 'http://data-api:8002',
+            'SEARCH_API_URL': 'http://search-api:8003',
             
             # Storage
-            'MINIO_ENDPOINT': f'{base}.205:9000',
-            'REDIS_HOST': f'{base}.206',
+            'MINIO_ENDPOINT': 'minio:9000',
+            'REDIS_HOST': 'redis',
             'REDIS_PORT': '6379',
         }
 
