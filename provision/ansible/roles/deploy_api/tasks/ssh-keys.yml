@@ -28,6 +28,12 @@
 # Proxmox Host - for running make install commands (Ansible playbooks)
 # ============================================================================
 # Ansible runs ON the Proxmox host, so we use local_action to add the key
+# Note: proxmox_host must be set in inventory group_vars or via PROXMOX_HOST env var
+
+- name: Check if proxmox_host is configured
+  set_fact:
+    proxmox_host_configured: "{{ proxmox_host is defined and proxmox_host | length > 0 }}"
+  tags: [deploy_api, deploy_api_ssh]
 
 - name: Add authz container public key to Proxmox host authorized_keys
   local_action:
@@ -36,13 +42,15 @@
     key: "{{ authz_public_key.content | b64decode }}"
     state: present
   become: true
+  when: proxmox_host_configured
   tags: [deploy_api, deploy_api_ssh]
 
+# Try to scan Proxmox host SSH key - may fail if SSH not accessible from container
 - name: Scan Proxmox host SSH key from authz container
-  shell: "ssh-keyscan -t ed25519,rsa {{ deploy_api_proxmox_host }} 2>/dev/null"
+  shell: "ssh-keyscan -t ed25519,rsa {{ deploy_api_proxmox_host }} 2>/dev/null || true"
   register: proxmox_host_keys
   changed_when: false
-  failed_when: proxmox_host_keys.stdout == ""
+  when: proxmox_host_configured
   tags: [deploy_api, deploy_api_ssh]
 
 - name: Add Proxmox host to known_hosts on authz container
@@ -50,6 +58,35 @@
     name: "{{ deploy_api_proxmox_host }}"
     key: "{{ proxmox_host_keys.stdout }}"
     state: present
+  when: proxmox_host_configured and proxmox_host_keys.stdout | length > 0
+  tags: [deploy_api, deploy_api_ssh]
+
+- name: Display warning if Proxmox host not configured
+  debug:
+    msg: |
+      WARNING: PROXMOX_HOST is not configured.
+      
+      To enable deploy-api to install infrastructure services, set PROXMOX_HOST:
+        export PROXMOX_HOST=<proxmox-management-ip>
+      
+      Or add to inventory group_vars:
+        proxmox_host: "<proxmox-management-ip>"
+      
+      Then redeploy internal_dns and deploy-api.
+  when: not proxmox_host_configured
+  tags: [deploy_api, deploy_api_ssh]
+
+- name: Display warning if Proxmox host SSH key scan failed
+  debug:
+    msg: |
+      WARNING: Could not scan SSH keys from Proxmox host ({{ deploy_api_proxmox_host }}).
+      This may be because:
+      1. SSH is not listening on this IP from containers
+      2. Firewall is blocking SSH from containers to the host
+      3. The hostname 'proxmox' is not resolvable yet (run internal_dns role first)
+      
+      deploy-api will use StrictHostKeyChecking=no for now.
+  when: proxmox_host_configured and (proxmox_host_keys.stdout | default('') | length == 0)
   tags: [deploy_api, deploy_api_ssh]
 
 # ============================================================================
@@ -289,17 +326,18 @@
   tags: [deploy_api, deploy_api_ssh]
 
 - name: Test SSH connection from authz to Proxmox host
-  shell: "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{{ deploy_api_proxmox_host }} 'echo SSH_OK'"
+  shell: "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 root@{{ deploy_api_proxmox_host }} 'echo SSH_OK'"
   register: ssh_test_proxmox
   changed_when: false
   failed_when: false
+  when: proxmox_host_configured
   tags: [deploy_api, deploy_api_ssh]
 
 - name: Display SSH test results
   debug:
     msg: |
       SSH Tests from authz-lxc (deploy-api):
-      - Proxmox Host: {{ 'OK' if ssh_test_proxmox.rc == 0 else 'FAILED' }}
+      - Proxmox Host: {{ 'NOT CONFIGURED' if not proxmox_host_configured else ('OK' if ssh_test_proxmox.rc == 0 else 'FAILED (required for make install)') }}
       - Core Apps: {{ 'OK' if ssh_test_core_apps.rc == 0 else 'FAILED' }}
       - Data (Redis): {{ 'OK' if ssh_test_data.rc == 0 else 'FAILED' }}
       - Agent: {{ 'OK' if ssh_test_agent.rc == 0 else 'FAILED' }}
@@ -310,8 +348,19 @@
       - Proxy (Nginx): {{ 'OK' if ssh_test_proxy.rc == 0 else 'FAILED' }}
   tags: [deploy_api, deploy_api_ssh]
 
-- name: Fail if SSH to Proxmox host failed
-  fail:
-    msg: "SSH to Proxmox host failed! deploy-api needs SSH access to run make install commands."
-  when: ssh_test_proxmox.rc != 0
+- name: Warn if SSH to Proxmox host failed (not fatal - service management still works)
+  debug:
+    msg: |
+      WARNING: SSH to Proxmox host ({{ deploy_api_proxmox_host }}) failed!
+      
+      This means deploy-api cannot run 'make install' commands for infrastructure services.
+      Service start/stop/restart will still work for already-installed services.
+      
+      To enable infrastructure installation via deploy-api:
+      1. Set PROXMOX_HOST to the Proxmox management IP reachable from containers
+      2. Ensure SSH is enabled on the Proxmox host at that IP
+      3. Run: make install SERVICE=internal_dns,deploy-api
+      
+      Debug: ssh -v root@{{ deploy_api_proxmox_host }} from the authz container
+  when: proxmox_host_configured and ssh_test_proxmox.rc != 0
   tags: [deploy_api, deploy_api_ssh]

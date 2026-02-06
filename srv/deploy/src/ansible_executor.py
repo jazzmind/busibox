@@ -199,8 +199,9 @@ class AnsibleExecutor:
         if not proxmox_host:
             yield {
                 'type': 'error',
-                'message': 'PROXMOX_HOST environment variable not set. '
-                           'Configure the Proxmox host IP/hostname for deploy-api to SSH and run Ansible.',
+                'message': 'PROXMOX_HOST not configured. '
+                           'Set PROXMOX_HOST in inventory group_vars to the Proxmox management IP, '
+                           'then redeploy internal_dns and deploy-api.',
                 'done': True
             }
             return

@@ -37,8 +37,9 @@ deploy_api_ssh_key_path: /root/.ssh/id_rsa
 # Proxmox host (for running make install commands)
 # deploy-api SSHes to the Proxmox host to run Ansible playbooks
 # The Proxmox host has the vault and vault password files
-# This should be the gateway IP of the LXC network (typically .1)
-deploy_api_proxmox_host: "{{ proxmox_host | default(network_base_octets + '.1') }}"
+# Uses the 'proxmox' hostname which is resolved via /etc/hosts (internal_dns role)
+# The proxmox_host variable should be set in inventory group_vars
+deploy_api_proxmox_host: proxmox
 
 # Nginx configuration
 # Note: Use 'proxy' group (not 'nginx') - inventories use 'proxy' as the group name

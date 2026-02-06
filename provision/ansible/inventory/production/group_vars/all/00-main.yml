@@ -25,6 +25,13 @@ network_base_octets: "{{ network_base_octets_production }}"
 internal_network: "{{ network_base_octets }}.0/21"
 internal_gateway: "{{ network_base_octets }}.1"
 
+# Proxmox host IP - the management IP of the Proxmox host
+# deploy-api needs SSH access to the Proxmox host to run make install commands
+# This is auto-detected from the Ansible controller's default IP
+# Override with PROXMOX_HOST env var or -e proxmox_host=... if needed
+# This gets added to /etc/hosts as 'proxmox' by the internal_dns role
+proxmox_host: "{{ lookup('env', 'PROXMOX_HOST') | default(lookup('pipe', 'hostname -I | cut -d\" \" -f1'), true) }}"
+
 # Container IP Addresses (calculated from base)
 # Infrastructure containers: .200-.212
 proxy_ip: "{{ network_base_octets }}.200"
