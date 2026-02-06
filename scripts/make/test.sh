@@ -20,6 +20,7 @@ ANSIBLE_DIR="${REPO_ROOT}/provision/ansible"
 # Source libraries
 source "${REPO_ROOT}/scripts/lib/ui.sh"
 source "${REPO_ROOT}/scripts/lib/state.sh"
+source "${REPO_ROOT}/scripts/lib/services.sh"
 
 # Detect vault password method (shared with deploy script)
 get_vault_flags() {
@@ -177,14 +178,11 @@ check_jq() {
     return 0
 }
 
-# Get LiteLLM IP from inventory
+# Get LiteLLM IP/hostname from service registry
 get_litellm_ip() {
     local env="$1"
-    if [[ "$env" == "production" ]]; then
-        echo "10.96.200.207"
-    else
-        echo "10.96.200.207"  # Test uses same IP
-    fi
+    # Use service registry (resolves via DNS hostname if available)
+    get_service_ip "litellm" "$env" "proxmox"
 }
 
 # Get LiteLLM API key (from vault or default)
