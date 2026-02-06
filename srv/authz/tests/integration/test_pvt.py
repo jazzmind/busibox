@@ -206,7 +206,7 @@ class TestPVTAuth:
             
             # Step 2: Use the magic link (requires JWT verification + new JWT signing)
             use_resp = await client.post(
-                f"{SERVICE_URL}/auth/magic-links/{magic_link_token}",
+                f"{SERVICE_URL}/auth/magic-links/{magic_link_token}/use",
                 timeout=10.0,
             )
             
