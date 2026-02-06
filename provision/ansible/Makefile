@@ -311,6 +311,11 @@ agent:
 data:
 	ansible-playbook -i $(INV) -l data site.yml --tags apis_data $(VAULT_FLAGS)
 
+# Redis - Install Redis on data container (prerequisite for data services)
+redis:
+	@echo "Installing Redis on data container..."
+	ansible-playbook -i $(INV) -l data site.yml --tags data_install $(VAULT_FLAGS)
+
 embedding-api:
 	ansible-playbook -i $(INV) -l data site.yml --tags embedding_api $(VAULT_FLAGS)
 

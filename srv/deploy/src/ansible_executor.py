@@ -220,7 +220,7 @@ class AnsibleExecutor:
         service_to_make_target = {
             'internal-dns': 'internal-dns',  # Updates /etc/hosts on all containers
             'dns': 'internal-dns',  # alias
-            'redis': 'data',  # Redis is installed as part of data role
+            'redis': 'redis',  # Redis has its own target with data_install tag
             'postgres': 'pg',
             'minio': 'files',
             'milvus': 'milvus',
