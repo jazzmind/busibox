@@ -990,10 +990,23 @@ async def start_service_sse(
                     container_host, systemd_service = proxmox_service_map[service]
                     
                     try:
-                        # Use SSH to start the service via systemctl
-                        # DNS hostname is resolved via /etc/hosts on the authz-lxc container
-                        command = f"systemctl start {systemd_service} && systemctl status {systemd_service} --no-pager"
+                        # First check if the service unit exists
                         yield f"data: {json.dumps({'type': 'info', 'message': f'Connecting to {container_host}...'})}\n\n"
+                        
+                        # Check if the systemd unit exists
+                        check_cmd = f"systemctl list-unit-files {systemd_service}.service 2>/dev/null | grep -q {systemd_service}"
+                        _, _, check_code = await execute_ssh_command(container_host, check_cmd, timeout=30)
+                        
+                        if check_code != 0:
+                            # Service unit doesn't exist - needs to be installed first
+                            yield f"data: {json.dumps({'type': 'warning', 'message': f'Service {service} is not installed on {container_host}.'})}\n\n"
+                            yield f"data: {json.dumps({'type': 'info', 'message': f'Use the /install/{service} endpoint to install this service via Ansible first.'})}\n\n"
+                            yield f"data: {json.dumps({'type': 'error', 'message': f'Service {service} not installed. Run installation first.', 'done': True, 'action': 'install_required', 'install_endpoint': f'/api/v1/services/install/{service}'})}\n\n"
+                            return
+                        
+                        # Service exists, try to start it
+                        command = f"systemctl start {systemd_service} && systemctl status {systemd_service} --no-pager"
+                        yield f"data: {json.dumps({'type': 'info', 'message': f'Starting {systemd_service}...'})}\n\n"
                         
                         stdout, stderr, code = await execute_ssh_command(container_host, command, timeout=60)
                         
@@ -1001,7 +1014,13 @@ async def start_service_sse(
                             yield f"data: {json.dumps({'type': 'log', 'message': stdout})}\n\n"
                             yield f"data: {json.dumps({'type': 'success', 'message': f'{service} started successfully', 'done': True})}\n\n"
                         else:
-                            yield f"data: {json.dumps({'type': 'error', 'message': f'Failed to start {service}: {stderr}', 'done': True})}\n\n"
+                            # Check if this is a "unit not found" error
+                            if 'not found' in stderr.lower() or 'could not be found' in stderr.lower():
+                                yield f"data: {json.dumps({'type': 'warning', 'message': f'Service unit {systemd_service} not found.'})}\n\n"
+                                yield f"data: {json.dumps({'type': 'info', 'message': f'Use /install/{service} endpoint to install this service via Ansible.'})}\n\n"
+                                yield f"data: {json.dumps({'type': 'error', 'message': f'Service {service} not installed. Run installation first.', 'done': True, 'action': 'install_required', 'install_endpoint': f'/api/v1/services/install/{service}'})}\n\n"
+                            else:
+                                yield f"data: {json.dumps({'type': 'error', 'message': f'Failed to start {service}: {stderr}', 'done': True})}\n\n"
                         return
                         
                     except Exception as e:
@@ -1315,6 +1334,185 @@ async def start_service_sse(
             "X-Accel-Buffering": "no",  # Disable nginx buffering
         }
     )
+
+
+# =============================================================================
+# Infrastructure Service Installation (Proxmox - via Ansible)
+# =============================================================================
+
+@router.get("/install/{service}")
+async def install_service_sse(
+    service: str,
+    request: Request,
+):
+    """
+    SSE endpoint for installing an infrastructure service via Ansible on Proxmox.
+    
+    This endpoint runs the appropriate Ansible playbook to install and configure
+    the service on its target container. Use this for initial service setup.
+    
+    For Docker environments, redirects to start_service_sse (docker compose up).
+    For Proxmox environments, runs Ansible playbooks with streaming output.
+    
+    Query params:
+      - token (required for auth)
+      - environment (optional): 'staging' or 'production' (default: auto-detect)
+    
+    Supported services:
+      - Infrastructure: redis, postgres, minio, milvus
+      - LLM: litellm, vllm, embedding-api
+      - APIs: data-api, search-api, agent-api, authz-api, docs-api, deploy-api
+      - Other: nginx
+    """
+    from .ansible_executor import AnsibleExecutor, INFRASTRUCTURE_ANSIBLE_MAP
+    from .state import read_state
+    
+    logger.info(f"[INSTALL] Received request to install service: {service}")
+    
+    # Get environment override from query params
+    env_override = request.query_params.get('environment', '')
+    
+    # Get token from query params (EventSource doesn't support custom headers)
+    token = request.query_params.get('token')
+    logger.info(f"[INSTALL] Token present: {bool(token)}")
+    if not token:
+        async def error_gen():
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Authentication required. Pass token as query parameter.', 'done': True})}\n\n"
+        return StreamingResponse(
+            error_gen(),
+            media_type="text/event-stream",
+            status_code=200,
+        )
+    
+    # Verify token manually
+    try:
+        from .auth import verify_token
+        token_payload = verify_token(token)
+    except HTTPException as e:
+        logger.error(f"[INSTALL] Token verification failed: {e.detail}")
+        async def error_gen():
+            yield f"data: {json.dumps({'type': 'error', 'message': f'Authentication failed: {e.detail}', 'done': True})}\n\n"
+        return StreamingResponse(
+            error_gen(),
+            media_type="text/event-stream",
+            status_code=200,
+        )
+    except Exception as e:
+        logger.error(f"[INSTALL] Token verification error: {e}", exc_info=True)
+        async def error_gen():
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Authentication failed', 'done': True})}\n\n"
+        return StreamingResponse(
+            error_gen(),
+            media_type="text/event-stream",
+            status_code=200,
+        )
+    
+    # Check for admin role
+    roles = token_payload.get('roles', [])
+    is_admin = any(
+        (r.get('name') if isinstance(r, dict) else r) == 'Admin' 
+        for r in roles
+    ) if isinstance(roles, list) else False
+    
+    if not is_admin:
+        logger.warning(f"[INSTALL] Non-admin user attempted to install service: {service}")
+        async def error_gen():
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Admin role required', 'done': True})}\n\n"
+        return StreamingResponse(
+            error_gen(),
+            media_type="text/event-stream",
+            status_code=200,
+        )
+    
+    async def event_generator():
+        # Check if we're on Docker - if so, redirect to start_service
+        if is_docker_environment():
+            yield f"data: {json.dumps({'type': 'info', 'message': 'Docker environment detected - using docker compose to install/start service...'})}\n\n"
+            yield f"data: {json.dumps({'type': 'info', 'message': f'Redirecting to start endpoint for {service}...'})}\n\n"
+            # In Docker, installation = starting via docker compose
+            # We'll emit a redirect message and let the client retry with /start
+            yield f"data: {json.dumps({'type': 'redirect', 'endpoint': f'/api/v1/services/start/{service}?token={token}', 'message': 'Use /start endpoint for Docker services'})}\n\n"
+            yield f"data: {json.dumps({'type': 'info', 'message': 'Note: In Docker mode, services are installed via docker compose up. Use the /start endpoint instead.', 'done': True})}\n\n"
+            return
+        
+        # Validate service name
+        if not service or not all(c.isalnum() or c in '-_' for c in service):
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Invalid service name', 'done': True})}\n\n"
+            return
+        
+        # Check if service is supported for Ansible installation
+        if service not in INFRASTRUCTURE_ANSIBLE_MAP:
+            supported = ', '.join(sorted(INFRASTRUCTURE_ANSIBLE_MAP.keys()))
+            yield f"data: {json.dumps({'type': 'error', 'message': f'Service {service} is not supported for installation. Supported services: {supported}', 'done': True})}\n\n"
+            return
+        
+        # Determine environment
+        if env_override and env_override in ('staging', 'production'):
+            environment = env_override
+            yield f"data: {json.dumps({'type': 'info', 'message': f'Using specified environment: {environment}'})}\n\n"
+        else:
+            # Try to read from .busibox-state file
+            try:
+                state = await read_state()
+                environment = state.get('ENVIRONMENT', 'staging')
+                yield f"data: {json.dumps({'type': 'info', 'message': f'Auto-detected environment: {environment}'})}\n\n"
+            except Exception as e:
+                logger.warning(f"[INSTALL] Failed to read state file, defaulting to staging: {e}")
+                environment = 'staging'
+                yield f"data: {json.dumps({'type': 'info', 'message': f'Defaulting to environment: {environment}'})}\n\n"
+        
+        yield f"data: {json.dumps({'type': 'info', 'message': f'Installing {service} on Proxmox via Ansible...'})}\n\n"
+        
+        # Run Ansible installation
+        executor = AnsibleExecutor()
+        
+        try:
+            async for event in executor.install_infrastructure_service_stream(service, environment):
+                yield f"data: {json.dumps(event)}\n\n"
+        except Exception as e:
+            logger.error(f"[INSTALL] Error during Ansible execution: {e}", exc_info=True)
+            yield f"data: {json.dumps({'type': 'error', 'message': f'Ansible execution error: {str(e)}', 'done': True})}\n\n"
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
+    )
+
+
+@router.get("/installable")
+async def list_installable_services(
+    admin: bool = Depends(verify_admin_token)
+):
+    """
+    List all services that can be installed via Ansible.
+    
+    Returns a dictionary of service names to their descriptions.
+    Only available on Proxmox environments.
+    """
+    from .ansible_executor import AnsibleExecutor
+    
+    if is_docker_environment():
+        return {
+            "mode": "docker",
+            "message": "Docker environment - use /start endpoint with docker compose",
+            "services": {}
+        }
+    
+    from .ansible_executor import get_installation_order
+    
+    executor = AnsibleExecutor()
+    return {
+        "mode": "proxmox",
+        "message": "Proxmox environment - services can be installed via Ansible",
+        "services": executor.get_supported_services(),
+        "installation_order": get_installation_order(),
+        "installation_order_note": "Services within a group can be installed in parallel, but groups should be installed sequentially."
+    }
 
 
 # =============================================================================

@@ -54,3 +54,9 @@ deploy_api_debug: false
 # This allows initial app deployment without a real user JWT
 # Derived from jwt_secret for determinism (same value each run)
 deploy_api_bootstrap_token: "{{ secrets.deploy_api.bootstrap_token | default('bootstrap-' + (secrets.jwt_secret | default('default-jwt-secret') | hash('sha256'))[:56]) }}"
+
+# LLM Backend: "vllm", "mlx", or "cloud"
+# On Proxmox with GPUs, this is typically "vllm"
+# On Mac/Apple Silicon, this would be "mlx"
+# Default to "vllm" for Proxmox deployments
+llm_backend: vllm
