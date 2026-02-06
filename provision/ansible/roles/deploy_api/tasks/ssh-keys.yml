@@ -1,10 +1,12 @@
 ---
 # SSH key setup for deploy-api container-to-container communication
-# Enables authz container (where deploy-api runs) to SSH to other containers
-# for service management via systemctl
+# Enables authz container (where deploy-api runs) to SSH to:
+# 1. Other LXC containers (for service management via systemctl)
+# 2. The Proxmox host (for running make install commands)
 #
 # Target containers: data-lxc, agent-lxc, milvus-lxc, files-lxc, pg-lxc, 
 #                    litellm-lxc, proxy-lxc, core-apps-lxc
+# Target host: Proxmox host (for running Ansible playbooks)
 
 - name: Generate SSH key pair on authz container for root user
   openssh_keypair:
@@ -20,6 +22,27 @@
   slurp:
     src: /root/.ssh/id_rsa.pub
   register: authz_public_key
+  tags: [deploy_api, deploy_api_ssh]
+
+# ============================================================================
+# Proxmox Host - for running make install commands (Ansible playbooks)
+# ============================================================================
+# Ansible runs ON the Proxmox host, so we use local_action to add the key
+
+- name: Add authz container public key to Proxmox host authorized_keys
+  local_action:
+    module: authorized_key
+    user: root
+    key: "{{ authz_public_key.content | b64decode }}"
+    state: present
+  become: true
+  tags: [deploy_api, deploy_api_ssh]
+
+- name: Add Proxmox host to known_hosts on authz container
+  known_hosts:
+    name: "{{ deploy_api_proxmox_host }}"
+    key: "{{ lookup('pipe', 'ssh-keyscan -t ed25519,rsa ' + deploy_api_proxmox_host + ' 2>/dev/null') }}"
+    state: present
   tags: [deploy_api, deploy_api_ssh]
 
 # ============================================================================
@@ -258,10 +281,18 @@
   failed_when: false
   tags: [deploy_api, deploy_api_ssh]
 
+- name: Test SSH connection from authz to Proxmox host
+  shell: "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{{ deploy_api_proxmox_host }} 'echo SSH_OK'"
+  register: ssh_test_proxmox
+  changed_when: false
+  failed_when: false
+  tags: [deploy_api, deploy_api_ssh]
+
 - name: Display SSH test results
   debug:
     msg: |
       SSH Tests from authz-lxc (deploy-api):
+      - Proxmox Host: {{ 'OK' if ssh_test_proxmox.rc == 0 else 'FAILED' }}
       - Core Apps: {{ 'OK' if ssh_test_core_apps.rc == 0 else 'FAILED' }}
       - Data (Redis): {{ 'OK' if ssh_test_data.rc == 0 else 'FAILED' }}
       - Agent: {{ 'OK' if ssh_test_agent.rc == 0 else 'FAILED' }}
@@ -270,4 +301,10 @@
       - PostgreSQL: {{ 'OK' if ssh_test_pg.rc == 0 else 'FAILED' }}
       - LiteLLM: {{ 'OK' if ssh_test_litellm.rc == 0 else 'FAILED' }}
       - Proxy (Nginx): {{ 'OK' if ssh_test_proxy.rc == 0 else 'FAILED' }}
+  tags: [deploy_api, deploy_api_ssh]
+
+- name: Fail if SSH to Proxmox host failed
+  fail:
+    msg: "SSH to Proxmox host failed! deploy-api needs SSH access to run make install commands."
+  when: ssh_test_proxmox.rc != 0
   tags: [deploy_api, deploy_api_ssh]

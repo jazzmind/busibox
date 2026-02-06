@@ -143,7 +143,7 @@ class TestPVTSSHConnectivity:
     async def test_ssh_key_exists(self):
         """SSH key exists for container-to-container communication."""
         import os
-        ssh_key_path = os.getenv("SSH_KEY_PATH", "/root/.ssh/id_ed25519")
+        ssh_key_path = os.getenv("SSH_KEY_PATH", "/root/.ssh/id_rsa")
         
         assert os.path.exists(ssh_key_path), \
             f"SSH key not found at {ssh_key_path}. Run deploy_api role with ssh-keys tag."
@@ -164,6 +164,52 @@ class TestPVTSSHConnectivity:
                     f"Cannot resolve hostname '{hostname}'. "
                     "Check /etc/hosts or internal_dns role."
                 )
+    
+    @pytest.mark.asyncio
+    async def test_proxmox_host_configured(self):
+        """PROXMOX_HOST environment variable is set."""
+        import os
+        proxmox_host = os.getenv("PROXMOX_HOST", "")
+        
+        assert proxmox_host, \
+            "PROXMOX_HOST not configured. deploy-api needs this to run make install commands."
+    
+    @pytest.mark.asyncio
+    async def test_can_ssh_to_proxmox_host(self):
+        """Can SSH to Proxmox host (for running make install commands)."""
+        import asyncio
+        import os
+        
+        proxmox_host = os.getenv("PROXMOX_HOST", "")
+        if not proxmox_host:
+            pytest.skip("PROXMOX_HOST not set")
+        
+        ssh_key_path = os.getenv("SSH_KEY_PATH", "/root/.ssh/id_rsa")
+        
+        # Try to SSH to Proxmox host
+        cmd = [
+            "ssh",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=5",
+        ]
+        
+        if os.path.exists(ssh_key_path):
+            cmd.extend(["-i", ssh_key_path])
+        
+        cmd.extend([f"root@{proxmox_host}", "echo SSH_OK"])
+        
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await proc.communicate()
+        
+        assert proc.returncode == 0 and b"SSH_OK" in stdout, \
+            f"Cannot SSH to Proxmox host {proxmox_host}. " \
+            f"Run deploy_api role with ssh-keys tag. stderr: {stderr.decode()}"
 
 
 @pytest.mark.pvt

@@ -34,6 +34,12 @@ deploy_api_apps_container_ip_staging: ai-portal
 # SSH key for remote operations
 deploy_api_ssh_key_path: /root/.ssh/id_rsa
 
+# Proxmox host (for running make install commands)
+# deploy-api SSHes to the Proxmox host to run Ansible playbooks
+# The Proxmox host has the vault and vault password files
+# This should be the gateway IP of the LXC network (typically .1)
+deploy_api_proxmox_host: "{{ proxmox_host | default(network_base_octets + '.1') }}"
+
 # Nginx configuration
 # Note: Use 'proxy' group (not 'nginx') - inventories use 'proxy' as the group name
 # Prefer DNS hostname 'nginx' (resolved via /etc/hosts from internal_dns role)
