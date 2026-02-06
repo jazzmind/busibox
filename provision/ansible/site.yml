@@ -255,21 +255,17 @@
 # =============================================================================
 
 # 3.1 AuthZ (authentication/authorization) - needed by all other APIs
-#     Also hosts Docs API (both are lightweight Python services)
 #     Deploy API also runs here for secure app deployment operations
 #
 # Tag structure:
-#   - apis_authz: runs all services on this host (authz + docs_api + deploy_api)
+#   - apis_authz: runs all services on this host (authz + deploy_api)
 #   - authz: runs only authz role
-#   - docs, docs_api: runs only docs_api role
 #   - deploy, deploy_api: runs only deploy_api role
 - hosts: authz
-  tags: [apis, apis_authz, authz, docs, docs_api, deploy, deploy_api]
+  tags: [apis, apis_authz, authz, deploy, deploy_api]
   roles:
     - role: authz
       tags: [apis, apis_authz, authz]
-    - role: docs_api
-      tags: [apis, apis_authz, docs, docs_api]
     - role: deploy_api
       tags: [apis, apis_authz, deploy, deploy_api]
 
@@ -289,12 +285,19 @@
     - role: search_api
       tags: [apis, apis_search, search, search_api, search-api]
 
-# 3.4 Agent API
+# 3.4 Agent API + Docs API (both on agent-lxc)
+#
+# Tag structure:
+#   - apis_agent: runs all services on this host (agent + docs_api)
+#   - agent, agent_api: runs only agent_api role
+#   - docs, docs_api: runs only docs_api role
 - hosts: agent
-  tags: [apis, apis_agent]
+  tags: [apis, apis_agent, agent, agent_api, docs, docs_api]
   roles:
     - role: agent_api
       tags: [apis, apis_agent, agent, agent_api]
+    - role: docs_api
+      tags: [apis, apis_agent, docs, docs_api]
 
 # 3.6 Bridge Service (optional - multi-channel communication)
 - hosts: bridge
