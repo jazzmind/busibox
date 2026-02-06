@@ -228,7 +228,7 @@
       {
         "commit": "{{ lookup('pipe', 'git rev-parse --short HEAD', cwd=playbook_dir + '/../..') }}",
         "branch": "{{ lookup('pipe', 'git branch --show-current', cwd=playbook_dir + '/../..') }}",
-        "timestamp": "{{ ansible_date_time.iso8601 }}",
+        "timestamp": "{{ now(utc=true).isoformat() }}",
         "deployed_by": "ansible",
         "minio_version": "{{ minio_installed_version.stdout | default('unknown') }}"
       }
