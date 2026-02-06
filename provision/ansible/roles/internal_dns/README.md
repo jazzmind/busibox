@@ -26,7 +26,7 @@ All services are accessible via canonical hostnames:
 - `litellm` → LiteLLM gateway
 - `vllm` → vLLM inference
 - `ollama` → Ollama inference
-- `docs-api` → Documentation API (embedded in milvus-lxc)
+- `docs-api` → Documentation API (embedded in agent-lxc)
 - `deploy-api` → Deployment API (embedded in authz-lxc)
 - `embedding-api` → Embedding API (embedded in ingest-lxc)
 - `ai-portal` → AI Portal frontend

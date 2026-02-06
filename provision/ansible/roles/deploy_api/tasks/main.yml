@@ -61,6 +61,30 @@
   tags: [deploy_api]
 
 # =============================================================================
+# Tests Directory - for PVT tests
+# =============================================================================
+
+- name: Sync deploy-api tests directory
+  synchronize:
+    src: "{{ deploy_api_src_dir }}/tests/"
+    dest: "{{ deploy_api_app_dir }}/tests/"
+    delete: yes
+    rsync_opts:
+      - "--exclude=__pycache__"
+      - "--exclude=*.pyc"
+      - "--exclude=.pytest_cache"
+  tags: [deploy_api, pvt]
+
+- name: Copy pytest configuration
+  copy:
+    src: "{{ deploy_api_src_dir }}/pytest.ini"
+    dest: "{{ deploy_api_app_dir }}/pytest.ini"
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [deploy_api, pvt]
+
+# =============================================================================
 # Shared Library (busibox_common) - MUST be after source sync
 # =============================================================================
 
