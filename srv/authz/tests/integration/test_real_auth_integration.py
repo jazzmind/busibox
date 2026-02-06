@@ -35,7 +35,7 @@ from datetime import datetime, timedelta
 # Test database configuration
 # Tests use ISOLATED test databases (test_authz, test_data, test_agent)
 # owned by busibox_test_user - completely separate from production data
-TEST_DB_HOST = os.getenv("TEST_DB_HOST", "10.96.201.203")
+TEST_DB_HOST = os.getenv("TEST_DB_HOST", "postgres")
 TEST_DB_PORT = int(os.getenv("TEST_DB_PORT", "5432"))
 TEST_DB_NAME = os.getenv("TEST_DB_NAME", "test_authz")
 TEST_DB_USER = os.getenv("TEST_DB_USER", "busibox_test_user")

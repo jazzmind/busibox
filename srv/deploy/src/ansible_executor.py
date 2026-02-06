@@ -11,14 +11,9 @@ import os
 from typing import Dict, Any, List, Tuple
 from .models import BusiboxManifest, DeploymentConfig
 from .config import config
+from .core_app_executor import is_docker_environment
 
 logger = logging.getLogger(__name__)
-
-
-def is_docker_environment() -> bool:
-    """Check if running in Docker (local development)"""
-    # In Docker, POSTGRES_HOST is typically 'postgres' (container name) not an IP
-    return not config.postgres_host.startswith('10.')
 
 
 class AnsibleExecutor:

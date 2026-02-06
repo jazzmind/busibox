@@ -43,7 +43,7 @@ class PostgresService:
         # Build pool config based on test mode
         if use_test_db and config.get("test_mode_enabled"):
             pool_config = PoolConfig(
-                host=config.get("postgres_host", "10.96.200.203"),
+                host=config.get("postgres_host", "postgres"),
                 port=int(config.get("postgres_port", 5432)),
                 database=config.get("test_postgres_db", "test_files"),
                 user=config.get("test_postgres_user", "busibox_test_user"),
@@ -52,7 +52,7 @@ class PostgresService:
             self._is_test_db = True
         else:
             pool_config = PoolConfig(
-                host=config.get("postgres_host", "10.96.200.203"),
+                host=config.get("postgres_host", "postgres"),
                 port=int(config.get("postgres_port", 5432)),
                 database=config.get("postgres_db", "busibox"),
                 user=config.get("postgres_user", "postgres"),

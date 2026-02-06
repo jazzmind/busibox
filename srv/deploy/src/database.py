@@ -12,6 +12,7 @@ import os
 from typing import Tuple, Optional
 from .models import BusiboxManifest, DatabaseProvisionResult
 from .config import config
+from .core_app_executor import is_docker_environment
 
 logger = logging.getLogger(__name__)
 
@@ -19,12 +20,6 @@ logger = logging.getLogger(__name__)
 def generate_password(length: int = 32) -> str:
     """Generate a secure random password"""
     return secrets.token_urlsafe(length)[:length]
-
-
-def is_docker_environment() -> bool:
-    """Check if running in Docker (no SSH needed for local postgres)"""
-    # In Docker, POSTGRES_HOST is typically 'postgres' (container name) not an IP
-    return not config.postgres_host.startswith('10.')
 
 
 async def execute_psql_direct(sql: str, database: str = 'postgres') -> Tuple[str, str, int]:

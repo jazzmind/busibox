@@ -38,6 +38,7 @@ from pydantic import BaseModel
 from .auth import verify_admin_token
 from .config import config
 from .platform_detection import get_platform_info
+from .core_app_executor import is_docker_environment, execute_ssh_command
 
 # Import token exchange for agent-api calls
 from busibox_common import exchange_token_zero_trust
@@ -952,6 +953,61 @@ async def start_service_sse(
                     
                     yield f"data: {json.dumps({'type': 'success', 'message': 'MLX server started via host-agent', 'done': True})}\n\n"
                     return
+                
+                # Check if we're on Proxmox/LXC (not Docker)
+                if not is_docker_environment():
+                    yield f"data: {json.dumps({'type': 'info', 'message': f'Starting {service} on Proxmox via systemd...'})}\n\n"
+                    
+                    # Map service names to DNS hostnames and systemd service names
+                    # DNS hostnames are resolved via /etc/hosts (set by internal_dns Ansible role)
+                    # Format: service_name -> (dns_hostname, systemd_service_name)
+                    proxmox_service_map = {
+                        'redis': ('redis', 'redis-server'),  # data-lxc
+                        'postgres': ('postgres', 'postgresql'),  # pg-lxc
+                        'milvus': ('milvus', 'milvus'),  # milvus-lxc
+                        'minio': ('minio', 'minio'),  # files-lxc
+                        'litellm': ('litellm', 'litellm'),  # litellm-lxc
+                        'authz-api': ('authz-api', 'authz'),  # authz-lxc
+                        'authz': ('authz-api', 'authz'),  # alias
+                        'data-api': ('data-api', 'data-api'),  # data-lxc
+                        'data': ('data-api', 'data-api'),  # alias
+                        'search-api': ('search-api', 'search-api'),  # milvus-lxc
+                        'search': ('search-api', 'search-api'),  # alias
+                        'agent-api': ('agent-api', 'agent-api'),  # agent-lxc
+                        'agent': ('agent-api', 'agent-api'),  # alias
+                        'embedding-api': ('embedding-api', 'embedding'),  # data-lxc
+                        'embedding': ('embedding-api', 'embedding'),  # alias
+                        'deploy-api': ('deploy-api', 'deploy-api'),  # authz-lxc
+                        'deploy': ('deploy-api', 'deploy-api'),  # alias
+                        'docs-api': ('docs-api', 'docs-api'),  # milvus-lxc
+                        'docs': ('docs-api', 'docs-api'),  # alias
+                    }
+                    
+                    if service not in proxmox_service_map:
+                        yield f"data: {json.dumps({'type': 'error', 'message': f'Service {service} is not supported on Proxmox. Use Ansible to deploy infrastructure services.', 'done': True})}\n\n"
+                        return
+                    
+                    container_host, systemd_service = proxmox_service_map[service]
+                    
+                    try:
+                        # Use SSH to start the service via systemctl
+                        # DNS hostname is resolved via /etc/hosts on the authz-lxc container
+                        command = f"systemctl start {systemd_service} && systemctl status {systemd_service} --no-pager"
+                        yield f"data: {json.dumps({'type': 'info', 'message': f'Connecting to {container_host}...'})}\n\n"
+                        
+                        stdout, stderr, code = await execute_ssh_command(container_host, command, timeout=60)
+                        
+                        if code == 0:
+                            yield f"data: {json.dumps({'type': 'log', 'message': stdout})}\n\n"
+                            yield f"data: {json.dumps({'type': 'success', 'message': f'{service} started successfully', 'done': True})}\n\n"
+                        else:
+                            yield f"data: {json.dumps({'type': 'error', 'message': f'Failed to start {service}: {stderr}', 'done': True})}\n\n"
+                        return
+                        
+                    except Exception as e:
+                        logger.error(f"[SSE] Error starting service on Proxmox: {e}")
+                        yield f"data: {json.dumps({'type': 'error', 'message': f'SSH error: {str(e)}', 'done': True})}\n\n"
+                        return
                 
                 # Regular Docker service deployment
                 yield f"data: {json.dumps({'type': 'info', 'message': f'Starting {service}...'})}\n\n"

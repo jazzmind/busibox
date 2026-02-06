@@ -14,7 +14,7 @@ class PostgresService:
     
     def __init__(self, config: dict):
         """Initialize PostgreSQL connection pool."""
-        self.host = config.get("postgres_host", "10.96.200.203")
+        self.host = config.get("postgres_host", "postgres")
         self.port = config.get("postgres_port", 5432)
         self.database = config.get("postgres_db", "busibox")
         self.user = config.get("postgres_user", "app_user")
