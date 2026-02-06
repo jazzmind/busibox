@@ -340,6 +340,12 @@ openwebui:
 bridge:
 	ansible-playbook -i $(INV) -l bridge site.yml --tags apis_bridge $(VAULT_FLAGS) || true
 
+# Internal DNS - Updates /etc/hosts on all containers
+# Run this after adding new services or changing IPs
+internal-dns:
+	@echo "Updating internal DNS (/etc/hosts) on all containers..."
+	ansible-playbook -i $(INV) site.yml --tags internal_dns $(VAULT_FLAGS)
+
 # Tailscale VPN (for secure remote access)
 # NOTE: This is a CONFIGURATION step, not part of core deployment
 # Run after initial deployment: make tailscale

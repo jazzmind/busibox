@@ -75,7 +75,8 @@ make manage SERVICE=postgres,redis ACTION=status
 **APIs**: `authz`, `agent`, `ingest`, `search`, `deploy`, `docs`, `embedding`  
 **LLM**: `litellm`, `ollama`, `vllm`  
 **Frontend**: `core-apps`, `nginx`  
-**User Apps**: `user-apps`
+**User Apps**: `user-apps`  
+**Utilities**: `internal-dns` (updates /etc/hosts on all containers)
 
 ### Service Groups
 
@@ -142,6 +143,16 @@ make install SERVICE=apis
 
 ```bash
 make manage SERVICE=all ACTION=restart
+```
+
+### "I need to update /etc/hosts on all containers"
+
+After adding new services or changing IPs:
+
+```bash
+make internal-dns INV=inventory/staging
+# or via the manage menu:
+make manage  # then press 'd' for internal DNS
 ```
 
 ## What Happens Behind the Scenes

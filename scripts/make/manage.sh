@@ -866,6 +866,9 @@ show_manage_menu() {
     printf "    ${BOLD}5)${NC} View Logs (all)\n"
     printf "    ${BOLD}6)${NC} Refresh Status\n"
     echo ""
+    printf "  ${BOLD}Utilities${NC}\n"
+    printf "    ${BOLD}d)${NC} Update Internal DNS (/etc/hosts on all containers)\n"
+    echo ""
     printf "  ${DIM}b = back to main menu    q = quit${NC}\n"
     echo ""
     box_footer
@@ -923,6 +926,17 @@ main() {
                 ;;
             6)
                 # Just refresh by continuing loop
+                ;;
+            d|D)
+                # Update internal DNS
+                echo ""
+                info "Updating internal DNS (/etc/hosts) on all containers..."
+                local env
+                env=$(get_current_env)
+                cd "${REPO_ROOT}/provision/ansible"
+                make internal-dns INV="inventory/${env}"
+                success "Internal DNS updated"
+                read -n 1 -s -r -p "Press any key to continue..."
                 ;;
             b|B)
                 exec bash "${SCRIPT_DIR}/launcher.sh"

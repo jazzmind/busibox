@@ -28,6 +28,10 @@ logger = logging.getLogger(__name__)
 # description: Human-readable description for logging
 
 INFRASTRUCTURE_ANSIBLE_MAP = {
+    # Internal DNS (updates /etc/hosts on all containers)
+    'internal-dns': ('all', ['internal_dns'], 'Internal DNS (/etc/hosts)'),
+    'dns': ('all', ['internal_dns'], 'Internal DNS (/etc/hosts)'),  # alias
+    
     # Core Infrastructure (data layer)
     'redis': ('data', ['data_install'], 'Redis (message queue)'),
     'postgres': ('pg', ['core_database'], 'PostgreSQL (database)'),
@@ -214,6 +218,8 @@ class AnsibleExecutor:
         # Map service names to make targets
         # Some services use different names in the Makefile
         service_to_make_target = {
+            'internal-dns': 'internal-dns',  # Updates /etc/hosts on all containers
+            'dns': 'internal-dns',  # alias
             'redis': 'data',  # Redis is installed as part of data role
             'postgres': 'pg',
             'minio': 'files',
