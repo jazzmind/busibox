@@ -117,33 +117,6 @@ def get_service_dependencies(service: str) -> List[str]:
     return dependencies
 
 
-def get_vault_password_file(environment: str) -> Optional[str]:
-    """
-    Get the vault password file path for the given environment.
-    
-    Returns None if no vault password file exists (will run without vault decryption).
-    """
-    # Check environment-specific password files first
-    env_vault_files = {
-        'production': '~/.busibox-vault-pass-prod',
-        'staging': '~/.busibox-vault-pass-staging',
-        'demo': '~/.busibox-vault-pass-demo',
-        'development': '~/.busibox-vault-pass-dev',
-    }
-    
-    vault_file = os.path.expanduser(env_vault_files.get(environment, '~/.busibox-vault-pass-dev'))
-    if os.path.exists(vault_file):
-        return vault_file
-    
-    # Fallback to legacy vault pass
-    legacy_vault = os.path.expanduser('~/.vault_pass')
-    if os.path.exists(legacy_vault):
-        return legacy_vault
-    
-    logger.warning(f"No vault password file found for environment '{environment}'")
-    return None
-
-
 class AnsibleExecutor:
     def __init__(self):
         self.ansible_dir = config.ansible_dir
@@ -192,6 +165,9 @@ class AnsibleExecutor:
         """
         Install an infrastructure service via Ansible with streaming output.
         
+        On Proxmox: SSHes to the Proxmox host and runs `make install SERVICE=<service>`
+        The Proxmox host has the vault and vault password files needed for Ansible.
+        
         Yields SSE-compatible event dictionaries with keys:
         - type: 'info', 'log', 'error', 'success', 'warning'
         - message: Human-readable message
@@ -205,80 +181,108 @@ class AnsibleExecutor:
         if service not in INFRASTRUCTURE_ANSIBLE_MAP:
             yield {
                 'type': 'error',
-                'message': f'Service {service} is not supported for Ansible installation. '
+                'message': f'Service {service} is not supported for installation. '
                            f'Supported services: {", ".join(sorted(INFRASTRUCTURE_ANSIBLE_MAP.keys()))}',
                 'done': True
             }
             return
         
-        host_limit, tags, description = INFRASTRUCTURE_ANSIBLE_MAP[service]
+        _, _, description = INFRASTRUCTURE_ANSIBLE_MAP[service]
         
         yield {
             'type': 'info',
-            'message': f'Installing {description} via Ansible...'
+            'message': f'Installing {description}...'
         }
         
-        # Determine inventory
-        if environment == 'staging':
-            inventory = self.inventory_staging
-        else:
-            inventory = self.inventory_production
-        
-        yield {
-            'type': 'info',
-            'message': f'Using {environment} inventory: {inventory}'
-        }
-        
-        # Get vault password file
-        vault_pass_file = get_vault_password_file(environment)
-        if not vault_pass_file:
+        # Check if Proxmox host is configured
+        proxmox_host = config.proxmox_host
+        if not proxmox_host:
             yield {
                 'type': 'error',
-                'message': f'No vault password file found for environment "{environment}". '
-                           f'Expected: ~/.busibox-vault-pass-{environment[:4]}',
+                'message': 'PROXMOX_HOST environment variable not set. '
+                           'Configure the Proxmox host IP/hostname for deploy-api to SSH and run Ansible.',
                 'done': True
             }
             return
         
         yield {
             'type': 'info',
-            'message': f'Using vault password from: {vault_pass_file}'
+            'message': f'Connecting to Proxmox host ({proxmox_host})...'
         }
         
-        # Build command
-        cmd = [
-            'ansible-playbook',
-            '-i', inventory,
-            '-l', host_limit,
-            f'{self.ansible_dir}/site.yml',
-            '--tags', ','.join(tags),
-            '--vault-password-file', vault_pass_file,
-        ]
+        # Map service names to make targets
+        # Some services use different names in the Makefile
+        service_to_make_target = {
+            'redis': 'data',  # Redis is installed as part of data role
+            'postgres': 'pg',
+            'minio': 'files',
+            'milvus': 'milvus',
+            'litellm': 'litellm',
+            'vllm': 'vllm',
+            'embedding-api': 'embedding-api',
+            'embedding': 'embedding-api',
+            'data-api': 'data-api',
+            'data': 'data',
+            'search-api': 'search-api',
+            'search': 'search-api',
+            'agent-api': 'agent',
+            'agent': 'agent',
+            'authz-api': 'authz',
+            'authz': 'authz',
+            'deploy-api': 'deploy-api',
+            'deploy': 'deploy-api',
+            'docs-api': 'docs',
+            'docs': 'docs',
+            'nginx': 'nginx',
+            'apps': 'apps',
+        }
         
-        logger.info(f"[ANSIBLE] Executing: {' '.join(cmd)}")
+        make_target = service_to_make_target.get(service, service)
+        
+        # Build the make command
+        # Use the environment to set the correct inventory
+        if environment == 'staging':
+            make_cmd = f'cd /root/busibox/provision/ansible && make {make_target} INV=inventory/staging'
+        else:
+            make_cmd = f'cd /root/busibox/provision/ansible && make {make_target} INV=inventory/production'
+        
         yield {
             'type': 'info',
-            'message': f'Running: ansible-playbook -l {host_limit} --tags {",".join(tags)}'
+            'message': f'Running: make {make_target} (environment: {environment})'
         }
+        
+        # Build SSH command
+        ssh_key = config.ssh_key_path
+        ssh_cmd = [
+            'ssh',
+            '-o', 'StrictHostKeyChecking=no',
+            '-o', 'UserKnownHostsFile=/dev/null',
+            '-o', 'BatchMode=yes',
+            '-o', 'ConnectTimeout=10',
+        ]
+        
+        if ssh_key and os.path.exists(ssh_key):
+            ssh_cmd.extend(['-i', ssh_key])
+        
+        ssh_cmd.extend([f'root@{proxmox_host}', make_cmd])
+        
+        logger.info(f"[INSTALL] Executing: {' '.join(ssh_cmd[:8])}... {make_cmd}")
         
         # Execute with streaming output
         try:
             proc = await asyncio.create_subprocess_exec(
-                *cmd,
+                *ssh_cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,  # Merge stderr into stdout
-                cwd=self.ansible_dir
             )
             
             # Stream output line by line
-            line_count = 0
             async for line_bytes in proc.stdout:
                 line = line_bytes.decode('utf-8', errors='replace').rstrip()
                 if line:
-                    line_count += 1
                     # Determine message type based on content
                     msg_type = 'log'
-                    if 'FAILED' in line or 'fatal:' in line or 'ERROR' in line:
+                    if 'FAILED' in line or 'fatal:' in line or 'ERROR' in line or 'Error' in line:
                         msg_type = 'error'
                     elif 'changed:' in line or 'ok:' in line:
                         msg_type = 'log'
@@ -286,8 +290,10 @@ class AnsibleExecutor:
                         msg_type = 'info'
                     elif 'RECAP' in line:
                         msg_type = 'info'
+                    elif line.startswith('make[') or line.startswith('make:'):
+                        msg_type = 'info'
                     elif 'skipping:' in line:
-                        msg_type = 'log'  # Keep as log, don't show warnings for skips
+                        msg_type = 'log'
                     
                     yield {
                         'type': msg_type,
@@ -306,15 +312,15 @@ class AnsibleExecutor:
             else:
                 yield {
                     'type': 'error',
-                    'message': f'Ansible playbook failed with exit code {proc.returncode}',
+                    'message': f'Installation failed with exit code {proc.returncode}',
                     'done': True
                 }
                 
         except Exception as e:
-            logger.error(f"[ANSIBLE] Error executing playbook: {e}")
+            logger.error(f"[INSTALL] Error executing command on Proxmox host: {e}")
             yield {
                 'type': 'error',
-                'message': f'Error executing Ansible playbook: {str(e)}',
+                'message': f'Error connecting to Proxmox host: {str(e)}',
                 'done': True
             }
     

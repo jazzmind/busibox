@@ -70,6 +70,11 @@ class Config:
     # SSH
     ssh_key_path: str = os.getenv('SSH_KEY_PATH', '/root/.ssh/id_rsa')
     
+    # Proxmox host (for running make install commands)
+    # The Proxmox host has the vault and vault password files
+    # deploy-api SSHes to Proxmox to run Ansible playbooks
+    proxmox_host: str = os.getenv('PROXMOX_HOST', '')
+    
     # Nginx (on nginx container)
     nginx_host: str = os.getenv('NGINX_HOST', 'nginx')
     nginx_config_dir: str = os.getenv('NGINX_CONFIG_DIR', '/etc/nginx/sites-available/apps')
