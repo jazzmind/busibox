@@ -40,6 +40,16 @@ class Config:
     # If not set, auto-detected from POSTGRES_HOST format
     deployment_backend: str = os.getenv('DEPLOYMENT_BACKEND', '')
     
+    # Environment: "staging" or "production"
+    busibox_env: str = os.getenv('BUSIBOX_ENV', os.getenv('ENVIRONMENT', 'production'))
+    
+    # LLM Backend: "vllm", "mlx", or "cloud"
+    llm_backend: str = os.getenv('LLM_BACKEND', 'vllm')
+    
+    # Whether staging uses production vLLM (true by default for staging)
+    # When true, staging doesn't deploy its own vLLM, it uses production's
+    use_production_vllm: bool = os.getenv('USE_PRODUCTION_VLLM', 'false').lower() == 'true'
+    
     # Authz service for token validation
     authz_url: str = os.getenv('AUTHZ_URL', 'http://localhost:8010')
     

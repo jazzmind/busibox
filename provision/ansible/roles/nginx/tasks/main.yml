@@ -17,12 +17,14 @@
       - ssl-cert
     state: present
     update_cache: yes
+  tags: [nginx, nginx_install]
 
 - name: Ensure NGINX is enabled and started
   systemd:
     name: nginx
     enabled: yes
     state: started
+  tags: [nginx, nginx_install, nginx_start]
 
 - name: Create NGINX configuration directories
   file:
@@ -35,9 +37,14 @@
     - /etc/nginx/sites-available
     - /etc/nginx/sites-enabled
     - /etc/nginx/snippets
+  tags: [nginx, nginx_install, nginx_configure]
 
 - name: Setup SSL certificates (discover from ssl/ or generate self-signed)
-  include_tasks: ssl-certificates.yml
+  include_tasks:
+    file: ssl-certificates.yml
+    apply:
+      tags: [nginx, nginx_configure, nginx_ssl]
+  tags: [nginx, nginx_configure, nginx_ssl]
 
 - name: Deploy main NGINX configuration
   template:
@@ -47,6 +54,7 @@
     owner: root
     group: root
   notify: Reload NGINX
+  tags: [nginx, nginx_configure]
 
 - name: Deploy HTTP to HTTPS redirect configuration
   template:
@@ -56,6 +64,7 @@
     owner: root
     group: root
   notify: Reload NGINX
+  tags: [nginx, nginx_configure]
 
 - name: Enable HTTP to HTTPS redirect
   file:
@@ -63,37 +72,49 @@
     dest: /etc/nginx/sites-enabled/redirect-to-https.conf
     state: link
   notify: Reload NGINX
+  tags: [nginx, nginx_configure]
 
 - name: Deploy placeholder HTML pages
-  include_tasks: placeholders.yml
-  tags: [nginx, placeholders]
+  include_tasks:
+    file: placeholders.yml
+    apply:
+      tags: [nginx, nginx_configure, placeholders]
+  tags: [nginx, nginx_configure, placeholders]
 
 - name: Configure NGINX with placeholders (if placeholder_mode enabled)
-  include_tasks: configure-placeholders.yml
+  include_tasks:
+    file: configure-placeholders.yml
+    apply:
+      tags: [nginx, nginx_configure, placeholders]
   when: placeholder_mode is defined and placeholder_mode | bool
-  tags: [nginx, placeholders]
+  tags: [nginx, nginx_configure, placeholders]
 
 - name: Configure NGINX with application routing (normal mode)
-  include_tasks: configure.yml
+  include_tasks:
+    file: configure.yml
+    apply:
+      tags: [nginx, nginx_configure, apps]
   when: 
     - placeholder_mode is not defined or not placeholder_mode | bool
     - applications is defined 
     - applications | length > 0
-  tags: [nginx, apps]
+  tags: [nginx, nginx_configure, apps]
 
 - name: Test NGINX configuration
   command: nginx -t
   changed_when: false
   register: nginx_test
+  tags: [nginx, nginx_configure, nginx_test]
 
 - name: Display NGINX configuration test result
   debug:
     msg: "{{ nginx_test.stderr_lines }}"
+  tags: [nginx, nginx_configure, nginx_test]
 
 - name: Display NGINX configuration summary
   debug:
     msg: |
-      ✅ NGINX configuration complete
+      NGINX configuration complete
       - SSL Mode: {{ ssl_mode_used | default('auto-discovered') }}
       - Applications configured: {{ applications | selectattr('routes', 'defined') | selectattr('routes', 'ne', []) | list | length }}
       - HTTP to HTTPS redirect: enabled
@@ -101,4 +122,5 @@
       Next steps:
       1. Access applications via HTTPS
       2. Monitor NGINX logs: journalctl -u nginx -f
+  tags: [nginx, nginx_configure]
 

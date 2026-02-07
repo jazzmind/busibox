@@ -573,6 +573,7 @@ async def check_service_health(
             # LLM services
             'litellm': ('litellm', 4000, '/health/liveliness', 'http', 'http'),
             'vllm': ('vllm', 8000, '/health', 'http', 'http'),
+            'vllm-verify': ('vllm', 8000, '/health', 'http', 'http'),  # Same as vllm, used for staging verification
             
             # Frontend
             'nginx': ('nginx', 443, '/health', 'https', 'http'),
@@ -884,6 +885,69 @@ async def start_service_sse(
                 # Check platform - if MLX backend and service is vllm, start MLX instead
                 platform_info = get_platform_info()
                 backend = platform_info.get("backend", "cloud")
+                
+                # Handle vllm-verify service (for staging that uses production vLLM)
+                if service == "vllm-verify":
+                    yield f"data: {json.dumps({'type': 'info', 'message': 'Verifying production vLLM availability...'})}\n\n"
+                    
+                    # Check vLLM health (DNS resolves to production vLLM when use_production_vllm=true)
+                    try:
+                        async with httpx.AsyncClient() as client:
+                            response = await client.get("http://vllm:8000/health", timeout=10.0)
+                            if response.status_code == 200:
+                                yield f"data: {json.dumps({'type': 'success', 'message': 'Production vLLM is running and healthy'})}\n\n"
+                                
+                                # Also check what models are loaded
+                                try:
+                                    models_response = await client.get("http://vllm:8000/v1/models", timeout=5.0)
+                                    if models_response.status_code == 200:
+                                        models_data = models_response.json()
+                                        models_list = models_data.get('data', [])
+                                        if models_list:
+                                            model_names = [m.get('id', 'unknown') for m in models_list]
+                                            yield f"data: {json.dumps({'type': 'info', 'message': f'Available models: {model_names}'})}\n\n"
+                                except Exception:
+                                    pass  # Model list is optional info
+                                
+                                yield f"data: {json.dumps({'type': 'success', 'message': 'Staging is using production vLLM', 'done': True})}\n\n"
+                            else:
+                                yield f"data: {json.dumps({'type': 'warning', 'message': f'Production vLLM returned status {response.status_code}'})}\n\n"
+                                yield f"data: {json.dumps({'type': 'warning', 'message': 'Production vLLM may not be fully ready', 'done': True})}\n\n"
+                    except httpx.ConnectError:
+                        yield f"data: {json.dumps({'type': 'warning', 'message': 'Could not connect to production vLLM'})}\n\n"
+                        yield f"data: {json.dumps({'type': 'info', 'message': 'Ensure production vLLM is running and accessible from staging'})}\n\n"
+                        yield f"data: {json.dumps({'type': 'warning', 'message': 'Production vLLM not available', 'done': True})}\n\n"
+                    except httpx.TimeoutException:
+                        yield f"data: {json.dumps({'type': 'warning', 'message': 'Connection to production vLLM timed out'})}\n\n"
+                        yield f"data: {json.dumps({'type': 'warning', 'message': 'Production vLLM may be starting up or overloaded', 'done': True})}\n\n"
+                    except Exception as e:
+                        logger.error(f"[SSE] Error checking production vLLM: {e}")
+                        yield f"data: {json.dumps({'type': 'warning', 'message': f'Error checking production vLLM: {str(e)}', 'done': True})}\n\n"
+                    return
+                
+                # Handle vllm service when use_production_vllm is true (staging uses production)
+                use_production_vllm = platform_info.get("use_production_vllm", False)
+                environment = platform_info.get("environment", "production")
+                
+                if service == "vllm" and use_production_vllm:
+                    yield f"data: {json.dumps({'type': 'info', 'message': 'Staging environment configured to use production vLLM'})}\n\n"
+                    yield f"data: {json.dumps({'type': 'info', 'message': 'Verifying production vLLM availability instead of installing...'})}\n\n"
+                    
+                    # Check vLLM health (DNS resolves to production vLLM)
+                    try:
+                        async with httpx.AsyncClient() as client:
+                            response = await client.get("http://vllm:8000/health", timeout=10.0)
+                            if response.status_code == 200:
+                                yield f"data: {json.dumps({'type': 'success', 'message': 'Production vLLM is running and healthy'})}\n\n"
+                                yield f"data: {json.dumps({'type': 'success', 'message': 'Staging will use production vLLM', 'done': True})}\n\n"
+                            else:
+                                yield f"data: {json.dumps({'type': 'warning', 'message': f'Production vLLM returned status {response.status_code}'})}\n\n"
+                                yield f"data: {json.dumps({'type': 'warning', 'message': 'Production vLLM may not be fully ready', 'done': True})}\n\n"
+                    except Exception as e:
+                        yield f"data: {json.dumps({'type': 'warning', 'message': f'Could not verify production vLLM: {str(e)}'})}\n\n"
+                        yield f"data: {json.dumps({'type': 'info', 'message': 'LiteLLM can still work with cloud fallback if configured'})}\n\n"
+                        yield f"data: {json.dumps({'type': 'warning', 'message': 'Production vLLM not verified', 'done': True})}\n\n"
+                    return
                 
                 if service == "vllm" and backend == "mlx":
                     # Start MLX server via host-agent (runs on host, not in Docker)

@@ -584,6 +584,17 @@ wizard_llm_backend() {
                 1) 
                     LLM_BACKEND="$DETECTED_LLM_BACKEND"
                     LLM_TIER="$DETECTED_LLM_TIER"
+                    
+                    # Show staging vLLM info if applicable
+                    if [[ "$ENVIRONMENT" == "staging" && "$LLM_BACKEND" == "vllm" ]]; then
+                        echo ""
+                        echo -e "${CYAN}NOTE:${NC} Staging environment will use production vLLM by default."
+                        echo "      This saves GPU memory and ensures staging uses the same models."
+                        echo "      DNS resolves 'vllm' to production vLLM IP (10.96.200.208)."
+                        echo "      No vLLM container will be deployed in the staging environment."
+                        echo ""
+                    fi
+                    
                     break
                     ;;
                 2) 

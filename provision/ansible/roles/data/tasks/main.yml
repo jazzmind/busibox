@@ -264,15 +264,23 @@
 # ============================================================================
 # Database Migrations
 # ============================================================================
+# Run migrations during full data deployment or explicit data_migrations tag
+# Uses apply: to prevent tag inheritance issues with include_tasks
 - name: Apply database migrations
-  include_tasks: migrations.yml
-  tags: [data, data_migrations, data_configure]
+  include_tasks:
+    file: migrations.yml
+    apply:
+      tags: [data, data_migrations, data_configure, data_install]
+  tags: [data, data_migrations, data_configure, data_install]
 
 # ============================================================================
 # Configuration
 # ============================================================================
 - name: Deploy model registry configuration
-  include_tasks: model_registry.yml
+  include_tasks:
+    file: model_registry.yml
+    apply:
+      tags: [data, data_configure, model_registry]
   tags: [data, data_configure, model_registry]
 
 - name: Create data service environment file

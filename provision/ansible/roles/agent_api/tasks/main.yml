@@ -14,6 +14,7 @@
     system: yes
     home: /srv/agent
     shell: /bin/bash
+  tags: [agent_api, agent_api_install]
 
 - name: Install system dependencies
   apt:
@@ -27,30 +28,36 @@
       - rsync
     state: present
     update_cache: yes
+  tags: [agent_api, agent_api_install]
 
 - name: Check current deployed version
   stat:
     path: /opt/agent-api/.deploy_version
   register: agent_deploy_version_file
+  tags: [agent_api, agent_api_deploy]
 
 - name: Read current deployed version
   slurp:
     path: /opt/agent-api/.deploy_version
   register: agent_current_version_content
   when: agent_deploy_version_file.stat.exists
+  tags: [agent_api, agent_api_deploy]
 
 - name: Parse current deployed version
   set_fact:
     agent_current_commit: "{{ (agent_current_version_content.content | b64decode | from_json).commit | default('') }}"
   when: agent_deploy_version_file.stat.exists
+  tags: [agent_api, agent_api_deploy]
 
 - name: Get new version to deploy
   set_fact:
     agent_new_commit: "{{ lookup('pipe', 'git rev-parse --short HEAD', cwd=playbook_dir + '/../..') }}"
+  tags: [agent_api, agent_api_deploy]
 
 - name: Check if deployment is needed
   set_fact:
     agent_deployment_needed: "{{ not agent_deploy_version_file.stat.exists or agent_current_commit != agent_new_commit }}"
+  tags: [agent_api, agent_api_deploy]
 
 - name: Display version check
   debug:
@@ -59,6 +66,7 @@
       - Current deployed: {{ agent_current_commit | default('none') }}
       - New version: {{ agent_new_commit }}
       - Deployment needed: {{ agent_deployment_needed }}
+  tags: [agent_api, agent_api_deploy]
 
 - name: Stop agent-api service if running (to allow cleanup)
   systemd:
@@ -66,12 +74,14 @@
     state: stopped
   ignore_errors: yes
   when: agent_deployment_needed
+  tags: [agent_api, agent_api_deploy]
 
 - name: Clean up old agent directory (from previous Node.js deployment)
   file:
     path: /srv/agent
     state: absent
   when: agent_deployment_needed
+  tags: [agent_api, agent_api_deploy]
 
 - name: Create agent directories
   file:
@@ -85,6 +95,7 @@
     - "{{ agent_api_log_path }}"
     - /opt/agent-api
   when: agent_deployment_needed
+  tags: [agent_api, agent_api_install]
 
 - name: Copy agent service source code
   synchronize:
@@ -102,6 +113,7 @@
       - "--exclude=.coverage"
   notify: Restart agent-api
   when: agent_deployment_needed
+  tags: [agent_api, agent_api_deploy]
 
 - name: Copy shared testing library
   synchronize:
@@ -112,6 +124,7 @@
       - "--exclude=__pycache__"
       - "--exclude=*.pyc"
   when: agent_deployment_needed
+  tags: [agent_api, agent_api_deploy]
 
 - name: Copy shared busibox_common library
   synchronize:
@@ -123,6 +136,7 @@
       - "--exclude=*.pyc"
   notify: Restart agent-api
   when: agent_deployment_needed
+  tags: [agent_api, agent_api_deploy]
 
 - name: Fix ownership of agent directory
   file:
@@ -131,6 +145,7 @@
     group: "{{ agent_api_user }}"
     recurse: yes
   when: agent_deployment_needed
+  tags: [agent_api, agent_api_deploy]
 
 - name: Create Python virtual environment
   command: python3 -m venv "{{ agent_api_venv_path }}"
@@ -139,6 +154,7 @@
   become: yes
   become_user: "{{ agent_api_user }}"
   when: agent_deployment_needed
+  tags: [agent_api, agent_api_install]
 
 - name: Upgrade pip in venv
   pip:
@@ -148,6 +164,7 @@
   become: yes
   become_user: "{{ agent_api_user }}"
   when: agent_deployment_needed
+  tags: [agent_api, agent_api_install]
 
 - name: Install agent service dependencies
   pip:
@@ -160,6 +177,7 @@
   become_user: "{{ agent_api_user }}"
   notify: Restart agent-api
   when: agent_deployment_needed
+  tags: [agent_api, agent_api_install]
 
 - name: Install test dependencies
   pip:
@@ -168,6 +186,7 @@
   become: yes
   become_user: "{{ agent_api_user }}"
   when: agent_deployment_needed
+  tags: [agent_api, agent_api_install]
 
 - name: Deploy agent service environment file
   template:
@@ -177,6 +196,7 @@
     group: "{{ agent_api_user }}"
     mode: "0600"
   notify: Restart agent-api
+  tags: [agent_api, agent_api_configure]
 
 # Deploy model registry for embedding config (same as data)
 - name: Create config directory for model registry
@@ -186,7 +206,7 @@
     mode: '0755'
     owner: root
     group: root
-  tags: [agent, model_registry]
+  tags: [agent_api, agent_api_configure, model_registry]
 
 - name: Deploy model registry configuration
   template:
@@ -196,7 +216,7 @@
     owner: root
     group: root
   notify: Restart agent-api
-  tags: [agent, model_registry]
+  tags: [agent_api, agent_api_configure, model_registry]
 
 - name: Make migration script executable
   file:
@@ -204,6 +224,7 @@
     mode: "0755"
     owner: "{{ agent_api_user }}"
     group: "{{ agent_api_user }}"
+  tags: [agent_api, agent_api_configure]
 
 # =============================================================================
 # Database Setup
@@ -219,7 +240,7 @@
     state: present
   become_user: postgres
   delegate_to: "{{ groups['pg'][0] }}"
-  tags: [agent, agent_api]
+  tags: [agent_api, agent_api_db]
 
 - name: Ensure agent database exists
   postgresql_db:
@@ -232,7 +253,7 @@
     state: present
   become_user: postgres
   delegate_to: "{{ groups['pg'][0] }}"
-  tags: [agent, agent_api]
+  tags: [agent_api, agent_api_db]
 
 - name: Grant database privileges to agent user
   postgresql_privs:
@@ -243,7 +264,7 @@
     role: "{{ postgres_user }}"
   become_user: postgres
   delegate_to: "{{ groups['pg'][0] }}"
-  tags: [agent, agent_api]
+  tags: [agent_api, agent_api_db]
 
 - name: Grant schema privileges to agent user
   postgresql_privs:
@@ -255,7 +276,7 @@
     role: "{{ postgres_user }}"
   become_user: postgres
   delegate_to: "{{ groups['pg'][0] }}"
-  tags: [agent, agent_api]
+  tags: [agent_api, agent_api_db]
 
 - name: Grant table privileges to agent user
   postgresql_privs:
@@ -268,7 +289,7 @@
     role: "{{ postgres_user }}"
   become_user: postgres
   delegate_to: "{{ groups['pg'][0] }}"
-  tags: [agent, agent_api]
+  tags: [agent_api, agent_api_db]
 
 - name: Transfer ownership of existing tables to agent user
   shell: |
@@ -288,7 +309,7 @@
     END \\\$\\\$;
     \""
   delegate_to: "{{ groups['pg'][0] }}"
-  tags: [agent, agent_api]
+  tags: [agent_api, agent_api_db]
 
 - name: Check if alembic_version table exists
   shell: |
@@ -302,6 +323,7 @@
   delegate_to: "{{ groups['pg'][0] }}"
   register: alembic_table_exists
   changed_when: false
+  tags: [agent_api, agent_api_migrations]
 
 - name: Get current alembic version from database
   shell: |
@@ -311,6 +333,7 @@
   failed_when: false
   changed_when: false
   when: alembic_table_exists.stdout == 't'
+  tags: [agent_api, agent_api_migrations]
 
 - name: Count all agent tables in database (excluding alembic_version)
   shell: |
@@ -322,6 +345,7 @@
   delegate_to: "{{ groups['pg'][0] }}"
   register: tables_count
   changed_when: false
+  tags: [agent_api, agent_api_migrations]
 
 - name: Debug migration state
   debug:
@@ -329,6 +353,7 @@
       Tables in DB: {{ tables_count.stdout|int }}
       Alembic table exists: {{ alembic_table_exists.stdout }}
       Current version: {{ alembic_version_num.stdout if alembic_table_exists.stdout == 't' else 'N/A' }}
+  tags: [agent_api, agent_api_migrations]
 
 - name: Backup all tables before stamping (if tables exist but no valid alembic version)
   shell: |
@@ -352,6 +377,7 @@
     (alembic_table_exists.stdout != 't' or alembic_version_num.stdout == '')
   register: backup_before_stamp
   changed_when: false
+  tags: [agent_api, agent_api_migrations]
 
 - name: Grant database permissions for migrations
   shell: |
@@ -368,6 +394,7 @@
   register: grant_result
   failed_when: false
   changed_when: false
+  tags: [agent_api, agent_api_migrations]
 
 - name: Stamp database to head if tables exist but no valid alembic version
   shell: |
@@ -385,6 +412,7 @@
      (alembic_version_num.stdout is defined and alembic_version_num.stdout | trim == ''))
   register: stamp_result
   changed_when: true
+  tags: [agent_api, agent_api_migrations]
 
 - name: Debug stamp decision
   debug:
@@ -394,6 +422,7 @@
       Version defined: {{ alembic_version_num.stdout is defined }}
       Version value: '{{ alembic_version_num.stdout | default("undefined") | trim }}'
       Should stamp: {{ tables_count.stdout|int > 0 and (alembic_table_exists.stdout != 't' or (alembic_version_num.stdout is defined and alembic_version_num.stdout | trim == '')) }}
+  tags: [agent_api, agent_api_migrations]
 
 - name: Run database migrations
   shell: |
@@ -407,11 +436,13 @@
     PYTHONPATH: "/srv/agent"
   register: migration_result
   changed_when: "'Running upgrade' in migration_result.stderr"
+  tags: [agent_api, agent_api_migrations]
 
 - name: Display migration output
   debug:
     var: migration_result.stdout_lines
   when: migration_result.stdout_lines is defined
+  tags: [agent_api, agent_api_migrations]
 
 # =============================================================================
 # Pytest Database Migrations
@@ -425,7 +456,7 @@
   set_fact:
     agent_pytest_database_url: "postgresql+asyncpg://busibox_test_user:{{ pytest_db_password | default('testpassword') }}@{{ postgres_host }}:{{ postgres_port }}/test_agent"
   when: enable_pytest_databases | default(false)
-  tags: [agent, agent_pytest_db]
+  tags: [agent_api, agent_api_pytest_db]
 
 - name: Run migrations on pytest database
   shell: |
@@ -440,13 +471,13 @@
   register: pytest_migration_result
   changed_when: "'Running upgrade' in pytest_migration_result.stderr"
   when: enable_pytest_databases | default(false)
-  tags: [agent, agent_pytest_db]
+  tags: [agent_api, agent_api_pytest_db]
 
 - name: Display pytest migration output
   debug:
     var: pytest_migration_result.stdout_lines
   when: enable_pytest_databases | default(false) and pytest_migration_result.stdout_lines is defined
-  tags: [agent, agent_pytest_db]
+  tags: [agent_api, agent_api_pytest_db]
 
 - name: Deploy agent service systemd unit
   template:
@@ -456,12 +487,14 @@
   notify:
     - Reload systemd
     - Restart agent-api
+  tags: [agent_api, agent_api_configure]
 
 - name: Enable agent service
   systemd:
     name: agent-api
     enabled: yes
     daemon_reload: yes
+  tags: [agent_api, agent_api_configure]
 
 - name: Write deployment version file
   copy:
@@ -476,12 +509,14 @@
     owner: "{{ agent_api_user }}"
     group: "{{ agent_api_user }}"
     mode: "0644"
+  tags: [agent_api, agent_api_deploy]
 
 - name: Restart agent service (always restart on deploy)
   systemd:
     name: agent-api
     state: restarted
   register: restart_result
+  tags: [agent_api, agent_api_start]
 
 - name: Wait for agent service to be ready
   uri:
@@ -493,16 +528,19 @@
   register: health_check
   until: health_check is success
   failed_when: false
+  tags: [agent_api, agent_api_start]
 
 - name: Check agent service status if health check failed
   shell: systemctl status agent-api --no-pager
   register: service_status
   when: health_check is failed
+  tags: [agent_api, agent_api_start]
 
 - name: Show agent service logs if startup failed
   shell: journalctl -u agent-api -n 50 --no-pager
   register: service_logs
   when: health_check is failed
+  tags: [agent_api, agent_api_start]
 
 - name: Display service status and logs if failed
   debug:
@@ -513,11 +551,13 @@
       - "=== Recent Logs ==="
       - "{{ service_logs.stdout_lines | default([]) }}"
   when: health_check is failed
+  tags: [agent_api, agent_api_start]
 
 - name: Fail if agent service did not start
   fail:
     msg: "Agent service failed to start. Check logs above."
   when: health_check is failed
+  tags: [agent_api, agent_api_start]
 
 # Post-Deployment Validation Tests (PVT)
 - name: Run PVT tests
@@ -533,19 +573,19 @@
   failed_when: false
   changed_when: false
   when: run_pvt_tests | default(true)
-  tags: [agent, pvt]
+  tags: [agent_api, pvt]
 
 - name: Display PVT test results
   debug:
     msg: "{{ agent_pvt_result.stdout_lines | default([]) }}"
   when: run_pvt_tests | default(true) and agent_pvt_result.stdout is defined
-  tags: [agent, pvt]
+  tags: [agent_api, pvt]
 
 - name: Fail if PVT tests failed
   fail:
     msg: "Post-deployment validation tests failed! Check logs above."
   when: run_pvt_tests | default(true) and agent_pvt_result.rc != 0
-  tags: [agent, pvt]
+  tags: [agent_api, pvt]
 
 
 

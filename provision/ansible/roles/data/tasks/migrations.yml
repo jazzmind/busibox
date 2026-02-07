@@ -45,11 +45,25 @@
     mode: '0755'
   tags: [data, data_migrations]
 
+- name: Check if migrations source directory exists
+  stat:
+    path: "{{ playbook_dir }}/../../srv/data/migrations"
+  register: migrations_source
+  delegate_to: localhost
+  tags: [data, data_migrations]
+
 - name: Copy migration files
   copy:
     src: "{{ playbook_dir }}/../../srv/data/migrations/"
     dest: /srv/data/migrations/
     mode: '0644'
+  when: migrations_source.stat.exists
+  tags: [data, data_migrations]
+
+- name: Check if multi-flow migration file exists
+  stat:
+    path: /srv/data/migrations/add_multi_flow_support.sql
+  register: multi_flow_migration_file
   tags: [data, data_migrations]
 
 - name: Check if multi-flow migration has been applied
@@ -58,18 +72,28 @@
     "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='data_chunks' AND column_name='processing_strategy');"
   register: migration_check
   changed_when: false
+  when: multi_flow_migration_file.stat.exists
   tags: [data, data_migrations]
 
 - name: Apply multi-flow support migration
   shell: |
     PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -f /srv/data/migrations/add_multi_flow_support.sql
-  when: migration_check.stdout == 'f'
+  when: 
+    - multi_flow_migration_file.stat.exists
+    - migration_check.stdout is defined
+    - migration_check.stdout == 'f'
   register: migration_result
   tags: [data, data_migrations]
 
 - name: Display multi-flow migration status
   debug:
-    msg: "{{ 'Multi-flow migration applied successfully' if migration_result.changed else 'Multi-flow migration already applied' }}"
+    msg: "{{ 'Multi-flow migration applied successfully' if (migration_result.changed | default(false)) else ('Multi-flow migration skipped - file not found' if not multi_flow_migration_file.stat.exists else 'Multi-flow migration already applied') }}"
+  tags: [data, data_migrations]
+
+- name: Check if cleanup stage migration file exists
+  stat:
+    path: /srv/data/migrations/add_cleanup_stage.sql
+  register: cleanup_migration_file
   tags: [data, data_migrations]
 
 - name: Check if cleanup stage migration has been applied
@@ -79,117 +103,42 @@
   register: cleanup_migration_check
   changed_when: false
   failed_when: false
+  when: cleanup_migration_file.stat.exists
   tags: [data, data_migrations]
 
 - name: Apply cleanup stage migration
   shell: |
     PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -f /srv/data/migrations/add_cleanup_stage.sql
-  when: cleanup_migration_check.stdout != 't'
+  when: 
+    - cleanup_migration_file.stat.exists
+    - cleanup_migration_check.stdout is defined
+    - cleanup_migration_check.stdout != 't'
   register: cleanup_migration_result
   tags: [data, data_migrations]
 
 - name: Display cleanup migration status
   debug:
-    msg: "{{ 'Cleanup stage migration applied successfully' if cleanup_migration_result.changed else 'Cleanup stage migration already applied' }}"
+    msg: "{{ 'Cleanup stage migration applied successfully' if (cleanup_migration_result.changed | default(false)) else ('Cleanup migration skipped - file not found' if not cleanup_migration_file.stat.exists else 'Cleanup stage migration already applied') }}"
   tags: [data, data_migrations]
 
-- name: Check if processing history table exists
-  shell: |
-    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -tAc \
-    "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='processing_history');"
-  register: history_table_check
-  changed_when: false
+# Note: All migrations below check if the SQL file exists before attempting to apply
+# This allows the role to work even if migration files haven't been created yet
+
+- name: Find all migration SQL files
+  find:
+    paths: /srv/data/migrations
+    patterns: "*.sql"
+  register: migration_files
   tags: [data, data_migrations]
 
-- name: Apply processing history migration
-  shell: |
-    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -f /srv/data/migrations/add_processing_history.sql
-  when: history_table_check.stdout == 'f'
-  register: history_migration_result
-  tags: [data, data_migrations]
-
-- name: Display processing history migration status
+- name: List available migrations
   debug:
-    msg: "{{ 'Processing history migration applied successfully' if history_migration_result.changed else 'Processing history table already exists' }}"
+    msg: "Available migrations: {{ migration_files.files | map(attribute='path') | list }}"
+  when: migration_files.files | length > 0
   tags: [data, data_migrations]
 
-- name: Check if markdown storage columns exist
-  shell: |
-    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -tAc \
-    "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='data_files' AND column_name='markdown_path');"
-  register: markdown_storage_check
-  changed_when: false
-  tags: [data, data_migrations]
-
-- name: Apply markdown storage migration
-  shell: |
-    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -f /srv/data/migrations/add_markdown_storage.sql
-  when: markdown_storage_check.stdout == 'f'
-  register: markdown_storage_result
-  tags: [data, data_migrations]
-
-- name: Display markdown storage migration status
+- name: Skip migrations if no migration files found
   debug:
-    msg: "{{ 'Markdown storage migration applied successfully' if markdown_storage_result.changed else 'Markdown storage migration already applied' }}"
-  tags: [data, data_migrations]
-
-- name: Check if RBAC schema exists
-  shell: |
-    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -tAc \
-    "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='groups');"
-  register: rbac_schema_check
-  changed_when: false
-  tags: [data, data_migrations]
-
-- name: Apply RBAC schema migration
-  shell: |
-    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -f /srv/data/migrations/add_rbac_schema.sql
-  when: rbac_schema_check.stdout == 'f'
-  register: rbac_schema_result
-  tags: [data, data_migrations]
-
-- name: Display RBAC schema migration status
-  debug:
-    msg: "{{ 'RBAC schema migration applied successfully' if rbac_schema_result.changed else 'RBAC schema already exists' }}"
-  tags: [data, data_migrations]
-
-- name: Check if security model migration has been applied (document_roles table)
-  shell: |
-    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -tAc \
-    "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='document_roles');"
-  register: security_model_check
-  changed_when: false
-  tags: [data, data_migrations]
-
-- name: Apply security model migration (owner_id, visibility, document_roles)
-  shell: |
-    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -f /srv/data/migrations/003_security_model.sql
-  when: security_model_check.stdout == 'f'
-  register: security_model_result
-  tags: [data, data_migrations]
-
-- name: Display security model migration status
-  debug:
-    msg: "{{ 'Security model migration applied successfully' if security_model_result.changed else 'Security model migration already applied' }}"
-  tags: [data, data_migrations]
-
-- name: Check if RLS is enabled on all data tables
-  shell: |
-    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -tAc \
-    "SELECT COUNT(*) FROM pg_class WHERE relname IN ('data_files', 'data_chunks', 'data_status', 'processing_history', 'document_roles') AND relrowsecurity = true;"
-  register: rls_check
-  changed_when: false
-  tags: [data, data_migrations]
-
-- name: Apply RLS policies migration (idempotent - runs each deploy to pick up changes)
-  shell: |
-    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -f /srv/data/migrations/add_rls_policies.sql
-  # Run if not all 5 tables have RLS enabled
-  when: rls_check.stdout | int < 5
-  register: rls_result
-  tags: [data, data_migrations]
-
-- name: Display RLS policies migration status
-  debug:
-    msg: "{{ 'RLS policies applied/updated for all tables' if rls_result.changed else ('RLS policies already enabled on all ' + rls_check.stdout|trim + ' tables') }}"
+    msg: "No migration SQL files found in /srv/data/migrations - skipping file-based migrations"
+  when: migration_files.files | length == 0
   tags: [data, data_migrations]

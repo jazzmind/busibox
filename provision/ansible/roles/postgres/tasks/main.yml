@@ -17,17 +17,20 @@
       - locales
     state: present
     update_cache: yes
+  tags: [postgres, postgres_install]
 
 - name: Generate en_US.UTF-8 locale
   locale_gen:
     name: en_US.UTF-8
     state: present
+  tags: [postgres, postgres_install]
 
 - name: Ensure PostgreSQL is started
   systemd:
     name: postgresql
     state: started
     enabled: yes
+  tags: [postgres, postgres_install, postgres_start]
 
 - name: Get PostgreSQL version
   shell: |
@@ -35,10 +38,12 @@
   register: pg_version
   changed_when: false
   check_mode: no  # Always run this task, even in check mode
+  tags: [postgres, postgres_configure]
 
 - name: Verify PostgreSQL version detected
   debug:
     msg: "PostgreSQL version: {{ pg_version.stdout }}"
+  tags: [postgres, postgres_configure]
 
 - name: Allow listen on all
   lineinfile:
@@ -46,6 +51,7 @@
     regexp: "^#?listen_addresses"
     line: "listen_addresses = '*'"
   notify: Restart Postgres
+  tags: [postgres, postgres_configure]
 
 - name: Configure trust authentication for local setup
   lineinfile:
@@ -54,6 +60,7 @@
     line: "local   all             postgres                                trust"
     insertbefore: "^# TYPE"
   notify: Reload Postgres
+  tags: [postgres, postgres_configure]
 
 - name: Configure trust authentication for all local users
   lineinfile:
@@ -62,6 +69,7 @@
     line: "local   all             all                                     trust"
     insertafter: "^local\\s+all\\s+postgres"
   notify: Reload Postgres
+  tags: [postgres, postgres_configure]
 
 - name: pg_hba for network access
   blockinfile:
@@ -70,15 +78,18 @@
     block: |
       host    all             all             10.96.200.0/21          md5
   notify: Reload Postgres
+  tags: [postgres, postgres_configure]
 
 - name: Flush handlers to restart/reload PostgreSQL
   meta: flush_handlers
+  tags: [postgres, postgres_configure]
 
 - name: Wait for PostgreSQL to be ready
   wait_for:
     port: 5432
     delay: 2
     timeout: 30
+  tags: [postgres, postgres_configure, postgres_start]
 
 - name: Create busibox database user
   become_user: postgres
@@ -87,6 +98,7 @@
     password: "{{ secrets.postgresql.password | default(postgres_password) | default('busibox_password_change_me') }}"
     role_attr_flags: "LOGIN,CREATEDB"
     state: present
+  tags: [postgres, postgres_configure]
 
 - name: Create service-specific databases
   become_user: postgres
@@ -370,6 +382,7 @@
     - { version: 12, name: "config_table", file: "012_config_table.sql" }
   register: migration_result
   changed_when: "'applied successfully' in migration_result.stdout"
+  tags: [postgres, postgres_migrations]
 
 - name: Grant ownership of all tables to application user (data database)
   become_user: postgres
@@ -409,6 +422,7 @@
       -- Set default privileges for future objects
       ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO {{ postgres_user }};
       ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO {{ postgres_user }};
+  tags: [postgres, postgres_configure]
 
 - name: Grant ownership of all tables to postgres user (data database)
   become_user: postgres
@@ -448,6 +462,7 @@
       -- Set default privileges for future objects
       ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO {{ postgres_user }};
       ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO {{ postgres_user }};
+  tags: [postgres, postgres_configure]
 
 - name: Configure peer/md5 authentication for non-postgres users (after migrations)
   lineinfile:
@@ -456,3 +471,4 @@
     line: "local   all             all                                     peer"
     insertafter: "^local\\s+all\\s+postgres"
   notify: Reload Postgres
+  tags: [postgres, postgres_configure]

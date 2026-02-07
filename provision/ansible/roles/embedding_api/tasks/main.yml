@@ -1,6 +1,13 @@
 ---
 # Embedding API deployment tasks
 # Deploys the FastEmbed-based embedding service to the data container
+#
+# Tag structure:
+#   - embedding_api: runs all embedding_api tasks
+#   - embedding_api_install: system deps, venv, pip packages
+#   - embedding_api_deploy: source code sync
+#   - embedding_api_configure: env file, systemd service
+#   - embedding_api_start: enable/start service, health check
 
 - name: Load secrets
   include_vars:
@@ -17,6 +24,7 @@
     createhome: true
     home: /home/{{ embedding_api_user }}
   become: true
+  tags: [embedding_api, embedding_api_install]
 
 - name: Create embedding directories
   ansible.builtin.file:
@@ -32,6 +40,7 @@
     - "{{ embedding_api_log_path }}"
     - /etc/embedding
     - "{{ embedding_cache_dir }}"
+  tags: [embedding_api, embedding_api_install]
 
 - name: Install system dependencies
   ansible.builtin.apt:
@@ -41,6 +50,7 @@
       - python3-pip
     state: present
   become: true
+  tags: [embedding_api, embedding_api_install]
 
 - name: Create Python virtual environment
   ansible.builtin.command:
@@ -48,6 +58,7 @@
     creates: "{{ embedding_api_venv_path }}/bin/python"
   become: true
   become_user: "{{ embedding_api_user }}"
+  tags: [embedding_api, embedding_api_install]
 
 - name: Upgrade pip in virtual environment
   ansible.builtin.pip:
@@ -59,6 +70,7 @@
     virtualenv: "{{ embedding_api_venv_path }}"
   become: true
   become_user: "{{ embedding_api_user }}"
+  tags: [embedding_api, embedding_api_install]
 
 - name: Copy embedding source code
   ansible.builtin.copy:
@@ -69,6 +81,7 @@
     mode: "0644"
   become: true
   notify: Restart embedding-api
+  tags: [embedding_api, embedding_api_deploy]
 
 - name: Copy requirements.txt
   ansible.builtin.copy:
@@ -79,6 +92,7 @@
     mode: "0644"
   become: true
   register: requirements_changed
+  tags: [embedding_api, embedding_api_deploy]
 
 - name: Install Python dependencies
   ansible.builtin.pip:
@@ -87,6 +101,7 @@
   become: true
   become_user: "{{ embedding_api_user }}"
   when: requirements_changed.changed or force_reinstall | default(false)
+  tags: [embedding_api, embedding_api_install]
 
 - name: Configure embedding-api environment
   ansible.builtin.template:
@@ -97,6 +112,7 @@
     mode: "0600"
   become: true
   notify: Restart embedding-api
+  tags: [embedding_api, embedding_api_configure]
 
 - name: Configure embedding-api systemd service
   ansible.builtin.template:
@@ -107,6 +123,7 @@
     mode: "0644"
   become: true
   notify: Restart embedding-api
+  tags: [embedding_api, embedding_api_configure]
 
 # Pre-download embedding model if not already cached
 # This avoids slow startup on first run and prevents health check timeouts
@@ -118,6 +135,7 @@
     executable: /bin/bash
   register: embedding_model_name
   changed_when: false
+  tags: [embedding_api, embedding_api_deploy]
 
 - name: Check if embedding model is already cached
   ansible.builtin.find:
@@ -126,6 +144,7 @@
     recurse: yes
   register: cached_model_files
   become: true
+  tags: [embedding_api, embedding_api_deploy]
 
 - name: Pre-download embedding model if not cached
   ansible.builtin.shell: |
@@ -162,6 +181,7 @@
   retries: 3
   delay: 10
   until: model_download.rc == 0
+  tags: [embedding_api, embedding_api_deploy]
 
 - name: Enable and start embedding-api service
   ansible.builtin.systemd:
@@ -170,6 +190,7 @@
     state: started
     daemon_reload: true
   become: true
+  tags: [embedding_api, embedding_api_start]
 
 - name: Wait for embedding-api to be healthy
   ansible.builtin.uri:
@@ -181,7 +202,9 @@
   retries: 30
   delay: 5
   until: health_check.status == 200 and health_check.json.model_loaded | default(false)
+  tags: [embedding_api, embedding_api_start]
 
 - name: Display embedding-api health status
   ansible.builtin.debug:
     msg: "Embedding API is healthy: {{ health_check.json }}"
+  tags: [embedding_api, embedding_api_start]

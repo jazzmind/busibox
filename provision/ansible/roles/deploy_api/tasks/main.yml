@@ -8,7 +8,7 @@
   include_vars:
     file: "{{ playbook_dir }}/roles/secrets/vars/vault.{{ deployment_environment | default('dev') }}.yml"
   no_log: true
-  tags: [deploy_api, deploy, apis_authz]
+  tags: [deploy_api, deploy, apis]
 
 - name: Install rsync for synchronize module
   apt:

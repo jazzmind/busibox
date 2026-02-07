@@ -131,16 +131,27 @@ def get_platform_info() -> dict:
     Get complete platform information.
     
     Returns:
-        Dictionary with backend, tier, ram_gb, and other platform details
+        Dictionary with backend, tier, ram_gb, environment, use_production_vllm, 
+        and other platform details
     """
+    import os
+    
     backend = detect_backend()
     tier = get_memory_tier(backend)
+    
+    # Get environment from config
+    environment = os.getenv('BUSIBOX_ENV', os.getenv('ENVIRONMENT', 'production'))
+    
+    # Get use_production_vllm flag (staging uses production vLLM by default)
+    use_production_vllm = os.getenv('USE_PRODUCTION_VLLM', 'false').lower() == 'true'
     
     info = {
         "backend": backend,
         "tier": tier,
         "os": platform.system(),
         "arch": platform.machine(),
+        "environment": environment,
+        "use_production_vllm": use_production_vllm,
     }
     
     # Add RAM/VRAM info if available

@@ -262,41 +262,52 @@
       tags: [apis, apis_authz, authz]
 
 # 3.1b Deploy API - runs in authz container for secure deployment operations
+# Note: Separate play from authz to prevent authz tasks running when only deploy_api is targeted
 - hosts: authz
-  tags: [apis, apis_authz, deploy, deploy_api]
+  tags: [apis, deploy, deploy_api]
   roles:
     - role: deploy_api
-      tags: [apis, apis_authz, deploy, deploy_api]
+      tags: [apis, deploy, deploy_api]
 
 # 3.2 Data (file ingestion + embedding)
+# Tag structure:
+#   - apis_data: runs both data role and embedding_api role
+#   - data: runs only the data role (task-level tags control data_api vs data_worker)
+#   - data_api: runs only data API tasks within data role (task-level only)
+#   - data_worker: runs only worker tasks within data role (task-level only)
+#   - embedding_api: runs only embedding_api role
+# NOTE: data_api and data_worker are NOT on role tags - they're task-level only
+# This prevents ALL data tasks from running when targeting data_api or data_worker
 - hosts: data
-  tags: [apis, apis_data]
+  tags: [apis, apis_data, data, embedding_api, embedding]
   roles:
     - role: data
-      tags: [apis, apis_data, data, data_api, data_worker]
+      tags: [apis, apis_data, data]
     - role: embedding_api
-      tags: [apis, apis_data, data, embedding_api, embedding]
+      tags: [apis, apis_data, embedding_api, embedding]
 
 # 3.3 Search API
+# Note: Removed 'search' from role tags to avoid confusion with milvus core service
 - hosts: milvus
   tags: [apis, apis_search]
   roles:
     - role: search_api
-      tags: [apis, apis_search, search, search_api, search-api]
+      tags: [apis, apis_search, search_api, search-api]
 
 # 3.4 Agent API + Docs API (both on agent-lxc)
 #
 # Tag structure:
-#   - apis_agent: runs all services on this host (agent + docs_api)
-#   - agent, agent_api: runs only agent_api role
-#   - docs, docs_api: runs only docs_api role
+#   - apis_agent: runs all services on this host (agent_api + docs_api)
+#   - agent_api: runs only agent_api role
+#   - docs_api: runs only docs_api role
+# Note: Removed 'agent' and 'docs' broad tags from role level to prevent confusion
 - hosts: agent
-  tags: [apis, apis_agent, agent, agent_api, docs, docs_api]
+  tags: [apis, apis_agent]
   roles:
     - role: agent_api
-      tags: [apis, apis_agent, agent, agent_api]
+      tags: [apis, apis_agent, agent_api]
     - role: docs_api
-      tags: [apis, apis_agent, docs, docs_api]
+      tags: [apis, apis_agent, docs_api]
 
 # 3.6 Bridge Service (optional - multi-channel communication)
 - hosts: bridge

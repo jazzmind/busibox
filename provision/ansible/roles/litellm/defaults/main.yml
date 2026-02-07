@@ -42,7 +42,9 @@ litellm_models: []
 litellm_routing_strategy: "simple-shuffle"
 litellm_allowed_fails: 3
 litellm_num_retries: 2
-litellm_timeout: 60
+# Timeout for LLM requests (seconds) - set high for long-running completions
+# This is the backend request timeout, not the SSE streaming timeout
+litellm_timeout: 600
 litellm_fallbacks: []
 
 # General Settings

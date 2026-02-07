@@ -119,10 +119,12 @@ applications:
       - type: subdomain
         subdomain: "agents{{ env_subdomain_suffix | default('') }}"
         websocket: true
+        sse: true  # Support streaming chat responses
       - type: path
         domain: "{{ full_domain }}"
         path: /agents
         strip_path: false  # Don't strip - Next.js handles basePath via NEXT_PUBLIC_BASE_PATH
+        sse: true  # Support streaming chat responses
     secrets:
       - database_url
       - agent_api_key
