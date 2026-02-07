@@ -254,18 +254,17 @@
 # Application services that depend on core + llm
 # =============================================================================
 
-# 3.1 AuthZ (authentication/authorization) - needed by all other APIs
-#     Deploy API also runs here for secure app deployment operations
-#
-# Tag structure:
-#   - apis_authz: runs all services on this host (authz + deploy_api)
-#   - authz: runs only authz role
-#   - deploy, deploy_api: runs only deploy_api role
+# 3.1a AuthZ (authentication/authorization) - needed by all other APIs
 - hosts: authz
-  tags: [apis, apis_authz, authz, deploy, deploy_api]
+  tags: [apis, apis_authz, authz]
   roles:
     - role: authz
       tags: [apis, apis_authz, authz]
+
+# 3.1b Deploy API - runs in authz container for secure deployment operations
+- hosts: authz
+  tags: [apis, apis_authz, deploy, deploy_api]
+  roles:
     - role: deploy_api
       tags: [apis, apis_authz, deploy, deploy_api]
 
