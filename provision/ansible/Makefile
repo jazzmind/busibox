@@ -62,8 +62,9 @@ VAULT_FLAGS=$(shell \
 EXTRA_ARGS=
 
 # Ansible output formatting
-# Use 'yaml' callback for readable output with task names
-export ANSIBLE_STDOUT_CALLBACK=yaml
+# Use default callback with result_format=yaml for readable output
+export ANSIBLE_STDOUT_CALLBACK=default
+export ANSIBLE_CALLBACK_RESULT_FORMAT=yaml
 # Don't show skipped hosts - reduces noise
 export ANSIBLE_DISPLAY_SKIPPED_HOSTS=false
 
