@@ -1223,10 +1223,12 @@ update_docker_ansible() {
     show_stage 40 "Deploying Updates" "Running Ansible playbook for Docker deployment."
     info "Running: ansible-playbook -i inventory/docker docker.yml"
     
+    # Use 'default' callback instead of 'dense' - dense uses ANSI cursor movement
+    # codes that don't work well when piped or in non-interactive terminals
     if [[ "$VERBOSE" == true ]]; then
-        $playbook_cmd
+        ANSIBLE_STDOUT_CALLBACK=default ANSIBLE_FORCE_COLOR=1 $playbook_cmd
     else
-        $playbook_cmd 2>&1 | tail -30 || true
+        ANSIBLE_STDOUT_CALLBACK=default ANSIBLE_FORCE_COLOR=1 $playbook_cmd 2>&1 | tail -30 || true
     fi
     
     # Wait for AI Portal

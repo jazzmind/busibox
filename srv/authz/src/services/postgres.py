@@ -14,7 +14,8 @@ logger = structlog.get_logger()
 
 # Module-level lock to prevent concurrent schema initialization
 _schema_lock = asyncio.Lock()
-_schema_initialized = False
+# Track schema initialization per database (by database name)
+_schema_initialized: set[str] = set()
 
 
 def validate_uuid(value: str, field_name: str = "id") -> uuid.UUID:
@@ -105,14 +106,17 @@ class PostgresService:
             # connect() will call ensure_schema() again; avoid recursion
             return
         
-        # Fast path: schema already initialized
-        if _schema_initialized:
+        # Get database name for per-database tracking
+        db_name = self._pool_manager.config.database or "default"
+        
+        # Fast path: schema already initialized for this database
+        if db_name in _schema_initialized:
             return
         
         # Use lock to prevent concurrent schema initialization
         async with _schema_lock:
             # Double-check after acquiring lock
-            if _schema_initialized:
+            if db_name in _schema_initialized:
                 return
             
             from schema import get_authz_schema
@@ -121,8 +125,8 @@ class PostgresService:
             async with self._pool_manager.acquire() as conn:
                 await schema.apply(conn)
             
-            _schema_initialized = True
-            logger.info("Authz schema initialization complete")
+            _schema_initialized.add(db_name)
+            logger.info("Authz schema initialization complete", database=db_name)
 
     # ---------------------------------------------------------------------
     # Audit
