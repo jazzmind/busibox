@@ -46,8 +46,6 @@ class AuthTestClient:
         self,
         authz_url: Optional[str] = None,
         admin_token: Optional[str] = None,
-        client_id: Optional[str] = None,
-        client_secret: Optional[str] = None,
         test_user_id: Optional[str] = None,
     ):
         """
@@ -55,7 +53,12 @@ class AuthTestClient:
         
         Args:
             authz_url: Base URL for authz service (default from AUTHZ_JWKS_URL)
+            admin_token: Admin token for role management (optional)
             test_user_id: Test user ID (default from TEST_USER_ID)
+        
+        Note: Client credentials for token exchange are read from environment:
+            - API_SERVICE_CLIENT_ID: Service client ID (default: api-service)
+            - API_SERVICE_CLIENT_SECRET: Service client secret (required for get_token)
         """
         # Get authz URL from JWKS URL
         jwks_url = os.getenv("AUTHZ_JWKS_URL", "")
@@ -65,6 +68,9 @@ class AuthTestClient:
         # Default to the well-known test user ID if not provided
         # This ID is created by bootstrap-test-databases.py
         self.test_user_id = test_user_id or os.getenv("TEST_USER_ID", "00000000-0000-0000-0000-000000000001")
+        
+        # Admin token for role management (optional)
+        self.admin_token = admin_token or os.getenv("AUTHZ_ADMIN_TOKEN", "")
         
         # Track changes for cleanup
         self._added_roles: Set[str] = set()
@@ -177,6 +183,9 @@ class AuthTestClient:
         """
         Get an access token for the test user via token exchange.
         
+        Uses service client credentials (API_SERVICE_CLIENT_ID/SECRET) to request
+        a token for the test user via the requested_subject grant.
+        
         Args:
             audience: Target audience for the token
             scopes: Space-separated scopes to request
@@ -186,13 +195,24 @@ class AuthTestClient:
         """
         self._require_config()
         
+        # Get service client credentials from environment
+        # These are set by Ansible when deploying the service
+        client_id = os.getenv("API_SERVICE_CLIENT_ID", "api-service")
+        client_secret = os.getenv("API_SERVICE_CLIENT_SECRET", "")
+        
+        if not client_secret:
+            pytest.fail(
+                "API_SERVICE_CLIENT_SECRET not configured. "
+                "Ensure the service is deployed with client credentials."
+            )
+        
         with httpx.Client() as client:
             resp = client.post(
                 f"{self.authz_url}/oauth/token",
                 data={
                     "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-                    "client_id": self.client_id,
-                    "client_secret": self.client_secret,
+                    "client_id": client_id,
+                    "client_secret": client_secret,
                     "requested_subject": self.test_user_id,
                     "audience": audience,
                     "scope": scopes,

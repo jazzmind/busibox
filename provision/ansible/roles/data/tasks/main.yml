@@ -87,21 +87,23 @@
     path: /srv/data
     state: directory
     mode: "0755"
-  tags: [data, data_install]
+  tags: [data, data_install, data_api, data_worker]
 
 - name: Create Python virtual environment
   shell: python3 -m venv /srv/data/venv
   args:
     creates: /srv/data/venv/bin/python
-  tags: [data, data_install]
+  tags: [data, data_install, data_api, data_worker]
 
 # ============================================================================
 # Deploy Source Code
 # ============================================================================
+# NOTE: data_api and data_worker tags added to shared tasks so that running
+# with --tags data_api or --tags data_worker deploys necessary code
 - name: Clean Python cache before source sync
   shell: find /srv/data/src -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
   changed_when: false
-  tags: [data, data_deploy]
+  tags: [data, data_deploy, data_api, data_worker]
 
 - name: Sync data service source code (removes stale files)
   synchronize:
@@ -114,14 +116,14 @@
   notify:
     - Restart data API
     - Restart data worker
-  tags: [data, data_deploy]
+  tags: [data, data_deploy, data_api, data_worker]
 
 - name: Copy requirements.txt
   copy:
     src: "{{ playbook_dir }}/../../srv/data/requirements.txt"
     dest: /srv/data/requirements.txt
     mode: "0644"
-  tags: [data, data_deploy]
+  tags: [data, data_deploy, data_api, data_worker]
 
 - name: Clean Python cache before test sync
   shell: find /srv/data/tests -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
@@ -156,7 +158,7 @@
     rsync_opts:
       - "--exclude=__pycache__"
       - "--exclude=*.pyc"
-  tags: [data, data_deploy]
+  tags: [data, data_deploy, data_api, data_worker]
 
 - name: Ensure test document repository is present on controller
   git:
@@ -184,7 +186,7 @@
       - setuptools
     virtualenv: /srv/data/venv
     state: latest
-  tags: [data, data_deploy]
+  tags: [data, data_deploy, data_api, data_worker]
 
 - name: Install Python dependencies (with caching and parallel downloads)
   pip:
@@ -196,7 +198,7 @@
   notify:
     - Restart data API
     - Restart data worker
-  tags: [data, data_deploy]
+  tags: [data, data_deploy, data_api, data_worker]
 
 - name: Download spaCy language model
   shell: /srv/data/venv/bin/python -m spacy download en_core_web_sm
@@ -206,7 +208,7 @@
   delay: 5
   register: spacy_download
   until: spacy_download.rc == 0
-  tags: [data, data_deploy]
+  tags: [data, data_deploy, data_api, data_worker]
 
 - name: Verify spaCy model installation
   shell: /srv/data/venv/bin/python -m spacy info en_core_web_sm
@@ -268,12 +270,13 @@
 # ============================================================================
 # Run migrations during full data deployment or explicit data_migrations tag
 # Uses apply: to prevent tag inheritance issues with include_tasks
+# NOTE: data_api included because API startup applies schema migrations
 - name: Apply database migrations
   include_tasks:
     file: migrations.yml
     apply:
-      tags: [data, data_migrations, data_configure, data_install]
-  tags: [data, data_migrations, data_configure, data_install]
+      tags: [data, data_migrations, data_configure, data_install, data_api]
+  tags: [data, data_migrations, data_configure, data_install, data_api]
 
 # ============================================================================
 # Configuration
@@ -293,7 +296,7 @@
   notify:
     - Restart data API
     - Restart data worker
-  tags: [data, data_configure]
+  tags: [data, data_configure, data_api, data_worker]
 
 # ============================================================================
 # API Service (FastAPI on port 8000)

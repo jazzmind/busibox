@@ -271,17 +271,17 @@
 
 # 3.2 Data (file ingestion, worker)
 # Tag structure:
-#   - apis_data: runs data role (use with apis_embedding to run both)
-#   - data: runs only the data role (task-level tags control data_api vs data_worker)
-#   - data_api: runs only data API tasks within data role (task-level only)
-#   - data_worker: runs only worker tasks within data role (task-level only)
-# NOTE: data_api and data_worker are NOT on role tags - they're task-level only
-# This prevents ALL data tasks from running when targeting data_api or data_worker
+#   - apis_data: runs entire data role
+#   - data: runs entire data role
+#   - data_api: runs only data API tasks (shared deploy + API service)
+#   - data_worker: runs only worker tasks (shared deploy + worker service)
+# NOTE: data_api/data_worker are on play tags to allow the play to run,
+# but task-level tags filter which specific tasks execute
 - hosts: data
-  tags: [apis, apis_data, data]
+  tags: [apis, apis_data, data, data_api, data_worker]
   roles:
     - role: data
-      tags: [apis, apis_data, data]
+      tags: [apis, apis_data, data, data_api, data_worker]
 
 # 3.2.1 Embedding API (separate play to avoid running data role GPU tasks)
 # Uses FastEmbed for CPU-based embeddings - does NOT need GPU
