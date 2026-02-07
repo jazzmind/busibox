@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.core import BusiboxDeps
 from app.agents.base_agent import BaseStreamingAgent
-from app.agents.dynamic_loader import load_active_agents, register_agent, TOOL_REGISTRY
+from app.agents.dynamic_loader import load_active_agents, register_agent, get_tool_function
 from app.schemas.definitions import AgentDefinitionCreate
 
 # Type alias for agents (can be either PydanticAI Agent or our BaseStreamingAgent)
@@ -133,7 +133,7 @@ class AgentRegistry:
             
             # Register tools
             for tool_name in definition.tools.get("names", []):
-                tool_fn = TOOL_REGISTRY.get(tool_name)
+                tool_fn = get_tool_function(tool_name)
                 if tool_fn:
                     agent.tool(tool_fn)
             

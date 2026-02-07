@@ -195,23 +195,104 @@ Choose the most appropriate single agent for the query.""",
         
         return None
     
+    async def _lookup_agent_by_name(
+        self, 
+        agent_name: str, 
+        session: AsyncSession
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Look up an agent definition by name from the database or built-in agents.
+        
+        This is used when the caller passes agent names instead of UUIDs.
+        
+        Returns dict with: id, name, display_name, agent_type, tools
+        """
+        # Check cache first (by name)
+        cache_key = f"name:{agent_name}"
+        if cache_key in self._agent_cache:
+            return self._agent_cache[cache_key]
+        
+        # First, check built-in agents
+        try:
+            from app.services.builtin_agents import get_builtin_agent_definitions
+            
+            builtin_agents = get_builtin_agent_definitions()
+            for agent_def in builtin_agents:
+                if agent_def.name == agent_name:
+                    # Extract tool names from tools dict
+                    tools = agent_def.tools or {}
+                    tool_names = tools.get("names", []) if isinstance(tools, dict) else []
+                    
+                    agent_info = {
+                        "id": str(agent_def.id),
+                        "name": agent_def.name,
+                        "display_name": agent_def.display_name or agent_def.name,
+                        "agent_type": agent_def.name,  # Use name as agent_type for built-ins
+                        "tools": tool_names,
+                    }
+                    self._agent_cache[cache_key] = agent_info
+                    logger.info(f"Found built-in agent by name: {agent_info['display_name']} (name: {agent_name})")
+                    return agent_info
+        except Exception as e:
+            logger.warning(f"Failed to check built-in agents by name: {e}")
+        
+        # Then check database
+        try:
+            from app.models.domain import AgentDefinition
+            
+            result = await session.execute(
+                select(AgentDefinition).where(
+                    AgentDefinition.name == agent_name,
+                    AgentDefinition.is_active.is_(True)
+                )
+            )
+            agent_def = result.scalar_one_or_none()
+            
+            if agent_def:
+                # Extract tool names
+                tools_config = agent_def.tools or {}
+                tool_names = tools_config.get("names", []) if isinstance(tools_config, dict) else []
+                
+                agent_info = {
+                    "id": str(agent_def.id),
+                    "name": agent_def.name,
+                    "display_name": agent_def.display_name or agent_def.name,
+                    "agent_type": getattr(agent_def, 'agent_type', None) or agent_def.name,
+                    "tools": tool_names,
+                    "definition": agent_def,  # Store full definition for factory
+                }
+                self._agent_cache[cache_key] = agent_info
+                logger.info(f"Found database agent by name: {agent_info['display_name']} (name: {agent_name}, id: {agent_info['id']})")
+                return agent_info
+        except Exception as e:
+            logger.warning(f"Failed to lookup agent by name '{agent_name}' in database: {e}")
+        
+        return None
+    
     def _resolve_streaming_agent(self, agent_info: Dict[str, Any]) -> Optional[str]:
         """
         Resolve an agent definition to a streaming agent key.
         
         Maps agent types/names to our streaming agent registry.
+        For database agents with full definitions, uses "dynamic" to create a custom streaming agent.
         """
-        # Try agent_type first
+        # First priority: if we have a full definition from the database, 
+        # use dynamic agent pattern - this lets custom agents use their own 
+        # prompts and tool configurations
+        if "definition" in agent_info:
+            return "dynamic"
+        
+        # Try agent_type for built-in streaming agents
         agent_type = agent_info.get("agent_type", "").lower()
         if agent_type in AGENT_TYPE_MAPPING:
             return AGENT_TYPE_MAPPING[agent_type]
         
-        # Try name
+        # Try name for built-in streaming agents
         name = agent_info.get("name", "").lower().replace(" ", "_").replace("-", "_")
         if name in AGENT_TYPE_MAPPING:
             return AGENT_TYPE_MAPPING[name]
         
-        # Check if name contains keywords
+        # Check if name contains keywords (for backward compatibility)
         name_lower = name.lower()
         if "web" in name_lower and "search" in name_lower:
             return "web_search"
@@ -230,10 +311,6 @@ Choose the most appropriate single agent for the query.""",
         
         if "web_search" in tools_str:
             return "web_search"
-        
-        # Check if we have a full definition - can create a dynamic agent
-        if "definition" in agent_info:
-            return "dynamic"
         
         return None
     
@@ -311,10 +388,25 @@ Choose the most appropriate single agent for the query.""",
                             # Unknown UUID, skip
                             logger.warning(f"Could not resolve agent UUID: {agent_id}")
                     else:
-                        # It's a known agent type/name
-                        display_name = self._get_agent_display_name(agent_id)
-                        streaming_key = agent_id if agent_id in STREAMING_AGENTS else AGENT_TYPE_MAPPING.get(agent_id)
-                        resolved_agents.append((agent_id, display_name, streaming_key))
+                        # It's an agent name - check if it's a known streaming agent first
+                        if agent_id in STREAMING_AGENTS or agent_id in AGENT_TYPE_MAPPING:
+                            display_name = self._get_agent_display_name(agent_id)
+                            streaming_key = agent_id if agent_id in STREAMING_AGENTS else AGENT_TYPE_MAPPING.get(agent_id)
+                            resolved_agents.append((agent_id, display_name, streaming_key))
+                        else:
+                            # Look up by name in database/built-in agents
+                            agent_info = await self._lookup_agent_by_name(agent_id, session)
+                            if agent_info:
+                                streaming_key = self._resolve_streaming_agent(agent_info)
+                                resolved_agents.append((
+                                    agent_info["id"],  # Use the actual UUID
+                                    agent_info["display_name"],
+                                    streaming_key
+                                ))
+                                logger.info(f"Resolved agent by name '{agent_id}' -> {agent_info['display_name']} -> {streaming_key}")
+                            else:
+                                # Unknown name, skip with warning
+                                logger.warning(f"Could not resolve agent name: {agent_id}")
             
             # If no agents resolved, default to chat agent only
             # Chat agent is the versatile general-purpose agent that can use tools when needed
