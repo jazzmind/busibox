@@ -1506,13 +1506,15 @@ bootstrap_docker_ansible() {
         
         # Always show full output for now - ansible filtering is tricky
         # Use -v for slightly more verbose output to see what's happening
+        # Use 'default' callback instead of 'dense' - dense uses ANSI cursor movement
+        # codes that don't work well when piped through tee
         echo ""
         info "Running ansible with tags: $tags"
         if [[ -n "$skip_tags" ]]; then
             info "Skipping already-healthy phases: $skip_tags"
-            ANSIBLE_FORCE_COLOR=1 $playbook_cmd --tags "$tags" --skip-tags "$skip_tags" -v 2>&1 | tee "$log_file"
+            ANSIBLE_STDOUT_CALLBACK=default ANSIBLE_FORCE_COLOR=1 $playbook_cmd --tags "$tags" --skip-tags "$skip_tags" -v 2>&1 | tee "$log_file"
         else
-            ANSIBLE_FORCE_COLOR=1 $playbook_cmd --tags "$tags" -v 2>&1 | tee "$log_file"
+            ANSIBLE_STDOUT_CALLBACK=default ANSIBLE_FORCE_COLOR=1 $playbook_cmd --tags "$tags" -v 2>&1 | tee "$log_file"
         fi
         local exit_code=${PIPESTATUS[0]}
         
