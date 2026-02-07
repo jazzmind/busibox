@@ -6,24 +6,24 @@
 - name: reload systemd
   systemd:
     daemon_reload: yes
-  tags: [litellm, litellm_configure]
+  tags: [litellm, litellm_configure, llm_litellm]
 
 - name: restart litellm
   systemd:
     name: litellm
     state: restarted
   when: litellm_start_service | default(true)
-  tags: [litellm, litellm_configure]
+  tags: [litellm, litellm_configure, llm_litellm]
 
 - name: stop litellm
   systemd:
     name: litellm
     state: stopped
-  tags: [litellm, litellm_configure]
+  tags: [litellm, litellm_configure, llm_litellm]
 
 - name: start litellm
   systemd:
     name: litellm
     state: started
-  tags: [litellm, litellm_configure]
+  tags: [litellm, litellm_configure, llm_litellm]
 

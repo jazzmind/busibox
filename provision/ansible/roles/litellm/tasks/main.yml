@@ -11,10 +11,16 @@
     - always
 
 - name: Include installation tasks
-  include_tasks: install.yml
-  tags: [litellm, litellm_install]
+  include_tasks:
+    file: install.yml
+    apply:
+      tags: [litellm, litellm_install, llm_litellm]
+  tags: [litellm, litellm_install, llm_litellm]
 
 - name: Include configuration tasks
-  include_tasks: configure.yml
-  tags: [litellm, litellm_configure]
+  include_tasks:
+    file: configure.yml
+    apply:
+      tags: [litellm, litellm_configure, llm_litellm]
+  tags: [litellm, litellm_configure, llm_litellm]
 
