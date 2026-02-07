@@ -61,6 +61,12 @@ VAULT_FLAGS=$(shell \
 # Extra arguments (can override with: make vllm-embedding EXTRA_ARGS="-e skip_model_check=true")
 EXTRA_ARGS=
 
+# Ansible output formatting - show task names clearly
+# Use 'dense' callback for compact output: host | status >> task_name
+export ANSIBLE_STDOUT_CALLBACK=dense
+# Don't show skipped hosts - reduces noise
+export ANSIBLE_DISPLAY_SKIPPED_HOSTS=false
+
 # Container IPs - production uses 10.96.200.x, staging uses 10.96.201.x
 # For production, IPs are static and defined in group_vars
 # For staging, they use the TEST network (10.96.201.x)
