@@ -74,7 +74,10 @@
 # GPU and CUDA Support (for Marker PDF extraction)
 # ============================================================================
 - name: Install GPU and CUDA support
-  include_tasks: gpu.yml
+  include_tasks:
+    file: gpu.yml
+    apply:
+      tags: [data, data_gpu, data_install]
   tags: [data, data_gpu, data_install]
 
 - name: Create data service directory

@@ -52,6 +52,7 @@
     regexp: '^LD_LIBRARY_PATH='
     line: 'LD_LIBRARY_PATH=/usr/local/cuda/targets/x86_64-linux/lib:/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH}'
     state: present
+    create: yes
   when: "'No NVIDIA devices' not in gpu_devices_check.stdout"
   tags: [data, data_gpu, data_configure]
 
@@ -61,6 +62,7 @@
     regexp: '^CUDA_VISIBLE_DEVICES='
     line: 'CUDA_VISIBLE_DEVICES={{ data_cuda_visible_devices | default("0") }}'
     state: present
+    create: yes
   when: "'No NVIDIA devices' not in gpu_devices_check.stdout"
   tags: [data, data_gpu, data_configure]
 
