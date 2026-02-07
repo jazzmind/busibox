@@ -30,14 +30,8 @@
     update_cache: yes
   tags: [data, data_install]
 
-- name: Ensure Redis is enabled and started
-  systemd:
-    name: redis-server
-    enabled: yes
-    state: started
-  tags: [data, data_install, redis]
-
 # Redis-only installation (minimal - just install and start Redis)
+# This block runs when --tags redis is used (e.g., from deploy-api bootstrap)
 - name: Install Redis (standalone)
   apt:
     name:
@@ -69,6 +63,14 @@
     state: restarted
     enabled: yes
   tags: [redis]
+
+# Ensure Redis is running (for full data role deployment)
+- name: Ensure Redis is enabled and started
+  systemd:
+    name: redis-server
+    enabled: yes
+    state: started
+  tags: [data, data_install]
 
 # ============================================================================
 # GPU and CUDA Support (for Marker PDF extraction)

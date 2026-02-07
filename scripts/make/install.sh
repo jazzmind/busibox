@@ -1082,7 +1082,28 @@ generate_secrets() {
     vault_pass_file=$(get_vault_pass_file)
     
     # Generate vault password if not exists
+    # CRITICAL: Only generate a new password if the vault is NOT already encrypted
     if [[ ! -f "$vault_pass_file" ]]; then
+        if [[ -f "$VAULT_FILE" ]] && is_vault_encrypted; then
+            error "Vault file exists and is encrypted, but password file is missing!"
+            error ""
+            error "  Vault file: $VAULT_FILE"
+            error "  Password file (missing): $vault_pass_file"
+            error ""
+            error "This vault was encrypted with a password that is no longer available."
+            error "You have two options:"
+            error ""
+            error "  1. If you have the original password, create the password file:"
+            error "     echo 'your-vault-password' > $vault_pass_file"
+            error "     chmod 600 $vault_pass_file"
+            error ""
+            error "  2. If you don't have the password, delete the vault to start fresh:"
+            error "     rm $VAULT_FILE"
+            error "     Then re-run make install"
+            error ""
+            exit 1
+        fi
+        
         info "Generating vault password..."
         openssl rand -base64 32 > "$vault_pass_file"
         chmod 600 "$vault_pass_file"
@@ -4205,7 +4226,30 @@ main() {
         fi
         
         # Generate vault password if it doesn't exist
+        # CRITICAL: Only generate a new password if the vault is NOT already encrypted
+        # If the vault IS encrypted, we need the original password - generating a new one
+        # would create a mismatch and make the vault inaccessible
         if [[ ! -f "$vault_pass_file" ]]; then
+            if [[ -f "$VAULT_FILE" ]] && is_vault_encrypted; then
+                error "Vault file exists and is encrypted, but password file is missing!"
+                error ""
+                error "  Vault file: $VAULT_FILE"
+                error "  Password file (missing): $vault_pass_file"
+                error ""
+                error "This vault was encrypted with a password that is no longer available."
+                error "You have two options:"
+                error ""
+                error "  1. If you have the original password, create the password file:"
+                error "     echo 'your-vault-password' > $vault_pass_file"
+                error "     chmod 600 $vault_pass_file"
+                error ""
+                error "  2. If you don't have the password, delete the vault to start fresh:"
+                error "     rm $VAULT_FILE"
+                error "     Then re-run make install"
+                error ""
+                exit 1
+            fi
+            
             if [[ -n "${VAULT_ENVIRONMENT:-}" ]]; then
                 info "Generating vault password for $VAULT_ENVIRONMENT environment..."
             else

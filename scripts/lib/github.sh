@@ -171,22 +171,12 @@ get_github_token() {
     fi
     
     # Try to read from vault (source of truth for secrets)
-    # Determine vault file path if not already set
-    local vault_file="${VAULT_FILE:-}"
-    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local repo_root="$(cd "$script_dir/../.." && pwd)"
-    
-    if [[ -z "$vault_file" ]]; then
-        vault_file="${repo_root}/provision/ansible/roles/secrets/vars/vault.yml"
-    fi
-    
-    if command -v get_vault_secret &>/dev/null && [[ -f "$vault_file" ]]; then
-        # Initialize vault access if not already done
-        # Determine environment prefix from state or default to dev
+    if command -v get_vault_secret &>/dev/null; then
+        # Initialize vault access first - this sets VAULT_FILE correctly
         local env_prefix
         env_prefix=$(_get_env_prefix 2>/dev/null || echo "dev")
         
-        # Set up vault environment and ensure access
+        # Set up vault environment (this sets VAULT_FILE for the correct environment)
         if command -v set_vault_environment &>/dev/null; then
             set_vault_environment "$env_prefix" >/dev/null 2>&1 || true
         fi
@@ -194,11 +184,14 @@ get_github_token() {
             ensure_vault_access >/dev/null 2>&1 || true
         fi
         
-        local vault_token
-        vault_token=$(get_vault_secret "secrets.github.personal_access_token" 2>/dev/null || echo "")
-        if [[ -n "$vault_token" ]] && [[ "$vault_token" != "null" ]] && [[ "$vault_token" != "CHANGE_ME"* ]]; then
-            echo "$vault_token"
-            return 0
+        # Now check if the vault file exists (VAULT_FILE is set by set_vault_environment)
+        if [[ -f "${VAULT_FILE:-}" ]]; then
+            local vault_token
+            vault_token=$(get_vault_secret "secrets.github.personal_access_token" 2>/dev/null || echo "")
+            if [[ -n "$vault_token" ]] && [[ "$vault_token" != "null" ]] && [[ "$vault_token" != "CHANGE_ME"* ]]; then
+                echo "$vault_token"
+                return 0
+            fi
         fi
     fi
     

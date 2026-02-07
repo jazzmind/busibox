@@ -354,7 +354,7 @@ _ensure-env:
 # Requires valid GitHub token for private repos
 docker-up:
 	@echo "Starting Docker services (ENV=$(ENV), overlay=$(notdir $(COMPOSE_OVERLAY)))..."
-	$(eval GITHUB_AUTH_TOKEN := $(shell bash scripts/lib/github.sh get 2>/dev/null))
+	$(eval GITHUB_AUTH_TOKEN := $(or $(GITHUB_AUTH_TOKEN),$(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.github.personal_access_token 2>/dev/null || echo ""')))
 	$(eval POSTGRES_PASSWORD := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.postgresql.password 2>/dev/null || echo "devpassword"'))
 	$(eval MINIO_ACCESS_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.minio.root_user 2>/dev/null || echo "minioadmin"'))
 	$(eval MINIO_SECRET_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.minio.root_password 2>/dev/null || echo "minioadmin"'))
@@ -421,7 +421,7 @@ docker-down-all:
 
 # Restart Docker services (simple restart, no recreation)
 docker-restart:
-	$(eval GITHUB_AUTH_TOKEN := $(shell bash scripts/lib/github.sh get 2>/dev/null))
+	$(eval GITHUB_AUTH_TOKEN := $(or $(GITHUB_AUTH_TOKEN),$(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.github.personal_access_token 2>/dev/null || echo ""')))
 	$(eval POSTGRES_PASSWORD := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.postgresql.password 2>/dev/null || echo "devpassword"'))
 	$(eval MINIO_ACCESS_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.minio.root_user 2>/dev/null || echo "minioadmin"'))
 	$(eval MINIO_SECRET_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.minio.root_password 2>/dev/null || echo "minioadmin"'))
@@ -453,7 +453,7 @@ ssl-check:
 # Check GitHub token is available and valid
 github-check:
 	@bash scripts/lib/github.sh check
-	$(eval GITHUB_AUTH_TOKEN := $(shell bash scripts/lib/github.sh get 2>/dev/null))
+	$(eval GITHUB_AUTH_TOKEN := $(or $(GITHUB_AUTH_TOKEN),$(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.github.personal_access_token 2>/dev/null || echo ""')))
 	@if [ -n "$(GITHUB_AUTH_TOKEN)" ]; then \
 		export GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)"; \
 	fi
@@ -461,7 +461,7 @@ github-check:
 # Ensure GitHub token is available (interactive prompt if needed)
 github-ensure:
 	@bash scripts/lib/github.sh ensure
-	$(eval GITHUB_AUTH_TOKEN := $(shell bash scripts/lib/github.sh get 2>/dev/null))
+	$(eval GITHUB_AUTH_TOKEN := $(or $(GITHUB_AUTH_TOKEN),$(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.github.personal_access_token 2>/dev/null || echo ""')))
 	@if [ -n "$(GITHUB_AUTH_TOKEN)" ]; then \
 		export GITHUB_AUTH_TOKEN="$(GITHUB_AUTH_TOKEN)"; \
 	fi
@@ -471,7 +471,7 @@ github-ensure:
 # Requires valid GitHub token for private repos
 docker-build: ssl-check
 	$(eval GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown"))
-	$(eval GITHUB_AUTH_TOKEN := $(shell bash scripts/lib/github.sh get 2>/dev/null))
+	$(eval GITHUB_AUTH_TOKEN := $(or $(GITHUB_AUTH_TOKEN),$(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.github.personal_access_token 2>/dev/null || echo ""')))
 	$(eval POSTGRES_PASSWORD := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.postgresql.password 2>/dev/null || echo "devpassword"'))
 	$(eval MINIO_ACCESS_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.minio.root_user 2>/dev/null || echo "minioadmin"'))
 	$(eval MINIO_SECRET_KEY := $(shell bash -c 'source scripts/lib/vault.sh >/dev/null 2>&1 && set_vault_environment $(ENV_PREFIX) >/dev/null 2>&1 && ensure_vault_access >/dev/null 2>&1 && get_vault_secret secrets.minio.root_password 2>/dev/null || echo "minioadmin"'))

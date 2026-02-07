@@ -335,6 +335,16 @@
     - role: app_deployer
       tags: [apps, apps_frontend, app_deployer]
 
+# 4.1.1 Reconfigure nginx after app deployment
+# This ensures nginx routes are updated after apps are deployed
+- hosts: proxy
+  tags: [apps, apps_frontend, nginx_post_apps]
+  roles:
+    - role: secrets
+      tags: [apps, apps_frontend, nginx_post_apps, secrets]
+    - role: nginx
+      tags: [apps, apps_frontend, nginx_post_apps, nginx]
+
 # 4.2 OpenWebUI (optional)
 - hosts: openwebui
   tags: [apps, apps_openwebui]
