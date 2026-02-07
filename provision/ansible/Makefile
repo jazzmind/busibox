@@ -61,9 +61,9 @@ VAULT_FLAGS=$(shell \
 # Extra arguments (can override with: make vllm-embedding EXTRA_ARGS="-e skip_model_check=true")
 EXTRA_ARGS=
 
-# Ansible output formatting - show task names clearly
-# Use 'dense' callback for compact output: host | status >> task_name
-export ANSIBLE_STDOUT_CALLBACK=dense
+# Ansible output formatting
+# Use 'yaml' callback for readable output with task names
+export ANSIBLE_STDOUT_CALLBACK=yaml
 # Don't show skipped hosts - reduces noise
 export ANSIBLE_DISPLAY_SKIPPED_HOSTS=false
 
