@@ -315,6 +315,29 @@ def get_data_schema() -> SchemaManager:
     """)
     
     # ==========================================================================
+    # Migrations - Add missing columns to existing tables
+    # ==========================================================================
+    # These handle schema evolution for existing databases
+    
+    # Add owner_id column if it doesn't exist (for databases created before owner_id was added)
+    # We use DO $$ block for conditional column addition
+    schema.add_migration("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'data_files' AND column_name = 'owner_id'
+            ) THEN
+                ALTER TABLE data_files ADD COLUMN owner_id UUID;
+                -- Set owner_id = user_id for existing rows
+                UPDATE data_files SET owner_id = user_id WHERE owner_id IS NULL;
+                -- Make it NOT NULL after populating
+                ALTER TABLE data_files ALTER COLUMN owner_id SET NOT NULL;
+            END IF;
+        END $$
+    """)
+    
+    # ==========================================================================
     # Indexes
     # ==========================================================================
     
