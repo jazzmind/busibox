@@ -9,7 +9,8 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.dynamic_loader import (
-    TOOL_REGISTRY,
+    get_available_tool_names,
+    get_tool_function,
     load_active_agents,
     register_agent,
     validate_tool_references,
@@ -18,20 +19,60 @@ from app.models.domain import AgentDefinition
 from app.schemas.definitions import AgentDefinitionCreate
 
 
-def test_tool_registry_has_expected_tools():
-    """Test TOOL_REGISTRY contains the core tools."""
-    assert "search" in TOOL_REGISTRY
-    assert "data" in TOOL_REGISTRY
-    assert "rag" in TOOL_REGISTRY
-    assert len(TOOL_REGISTRY) == 3
+def test_get_available_tool_names():
+    """Test get_available_tool_names returns all available tools."""
+    available = get_available_tool_names()
+    
+    # Legacy bundle tools
+    assert "search" in available
+    assert "data" in available
+    assert "rag" in available
+    
+    # Individual data tools from BUILTIN_TOOL_METADATA
+    assert "create_data_document" in available
+    assert "query_data" in available
+    assert "insert_records" in available
+    assert "update_records" in available
+    assert "delete_records" in available
+    assert "list_data_documents" in available
+    assert "get_data_document" in available
+    
+    # Search tools
+    assert "document_search" in available
+    assert "web_search" in available
+    
+    # Should have at least 12 tools (3 legacy + 9 builtin)
+    assert len(available) >= 12
+
+
+def test_get_tool_function():
+    """Test get_tool_function returns tool functions."""
+    # Legacy tools
+    assert get_tool_function("search") is not None
+    assert get_tool_function("data") is not None
+    assert get_tool_function("rag") is not None
+    
+    # Builtin tools
+    assert get_tool_function("web_search") is not None
+    assert get_tool_function("query_data") is not None
+    
+    # Unknown tool
+    assert get_tool_function("nonexistent_tool") is None
 
 
 def test_validate_tool_references_success():
     """Test validate_tool_references passes with valid tools."""
-    # Should not raise
+    # Should not raise - legacy tools
     validate_tool_references(["search", "data"])
     validate_tool_references(["rag"])
     validate_tool_references([])
+    
+    # Should not raise - individual data tools
+    validate_tool_references(["list_data_documents", "query_data"])
+    validate_tool_references(["insert_records", "update_records", "delete_records"])
+    
+    # Should not raise - mixed
+    validate_tool_references(["data", "document_search", "web_search"])
 
 
 def test_validate_tool_references_invalid_tool():
@@ -50,9 +91,13 @@ def test_validate_tool_references_error_message():
     
     error_msg = str(exc_info.value)
     assert "Available tools:" in error_msg
+    # Check legacy tools
     assert "search" in error_msg
     assert "data" in error_msg
     assert "rag" in error_msg
+    # Check individual tools
+    assert "query_data" in error_msg
+    assert "list_data_documents" in error_msg
 
 
 @pytest.mark.asyncio

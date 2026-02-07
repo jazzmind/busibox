@@ -598,3 +598,126 @@ async def ensure_personal_libraries(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"error": "Failed to ensure personal libraries", "details": str(e)}
         )
+
+
+@router.get("/app-data")
+async def list_app_data_libraries(
+    request: Request,
+    sourceApp: Optional[str] = Query(None, description="Filter by source app (e.g., 'status-report')"),
+    _: dict = Depends(require_data_read),
+):
+    """
+    List app data libraries (data documents with sourceApp metadata).
+    
+    App data libraries are structured data created by apps like status-report.
+    They are exposed as "libraries" for browsing in the document manager.
+    
+    Each data document with a sourceApp becomes a browseable library entry.
+    The response includes schema information for rendering the data.
+    
+    Returns:
+        List of app data "libraries" grouped by sourceApp
+    """
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        return JSONResponse(
+            status_code=http_status.HTTP_401_UNAUTHORIZED,
+            content={"error": "User ID not found in request"}
+        )
+    
+    try:
+        # Import data service to query data documents
+        from api.services.data_service import DataService
+        from api.main import pg_service
+        
+        data_service = DataService(pg_service.pool)
+        
+        # Query data documents with sourceApp in metadata
+        # If sourceApp is specified, filter by it; otherwise get all app data documents
+        from api.middleware.jwt_auth import set_rls_session_vars
+        
+        async with pg_service.pool.acquire() as conn:
+            await set_rls_session_vars(conn, request)
+            
+            # Build query for data documents with sourceApp
+            query = """
+                SELECT 
+                    file_id,
+                    filename as name,
+                    owner_id,
+                    visibility,
+                    metadata,
+                    data_schema,
+                    data_record_count,
+                    data_version,
+                    data_modified_at,
+                    library_id,
+                    created_at,
+                    updated_at
+                FROM data_files
+                WHERE doc_type = 'data'
+                  AND metadata->>'sourceApp' IS NOT NULL
+            """
+            params = []
+            param_idx = 1
+            
+            if sourceApp:
+                query += f" AND metadata->>'sourceApp' = ${param_idx}"
+                params.append(sourceApp)
+                param_idx += 1
+            
+            query += " ORDER BY metadata->>'sourceApp', filename"
+            
+            rows = await conn.fetch(query, *params)
+        
+        # Transform to app data library format, grouped by sourceApp
+        import json
+        app_data_libraries = []
+        
+        for row in rows:
+            metadata = json.loads(row["metadata"]) if row["metadata"] else {}
+            schema = json.loads(row["data_schema"]) if row["data_schema"] else None
+            
+            app_data_libraries.append({
+                "id": str(row["file_id"]),
+                "documentId": str(row["file_id"]),  # Same as id for data documents
+                "name": row["name"],
+                "sourceApp": metadata.get("sourceApp"),
+                "displayName": schema.get("displayName", row["name"]) if schema else row["name"],
+                "itemLabel": schema.get("itemLabel", "Item") if schema else "Item",
+                "recordCount": row["data_record_count"] or 0,
+                "visibility": row["visibility"],
+                "schema": schema,
+                "allowSharing": schema.get("allowSharing", True) if schema else True,
+                "createdAt": row["created_at"].isoformat() if row["created_at"] else None,
+                "updatedAt": row["updated_at"].isoformat() if row["updated_at"] else None,
+            })
+        
+        # Group by sourceApp for easier consumption
+        grouped = {}
+        for lib in app_data_libraries:
+            app = lib["sourceApp"]
+            if app not in grouped:
+                grouped[app] = {
+                    "sourceApp": app,
+                    "documents": [],
+                    "totalRecords": 0,
+                }
+            grouped[app]["documents"].append(lib)
+            grouped[app]["totalRecords"] += lib["recordCount"]
+        
+        return JSONResponse(
+            status_code=http_status.HTTP_200_OK,
+            content={
+                "data": app_data_libraries,
+                "grouped": list(grouped.values()),
+                "total": len(app_data_libraries),
+            }
+        )
+        
+    except Exception as e:
+        logger.error("Failed to list app data libraries", error=str(e), exc_info=True)
+        return JSONResponse(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": "Failed to list app data libraries", "details": str(e)}
+        )

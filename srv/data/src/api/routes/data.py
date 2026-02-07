@@ -75,6 +75,7 @@ class CreateDataDocumentRequest(BaseModel):
     roleIds: Optional[List[str]] = Field(None, description="Role IDs for shared documents")
     libraryId: Optional[str] = Field(None, description="Library to place document in")
     enableCache: bool = Field(default=False, description="Enable Redis caching")
+    sourceApp: Optional[str] = Field(None, description="Source app identifier (e.g., 'status-report') for app data libraries")
     
     class Config:
         populate_by_name = True
@@ -247,18 +248,39 @@ async def list_data_documents(
     request: Request,
     libraryId: Optional[str] = Query(None, description="Filter by library"),
     visibility: Optional[str] = Query(None, description="Filter by visibility"),
+    sourceApp: Optional[str] = Query(None, description="Filter by source app (e.g., 'status-report')"),
     limit: int = Query(50, ge=1, le=100, description="Max documents to return"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
     data_service: DataService = Depends(get_data_service),
 ):
     """List data documents accessible to the user."""
+    user_id = getattr(request.state, "user_id", None)
+    role_ids = getattr(request.state, "role_ids", [])
+    
+    logger.debug(
+        "[DATA API] GET /data - Listing documents",
+        user_id=user_id,
+        role_ids=role_ids,
+        library_id=libraryId,
+        visibility_filter=visibility,
+        source_app=sourceApp,
+    )
+    
     try:
         documents = await data_service.list_documents(
             request,
             library_id=libraryId,
             visibility=visibility,
+            source_app=sourceApp,
             limit=limit,
             offset=offset,
+        )
+        
+        logger.info(
+            "[DATA API] Listed documents",
+            count=len(documents),
+            user_id=user_id,
+            role_count=len(role_ids) if role_ids else 0,
         )
         
         return {
@@ -268,7 +290,7 @@ async def list_data_documents(
             "offset": offset,
         }
     except Exception as e:
-        logger.error("Failed to list data documents", error=str(e))
+        logger.error("[DATA API] Failed to list data documents", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -284,6 +306,21 @@ async def create_data_document(
     data_service: DataService = Depends(get_data_service),
 ):
     """Create a new data document."""
+    user_id = getattr(request.state, "user_id", None)
+    role_ids = getattr(request.state, "role_ids", [])
+    
+    logger.info(
+        "[DATA API] POST /data - Creating document",
+        name=body.name,
+        visibility=body.visibility,
+        role_ids=body.roleIds,
+        user_id=user_id,
+        request_role_ids=role_ids,
+        has_schema=body.schema_def is not None,
+        initial_record_count=len(body.initialRecords) if body.initialRecords else 0,
+        source_app=body.sourceApp,
+    )
+    
     try:
         document = await data_service.create_document(
             request,
@@ -295,13 +332,35 @@ async def create_data_document(
             role_ids=body.roleIds,
             library_id=body.libraryId,
             enable_cache=body.enableCache,
+            source_app=body.sourceApp,
+        )
+        
+        if document is None:
+            logger.error(
+                "[DATA API] Document creation returned null - RLS issue",
+                name=body.name,
+                visibility=body.visibility,
+                role_ids=body.roleIds,
+                user_id=user_id,
+            )
+            raise HTTPException(
+                status_code=500, 
+                detail=f"Document created but could not be retrieved. Visibility '{body.visibility}' requires matching role assignments or owner check."
+            )
+        
+        logger.info(
+            "[DATA API] Document created successfully",
+            document_id=document.get("id"),
+            name=body.name,
         )
         
         return document
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error("Failed to create data document", error=str(e))
+        logger.error("[DATA API] Failed to create data document", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 

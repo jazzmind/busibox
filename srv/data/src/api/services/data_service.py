@@ -59,6 +59,16 @@ class DataService:
         Args:
             request: FastAPI Request object with user_id in state
         """
+        user_id = getattr(request.state, "user_id", None)
+        role_ids = getattr(request.state, "role_ids", [])
+        
+        logger.debug(
+            "[RLS] Acquiring connection with RLS context",
+            user_id=user_id,
+            role_ids=role_ids,
+            role_count=len(role_ids) if role_ids else 0,
+        )
+        
         async with self.pool.acquire() as conn:
             await set_rls_session_vars(conn, request)
             yield conn
@@ -78,6 +88,7 @@ class DataService:
         role_ids: Optional[List[str]] = None,
         library_id: Optional[str] = None,
         enable_cache: bool = False,
+        source_app: Optional[str] = None,
     ) -> Dict:
         """
         Create a new data document.
@@ -92,6 +103,7 @@ class DataService:
             role_ids: Role IDs for shared documents
             library_id: Optional library to place document in
             enable_cache: Whether to enable Redis caching
+            source_app: Optional app identifier (e.g., "status-report") for app data libraries
             
         Returns:
             Created document record
@@ -112,6 +124,11 @@ class DataService:
                 if schema:
                     self._validate_record(schema, record)
                 records.append(record)
+        
+        # Build metadata with sourceApp if provided
+        doc_metadata = metadata.copy() if metadata else {}
+        if source_app:
+            doc_metadata["sourceApp"] = source_app
         
         async with self.acquire_with_rls(request) as conn:
             async with conn.transaction():
@@ -138,7 +155,7 @@ class DataService:
                     0,  # size_bytes - not applicable for data docs
                     f"data/{document_id}",  # Virtual storage path
                     f"data-{document_id}",  # Unique content hash
-                    json.dumps(metadata or {}),
+                    json.dumps(doc_metadata),
                     visibility,
                     "data",
                     json.dumps(schema) if schema else None,
@@ -178,14 +195,29 @@ class DataService:
             })
         
         logger.info(
-            "Data document created",
+            "[DATA] Document created successfully",
             document_id=document_id,
             name=name,
             record_count=len(records),
             visibility=visibility,
+            owner_id=user_id,
+            role_ids=role_ids,
         )
         
-        return await self.get_document(request, document_id)
+        # Fetch the created document - this will apply RLS
+        result = await self.get_document(request, document_id)
+        
+        if result is None:
+            logger.error(
+                "[DATA] CRITICAL: Created document but RLS prevented retrieval!",
+                document_id=document_id,
+                visibility=visibility,
+                owner_id=user_id,
+                role_ids=role_ids,
+                hint="For 'shared' visibility, roleIds must be provided. For 'personal' visibility, ensure owner_id matches request user_id.",
+            )
+        
+        return result
     
     async def get_document(
         self,
@@ -217,6 +249,9 @@ class DataService:
                     if exists:
                         return self._format_document(cached, include_records)
         
+        user_id = getattr(request.state, "user_id", None)
+        role_ids = getattr(request.state, "role_ids", [])
+        
         async with self.acquire_with_rls(request) as conn:
             row = await conn.fetchrow("""
                 SELECT 
@@ -238,7 +273,34 @@ class DataService:
             """, uuid.UUID(document_id))
             
             if not row:
+                # Check if document exists at all (bypass RLS with a simpler check)
+                # This helps distinguish "doesn't exist" from "RLS blocked"
+                exists_check = await conn.fetchval(
+                    "SELECT visibility FROM data_files WHERE file_id = $1",
+                    uuid.UUID(document_id)
+                )
+                if exists_check is not None:
+                    logger.warning(
+                        "[DATA] Document exists but RLS blocked access",
+                        document_id=document_id,
+                        document_visibility=exists_check,
+                        request_user_id=user_id,
+                        request_role_ids=role_ids,
+                        hint="Check visibility and role assignments",
+                    )
+                else:
+                    logger.debug(
+                        "[DATA] Document not found",
+                        document_id=document_id,
+                    )
                 return None
+            
+            logger.debug(
+                "[DATA] Document retrieved successfully",
+                document_id=document_id,
+                name=row["name"],
+                visibility=row["visibility"],
+            )
             
             return self._row_to_document(row, include_records)
     
@@ -716,6 +778,7 @@ class DataService:
         request,
         library_id: Optional[str] = None,
         visibility: Optional[str] = None,
+        source_app: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
     ) -> List[Dict]:
@@ -726,6 +789,7 @@ class DataService:
             request: FastAPI Request for RLS context
             library_id: Optional filter by library
             visibility: Optional filter by visibility
+            source_app: Optional filter by source app (e.g., "status-report")
             limit: Max results (default 50)
             offset: Pagination offset
             
@@ -761,6 +825,12 @@ class DataService:
             if visibility:
                 query += f" AND visibility = ${param_idx}"
                 params.append(visibility)
+                param_idx += 1
+            
+            if source_app:
+                # Filter by sourceApp stored in metadata JSONB
+                query += f" AND metadata->>'sourceApp' = ${param_idx}"
+                params.append(source_app)
                 param_idx += 1
             
             query += f" ORDER BY updated_at DESC LIMIT ${param_idx} OFFSET ${param_idx + 1}"
@@ -884,12 +954,14 @@ class DataService:
         """
         Convert a database row to a document dict.
         """
+        metadata = json.loads(row["metadata"]) if row["metadata"] else {}
+        
         doc = {
             "id": str(row["file_id"]),
             "name": row["name"],
             "ownerId": str(row["owner_id"]) if row["owner_id"] else None,
             "visibility": row["visibility"],
-            "metadata": json.loads(row["metadata"]) if row["metadata"] else {},
+            "metadata": metadata,
             "schema": json.loads(row["data_schema"]) if row["data_schema"] else None,
             "recordCount": row["data_record_count"] or 0,
             "version": row["data_version"] or 1,
@@ -898,6 +970,10 @@ class DataService:
             "createdAt": row["created_at"].isoformat() if row["created_at"] else None,
             "updatedAt": row["updated_at"].isoformat() if row["updated_at"] else None,
         }
+        
+        # Extract sourceApp from metadata if present
+        if metadata.get("sourceApp"):
+            doc["sourceApp"] = metadata["sourceApp"]
         
         if include_records and row.get("data_content"):
             doc["records"] = json.loads(row["data_content"])

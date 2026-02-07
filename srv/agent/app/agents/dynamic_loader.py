@@ -1,6 +1,11 @@
-import os
+"""
+Dynamic agent loader with tool registry support.
+
+Loads agent definitions from database and dynamically attaches tools
+based on tool names registered in BUILTIN_TOOL_METADATA.
+"""
 import uuid
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Set
 
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIModel
@@ -11,15 +16,58 @@ from app.agents.core import BusiboxDeps, data_tool, rag_tool, search_tool
 from app.config.settings import get_settings
 from app.models.domain import AgentDefinition
 from app.schemas.definitions import AgentDefinitionCreate
+from app.services.builtin_tools import BUILTIN_TOOL_METADATA, get_tool_executor
 
 settings = get_settings()
 
-# Registry of permitted tool adapters
-TOOL_REGISTRY = {
+
+def get_available_tool_names() -> Set[str]:
+    """
+    Get the set of all available tool names.
+    
+    Includes:
+    - Built-in tools from BUILTIN_TOOL_METADATA
+    - Legacy bundle tools (search, data, rag)
+    
+    Returns:
+        Set of valid tool names
+    """
+    # Get tool names from BUILTIN_TOOL_METADATA
+    builtin_names = {metadata["name"] for metadata in BUILTIN_TOOL_METADATA.values()}
+    
+    # Add legacy bundle tools for backward compatibility
+    legacy_names = {"search", "data", "rag"}
+    
+    return builtin_names | legacy_names
+
+
+# Legacy tool registry for backward compatibility
+# These are the original bundle tools from core.py
+LEGACY_TOOL_REGISTRY = {
     "search": search_tool,
     "data": data_tool,
     "rag": rag_tool,
 }
+
+
+def get_tool_function(tool_name: str) -> Optional[Callable]:
+    """
+    Get the tool function for a given tool name.
+    
+    Checks legacy tools first, then uses dynamic loading for builtin tools.
+    
+    Args:
+        tool_name: Name of the tool
+        
+    Returns:
+        Tool function or None if not found
+    """
+    # Check legacy tools first
+    if tool_name in LEGACY_TOOL_REGISTRY:
+        return LEGACY_TOOL_REGISTRY[tool_name]
+    
+    # Try to get from builtin tools (dynamic loading)
+    return get_tool_executor(tool_name)
 
 
 def _configure_litellm_env():
@@ -52,7 +100,7 @@ async def load_active_agents(session: AsyncSession) -> Dict[uuid.UUID, Agent[Bus
             instructions=definition.instructions,
         )
         for tool_name in definition.tools.get("names", []):
-            tool_fn = TOOL_REGISTRY.get(tool_name)
+            tool_fn = get_tool_function(tool_name)
             if tool_fn:
                 agent.tool(tool_fn)  # type: ignore[arg-type]
         agents[definition.id] = agent
@@ -61,17 +109,18 @@ async def load_active_agents(session: AsyncSession) -> Dict[uuid.UUID, Agent[Bus
 
 def validate_tool_references(tool_names: List[str]) -> None:
     """
-    Validate that all tool names reference entries in the TOOL_REGISTRY.
+    Validate that all tool names reference available tools.
     
     Args:
         tool_names: List of tool names to validate
         
     Raises:
-        ValueError: If any tool name is not in the registry
+        ValueError: If any tool name is not available
     """
-    invalid_tools = [name for name in tool_names if name not in TOOL_REGISTRY]
+    available_tools = get_available_tool_names()
+    invalid_tools = [name for name in tool_names if name not in available_tools]
     if invalid_tools:
-        available = ", ".join(sorted(TOOL_REGISTRY.keys()))
+        available = ", ".join(sorted(available_tools))
         raise ValueError(
             f"Invalid tool references: {', '.join(invalid_tools)}. "
             f"Available tools: {available}"
@@ -127,6 +176,7 @@ async def register_agent(
     )
     agent = Agent[BusiboxDeps, object](model=model, instructions=definition.instructions)
     for tool_name in tool_names:
-        tool_fn = TOOL_REGISTRY[tool_name]  # Safe to use [] now after validation
-        agent.tool(tool_fn)  # type: ignore[arg-type]
+        tool_fn = get_tool_function(tool_name)
+        if tool_fn:
+            agent.tool(tool_fn)  # type: ignore[arg-type]
     return definition.id, agent

@@ -37,6 +37,7 @@ import json
 from typing import Tuple, List, Optional, Dict, Set
 from .models import BusiboxManifest, DeploymentConfig
 from .config import config
+from .env_generator import generate_env_vars
 
 logger = logging.getLogger(__name__)
 
@@ -1670,24 +1671,16 @@ async def deploy_app(
     if not await run_migrations(app_path, manifest, database_url, logs):
         return False
     
-    # Build environment variables
-    env_vars = {
-        "NODE_ENV": "production" if deploy_config.environment == "production" else "development",
-        "PORT": str(manifest.defaultPort),
-        # CRITICAL: Next.js needs NEXT_PUBLIC_BASE_PATH to serve assets correctly
-        # when the app is accessed via nginx reverse proxy at a subpath
-        "NEXT_PUBLIC_BASE_PATH": manifest.defaultPath,
-        # Portal URL for auth redirects
-        "NEXT_PUBLIC_AI_PORTAL_URL": portal_url,
-        # APP_NAME must match the audience in SSO tokens issued by AI Portal
-        # AI Portal uses app.name as the audience when requesting tokens from authz
-        "APP_NAME": manifest.name,
-    }
-    if database_url:
-        env_vars["DATABASE_URL"] = database_url
+    # Build environment variables using centralized generator
+    # This ensures all apps get proper service endpoints (DATA_API_URL, AGENT_API_URL, etc.)
+    env_vars = generate_env_vars(manifest, deploy_config, database_url)
     
-    # Add any additional secrets
-    env_vars.update(deploy_config.secrets)
+    # Add portal URL for auth redirects (not in env_generator since it's deployment-specific)
+    env_vars["NEXT_PUBLIC_AI_PORTAL_URL"] = portal_url
+    
+    # APP_NAME must match the audience in SSO tokens issued by AI Portal
+    # AI Portal uses app.name as the audience when requesting tokens from authz
+    env_vars["APP_NAME"] = manifest.name
     
     # Determine start command
     if is_dev_mode:
