@@ -43,8 +43,8 @@
   include_tasks:
     file: ssl-certificates.yml
     apply:
-      tags: [nginx, nginx_configure, nginx_ssl]
-  tags: [nginx, nginx_configure, nginx_ssl]
+      tags: [nginx, nginx_configure, nginx_ssl, apps]
+  tags: [nginx, nginx_configure, nginx_ssl, apps]
 
 - name: Deploy main NGINX configuration
   template:
