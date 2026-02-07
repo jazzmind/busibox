@@ -8,9 +8,10 @@ embedding_api_src_path: /opt/embedding/src
 embedding_api_log_path: /var/log/embedding
 
 # FastEmbed cache directory
-# For Proxmox: Shared cache mounted from host at /var/lib/embedding-models/fastembed
+# For Proxmox/LXC: Shared cache mounted from host at /var/lib/embedding-models/fastembed
 # For Docker: Local cache in user home directory
-embedding_cache_dir: "{{ '/var/lib/embedding-models/fastembed' if ansible_connection != 'docker' else '/home/' + embedding_api_user + '/.cache/fastembed' }}"
+# Use is_docker inventory variable (set in inventory), defaulting to Proxmox path
+embedding_cache_dir: "{{ '/home/' + embedding_api_user + '/.cache/fastembed' if (is_docker | default(false)) else '/var/lib/embedding-models/fastembed' }}"
 
 # FastEmbed model configuration (derived from model_registry.yml in template)
 # Default values if model_registry not available
