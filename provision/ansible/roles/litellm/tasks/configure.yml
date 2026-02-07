@@ -78,6 +78,34 @@
       ==========================================
   tags: [litellm_configure, litellm_debug]
 
+# Deploy systemd service and environment files FIRST (before config file)
+# This ensures the service exists before any handler tries to restart it
+- name: Deploy LiteLLM systemd service file
+  template:
+    src: litellm.service.j2
+    dest: /etc/systemd/system/litellm.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - reload systemd
+  tags: [litellm_configure]
+
+- name: Create LiteLLM environment file
+  template:
+    src: litellm.env.j2
+    dest: /etc/default/litellm
+    owner: root
+    group: "{{ litellm_group }}"
+    mode: '0640'
+  notify: restart litellm
+  tags: [litellm_configure]
+
+- name: Ensure systemd knows about litellm service
+  systemd:
+    daemon_reload: yes
+  tags: [litellm_configure]
+
 - name: Deploy LiteLLM configuration file
   template:
     src: config.yaml.j2
@@ -105,33 +133,6 @@
   debug:
     msg: "{{ config_preview.stdout_lines }}"
   tags: [litellm_configure, litellm_debug]
-
-- name: Deploy LiteLLM systemd service file
-  template:
-    src: litellm.service.j2
-    dest: /etc/systemd/system/litellm.service
-    owner: root
-    group: root
-    mode: '0644'
-  notify:
-    - reload systemd
-    - restart litellm
-  tags: [litellm_configure]
-
-- name: Create LiteLLM environment file
-  template:
-    src: litellm.env.j2
-    dest: /etc/default/litellm
-    owner: root
-    group: "{{ litellm_group }}"
-    mode: '0640'
-  notify: restart litellm
-  tags: [litellm_configure]
-
-# Flush handlers to ensure litellm restarts after service/env changes
-- name: Flush handlers after service configuration
-  meta: flush_handlers
-  tags: [litellm_configure]
 
 - name: Create /opt/litellm directory for version tracking
   file:
@@ -234,10 +235,7 @@
     mode: '0755'
   tags: [litellm_debug]
 
-- name: Ensure systemd is reloaded
-  systemd:
-    daemon_reload: yes
-  tags: [litellm_configure]
+# Note: systemd daemon_reload is done earlier after deploying the service file
 
 - name: Generate Prisma client for LiteLLM
   shell: |
