@@ -152,15 +152,16 @@ class SchemaManager:
             await execute(table_sql)
         logger.debug(f"Tables ensured: {len(self._tables)}")
         
-        # Create indexes
-        for index_sql in self._indexes:
-            await execute(index_sql)
-        logger.debug(f"Indexes ensured: {len(self._indexes)}")
-        
-        # Run migrations
+        # Run migrations BEFORE indexes
+        # Migrations may add columns that indexes depend on
         for migration_sql in self._migrations:
             await execute(migration_sql)
         logger.debug(f"Migrations applied: {len(self._migrations)}")
+        
+        # Create indexes (after migrations ensure columns exist)
+        for index_sql in self._indexes:
+            await execute(index_sql)
+        logger.debug(f"Indexes ensured: {len(self._indexes)}")
         
         # Apply RLS policies
         for rls_sql in self._rls_policies:
