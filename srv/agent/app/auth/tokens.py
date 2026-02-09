@@ -60,23 +60,30 @@ def _extract_scopes(claims: Dict) -> List[str]:
 
 def _extract_roles(claims: Dict) -> List[str]:
     """
-    Extract role IDs from claims.
+    Extract role identifiers from claims.
     
     The authz service returns roles as objects: [{"id": "...", "name": "..."}]
-    but the Principal model expects a list of strings (role IDs).
+    We extract BOTH the id and the name so that role checks can match on either.
+    For example, an Admin role yields both "some-uuid" and "Admin" in the list.
     """
     roles_claim = claims.get("roles", [])
     if not roles_claim:
         return []
     
     roles: List[str] = []
+    seen = set()
     for role in roles_claim:
         if isinstance(role, str):
-            roles.append(role)
+            if role not in seen:
+                roles.append(role)
+                seen.add(role)
         elif isinstance(role, dict):
-            role_id = role.get("id") or role.get("name")
-            if role_id:
-                roles.append(str(role_id))
+            # Include both id and name so checks work with either
+            for key in ("id", "name"):
+                val = role.get(key)
+                if val and str(val) not in seen:
+                    roles.append(str(val))
+                    seen.add(str(val))
     
     return roles
 

@@ -14,6 +14,7 @@ from app.schemas.auth import Principal
 from app.schemas.definitions import (
     AgentDefinitionCreate,
     AgentDefinitionRead,
+    AgentDefinitionUpdate,
     EvalDefinitionCreate,
     EvalDefinitionRead,
     ToolDefinitionCreate,
@@ -189,6 +190,85 @@ async def create_agent_definition(
     )
     
     return AgentDefinitionRead.model_validate(definition)
+
+
+@router.put("/definitions/{agent_id}", response_model=AgentDefinitionRead)
+async def update_agent_definition(
+    agent_id: uuid.UUID,
+    payload: AgentDefinitionUpdate,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+) -> AgentDefinitionRead:
+    """
+    Update an agent definition. Built-in agents may only have tools updated.
+    Personal agents: only the owner can update; all updatable fields allowed.
+    """
+    from app.agents.dynamic_loader import validate_tool_references
+
+    definition = await session.get(AgentDefinition, agent_id)
+    if not definition or not definition.is_active:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    # Built-in: only tools may be updated
+    if definition.is_builtin:
+        if payload.model_dump(exclude_unset=True).keys() - {"tools"}:
+            raise HTTPException(
+                status_code=403,
+                detail="Built-in agents only allow updating tools",
+            )
+        if "tools" in payload.model_dump(exclude_unset=True):
+            tool_names = (payload.tools or {}).get("names", [])
+            validate_tool_references(tool_names)
+            definition.tools = {"names": tool_names}
+    else:
+        # Personal: must be owner
+        if definition.created_by != principal.sub:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        update_data = payload.model_dump(exclude_unset=True)
+        if "tools" in update_data and update_data["tools"] is not None:
+            validate_tool_references(update_data["tools"].get("names", []))
+        for key, value in update_data.items():
+            setattr(definition, key, value)
+
+    definition.version += 1
+    await session.commit()
+    await session.refresh(definition)
+
+    # Refresh registry so runtime uses updated definition
+    await agent_registry.refresh(session)
+
+    logger.info(
+        "agent_updated",
+        agent_id=str(agent_id),
+        agent_name=definition.name,
+        user_id=principal.sub,
+    )
+    return AgentDefinitionRead.model_validate(definition)
+
+
+@router.delete("/definitions/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_agent_definition(
+    agent_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Soft-delete a personal agent (is_active=False). Built-in agents cannot be deleted."""
+    definition = await session.get(AgentDefinition, agent_id)
+    if not definition:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if definition.is_builtin:
+        raise HTTPException(status_code=403, detail="Cannot delete built-in agents")
+    if definition.created_by != principal.sub:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    definition.is_active = False
+    await session.commit()
+    await agent_registry.refresh(session)
+    logger.info(
+        "agent_deleted",
+        agent_id=str(agent_id),
+        agent_name=definition.name,
+        user_id=principal.sub,
+    )
 
 
 @router.get("/tools", response_model=List[ToolDefinitionRead])
