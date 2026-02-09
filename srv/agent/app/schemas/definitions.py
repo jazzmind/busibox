@@ -58,6 +58,18 @@ class AgentDefinitionRead(AgentDefinitionCreate):
         from_attributes = True
 
 
+class AgentDefinitionUpdate(BaseModel):
+    """Schema for partial update of agent definitions. All fields optional."""
+    display_name: Optional[str] = None
+    description: Optional[str] = None
+    model: Optional[str] = None
+    instructions: Optional[str] = None
+    tools: Optional[Dict[str, Any]] = None
+    workflows: Optional[Dict[str, Any]] = None
+    scopes: Optional[List[str]] = None
+    is_active: Optional[bool] = None
+
+
 class ToolDefinitionCreate(BaseModel):
     name: str
     description: Optional[str] = None
