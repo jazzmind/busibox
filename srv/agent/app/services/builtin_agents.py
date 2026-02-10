@@ -37,7 +37,7 @@ BUILTIN_AGENT_METADATA = {
         "name": "test-agent",
         "display_name": "Test Agent",
         "description": "Minimal agent for LLM chain validation tests (uses configured model alias, no tools)",
-        "model": "agent",
+        "model": "fast",
         "version": 1,
         "tools": [],
     },
