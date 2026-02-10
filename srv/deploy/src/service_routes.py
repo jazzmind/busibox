@@ -2272,6 +2272,7 @@ litellm_settings:
                 'Content-Type': 'application/json',
                 'Authorization': f'Bearer {litellm_api_key}',
             }
+            selected_litellm_model = 'test'
             
             try:
                 # Health check - use /health/liveliness which doesn't require auth or DB
@@ -2280,6 +2281,36 @@ litellm_settings:
                     raise Exception(f'LiteLLM health check failed: {response.status_code}')
                 
                 yield sse_event('info', 'LiteLLM is healthy, testing chat completion...')
+                # Discover models available for this API key. Some keys cannot access "test".
+                try:
+                    models_response = await client.get(
+                        f'{LITELLM_URL}/v1/models',
+                        headers=litellm_headers,
+                        timeout=10.0,
+                    )
+                    if models_response.status_code == 200:
+                        models_data = models_response.json()
+                        models_list = models_data.get('data', [])
+                        available_models: list[str] = []
+                        for model_item in models_list:
+                            model_id = model_item.get('id') or model_item.get('model_name')
+                            if model_id:
+                                available_models.append(str(model_id))
+
+                        if available_models:
+                            preferred = ['test', 'agent', 'fast', 'default']
+                            selected_litellm_model = next(
+                                (candidate for candidate in preferred if candidate in available_models),
+                                available_models[0],
+                            )
+                            yield sse_event('info', f'[LiteLLM] Available models for key: {available_models[:10]}')
+                            yield sse_event('info', f'[LiteLLM] Selected model: {selected_litellm_model}')
+                        else:
+                            yield sse_event('warning', '[LiteLLM] /v1/models returned no models; falling back to model=test')
+                    else:
+                        yield sse_event('warning', f'[LiteLLM] Could not list models: HTTP {models_response.status_code}')
+                except Exception as e:
+                    yield sse_event('warning', f'[LiteLLM] Model discovery failed: {str(e)}')
                 
                 # Chat completion test with auth - use 'test' model for fast validation
                 # /no_think is Qwen-specific - only use for MLX backend
@@ -2289,14 +2320,14 @@ litellm_settings:
                 else:
                     litellm_prompt = test_prompt
                 
-                yield sse_event('info', f'[LiteLLM] Model: test')
+                yield sse_event('info', f'[LiteLLM] Model: {selected_litellm_model}')
                 yield sse_event('info', f'[LiteLLM] Backend: {llm_backend}')
                 yield sse_event('info', f'[LiteLLM] Prompt: "{litellm_prompt}"')
                 
                 # Build request payload - remove Qwen-specific params if routing to vLLM
                 # LiteLLM should handle this, but be explicit for clarity
                 request_payload = {
-                    'model': 'test',  # Use test model (Qwen3-0.6B for MLX, or vLLM equivalent)
+                    'model': selected_litellm_model,
                     'messages': [{'role': 'user', 'content': litellm_prompt}],
                     'max_tokens': 1000,
                 }
@@ -2375,7 +2406,7 @@ litellm_settings:
                     # Test the chat endpoint with proper auth
                     # Use selected_agents to bypass dispatcher and directly use test-agent
                     agent_prompt = test_prompt
-                    yield sse_event('info', f'[Agent API] Model: test')
+                    yield sse_event('info', f'[Agent API] Model: {selected_litellm_model}')
                     yield sse_event('info', f'[Agent API] Agents: test-agent')
                     yield sse_event('info', f'[Agent API] Prompt: "{agent_prompt}"')
                     
@@ -2388,7 +2419,7 @@ litellm_settings:
                         json={
                             'conversation_id': None,
                             'message': agent_prompt,
-                            'model': 'test',  # Use test model (Qwen3-0.6B) for validation
+                            'model': selected_litellm_model,
                             'selected_agents': ['test-agent'],  # Bypass dispatcher, use test agent
                             'enable_web_search': False,
                             'enable_doc_search': False,
