@@ -67,3 +67,7 @@ deploy_api_bootstrap_token: "{{ secrets.deploy_api.bootstrap_token | default('bo
 # On Mac/Apple Silicon, this would be "mlx"
 # Default to "vllm" for Proxmox deployments
 llm_backend: vllm
+
+# LiteLLM Master Key (for LLM chain validation)
+# Must match the master_key configured in LiteLLM service
+litellm_master_key: "{{ secrets.litellm_master_key | default('sk-litellm-master-key-change-me') }}"
