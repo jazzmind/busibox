@@ -23,7 +23,6 @@ from app.agents.base_agent import (
     PipelineStep,
     ToolStrategy,
 )
-from app.config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -56,10 +55,9 @@ class TestAgent(BaseStreamingAgent):
     """
     
     def __init__(self):
-        settings = get_settings()
         # Use an overridable model alias so validation works with restricted LiteLLM keys.
-        # Priority: explicit TEST_AGENT_MODEL -> app default model -> "agent".
-        test_agent_model = os.getenv("TEST_AGENT_MODEL") or settings.default_model or "agent"
+        # Priority: explicit TEST_AGENT_MODEL -> "fast".
+        test_agent_model = os.getenv("TEST_AGENT_MODEL") or "fast"
 
         config = AgentConfig(
             name="test-agent",
