@@ -1,13 +1,21 @@
 # Wes's Tasks
+
+Critical:
+Research Plymouth Rock, Jim
+Project Status for Peter, Jay
+Invoices - maigent Dec (12,500), Jan (15,000), Feb (12,500)
+Expenses - exchange cash; write 10k check to personal
+
+
 issues:
 
 [ ] get proxmox stage deployed
-[ ] get docker prod deployed
-[ ] get docker dev deployed
-  [ ] make sure we can deploy app-template on both
-  [ ] app-template needs to use our data-api so we can prove that works
+[X] get docker prod deployed
+[X] get docker dev deployed
+  [P] make sure we can deploy app-template on both
+  [X] app-template needs to use our data-api so we can prove that works
 
-[ ] We need a status tracker app
+[X] We need a status tracker app
 [ ] improve project-analysis
     [ ] needs to work with local llm
     [ ] report view
