@@ -2071,15 +2071,21 @@ async def validate_llm_chain(
                     direct_prompt = test_prompt
                     yield sse_event('info', f'[Direct {llm_backend.upper()}] Prompt: "{direct_prompt}"')
                     
+                    # Build request payload - vLLM uses standard OpenAI format, MLX supports Qwen extensions
+                    request_payload = {
+                        'model': model_name,
+                        'messages': [{'role': 'user', 'content': direct_prompt}],
+                        'max_tokens': 1000,
+                    }
+                    
+                    # Add Qwen-specific parameters only for MLX
+                    if llm_backend == 'mlx':
+                        request_payload['reasoning_effort'] = 'minimal'
+                        request_payload['verbosity'] = 'low'
+                    
                     response = await client.post(
                         f'{llm_url}/v1/chat/completions',
-                        json={
-                            'model': model_name,
-                            'messages': [{'role': 'user', 'content': direct_prompt}],
-                            'reasoning_effort': 'minimal',
-                            'verbosity': 'low',
-                            'max_tokens': 1000,  # Allow room for Qwen3 <think> reasoning
-                        },
+                        json=request_payload,
                         timeout=30.0
                     )
                     
@@ -2096,8 +2102,9 @@ async def validate_llm_chain(
                         else:
                             yield sse_event('warning', f'Direct {llm_backend.upper()} response invalid: {validation_msg}')
                     else:
-                        yield sse_event('warning', f'Direct {llm_backend.upper()} test failed: HTTP {response.status_code}')
-                        yield sse_event('info', f'[Direct {llm_backend.upper()}] Error: {response.text[:200]}')
+                        yield sse_event('error', f'Direct {llm_backend.upper()} test failed: HTTP {response.status_code}')
+                        yield sse_event('info', f'[Direct {llm_backend.upper()}] Requested model: {model_name}')
+                        yield sse_event('info', f'[Direct {llm_backend.upper()}] Error response: {response.text[:300]}')
                 except Exception as e:
                     yield sse_event('warning', f'Direct {llm_backend.upper()} test error: {str(e)}')
             
@@ -2255,7 +2262,11 @@ litellm_settings:
             # Get LiteLLM master key for authentication
             # LITELLM_MASTER_KEY is the preferred key (used in config.yaml)
             litellm_api_key = os.getenv('LITELLM_MASTER_KEY', os.getenv('LITELLM_API_KEY', 'sk-local-dev-key'))
-            yield sse_event('info', f'Using LiteLLM key: {litellm_api_key[:10]}...{litellm_api_key[-4:]}')
+            key_source = 'LITELLM_MASTER_KEY' if os.getenv('LITELLM_MASTER_KEY') else ('LITELLM_API_KEY' if os.getenv('LITELLM_API_KEY') else 'default')
+            yield sse_event('info', f'Using LiteLLM key from {key_source}: {litellm_api_key[:10]}...{litellm_api_key[-4:]}')
+            
+            if litellm_api_key == 'sk-local-dev-key' and DEPLOYMENT_BACKEND == 'proxmox':
+                yield sse_event('warning', 'Using default LiteLLM key - ensure LITELLM_MASTER_KEY is set in deploy-api environment')
             
             litellm_headers = {
                 'Content-Type': 'application/json',
@@ -2275,16 +2286,24 @@ litellm_settings:
                 yield sse_event('info', f'[LiteLLM] Model: test')
                 yield sse_event('info', f'[LiteLLM] Prompt: "{litellm_prompt}"')
                 
+                # Build request payload - remove Qwen-specific params if routing to vLLM
+                # LiteLLM should handle this, but be explicit for clarity
+                request_payload = {
+                    'model': 'test',  # Use test model (Qwen3-0.6B) for validation
+                    'messages': [{'role': 'user', 'content': litellm_prompt}],
+                    'max_tokens': 1000,
+                }
+                
+                # Only add Qwen params if we know we're using MLX (not vLLM)
+                # LiteLLM will route based on model config, so these may be ignored
+                if llm_backend == 'mlx':
+                    request_payload['reasoning_effort'] = 'minimal'
+                    request_payload['verbosity'] = 'low'
+                
                 response = await client.post(
                     f'{LITELLM_URL}/v1/chat/completions',
                     headers=litellm_headers,
-                    json={
-                        'model': 'test',  # Use test model (Qwen3-0.6B) for validation
-                        'messages': [{'role': 'user', 'content': litellm_prompt}],
-                        'reasoning_effort': 'minimal',
-                        'verbosity': 'low',
-                        'max_tokens': 1000,  # Give some room in case /no_think doesn't fully suppress
-                    },
+                    json=request_payload,
                     timeout=60.0
                 )
                 
@@ -2303,8 +2322,10 @@ litellm_settings:
                 else:
                     # Provide more detail on auth failures
                     if response.status_code == 401:
-                        yield sse_event('warning', f'LiteLLM auth failed (401) - key may not be registered in DB')
-                        yield sse_event('info', f'Hint: LiteLLM may need database migration or use master_key in config')
+                        yield sse_event('error', f'LiteLLM auth failed (401) - key "{litellm_api_key[:10]}...{litellm_api_key[-4:]}" not recognized')
+                        yield sse_event('info', f'Key source: {key_source}')
+                        yield sse_event('info', f'Hint: Ensure LITELLM_MASTER_KEY matches the master_key in LiteLLM config')
+                        yield sse_event('info', f'Hint: On Proxmox, check deploy-api.env.j2 template sets LITELLM_MASTER_KEY from vault')
                     yield sse_event('warning', f'LiteLLM test failed: HTTP {response.status_code}')
                     yield sse_event('info', f'[LiteLLM] Error: {response.text[:300]}')
             except Exception as e:
