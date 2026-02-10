@@ -33,6 +33,7 @@ import asyncio
 import os
 import json
 import re
+import uuid
 import yaml
 from pydantic import BaseModel
 from .auth import verify_admin_token
