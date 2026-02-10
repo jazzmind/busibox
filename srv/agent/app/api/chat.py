@@ -239,9 +239,37 @@ async def send_chat_message(
         selected_model = payload.model
         model_selection_reasoning = None
         
+        # If specific agents are selected, bypass dispatcher and run them directly.
+        # This aligns non-streaming behavior with the API contract and streaming endpoint.
+        if payload.selected_agents:
+            selected_agent_ids: list[str] = []
+            for agent_id in payload.selected_agents:
+                if agent_id == "test-agent":
+                    # Allow friendly alias while keeping execution path UUID-based.
+                    selected_agent_ids.append(str(uuid.uuid5(uuid.NAMESPACE_DNS, "busibox.builtin.test-agent")))
+                else:
+                    selected_agent_ids.append(agent_id)
+
+            from app.schemas.dispatcher import RoutingDecision
+            decision = RoutingDecision(
+                selected_tools=[],
+                selected_agents=selected_agent_ids,
+                confidence=1.0,
+                reasoning="Bypassed dispatcher: using explicitly selected agents",
+                alternatives=[],
+                requires_disambiguation=False
+            )
+            logger.info(
+                "Selected agents provided: bypassing dispatcher",
+                extra={
+                    "user_sub": principal.sub,
+                    "conversation_id": str(conversation.id),
+                    "selected_agents": selected_agent_ids,
+                }
+            )
         # Special handling for test mode - bypass dispatcher's LLM call, use test-agent directly
         # This still uses the full agent system (agent prompt, execution) but skips dispatcher analysis
-        if payload.model == "test":
+        elif payload.model == "test":
             # Generate deterministic UUID for test-agent (same as builtin_agents.py)
             test_agent_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, "busibox.builtin.test-agent"))
             logger.info(

@@ -2420,8 +2420,9 @@ litellm_settings:
                     # Test the chat endpoint with proper auth
                     # Use selected_agents to bypass dispatcher and directly use test-agent
                     agent_prompt = test_prompt
+                    test_agent_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, "busibox.builtin.test-agent"))
                     yield sse_event('info', f'[Agent API] Model: {selected_litellm_model}')
-                    yield sse_event('info', f'[Agent API] Agents: test-agent')
+                    yield sse_event('info', f'[Agent API] Agents: test-agent ({test_agent_uuid})')
                     yield sse_event('info', f'[Agent API] Prompt: "{agent_prompt}"')
                     
                     response = await client.post(
@@ -2434,7 +2435,7 @@ litellm_settings:
                             'conversation_id': None,
                             'message': agent_prompt,
                             'model': selected_litellm_model,
-                            'selected_agents': ['test-agent'],  # Bypass dispatcher, use test agent
+                            'selected_agents': [test_agent_uuid],  # Bypass dispatcher, use test agent
                             'enable_web_search': False,
                             'enable_doc_search': False,
                         },
