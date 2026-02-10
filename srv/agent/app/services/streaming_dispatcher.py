@@ -17,7 +17,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.core import BusiboxDeps
-from app.agents.dispatcher import dispatcher_agent
+from app.agents.dispatcher import get_dispatcher_agent
 from app.agents.web_search_agent import web_search_agent
 from app.agents.document_agent import document_agent
 from app.agents.weather_agent import weather_agent
@@ -144,7 +144,7 @@ Attachments: {len(request.attachments)} file(s) attached
 
 Analyze this query and select the appropriate tools and/or agents."""
 
-        result = await dispatcher_agent.run(prompt)
+        result = await get_dispatcher_agent().run(prompt)
         routing_decision: RoutingDecision = result.output
         
         # Announce the routing decision

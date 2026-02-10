@@ -16,7 +16,7 @@ from typing import Any, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.dispatcher import dispatcher_agent
+from app.agents.dispatcher import get_dispatcher_agent
 from app.core.logging import get_logger
 from app.models.dispatcher_log import DispatcherDecisionLog
 from app.schemas.dispatcher import DispatcherRequest, DispatcherResponse, RoutingDecision
@@ -140,7 +140,7 @@ Attachments: {len(request.attachments)} file(s) attached
 
 Analyze this query and select the appropriate tools and/or agents."""
 
-                result = await dispatcher_agent.run(prompt)
+                result = await get_dispatcher_agent().run(prompt)
                 
                 # PydanticAI with output_type returns validated structured data in .output
                 routing_decision = result.output

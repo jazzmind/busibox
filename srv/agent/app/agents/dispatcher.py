@@ -64,28 +64,47 @@ Your job is to:
 - 0.0-0.5: Low confidence or no available tools/agents
 """
 
-# Ensure env is configured before creating model
-_ensure_dispatcher_env()
+# Lazy-initialized dispatcher agent and model.
+# These are created on first access rather than at module import time,
+# so that importing this module doesn't require OPENAI_API_KEY / LiteLLM
+# to be configured (critical for PVT tests and other lightweight imports).
+_dispatcher_agent: Agent[None, RoutingDecision] | None = None
 
-# Create OpenAI-compatible model using LiteLLM
-# Use "fast" purpose for quick dispatcher routing decisions
-model = OpenAIChatModel(
-    model_name="fast",  # LiteLLM routes to fast model (phi-4)
-    provider="openai",
-)
 
-# Create dispatcher agent with LiteLLM-backed model
-# PydanticAI's output_type parameter enables structured output - the model will return
-# data that validates against the RoutingDecision schema
-dispatcher_agent: Agent[None, RoutingDecision] = Agent(
-    model=model,
-    output_type=RoutingDecision,  # This tells PydanticAI to use structured output
-    system_prompt=DISPATCHER_SYSTEM_PROMPT,
-    model_settings={
-        "temperature": 0.3,  # Low temperature for consistent routing
-        "max_tokens": 10000,  # Increased from 1000 to handle structured output
-    }
-)
+def get_dispatcher_agent() -> Agent[None, RoutingDecision]:
+    """Get the dispatcher agent, creating it on first call."""
+    global _dispatcher_agent
+    if _dispatcher_agent is None:
+        # Ensure env is configured before creating model
+        _ensure_dispatcher_env()
+
+        # Create OpenAI-compatible model using LiteLLM
+        # Use "fast" purpose for quick dispatcher routing decisions
+        model = OpenAIChatModel(
+            model_name="fast",  # LiteLLM routes to fast model (phi-4)
+            provider="openai",
+        )
+
+        # Create dispatcher agent with LiteLLM-backed model
+        # PydanticAI's output_type parameter enables structured output - the model will return
+        # data that validates against the RoutingDecision schema
+        _dispatcher_agent = Agent(
+            model=model,
+            output_type=RoutingDecision,
+            system_prompt=DISPATCHER_SYSTEM_PROMPT,
+            model_settings={
+                "temperature": 0.3,  # Low temperature for consistent routing
+                "max_tokens": 10000,  # Increased from 1000 to handle structured output
+            }
+        )
+    return _dispatcher_agent
+
+
+# Backward-compatible module-level alias (lazy property via __getattr__)
+def __getattr__(name: str):
+    if name == "dispatcher_agent":
+        return get_dispatcher_agent()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 
