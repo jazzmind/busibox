@@ -2282,20 +2282,27 @@ litellm_settings:
                 yield sse_event('info', 'LiteLLM is healthy, testing chat completion...')
                 
                 # Chat completion test with auth - use 'test' model for fast validation
-                litellm_prompt = '/no_think ' + test_prompt
+                # /no_think is Qwen-specific - only use for MLX backend
+                # For vLLM, use plain prompt (vLLM models don't support Qwen directives)
+                if llm_backend == 'mlx':
+                    litellm_prompt = '/no_think ' + test_prompt
+                else:
+                    litellm_prompt = test_prompt
+                
                 yield sse_event('info', f'[LiteLLM] Model: test')
+                yield sse_event('info', f'[LiteLLM] Backend: {llm_backend}')
                 yield sse_event('info', f'[LiteLLM] Prompt: "{litellm_prompt}"')
                 
                 # Build request payload - remove Qwen-specific params if routing to vLLM
                 # LiteLLM should handle this, but be explicit for clarity
                 request_payload = {
-                    'model': 'test',  # Use test model (Qwen3-0.6B) for validation
+                    'model': 'test',  # Use test model (Qwen3-0.6B for MLX, or vLLM equivalent)
                     'messages': [{'role': 'user', 'content': litellm_prompt}],
                     'max_tokens': 1000,
                 }
                 
                 # Only add Qwen params if we know we're using MLX (not vLLM)
-                # LiteLLM will route based on model config, so these may be ignored
+                # LiteLLM will route based on model config, but vLLM doesn't support these
                 if llm_backend == 'mlx':
                     request_payload['reasoning_effort'] = 'minimal'
                     request_payload['verbosity'] = 'low'
@@ -2326,8 +2333,11 @@ litellm_settings:
                         yield sse_event('info', f'Key source: {key_source}')
                         yield sse_event('info', f'Hint: Ensure LITELLM_MASTER_KEY matches the master_key in LiteLLM config')
                         yield sse_event('info', f'Hint: On Proxmox, check deploy-api.env.j2 template sets LITELLM_MASTER_KEY from vault')
-                    yield sse_event('warning', f'LiteLLM test failed: HTTP {response.status_code}')
-                    yield sse_event('info', f'[LiteLLM] Error: {response.text[:300]}')
+                    elif response.status_code == 400:
+                        yield sse_event('error', f'LiteLLM request invalid (400) - check model configuration and request format')
+                        yield sse_event('info', f'[LiteLLM] Request payload: {json.dumps(request_payload, indent=2)}')
+                    yield sse_event('error', f'LiteLLM test failed: HTTP {response.status_code}')
+                    yield sse_event('info', f'[LiteLLM] Error response: {response.text[:500]}')
             except Exception as e:
                 yield sse_event('warning', f'LiteLLM test error: {str(e)}')
             
