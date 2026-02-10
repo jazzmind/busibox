@@ -2282,6 +2282,7 @@ litellm_settings:
                 
                 yield sse_event('info', 'LiteLLM is healthy, testing chat completion...')
                 # Discover models available for this API key. Some keys cannot access "test".
+                yield sse_event('info', f'[LiteLLM] Discovering available models for API key...')
                 try:
                     models_response = await client.get(
                         f'{LITELLM_URL}/v1/models',
@@ -2307,10 +2308,14 @@ litellm_settings:
                             yield sse_event('info', f'[LiteLLM] Selected model: {selected_litellm_model}')
                         else:
                             yield sse_event('warning', '[LiteLLM] /v1/models returned no models; falling back to model=test')
+                            yield sse_event('info', f'[LiteLLM] Raw /v1/models response: {json.dumps(models_data)[:200]}')
                     else:
                         yield sse_event('warning', f'[LiteLLM] Could not list models: HTTP {models_response.status_code}')
+                        yield sse_event('info', f'[LiteLLM] /v1/models error: {models_response.text[:300]}')
+                        yield sse_event('info', f'[LiteLLM] Will try model=test (may fail if key lacks access)')
                 except Exception as e:
-                    yield sse_event('warning', f'[LiteLLM] Model discovery failed: {str(e)}')
+                    yield sse_event('warning', f'[LiteLLM] Model discovery failed: {type(e).__name__}: {str(e)}')
+                    yield sse_event('info', f'[LiteLLM] Will try model=test (may fail if key lacks access)')
                 
                 # Chat completion test with auth - use 'test' model for fast validation
                 # /no_think is Qwen-specific - only use for MLX backend
@@ -2367,8 +2372,17 @@ litellm_settings:
                     elif response.status_code == 400:
                         yield sse_event('error', f'LiteLLM request invalid (400) - check model configuration and request format')
                         yield sse_event('info', f'[LiteLLM] Request payload: {json.dumps(request_payload, indent=2)}')
+                        yield sse_event('info', f'[LiteLLM] Selected model was: {selected_litellm_model}')
+                        # Parse error response to show the actual error message
+                        try:
+                            error_data = response.json()
+                            error_msg = error_data.get('error', {}).get('message', '') if isinstance(error_data.get('error'), dict) else error_data.get('error', '')
+                            if error_msg:
+                                yield sse_event('info', f'[LiteLLM] Error message: {error_msg}')
+                        except:
+                            pass
                     yield sse_event('error', f'LiteLLM test failed: HTTP {response.status_code}')
-                    yield sse_event('info', f'[LiteLLM] Error response: {response.text[:500]}')
+                    yield sse_event('info', f'[LiteLLM] Full error response: {response.text[:500]}')
             except Exception as e:
                 yield sse_event('warning', f'LiteLLM test error: {str(e)}')
             
