@@ -36,8 +36,8 @@ BUILTIN_AGENT_METADATA = {
     "test_agent": {
         "name": "test-agent",
         "display_name": "Test Agent",
-        "description": "Minimal agent for LLM chain validation tests (uses Qwen3-0.6B, no tools)",
-        "model": "test",
+        "description": "Minimal agent for LLM chain validation tests (uses configured model alias, no tools)",
+        "model": "agent",
         "version": 1,
         "tools": [],
     },

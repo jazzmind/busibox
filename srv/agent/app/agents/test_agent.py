@@ -9,6 +9,7 @@ Direct LLM -> LiteLLM -> Agent API
 """
 
 import logging
+import os
 from typing import List
 
 from pydantic_ai import Agent
@@ -22,6 +23,7 @@ from app.agents.base_agent import (
     PipelineStep,
     ToolStrategy,
 )
+from app.config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +56,11 @@ class TestAgent(BaseStreamingAgent):
     """
     
     def __init__(self):
+        settings = get_settings()
+        # Use an overridable model alias so validation works with restricted LiteLLM keys.
+        # Priority: explicit TEST_AGENT_MODEL -> app default model -> "agent".
+        test_agent_model = os.getenv("TEST_AGENT_MODEL") or settings.default_model or "agent"
+
         config = AgentConfig(
             name="test-agent",
             display_name="Test Agent",
@@ -64,10 +71,9 @@ class TestAgent(BaseStreamingAgent):
         )
         super().__init__(config)
         
-        # Override synthesis_model to use the "test" model (Qwen3-0.6B)
-        # This ensures test agent uses the smallest/fastest model
+        # Override synthesis model with a configurable alias rather than hardcoding "test".
         self.synthesis_model = OpenAIChatModel(
-            model_name="test",  # Maps to qwen3-0.6b in LiteLLM
+            model_name=test_agent_model,
             provider="openai",
         )
         
