@@ -1721,7 +1721,9 @@ litellm_settings:
 LITELLM_URL = os.getenv("LITELLM_URL", "http://litellm:4000")
 AGENT_API_URL = os.getenv("AGENT_API_URL", "http://agent-api:8000")
 MLX_SERVER_URL = os.getenv("MLX_SERVER_URL", "http://host.docker.internal:8080")
+VLLM_URL = os.getenv("VLLM_URL", "http://vllm:8000")  # Configured by Ansible on Proxmox
 LLM_BACKEND = os.getenv("LLM_BACKEND", "")  # mlx, vllm, or cloud
+DEPLOYMENT_BACKEND = os.getenv("DEPLOYMENT_BACKEND", "docker")  # docker or proxmox
 
 
 @router.get("/mlx/ensure")
@@ -2015,18 +2017,28 @@ async def validate_llm_chain(
             
             # Try vLLM if MLX not available
             if not llm_url:
+                yield sse_event('info', f'Checking vLLM at {VLLM_URL}...')
                 try:
-                    vllm_url = 'http://vllm:8000'
-                    response = await client.get(f'{vllm_url}/health', timeout=5.0)
+                    response = await client.get(f'{VLLM_URL}/health', timeout=10.0)
                     if response.status_code == 200:
                         llm_backend = 'vllm'
-                        llm_url = vllm_url
-                        yield sse_event('info', 'vLLM server is available')
-                except Exception:
-                    pass
+                        llm_url = VLLM_URL
+                        yield sse_event('success', f'vLLM server is reachable at {VLLM_URL}')
+                    else:
+                        yield sse_event('error', f'vLLM health check failed: HTTP {response.status_code}')
+                        yield sse_event('info', f'vLLM response: {response.text[:200]}')
+                except httpx.ConnectError as e:
+                    yield sse_event('error', f'vLLM not reachable at {VLLM_URL}: Connection refused')
+                    yield sse_event('info', 'Check that vLLM is running on the target host (production or staging vLLM container)')
+                except httpx.TimeoutException:
+                    yield sse_event('error', f'vLLM health check timed out at {VLLM_URL}')
+                except Exception as e:
+                    yield sse_event('error', f'vLLM check failed: {type(e).__name__}: {str(e)}')
             
             if not llm_url:
                 yield sse_event('warning', 'No local LLM backend available (MLX or vLLM)')
+                yield sse_event('info', f'VLLM_URL configured as: {VLLM_URL}')
+                yield sse_event('info', f'LLM_BACKEND configured as: {LLM_BACKEND or "not set"}')
                 yield sse_event('info', 'Will test LiteLLM with cloud fallback if configured...')
             else:
                 # Test direct LLM inference
@@ -2090,9 +2102,10 @@ async def validate_llm_chain(
                     yield sse_event('warning', f'Direct {llm_backend.upper()} test error: {str(e)}')
             
             # =================================================================
-            # Check LiteLLM config - only regenerate if needed
+            # Check LiteLLM config - only regenerate if needed (Docker only)
+            # On Proxmox, LiteLLM config is managed by Ansible
             # =================================================================
-            if llm_backend in ('mlx', 'vllm'):
+            if llm_backend in ('mlx', 'vllm') and DEPLOYMENT_BACKEND == 'docker':
                 try:
                     # Get paths
                     busibox_host_path = os.getenv('BUSIBOX_HOST_PATH', '/busibox')
@@ -2219,6 +2232,19 @@ litellm_settings:
                         
                 except Exception as e:
                     yield sse_event('warning', f'Failed to check/configure LiteLLM: {str(e)}')
+            elif llm_backend in ('mlx', 'vllm') and DEPLOYMENT_BACKEND == 'proxmox':
+                # On Proxmox, LiteLLM config is managed by Ansible - just verify it's healthy
+                yield sse_event('info', 'Proxmox deployment: LiteLLM config is managed by Ansible')
+                try:
+                    response = await client.get(f'{LITELLM_URL}/health/liveliness', timeout=5.0)
+                    if response.status_code == 200:
+                        yield sse_event('success', f'LiteLLM is healthy at {LITELLM_URL}')
+                    else:
+                        yield sse_event('warning', f'LiteLLM health check returned: HTTP {response.status_code}')
+                except httpx.ConnectError:
+                    yield sse_event('error', f'LiteLLM not reachable at {LITELLM_URL}: Connection refused')
+                except Exception as e:
+                    yield sse_event('warning', f'LiteLLM health check failed: {str(e)}')
             
             # =================================================================
             # Test 2: LiteLLM Gateway
