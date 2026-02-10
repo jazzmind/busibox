@@ -553,7 +553,15 @@ async def initiate_login(request: Request):
     # Check email domain allowlist
     if config.allowed_email_domains:
         domain = email.split("@")[-1].lower()
-        if domain not in config.allowed_email_domains:
+        
+        # In test mode, allow test.example.com domain for PVT test user
+        is_test_mode = (
+            config.test_mode_enabled
+            and request.headers.get(TEST_MODE_HEADER, "").lower() == "true"
+        )
+        is_test_domain = domain == "test.example.com"
+        
+        if domain not in config.allowed_email_domains and not (is_test_mode and is_test_domain):
             # Don't leak which domains are allowed - just reject silently
             # by returning a fake success response
             import secrets

@@ -2,7 +2,7 @@
 AuthZ test client for managing test users, roles, and scopes.
 
 Provides a clean interface for:
-- Getting tokens via token exchange
+- Getting tokens via Zero Trust token exchange (magic link login + subject_token)
 - Adding/removing roles from test user
 - Adding/removing scopes from test user
 - Cleaning up test state
@@ -33,12 +33,18 @@ import pytest
 TEST_MODE_HEADER = "X-Test-Mode"
 TEST_MODE_VALUE = "true"
 
+# Well-known test user email (must match oauth.py bootstrap)
+TEST_USER_EMAIL = "test@test.example.com"
+
 
 class AuthTestClient:
     """
     Client for managing test authentication state.
     
-    Uses the authz admin API to manipulate roles and scopes for testing.
+    Uses the authz login flow (magic link) to obtain session JWTs,
+    then exchanges them for service-scoped tokens via Zero Trust token exchange.
+    
+    No client credentials (API_SERVICE_CLIENT_SECRET) are required.
     All changes are tracked and can be cleaned up automatically.
     """
     
@@ -47,27 +53,26 @@ class AuthTestClient:
         authz_url: Optional[str] = None,
         admin_token: Optional[str] = None,
         test_user_id: Optional[str] = None,
+        test_user_email: Optional[str] = None,
     ):
         """
         Initialize the auth test client.
         
         Args:
-            authz_url: Base URL for authz service (default from AUTHZ_JWKS_URL)
+            authz_url: Base URL for authz service (default from AUTHZ_JWKS_URL or AUTH_JWKS_URL)
             admin_token: Admin token for role management (optional)
             test_user_id: Test user ID (default from TEST_USER_ID)
-        
-        Note: Client credentials for token exchange are read from environment:
-            - API_SERVICE_CLIENT_ID: Service client ID (default: api-service)
-            - API_SERVICE_CLIENT_SECRET: Service client secret (required for get_token)
+            test_user_email: Test user email (default: test@test.example.com)
         """
-        # Get authz URL from JWKS URL
-        jwks_url = os.getenv("AUTHZ_JWKS_URL", "")
+        # Get authz URL from JWKS URL (try both env var names)
+        jwks_url = os.getenv("AUTHZ_JWKS_URL", "") or os.getenv("AUTH_JWKS_URL", "")
         default_url = jwks_url.replace("/.well-known/jwks.json", "") if jwks_url else ""
         
         self.authz_url = authz_url or default_url
         # Default to the well-known test user ID if not provided
-        # This ID is created by bootstrap-test-databases.py
+        # This ID is created by _ensure_bootstrap_test_user() in authz
         self.test_user_id = test_user_id or os.getenv("TEST_USER_ID", "00000000-0000-0000-0000-000000000001")
+        self.test_user_email = test_user_email or os.getenv("TEST_USER_EMAIL", TEST_USER_EMAIL)
         
         # Admin token for role management (optional)
         self.admin_token = admin_token or os.getenv("AUTHZ_ADMIN_TOKEN", "")
@@ -79,6 +84,9 @@ class AuthTestClient:
         
         # Cache for role IDs
         self._role_cache: Dict[str, str] = {}
+        
+        # Cache for session JWT (avoids repeated login)
+        self._session_jwt: Optional[str] = None
     
     def _require_config(self, require_admin: bool = False):
         """
@@ -107,113 +115,150 @@ class AuthTestClient:
         """
         Ensure the test user exists in the database.
         
-        Checks if the configured TEST_USER_ID exists. If not, tries to create
-        a test user. This handles cases where the bootstrap script hasn't been run.
+        In Zero Trust architecture, the test user is bootstrapped automatically
+        by authz on startup (_ensure_bootstrap_test_user). This method verifies
+        the user can be logged in by attempting a magic link login.
         
-        NOTE: Requires AUTHZ_ADMIN_TOKEN to be configured.
+        If admin token is available, also checks via admin API as fallback.
         """
-        self._require_config(require_admin=True)
+        self._require_config()
         
+        # Try to verify the test user exists by initiating a login
+        # This will create the user if it doesn't exist (as PENDING)
         with httpx.Client() as client:
-            # Check if user with TEST_USER_ID exists
-            resp = client.get(
-                f"{self.authz_url}/admin/users/{self.test_user_id}",
-                headers=self._admin_headers(),
-                timeout=10.0,
-            )
-            
-            if resp.status_code == 200:
-                # User already exists
-                return
-            
-            # User with TEST_USER_ID doesn't exist.
-            # This can happen if bootstrap-test-credentials wasn't run.
-            # Try to create a user (it will get a different UUID, but we'll use it)
-            email = f"test-user-{self.test_user_id[:8]}@test.example.com"  # Use test.example.com (allowed domain)
-            
-            # First check if a user with this email already exists
-            resp = client.get(
-                f"{self.authz_url}/admin/users/by-email/{email}",
-                headers=self._admin_headers(),
-                timeout=10.0,
-            )
-            
-            if resp.status_code == 200:
-                # User with this email exists, use its ID
-                user_data = resp.json()
-                actual_id = user_data.get("user_id") or user_data.get("id")
-                if actual_id != self.test_user_id:
-                    import structlog
-                    logger = structlog.get_logger()
-                    logger.info(
-                        "Using existing test user with different ID",
-                        configured_id=self.test_user_id,
-                        actual_id=actual_id,
-                    )
-                    self.test_user_id = actual_id
-                return
-            
-            # Create new user
             resp = client.post(
-                f"{self.authz_url}/admin/users",
-                headers=self._admin_headers(),
-                json={
-                    "email": email,
-                    "status": "ACTIVE",
-                },
+                f"{self.authz_url}/auth/login/initiate",
+                json={"email": self.test_user_email},
+                headers={TEST_MODE_HEADER: TEST_MODE_VALUE},
                 timeout=10.0,
             )
             
-            if resp.status_code in [200, 201]:
-                user_data = resp.json()
-                actual_id = user_data.get("user_id") or user_data.get("id")
-                import structlog
-                logger = structlog.get_logger()
-                logger.info("Created test user", user_id=actual_id)
-                # Update our test_user_id to the newly created ID
-                self.test_user_id = actual_id
-            else:
+            if resp.status_code == 200:
+                # Login initiated successfully - user exists (or was created)
+                return
+        
+        # Fallback: If admin token is available, try admin API
+        if self.admin_token:
+            with httpx.Client() as client:
+                resp = client.get(
+                    f"{self.authz_url}/admin/users/{self.test_user_id}",
+                    headers=self._admin_headers(),
+                    timeout=10.0,
+                )
+                
+                if resp.status_code == 200:
+                    return
+                
+                # Try to create user via admin API
+                resp = client.post(
+                    f"{self.authz_url}/admin/users",
+                    headers=self._admin_headers(),
+                    json={
+                        "email": self.test_user_email,
+                        "status": "ACTIVE",
+                    },
+                    timeout=10.0,
+                )
+                
+                if resp.status_code in [200, 201, 409]:
+                    return
+                
                 pytest.fail(f"Failed to create test user: {resp.status_code} - {resp.text}")
     
     # =========================================================================
-    # Token Management
+    # Token Management (Zero Trust)
     # =========================================================================
+    
+    def _get_session_jwt(self) -> str:
+        """
+        Get a session JWT for the test user via magic link login.
+        
+        This is the Zero Trust flow:
+        1. POST /auth/login/initiate with test user email
+        2. POST /auth/magic-links/{token}/use to get session JWT
+        
+        The session JWT is cached for the lifetime of this client.
+        
+        Returns:
+            Session JWT string
+        """
+        if self._session_jwt:
+            return self._session_jwt
+        
+        self._require_config()
+        
+        with httpx.Client() as client:
+            # Step 1: Initiate login for the test user
+            resp = client.post(
+                f"{self.authz_url}/auth/login/initiate",
+                json={"email": self.test_user_email},
+                headers={TEST_MODE_HEADER: TEST_MODE_VALUE},
+                timeout=10.0,
+            )
+            
+            if resp.status_code != 200:
+                pytest.fail(
+                    f"Failed to initiate login for test user ({self.test_user_email}): "
+                    f"{resp.status_code} - {resp.text}"
+                )
+            
+            data = resp.json()
+            magic_link_token = data.get("magic_link_token")
+            if not magic_link_token:
+                pytest.fail(f"No magic_link_token in login response: {data}")
+            
+            # Step 2: Use the magic link to get a session JWT
+            resp = client.post(
+                f"{self.authz_url}/auth/magic-links/{magic_link_token}/use",
+                headers={TEST_MODE_HEADER: TEST_MODE_VALUE},
+                timeout=10.0,
+            )
+            
+            if resp.status_code != 200:
+                pytest.fail(
+                    f"Failed to use magic link for test user: "
+                    f"{resp.status_code} - {resp.text}. "
+                    f"Check that test.example.com is in ALLOWED_EMAIL_DOMAINS "
+                    f"or ALLOWED_EMAIL_DOMAINS is empty."
+                )
+            
+            data = resp.json()
+            session = data.get("session", {})
+            session_jwt = session.get("token")
+            
+            if not session_jwt:
+                pytest.fail(f"No session JWT in magic link response: {data}")
+            
+            self._session_jwt = session_jwt
+            return session_jwt
     
     def get_token(self, audience: str = "search-api", scopes: str = "read write") -> str:
         """
-        Get an access token for the test user via token exchange.
+        Get an access token for the test user via Zero Trust token exchange.
         
-        Uses service client credentials (API_SERVICE_CLIENT_ID/SECRET) to request
-        a token for the test user via the requested_subject grant.
+        Uses the magic link login flow to get a session JWT, then exchanges
+        it for a service-scoped access token. No client credentials required.
         
         Args:
-            audience: Target audience for the token
-            scopes: Space-separated scopes to request
+            audience: Target audience for the token (e.g., "data-api", "search-api", "agent-api")
+            scopes: Space-separated scopes to request (scopes come from RBAC, this is advisory)
             
         Returns:
             Access token string
         """
         self._require_config()
         
-        # Get service client credentials from environment
-        # These are set by Ansible when deploying the service
-        client_id = os.getenv("API_SERVICE_CLIENT_ID", "api-service")
-        client_secret = os.getenv("API_SERVICE_CLIENT_SECRET", "")
-        
-        if not client_secret:
-            pytest.fail(
-                "API_SERVICE_CLIENT_SECRET not configured. "
-                "Ensure the service is deployed with client credentials."
-            )
+        # Get a session JWT for the test user
+        session_jwt = self._get_session_jwt()
         
         with httpx.Client() as client:
+            # Exchange session JWT for service-scoped access token
             resp = client.post(
                 f"{self.authz_url}/oauth/token",
                 data={
                     "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-                    "client_id": client_id,
-                    "client_secret": client_secret,
-                    "requested_subject": self.test_user_id,
+                    "subject_token": session_jwt,
+                    "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
                     "audience": audience,
                     "scope": scopes,
                 },
@@ -222,7 +267,7 @@ class AuthTestClient:
             )
             
             if resp.status_code != 200:
-                pytest.fail(f"Failed to get token: {resp.status_code} - {resp.text}")
+                pytest.fail(f"Failed to exchange token: {resp.status_code} - {resp.text}")
             
             data = resp.json()
             if "access_token" not in data:
@@ -497,7 +542,11 @@ class AuthTestClient:
         
         Removes roles added to user and deletes created roles.
         All cleanup operations use X-Test-Mode header to target test database.
+        Clears cached session JWT.
         """
+        # Clear cached session
+        self._session_jwt = None
+        
         # Remove roles from user
         for role_id in list(self._added_roles):
             try:
