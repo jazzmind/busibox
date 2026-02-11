@@ -67,7 +67,7 @@ class QueryDataInput(BaseModel):
         default=None,
         description="Sort order, e.g., [{'field': 'name', 'direction': 'asc'}]"
     )
-    limit: int = Field(default=50, ge=1, le=200, description="Max records to return")
+    limit: int = Field(default=20, ge=1, le=100, description="Max records to return (keep low to avoid context overflow)")
     offset: int = Field(default=0, ge=0, description="Pagination offset")
 
 
@@ -239,7 +239,7 @@ async def query_data(
     select: Optional[List[str]] = None,
     where: Optional[Dict[str, Any]] = None,
     order_by: Optional[List[Dict[str, str]]] = None,
-    limit: int = 50,
+    limit: int = 20,
     offset: int = 0,
 ) -> QueryDataOutput:
     """
@@ -253,7 +253,7 @@ async def query_data(
         select: List of fields to return (default: all)
         where: Filter conditions
         order_by: Sort specification
-        limit: Max records to return (default: 50)
+        limit: Max records to return (default: 20)
         offset: Pagination offset (default: 0)
     
     Returns:

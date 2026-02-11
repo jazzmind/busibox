@@ -32,11 +32,13 @@ class HTMLRenderer:
         self.allowed_tags = [
             'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
             'p', 'br', 'span', 'div',
-            'strong', 'em', 'u', 'strike', 'code', 'pre',
+            'strong', 'em', 'b', 'i', 'u', 'strike', 'del', 'code', 'pre',
             'ul', 'ol', 'li',
             'table', 'thead', 'tbody', 'tr', 'th', 'td',
-            'a', 'img',
-            'blockquote', 'hr'
+            'a', 'img', 'figure', 'figcaption',
+            'blockquote', 'hr',
+            'sup', 'sub', 'mark', 'abbr',
+            'dl', 'dt', 'dd',
         ]
         
         self.allowed_attributes = {
@@ -62,21 +64,24 @@ class HTMLRenderer:
             # Extract and process headings for TOC before rendering
             toc = self._extract_toc(markdown_content)
             
-            # Add IDs to headings
-            markdown_with_ids = self._add_heading_ids(markdown_content)
-            
-            # Replace image references with proper URLs
+            # Replace image references with proper URLs BEFORE markdown conversion
+            # (so markdown parser can turn ![alt](url) into <img> tags)
+            processed_md = markdown_content
             if file_id:
-                markdown_with_ids = self._resolve_image_urls(markdown_with_ids, file_id)
+                processed_md = self._resolve_image_urls(processed_md, file_id)
             
-            # Convert markdown to HTML
+            # Convert markdown to HTML (let the markdown library handle ALL formatting
+            # including bold, italic, headings, etc. - do NOT pre-convert headings to HTML)
             md = markdown.Markdown(extensions=[
                 'tables',
                 'fenced_code',
                 'codehilite',
-                'nl2br',  # Convert newlines to <br>
             ])
-            html = md.convert(markdown_with_ids)
+            html = md.convert(processed_md)
+            
+            # Now inject heading IDs into the rendered HTML (post-conversion)
+            # This preserves all inline markdown formatting (bold, italic, etc.)
+            html = self._inject_heading_ids(html)
             
             # Sanitize HTML
             html = self._sanitize_html(html)
@@ -109,12 +114,17 @@ class HTMLRenderer:
         
         for match in re.finditer(heading_pattern, markdown_content, re.MULTILINE):
             level = len(match.group(1))  # Number of # characters
-            title = match.group(2).strip()
-            heading_id = self._slugify(title)
+            raw_title = match.group(2).strip()
+            # Strip markdown inline formatting for clean TOC display
+            clean_title = re.sub(r'\*{1,2}([^*]+)\*{1,2}', r'\1', raw_title)  # **bold** / *italic*
+            clean_title = re.sub(r'__([^_]+)__', r'\1', clean_title)  # __bold__
+            clean_title = re.sub(r'_([^_]+)_', r'\1', clean_title)   # _italic_
+            clean_title = re.sub(r'`([^`]+)`', r'\1', clean_title)   # `code`
+            heading_id = self._slugify(clean_title)
             
             toc.append({
                 'level': level,
-                'title': title,
+                'title': clean_title,
                 'id': heading_id
             })
         
@@ -140,26 +150,38 @@ class HTMLRenderer:
         # Frontend can build hierarchy based on levels
         return toc
 
-    def _add_heading_ids(self, markdown_content: str) -> str:
+    def _inject_heading_ids(self, html: str) -> str:
         """
-        Add ID attributes to markdown headings for anchor links.
+        Inject ID attributes into HTML heading tags post-conversion.
+        
+        This runs AFTER markdown-to-HTML conversion so that all inline
+        formatting (bold, italic, links, etc.) is already properly rendered.
+        We extract the text content of each heading (stripping HTML tags)
+        and use it to generate a slug ID.
 
         Args:
-            markdown_content: Original markdown
+            html: Rendered HTML content
 
         Returns:
-            Markdown with heading IDs
+            HTML with heading IDs injected
         """
         def replace_heading(match):
-            hashes = match.group(1)
-            title = match.group(2).strip()
-            heading_id = self._slugify(title)
-            # Markdown doesn't support IDs directly, so we'll add HTML
-            level = len(hashes)
-            return f'<h{level} id="{heading_id}">{title}</h{level}>'
+            tag = match.group(1)        # e.g., "h2"
+            attrs = match.group(2) or ""  # existing attributes
+            content = match.group(3)     # inner HTML (may contain <strong>, <em>, etc.)
+            
+            # If heading already has an id, leave it alone
+            if 'id=' in attrs:
+                return match.group(0)
+            
+            # Extract plain text from HTML content for slug generation
+            plain_text = re.sub(r'<[^>]+>', '', content).strip()
+            heading_id = self._slugify(plain_text)
+            
+            return f'<{tag} id="{heading_id}"{attrs}>{content}</{tag}>'
         
-        heading_pattern = r'^(#{1,6})\s+(.+)$'
-        result = re.sub(heading_pattern, replace_heading, markdown_content, flags=re.MULTILINE)
+        heading_pattern = r'<(h[1-6])([^>]*)>(.*?)</\1>'
+        result = re.sub(heading_pattern, replace_heading, html, flags=re.DOTALL)
         
         return result
 
@@ -168,13 +190,18 @@ class HTMLRenderer:
         Convert heading text to URL-safe slug for IDs.
 
         Args:
-            text: Heading text
+            text: Heading text (may contain markdown formatting or HTML)
 
         Returns:
             Slugified ID
         """
+        # Strip any remaining HTML tags
+        clean = re.sub(r'<[^>]+>', '', text)
+        # Strip markdown bold/italic markers
+        clean = re.sub(r'\*{1,2}', '', clean)
+        clean = re.sub(r'_{1,2}', '', clean)
         # Remove special characters
-        slug = re.sub(r'[^\w\s-]', '', text.lower())
+        slug = re.sub(r'[^\w\s-]', '', clean.lower())
         # Replace whitespace with hyphens
         slug = re.sub(r'[-\s]+', '-', slug)
         # Remove leading/trailing hyphens
