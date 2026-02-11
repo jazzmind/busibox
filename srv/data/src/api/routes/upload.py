@@ -215,9 +215,14 @@ async def upload_file(
             encrypt_role_ids = parsed_role_ids if visibility == "shared" else None
             encrypt_user_id = user_id if visibility == "personal" else None
             
+            # Get user's JWT token from request context for keystore API calls
+            user_token = getattr(request.state, 'user_context', None)
+            user_token = user_token.token if user_token else None
+            
             content_to_store = await encryption_client.encrypt_for_upload(
                 file_id=file_id,
                 content=file_content,
+                user_token=user_token,
                 role_ids=encrypt_role_ids,
                 user_id=encrypt_user_id,
             )
