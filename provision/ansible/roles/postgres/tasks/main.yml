@@ -380,6 +380,7 @@
     - { version: 3, name: "fix_schema_migrations", file: "003_fix_schema_migrations.sql" }
     - { version: 11, name: "web_search_providers", file: "011_web_search_providers.sql" }
     - { version: 12, name: "config_table", file: "012_config_table.sql" }
+    - { version: 13, name: "deployment_tables", file: "013_deployment_tables.sql" }
   register: migration_result
   changed_when: "'applied successfully' in migration_result.stdout"
   tags: [postgres, postgres_migrations]

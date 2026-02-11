@@ -25,14 +25,19 @@ from sqlalchemy.orm import selectinload
 
 from app.auth.dependencies import get_principal
 from app.db.session import get_session
-from app.models.domain import ChatSettings, Conversation, Message
+from app.models.domain import ChatAttachment, ChatSettings, Conversation, ConversationShare, Message
 from app.schemas.auth import Principal
 from app.schemas.conversation import (
+    ChatAttachmentCreate,
+    ChatAttachmentRead,
     ChatSettingsRead,
     ChatSettingsUpdate,
     ConversationCreate,
     ConversationListResponse,
     ConversationRead,
+    ConversationShareCreate,
+    ConversationShareListResponse,
+    ConversationShareRead,
     ConversationUpdate,
     ConversationWithMessages,
     MessageCreate,
@@ -52,8 +57,13 @@ async def get_conversation_or_404(
     conversation_id: uuid.UUID,
     session: AsyncSession,
     user_id: str,
+    allow_shared: bool = True,
 ) -> Conversation:
-    """Get conversation by ID and verify ownership"""
+    """Get conversation by ID and verify ownership or shared access.
+    
+    Args:
+        allow_shared: If True, also allows access for users the conversation is shared with.
+    """
     result = await session.execute(
         select(Conversation).where(Conversation.id == conversation_id)
     )
@@ -65,13 +75,25 @@ async def get_conversation_or_404(
             detail=f"Conversation {conversation_id} not found"
         )
     
-    if conversation.user_id != user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have access to this conversation"
-        )
+    if conversation.user_id == user_id:
+        return conversation
     
-    return conversation
+    # Check if user has shared access
+    if allow_shared:
+        share_result = await session.execute(
+            select(ConversationShare).where(
+                ConversationShare.conversation_id == conversation_id,
+                ConversationShare.user_id == user_id,
+            )
+        )
+        share = share_result.scalar_one_or_none()
+        if share:
+            return conversation
+    
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="You do not have access to this conversation"
+    )
 
 
 async def get_message_or_404(
@@ -126,12 +148,20 @@ async def list_conversations(
     If source is provided, only returns conversations created by that app/client.
     """
     try:
-        # Base filter for user ownership
-        base_filter = Conversation.user_id == principal.sub
+        from sqlalchemy import and_, or_
+        
+        # Base filter: owned OR shared with user
+        shared_conv_subquery = (
+            select(ConversationShare.conversation_id)
+            .where(ConversationShare.user_id == principal.sub)
+        )
+        base_filter = or_(
+            Conversation.user_id == principal.sub,
+            Conversation.id.in_(shared_conv_subquery),
+        )
         
         # Filter by source if provided
         if source:
-            from sqlalchemy import and_
             base_filter = and_(base_filter, Conversation.source == source)
         
         # If agent_id is provided, find conversations with messages that used this agent
@@ -252,6 +282,9 @@ async def list_conversations(
                     title=conv.title,
                     user_id=conv.user_id,
                     source=getattr(conv, 'source', None),
+                    model=getattr(conv, 'model', None),
+                    is_private=getattr(conv, 'is_private', False),
+                    agent_id=getattr(conv, 'agent_id', None),
                     message_count=message_count,
                     last_message=last_message_preview,
                     created_at=conv.created_at,
@@ -298,6 +331,9 @@ async def create_conversation(
             title=title,
             user_id=principal.sub,
             source=payload.source,
+            model=payload.model,
+            is_private=payload.is_private,
+            agent_id=payload.agent_id,
         )
         
         session.add(conversation)
@@ -314,6 +350,9 @@ async def create_conversation(
             title=conversation.title,
             user_id=conversation.user_id,
             source=conversation.source,
+            model=conversation.model,
+            is_private=conversation.is_private,
+            agent_id=conversation.agent_id,
             message_count=0,
             last_message=None,
             created_at=conversation.created_at,
@@ -393,10 +432,14 @@ async def update_conversation(
     Update a conversation's title.
     """
     try:
-        conversation = await get_conversation_or_404(conversation_id, session, principal.sub)
+        conversation = await get_conversation_or_404(conversation_id, session, principal.sub, allow_shared=False)
         
         if payload.title is not None:
             conversation.title = payload.title
+        if payload.is_private is not None:
+            conversation.is_private = payload.is_private
+        if payload.model is not None:
+            conversation.model = payload.model
         
         await session.commit()
         await session.refresh(conversation)
@@ -417,6 +460,10 @@ async def update_conversation(
             id=conversation.id,
             title=conversation.title,
             user_id=conversation.user_id,
+            source=conversation.source,
+            model=conversation.model,
+            is_private=conversation.is_private,
+            agent_id=conversation.agent_id,
             message_count=message_count,
             created_at=conversation.created_at,
             updated_at=conversation.updated_at
@@ -541,8 +588,23 @@ async def create_message(
     Create a new message in a conversation.
     """
     try:
-        # Verify conversation ownership
+        # Verify conversation ownership (or editor share access)
         conversation = await get_conversation_or_404(conversation_id, session, principal.sub)
+        
+        # If user is not owner, check they have editor share
+        if conversation.user_id != principal.sub:
+            share_result = await session.execute(
+                select(ConversationShare).where(
+                    ConversationShare.conversation_id == conversation_id,
+                    ConversationShare.user_id == principal.sub,
+                    ConversationShare.role == 'editor',
+                )
+            )
+            if not share_result.scalar_one_or_none():
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You do not have edit access to this conversation"
+                )
         
         # Create message
         message = Message(
@@ -550,9 +612,10 @@ async def create_message(
             role=payload.role,
             content=payload.content,
             attachments=[att.model_dump() for att in payload.attachments] if payload.attachments else None,
+            metadata_json=payload.metadata,
             run_id=payload.run_id,
             routing_decision=payload.routing_decision,
-            tool_calls=payload.tool_calls
+            tool_calls=payload.tool_calls,
         )
         
         session.add(message)
@@ -563,6 +626,17 @@ async def create_message(
         
         await session.commit()
         await session.refresh(message)
+        
+        # Link attachment IDs if provided
+        if payload.attachment_ids:
+            for att_id in payload.attachment_ids:
+                att_result = await session.execute(
+                    select(ChatAttachment).where(ChatAttachment.id == att_id)
+                )
+                attachment = att_result.scalar_one_or_none()
+                if attachment:
+                    attachment.message_id = message.id
+            await session.commit()
         
         logger.info(
             f"Created message {message.id} in conversation {conversation_id}",
@@ -609,6 +683,206 @@ async def get_message(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get message"
         )
+
+
+# ========== Conversation Sharing Endpoints ==========
+
+@router.post("/conversations/{conversation_id}/shares", response_model=ConversationShareRead, status_code=status.HTTP_201_CREATED)
+async def share_conversation(
+    conversation_id: uuid.UUID,
+    payload: ConversationShareCreate,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+) -> ConversationShareRead:
+    """Share a conversation with another user. Only the owner can share."""
+    try:
+        # Only owner can share
+        conversation = await get_conversation_or_404(conversation_id, session, principal.sub, allow_shared=False)
+        
+        if payload.user_id == principal.sub:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot share with yourself")
+        
+        # Check if already shared
+        existing = await session.execute(
+            select(ConversationShare).where(
+                ConversationShare.conversation_id == conversation_id,
+                ConversationShare.user_id == payload.user_id,
+            )
+        )
+        share = existing.scalar_one_or_none()
+        
+        if share:
+            # Update role
+            share.role = payload.role
+            await session.commit()
+            await session.refresh(share)
+        else:
+            share = ConversationShare(
+                conversation_id=conversation_id,
+                user_id=payload.user_id,
+                role=payload.role,
+                shared_by=principal.sub,
+            )
+            session.add(share)
+            await session.commit()
+            await session.refresh(share)
+        
+        return ConversationShareRead.model_validate(share)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        await session.rollback()
+        logger.error(f"Failed to share conversation: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to share conversation")
+
+
+@router.get("/conversations/{conversation_id}/shares", response_model=ConversationShareListResponse)
+async def list_conversation_shares(
+    conversation_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+) -> ConversationShareListResponse:
+    """List all shares for a conversation. Owner or shared users can view."""
+    try:
+        await get_conversation_or_404(conversation_id, session, principal.sub)
+        
+        result = await session.execute(
+            select(ConversationShare)
+            .where(ConversationShare.conversation_id == conversation_id)
+            .order_by(ConversationShare.shared_at.desc())
+        )
+        shares = [ConversationShareRead.model_validate(s) for s in result.scalars().all()]
+        
+        return ConversationShareListResponse(shares=shares)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to list shares: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to list shares")
+
+
+@router.delete("/conversations/{conversation_id}/shares/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def unshare_conversation(
+    conversation_id: uuid.UUID,
+    user_id: str,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Remove sharing for a user. Only the owner can unshare."""
+    try:
+        await get_conversation_or_404(conversation_id, session, principal.sub, allow_shared=False)
+        
+        result = await session.execute(
+            select(ConversationShare).where(
+                ConversationShare.conversation_id == conversation_id,
+                ConversationShare.user_id == user_id,
+            )
+        )
+        share = result.scalar_one_or_none()
+        
+        if not share:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Share not found")
+        
+        await session.delete(share)
+        await session.commit()
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        await session.rollback()
+        logger.error(f"Failed to unshare conversation: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to unshare conversation")
+
+
+# ========== Chat Attachment Endpoints ==========
+
+@router.post("/chat-attachments", response_model=ChatAttachmentRead, status_code=status.HTTP_201_CREATED)
+async def create_chat_attachment(
+    payload: ChatAttachmentCreate,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+) -> ChatAttachmentRead:
+    """Create a chat attachment (initially unlinked to a message)."""
+    try:
+        attachment = ChatAttachment(
+            filename=payload.filename,
+            file_url=payload.file_url,
+            mime_type=payload.mime_type,
+            size_bytes=payload.size_bytes,
+            added_to_library=payload.added_to_library,
+            library_document_id=payload.library_document_id,
+            parsed_content=payload.parsed_content,
+        )
+        session.add(attachment)
+        await session.commit()
+        await session.refresh(attachment)
+        
+        return ChatAttachmentRead.model_validate(attachment)
+    except Exception as e:
+        await session.rollback()
+        logger.error(f"Failed to create attachment: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create attachment")
+
+
+@router.get("/chat-attachments/{attachment_id}", response_model=ChatAttachmentRead)
+async def get_chat_attachment(
+    attachment_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+) -> ChatAttachmentRead:
+    """Get a chat attachment by ID."""
+    try:
+        result = await session.execute(
+            select(ChatAttachment).where(ChatAttachment.id == attachment_id)
+        )
+        attachment = result.scalar_one_or_none()
+        
+        if not attachment:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attachment not found")
+        
+        # If linked to a message, verify conversation access
+        if attachment.message_id:
+            msg_result = await session.execute(
+                select(Message).options(selectinload(Message.conversation)).where(Message.id == attachment.message_id)
+            )
+            message = msg_result.scalar_one_or_none()
+            if message:
+                await get_conversation_or_404(message.conversation_id, session, principal.sub)
+        
+        return ChatAttachmentRead.model_validate(attachment)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get attachment: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to get attachment")
+
+
+@router.delete("/chat-attachments/{attachment_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_chat_attachment(
+    attachment_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Delete a chat attachment."""
+    try:
+        result = await session.execute(
+            select(ChatAttachment).where(ChatAttachment.id == attachment_id)
+        )
+        attachment = result.scalar_one_or_none()
+        
+        if not attachment:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attachment not found")
+        
+        await session.delete(attachment)
+        await session.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        await session.rollback()
+        logger.error(f"Failed to delete attachment: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete attachment")
 
 
 # ========== Chat Settings Endpoints ==========

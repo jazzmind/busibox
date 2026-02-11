@@ -14,6 +14,11 @@ from .routes import router
 from .system_routes import router as system_router
 from .service_routes import router as service_router
 from .config_routes import router as config_router
+from .github_routes import router as github_router
+from .deployment_config_routes import router as deployment_config_router
+from .deployment_history_routes import router as deployment_history_router
+from .secrets_routes import router as secrets_router
+from .releases_routes import router as releases_router
 from .config import config
 
 # Configure logging
@@ -60,6 +65,11 @@ app.include_router(router)
 app.include_router(system_router)
 app.include_router(service_router)
 app.include_router(config_router)
+app.include_router(github_router)
+app.include_router(deployment_config_router)
+app.include_router(deployment_history_router)
+app.include_router(secrets_router)
+app.include_router(releases_router)
 
 
 @app.get("/health/live")
