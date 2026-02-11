@@ -54,7 +54,11 @@ deploy_api_nginx_host: nginx
 # When set, deploy-api sends Host header so requests hit domain server block
 # Uses domain/full_domain from inventory, or env-specific fallback
 deploy_api_nginx_public_domain: "{{ domain | default(full_domain) | default('staging.ai.jaycashman.com' if (deployment_environment | default('')) == 'staging' else 'localhost') }}"
-deploy_api_nginx_config_dir: /etc/nginx/sites-available/apps
+# Location snippets are included inside the server block via:
+# include /etc/nginx/app-locations/*.conf;
+# This avoids the "location directive not allowed here" error that occurs
+# when bare location blocks are placed in sites-enabled/ (http-level context)
+deploy_api_nginx_config_dir: /etc/nginx/app-locations
 deploy_api_nginx_enabled_dir: /etc/nginx/sites-enabled
 
 # Ansible directory

@@ -87,7 +87,9 @@ class Config:
     
     # Nginx (on nginx container)
     nginx_host: str = os.getenv('NGINX_HOST', 'nginx')
-    nginx_config_dir: str = os.getenv('NGINX_CONFIG_DIR', '/etc/nginx/sites-available/apps')
+    # For LXC: location snippets go in app-locations/ which is included inside the server block
+    # For Docker: location snippets are written directly to the mounted nginx config volume
+    nginx_config_dir: str = os.getenv('NGINX_CONFIG_DIR', '/etc/nginx/app-locations')
     nginx_enabled_dir: str = os.getenv('NGINX_ENABLED_DIR', '/etc/nginx/sites-enabled')
     
     # Rate limiting (in seconds for flexibility, default 10 seconds for testing)

@@ -311,20 +311,20 @@ ln -s {source} {target}
         if not container_ip:
             container_ip = self.apps_container_ip
         
-        # Write configuration
+        # Write configuration (location snippet to app-locations/ directory)
         success, msg = await self.write_config(manifest, container_ip)
         if not success:
             return False, f"Failed to write nginx configuration: {msg}"
         
         # Validate configuration
+        # The location snippets in app-locations/ are included inside the server
+        # block via "include /etc/nginx/app-locations/*.conf;" in the vhost config.
+        # No symlink into sites-enabled is needed.
         valid, output = await self.validate_config()
         if not valid:
+            # Validation failed - remove the bad config to avoid breaking nginx
+            await self._remove_config_file(manifest)
             return False, f"Nginx configuration validation failed: {output}"
-        
-        # Enable configuration
-        success, msg = await self.enable_config(manifest)
-        if not success:
-            return False, f"Failed to enable nginx configuration: {msg}"
         
         # Reload nginx
         success, msg = await self.reload_nginx()
@@ -333,15 +333,29 @@ ln -s {source} {target}
         
         return True, f"Nginx configured for {manifest.name} at {manifest.defaultPath}"
     
+    async def _remove_config_file(self, manifest: BusiboxManifest) -> Tuple[bool, str]:
+        """Remove just the config file (used for cleanup on validation failure)"""
+        config_path = f"{self.config_dir}/{manifest.id}.conf"
+        command = f"rm -f {config_path}"
+        stdout, stderr, code = await execute_ssh_command(self.nginx_host, command)
+        if code != 0:
+            return False, f"Failed to remove config file: {stderr}"
+        return True, f"Removed {config_path}"
+
     async def remove_config(self, manifest: BusiboxManifest) -> Tuple[bool, str]:
         """Remove nginx configuration for app via SSH"""
         
-        target = f"{self.enabled_dir}/{manifest.id}.conf"
-        source = f"{self.config_dir}/{manifest.id}.conf"
+        # Remove from app-locations dir (current approach)
+        config_path = f"{self.config_dir}/{manifest.id}.conf"
+        # Also clean up any legacy symlink in sites-enabled (from older deploys)
+        legacy_enabled = f"{self.enabled_dir}/{manifest.id}.conf"
+        # Also clean up legacy sites-available/apps/ path
+        legacy_available = f"/etc/nginx/sites-available/apps/{manifest.id}.conf"
         
         command = f"""
-rm -f {target}
-rm -f {source}
+rm -f {config_path}
+rm -f {legacy_enabled}
+rm -f {legacy_available}
 """
         
         stdout, stderr, code = await execute_ssh_command(self.nginx_host, command)

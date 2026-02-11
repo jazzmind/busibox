@@ -37,6 +37,7 @@
     - /etc/nginx/sites-available
     - /etc/nginx/sites-enabled
     - /etc/nginx/snippets
+    - /etc/nginx/app-locations
   tags: [nginx, nginx_install, nginx_configure]
 
 - name: Setup SSL certificates (discover from ssl/ or generate self-signed)

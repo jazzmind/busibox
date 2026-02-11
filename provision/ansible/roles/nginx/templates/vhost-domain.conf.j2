@@ -84,6 +84,10 @@ server {
 {% endfor %}
 {% endfor %}
 
+    # Dynamically deployed apps (managed by deploy-api at runtime)
+    # Location snippets are written here when apps are deployed via AI Portal
+    include /etc/nginx/app-locations/*.conf;
+
     # Health check endpoint (for deploy-api / admin system status)
     location = /health {
         default_type application/json;
