@@ -304,21 +304,10 @@ get_proxmox_service_status() {
             ;;
         000)
             # Connection failed - check if container is at least pingable
-            local network_base
-            case "$env" in
-                staging) network_base="10.96.201" ;;
-                production) network_base="10.96.200" ;;
-                *) network_base="10.96.201" ;;
-            esac
-            local container_id
-            container_id=$(get_service_container_id "$lookup_service" "$env" 2>/dev/null || echo "")
-            if [[ -n "$container_id" ]]; then
-                local ip
-                if [[ "$env" == "staging" ]]; then
-                    ip="${network_base}.$((container_id - 100))"
-                else
-                    ip="${network_base}.${container_id}"
-                fi
+            # Use get_service_ip for correct resolution (e.g. vllm uses prod when staging+use_production_vllm)
+            local ip
+            ip=$(get_service_ip "$lookup_service" "$env" "proxmox" 2>/dev/null || echo "")
+            if [[ -n "$ip" ]]; then
                 if ping -c 1 -W 1 "$ip" &>/dev/null 2>&1; then
                     echo "stopped"  # Container up but service not responding
                 else
@@ -466,11 +455,16 @@ show_services_status() {
                     unreachable) status_icon2="○" ; status_color2="${RED}" ;;
                     *)          status_icon2="?" ; status_color2="${DIM}" ;;
                 esac
-                printf "    ${status_color1}${status_icon1}${NC} %-18s ${DIM}%-10s${NC}  ${status_color2}${status_icon2}${NC} %-18s ${DIM}%s${NC}\n" \
-                    "$service1" "$status1" "$service2" "$status2"
+                local display1 display2
+                display1=$(get_service_display_name_for_env "$service1" "$(get_current_env)")
+                display2=$(get_service_display_name_for_env "$service2" "$(get_current_env)")
+                printf "    ${status_color1}${status_icon1}${NC} %-22s ${DIM}%-10s${NC}  ${status_color2}${status_icon2}${NC} %-22s ${DIM}%s${NC}\n" \
+                    "$display1" "$status1" "$display2" "$status2"
             else
                 # Single item on last row
-                printf "    ${status_color1}${status_icon1}${NC} %-18s ${DIM}%s${NC}\n" "$service1" "$status1"
+                local display1
+                display1=$(get_service_display_name_for_env "$service1" "$(get_current_env)")
+                printf "    ${status_color1}${status_icon1}${NC} %-22s ${DIM}%s${NC}\n" "$display1" "$status1"
             fi
             
             i=$((i+2))

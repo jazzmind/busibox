@@ -1702,8 +1702,16 @@ setup_proxmox_host_dns() {
     info "Setting up /etc/hosts on Proxmox host for service discovery..."
     
     local network_base="${NETWORK_BASE_OCTETS:-10.96.200}"
+    local vllm_ip="${NETWORK_BASE_OCTETS:-10.96.200}.208"
     if [[ "$ENVIRONMENT" == "staging" ]]; then
         network_base="${NETWORK_STAGING:-10.96.201}"
+        # Staging may use production vLLM (saves GPU memory)
+        local staging_vars="${REPO_ROOT:-.}/provision/ansible/inventory/staging/group_vars/all/00-main.yml"
+        if [[ -f "$staging_vars" ]] && grep -q "use_production_vllm: true" "$staging_vars" 2>/dev/null; then
+            vllm_ip="10.96.200.208"
+        else
+            vllm_ip="${network_base}.208"
+        fi
     fi
     
     # Marker to identify our entries
@@ -1733,10 +1741,11 @@ ${network_base}.202       agent-api agent agent-lxc
 
 # LLM Services
 ${network_base}.207       litellm litellm-lxc
-${network_base}.208       vllm vllm-lxc
+${vllm_ip}                vllm vllm-lxc
 
 # Embedded Services (share container with parent service)
-${network_base}.204       docs-api docs
+# docs-api runs on agent (202), not milvus (204)
+${network_base}.202       docs-api docs
 ${network_base}.210       deploy-api deploy
 ${network_base}.206       embedding-api embedding
 

@@ -193,6 +193,25 @@ get_service_display_name() {
     echo "${name:-$service}"
 }
 
+# Get service display name with env suffix (for vllm: "vllm (prod)" or "vllm (staging)" when in staging)
+# Usage: get_service_display_name_for_env "vllm" "staging"
+get_service_display_name_for_env() {
+    local service=$1
+    local env=${2:-production}
+    local base_name
+    base_name=$(get_service_display_name "$service")
+    
+    if [[ "$service" == "vllm" && "$env" == "staging" ]]; then
+        if _staging_uses_production_vllm; then
+            echo "vllm (prod)"
+        else
+            echo "vllm (staging)"
+        fi
+    else
+        echo "$base_name"
+    fi
+}
+
 # Get service hostname (DNS alias)
 # Usage: get_service_hostname "deploy_api"
 # Returns: deploy-api (matches /etc/hosts entries from internal_dns role)
@@ -223,6 +242,18 @@ get_service_hostname() {
     esac
 }
 
+# Check if staging uses production vLLM (reads from Ansible group_vars)
+# Usage: _staging_uses_production_vllm
+# Returns 0 if true, 1 if false. Requires REPO_ROOT or SCRIPT_DIR to locate vars.
+_staging_uses_production_vllm() {
+    local repo_root="${REPO_ROOT:-}"
+    if [[ -z "$repo_root" && -n "${_SERVICES_SCRIPT_DIR:-}" ]]; then
+        repo_root="$(cd "${_SERVICES_SCRIPT_DIR}/../.." && pwd)"
+    fi
+    local staging_vars="${repo_root}/provision/ansible/inventory/staging/group_vars/all/00-main.yml"
+    [[ -f "$staging_vars" ]] && grep -q "use_production_vllm: true" "$staging_vars" 2>/dev/null
+}
+
 # Get container IP for service
 # Usage: get_service_ip "authz" "staging" "proxmox"
 # 
@@ -231,6 +262,7 @@ get_service_hostname() {
 #
 # NOTE: The Proxmox host must have /etc/hosts configured with these entries.
 # Run 'make install SERVICE=internal_dns' or ensure hosts file is set up.
+# Special case: staging may use production vLLM (use_production_vllm: true) - use 10.96.200.208
 get_service_ip() {
     local service=$1
     local env=${2:-production}
@@ -240,6 +272,14 @@ get_service_ip() {
         # Docker uses localhost
         echo "localhost"
         return 0
+    fi
+    
+    # vLLM special case: staging often uses production vLLM (saves GPU memory)
+    if [[ "$service" == "vllm" && "$env" == "staging" ]]; then
+        if _staging_uses_production_vllm; then
+            echo "10.96.200.208"
+            return 0
+        fi
     fi
     
     # Proxmox: Use DNS hostname (resolved via /etc/hosts)
