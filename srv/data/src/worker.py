@@ -247,6 +247,81 @@ class IngestWorker:
     # Removed _log_step - now using self.history.log_step() directly
     # Removed _is_transient_error - now using self.error_handler.is_transient_error()
     
+    def _exchange_delegation_token(
+        self,
+        delegation_token: str,
+        user_id: str,
+        file_id: str,
+    ) -> Optional[str]:
+        """
+        Exchange a delegation token for a data-api scoped access token.
+        
+        Uses Zero Trust token exchange: the delegation token (created at upload
+        time) is exchanged for a short-lived data-api token. This ensures the
+        worker operates with proper user identity for RLS, decryption, etc.
+        
+        Args:
+            delegation_token: Delegation JWT from the job data
+            user_id: User ID for logging
+            file_id: File ID for logging
+            
+        Returns:
+            Access token string for data-api audience, or None if exchange fails
+        """
+        from busibox_common.auth import exchange_token_zero_trust
+        
+        authz_token_url = self.config.get("authz_token_url") or os.environ.get(
+            "AUTHZ_TOKEN_URL", ""
+        )
+        
+        if not authz_token_url:
+            logger.warning(
+                "AUTHZ_TOKEN_URL not configured, cannot exchange delegation token",
+                file_id=file_id,
+            )
+            return None
+        
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                result = loop.run_until_complete(
+                    exchange_token_zero_trust(
+                        subject_token=delegation_token,
+                        target_audience="data-api",
+                        user_id=user_id,
+                        authz_url=authz_token_url,
+                        use_cache=False,  # Don't cache worker tokens
+                    )
+                )
+                
+                if result:
+                    logger.info(
+                        "Delegation token exchanged for data-api token",
+                        file_id=file_id,
+                        user_id=user_id,
+                        expires_in=result.expires_in,
+                    )
+                    return result.access_token
+                else:
+                    logger.warning(
+                        "Delegation token exchange returned no result",
+                        file_id=file_id,
+                        user_id=user_id,
+                    )
+                    return None
+            finally:
+                loop.close()
+                
+        except Exception as e:
+            logger.warning(
+                "Failed to exchange delegation token (non-fatal, will process without user token)",
+                file_id=file_id,
+                user_id=user_id,
+                error=str(e),
+            )
+            return None
+    
     def _get_timeout_seconds(self, page_count: int) -> int:
         """Calculate timeout based on document size."""
         if page_count < 10:
@@ -572,6 +647,11 @@ class IngestWorker:
                     role_ids_str=role_ids_str,
                 )
         
+        # Extract delegation token for Zero Trust token exchange
+        # The delegation token was created at upload time so the worker can
+        # perform authenticated operations (decryption, etc.) on behalf of the user
+        delegation_token = job_data.get("delegation_token")
+        
         # Parse processing configuration if provided
         processing_config = {}
         processing_config_str = job_data.get("processing_config")
@@ -615,6 +695,16 @@ class IngestWorker:
         # Store on instance so helper methods can access it
         self._current_rls_context = WorkerRLSContext(user_id=user_id, role_ids=role_ids)
         
+        # Exchange delegation token for a data-api scoped user token
+        # This user_token can be used for decryption and other authenticated operations
+        user_token = None
+        if delegation_token:
+            user_token = self._exchange_delegation_token(
+                delegation_token=delegation_token,
+                user_id=user_id,
+                file_id=file_id,
+            )
+        
         try:
             logger.info(
                 "Processing job",
@@ -624,6 +714,7 @@ class IngestWorker:
                 trace_id=trace_id,
                 visibility=visibility,
                 role_count=len(role_ids) if role_ids else 0,
+                has_user_token=user_token is not None,
             )
             
             # Update status to parsing (first processing stage)
@@ -718,10 +809,12 @@ class IngestWorker:
             
             logger.debug("Downloading file from storage", file_id=file_id, storage_path=storage_path)
             download_start = time.time()
-            # Pass file_id, user_id, and role_ids for decryption
+            # Pass file_id, user_token, user_id, and role_ids for decryption
+            # user_token comes from delegation token exchange (Zero Trust)
             temp_file_path = self.file_service.download(
                 storage_path,
                 file_id=file_id,
+                user_token=user_token,
                 role_ids=role_ids,
                 user_id=user_id,
             )
