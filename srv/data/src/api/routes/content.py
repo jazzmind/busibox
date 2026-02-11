@@ -150,9 +150,14 @@ async def data_content(
         is_encrypted = False
         
         if encryption_client.enabled:
+            # Get user's JWT token from request context for keystore API calls
+            user_ctx = getattr(request.state, 'user_context', None)
+            user_token = user_ctx.token if user_ctx else None
+            
             content_to_store = await encryption_client.encrypt_for_upload(
                 file_id=file_id,
                 content=content_bytes,
+                user_token=user_token,
                 user_id=user_id,  # Personal files use user_id for key ownership
             )
             

@@ -500,15 +500,10 @@ async def check_service_health(
         
         # Determine nginx host based on environment
         # - NGINX_HOST env var (explicit override)
-        # - dev-nginx for development environment
-        # - nginx for production
-        nginx_host = os.getenv('NGINX_HOST')
-        if not nginx_host:
-            environment = os.getenv('ENVIRONMENT', os.getenv('NODE_ENV', 'development'))
-            if environment in ('development', 'dev', 'demo'):
-                nginx_host = 'dev-nginx'
-            else:
-                nginx_host = 'nginx'
+        # - In Docker: nginx is bundled inside core-apps container (hostname: nginx)
+        # - In Proxmox: nginx runs in its own container
+        # Default to 'nginx' which works for both Docker (via alias) and Proxmox
+        nginx_host = os.getenv('NGINX_HOST', 'nginx')
         
         # Check via nginx container (HTTPS with self-signed cert, verify=False like curl -k)
         url = f"https://{nginx_host}{health_path}"
@@ -563,7 +558,7 @@ async def check_service_health(
             'milvus': ('milvus', 9091, '/healthz', 'http', 'http'),
             
             # API services
-            'authz-api': ('authz-api', 8010, '/health', 'http', 'http'),
+            'authz-api': ('authz-api', 8010, '/health/live', 'http', 'http'),
             'deploy-api': ('deploy-api', 8011, '/health', 'http', 'http'),
             'data-api': ('data-api', 8002, '/health', 'http', 'http'),
             'search-api': ('search-api', 8003, '/health', 'http', 'http'),
