@@ -601,7 +601,7 @@ CREATE TABLE ingestion_chunks (
 ### Worker Process
 
 ```python
-# srv/ingest/src/worker.py
+# srv/data/src/worker.py
 
 import structlog
 from redis import Redis
@@ -748,18 +748,18 @@ class IngestionWorker:
 
 - name: Create ingest service directory
   file:
-    path: /srv/ingest
+    path: /srv/data
     state: directory
 
 - name: Copy source code
   copy:
-    src: "{{ playbook_dir }}/../../srv/ingest/"
-    dest: /srv/ingest/
+    src: "{{ playbook_dir }}/../../srv/data/"
+    dest: /srv/data/
 
 - name: Install Python dependencies
   pip:
-    requirements: /srv/ingest/requirements.txt
-    virtualenv: /srv/ingest/venv
+    requirements: /srv/data/requirements.txt
+    virtualenv: /srv/data/venv
 
 - name: Configure Redis
   template:

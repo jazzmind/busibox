@@ -66,6 +66,6 @@ The host-agent is necessary because MLX requires direct access to Apple Silicon 
 ## Operational Sources of Truth
 - **Provisioning**: `provision/pct/*.sh` + `vars.env`
 - **Configuration**: `provision/ansible/roles/*` group vars and templates
-- **Service code**: `srv/ingest`, `srv/search`, `srv/authz`, `srv/agent`
+- **Service code**: `srv/data` (formerly `srv/ingest`), `srv/search`, `srv/authz`, `srv/agent`
 
 See individual component documents for API contracts and pipeline details.

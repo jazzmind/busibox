@@ -267,7 +267,7 @@ Python services have hot-reload enabled. Edit files in `srv/` and changes apply 
 
 ```
 srv/authz/src/     → authz-api auto-reloads
-srv/ingest/src/    → ingest-api auto-reloads  
+srv/data/src/      → ingest-api auto-reloads (srv/ingest was renamed to srv/data)
 srv/search/src/    → search-api auto-reloads
 srv/agent/app/     → agent-api auto-reloads
 ```

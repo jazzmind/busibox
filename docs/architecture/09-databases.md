@@ -58,7 +58,7 @@ This architecture ensures:
 |---------|---------|----------|
 | Agent API | Alembic migrations | `srv/agent/alembic/` |
 | AuthZ | SchemaManager | `srv/authz/src/schema.py` |
-| Ingest | SchemaManager | `srv/ingest/src/schema.py` |
+| Ingest | SchemaManager | `srv/data/src/schema.py` (formerly `srv/ingest`) |
 | AI Portal | Prisma | `prisma/schema.prisma` |
 
 ### SchemaManager (AuthZ, Ingest)

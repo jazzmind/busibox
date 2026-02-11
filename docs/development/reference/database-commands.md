@@ -129,6 +129,6 @@ Services use the shared `busibox_common` library for schema management:
 
 - **Agent**: Alembic migrations in `srv/agent/alembic/`
 - **AuthZ**: SchemaManager in `srv/authz/src/schema.py`
-- **Ingest**: SchemaManager in `srv/ingest/src/schema.py`
+- **Ingest**: SchemaManager in `srv/data/src/schema.py`
 
 Schema is applied idempotently on every service startup.

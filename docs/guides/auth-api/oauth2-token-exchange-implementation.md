@@ -92,7 +92,7 @@ The internal access token contract was already defined in `busibox/srv/authz/src
 
 #### Ingest API ✅
 
-**Already implemented** in `busibox/srv/ingest/src/api/middleware/jwt_auth.py`:
+**Already implemented** in `busibox/srv/data/src/api/middleware/jwt_auth.py`:
 
 - JWKS-based validation using `PyJWKClient`
 - Validates `iss`, `aud`, `exp`, `nbf`

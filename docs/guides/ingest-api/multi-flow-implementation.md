@@ -17,7 +17,7 @@ Each document can now be processed with ALL applicable strategies simultaneously
 
 ### 1. Processing Strategy Framework ✅
 
-**File:** `srv/ingest/src/processors/processing_strategy.py`
+**File:** `srv/data/src/processors/processing_strategy.py`
 
 - `ProcessingStrategy` enum (SIMPLE, MARKER, COLPALI)
 - `StrategyConfig` dataclass with metadata for each strategy
@@ -34,7 +34,7 @@ Each document can now be processed with ALL applicable strategies simultaneously
 
 ### 2. Multi-Flow Processor ✅
 
-**File:** `srv/ingest/src/processors/multi_flow_processor.py`
+**File:** `srv/data/src/processors/multi_flow_processor.py`
 
 - `MultiFlowProcessor` class orchestrating parallel processing
 - Parallel execution using ThreadPoolExecutor
@@ -51,7 +51,7 @@ Each document can now be processed with ALL applicable strategies simultaneously
 
 ### 3. Comprehensive Testing ✅
 
-**File:** `srv/ingest/tests/test_multi_flow.py`
+**File:** `srv/data/tests/test_multi_flow.py`
 
 - 40+ test cases covering all functionality
 - Unit tests for strategy selection
@@ -71,7 +71,7 @@ Each document can now be processed with ALL applicable strategies simultaneously
 ### 4. ColPali Testing Suite ✅
 
 **Files:**
-- `srv/ingest/tests/test_colpali.py` - Python test suite
+- `srv/data/tests/test_colpali.py` - Python test suite
 - `scripts/test-colpali.sh` - Shell test script
 
 **Features:**
@@ -257,7 +257,7 @@ MAX_PARALLEL_STRATEGIES=3
 ### Run All Tests
 
 ```bash
-cd srv/ingest
+cd srv/data
 
 # Multi-flow tests
 pytest tests/test_multi_flow.py -v
@@ -287,10 +287,10 @@ RUN_PYTHON_TESTS=1 bash scripts/test-colpali.sh test
 
 ```bash
 # Multi-flow diagnostic
-python srv/ingest/tests/test_multi_flow.py
+python srv/data/tests/test_multi_flow.py
 
 # ColPali diagnostic
-python srv/ingest/tests/test_colpali.py
+python srv/data/tests/test_colpali.py
 ```
 
 ## Performance Benchmarks
@@ -331,7 +331,7 @@ python srv/ingest/tests/test_colpali.py
 - Update queries to filter by strategy
 
 **Files to Update:**
-- `srv/ingest/src/services/postgres_service.py`
+- `srv/data/src/services/postgres_service.py`
 - Database migration script
 
 ### 2. Worker Integration
@@ -345,7 +345,7 @@ python srv/ingest/tests/test_colpali.py
 - Update status reporting for multiple strategies
 
 **Files to Update:**
-- `srv/ingest/src/worker.py`
+- `srv/data/src/worker.py`
 
 ### 3. Milvus Multi-Strategy Support
 
@@ -357,7 +357,7 @@ python srv/ingest/tests/test_colpali.py
 - Enable cross-strategy comparison queries
 
 **Files to Update:**
-- `srv/ingest/src/services/milvus_service.py`
+- `srv/data/src/services/milvus_service.py`
 
 ### 4. API Updates
 
@@ -375,7 +375,7 @@ python srv/ingest/tests/test_colpali.py
 ## File Structure
 
 ```
-srv/ingest/
+srv/data/
 ├── src/
 │   └── processors/
 │       ├── processing_strategy.py       # ✅ Strategy framework
@@ -482,7 +482,7 @@ bash scripts/test-colpali.sh test
 ### 2. Run Multi-Flow Tests
 
 ```bash
-cd srv/ingest
+cd srv/data
 pytest tests/test_multi_flow.py -v
 pytest tests/test_colpali.py -v
 ```
@@ -589,15 +589,15 @@ if not successful:
 ## References
 
 ### Code
-- **Strategy framework:** `srv/ingest/src/processors/processing_strategy.py`
-- **Multi-flow processor:** `srv/ingest/src/processors/multi_flow_processor.py`
-- **ColPali embedder:** `srv/ingest/src/processors/colpali.py`
-- **PDF splitter:** `srv/ingest/src/processors/pdf_splitter.py`
+- **Strategy framework:** `srv/data/src/processors/processing_strategy.py`
+- **Multi-flow processor:** `srv/data/src/processors/multi_flow_processor.py`
+- **ColPali embedder:** `srv/data/src/processors/colpali.py`
+- **PDF splitter:** `srv/data/src/processors/pdf_splitter.py`
 
 ### Tests
-- **Multi-flow tests:** `srv/ingest/tests/test_multi_flow.py`
-- **ColPali tests:** `srv/ingest/tests/test_colpali.py`
-- **PDF splitting tests:** `srv/ingest/tests/test_pdf_splitting.py`
+- **Multi-flow tests:** `srv/data/tests/test_multi_flow.py`
+- **ColPali tests:** `srv/data/tests/test_colpali.py`
+- **PDF splitting tests:** `srv/data/tests/test_pdf_splitting.py`
 - **ColPali script:** `scripts/test-colpali.sh`
 
 ### Documentation

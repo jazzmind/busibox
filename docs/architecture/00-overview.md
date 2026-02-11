@@ -60,7 +60,7 @@ Busibox is a local-first LLM platform running on a single Proxmox host with isol
 - **Provisioning/Config**: Proxmox scripts in `provision/pct/`, Ansible roles in `provision/ansible/`.
 
 ## What Changed from Prior Docs
-- Ingestion now lives in its own service (`srv/ingest`) with internal-only API and Redis queue; upload/webhook logic was removed from the agent API stubs.
+- Ingestion now lives in its own service (`srv/data`; formerly `srv/ingest`) with internal-only API and Redis queue; upload/webhook logic was removed from the agent API stubs.
 - Search is a dedicated service (`srv/search`) with hybrid retrieval and partition-based authorization.
 - AuthZ is a standalone service (CT 210) issuing scoped JWTs for ingest and search; services accept legacy `X-User-Id` only for migration.
 - Agent API remains skeletal; RAG orchestration should call search + liteLLM rather than duplicate ingestion/search logic.

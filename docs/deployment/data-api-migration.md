@@ -40,8 +40,8 @@ This document describes the migration from `ingest-api` to `data-api`. The servi
 The migration adds new columns to `ingestion_files` and creates supporting tables:
 
 ```bash
-# Migration file
-srv/ingest/migrations/004_structured_data.sql
+# Migration file (srv/ingest was renamed to srv/data)
+srv/data/migrations/004_structured_data.sql
 ```
 
 **New columns in `ingestion_files`:**

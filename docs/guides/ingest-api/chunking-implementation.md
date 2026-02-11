@@ -159,7 +159,7 @@ for chunk in chunks:
 
 ```bash
 # Run all tests
-cd /srv/ingest
+cd /srv/data
 python -m pytest tests/test_chunker.py -v
 
 # Run specific test class

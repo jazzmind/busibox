@@ -18,7 +18,7 @@ The Search Service is a dedicated FastAPI application running in **milvus-lxc** 
 - **Scalability**: Search service can be scaled independently
 
 **Current state:**
-- Basic hybrid search exists in `srv/ingest/src/api/routes/search.py`
+- Basic hybrid search exists in `srv/data/src/api/routes/search.py`
 - Only dense vector search implemented (BM25 mentioned but not fully utilized)
 - No reranking, no highlighting, no semantic alignment visualization
 

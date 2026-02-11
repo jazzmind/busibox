@@ -32,7 +32,7 @@ published: true
   - Missing role permissions (`create` for shared upload, `read` for search).
 - **Ingestion stuck in queued**
   - Redis not reachable (`REDIS_HOST`), or consumer group missing.
-  - Worker errors: check `srv/ingest` worker logs; Milvus/MinIO connectivity.
+  - Worker errors: check `srv/data` worker logs; Milvus/MinIO connectivity.
   - Unsupported MIME type or oversized upload (defaults 100 MB).
 - **Search returns empty**
   - Partitions missing: ensure ingest wrote to `personal_*` or `role_*`.

@@ -41,7 +41,7 @@ This document provides an index of OpenAPI specifications for Busibox APIs and e
 - **File**: `docs/reference/ingest-api-openapi.yaml`
 - **Service**: Ingestion Service (ingest-lxc)
 - **Port**: 8002
-- **Implementation**: `srv/ingest/src/api/`
+- **Implementation**: `srv/data/src/api/`
 - **Description**: Document ingestion and processing API with role-based access control
 
 **Key Features**:
@@ -327,7 +327,7 @@ HTTP status codes:
 
 - **Architecture**: `docs/architecture/architecture.md` - System design
 - **Agent API Implementation**: `srv/agent/README.md`
-- **Ingest API Implementation**: `srv/ingest/README.md`
+- **Ingest API Implementation**: `srv/data/README.md`
 - **Search API Implementation**: `srv/search/README.md`
 - **Testing**: `TESTING.md` - API testing procedures
 - **Deployment**: `docs/deployment/` - Service deployment guides

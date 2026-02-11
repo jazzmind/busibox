@@ -36,7 +36,7 @@ This ensures tests never pollute production data. The `make test` commands autom
 ### Ingestion Service
 - Unit/integration (inside repo or container):
   ```bash
-  cd srv/ingest
+  cd srv/data
   pip install -r requirements.txt
   pytest tests/api     # API routes incl. upload/status/search
   pytest tests/integration -m "not slow"  # pipeline coverage
