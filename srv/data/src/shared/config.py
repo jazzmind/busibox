@@ -88,6 +88,10 @@ class Config:
         # AI Portal configuration (for library resolution)
         self.ai_portal_url = os.getenv("AI_PORTAL_URL", "http://ai-portal:3000")
         
+        # AuthZ configuration (for Zero Trust token exchange and delegation tokens)
+        self.authz_base_url = os.getenv("AUTHZ_BASE_URL", "")
+        self.authz_token_url = os.getenv("AUTHZ_TOKEN_URL", "")
+        
         # Processing configuration
         self.chunk_size_min = int(os.getenv("CHUNK_SIZE_MIN", "400"))
         self.chunk_size_max = int(os.getenv("CHUNK_SIZE_MAX", "800"))
@@ -151,5 +155,7 @@ class Config:
             "chunk_overlap_pct": self.chunk_overlap_pct,
             "temp_dir": "/tmp/data",
             "ai_portal_url": self.ai_portal_url,
+            "authz_base_url": self.authz_base_url,
+            "authz_token_url": self.authz_token_url,
         }
 

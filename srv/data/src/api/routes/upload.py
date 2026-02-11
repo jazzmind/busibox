@@ -11,9 +11,11 @@ Handles:
 """
 
 import json
+import os
 import uuid
 from typing import List, Optional
 
+import httpx
 import structlog
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile, status
 from fastapi.responses import JSONResponse
@@ -28,6 +30,78 @@ from shared.config import Config
 logger = structlog.get_logger()
 
 router = APIRouter()
+
+
+async def _create_delegation_token_for_processing(user_token: str, file_id: str) -> Optional[str]:
+    """
+    Create a delegation token for the background worker to process this file.
+    
+    The delegation token preserves the user's identity and scopes so the worker
+    can perform Zero Trust token exchanges for downstream operations (decryption,
+    RLS-enforced DB queries, etc.) even after the upload request completes.
+    
+    Args:
+        user_token: The user's current JWT from the upload request
+        file_id: File ID for logging/naming the delegation
+        
+    Returns:
+        Delegation JWT token string, or None if creation fails (non-fatal)
+    """
+    authz_base_url = os.getenv("AUTHZ_BASE_URL", "")
+    if not authz_base_url:
+        logger.warning(
+            "AUTHZ_BASE_URL not configured, cannot create delegation token for worker",
+            file_id=file_id,
+        )
+        return None
+    
+    delegation_url = f"{authz_base_url}/oauth/delegation"
+    
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                delegation_url,
+                json={
+                    "subject_token": user_token,
+                    "name": f"data-processing:{file_id[:8]}",
+                    "scopes": [],  # Empty = inherit all user's scopes from RBAC
+                    "expires_in_seconds": 86400,  # 24 hours for processing
+                },
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                delegation_token = data.get("delegation_token")
+                if delegation_token:
+                    logger.info(
+                        "Delegation token created for file processing",
+                        file_id=file_id,
+                        jti=data.get("jti"),
+                        expires_in=data.get("expires_in"),
+                    )
+                    return delegation_token
+                else:
+                    logger.warning(
+                        "No delegation_token in response",
+                        file_id=file_id,
+                    )
+                    return None
+            else:
+                logger.warning(
+                    "Failed to create delegation token for processing",
+                    file_id=file_id,
+                    status_code=response.status_code,
+                    response=response.text[:200],
+                )
+                return None
+                
+    except Exception as e:
+        logger.warning(
+            "Error creating delegation token for processing (non-fatal)",
+            file_id=file_id,
+            error=str(e),
+        )
+        return None
 
 # Scope dependencies
 require_data_write = ScopeChecker("data.write")
@@ -355,6 +429,13 @@ async def upload_file(
         is_image = file.content_type and file.content_type.startswith("image/")
         
         if not is_video and not is_image:
+            # Create a delegation token so the worker can perform Zero Trust
+            # token exchanges on behalf of this user during processing
+            delegation_token = await _create_delegation_token_for_processing(
+                user_token=user_token,
+                file_id=file_id,
+            ) if user_token else None
+            
             # Queue job in Redis with processing config and role information for non-video files
             await redis_service.ensure_consumer_group()
             await redis_service.add_job(
@@ -366,6 +447,7 @@ async def upload_file(
                 processing_config=parsed_processing_config,
                 visibility=visibility,
                 role_ids=parsed_role_ids if visibility == "shared" else None,
+                delegation_token=delegation_token,
             )
             
             logger.info(

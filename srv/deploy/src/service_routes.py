@@ -505,14 +505,25 @@ async def check_service_health(
         # Default to 'nginx' which works for both Docker (via alias) and Proxmox
         nginx_host = os.getenv('NGINX_HOST', 'nginx')
         
+        # When NGINX_PUBLIC_URL is set (e.g. https://staging.ai.jaycashman.com), use Host header
+        # so the request hits the domain server block (which has /health and proper app routing).
+        # Without this, Host: nginx hits the default server which may route to wrong app.
+        nginx_public_url = os.getenv('NGINX_PUBLIC_URL', '')
+        headers = {}
+        if nginx_public_url:
+            from urllib.parse import urlparse
+            parsed = urlparse(nginx_public_url)
+            if parsed.netloc:
+                headers['Host'] = parsed.netloc
+        
         # Check via nginx container (HTTPS with self-signed cert, verify=False like curl -k)
         url = f"https://{nginx_host}{health_path}"
-        logger.info(f"Checking nginx-proxied app health: {url}")
+        logger.info(f"Checking nginx-proxied app health: {url}" + (f" (Host: {headers.get('Host', '')})" if headers else ""))
         
         try:
             # verify=False to ignore self-signed SSL cert (equivalent to curl -k)
             async with httpx.AsyncClient(verify=False) as client:
-                response = await client.get(url, timeout=5.0)
+                response = await client.get(url, headers=headers or None, timeout=5.0)
                 healthy = response.status_code == 200
                 logger.info(f"Nginx app health check for {service}: {healthy} (status: {response.status_code})")
                 return {
@@ -559,7 +570,8 @@ async def check_service_health(
             
             # API services
             'authz-api': ('authz-api', 8010, '/health/live', 'http', 'http'),
-            'deploy-api': ('deploy-api', 8011, '/health', 'http', 'http'),
+            # deploy-api runs on authz container - use localhost for self-check
+            'deploy-api': ('127.0.0.1', 8011, '/health/live', 'http', 'http'),
             'data-api': ('data-api', 8002, '/health', 'http', 'http'),
             'search-api': ('search-api', 8003, '/health', 'http', 'http'),
             'agent-api': ('agent-api', 8000, '/health', 'http', 'http'),
@@ -674,11 +686,20 @@ async def check_service_health(
         # HTTP/HTTPS health check
         if check_type == 'http':
             url = f"{protocol}://{hostname}:{port}{endpoint}"
-            logger.info(f"Checking health at {url}")
+            # For nginx, use Host header from NGINX_PUBLIC_URL so request hits domain server block
+            http_headers = {}
+            if service == 'nginx':
+                nginx_public_url = os.getenv('NGINX_PUBLIC_URL', '')
+                if nginx_public_url:
+                    from urllib.parse import urlparse
+                    parsed = urlparse(nginx_public_url)
+                    if parsed.netloc:
+                        http_headers['Host'] = parsed.netloc
+            logger.info(f"Checking health at {url}" + (f" (Host: {http_headers.get('Host', '')})" if http_headers else ""))
             
             try:
                 async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
-                    response = await client.get(url)
+                    response = await client.get(url, headers=http_headers or None)
                     # 200 = healthy, 401/403 = service is up but needs auth
                     healthy = response.status_code in (200, 401, 403)
                     logger.info(f"HTTP health check for {service} at {url}: status={response.status_code}, healthy={healthy}")

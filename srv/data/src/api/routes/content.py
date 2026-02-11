@@ -22,6 +22,7 @@ from api.services.postgres import PostgresService
 from api.services.redis_service import RedisService
 from api.services.library_service import LibraryService
 from api.services.encryption_client import EncryptionClient
+from api.routes.upload import _create_delegation_token_for_processing
 from shared.config import Config
 
 logger = structlog.get_logger()
@@ -210,6 +211,15 @@ async def data_content(
         )
         print(f"[content] File record created successfully: {file_id}, library_id={library_id}")
         
+        # Create a delegation token so the worker can perform Zero Trust
+        # token exchanges on behalf of this user during processing
+        user_ctx = getattr(request.state, 'user_context', None)
+        content_user_token = user_ctx.token if user_ctx else None
+        delegation_token = await _create_delegation_token_for_processing(
+            user_token=content_user_token,
+            file_id=file_id,
+        ) if content_user_token else None
+        
         # Queue for processing using add_job method
         await redis_service.add_job(
             file_id=file_id,
@@ -219,6 +229,7 @@ async def data_content(
             original_filename=filename,
             metadata=doc_metadata,
             visibility="personal",
+            delegation_token=delegation_token,
         )
         
         logger.info(

@@ -68,6 +68,7 @@ class RedisService:
         processing_config: Optional[Dict] = None,
         visibility: str = "personal",
         role_ids: Optional[list] = None,
+        delegation_token: Optional[str] = None,
     ) -> str:
         """
         Add job to Redis Streams queue.
@@ -82,6 +83,8 @@ class RedisService:
             processing_config: Optional processing configuration dict
             visibility: Document visibility ('personal' or 'shared')
             role_ids: List of role UUIDs for shared documents
+            delegation_token: Delegation JWT for worker to use for Zero Trust
+                             token exchange during background processing
         
         Returns:
             Message ID (stream entry ID)
@@ -108,6 +111,9 @@ class RedisService:
         
         if role_ids:
             job_data["role_ids"] = json.dumps(role_ids)
+        
+        if delegation_token:
+            job_data["delegation_token"] = delegation_token
         
         try:
             message_id = await self.client.xadd(

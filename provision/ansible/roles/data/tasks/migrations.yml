@@ -121,6 +121,38 @@
     msg: "{{ 'Cleanup stage migration applied successfully' if (cleanup_migration_result.changed | default(false)) else ('Cleanup migration skipped - file not found' if not cleanup_migration_file.stat.exists else 'Cleanup stage migration already applied') }}"
   tags: [data, data_migrations]
 
+# Processing history columns migration (step_name, message, metadata, created_at)
+- name: Check if processing_history columns migration file exists
+  stat:
+    path: /srv/data/migrations/add_processing_history_columns.sql
+  register: processing_history_migration_file
+  tags: [data, data_migrations]
+
+- name: Check if processing_history step_name column exists
+  shell: |
+    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -tAc \
+    "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='processing_history' AND column_name='step_name');"
+  register: processing_history_migration_check
+  changed_when: false
+  failed_when: false
+  when: processing_history_migration_file.stat.exists
+  tags: [data, data_migrations]
+
+- name: Apply processing_history columns migration
+  shell: |
+    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -f /srv/data/migrations/add_processing_history_columns.sql
+  when:
+    - processing_history_migration_file.stat.exists
+    - processing_history_migration_check.stdout is defined
+    - processing_history_migration_check.stdout != 't'
+  register: processing_history_migration_result
+  tags: [data, data_migrations]
+
+- name: Display processing_history migration status
+  debug:
+    msg: "{{ 'Processing history columns migration applied' if (processing_history_migration_result.changed | default(false)) else ('Processing history migration skipped - file not found' if not processing_history_migration_file.stat.exists else 'Processing history columns already exist') }}"
+  tags: [data, data_migrations]
+
 # Note: All migrations below check if the SQL file exists before attempting to apply
 # This allows the role to work even if migration files haven't been created yet
 

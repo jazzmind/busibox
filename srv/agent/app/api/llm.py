@@ -831,6 +831,35 @@ async def save_provider_key(
     import os
     os.environ[env_var] = request.api_key
     
+    # Auto-register sora-2 video model when OpenAI key is saved
+    if provider == "openai":
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                sora_entry = {
+                    "model_name": "sora-2",
+                    "litellm_params": {
+                        "model": "openai/sora-2",
+                    },
+                    "model_info": {
+                        "description": "OpenAI Sora-2 video generation",
+                    },
+                }
+                resp = await client.post(
+                    f"{base_url}/model/new",
+                    headers=headers,
+                    json=sora_entry,
+                )
+                if resp.status_code == 200:
+                    logger.info("Auto-registered sora-2 video model in LiteLLM")
+                else:
+                    # 409 or other - model may already exist, that's fine
+                    logger.debug(
+                        f"sora-2 model registration returned {resp.status_code}: "
+                        f"{resp.text[:200]}"
+                    )
+        except Exception as e:
+            logger.warning(f"Failed to auto-register sora-2 model: {e}")
+    
     return {
         "success": True,
         "provider": provider,
@@ -860,27 +889,197 @@ async def list_provider_keys(
     return KeysResponse(providers=providers_info)
 
 
-@router.get("/keys/openai-for-video")
-async def get_openai_key_for_video(
+# =============================================================================
+# Video Generation Proxy  (AI Portal -> Agent API -> LiteLLM -> OpenAI)
+# =============================================================================
+
+class VideoCreateRequest(BaseModel):
+    """Request to create a video via LiteLLM/OpenAI Sora."""
+    model: str = Field("sora-2", description="Video model name")
+    prompt: str = Field(..., description="Text prompt for video generation")
+    seconds: str = Field(..., description="Duration in seconds (e.g. '4', '8', '12')")
+    size: str = Field(..., description="Resolution (e.g. '1920x1080')")
+    input_reference_base64: Optional[str] = Field(
+        None, description="Base64-encoded reference image (will be converted to file upload)"
+    )
+    input_reference_filename: Optional[str] = Field(
+        None, description="Filename for the reference image"
+    )
+
+
+@router.post("/videos/create")
+async def create_video(
+    request: VideoCreateRequest,
     principal: Principal = Depends(get_principal),
 ) -> Dict[str, Any]:
     """
-    Return the OpenAI API key for server-side video generation.
-    
-    Used by AI Portal when OPENAI_API_KEY is not in its env (e.g. when key was
-    configured via AI Models UI and stored in LiteLLM, not in vault).
-    Admin only. The key is returned over HTTPS to the calling service.
+    Create a video generation job via LiteLLM (proxied to OpenAI Sora).
+
+    Any authenticated user can call this (not admin-only).
+    The OpenAI API key is managed by LiteLLM -- it never leaves this service.
     """
-    _require_admin(principal)
-    
-    api_key = await _get_api_key_for_provider("openai")
-    if not api_key:
+    base_url = _get_litellm_base_url()
+    headers = _get_litellm_headers()
+
+    try:
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            # Build multipart form if reference image is provided,
+            # otherwise use JSON.
+            if request.input_reference_base64:
+                import base64 as b64mod
+                img_bytes = b64mod.b64decode(request.input_reference_base64)
+                fname = request.input_reference_filename or f"reference-{id(request)}.jpg"
+
+                # Multipart: LiteLLM forwards to OpenAI /v1/videos
+                files = {
+                    "input_reference": (fname, img_bytes, "image/jpeg"),
+                }
+                data = {
+                    "model": request.model,
+                    "prompt": request.prompt,
+                    "seconds": request.seconds,
+                    "size": request.size,
+                }
+                # Remove Content-Type from headers so httpx sets multipart boundary
+                mp_headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
+                resp = await client.post(
+                    f"{base_url}/v1/videos",
+                    headers=mp_headers,
+                    data=data,
+                    files=files,
+                )
+            else:
+                body = {
+                    "model": request.model,
+                    "prompt": request.prompt,
+                    "seconds": request.seconds,
+                    "size": request.size,
+                }
+                resp = await client.post(
+                    f"{base_url}/v1/videos",
+                    headers=headers,
+                    json=body,
+                )
+
+            if not resp.is_success:
+                error_text = resp.text[:1000]
+                logger.error(f"LiteLLM /videos create failed {resp.status_code}: {error_text}")
+                raise HTTPException(
+                    status_code=resp.status_code,
+                    detail=f"Video creation failed: {error_text}",
+                )
+            return resp.json()
+    except HTTPException:
+        raise
+    except httpx.ConnectError:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="OpenAI API key not available. Configure it in Admin Settings > AI Models.",
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Cannot connect to LiteLLM service for video generation",
         )
-    
-    return {"api_key": api_key}
+    except Exception as e:
+        logger.error(f"Video create proxy failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        )
+
+
+@router.get("/videos/{video_id}")
+async def get_video_status(
+    video_id: str,
+    principal: Principal = Depends(get_principal),
+) -> Dict[str, Any]:
+    """
+    Retrieve video status from LiteLLM (proxied to OpenAI).
+
+    Any authenticated user can call this.
+    """
+    base_url = _get_litellm_base_url()
+    headers = _get_litellm_headers()
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(
+                f"{base_url}/v1/videos/{video_id}",
+                headers=headers,
+            )
+            if not resp.is_success:
+                error_text = resp.text[:500]
+                logger.error(f"LiteLLM /videos/{video_id} failed {resp.status_code}: {error_text}")
+                raise HTTPException(
+                    status_code=resp.status_code,
+                    detail=f"Video status check failed: {error_text}",
+                )
+            return resp.json()
+    except HTTPException:
+        raise
+    except httpx.ConnectError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Cannot connect to LiteLLM service",
+        )
+    except Exception as e:
+        logger.error(f"Video status proxy failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        )
+
+
+@router.get("/videos/{video_id}/content")
+async def get_video_content(
+    video_id: str,
+    principal: Principal = Depends(get_principal),
+):
+    """
+    Stream video content bytes from LiteLLM (proxied to OpenAI).
+
+    Returns the raw video binary. Uses StreamingResponse for memory efficiency.
+    Any authenticated user can call this.
+    """
+    base_url = _get_litellm_base_url()
+    headers = _get_litellm_headers()
+
+    async def _stream():
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            async with client.stream(
+                "GET",
+                f"{base_url}/v1/videos/{video_id}/content",
+                headers=headers,
+            ) as resp:
+                if not resp.is_success:
+                    error_text = ""
+                    async for chunk in resp.aiter_bytes():
+                        error_text += chunk.decode("utf-8", errors="replace")
+                    logger.error(
+                        f"LiteLLM /videos/{video_id}/content failed "
+                        f"{resp.status_code}: {error_text[:500]}"
+                    )
+                    raise HTTPException(
+                        status_code=resp.status_code,
+                        detail=f"Video content download failed: {error_text[:500]}",
+                    )
+                async for chunk in resp.aiter_bytes():
+                    yield chunk
+
+    try:
+        return StreamingResponse(
+            _stream(),
+            media_type="video/mp4",
+        )
+    except HTTPException:
+        raise
+    except httpx.ConnectError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Cannot connect to LiteLLM service",
+        )
+    except Exception as e:
+        logger.error(f"Video content proxy failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        )
 
 
 # =============================================================================

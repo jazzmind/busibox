@@ -237,12 +237,15 @@ def get_data_schema() -> SchemaManager:
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             file_id UUID NOT NULL REFERENCES data_files(file_id) ON DELETE CASCADE,
             stage VARCHAR(50) NOT NULL,
+            step_name VARCHAR(100),
             status VARCHAR(20) NOT NULL DEFAULT 'started' CHECK (status IN ('started', 'completed', 'failed', 'skipped')),
+            message TEXT,
+            error_message TEXT,
+            metadata JSONB DEFAULT '{}',
+            duration_ms INTEGER,
             started_at TIMESTAMP NOT NULL DEFAULT NOW(),
             completed_at TIMESTAMP,
-            duration_ms INTEGER,
-            details JSONB DEFAULT '{}',
-            error_message TEXT
+            created_at TIMESTAMPTZ DEFAULT NOW()
         )
     """)
     
