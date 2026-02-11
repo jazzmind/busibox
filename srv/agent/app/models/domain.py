@@ -38,6 +38,10 @@ class AgentDefinition(Base):
     scopes: Mapped[list] = mapped_column(JSON, default=list)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_builtin: Mapped[bool] = mapped_column(Boolean, default=False)
+    allow_frontier_fallback: Mapped[bool] = mapped_column(
+        Boolean, default=False,
+        comment="Allow automatic fallback to frontier cloud model when context window is exceeded"
+    )
     created_by: Mapped[Optional[str]] = mapped_column(String(255))
     version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)

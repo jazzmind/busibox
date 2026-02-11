@@ -216,6 +216,7 @@ class AgentConfig:
     max_iterations: int = 5
     synthesis_prompt: Optional[str] = None  # Override default synthesis prompt
     max_tokens: Optional[int] = None  # Max tokens for synthesis (None = model default, no limit)
+    allow_frontier_fallback: bool = False  # Allow LiteLLM to fall back to frontier model on context overflow
     
     # Context compression settings
     enable_history_compression: bool = True  # Whether to compress long conversation history
@@ -889,6 +890,10 @@ class BaseStreamingAgent(StreamingAgent):
             if self.config.max_tokens is not None:
                 model_settings["max_tokens"] = self.config.max_tokens
             
+            # Disable LiteLLM context_window_fallbacks unless agent opts in
+            if not self.config.allow_frontier_fallback:
+                model_settings.setdefault("extra_body", {})["disable_fallbacks"] = True
+            
             # Create agent without tools for pure conversation
             agent = Agent(
                 model=self.synthesis_model,
@@ -918,6 +923,10 @@ class BaseStreamingAgent(StreamingAgent):
         model_settings = {}
         if self.config.max_tokens is not None:
             model_settings["max_tokens"] = self.config.max_tokens
+        
+        # Disable LiteLLM context_window_fallbacks unless agent opts in
+        if not self.config.allow_frontier_fallback:
+            model_settings.setdefault("extra_body", {})["disable_fallbacks"] = True
         
         # Create agent with tools
         agent = Agent(
@@ -1254,6 +1263,7 @@ def create_agent_from_definition(definition: Any) -> BaseStreamingAgent:
         execution_mode=execution_mode,
         tool_strategy=tool_strategy,
         max_iterations=workflows.get("max_iterations", 5),
+        allow_frontier_fallback=getattr(definition, 'allow_frontier_fallback', False),
     )
     
     # Check for predefined pipeline

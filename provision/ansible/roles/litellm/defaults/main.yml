@@ -46,6 +46,12 @@ litellm_num_retries: 2
 # This is the backend request timeout, not the SSE streaming timeout
 litellm_timeout: 600
 litellm_fallbacks: []
+# Context window fallbacks - automatically retry with a larger model when context is exceeded.
+# Agents must opt in via allow_frontier_fallback; others send disable_fallbacks=true.
+litellm_context_window_fallbacks:
+  - {"agent": ["frontier"]}
+  - {"tool_calling": ["frontier"]}
+  - {"research": ["frontier"]}
 
 # General Settings
 litellm_drop_params: true

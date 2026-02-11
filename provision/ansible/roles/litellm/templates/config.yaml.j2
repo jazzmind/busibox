@@ -35,6 +35,9 @@ router_settings:
 {% if litellm_fallbacks | length > 0 %}
   fallbacks: {{ litellm_fallbacks | to_json }}
 {% endif %}
+{% if litellm_context_window_fallbacks | default([]) | length > 0 %}
+  context_window_fallbacks: {{ litellm_context_window_fallbacks | to_json }}
+{% endif %}
 
 litellm_settings:
   drop_params: {{ litellm_drop_params | lower }}

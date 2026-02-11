@@ -40,6 +40,10 @@ class AgentDefinitionCreate(BaseModel):
     workflows: Optional[Dict[str, Any]] = None
     scopes: List[str] = Field(default_factory=list)
     is_active: bool = True
+    allow_frontier_fallback: bool = Field(
+        default=False,
+        description="Allow automatic fallback to frontier cloud model when context window is exceeded. Only enable for non-sensitive data."
+    )
     context_compression: Optional[ContextCompressionConfig] = Field(
         default_factory=ContextCompressionConfig,
         description="Configuration for conversation history compression"
@@ -68,6 +72,7 @@ class AgentDefinitionUpdate(BaseModel):
     workflows: Optional[Dict[str, Any]] = None
     scopes: Optional[List[str]] = None
     is_active: Optional[bool] = None
+    allow_frontier_fallback: Optional[bool] = None
 
 
 class ToolDefinitionCreate(BaseModel):

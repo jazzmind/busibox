@@ -185,6 +185,11 @@ def generate_litellm_config_from_registry(
         'router_settings': {
             'enable_cache': True,
             'timeout': 120,
+            'context_window_fallbacks': [
+                {"agent": ["frontier"]},
+                {"tool_calling": ["frontier"]},
+                {"research": ["frontier"]},
+            ],
         },
         'litellm_settings': {
             'drop_params': True,
