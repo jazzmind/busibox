@@ -539,6 +539,7 @@ async def get_file_metadata(fileId: str, request: Request):
                     "mimeType": file_row["mime_type"],
                     "sizeBytes": file_row["size_bytes"],
                     "contentHash": file_row["content_hash"],
+                    "visibility": file_row.get("visibility", "personal"),
                     "documentType": file_row["document_type"],
                     "primaryLanguage": file_row["primary_language"],
                     "detectedLanguages": file_row["detected_languages"],

@@ -15,6 +15,9 @@ Specific agents extend this class and only define their unique aspects:
 """
 
 import asyncio
+import functools
+import inspect
+import json
 import logging
 import os
 from abc import abstractmethod
@@ -55,6 +58,112 @@ def _ensure_openai_env():
         base_url=str(settings.litellm_base_url),
         api_key=settings.litellm_api_key,
     )
+
+
+# Maximum characters for a single tool result before truncation.
+# ~2000 tokens at ~4 chars/token. Prevents context window overflow
+# when tools return large datasets (e.g. query_data with many records).
+MAX_TOOL_RESULT_CHARS = 8000
+
+
+def _truncate_tool_result(result: Any) -> Any:
+    """
+    Truncate a tool result if its serialized form exceeds MAX_TOOL_RESULT_CHARS.
+    
+    For results with a 'records' list (e.g. QueryDataOutput), progressively
+    removes records until the result fits. Adds a _truncated flag and guidance
+    note so the LLM knows to use select/where/limit to narrow queries.
+    
+    Returns the original result if it's small enough, or a truncated dict.
+    """
+    try:
+        if isinstance(result, BaseModel):
+            serialized = result.model_dump_json()
+            if len(serialized) <= MAX_TOOL_RESULT_CHARS:
+                return result
+            
+            # Try to truncate records-based results
+            if hasattr(result, 'records') and result.records:
+                data = result.model_dump()
+                total = data.get('total', len(data.get('records', [])))
+                records = data.get('records', [])
+                original_count = len(records)
+                
+                # Progressively remove records until under limit
+                while len(json.dumps(data, default=str)) > MAX_TOOL_RESULT_CHARS and records:
+                    records.pop()
+                
+                data['records'] = records
+                data['_truncated'] = True
+                data['_note'] = (
+                    f"Results truncated to {len(records)} of {total} total records "
+                    f"(originally fetched {original_count}). "
+                    f"Use 'select' to fetch only needed fields, 'where' to filter, "
+                    f"or reduce 'limit' to avoid truncation."
+                )
+                logger.info(
+                    f"Tool result truncated: {original_count} -> {len(records)} records "
+                    f"({len(serialized)} -> {len(json.dumps(data, default=str))} chars)"
+                )
+                return data
+            
+            # For non-records results, truncate the serialized string
+            data = result.model_dump()
+            serialized = json.dumps(data, default=str)
+            if len(serialized) > MAX_TOOL_RESULT_CHARS:
+                truncated_str = serialized[:MAX_TOOL_RESULT_CHARS]
+                logger.info(f"Tool result string-truncated: {len(serialized)} -> {MAX_TOOL_RESULT_CHARS} chars")
+                return {
+                    '_truncated': True,
+                    '_note': 'Result was too large and has been truncated.',
+                    'data': truncated_str,
+                }
+        
+        # Handle dict results
+        elif isinstance(result, dict):
+            serialized = json.dumps(result, default=str)
+            if len(serialized) > MAX_TOOL_RESULT_CHARS:
+                if 'records' in result and isinstance(result.get('records'), list):
+                    total = result.get('total', len(result['records']))
+                    records = list(result['records'])
+                    original_count = len(records)
+                    data = dict(result)
+                    while len(json.dumps(data, default=str)) > MAX_TOOL_RESULT_CHARS and records:
+                        records.pop()
+                    data['records'] = records
+                    data['_truncated'] = True
+                    data['_note'] = (
+                        f"Results truncated to {len(records)} of {total} total records. "
+                        f"Use 'select', 'where', or smaller 'limit'."
+                    )
+                    return data
+        
+        return result
+    except Exception as e:
+        logger.warning(f"Failed to truncate tool result: {e}")
+        return result
+
+
+def _wrap_tool_with_truncation(tool_func: Callable) -> Callable:
+    """
+    Wrap a pydantic-ai tool function so its return value is truncated
+    if it exceeds MAX_TOOL_RESULT_CHARS.
+    
+    Preserves the original function's signature, annotations, and metadata
+    so pydantic-ai can introspect it correctly.
+    """
+    @functools.wraps(tool_func)
+    async def wrapper(*args, **kwargs):
+        result = await tool_func(*args, **kwargs)
+        return _truncate_tool_result(result)
+    
+    # Preserve the full signature for pydantic-ai's introspection.
+    # functools.wraps copies __name__, __doc__, __module__, __qualname__,
+    # __dict__, and __wrapped__, but pydantic-ai also reads __signature__
+    # and __annotations__ to discover tool parameters.
+    wrapper.__signature__ = inspect.signature(tool_func)
+    wrapper.__annotations__ = getattr(tool_func, '__annotations__', {})
+    return wrapper
 
 
 class ExecutionMode(str, Enum):
@@ -763,12 +872,13 @@ class BaseStreamingAgent(StreamingAgent):
         from pydantic_ai import Agent
         from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, UserPromptPart, TextPart
         
-        # Get tool functions for this agent
+        # Get tool functions for this agent, wrapped with result truncation
+        # to prevent large tool outputs from exceeding the LLM context window
         tools = []
         for tool_name in self.config.tools:
             tool_func = ToolRegistry.get(tool_name)
             if tool_func:
-                tools.append(tool_func)
+                tools.append(_wrap_tool_with_truncation(tool_func))
         
         if not tools:
             # No tools configured - run as conversational agent without tool capabilities
