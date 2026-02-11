@@ -269,7 +269,7 @@ get_proxmox_service_status() {
             postgres|pg) ip="${network_base}.203" ;;
             minio|files) ip="${network_base}.205" ;;
             milvus) ip="${network_base}.204" ;;
-            agent|agent-api) ip="${network_base}.202" ;;
+            agent|agent-api|docs-api|docs) ip="${network_base}.202" ;;
             ingest|data-api|data) ip="${network_base}.206" ;;
             authz|authz-api) ip="${network_base}.210" ;;
             core-apps|apps) ip="${network_base}.201" ;;
