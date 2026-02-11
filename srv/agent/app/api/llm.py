@@ -82,8 +82,12 @@ class HealthResponse(BaseModel):
 
 class ProviderKeyRequest(BaseModel):
     """Request to save a cloud provider API key."""
-    provider: str = Field(..., description="Provider name: openai, anthropic")
-    api_key: str = Field(..., min_length=1, description="API key for the provider")
+    provider: str = Field(..., description="Provider name: openai, anthropic, bedrock")
+    api_key: str = Field(default="", description="API key for the provider (or access_key:secret_key for bedrock)")
+    # Bedrock-specific fields (alternative to api_key)
+    aws_access_key_id: Optional[str] = Field(default=None, description="AWS Access Key ID (Bedrock)")
+    aws_secret_access_key: Optional[str] = Field(default=None, description="AWS Secret Access Key (Bedrock)")
+    aws_region: Optional[str] = Field(default=None, description="AWS region (Bedrock, defaults to us-east-1)")
 
 
 class ProviderKeyInfo(BaseModel):
@@ -132,7 +136,7 @@ class PurposeMappingUpdate(BaseModel):
 # =============================================================================
 
 # Provider API base URLs for fetching live model lists
-CLOUD_PROVIDER_CONFIG: Dict[str, Dict[str, str]] = {
+CLOUD_PROVIDER_CONFIG: Dict[str, Dict[str, Any]] = {
     "openai": {
         "models_url": "https://api.openai.com/v1/models",
         "env_var": "OPENAI_API_KEY",
@@ -144,6 +148,11 @@ CLOUD_PROVIDER_CONFIG: Dict[str, Dict[str, str]] = {
         "env_var": "ANTHROPIC_API_KEY",
         "auth_header": "x-api-key",
         "auth_prefix": "",
+    },
+    "bedrock": {
+        # Bedrock uses AWS credentials, not a single API key
+        "env_vars": ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION_NAME"],
+        "env_var": "AWS_ACCESS_KEY_ID",  # Primary env var for detection
     },
 }
 
@@ -244,7 +253,7 @@ async def _get_configured_env_vars() -> Dict[str, str]:
     # Strategy 3: os.environ
     import os
     result = {}
-    for var in ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"]:
+    for var in ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION_NAME"]:
         val = os.environ.get(var, "")
         if val:
             result[var] = val
@@ -722,6 +731,9 @@ async def save_provider_key(
     Also sets the key in os.environ so agent-api can use it for
     direct provider API calls (e.g., fetching live model lists).
     
+    For Bedrock: accepts either api_key (access_key:secret_key format)
+    or separate aws_access_key_id + aws_secret_access_key fields.
+    
     Admin only.
     """
     _require_admin(principal)
@@ -734,7 +746,18 @@ async def save_provider_key(
                    f"Supported: {list(CLOUD_PROVIDER_CONFIG.keys())}"
         )
     
-    env_var = CLOUD_PROVIDER_CONFIG[provider]["env_var"]
+    # Build the env_vars dict to save based on provider
+    if provider == "bedrock":
+        env_vars_to_save = _build_bedrock_env_vars(request)
+    else:
+        if not request.api_key:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="api_key is required for this provider"
+            )
+        env_var = CLOUD_PROVIDER_CONFIG[provider]["env_var"]
+        env_vars_to_save = {env_var: request.api_key}
+    
     base_url = _get_litellm_base_url()
     headers = _get_litellm_headers()
     saved = False
@@ -747,11 +770,9 @@ async def save_provider_key(
                     "credential_name": f"{provider}_credentials",
                     "credential_info": {
                         "provider": provider,
-                        "description": f"{provider.title()} API key",
+                        "description": f"{provider.title()} credentials",
                     },
-                    "credential_values": {
-                        env_var: request.api_key,
-                    },
+                    "credential_values": env_vars_to_save,
                 }
                 resp = await client.post(
                     f"{base_url}/credentials",
@@ -767,7 +788,7 @@ async def save_provider_key(
                         f"{base_url}/credentials/{provider}_credentials",
                         headers=headers,
                         json={
-                            "credential_values": {env_var: request.api_key},
+                            "credential_values": env_vars_to_save,
                         },
                     )
                     if resp2.status_code == 200:
@@ -792,7 +813,7 @@ async def save_provider_key(
                     resp = await client.post(
                         f"{base_url}/config/update",
                         headers=headers,
-                        json={"environment_variables": {env_var: request.api_key}},
+                        json={"environment_variables": env_vars_to_save},
                     )
                     if resp.status_code == 200:
                         logger.info(f"Saved {provider} key via /config/update")
@@ -829,7 +850,8 @@ async def save_provider_key(
     
     # Also set in os.environ so agent-api can use it for direct provider calls
     import os
-    os.environ[env_var] = request.api_key
+    for env_key, env_val in env_vars_to_save.items():
+        os.environ[env_key] = env_val
     
     # Auto-register sora-2 video model when OpenAI key is saved
     if provider == "openai":
@@ -863,8 +885,47 @@ async def save_provider_key(
     return {
         "success": True,
         "provider": provider,
-        "message": f"{provider.title()} API key configured successfully"
+        "message": f"{provider.title()} credentials configured successfully"
     }
+
+
+def _build_bedrock_env_vars(request: ProviderKeyRequest) -> Dict[str, str]:
+    """Build env vars dict for Bedrock from request fields.
+    
+    Supports two modes:
+    1. Separate fields: aws_access_key_id + aws_secret_access_key (+ optional aws_region)
+    2. Combined api_key in access_key:secret_key format
+    """
+    env_vars: Dict[str, str] = {}
+    
+    if request.aws_access_key_id and request.aws_secret_access_key:
+        # Mode 1: Separate IAM credential fields
+        env_vars["AWS_ACCESS_KEY_ID"] = request.aws_access_key_id
+        env_vars["AWS_SECRET_ACCESS_KEY"] = request.aws_secret_access_key
+    elif request.api_key:
+        # Mode 2: Combined format (access_key:secret_key)
+        if ":" in request.api_key:
+            parts = request.api_key.split(":", 1)
+            env_vars["AWS_ACCESS_KEY_ID"] = parts[0]
+            env_vars["AWS_SECRET_ACCESS_KEY"] = parts[1]
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Bedrock api_key must be in 'access_key:secret_key' format, "
+                       "or provide aws_access_key_id and aws_secret_access_key separately"
+            )
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Bedrock requires either aws_access_key_id + aws_secret_access_key, "
+                   "or api_key in 'access_key:secret_key' format"
+        )
+    
+    # Region (default to us-east-1)
+    region = request.aws_region or "us-east-1"
+    env_vars["AWS_REGION_NAME"] = region
+    
+    return env_vars
 
 
 @router.get("/keys", response_model=KeysResponse)
@@ -885,6 +946,22 @@ async def list_provider_keys(
             # Keys in DB may be encrypted - just show configured status
             masked_key="****configured****" if configured else None,
         ))
+    
+    # Bedrock: check if AWS_ACCESS_KEY_ID is configured
+    bedrock_configured = (
+        _is_key_configured(env_vars, "AWS_ACCESS_KEY_ID") and
+        _is_key_configured(env_vars, "AWS_SECRET_ACCESS_KEY")
+    )
+    bedrock_region = env_vars.get("AWS_REGION_NAME", "")
+    bedrock_masked = None
+    if bedrock_configured:
+        access_key = env_vars.get("AWS_ACCESS_KEY_ID", "")
+        bedrock_masked = f"{_mask_key(access_key)} (region: {bedrock_region or 'us-east-1'})"
+    providers_info.append(ProviderKeyInfo(
+        provider="bedrock",
+        configured=bedrock_configured,
+        masked_key=bedrock_masked,
+    ))
     
     return KeysResponse(providers=providers_info)
 
