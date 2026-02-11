@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Boolean, Column, DateTime, Enum, Float, ForeignKey, Index, Integer, JSON, String, Text
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, Enum, Float, ForeignKey, Index, Integer, JSON, String, Text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -324,12 +324,18 @@ class Conversation(Base):
         String(50), nullable=True, index=True,
         comment="App/client that created this conversation (e.g., 'ai-portal', 'agent-manager')"
     )
+    model: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    is_private: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    agent_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
     # Relationships
     messages: Mapped[list["Message"]] = relationship(
         "Message", back_populates="conversation", cascade="all, delete-orphan"
+    )
+    shares: Mapped[list["ConversationShare"]] = relationship(
+        "ConversationShare", back_populates="conversation", cascade="all, delete-orphan"
     )
 
     __table_args__ = (
@@ -355,6 +361,10 @@ class Message(Base):
     )  # 'user', 'assistant', 'system'
     content: Mapped[str] = mapped_column(Text, nullable=False)
     attachments: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(
+        "metadata", JSON, nullable=True,
+        comment="Additional metadata: web_search_results, doc_search_results, used_insight_ids"
+    )
     run_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey('run_records.id'), nullable=True
     )
@@ -365,6 +375,9 @@ class Message(Base):
     # Relationships
     conversation: Mapped["Conversation"] = relationship("Conversation", back_populates="messages")
     run: Mapped[Optional["RunRecord"]] = relationship("RunRecord")
+    chat_attachments: Mapped[list["ChatAttachment"]] = relationship(
+        "ChatAttachment", back_populates="message", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         Index('idx_messages_conversation_id', 'conversation_id'),
@@ -374,6 +387,52 @@ class Message(Base):
 
     def __repr__(self) -> str:
         return f"<Message(id={self.id}, conversation_id={self.conversation_id}, role={self.role})>"
+
+
+class ConversationShare(Base):
+    """Conversation sharing with role-based access"""
+    __tablename__ = "conversation_shares"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('conversations.id', ondelete='CASCADE'), nullable=False
+    )
+    user_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[str] = mapped_column(String(20), default='viewer', nullable=False)
+    shared_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    shared_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+    conversation: Mapped["Conversation"] = relationship("Conversation", back_populates="shares")
+
+    __table_args__ = (
+        Index('idx_conversation_shares_conversation_id', 'conversation_id'),
+        Index('idx_conversation_shares_user_id', 'user_id'),
+        Index('uq_conversation_shares_conv_user', 'conversation_id', 'user_id', unique=True),
+    )
+
+
+class ChatAttachment(Base):
+    """File attachment in chat messages"""
+    __tablename__ = "chat_attachments"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    message_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('messages.id', ondelete='CASCADE'), nullable=True
+    )
+    filename: Mapped[str] = mapped_column(String(500), nullable=False)
+    file_url: Mapped[str] = mapped_column(Text, nullable=False)
+    mime_type: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    size_bytes: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    added_to_library: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    library_document_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    parsed_content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+    message: Mapped[Optional["Message"]] = relationship("Message", back_populates="chat_attachments")
+
+    __table_args__ = (
+        Index('idx_chat_attachments_message_id', 'message_id'),
+    )
 
 
 class ChatSettings(Base):

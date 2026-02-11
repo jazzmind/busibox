@@ -297,6 +297,9 @@ def get_agent_schema() -> SchemaManager:
             title VARCHAR(255) NOT NULL,
             user_id VARCHAR(255) NOT NULL,
             source VARCHAR(50),
+            model VARCHAR(255),
+            is_private BOOLEAN NOT NULL DEFAULT false,
+            agent_id VARCHAR(255),
             created_at TIMESTAMP NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMP
         )
@@ -310,13 +313,42 @@ def get_agent_schema() -> SchemaManager:
             role VARCHAR(50) NOT NULL,
             content TEXT NOT NULL,
             attachments JSON,
+            metadata JSON,
             run_id UUID REFERENCES run_records(id),
             routing_decision JSON,
             tool_calls JSON,
             created_at TIMESTAMP NOT NULL DEFAULT NOW()
         )
     """)
-    
+
+    # Conversation Shares
+    schema.add_table("""
+        CREATE TABLE IF NOT EXISTS conversation_shares (
+            id UUID PRIMARY KEY,
+            conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+            user_id VARCHAR(255) NOT NULL,
+            role VARCHAR(20) NOT NULL DEFAULT 'viewer',
+            shared_by VARCHAR(255) NOT NULL,
+            shared_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+    """)
+
+    # Chat Attachments
+    schema.add_table("""
+        CREATE TABLE IF NOT EXISTS chat_attachments (
+            id UUID PRIMARY KEY,
+            message_id UUID REFERENCES messages(id) ON DELETE CASCADE,
+            filename VARCHAR(500) NOT NULL,
+            file_url TEXT NOT NULL,
+            mime_type VARCHAR(255),
+            size_bytes BIGINT,
+            added_to_library BOOLEAN NOT NULL DEFAULT false,
+            library_document_id VARCHAR(255),
+            parsed_content TEXT,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+    """)
+
     # Chat Settings
     schema.add_table("""
         CREATE TABLE IF NOT EXISTS chat_settings (
@@ -489,12 +521,21 @@ def get_agent_schema() -> SchemaManager:
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON conversations(user_id)")
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_conversations_created_at ON conversations(created_at)")
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_conversations_source ON conversations(source)")
+    schema.add_index("CREATE INDEX IF NOT EXISTS idx_conversations_agent_id ON conversations(agent_id)")
     
     # messages indexes
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id)")
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at)")
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_messages_run_id ON messages(run_id)")
-    
+
+    # conversation_shares indexes
+    schema.add_index("CREATE INDEX IF NOT EXISTS idx_conversation_shares_conv ON conversation_shares(conversation_id)")
+    schema.add_index("CREATE INDEX IF NOT EXISTS idx_conversation_shares_user ON conversation_shares(user_id)")
+    schema.add_index("CREATE UNIQUE INDEX IF NOT EXISTS uq_conversation_shares_conv_user ON conversation_shares(conversation_id, user_id)")
+
+    # chat_attachments indexes
+    schema.add_index("CREATE INDEX IF NOT EXISTS idx_chat_attachments_message ON chat_attachments(message_id)")
+
     # chat_settings indexes
     schema.add_index("CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_settings_user_id ON chat_settings(user_id)")
     
@@ -543,6 +584,8 @@ def get_agent_schema() -> SchemaManager:
     schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON step_executions TO busibox_user")
     schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON conversations TO busibox_user")
     schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON messages TO busibox_user")
+    schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON conversation_shares TO busibox_user")
+    schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON chat_attachments TO busibox_user")
     schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON chat_settings TO busibox_user")
     schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON tool_configs TO busibox_user")
     schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON agent_tasks TO busibox_user")
