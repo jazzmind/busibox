@@ -31,6 +31,11 @@ deploy_api_postgres_admin_password: "{{ secrets.postgresql.password | default(''
 deploy_api_apps_container_ip: ai-portal
 deploy_api_apps_container_ip_staging: ai-portal
 
+# User apps container (for external/untrusted app deployments)
+# Uses 'user-apps' DNS hostname on Proxmox, resolved via /etc/hosts (internal_dns role)
+deploy_api_user_apps_container_ip: "{{ user_apps_ip | default('user-apps') }}"
+deploy_api_user_apps_container_ip_staging: "{{ user_apps_ip | default('user-apps') }}"
+
 # SSH key for remote operations
 deploy_api_ssh_key_path: /root/.ssh/id_rsa
 

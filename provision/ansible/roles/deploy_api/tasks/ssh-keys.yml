@@ -90,6 +90,30 @@
   tags: [deploy_api, deploy_api_ssh]
 
 # ============================================================================
+# User Apps Container (user-apps-lxc) - for external/untrusted app deployments
+# ============================================================================
+
+- name: Ensure .ssh directory exists on user-apps container
+  file:
+    path: /root/.ssh
+    state: directory
+    mode: '0700'
+    owner: root
+    group: root
+  delegate_to: "{{ hostvars[groups['user_apps'][0]]['ansible_host'] }}"
+  when: groups['user_apps'] is defined and groups['user_apps'] | length > 0
+  tags: [deploy_api, deploy_api_ssh]
+
+- name: Add authz container public key to user-apps container authorized_keys
+  authorized_key:
+    user: root
+    key: "{{ authz_public_key.content | b64decode }}"
+    state: present
+  delegate_to: "{{ hostvars[groups['user_apps'][0]]['ansible_host'] }}"
+  when: groups['user_apps'] is defined and groups['user_apps'] | length > 0
+  tags: [deploy_api, deploy_api_ssh]
+
+# ============================================================================
 # Core Apps Container (core-apps-lxc) - for ai-portal and agent-manager
 # ============================================================================
 
@@ -269,6 +293,14 @@
 # Test SSH connections
 # ============================================================================
 
+- name: Test SSH connection from authz to user-apps
+  shell: "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{{ deploy_api_user_apps_container_ip }} 'echo SSH_OK'"
+  register: ssh_test_user_apps
+  changed_when: false
+  failed_when: false
+  when: groups['user_apps'] is defined and groups['user_apps'] | length > 0
+  tags: [deploy_api, deploy_api_ssh]
+
 - name: Test SSH connection from authz to core-apps
   shell: "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@ai-portal 'echo SSH_OK'"
   register: ssh_test_core_apps
@@ -339,6 +371,7 @@
       SSH Tests from authz-lxc (deploy-api):
       - Proxmox Host: {{ 'NOT CONFIGURED' if not proxmox_host_configured else ('OK' if ssh_test_proxmox.rc == 0 else 'FAILED (required for make install)') }}
       - Core Apps: {{ 'OK' if ssh_test_core_apps.rc == 0 else 'FAILED' }}
+      - User Apps: {{ 'NOT CONFIGURED' if (groups['user_apps'] is not defined or groups['user_apps'] | length == 0) else ('OK' if ssh_test_user_apps.rc == 0 else 'FAILED (required for user app deployments)') }}
       - Data (Redis): {{ 'OK' if ssh_test_data.rc == 0 else 'FAILED' }}
       - Agent: {{ 'OK' if ssh_test_agent.rc == 0 else 'FAILED' }}
       - Milvus: {{ 'OK' if ssh_test_milvus.rc == 0 else 'FAILED' }}
