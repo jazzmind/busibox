@@ -129,7 +129,14 @@ class Settings(BaseSettings):
         description="Base URL for portal links in notifications",
     )
     
-    # Email/SMTP configuration
+    # Email configuration
+    # Bridge API is the preferred email provider (handles SMTP/Resend internally)
+    bridge_api_url: Optional[str] = Field(
+        None,
+        description="Bridge API URL for sending emails (e.g., http://bridge-api:8081). Preferred over direct SMTP.",
+    )
+    
+    # Legacy SMTP configuration (used only if bridge_api_url is not set)
     smtp_host: Optional[str] = Field(None, description="SMTP server host")
     smtp_port: int = Field(587, description="SMTP server port")
     smtp_username: Optional[str] = Field(None, description="SMTP username")

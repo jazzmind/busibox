@@ -760,8 +760,31 @@ async def create_workflow_execution(
     Raises:
         WorkflowExecutionError: If workflow not found or inactive
     """
-    # Load workflow definition
+    from app.services.builtin_workflows import get_builtin_workflow_by_id, is_builtin_workflow
+    
+    # Load workflow definition - check database first, then built-in workflows
     workflow = await session.get(WorkflowDefinition, workflow_id)
+    
+    if not workflow and is_builtin_workflow(workflow_id):
+        # Built-in workflow not yet persisted — create a database record for execution tracking
+        builtin = get_builtin_workflow_by_id(workflow_id)
+        if builtin:
+            workflow = WorkflowDefinition(
+                id=workflow_id,
+                name=builtin.name,
+                description=builtin.description,
+                steps=builtin.steps,
+                trigger=builtin.trigger,
+                guardrails=builtin.guardrails,
+                is_active=True,
+                created_by=None,
+                version=builtin.version,
+            )
+            session.add(workflow)
+            await session.commit()
+            await session.refresh(workflow)
+            logger.info(f"Persisted built-in workflow {builtin.name} (ID: {workflow_id}) for execution tracking")
+    
     if not workflow:
         raise WorkflowExecutionError(f"Workflow {workflow_id} not found")
     
@@ -822,11 +845,33 @@ async def run_workflow_execution(
             
             workflow = await session.get(WorkflowDefinition, execution.workflow_id)
             if not workflow:
-                logger.error(f"Workflow {execution.workflow_id} not found")
-                execution.status = "failed"
-                execution.error = "Workflow not found"
-                await session.commit()
-                return execution
+                # Check if it's a built-in workflow and persist it
+                from app.services.builtin_workflows import get_builtin_workflow_by_id, is_builtin_workflow
+                if is_builtin_workflow(execution.workflow_id):
+                    builtin = get_builtin_workflow_by_id(execution.workflow_id)
+                    if builtin:
+                        workflow = WorkflowDefinition(
+                            id=execution.workflow_id,
+                            name=builtin.name,
+                            description=builtin.description,
+                            steps=builtin.steps,
+                            trigger=builtin.trigger,
+                            guardrails=builtin.guardrails,
+                            is_active=True,
+                            created_by=None,
+                            version=builtin.version,
+                        )
+                        session.add(workflow)
+                        await session.commit()
+                        await session.refresh(workflow)
+                        logger.info(f"Persisted built-in workflow {builtin.name} for background execution")
+                
+                if not workflow:
+                    logger.error(f"Workflow {execution.workflow_id} not found")
+                    execution.status = "failed"
+                    execution.error = "Workflow not found"
+                    await session.commit()
+                    return execution
             
             # Mark as running
             execution.status = "running"
@@ -973,8 +1018,31 @@ async def execute_enhanced_workflow(
     Raises:
         WorkflowExecutionError: If workflow execution fails
     """
-    # Load workflow definition
+    from app.services.builtin_workflows import get_builtin_workflow_by_id, is_builtin_workflow
+    
+    # Load workflow definition - check database first, then built-in workflows
     workflow = await session.get(WorkflowDefinition, workflow_id)
+    
+    if not workflow and is_builtin_workflow(workflow_id):
+        # Built-in workflow not yet persisted — create a database record for execution tracking
+        builtin = get_builtin_workflow_by_id(workflow_id)
+        if builtin:
+            workflow = WorkflowDefinition(
+                id=workflow_id,
+                name=builtin.name,
+                description=builtin.description,
+                steps=builtin.steps,
+                trigger=builtin.trigger,
+                guardrails=builtin.guardrails,
+                is_active=True,
+                created_by=None,
+                version=builtin.version,
+            )
+            session.add(workflow)
+            await session.commit()
+            await session.refresh(workflow)
+            logger.info(f"Persisted built-in workflow {builtin.name} (ID: {workflow_id}) for execution tracking")
+    
     if not workflow:
         raise WorkflowExecutionError(f"Workflow {workflow_id} not found")
     

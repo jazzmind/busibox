@@ -756,7 +756,8 @@ services:
       AUTH_ISSUER: busibox-authz
       AUTH_AUDIENCE: agent-api
       AUTH_TOKEN_URL: http://authz-api:8010/oauth/token
-      # SMTP configuration for email notifications
+      # Email notifications - uses Bridge API (preferred) or direct SMTP as fallback
+      BRIDGE_API_URL: "http://bridge-api:8081"
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USERNAME: ${SMTP_USERNAME:-}
