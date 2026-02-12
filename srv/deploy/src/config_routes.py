@@ -28,6 +28,8 @@ What stays in Ansible vault (infrastructure):
 - SSL certificates
 """
 
+import base64
+import json
 import logging
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -452,12 +454,23 @@ _CONFIG_TO_COMPOSE_ENV: dict[str, str] = {
     "RESEND_API_KEY": "BRIDGE_RESEND_API_KEY",
 }
 
+# Config keys → bridge .env variable names (Proxmox: no BRIDGE_ prefix)
+_CONFIG_TO_BRIDGE_ENV: dict[str, str] = {
+    "SMTP_HOST":     "SMTP_HOST",
+    "SMTP_PORT":     "SMTP_PORT",
+    "SMTP_USER":     "SMTP_USER",
+    "SMTP_PASSWORD": "SMTP_PASSWORD",
+    "SMTP_SECURE":   "SMTP_SECURE",
+    "EMAIL_FROM":    "EMAIL_FROM",
+    "RESEND_API_KEY": "RESEND_API_KEY",
+}
 
-async def _read_bridge_config_from_db() -> dict[str, str]:
-    """Read all smtp-category config rows and return as {COMPOSE_ENV: value}."""
+
+async def _read_bridge_raw_config_from_db() -> dict[str, str]:
+    """Read all smtp-category config rows and return as {config_key: value}."""
     sql = "SELECT key, value FROM config WHERE category = 'smtp'"
     result = await query_config(sql)
-    env: dict[str, str] = {}
+    raw: dict[str, str] = {}
     if result:
         for line in result.split('\n'):
             line = line.strip()
@@ -465,10 +478,18 @@ async def _read_bridge_config_from_db() -> dict[str, str]:
                 continue
             parts = line.split('|', 1)
             if len(parts) == 2:
-                cfg_key, cfg_val = parts[0].strip(), parts[1].strip()
-                compose_key = _CONFIG_TO_COMPOSE_ENV.get(cfg_key)
-                if compose_key:
-                    env[compose_key] = cfg_val
+                raw[parts[0].strip()] = parts[1].strip()
+    return raw
+
+
+async def _read_bridge_config_from_db() -> dict[str, str]:
+    """Read all smtp-category config rows and return as {COMPOSE_ENV: value}."""
+    raw = await _read_bridge_raw_config_from_db()
+    env: dict[str, str] = {}
+    for cfg_key, cfg_val in raw.items():
+        compose_key = _CONFIG_TO_COMPOSE_ENV.get(cfg_key)
+        if compose_key:
+            env[compose_key] = cfg_val
     # Derive EMAIL_ENABLED from whether any provider is configured
     has_smtp = bool(env.get("BRIDGE_SMTP_HOST"))
     has_resend = bool(env.get("BRIDGE_RESEND_API_KEY"))
@@ -518,6 +539,79 @@ async def _apply_bridge_config_docker() -> dict:
     return {"success": True, "message": "bridge-api restarted with updated email config.", "output": out}
 
 
+async def _apply_bridge_config_proxmox() -> dict:
+    """
+    Proxmox path: read config from DB, SSH to the bridge container,
+    patch the email-related env vars in the bridge .env file, and restart
+    the bridge systemd service.
+
+    This avoids a full Ansible re-run which is slow and requires vault
+    secrets to already contain the new values.
+    """
+    from .database import execute_ssh_command
+
+    raw = await _read_bridge_raw_config_from_db()
+    logger.info(f"[APPLY-PROXMOX] Bridge raw config keys: {list(raw.keys())}")
+
+    # Build the env var updates for the bridge .env file
+    env_updates: dict[str, str] = {}
+    for cfg_key, cfg_val in raw.items():
+        bridge_key = _CONFIG_TO_BRIDGE_ENV.get(cfg_key)
+        if bridge_key:
+            env_updates[bridge_key] = cfg_val
+
+    # Derive EMAIL_ENABLED
+    has_smtp = bool(env_updates.get("SMTP_HOST"))
+    has_resend = bool(env_updates.get("RESEND_API_KEY"))
+    env_updates["EMAIL_ENABLED"] = "true" if (has_smtp or has_resend) else "false"
+
+    logger.info(f"[APPLY-PROXMOX] Updating bridge .env: { {k: ('****' if 'PASSWORD' in k or 'KEY' in k else v) for k, v in env_updates.items()} }")
+
+    # The bridge .env file is at /srv/bridge/.env on the bridge container
+    # SSH to 'bridge' hostname (resolved via /etc/hosts from internal_dns role)
+    bridge_host = "bridge"
+    env_file = "/srv/bridge/.env"
+
+    # Use a Python script on the remote host to safely patch the .env file.
+    # This avoids sed/shell escaping issues with special chars in passwords.
+    updates_b64 = base64.b64encode(json.dumps(env_updates).encode()).decode()
+    combined = (
+        f"python3 -c '"
+        f"import json, base64, os; "
+        f"updates = json.loads(base64.b64decode(\"{updates_b64}\").decode()); "
+        f"env_file = \"{env_file}\"; "
+        f"lines = open(env_file).readlines() if os.path.exists(env_file) else []; "
+        f"found = set(); "
+        f"new_lines = []; "
+        f"["
+        f"(found.add(l.split(\"=\", 1)[0]), new_lines.append(l.split(\"=\", 1)[0] + \"=\" + updates[l.split(\"=\", 1)[0]] + \"\\n\")) "
+        f"if \"=\" in l and l.split(\"=\", 1)[0] in updates "
+        f"else new_lines.append(l) "
+        f"for l in lines"
+        f"]; "
+        f"[new_lines.append(k + \"=\" + v + \"\\n\") for k, v in updates.items() if k not in found]; "
+        f"open(env_file, \"w\").writelines(new_lines)"
+        f"' && systemctl restart bridge"
+    )
+
+    stdout, stderr, code = await execute_ssh_command(bridge_host, combined)
+
+    if code != 0:
+        err = stderr.strip() if stderr else "unknown error"
+        logger.error(f"[APPLY-PROXMOX] Failed to apply bridge config: {err}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to apply bridge config via SSH: {err}"
+        )
+
+    logger.info(f"[APPLY-PROXMOX] Bridge config applied and service restarted")
+    return {
+        "success": True,
+        "message": "Bridge email config updated and service restarted.",
+        "keys_updated": list(env_updates.keys()),
+    }
+
+
 @router.post("/apply/{service}")
 async def apply_config(
     service: str,
@@ -530,9 +624,9 @@ async def apply_config(
     exports them as compose env vars, and recreates the container via
     ``docker compose up -d``.
 
-    In **Proxmox** environments: triggers ``make <service>`` on the Proxmox
-    host via SSH, which re-renders the service's ``.env.j2`` from vault/defaults
-    and restarts the systemd service.
+    In **Proxmox** environments: SSHes to the service container, patches the
+    relevant env vars in the service's ``.env`` file, and restarts the systemd
+    service.
 
     Currently supported services:
     - bridge: Multi-channel communication (email, Signal)
@@ -554,49 +648,8 @@ async def apply_config(
     if is_docker_environment():
         return await _apply_bridge_config_docker()
 
-    # ----- Proxmox / Ansible path (unchanged) -----
-    from .ansible_executor import INFRASTRUCTURE_ANSIBLE_MAP, AnsibleExecutor
-
-    if service not in INFRASTRUCTURE_ANSIBLE_MAP:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Service '{service}' is not supported for Ansible apply. "
-                   f"Supported: {', '.join(sorted(INFRASTRUCTURE_ANSIBLE_MAP.keys()))}"
-        )
-
-    _, _, description = INFRASTRUCTURE_ANSIBLE_MAP[service]
-    executor = AnsibleExecutor()
-
-    environment = getattr(config, 'environment', 'production')
-    if environment not in ('staging', 'production'):
-        environment = 'production'
-
-    logs = []
-    success = False
-
-    try:
-        async for event in executor.install_infrastructure_service_stream(service, environment):
-            msg_type = event.get('type', 'log')
-            message = event.get('message', '')
-            done = event.get('done', False)
-            logs.append(f"[{msg_type}] {message}")
-            if done:
-                success = msg_type == 'success'
-    except Exception as exc:
-        logger.error(f"Failed to apply config for {service}: {exc}")
-        raise HTTPException(status_code=500, detail=f"Failed to restart {service}: {str(exc)}")
-
-    if not success:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to restart {description}. Check logs for details."
-        )
-
-    return {
-        "success": True,
-        "message": f"{description} configuration applied and service restarted.",
-        "service": service,
-    }
+    # ----- Proxmox path: patch .env and restart -----
+    return await _apply_bridge_config_proxmox()
 
 
 @router.get("/export/all")
