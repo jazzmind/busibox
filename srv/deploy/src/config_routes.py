@@ -387,68 +387,160 @@ async def bulk_set_configs(
     )
 
 
+# -------------------------------------------------------------------------
+# Config keys → Docker Compose env-var names (BRIDGE_* prefix used by compose)
+# The config table stores e.g. SMTP_HOST; compose reads BRIDGE_SMTP_HOST.
+# -------------------------------------------------------------------------
+_CONFIG_TO_COMPOSE_ENV: dict[str, str] = {
+    "SMTP_HOST":     "BRIDGE_SMTP_HOST",
+    "SMTP_PORT":     "BRIDGE_SMTP_PORT",
+    "SMTP_USER":     "BRIDGE_SMTP_USER",
+    "SMTP_PASSWORD": "BRIDGE_SMTP_PASSWORD",
+    "SMTP_SECURE":   "BRIDGE_SMTP_SECURE",
+    "EMAIL_FROM":    "BRIDGE_EMAIL_FROM",
+    "RESEND_API_KEY": "BRIDGE_RESEND_API_KEY",
+}
+
+
+async def _read_bridge_config_from_db() -> dict[str, str]:
+    """Read all smtp-category config rows and return as {COMPOSE_ENV: value}."""
+    sql = "SELECT key, value FROM config WHERE category = 'smtp'"
+    result = await query_config(sql)
+    env: dict[str, str] = {}
+    if result:
+        for line in result.split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split('|', 1)
+            if len(parts) == 2:
+                cfg_key, cfg_val = parts[0].strip(), parts[1].strip()
+                compose_key = _CONFIG_TO_COMPOSE_ENV.get(cfg_key)
+                if compose_key:
+                    env[compose_key] = cfg_val
+    # Derive EMAIL_ENABLED from whether any provider is configured
+    has_smtp = bool(env.get("BRIDGE_SMTP_HOST"))
+    has_resend = bool(env.get("BRIDGE_RESEND_API_KEY"))
+    env["BRIDGE_EMAIL_ENABLED"] = "true" if (has_smtp or has_resend) else "false"
+    return env
+
+
+async def _apply_bridge_config_docker() -> dict:
+    """
+    Docker path: read config from DB, export as env vars, and recreate the
+    bridge-api container via ``docker compose up -d bridge-api`` so it picks
+    up the new environment.
+    """
+    import asyncio, os
+
+    env_overrides = await _read_bridge_config_from_db()
+    logger.info(f"[APPLY] Bridge env overrides: { {k: ('****' if 'PASSWORD' in k or 'KEY' in k else v) for k, v in env_overrides.items()} }")
+
+    # Build the shell environment — start with current env (which already has
+    # COMPOSE_PROJECT_NAME, BUSIBOX_HOST_PATH, POSTGRES_PASSWORD, etc.) and
+    # layer the smtp overrides on top.
+    compose_env = {**os.environ, **env_overrides}
+
+    # Compose files and project name come from the deploy-api container env
+    compose_files = os.environ.get("COMPOSE_FILES", "-f docker-compose.yml")
+    repo_root = os.environ.get("BUSIBOX_HOST_PATH") or os.environ.get("BUSIBOX_REPO_ROOT", "/app/busibox")
+
+    cmd = f"docker compose {compose_files} up -d bridge-api"
+    logger.info(f"[APPLY] Running: {cmd}  (cwd={repo_root})")
+
+    proc = await asyncio.create_subprocess_shell(
+        cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=repo_root,
+        env=compose_env,
+    )
+    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+
+    if proc.returncode != 0:
+        err = stderr.decode().strip() if stderr else "unknown error"
+        logger.error(f"[APPLY] docker compose up failed: {err}")
+        raise HTTPException(status_code=500, detail=f"Failed to restart bridge-api: {err}")
+
+    out = stdout.decode().strip() if stdout else ""
+    logger.info(f"[APPLY] bridge-api recreated: {out}")
+    return {"success": True, "message": "bridge-api restarted with updated email config.", "output": out}
+
+
 @router.post("/apply/{service}")
 async def apply_config(
     service: str,
     token_payload: dict = Depends(verify_admin_token)
 ):
     """
-    Apply configuration changes to a service by triggering an Ansible redeploy.
-    
-    This endpoint:
-    1. Triggers `make <service>` on the Proxmox host via SSH
-    2. Which re-renders the service's .env.j2 from vault/defaults
-    3. And restarts the service
-    
+    Apply configuration changes to a service.
+
+    In **Docker** environments: reads config values from the ``config`` table,
+    exports them as compose env vars, and recreates the container via
+    ``docker compose up -d``.
+
+    In **Proxmox** environments: triggers ``make <service>`` on the Proxmox
+    host via SSH, which re-renders the service's ``.env.j2`` from vault/defaults
+    and restarts the systemd service.
+
     Currently supported services:
     - bridge: Multi-channel communication (email, Signal)
-    
+
     Requires admin authentication.
     """
-    from .ansible_executor import INFRASTRUCTURE_ANSIBLE_MAP, AnsibleExecutor
-    
+    from .core_app_executor import is_docker_environment
+
     logger.info(f"Applying config for service={service}, user={token_payload.get('user_id')}")
-    
+
+    supported = {"bridge"}
+    if service not in supported:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Service '{service}' is not supported. Supported: {', '.join(sorted(supported))}"
+        )
+
+    # ----- Docker path -----
+    if is_docker_environment():
+        return await _apply_bridge_config_docker()
+
+    # ----- Proxmox / Ansible path (unchanged) -----
+    from .ansible_executor import INFRASTRUCTURE_ANSIBLE_MAP, AnsibleExecutor
+
     if service not in INFRASTRUCTURE_ANSIBLE_MAP:
         raise HTTPException(
             status_code=400,
-            detail=f"Service '{service}' is not supported. "
+            detail=f"Service '{service}' is not supported for Ansible apply. "
                    f"Supported: {', '.join(sorted(INFRASTRUCTURE_ANSIBLE_MAP.keys()))}"
         )
-    
+
     _, _, description = INFRASTRUCTURE_ANSIBLE_MAP[service]
-    
     executor = AnsibleExecutor()
-    
-    # Determine environment from config or default to production
+
     environment = getattr(config, 'environment', 'production')
     if environment not in ('staging', 'production'):
         environment = 'production'
-    
-    # Collect output from the streaming install
+
     logs = []
     success = False
-    
+
     try:
         async for event in executor.install_infrastructure_service_stream(service, environment):
             msg_type = event.get('type', 'log')
             message = event.get('message', '')
             done = event.get('done', False)
-            
             logs.append(f"[{msg_type}] {message}")
-            
             if done:
                 success = msg_type == 'success'
     except Exception as exc:
         logger.error(f"Failed to apply config for {service}: {exc}")
         raise HTTPException(status_code=500, detail=f"Failed to restart {service}: {str(exc)}")
-    
+
     if not success:
         raise HTTPException(
             status_code=500,
             detail=f"Failed to restart {description}. Check logs for details."
         )
-    
+
     return {
         "success": True,
         "message": f"{description} configuration applied and service restarted.",
