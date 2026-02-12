@@ -318,6 +318,141 @@ def get_data_schema() -> SchemaManager:
     """)
     
     # ==========================================================================
+    # Migrations - Add columns that may be missing from older table versions
+    # ==========================================================================
+    # CREATE TABLE IF NOT EXISTS is a no-op when the table already exists,
+    # so any columns added after initial deployment must be handled here.
+    
+    # owner_id was added to data_files schema but existing tables may lack it
+    schema.add_migration("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'data_files' AND column_name = 'owner_id'
+            ) THEN
+                ALTER TABLE data_files ADD COLUMN owner_id UUID;
+                -- Backfill from user_id for existing rows
+                UPDATE data_files SET owner_id = user_id WHERE owner_id IS NULL;
+                -- Now make it NOT NULL
+                ALTER TABLE data_files ALTER COLUMN owner_id SET NOT NULL;
+            END IF;
+        END $$;
+    """)
+    
+    # visibility column migration
+    schema.add_migration("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'data_files' AND column_name = 'visibility'
+            ) THEN
+                ALTER TABLE data_files ADD COLUMN visibility VARCHAR(20) DEFAULT 'personal' CHECK (visibility IN ('personal', 'shared', 'group'));
+            END IF;
+        END $$;
+    """)
+    
+    # doc_type column migration (structured data support)
+    schema.add_migration("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'data_files' AND column_name = 'doc_type'
+            ) THEN
+                ALTER TABLE data_files ADD COLUMN doc_type VARCHAR(20) DEFAULT 'file' CHECK (doc_type IN ('file', 'data'));
+            END IF;
+        END $$;
+    """)
+    
+    # data_schema column migration
+    schema.add_migration("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'data_files' AND column_name = 'data_schema'
+            ) THEN
+                ALTER TABLE data_files ADD COLUMN data_schema JSONB;
+                ALTER TABLE data_files ADD COLUMN data_content JSONB DEFAULT '[]'::jsonb;
+                ALTER TABLE data_files ADD COLUMN data_indexes JSONB;
+                ALTER TABLE data_files ADD COLUMN data_version INTEGER DEFAULT 1;
+                ALTER TABLE data_files ADD COLUMN data_record_count INTEGER DEFAULT 0;
+                ALTER TABLE data_files ADD COLUMN data_modified_at TIMESTAMP;
+            END IF;
+        END $$;
+    """)
+    
+    # has_markdown column migration
+    schema.add_migration("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'data_files' AND column_name = 'has_markdown'
+            ) THEN
+                ALTER TABLE data_files ADD COLUMN has_markdown BOOLEAN DEFAULT false;
+                ALTER TABLE data_files ADD COLUMN markdown_path VARCHAR(512);
+                ALTER TABLE data_files ADD COLUMN images_path VARCHAR(512);
+                ALTER TABLE data_files ADD COLUMN image_count INTEGER DEFAULT 0;
+            END IF;
+        END $$;
+    """)
+    
+    # processing_strategies column migration
+    schema.add_migration("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'data_files' AND column_name = 'processing_strategies'
+            ) THEN
+                ALTER TABLE data_files ADD COLUMN processing_strategies JSONB DEFAULT '[]'::jsonb;
+            END IF;
+        END $$;
+    """)
+    
+    # is_encrypted column migration
+    schema.add_migration("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'data_files' AND column_name = 'is_encrypted'
+            ) THEN
+                ALTER TABLE data_files ADD COLUMN is_encrypted BOOLEAN DEFAULT false;
+            END IF;
+        END $$;
+    """)
+    
+    # library_id column migration
+    schema.add_migration("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'data_files' AND column_name = 'library_id'
+            ) THEN
+                ALTER TABLE data_files ADD COLUMN library_id UUID REFERENCES libraries(id) ON DELETE SET NULL;
+            END IF;
+        END $$;
+    """)
+    
+    # group_id column migration
+    schema.add_migration("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'data_files' AND column_name = 'group_id'
+            ) THEN
+                ALTER TABLE data_files ADD COLUMN group_id UUID REFERENCES groups(id) ON DELETE SET NULL;
+            END IF;
+        END $$;
+    """)
+    
+    # ==========================================================================
     # Indexes
     # ==========================================================================
     

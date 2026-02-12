@@ -17,6 +17,41 @@ class BusiboxClient:
         self._token = access_token
         self._headers = {"Authorization": f"Bearer {self._token}"}
 
+    async def request(
+        self,
+        method: str,
+        path: str,
+        json: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+        timeout: int = 30,
+    ) -> Dict[str, Any]:
+        """
+        Generic HTTP request to data-api.
+
+        Used by data tools (create_data_document, query_data, insert_records, etc.)
+        to make arbitrary requests to the data-api service.
+
+        Args:
+            method: HTTP method (GET, POST, PUT, DELETE)
+            path: API path (e.g. "/data", "/data/{id}/query")
+            json: Request body (for POST/PUT)
+            params: Query parameters (for GET)
+            timeout: Request timeout in seconds
+        """
+        base_url = str(settings.data_api_url).rstrip('/')
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.request(
+                method=method,
+                url=f"{base_url}{path}",
+                json=json,
+                params=params,
+                headers=self._headers,
+                timeout=timeout,
+            )
+            resp.raise_for_status()
+            return resp.json()
+
     async def search(
         self,
         query: str,
