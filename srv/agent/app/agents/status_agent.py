@@ -39,6 +39,11 @@ INTENT_QUERY = "query"
 INTENT_UPDATE = "update"
 INTENT_CHAT = "chat"
 
+# Well-known data document names for the status-report app
+STATUS_DOC_PROJECTS = "status-report-projects"
+STATUS_DOC_TASKS = "status-report-tasks"
+STATUS_DOC_UPDATES = "status-report-updates"
+
 # Synthesis prompt -- the LLM only needs to produce a nice response from tool results
 STATUS_SYNTHESIS_PROMPT = """You are a project status assistant. Given tool results and user context, create a clear, well-organized response.
 
@@ -140,6 +145,7 @@ class StatusAssistantAgent(BaseStreamingAgent):
             instructions=STATUS_SYNTHESIS_PROMPT,
             tools=[
                 "list_data_documents",
+                "create_data_document",
                 "query_data",
                 "insert_records",
                 "update_records",
@@ -154,6 +160,7 @@ class StatusAssistantAgent(BaseStreamingAgent):
         self._doc_ids: Dict[str, str] = {}  # name -> document_id
         self._extracted_data: Dict[str, Any] = {}  # parsed from user text
         self._query_results: Dict[str, Any] = {}
+        self._bootstrapping: bool = False  # True when creating initial data documents
 
         # Lazy-init LLM agents for classification and extraction
         self._classifier: Optional[Agent] = None
@@ -316,11 +323,14 @@ class StatusAssistantAgent(BaseStreamingAgent):
         Process tool results and chain next pipeline steps dynamically.
 
         After list_data_documents: classify intent and build remaining pipeline.
+        After create_data_document: track new document IDs during bootstrap.
         After query_data: store results for synthesis.
         After insert/update_records: store results for synthesis.
         """
         if step.tool == "list_data_documents":
             return await self._handle_list_docs_result(result, context)
+        elif step.tool == "create_data_document":
+            return await self._handle_create_doc_result(step, result, context)
         elif step.tool == "query_data":
             return self._handle_query_result(step, result, context)
         elif step.tool == "insert_records":
@@ -355,8 +365,8 @@ class StatusAssistantAgent(BaseStreamingAgent):
         logger.info(f"Found documents: {self._doc_ids}")
 
         if not self._doc_ids:
-            logger.warning("No data documents found -- cannot proceed with data operations")
-            return []
+            logger.info("No data documents found -- bootstrapping status-report documents")
+            return self._build_bootstrap_pipeline()
 
         # Classify intent from the original query
         # The query is stored in context.tool_results or we can get it from context
@@ -386,6 +396,140 @@ class StatusAssistantAgent(BaseStreamingAgent):
         else:
             # Chat intent -- no tools needed, just synthesize
             return []
+
+    def _build_bootstrap_pipeline(self) -> List[PipelineStep]:
+        """
+        Create the three required data documents when none exist.
+
+        The status-report app uses three well-known documents:
+        - status-report-projects
+        - status-report-tasks
+        - status-report-updates
+
+        After all three are created, the pipeline continues with intent handling.
+        """
+        self._bootstrapping = True
+        return [
+            PipelineStep(
+                tool="create_data_document",
+                args={
+                    "name": STATUS_DOC_PROJECTS,
+                    "schema": {
+                        "fields": {
+                            "name": {"type": "string"},
+                            "description": {"type": "string"},
+                            "status": {"type": "string"},
+                            "progress": {"type": "number"},
+                            "owner": {"type": "string"},
+                            "tags": {"type": "array"},
+                            "checkpointProgress": {"type": "number"},
+                            "nextCheckpoint": {"type": "string"},
+                            "checkpointDate": {"type": "string"},
+                            "team": {"type": "array"},
+                        }
+                    },
+                    "visibility": "personal",
+                },
+            ),
+            PipelineStep(
+                tool="create_data_document",
+                args={
+                    "name": STATUS_DOC_TASKS,
+                    "schema": {
+                        "fields": {
+                            "projectId": {"type": "string"},
+                            "title": {"type": "string"},
+                            "description": {"type": "string"},
+                            "status": {"type": "string"},
+                            "assignee": {"type": "string"},
+                            "priority": {"type": "string"},
+                            "dueDate": {"type": "string"},
+                            "order": {"type": "number"},
+                        }
+                    },
+                    "visibility": "personal",
+                },
+            ),
+            PipelineStep(
+                tool="create_data_document",
+                args={
+                    "name": STATUS_DOC_UPDATES,
+                    "schema": {
+                        "fields": {
+                            "projectId": {"type": "string"},
+                            "content": {"type": "string"},
+                            "author": {"type": "string"},
+                            "tasksCompleted": {"type": "array"},
+                            "tasksAdded": {"type": "array"},
+                            "previousStatus": {"type": "string"},
+                            "newStatus": {"type": "string"},
+                        }
+                    },
+                    "visibility": "personal",
+                },
+            ),
+        ]
+
+    async def _handle_create_doc_result(
+        self,
+        step: PipelineStep,
+        result: Any,
+        context: AgentContext,
+    ) -> List[PipelineStep]:
+        """
+        Track newly created document IDs during bootstrap.
+
+        After the last document is created, classify intent and build the main pipeline.
+        """
+        doc_name = step.args.get("name", "")
+        # Extract document ID from result
+        doc_id = ""
+        if hasattr(result, 'document_id'):
+            doc_id = result.document_id
+        elif hasattr(result, 'id'):
+            doc_id = result.id
+        elif isinstance(result, dict):
+            doc_id = result.get("document_id", result.get("id", ""))
+
+        if doc_name and doc_id:
+            self._doc_ids[doc_name] = doc_id
+            # Map to simplified keys
+            if "project" in doc_name.lower():
+                self._doc_ids["projects"] = doc_id
+            elif "task" in doc_name.lower():
+                self._doc_ids["tasks"] = doc_id
+            elif "update" in doc_name.lower():
+                self._doc_ids["updates"] = doc_id
+            logger.info(f"Created document: {doc_name} -> {doc_id}")
+
+        # Check if all three bootstrap documents are now created
+        if self._bootstrapping and all(
+            k in self._doc_ids for k in ("projects", "tasks", "updates")
+        ):
+            self._bootstrapping = False
+            logger.info(f"Bootstrap complete. Documents: {self._doc_ids}")
+
+            # Now classify intent and build the main pipeline
+            original_query = ""
+            if context.recent_messages:
+                for msg in reversed(context.recent_messages):
+                    if msg.get("role") == "user":
+                        original_query = msg.get("content", "")
+                        break
+            if not original_query:
+                original_query = context.metadata.get("_original_query", "")
+
+            self._intent = await self._classify_intent(original_query, context)
+            logger.info(f"Post-bootstrap intent: {self._intent}")
+
+            if self._intent == INTENT_CREATE:
+                return await self._build_create_pipeline(original_query, context)
+            elif self._intent == INTENT_QUERY:
+                return self._build_query_pipeline(original_query, context)
+            elif self._intent == INTENT_UPDATE:
+                return self._build_update_pipeline(original_query, context)
+
+        return []
 
     async def _build_create_pipeline(
         self,
@@ -733,8 +877,16 @@ class StatusAssistantAgent(BaseStreamingAgent):
         """Format human-readable streaming messages for tool results."""
         if tool_name == "list_data_documents":
             if hasattr(result, 'documents'):
-                return f"Found **{len(result.documents)} data stores**"
+                count = len(result.documents)
+                if count == 0:
+                    return "No data stores found -- will create them"
+                return f"Found **{count} data stores**"
             return "Checked data stores"
+
+        if tool_name == "create_data_document":
+            if hasattr(result, 'name'):
+                return f"Created data store **{result.name}**"
+            return "Created data store"
 
         if tool_name == "query_data":
             if hasattr(result, 'records'):
@@ -806,6 +958,7 @@ Guidelines:
 - Suggest next steps if appropriate""",
             tools=[
                 "list_data_documents",
+                "create_data_document",
                 "query_data",
                 "insert_records",
                 "update_records",
