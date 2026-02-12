@@ -319,29 +319,41 @@ class LibraryService:
         user_uuid = uuid.UUID(user_id)
         
         async with self.pool.acquire() as conn:
+            # Custom sort order for personal library types:
+            # DOCS first (main personal), then RESEARCH, TASKS, MEDIA last
+            personal_type_order = """
+                CASE library_type
+                    WHEN 'DOCS' THEN 1
+                    WHEN 'RESEARCH' THEN 2
+                    WHEN 'TASKS' THEN 3
+                    WHEN 'MEDIA' THEN 4
+                    ELSE 5
+                END
+            """
+            
             if include_shared:
                 libraries = await conn.fetch(
-                    """
+                    f"""
                     SELECT id, name, is_personal, user_id, library_type,
                            created_by, deleted_at, created_at, updated_at
                     FROM libraries
-                    WHERE (is_personal = true AND user_id = $1)
-                       OR is_personal = false
+                    WHERE ((is_personal = true AND user_id = $1)
+                       OR is_personal = false)
                     AND deleted_at IS NULL
-                    ORDER BY is_personal DESC, name ASC
+                    ORDER BY is_personal DESC, {personal_type_order}, name ASC
                     """,
                     user_uuid,
                 )
             else:
                 libraries = await conn.fetch(
-                    """
+                    f"""
                     SELECT id, name, is_personal, user_id, library_type,
                            created_by, deleted_at, created_at, updated_at
                     FROM libraries
                     WHERE is_personal = true 
                       AND user_id = $1
                       AND deleted_at IS NULL
-                    ORDER BY library_type ASC
+                    ORDER BY {personal_type_order}
                     """,
                     user_uuid,
                 )
