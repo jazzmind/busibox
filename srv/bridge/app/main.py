@@ -96,10 +96,8 @@ class SignalBot:
             return
 
         # Check allowed phone numbers
-        if (
-            self.settings.allowed_phone_numbers
-            and sender not in self.settings.allowed_phone_numbers
-        ):
+        allowed = self.settings.get_allowed_phone_numbers()
+        if allowed and sender not in allowed:
             logger.warning(f"Rejected message from unauthorized sender: {sender[:6]}...")
             return
 
