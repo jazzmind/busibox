@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from .routes import router
 from .system_routes import router as system_router
 from .service_routes import router as service_router
-from .config_routes import router as config_router
+from .config_routes import router as config_router, ensure_config_database
 from .github_routes import router as github_router
 from .deployment_config_routes import router as deployment_config_router
 from .deployment_history_routes import router as deployment_history_router
@@ -38,6 +38,13 @@ async def lifespan(app: FastAPI):
     logger.info(f"[DEPLOY] PostgreSQL host: {config.postgres_host}")
     logger.info(f"[DEPLOY] Apps container: {config.apps_container_ip}")
     logger.info(f"[DEPLOY] Nginx host: {config.nginx_host}")
+    logger.info(f"[DEPLOY] Config database: {config.config_database}")
+    
+    # Ensure config database and table exist
+    try:
+        await ensure_config_database()
+    except Exception as e:
+        logger.warning(f"[DEPLOY] Failed to ensure config database (non-fatal): {e}")
     
     yield
     

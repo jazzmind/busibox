@@ -48,18 +48,69 @@ router = APIRouter(prefix="/api/v1/config", tags=["config"])
 
 
 async def get_config_db_connection():
-    """Get connection info for the config database (busibox)."""
-    # The config table is in the main busibox database
+    """Get connection info for the config database."""
     return config.postgres_host, config.postgres_port
 
 
-async def query_config(sql: str, database: str = 'busibox'):
+def get_config_db_name() -> str:
+    """Get the config store database name."""
+    return config.config_database
+
+
+async def query_config(sql: str, database: str | None = None):
     """Execute a query against the config database."""
+    if database is None:
+        database = get_config_db_name()
     stdout, stderr, code = await execute_sql(sql, database)
     if code != 0:
         logger.error(f"Config query failed: {stderr}")
         raise HTTPException(status_code=500, detail=f"Database error: {stderr}")
     return stdout.strip()
+
+
+async def ensure_config_database():
+    """
+    Ensure the config database and config table exist.
+    
+    Called at startup. On Docker, the 'busibox' database is created via
+    POSTGRES_DB in docker-compose.yml. On Proxmox, we need to create it
+    ourselves since the Ansible pg role only creates per-service databases.
+    """
+    db_name = get_config_db_name()
+    logger.info(f"Ensuring config database '{db_name}' exists...")
+
+    # Check if the database exists (query the 'postgres' system database)
+    check_sql = f"SELECT 1 FROM pg_database WHERE datname='{db_name}'"
+    stdout, stderr, code = await execute_sql(check_sql, 'postgres')
+
+    if stdout.strip() != '1':
+        # Database doesn't exist — create it
+        logger.info(f"Config database '{db_name}' not found, creating...")
+        stdout, stderr, code = await execute_sql(f"CREATE DATABASE {db_name}", 'postgres')
+        if code != 0:
+            logger.error(f"Failed to create config database: {stderr}")
+            return False
+        logger.info(f"Config database '{db_name}' created successfully")
+
+    # Ensure the config table exists
+    create_table_sql = """
+        CREATE TABLE IF NOT EXISTS config (
+            key       TEXT PRIMARY KEY,
+            value     TEXT NOT NULL DEFAULT '',
+            encrypted BOOLEAN NOT NULL DEFAULT FALSE,
+            category  TEXT,
+            description TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """
+    try:
+        await query_config(create_table_sql)
+        logger.info(f"Config table ensured in database '{db_name}'")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to ensure config table: {e}")
+        return False
 
 
 @router.get("", response_model=ConfigListResponse)

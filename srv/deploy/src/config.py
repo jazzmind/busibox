@@ -66,6 +66,10 @@ class Config:
     postgres_admin_user: str = os.getenv('POSTGRES_ADMIN_USER', 'postgres')
     postgres_admin_password: str = os.getenv('POSTGRES_ADMIN_PASSWORD', '')
     
+    # Config store database name (deploy-api stores runtime config here)
+    # Docker creates 'busibox' via POSTGRES_DB; Proxmox may use 'deploy' or similar
+    config_database: str = os.getenv('DEPLOY_CONFIG_DB', 'busibox')
+    
     # Container hosts (use DNS hostnames, resolved via /etc/hosts on Proxmox)
     # Core apps container (ai-portal, agent-manager)
     core_apps_container_ip: str = os.getenv('CORE_APPS_CONTAINER_IP', 'ai-portal')
