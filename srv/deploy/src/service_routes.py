@@ -582,6 +582,7 @@ async def check_service_health(
             'agent-api': ('agent-api', 8000, '/health', 'http', 'http'),
             'embedding-api': ('embedding-api', 8005, '/health', 'http', 'http'),
             'docs-api': ('docs-api', 8004, '/health/live', 'http', 'http'),
+            'bridge-api': ('bridge-api', 8081, '/health', 'http', 'http'),
             
             # LLM services
             'litellm': ('litellm', 4000, '/health/liveliness', 'http', 'http'),

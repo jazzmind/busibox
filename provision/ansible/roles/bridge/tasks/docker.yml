@@ -1,0 +1,37 @@
+---
+# Bridge API Docker Deployment Tasks
+#
+# Deploys Bridge API via Docker Compose
+# Used when deploy_target == 'docker'
+
+- name: Build Bridge API container
+  include_role:
+    name: docker_common
+    tasks_from: compose_build
+  vars:
+    docker_services_to_build:
+      - bridge-api
+    docker_build_no_cache: "{{ docker_force_rebuild | default(false) }}"
+
+- name: Start Bridge API container
+  include_role:
+    name: docker_common
+    tasks_from: compose_up
+  vars:
+    docker_services_to_start:
+      - bridge-api
+    docker_wait_for_health: true
+
+- name: Wait for Bridge API to be ready
+  include_role:
+    name: docker_common
+    tasks_from: wait_healthy
+  vars:
+    docker_wait_service: bridge-api
+    docker_wait_timeout: 60
+
+- name: Display Bridge API status
+  ansible.builtin.debug:
+    msg: |
+      Bridge API is running and ready
+      API: http://localhost:{{ bridge_api_port | default(8081) }}

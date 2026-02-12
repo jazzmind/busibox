@@ -579,6 +579,52 @@ services:
     networks:
       - busibox-net
 
+  # Bridge API - Multi-channel Communication Service (Email, Signal)
+  bridge-api:
+    build:
+      context: ./srv/bridge
+      dockerfile: Dockerfile
+      labels:
+        - "version=${GIT_COMMIT:-unknown}"
+    container_name: ${CONTAINER_PREFIX:-dev}-bridge-api
+    hostname: bridge-api
+    labels:
+      - "version=${GIT_COMMIT:-unknown}"
+    volumes:
+      - ./srv/bridge/app:/app/app:ro
+    environment:
+      ENVIRONMENT: ${BUSIBOX_ENV:-development}
+      LOG_LEVEL: INFO
+      BRIDGE_API_PORT: "8081"
+      # Signal channel (disabled by default in dev)
+      SIGNAL_ENABLED: "false"
+      SIGNAL_CLI_URL: http://localhost:8080
+      SIGNAL_PHONE_NUMBER: ""
+      # Agent API
+      AGENT_API_URL: http://agent-api:8000
+      AUTH_TOKEN_URL: http://authz-api:8010/oauth/token
+      DELEGATION_TOKEN: ""
+      # Email channel (disabled by default, configured via admin UI)
+      EMAIL_ENABLED: "${BRIDGE_EMAIL_ENABLED:-false}"
+      SMTP_HOST: "${BRIDGE_SMTP_HOST:-}"
+      SMTP_PORT: "${BRIDGE_SMTP_PORT:-}"
+      SMTP_USER: "${BRIDGE_SMTP_USER:-}"
+      SMTP_PASSWORD: "${BRIDGE_SMTP_PASSWORD:-}"
+      SMTP_SECURE: "${BRIDGE_SMTP_SECURE:-false}"
+      EMAIL_FROM: "${BRIDGE_EMAIL_FROM:-}"
+      RESEND_API_KEY: "${BRIDGE_RESEND_API_KEY:-}"
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 5s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - busibox-net
+
   # Search API - Semantic Search Service
   search-api:
     build:

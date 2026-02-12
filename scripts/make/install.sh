@@ -1747,6 +1747,7 @@ ${vllm_ip}                vllm vllm-lxc
 # docs-api runs on agent (202), not milvus (204)
 ${network_base}.202       docs-api docs
 ${network_base}.210       deploy-api deploy
+${network_base}.206       bridge-api bridge
 ${network_base}.206       embedding-api embedding
 
 # Application Services

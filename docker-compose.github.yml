@@ -91,6 +91,8 @@ services:
       DOCS_API_URL: http://docs-api:8004
       # Deployment Service - internal container URL for server-side deployment
       DEPLOYMENT_SERVICE_URL: http://deploy-api:8011/api/v1/deployment
+      # Bridge API - email sending and multi-channel communication
+      BRIDGE_API_URL: http://bridge-api:8081
       # =========================================================================
       # Agent Manager Environment (PORT 3001)
       # =========================================================================

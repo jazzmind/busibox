@@ -10,7 +10,7 @@ Loads settings from environment variables for all communication channels:
 from functools import lru_cache
 from typing import List, Optional
 
-from pydantic import AnyHttpUrl, Field
+from pydantic import AnyHttpUrl, Field, field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -19,6 +19,26 @@ class Settings(BaseSettings):
     Bridge service settings, loaded from environment variables.
     Covers Signal bot, email channel, and the HTTP API server.
     """
+
+    @field_validator(
+        "smtp_port",
+        "smtp_host",
+        "smtp_user",
+        "smtp_password",
+        "email_from",
+        "resend_api_key",
+        mode="before",
+    )
+    @classmethod
+    def empty_str_to_none(cls, v: object) -> object:
+        """Convert empty strings to None for optional fields.
+
+        Docker Compose sets unset env vars to '' rather than leaving them
+        unset, which breaks Pydantic's Optional[int] parsing.
+        """
+        if isinstance(v, str) and v.strip() == "":
+            return None
+        return v
 
     app_name: str = "bridge"
     environment: str = Field("development", description="Environment name")

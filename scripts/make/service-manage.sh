@@ -107,6 +107,7 @@ get_container_for_service() {
         data-worker) echo "data-worker" ;;
         search|search-api) echo "search-api" ;;
         deploy|deploy-api) echo "deploy-api" ;;
+        bridge|bridge-api) echo "bridge-api" ;;
         docs|docs-api) echo "docs-api" ;;
         embedding|embedding-api) echo "embedding-api" ;;
         
@@ -281,6 +282,7 @@ get_proxmox_make_target() {
         data-worker) echo "data" ;;
         search|search-api) echo "search-api" ;;
         deploy|deploy-api) echo "deploy-api" ;;
+        bridge|bridge-api) echo "bridge" ;;
         docs|docs-api) echo "docs" ;;
         embedding|embedding-api) echo "embedding-api" ;;
         
@@ -470,7 +472,7 @@ get_service_ip() {
         minio|files) echo "${network_base}.205" ;;
         milvus) echo "${network_base}.204" ;;
         agent|agent-api) echo "${network_base}.202" ;;
-        ingest|data-api|data-worker|redis) echo "${network_base}.206" ;;
+        ingest|data-api|data-worker|redis|bridge|bridge-api) echo "${network_base}.206" ;;
         authz|authz-api|deploy|deploy-api|docs|docs-api) echo "${network_base}.210" ;;
         search|search-api|embedding|embedding-api) echo "${network_base}.204" ;;  # on milvus container
         core-apps|apps|ai-portal|agent-manager) echo "${network_base}.201" ;;
@@ -491,6 +493,7 @@ get_systemd_service_name() {
         data-worker) echo "data-worker" ;;
         search|search-api) echo "search-api" ;;
         deploy|deploy-api) echo "deploy-api" ;;
+        bridge|bridge-api) echo "bridge" ;;
         docs|docs-api) echo "docs-api" ;;
         embedding|embedding-api) echo "embedding-api" ;;
         nginx|proxy) echo "nginx" ;;

@@ -45,6 +45,8 @@ _SERVICE_data_worker="206:busibox:srv/data::8002"
 _SERVICE_search_api="204:busibox:srv/search:/health:8003"
 _SERVICE_agent_api="202:busibox:srv/agent:/health:8000"
 _SERVICE_deploy_api="210:busibox:srv/deploy:/health/live:8011"
+_SERVICE_bridge="206:busibox:srv/bridge:/health:8081"
+_SERVICE_bridge_api="206:busibox:srv/bridge:/health:8081"  # Alias
 _SERVICE_docs_api="202:busibox:srv/docs:/health/live:8004"
 _SERVICE_litellm="207:litellm::/health:4000"
 _SERVICE_vllm="208:vllm::/health:8000"
@@ -77,6 +79,8 @@ _NAME_embedding="Embedding API"
 _NAME_nginx="Nginx"
 _NAME_ai_portal="AI Portal"
 _NAME_agent_manager="Agent Manager"
+_NAME_bridge="Bridge"
+_NAME_bridge_api="Bridge API"
 _NAME_docs_api="Docs API"
 _NAME_authz_api="AuthZ API"
 _NAME_deploy_api="Deploy API"
@@ -93,12 +97,12 @@ _LLM_SERVICES_BASE="litellm"
 _LLM_SERVICES_GPU="vllm"     # For Linux with NVIDIA GPU
 _LLM_SERVICES_APPLE="mlx"    # For Apple Silicon
 _LLM_SERVICES_SUFFIX="embedding"
-_API_SERVICES="deploy-api data search-api agent-api docs-api"
+_API_SERVICES="deploy-api data search-api agent-api docs-api bridge"
 _APP_SERVICES="nginx ai-portal agent-manager"
 
 # All services combined (includes individual services for status checking)
 # Note: "data" is used for display, but we check "data-api" and "data-worker" individually
-ALL_SERVICES="authz postgres redis milvus minio nginx litellm vllm mlx embedding data-api data-worker search-api agent-api deploy-api docs-api ai-portal agent-manager"
+ALL_SERVICES="authz postgres redis milvus minio nginx litellm vllm mlx embedding data-api data-worker search-api agent-api deploy-api bridge docs-api ai-portal agent-manager"
 
 # ============================================================================
 # Service Metadata Functions
@@ -227,6 +231,7 @@ get_service_hostname() {
         search|search_api)   echo "search-api" ;;
         agent|agent_api)     echo "agent-api" ;;
         embedding|embedding_api) echo "embedding-api" ;;
+        bridge|bridge_api)   echo "bridge-api" ;;
         postgres|pg)         echo "postgres" ;;
         redis)               echo "redis" ;;
         milvus)              echo "milvus" ;;

@@ -80,6 +80,8 @@ services:
       # Deployment Service - internal container URL for server-side deployment
       DEPLOYMENT_SERVICE_URL: http://deploy-api:8011/api/v1/deployment
       DEPLOY_API_URL: http://deploy-api:8011
+      # Bridge API - email sending and multi-channel communication
+      BRIDGE_API_URL: http://bridge-api:8081
       # Host Agent (for MLX control on Apple Silicon)
       HOST_AGENT_URL: http://host.docker.internal:8089
       HOST_AGENT_TOKEN: ${HOST_AGENT_TOKEN:-}

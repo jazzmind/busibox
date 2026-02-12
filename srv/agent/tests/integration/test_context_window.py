@@ -361,7 +361,7 @@ class TestContextCompression:
         """When compression is disabled, all messages should be returned as-is."""
         config = ContextCompressionConfig(
             enabled=False,
-            compression_threshold_chars=100,  # Low threshold, but disabled
+            compression_threshold_chars=1000,  # Low threshold, but disabled (minimum allowed is 1000)
         )
         service = ContextCompressionService(config)
         

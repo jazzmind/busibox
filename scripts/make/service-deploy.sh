@@ -45,6 +45,7 @@ get_ansible_tag() {
         ingest|data-api) echo "data" ;;
         search|search-api) echo "search" ;;
         deploy|deploy-api) echo "deploy" ;;
+        bridge|bridge-api) echo "bridge" ;;
         docs|docs-api) echo "docs" ;;
         embedding|embedding-api) echo "embedding" ;;
         
@@ -91,7 +92,7 @@ expand_services() {
                 expanded="${expanded} postgres redis minio milvus"
                 ;;
             apis)
-                expanded="${expanded} authz agent data search deploy docs embedding"
+                expanded="${expanded} authz agent data search deploy bridge docs embedding"
                 ;;
             llm)
                 expanded="${expanded} litellm"
@@ -100,7 +101,7 @@ expand_services() {
                 expanded="${expanded} core-apps nginx"
                 ;;
             all)
-                expanded="${expanded} postgres redis minio milvus authz agent data search deploy docs embedding litellm core-apps nginx"
+                expanded="${expanded} postgres redis minio milvus authz agent data search deploy bridge docs embedding litellm core-apps nginx"
                 ;;
             *)
                 expanded="${expanded} ${svc}"
@@ -283,6 +284,9 @@ main() {
     box_empty
     box_footer
     echo ""
+    
+    # Set vault environment before accessing vault
+    set_vault_environment "$prefix" 2>/dev/null || true
     
     # Ensure vault access
     if ! ensure_vault_access 2>/dev/null; then

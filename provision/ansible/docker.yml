@@ -25,7 +25,7 @@
 # Tags:
 #   - all: Everything
 #   - infrastructure: postgres, redis, minio, milvus
-#   - apis: authz, data, search, agent, docs, deploy
+#   - apis: authz, data, search, agent, docs, deploy, bridge
 #   - llm: litellm
 #   - frontend: core-apps, nginx
 #   - user-apps: user-apps container
@@ -223,6 +223,20 @@
         - apis
         - deploy
 
+    - name: Deploy Bridge API
+      ansible.builtin.include_role:
+        name: bridge
+        tasks_from: docker
+        apply:
+          tags:
+            - apis
+            - bridge
+            - apis_bridge
+      tags:
+        - apis
+        - bridge
+        - apis_bridge
+
     # =========================================================================
     # LLM SERVICES
     # =========================================================================
@@ -309,6 +323,7 @@
             ✓ Data API      - localhost:{{ data_port | default(8002) }}
             ✓ Search API      - localhost:{{ search_port | default(8003) }}
             ✓ Agent API       - localhost:{{ agent_port | default(8000) }}
+            ✓ Bridge API      - localhost:{{ bridge_api_port | default(8081) }}
             ✓ LiteLLM         - localhost:{{ litellm_port | default(4000) }}
             ✓ AI Portal       - localhost:{{ ai_portal_port | default(3000) }}
             ✓ Agent Manager   - localhost:{{ agent_manager_port | default(3001) }}

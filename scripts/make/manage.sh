@@ -87,8 +87,8 @@ get_services_for_group() {
         "Infrastructure")
             echo "postgres redis minio milvus"
             ;;
-        "APIs")
-            echo "authz-api agent-api data-api search-api deploy-api docs-api embedding-api"
+            "APIs")
+                echo "authz-api agent-api data-api search-api deploy-api bridge-api docs-api embedding-api"
             ;;
         "LLM")
             # Show MLX on Apple Silicon, vLLM otherwise
