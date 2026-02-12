@@ -62,8 +62,8 @@ INFRASTRUCTURE_ANSIBLE_MAP = {
     'nginx': ('proxy', ['core_nginx'], 'Nginx (reverse proxy)'),
     
     # Bridge (multi-channel communication: email, Signal, etc.)
-    'bridge': ('data', ['apis_bridge'], 'Bridge (multi-channel communication)'),
-    'bridge-api': ('data', ['apis_bridge'], 'Bridge (multi-channel communication)'),  # alias
+    'bridge': ('bridge', ['apis_bridge'], 'Bridge (multi-channel communication)'),
+    'bridge-api': ('bridge', ['apis_bridge'], 'Bridge (multi-channel communication)'),  # alias
     
     # Apps (deploy via Deploy API, but can also use Ansible)
     'apps': ('apps', ['apps'], 'Frontend applications'),
@@ -246,6 +246,7 @@ class AnsibleExecutor:
             'docs': 'docs',
             'nginx': 'nginx',
             'bridge': 'bridge',
+            'bridge-api': 'bridge',  # alias
             'apps': 'apps',
         }
         
