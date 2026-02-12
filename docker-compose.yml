@@ -471,6 +471,7 @@ services:
       LITELLM_BASE_URL: http://litellm:4000
       LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-local-dev-key}
       # AuthZ
+      AUTHZ_BASE_URL: http://authz-api:8010
       AUTHZ_JWKS_URL: http://authz-api:8010/.well-known/jwks.json
       AUTHZ_ISSUER: busibox-authz
       AUTHZ_AUDIENCE: data-api
@@ -556,6 +557,11 @@ services:
       # Embedding API - dedicated embedding service (no local model loading)
       EMBEDDING_API_URL: http://embedding-api:8005
       EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-1024}
+      # AuthZ (for encryption/decryption during processing)
+      AUTHZ_BASE_URL: http://authz-api:8010
+      AUTHZ_JWKS_URL: http://authz-api:8010/.well-known/jwks.json
+      AUTHZ_ISSUER: busibox-authz
+      AUTHZ_AUDIENCE: data-api
       # Worker ID (for debugging)
       WORKER_ID: local-worker-1
     depends_on:
@@ -572,6 +578,8 @@ services:
       data-api:
         condition: service_healthy
       embedding-api:
+        condition: service_healthy
+      authz-api:
         condition: service_healthy
     # Worker healthcheck - verify the Python worker process is running (PID 1)
     # Uses /proc/1/cmdline since pgrep isn't available in slim image

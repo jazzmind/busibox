@@ -62,7 +62,7 @@ class EncryptionClient:
             config: Configuration dict with authz_base_url
         """
         self.authz_base_url = config.get("authz_base_url") or os.getenv(
-            "AUTHZ_BASE_URL", "http://10.96.201.210:8010"
+            "AUTHZ_BASE_URL", ""
         )
         
         # Check if encryption should be enabled (just need authz URL, tokens come per-request)
@@ -109,12 +109,11 @@ class EncryptionClient:
             logger.error("No user_token provided for ensure_kek_for_role")
             return None
         
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0)) as client:
             try:
                 resp = await client.post(
                     f"{self.authz_base_url}/keystore/kek/ensure-for-role/{role_id}",
                     headers=self._get_headers(user_token),
-                    timeout=30.0,
                 )
                 
                 if resp.status_code == 200:
@@ -177,7 +176,7 @@ class EncryptionClient:
             for role_id in role_ids:
                 await self.ensure_kek_for_role(role_id, user_token)
         
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=5.0)) as client:
             try:
                 resp = await client.post(
                     f"{self.authz_base_url}/keystore/encrypt",
@@ -188,7 +187,6 @@ class EncryptionClient:
                         "role_ids": role_ids or [],
                         "user_id": user_id,
                     },
-                    timeout=60.0,  # Larger timeout for big files
                 )
                 
                 if resp.status_code == 200:
@@ -257,7 +255,7 @@ class EncryptionClient:
             logger.error("No user_token provided for decrypt_for_download", file_id=file_id)
             return encrypted_content
         
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=5.0)) as client:
             try:
                 # Pass role and user info in headers for access check
                 headers = self._get_headers(user_token)
@@ -273,7 +271,6 @@ class EncryptionClient:
                         "file_id": file_id,
                         "encrypted_content": base64.b64encode(encrypted_content).decode(),
                     },
-                    timeout=60.0,
                 )
                 
                 if resp.status_code == 200:
@@ -349,12 +346,11 @@ class EncryptionClient:
         # Ensure the role has a KEK first
         await self.ensure_kek_for_role(role_id, user_token)
         
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0)) as client:
             try:
                 resp = await client.post(
                     f"{self.authz_base_url}/keystore/file/{file_id}/add-role/{role_id}",
                     headers=self._get_headers(user_token),
-                    timeout=30.0,
                 )
                 
                 if resp.status_code == 200:
@@ -402,12 +398,11 @@ class EncryptionClient:
             logger.error("No user_token provided for remove_role_access", file_id=file_id)
             return False
         
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0)) as client:
             try:
                 resp = await client.delete(
                     f"{self.authz_base_url}/keystore/file/{file_id}/remove-role/{role_id}",
                     headers=self._get_headers(user_token),
-                    timeout=30.0,
                 )
                 
                 if resp.status_code == 200:
@@ -453,12 +448,11 @@ class EncryptionClient:
             logger.error("No user_token provided for delete_file_keys", file_id=file_id)
             return False
         
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0)) as client:
             try:
                 resp = await client.delete(
                     f"{self.authz_base_url}/keystore/file/{file_id}",
                     headers=self._get_headers(user_token),
-                    timeout=30.0,
                 )
                 
                 if resp.status_code == 200:
