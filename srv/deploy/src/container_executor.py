@@ -359,7 +359,13 @@ async def recreate_user_apps_with_volumes(dev_app_ids: Set[str], logs: List[str]
     # 1. Sets up npm auth for GitHub Packages
     # 2. Installs required tools (git, curl, procps, supervisor)
     # 3. Creates supervisor directories
-    # 4. Starts supervisord as PID 1
+    # 4. Patches the Debian-default supervisord.conf to add nodaemon=true
+    # 5. Starts supervisord as PID 1
+    #
+    # NOTE: The Debian `supervisor` package installs a working config at
+    # /etc/supervisor/supervisord.conf with [include] for conf.d/*.conf.
+    # We only need to add `nodaemon=true` so supervisord stays in foreground
+    # as PID 1 (required for Docker containers).
     entrypoint_script = (
         'if [ -n "$GITHUB_AUTH_TOKEN" ]; then '
         'echo "//npm.pkg.github.com/:_authToken=$GITHUB_AUTH_TOKEN" > /root/.npmrc && '
@@ -367,32 +373,9 @@ async def recreate_user_apps_with_volumes(dev_app_ids: Set[str], logs: List[str]
         'fi && '
         'apt-get update && apt-get install -y --no-install-recommends git curl procps supervisor && '
         'mkdir -p /var/log/user-apps /var/log/supervisor /etc/supervisor/conf.d && '
-        # Create a minimal supervisord config if none exists
-        'if [ ! -f /etc/supervisor/supervisord.conf ]; then '
-        'cat > /etc/supervisor/supervisord.conf << \'SEOF\'\n'
-        '[supervisord]\n'
-        'nodaemon=true\n'
-        'logfile=/var/log/supervisor/supervisord.log\n'
-        'logfile_maxbytes=10MB\n'
-        'pidfile=/run/supervisord.pid\n'
-        'childlogdir=/var/log/supervisor\n'
-        'user=root\n'
-        'loglevel=info\n'
-        '\n'
-        '[include]\n'
-        'files = /etc/supervisor/conf.d/*.conf\n'
-        '\n'
-        '[unix_http_server]\n'
-        'file=/run/supervisord.sock\n'
-        'chmod=0700\n'
-        '\n'
-        '[supervisorctl]\n'
-        'serverurl=unix:///run/supervisord.sock\n'
-        '\n'
-        '[rpcinterface:supervisor]\n'
-        'supervisor.rpcinterface_factory = supervisor.rpcinterface:make_main_rpcinterface\n'
-        'SEOF\n'
-        'fi && '
+        # Patch Debian default config: add nodaemon=true under [supervisord]
+        'grep -q "nodaemon" /etc/supervisor/supervisord.conf || '
+        'sed -i "/\\[supervisord\\]/a nodaemon=true" /etc/supervisor/supervisord.conf && '
         # Start supervisord as PID 1 (exec replaces shell)
         'exec supervisord -c /etc/supervisor/supervisord.conf'
     )
