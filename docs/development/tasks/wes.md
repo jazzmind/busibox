@@ -7,12 +7,17 @@ Invoices - maigent Dec (12,500), Jan (15,000), Feb (12,500)
 Expenses - exchange cash; write 10k check to personal
 
 
+
+
 issues:
 
-[ ] get proxmox stage deployed
+apps in dev mode will crash if they change
+
+
+[X] get proxmox stage deployed
 [X] get docker prod deployed
 [X] get docker dev deployed
-  [P] make sure we can deploy app-template on both
+  [X] make sure we can deploy app-template on both
   [X] app-template needs to use our data-api so we can prove that works
 
 [X] We need a status tracker app
