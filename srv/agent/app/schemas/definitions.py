@@ -40,6 +40,11 @@ class AgentDefinitionCreate(BaseModel):
     workflows: Optional[Dict[str, Any]] = None
     scopes: List[str] = Field(default_factory=list)
     is_active: bool = True
+    is_builtin: bool = Field(
+        default=False,
+        description="Mark as built-in agent visible to all users. "
+        "When True, the agent is shared across all users and cannot be deleted by non-admins."
+    )
     allow_frontier_fallback: bool = Field(
         default=False,
         description="Allow automatic fallback to frontier cloud model when context window is exceeded. Only enable for non-sensitive data."
@@ -72,6 +77,7 @@ class AgentDefinitionUpdate(BaseModel):
     workflows: Optional[Dict[str, Any]] = None
     scopes: Optional[List[str]] = None
     is_active: Optional[bool] = None
+    is_builtin: Optional[bool] = None
     allow_frontier_fallback: Optional[bool] = None
 
 

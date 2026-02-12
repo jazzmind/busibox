@@ -169,11 +169,12 @@ async def create_agent_definition(
     """
     Create a new agent definition.
     
-    Personal agents (is_builtin=False) are created with created_by set to authenticated user.
-    Only system can create built-in agents (is_builtin=True).
+    If is_builtin=True is requested, the agent will be visible to all users.
+    Otherwise it is a personal agent visible only to the creator.
     """
+    is_builtin = payload.is_builtin
     try:
-        agent_id = await agent_registry.add(session, payload, created_by=principal.sub, is_builtin=False)
+        agent_id = await agent_registry.add(session, payload, created_by=principal.sub, is_builtin=is_builtin)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     definition = await session.get(AgentDefinition, agent_id)
@@ -185,7 +186,7 @@ async def create_agent_definition(
         agent_id=str(agent_id),
         agent_name=definition.name,
         user_id=principal.sub,
-        is_builtin=False,
+        is_builtin=is_builtin,
         model=definition.model
     )
     
@@ -209,22 +210,31 @@ async def update_agent_definition(
     if not definition or not definition.is_active:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    # Built-in: only tools may be updated
+    update_data = payload.model_dump(exclude_unset=True)
+
     if definition.is_builtin:
-        if payload.model_dump(exclude_unset=True).keys() - {"tools"}:
-            raise HTTPException(
-                status_code=403,
-                detail="Built-in agents only allow updating tools",
-            )
-        if "tools" in payload.model_dump(exclude_unset=True):
-            tool_names = (payload.tools or {}).get("names", [])
-            validate_tool_references(tool_names)
-            definition.tools = {"names": tool_names}
+        # Built-in agents: owner can update all fields, others can only update tools
+        if definition.created_by == principal.sub:
+            # Owner of a built-in agent can update all fields
+            if "tools" in update_data and update_data["tools"] is not None:
+                validate_tool_references(update_data["tools"].get("names", []))
+            for key, value in update_data.items():
+                setattr(definition, key, value)
+        else:
+            # Non-owner: only tools may be updated
+            if update_data.keys() - {"tools"}:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Built-in agents only allow updating tools (unless you are the owner)",
+                )
+            if "tools" in update_data:
+                tool_names = (update_data["tools"] or {}).get("names", [])
+                validate_tool_references(tool_names)
+                definition.tools = {"names": tool_names}
     else:
         # Personal: must be owner
         if definition.created_by != principal.sub:
             raise HTTPException(status_code=404, detail="Agent not found")
-        update_data = payload.model_dump(exclude_unset=True)
         if "tools" in update_data and update_data["tools"] is not None:
             validate_tool_references(update_data["tools"].get("names", []))
         for key, value in update_data.items():
