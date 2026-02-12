@@ -960,14 +960,32 @@ async def run_agent_task(
                     
                     # Post-processing in a new session
                     async with get_session_context() as bg_session:
-                        # Extract output summary
+                        # Build step_outputs - prefer workflow execution's aggregated outputs,
+                        # fall back to querying step_executions directly
+                        step_outputs = wf_result.step_outputs or {}
+                        
+                        if not step_outputs or all(v is None for v in step_outputs.values()):
+                            # Fallback: query step_executions table directly
+                            from app.models.domain import StepExecution as StepExecModel
+                            step_result = await bg_session.execute(
+                                select(StepExecModel)
+                                .where(StepExecModel.execution_id == wf_exec_id)
+                                .order_by(StepExecModel.created_at)
+                            )
+                            step_execs = step_result.scalars().all()
+                            step_outputs = {}
+                            for se in step_execs:
+                                if se.output_data:
+                                    step_outputs[se.step_id] = se.output_data
+                        
+                        # Extract output summary from the final step
                         output_summary = None
-                        if wf_result.step_outputs:
+                        if step_outputs:
                             last_output = None
-                            if isinstance(wf_result.step_outputs, dict):
-                                last_output = wf_result.step_outputs.get("synthesize") or \
-                                              wf_result.step_outputs.get("result") or \
-                                              (list(wf_result.step_outputs.values())[-1] if wf_result.step_outputs else None)
+                            if isinstance(step_outputs, dict):
+                                last_output = step_outputs.get("synthesize") or \
+                                              step_outputs.get("result") or \
+                                              (list(step_outputs.values())[-1] if step_outputs else None)
                             if last_output:
                                 if isinstance(last_output, dict):
                                     output_summary = last_output.get("summary") or last_output.get("result") or str(last_output)[:500]
@@ -986,7 +1004,7 @@ async def run_agent_task(
                             error=wf_result.error if not success else None,
                             output_data={
                                 "workflow_execution_id": str(wf_exec_id),
-                                "step_outputs": wf_result.step_outputs,
+                                "step_outputs": step_outputs,
                             },
                         )
                         

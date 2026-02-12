@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.agents.core import BusiboxDeps
 from app.clients.busibox import BusiboxClient
@@ -935,9 +936,10 @@ async def run_workflow_execution(
                     session, execution, step, context, usage_limits, busibox_client, principal
                 )
                 
-                # Store result in context
+                # Store result in context and workflow execution
                 context[step_id] = result
                 execution.step_outputs[step_id] = result
+                flag_modified(execution, "step_outputs")  # SQLAlchemy needs explicit flag for in-place JSON mutation
                 
                 # Check if workflow is paused for human approval
                 if isinstance(result, dict) and result.get("status") == "awaiting_human":
@@ -1121,9 +1123,10 @@ async def execute_enhanced_workflow(
                 session, execution, step, context, usage_limits, busibox_client, principal
             )
             
-            # Store result in context
+            # Store result in context and workflow execution
             context[step_id] = result
             execution.step_outputs[step_id] = result
+            flag_modified(execution, "step_outputs")  # SQLAlchemy needs explicit flag for in-place JSON mutation
             
             # Check if workflow is paused for human approval
             if isinstance(result, dict) and result.get("status") == "awaiting_human":
