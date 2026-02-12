@@ -83,7 +83,7 @@ class HealthResponse(BaseModel):
 class ProviderKeyRequest(BaseModel):
     """Request to save a cloud provider API key."""
     provider: str = Field(..., description="Provider name: openai, anthropic, bedrock")
-    api_key: str = Field(default="", description="API key for the provider (or access_key:secret_key for bedrock)")
+    api_key: str = Field(default="", description="API key for the provider (access_key:secret_key or Bedrock API Key for bedrock)")
     # Bedrock-specific fields (alternative to api_key)
     aws_access_key_id: Optional[str] = Field(default=None, description="AWS Access Key ID (Bedrock)")
     aws_secret_access_key: Optional[str] = Field(default=None, description="AWS Secret Access Key (Bedrock)")
@@ -150,9 +150,9 @@ CLOUD_PROVIDER_CONFIG: Dict[str, Dict[str, Any]] = {
         "auth_prefix": "",
     },
     "bedrock": {
-        # Bedrock uses AWS credentials, not a single API key
-        "env_vars": ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION_NAME"],
-        "env_var": "AWS_ACCESS_KEY_ID",  # Primary env var for detection
+        # Bedrock uses AWS credentials (IAM) or a Bedrock API Key (bearer token)
+        "env_vars": ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION_NAME", "AWS_BEARER_TOKEN_BEDROCK"],
+        "env_var": "AWS_ACCESS_KEY_ID",  # Primary env var for IAM detection
     },
 }
 
@@ -731,7 +731,8 @@ async def save_provider_key(
     Also sets the key in os.environ so agent-api can use it for
     direct provider API calls (e.g., fetching live model lists).
     
-    For Bedrock: accepts either api_key (access_key:secret_key format)
+    For Bedrock: accepts api_key (access_key:secret_key format),
+    a single Bedrock API Key (base64-encoded bearer token),
     or separate aws_access_key_id + aws_secret_access_key fields.
     
     Admin only.
@@ -892,9 +893,10 @@ async def save_provider_key(
 def _build_bedrock_env_vars(request: ProviderKeyRequest) -> Dict[str, str]:
     """Build env vars dict for Bedrock from request fields.
     
-    Supports two modes:
+    Supports three modes:
     1. Separate fields: aws_access_key_id + aws_secret_access_key (+ optional aws_region)
     2. Combined api_key in access_key:secret_key format
+    3. Single Bedrock API Key (base64-encoded bearer token, no colon) -> AWS_BEARER_TOKEN_BEDROCK
     """
     env_vars: Dict[str, str] = {}
     
@@ -903,22 +905,20 @@ def _build_bedrock_env_vars(request: ProviderKeyRequest) -> Dict[str, str]:
         env_vars["AWS_ACCESS_KEY_ID"] = request.aws_access_key_id
         env_vars["AWS_SECRET_ACCESS_KEY"] = request.aws_secret_access_key
     elif request.api_key:
-        # Mode 2: Combined format (access_key:secret_key)
         if ":" in request.api_key:
+            # Mode 2: Combined format (access_key:secret_key)
             parts = request.api_key.split(":", 1)
             env_vars["AWS_ACCESS_KEY_ID"] = parts[0]
             env_vars["AWS_SECRET_ACCESS_KEY"] = parts[1]
         else:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Bedrock api_key must be in 'access_key:secret_key' format, "
-                       "or provide aws_access_key_id and aws_secret_access_key separately"
-            )
+            # Mode 3: Single Bedrock API Key (bearer token)
+            # Used with LiteLLM's AWS_BEARER_TOKEN_BEDROCK env var
+            env_vars["AWS_BEARER_TOKEN_BEDROCK"] = request.api_key
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Bedrock requires either aws_access_key_id + aws_secret_access_key, "
-                   "or api_key in 'access_key:secret_key' format"
+                   "api_key in 'access_key:secret_key' format, or a Bedrock API Key"
         )
     
     # Region (default to us-east-1)
@@ -947,16 +947,21 @@ async def list_provider_keys(
             masked_key="****configured****" if configured else None,
         ))
     
-    # Bedrock: check if AWS_ACCESS_KEY_ID is configured
-    bedrock_configured = (
+    # Bedrock: check IAM credentials or Bedrock API Key (bearer token)
+    bedrock_iam_configured = (
         _is_key_configured(env_vars, "AWS_ACCESS_KEY_ID") and
         _is_key_configured(env_vars, "AWS_SECRET_ACCESS_KEY")
     )
+    bedrock_apikey_configured = _is_key_configured(env_vars, "AWS_BEARER_TOKEN_BEDROCK")
+    bedrock_configured = bedrock_iam_configured or bedrock_apikey_configured
     bedrock_region = env_vars.get("AWS_REGION_NAME", "")
     bedrock_masked = None
-    if bedrock_configured:
+    if bedrock_iam_configured:
         access_key = env_vars.get("AWS_ACCESS_KEY_ID", "")
-        bedrock_masked = f"{_mask_key(access_key)} (region: {bedrock_region or 'us-east-1'})"
+        bedrock_masked = f"{_mask_key(access_key)} (IAM, region: {bedrock_region or 'us-east-1'})"
+    elif bedrock_apikey_configured:
+        bearer_token = env_vars.get("AWS_BEARER_TOKEN_BEDROCK", "")
+        bedrock_masked = f"{_mask_key(bearer_token)} (API Key, region: {bedrock_region or 'us-east-1'})"
     providers_info.append(ProviderKeyInfo(
         provider="bedrock",
         configured=bedrock_configured,
