@@ -1,7 +1,15 @@
-# Ingestion Service
+---
+title: "Data / Ingestion Service"
+category: "developer"
+order: 5
+description: "Document upload, processing pipeline, embedding generation, and data storage architecture"
+published: true
+---
+
+# Data / Ingestion Service
 
 **Created**: 2025-12-09  
-**Last Updated**: 2025-12-21  
+**Last Updated**: 2026-02-12  
 **Status**: Active  
 **Category**: Architecture  
 **Related Docs**:  
@@ -11,21 +19,58 @@
 - `architecture/05-search.md`
 
 ## Service Placement
-- **Container**: `ingest-lxc` (CT 206)
-- **Code**: `srv/ingest`
-- **Ports**: `8000` (FastAPI), `6379` (Redis Streams)
+- **Container**: `data-lxc` (CT 206)
+- **Code**: `srv/data`
+- **Ports**: `8002` (FastAPI Data API), `6379` (Redis Streams)
+- **Additional services**: Embedding API (`8005`), Data Worker
 - **Exposure**: Internal-only; apps proxy requests.
 
+## Pipeline Overview
+
+```mermaid
+graph LR
+    subgraph upload [Upload]
+        API[Data API :8002]
+    end
+
+    subgraph store [Initial Storage]
+        MinIO[(MinIO)]
+        PG[(PostgreSQL)]
+        Redis[(Redis Queue)]
+    end
+
+    subgraph worker [Data Worker]
+        Extract[Text Extraction]
+        Cleanup[LLM Cleanup]
+        Chunk[Semantic Chunking]
+        Embed[Embedding Generation]
+    end
+
+    subgraph index [Indexing]
+        Milvus[(Milvus)]
+    end
+
+    API --> MinIO
+    API --> PG
+    API --> Redis
+    Redis --> Extract
+    Extract --> Cleanup
+    Cleanup --> Chunk
+    Chunk --> Embed
+    Embed --> Milvus
+    Embed --> PG
+```
+
 ## Key Endpoints (prefix `/`)
-- `POST /upload` — multipart upload; streams to MinIO; dedupe via SHA-256; supports metadata, processing config, visibility `personal|shared`, role list.
-- `GET /status/{fileId}` — SSE status stream per file.
-- `GET /files/{fileId}` — metadata lookup; markdown retrieval under `/files/{fileId}/markdown`.
-- `DELETE /files/{fileId}` — delete file (enforces role permissions).
-- `POST /files/{fileId}/roles` — share/unshare with roles.
-- `POST /search` — hybrid search (semantic + BM25) using ingest-held embeddings.
-- `POST /api/embeddings` — text embedding endpoint (FastEmbed), used by search when configured.
-- `POST /authz/*` — token/audit passthrough helpers.
-- `GET /health` — health checks.
+- `POST /upload` -- multipart upload; streams to MinIO; dedupe via SHA-256; supports metadata, processing config, visibility `personal|shared`, role list.
+- `GET /status/{fileId}` -- SSE status stream per file.
+- `GET /files/{fileId}` -- metadata lookup; markdown retrieval under `/files/{fileId}/markdown`.
+- `DELETE /files/{fileId}` -- delete file (enforces role permissions).
+- `POST /files/{fileId}/roles` -- share/unshare with roles.
+- `POST /search` -- hybrid search (semantic + BM25) using data-held embeddings.
+- `POST /api/embeddings` -- text embedding endpoint (FastEmbed), used by search when configured.
+- `POST /authz/*` -- token/audit passthrough helpers.
+- `GET /health` -- health checks.
 
 ## Auth & RLS
 - JWT middleware (`Authorization: Bearer`) validates RS256 tokens from AuthZ service.
@@ -38,11 +83,11 @@
 1. **Upload**: MinIO store at `userId/fileId/filename`; dedupe via content hash.
 2. **Metadata**: PostgreSQL record with visibility + role IDs.
 3. **Queue**: Redis Streams entry (`jobs:ingestion`).
-4. **Processing worker** (`srv/ingest/src/worker.py`):
+4. **Processing worker** (`srv/data/src/worker.py`):
    - **PDF Splitting**: Large PDFs (>5 pages) automatically split into 5-page chunks before processing to prevent memory issues and timeouts. Configurable via `PDF_SPLIT_PAGES` and `PDF_SPLIT_ENABLED`.
    - Extraction: Marker (GPU) with remote override; fallbacks (pdfplumber, etc.).
    - Classification and metadata enrichment.
-   - Chunking: configurable 400–800 tokens, ~12% overlap.
+   - Chunking: configurable 400-800 tokens, ~12% overlap.
    - Embeddings: FastEmbed (`bge-large-en-v1.5`); optional ColPali for visual.
    - Indexing: Milvus collection `documents`, partitions per user/role.
    - Status: Updates persisted for SSE/polling.
@@ -66,6 +111,8 @@
 - Auth: `AUTHZ_JWKS_URL`, `JWT_ISSUER`, `JWT_AUDIENCE`, `ALLOW_LEGACY_AUTH`
 
 ## Notes vs Prior Docs
+- Service code is in `srv/data` (formerly `srv/ingest`). Container is `data-lxc` (formerly `ingest-lxc`). Port is `8002` (formerly `8000`).
 - Upload, webhook, and status logic previously described for agent-lxc now lives here.
 - SSE status streaming is internal-only and proxied by apps; no public ingest endpoints.
 - Video/image uploads are stored but not processed; return `status=completed` without queuing.
+- Embedding API runs as a separate service on the same container (port `8005`).

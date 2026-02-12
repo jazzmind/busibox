@@ -130,8 +130,8 @@ def generate_supervisor_conf(app_id: str, app_path: str, start_command: str, env
     - Runs the app's start command in the app directory
     - Sets environment variables
     - Automatically restarts on crash (up to 5 retries)
-    - Logs stdout/stderr to per-app log files
-    - Streams logs to container stdout via /dev/fd/1 for `docker logs`
+    - Logs stdout/stderr to container stdout/stderr for `docker logs`
+    - Also keeps per-app log files for direct access
     
     Args:
         app_id: Application identifier (used as program name)
@@ -151,8 +151,6 @@ def generate_supervisor_conf(app_id: str, app_path: str, start_command: str, env
         env_parts.append(f'{k}="{escaped_v}"')
     env_string = ",".join(env_parts) if env_parts else ""
     
-    log_file = f"/var/log/user-apps/{app_id}.log"
-    
     conf = f"""# =============================================================================
 # {app_id} - Managed by deploy-api
 # =============================================================================
@@ -167,10 +165,10 @@ startsecs=10
 stopwaitsecs=15
 stopasgroup=true
 killasgroup=true
-redirect_stderr=true
-stdout_logfile={log_file}
-stdout_logfile_maxbytes=10MB
-stdout_logfile_backups=3
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
+stderr_logfile=/dev/stderr
+stderr_logfile_maxbytes=0
 """
     return conf
 
@@ -373,9 +371,12 @@ async def recreate_user_apps_with_volumes(dev_app_ids: Set[str], logs: List[str]
         'fi && '
         'apt-get update && apt-get install -y --no-install-recommends git curl procps supervisor && '
         'mkdir -p /var/log/user-apps /var/log/supervisor /etc/supervisor/conf.d && '
-        # Patch Debian default config: add nodaemon=true under [supervisord]
+        # Patch Debian default config: add nodaemon=true and redirect log to stdout
         'grep -q "nodaemon" /etc/supervisor/supervisord.conf || '
         'sed -i "/\\[supervisord\\]/a nodaemon=true" /etc/supervisor/supervisord.conf && '
+        'sed -i "s|logfile=.*|logfile=/dev/stdout|" /etc/supervisor/supervisord.conf && '
+        'sed -i "/logfile_maxbytes/d" /etc/supervisor/supervisord.conf && '
+        'sed -i "/\\[supervisord\\]/a logfile_maxbytes=0" /etc/supervisor/supervisord.conf && '
         # Start supervisord as PID 1 (exec replaces shell)
         'exec supervisord -c /etc/supervisor/supervisord.conf'
     )
@@ -1260,13 +1261,12 @@ rm -f /tmp/{app_id}.pid 2>/dev/null || true
             logs.append(f"✅ Application running under supervisord")
             logs.append(f"   {status_line}")
             
-            log_file = f"/var/log/user-apps/{app_id}.log"
-            # Show first few lines of log for debugging
-            log_cmd = f"head -20 {log_file} 2>/dev/null || echo 'No log output yet'"
+            # Show recent log output for debugging via supervisorctl
+            log_cmd = f"supervisorctl tail {app_id} 2>/dev/null || echo 'No log output yet'"
             log_stdout, _, _ = await execute_in_container(log_cmd)
             if log_stdout.strip() and log_stdout.strip() != 'No log output yet':
                 logs.append(f"📋 Initial log output:")
-                for line in log_stdout.strip().split('\n')[:10]:
+                for line in log_stdout.strip().split('\n')[-10:]:
                     logs.append(f"   {line}")
             
             return True
@@ -1278,9 +1278,8 @@ rm -f /tmp/{app_id}.pid 2>/dev/null || true
         elif "FATAL" in status_line or "BACKOFF" in status_line:
             logs.append(f"❌ Application failed to start: {status_line}")
             
-            log_file = f"/var/log/user-apps/{app_id}.log"
-            # Show log output to help diagnose
-            log_cmd = f"tail -30 {log_file} 2>/dev/null || echo 'No log output'"
+            # Show log output to help diagnose via supervisorctl
+            log_cmd = f"supervisorctl tail {app_id} 2>/dev/null || echo 'No log output'"
             log_stdout, _, _ = await execute_in_container(log_cmd)
             if log_stdout.strip() and log_stdout.strip() != 'No log output':
                 logs.append(f"📋 Log output:")
@@ -1542,10 +1541,10 @@ fi
     
     if not port_stdout.strip():
         logs.append(f"⏳ Port {port} not yet listening, waiting for app to start...")
-        # Show last lines of log to help debug (check both old and new log locations)
-        log_cmd = f"tail -10 /var/log/user-apps/{app_id}.log 2>/dev/null || tail -10 /tmp/{app_id}.log 2>/dev/null || echo 'No log file yet'"
+        # Show last lines of log to help debug via supervisorctl
+        log_cmd = f"supervisorctl tail {app_id} 2>/dev/null || echo 'No log output yet'"
         log_stdout, _, _ = await execute_in_container(log_cmd)
-        if log_stdout.strip() and 'No log file yet' not in log_stdout:
+        if log_stdout.strip() and 'No log output yet' not in log_stdout:
             logs.append(f"📋 Recent log output:")
             for line in log_stdout.strip().split('\n')[-5:]:
                 logs.append(f"   {line}")
@@ -1573,8 +1572,8 @@ fi
             port_stdout, _, _ = await execute_in_container(port_check)
             if not port_stdout.strip():
                 logs.append(f"⚠️ Port {port} stopped listening - app may have crashed (supervisord will auto-restart)")
-                # Show recent log
-                log_cmd = f"tail -15 /var/log/user-apps/{app_id}.log 2>/dev/null || tail -15 /tmp/{app_id}.log 2>/dev/null"
+                # Show recent log via supervisorctl
+                log_cmd = f"supervisorctl tail {app_id} 2>/dev/null"
                 log_stdout, _, _ = await execute_in_container(log_cmd)
                 if log_stdout.strip():
                     logs.append(f"📋 Recent log output:")
@@ -1603,12 +1602,12 @@ fi
     else:
         logs.append(f"⚠️ No process listening on port {port}")
     
-    # Show last lines of log (check both new supervisord and legacy log locations)
-    log_cmd = f"tail -20 /var/log/user-apps/{app_id}.log 2>/dev/null || tail -20 /tmp/{app_id}.log 2>/dev/null"
+    # Show last lines of log via supervisorctl
+    log_cmd = f"supervisorctl tail {app_id} 2>/dev/null"
     log_stdout, _, _ = await execute_in_container(log_cmd)
     if log_stdout.strip():
         logs.append(f"📋 App log (last 20 lines):")
-        for line in log_stdout.strip().split('\n'):
+        for line in log_stdout.strip().split('\n')[-20:]:
             logs.append(f"   {line}")
     
     return False

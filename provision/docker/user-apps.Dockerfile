@@ -15,7 +15,7 @@
 #
 #   supervisord provides:
 #     - Automatic restart on crash (autorestart=true)
-#     - Log capture to /var/log/user-apps/<app>.log
+#     - Log output to container stdout/stderr (visible via `docker logs`)
 #     - Clean process lifecycle management
 #     - Status querying via supervisorctl
 #

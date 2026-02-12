@@ -1,7 +1,15 @@
+---
+title: "Agent Service"
+category: "developer"
+order: 7
+description: "Agent API architecture, chat orchestration, tools, and workflow execution"
+published: true
+---
+
 # Agent Service
 
 **Created**: 2025-12-09  
-**Last Updated**: 2025-12-20  
+**Last Updated**: 2026-02-12  
 **Status**: Active  
 **Category**: Architecture  
 **Related Docs**:  
@@ -9,12 +17,51 @@
 - `architecture/02-ai.md`  
 - `architecture/05-search.md`
 
-## Current State (agent-server, Mastra-based)
+## Service Placement
 - **Container**: `agent-lxc` (CT 202)
-- **Code**: `agent-server` (Mastra)
-- **Port**: 4111 (internal)
+- **Code**: `srv/agent`
+- **Port**: 8000 (FastAPI)
 - **Exposure**: Internal-only
-- **Implementation**: Mastra agents + tools with a streaming `/api/chat` endpoint.
+- **Additional**: Docs API also runs on this container (port 8004)
+
+## Agent Architecture
+
+```mermaid
+graph TB
+    subgraph api [Agent API - CT 202]
+        Chat[Chat Endpoint]
+        Agents[Agent Definitions]
+        Tools[Tool Registry]
+        Workflows[Workflow Engine]
+    end
+
+    subgraph routing [Agent Routing]
+        RAG[RAG Search Agent]
+        Web[Web Search Agent]
+        ChatAgent[Chat Agent]
+        Attach[Attachment Agent]
+    end
+
+    subgraph downstream [Downstream Services]
+        Search[Search API]
+        LiteLLM[LiteLLM Gateway]
+        DataAPI[Data API]
+        AuthZ[AuthZ Service]
+    end
+
+    Chat --> RAG
+    Chat --> Web
+    Chat --> ChatAgent
+    Chat --> Attach
+
+    RAG --> Search
+    RAG --> LiteLLM
+    Web --> LiteLLM
+    ChatAgent --> LiteLLM
+    Attach --> DataAPI
+
+    Chat --> AuthZ
+```
 
 ## Responsibilities
 - Orchestrate agent-style requests (RAG + web + attachment decisions):
@@ -23,11 +70,7 @@
   - Call liteLLM via OpenAI-compatible API for synthesis.
   - Enforce RBAC using the same JWT/role model as apps/search/ingest.
 - Provide a stable surface for apps to invoke AI workflows without duplicating search/LLM calls.
-
-## What to Rely On Today
-- Use `agent-server /api/chat` for streaming chat with debug marker; legacy app-side logic remains as fallback.
-- Retrieval is delegated to Search API via the `document-search` tool (grounded RAG).
-- Web search tool is currently a placeholder (returns “not configured”) until a provider is added.
+- Manage agent definitions, conversations, workflows, and tools.
 
 ## Auth
 - End-user JWT: RS256 tokens from AuthZ service (`iss=busibox-authz`, `aud=agent-api`).
@@ -36,18 +79,31 @@
 - Scopes from JWT are stored in token grants for downstream calls.
 - **Note**: OAuth2 scope-based operation authorization (e.g., `agent.execute`) is designed but not yet enforced. See `architecture/03-authentication.md` for current status.
 
-## Built-in Agents (hardcoded, listed via `/admin/agents`)
+## Built-in Agents (listed via `/admin/agents`)
 - `rag-search-agent`: uses `document-search` tool; grounded answers with citations.
-- `web-search-agent`: placeholder web search (provider not configured).
+- `web-search-agent`: web search with configurable provider.
 - `attachment-agent`: heuristic action/modelHint for attachments.
 - `chat-agent`: final responder; uses provided doc/web/attachment context, avoids fabrication.
-- (Legacy) `documentAgent`, `weatherAgent` remain available.
 
 ## Chat Endpoint
 - **Path**: `POST /api/chat`
-- **Behavior**: attachment decision → optional doc search → chat synthesis via liteLLM; streams tokens and prepends `<!-- ROUTING_DEBUG:... -->`.
+- **Behavior**: attachment decision -> optional doc search -> chat synthesis via liteLLM; streams tokens via SSE.
 - **Inputs**: `content`, `enableDocumentSearch`, `enableWebSearch`, `attachmentIds?`, `model?`, `conversationId?`
 - **Outputs**: streaming text + routing debug; doc results included in debug payload for UI display.
 
-## App Integration (high level)
-- Apps should mint a user HS256 JWT and call `agent-server /api/chat`, streaming the response to the UI; keep legacy in-app routing as fallback until fully migrated.
+## Additional APIs
+- `GET /api/agents` -- list available agents
+- `GET /api/conversations` -- list conversations
+- `POST /api/runs` -- execute agent workflows
+- `GET /api/tools` -- list available tools
+- `GET /admin/agents` -- admin view of agent definitions
+
+## App Integration
+- Apps exchange user session JWT for an `agent-api` audience token via AuthZ.
+- Call `agent-api /api/chat` with the exchanged token, streaming the response to the UI.
+- The `@jazzmind/busibox-app` library provides `AgentClient` and `SimpleChatInterface` for easy integration.
+
+## Database
+- Uses `agent_server` database in PostgreSQL.
+- Schema managed via Alembic migrations (`srv/agent/alembic/`).
+- Key tables: `agent_definitions`, `conversations`, `messages`, `tools`, `workflows`, `runs`, `run_outputs`, `run_tool_calls`.

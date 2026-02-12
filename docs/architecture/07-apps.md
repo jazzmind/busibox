@@ -1,7 +1,15 @@
+---
+title: "Applications Layer"
+category: "developer"
+order: 8
+description: "Next.js application architecture, SSO flow, app types, and deployment model"
+published: true
+---
+
 # Applications Layer
 
 **Created**: 2025-12-09  
-**Last Updated**: 2026-01-20  
+**Last Updated**: 2026-02-12  
 **Status**: Active  
 **Category**: Architecture  
 **Related Docs**:  
@@ -14,9 +22,11 @@
 
 ## Service Placement
 
-- **Container**: `apps-lxc` (CT 201)
-- **Role**: Hosts user-facing Next.js apps (e.g., AI Portal, Agent Manager) behind `proxy-lxc`.
-- **Ports**: Next.js internal `3000`; exposed via proxy `80/443`.
+- **Core Apps Container**: `core-apps-lxc` (CT 201) -- hosts AI Portal, Agent Manager, and other core apps
+- **User Apps Container**: `user-apps-lxc` (CT 212) -- hosts user-deployed applications
+- **Reverse Proxy**: `proxy-lxc` (CT 200) -- nginx fronts all apps
+- **Ports**: Next.js internal `3000`+ ; exposed via proxy `80/443`.
+- **Process Management**: supervisord (Docker) or systemd (Proxmox)
 
 ---
 
@@ -24,7 +34,7 @@
 
 - Provide UI for uploads, search, admin/deployment views.
 - Proxy internal calls to:
-  - Ingest API (`/upload`, `/status`, `/files`, `/search`).
+  - Data API (`/upload`, `/status`, `/files`, `/search`).
   - Search API (`/search`) for retrieval.
   - Agent API (`/chat`, `/agents`) for agent interactions.
   - AuthZ service for token exchange.
@@ -38,7 +48,7 @@
 |------|-------------|----------------|
 | **BUILT_IN** | Core portal features (Video, Chat, Document Manager) | Uses session JWT directly |
 | **LIBRARY** | Deployed alongside portal (Agent Manager, Doc Intel) | SSO via app-scoped token |
-| **EXTERNAL** | Third-party apps (future) | SSO via app-scoped token |
+| **EXTERNAL** | User-deployed apps | SSO via app-scoped token |
 
 ---
 
@@ -58,17 +68,16 @@ sequenceDiagram
     participant Browser
     participant AIPortal
     participant AuthZ
-    participant AgentManager
+    participant App as Target App
 
-    Browser->>AIPortal: Click "Agent Manager"
+    Browser->>AIPortal: Click app link
     AIPortal->>AuthZ: POST /oauth/token (subject_token + resource_id)
-    Note right of AuthZ: Check user has role<br/>with app binding
     AuthZ-->>AIPortal: App-scoped RS256 JWT
-    AIPortal->>Browser: Redirect to agent-manager?token=<jwt>
-    Browser->>AgentManager: GET /api/sso?token=<jwt>
-    AgentManager->>AuthZ: Fetch /.well-known/jwks.json
-    AgentManager->>AgentManager: Verify JWT signature
-    AgentManager->>Browser: Set session, redirect to /dashboard
+    AIPortal->>Browser: Redirect to app?token=jwt
+    Browser->>App: POST /api/sso with token
+    App->>AuthZ: Fetch /.well-known/jwks.json
+    App->>App: Verify JWT signature
+    App->>Browser: Set session cookie, redirect to dashboard
 ```
 
 ### App Token Validation
@@ -79,14 +88,14 @@ External apps validate tokens using authz JWKS:
 import * as jose from 'jose';
 
 const AUTHZ_URL = process.env.AUTHZ_BASE_URL || 'http://authz-api:8010';
-const APP_NAME = 'Agent Manager';
+const APP_NAME = process.env.APP_NAME;
 
 // Create JWKS verifier (cached)
 const jwks = jose.createRemoteJWKSet(new URL('/.well-known/jwks.json', AUTHZ_URL));
 
 // Validate incoming token
 const { payload } = await jose.jwtVerify(token, jwks, {
-  issuer: 'authz-api',
+  issuer: 'busibox-authz',
   audience: APP_NAME,
 });
 
@@ -123,60 +132,71 @@ POST /admin/bindings
 ## Integration Boundaries
 
 - Apps do **not** expose ingest or search publicly; all backend calls stay on the internal network.
-- SSE for ingestion status is proxied: browser connects to app endpoint, which forwards to ingest `/status/{fileId}`.
+- SSE for ingestion status is proxied: browser connects to app endpoint, which forwards to data API `/status/{fileId}`.
 - Role data originates from authz and is included in JWTs passed to backend services.
 
 ---
 
-## Agent-Manager Integration
+## Deployment Architecture
 
-**Agent Manager** is a LIBRARY app that provides a UI for managing AI agents.
+Apps are deployed at runtime via the Deploy API -- they are NOT baked into container images:
 
-### Authentication
+```mermaid
+sequenceDiagram
+    participant Dev as Developer
+    participant Deploy as Deploy API
+    participant Container as Apps Container
+    participant Nginx as nginx
 
-1. User accesses via ai-portal SSO (app-scoped token)
-2. Token is validated via authz JWKS
-3. For downstream API calls (agent-api), token is exchanged via authz:
-
-```typescript
-import { exchangeTokenZeroTrust } from '@jazzmind/busibox-app';
-
-const result = await exchangeTokenZeroTrust({
-  sessionJwt: appToken,  // The app-scoped token from SSO
-  audience: 'agent-api',
-  scopes: ['agents:read', 'agents:write'],
-});
-
-// Use result.accessToken for agent-api calls
+    Dev->>Deploy: Deploy my-app (git ref)
+    Deploy->>Container: Clone repository
+    Container->>Container: npm install + npm run build
+    Deploy->>Container: Start with PM2/supervisord
+    Deploy->>Nginx: Update routing config
+    Nginx-->>Dev: App live at /my-app
 ```
 
-### Configuration
-
-| Variable | Description |
-|----------|-------------|
-| `AUTHZ_BASE_URL` | AuthZ service URL (e.g., `http://authz-api:8010`) |
-| `APP_NAME` | App name for audience validation (e.g., `Agent Manager`) |
-| `AGENT_API_URL` | Agent API URL (e.g., `http://agent-api:8040`) |
-
----
-
-## Deployment Notes
-
-- Provisioning and deploy automation live under `provision/ansible` (see `make deploy-apps`, `make deploy-ai-portal` in CLAUDE.md).
-- Environment variables for app endpoints should match container IPs in `provision/pct/vars.env`.
-- Keep proxy rules aligned so only apps are internet-facing; backend containers remain internal.
+This runtime installation pattern provides:
+- **Fast iteration** -- deploy code changes without rebuilding containers
+- **Independent updates** -- update one app without affecting others
+- **Version control** -- deploy specific git refs, tags, or branches
+- **Rollback** -- revert to a previous version instantly
 
 ---
 
 ## busibox-app Library
 
-The `@jazzmind/busibox-app` library provides shared authentication utilities:
+The `@jazzmind/busibox-app` library provides shared utilities for all apps:
 
 | Function | Purpose |
 |----------|---------|
 | `exchangeTokenZeroTrust()` | Exchange session/app token for downstream access token |
 | `validateSession()` | Validate session JWT locally or against authz |
-| `getUserRoles()` | Get user's role assignments |
-| `userCanAccessResource()` | Check if user has access to a resource |
+| `useAuthzTokenManager()` | Client-side token management hook |
+| `IngestClient` | File upload and processing |
+| `AgentClient` | AI chat and agents |
+| `RBACClient` | Role-based access control |
+| `SearchClient` | Document search |
+| `SimpleChatInterface` | Drop-in chat UI component |
 
 See `busibox-app/src/lib/authz/zero-trust.ts` for implementation.
+
+---
+
+## Core Apps
+
+| App | Port | Base Path | Description |
+|-----|------|-----------|-------------|
+| AI Portal | 3000 | / | Main dashboard, admin, document manager |
+| Agent Manager | 3001 | /agents | Agent management and chat |
+| Status Report | 3003 | /status | Project tracking with AI agents |
+| Estimator | 3004 | /estimator | Cost estimation tool |
+
+---
+
+## Deployment Notes
+
+- Deploy core apps: `make install SERVICE=ai-portal` or `make install SERVICE=core-apps`
+- Deploy user apps: via Deploy API or AI Portal admin UI
+- Environment variables for app endpoints should match container IPs in `provision/pct/vars.env`.
+- Keep proxy rules aligned so only apps are internet-facing; backend containers remain internal.

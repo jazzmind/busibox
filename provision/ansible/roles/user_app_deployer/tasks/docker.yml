@@ -144,10 +144,10 @@
       stopwaitsecs=15
       stopasgroup=true
       killasgroup=true
-      redirect_stderr=true
-      stdout_logfile=/var/log/user-apps/{{ app_id }}.log
-      stdout_logfile_maxbytes=10MB
-      stdout_logfile_backups=3
+      stdout_logfile=/dev/stdout
+      stdout_logfile_maxbytes=0
+      stderr_logfile=/dev/stderr
+      stderr_logfile_maxbytes=0
       EOF"
   changed_when: true
 

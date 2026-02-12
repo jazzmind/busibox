@@ -1,7 +1,15 @@
+---
+title: "Testing Architecture"
+category: "developer"
+order: 9
+description: "Testing philosophy, execution methods, service-specific tests, and debugging strategies"
+published: true
+---
+
 # Testing Architecture
 
 **Created**: 2025-12-21  
-**Updated**: 2026-01-16  
+**Updated**: 2026-02-12  
 **Status**: Active  
 **Category**: Architecture  
 

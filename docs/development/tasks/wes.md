@@ -1,17 +1,11 @@
 # Wes's Tasks
 
 Critical:
-Research Plymouth Rock, Jim
-Project Status for Peter, Jay
-Invoices - maigent Dec (12,500), Jan (15,000), Feb (12,500)
-Expenses - exchange cash; write 10k check to personal
-
-
-
+[~] Project Status for Peter, Jay
 
 issues:
 
-apps in dev mode will crash if they change
+- apps should be able to install docs into docs-api
 
 
 [X] get proxmox stage deployed

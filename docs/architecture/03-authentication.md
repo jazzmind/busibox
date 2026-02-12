@@ -1,7 +1,15 @@
+---
+title: "Authentication & Authorization"
+category: "developer"
+order: 4
+description: "Zero Trust architecture, OAuth2 token exchange, RBAC, and Row-Level Security"
+published: true
+---
+
 # Authentication & Authorization
 
 **Created**: 2025-12-09  
-**Last Updated**: 2026-01-20  
+**Last Updated**: 2026-02-12  
 **Status**: Active  
 **Category**: Architecture  
 **Related Docs**:  
