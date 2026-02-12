@@ -63,6 +63,7 @@ INFRASTRUCTURE_ANSIBLE_MAP = {
     
     # Bridge (multi-channel communication: email, Signal, etc.)
     'bridge': ('data', ['apis_bridge'], 'Bridge (multi-channel communication)'),
+    'bridge-api': ('data', ['apis_bridge'], 'Bridge (multi-channel communication)'),  # alias
     
     # Apps (deploy via Deploy API, but can also use Ansible)
     'apps': ('apps', ['apps'], 'Frontend applications'),
@@ -93,7 +94,7 @@ INSTALLATION_ORDER = [
     ['data-api'],       # Data API (depends on redis, minio, postgres, embedding)
     ['search-api'],     # Search API (depends on milvus)
     ['authz-api', 'deploy-api'],  # Auth services
-    ['agent-api', 'docs-api'],    # Agent services
+    ['agent-api', 'docs-api', 'bridge'],  # Agent services + Bridge
     
     # Group 6: Apps (need all APIs)
     ['apps'],
