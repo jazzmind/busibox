@@ -19,6 +19,23 @@ Execution Methods:
 - Docker: Uses `docker exec` to run commands in user-apps container
 - LXC: Uses SSH to run commands in user-apps-lxc container
 
+Process Management (Docker):
+-----------------------------
+Apps are managed by supervisord running as PID 1 in the user-apps container.
+Deploy-api creates per-app config files in /etc/supervisor/conf.d/{app_id}.conf
+and uses `supervisorctl update` to hot-load/remove programs.
+
+Benefits over the previous nohup approach:
+- Automatic restart on crash (autorestart=true, startretries=5)
+- Clean process lifecycle (SIGTERM -> SIGKILL with stopwaitsecs)
+- Log capture to per-app log files
+- Status querying via `supervisorctl status`
+- Survives host file changes on bind mounts (restarts automatically)
+
+Process Management (LXC):
+--------------------------
+Apps are managed by systemd services created in /etc/systemd/system/{app_id}.service.
+
 Volume Management for Dev Apps (Docker):
 ----------------------------------------
 For local dev apps, we need to handle the platform mismatch between host (macOS/Windows)
@@ -53,9 +70,14 @@ _user_apps_container_checked = False
 _mounted_app_volumes: Set[str] = set()
 
 # Registry of running apps - stored in deploy service's filesystem
-# so it survives both deploy service restarts AND container recreation
+# so it survives both deploy service restarts AND container recreation.
+# When the container is recreated (e.g., for volume changes), we use
+# this registry to regenerate supervisord configs and restart all apps.
 # Format: {app_id: {"app_path": str, "start_command": str, "env_vars": dict}}
 APPS_REGISTRY_FILE = "/tmp/busibox_running_apps_registry.json"
+
+# Supervisord config directory inside the user-apps container
+SUPERVISOR_CONF_DIR = "/etc/supervisor/conf.d"
 
 
 def register_running_app(app_id: str, app_path: str, start_command: str, env_vars: dict):
@@ -99,6 +121,58 @@ def get_running_apps_registry() -> Dict[str, Dict]:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
+
+
+def generate_supervisor_conf(app_id: str, app_path: str, start_command: str, env_vars: dict) -> str:
+    """Generate a supervisord program configuration for an app.
+    
+    Creates a config that:
+    - Runs the app's start command in the app directory
+    - Sets environment variables
+    - Automatically restarts on crash (up to 5 retries)
+    - Logs stdout/stderr to per-app log files
+    - Streams logs to container stdout via /dev/fd/1 for `docker logs`
+    
+    Args:
+        app_id: Application identifier (used as program name)
+        app_path: Working directory for the app
+        start_command: Command to start the app (e.g., "npm run dev", "npm start")
+        env_vars: Environment variables to set for the app process
+    
+    Returns:
+        String content for the supervisord .conf file
+    """
+    # Build environment string for supervisord
+    # Format: KEY="value",KEY2="value2"
+    env_parts = []
+    for k, v in env_vars.items():
+        # Escape quotes and commas in values for supervisord
+        escaped_v = str(v).replace('"', '\\"').replace('%', '%%')
+        env_parts.append(f'{k}="{escaped_v}"')
+    env_string = ",".join(env_parts) if env_parts else ""
+    
+    log_file = f"/var/log/user-apps/{app_id}.log"
+    
+    conf = f"""# =============================================================================
+# {app_id} - Managed by deploy-api
+# =============================================================================
+[program:{app_id}]
+command=/bin/bash -c '{start_command}'
+directory={app_path}
+environment={env_string}
+autostart=true
+autorestart=true
+startretries=5
+startsecs=10
+stopwaitsecs=15
+stopasgroup=true
+killasgroup=true
+redirect_stderr=true
+stdout_logfile={log_file}
+stdout_logfile_maxbytes=10MB
+stdout_logfile_backups=3
+"""
+    return conf
 
 
 def reset_user_apps_container_check():
@@ -281,20 +355,46 @@ async def recreate_user_apps_with_volumes(dev_app_ids: Set[str], logs: List[str]
     if github_token:
         env_args.extend(['-e', f'GITHUB_AUTH_TOKEN={github_token}'])
     
-    # Entrypoint script that sets up npm auth, installs deps, and tails app logs
-    # The tail -F /tmp/*.log streams all app logs to container stdout for Docker Desktop
-    # Using tail -F (capital F) follows by name, so it picks up new log files as apps start
+    # Entrypoint script that:
+    # 1. Sets up npm auth for GitHub Packages
+    # 2. Installs required tools (git, curl, procps, supervisor)
+    # 3. Creates supervisor directories
+    # 4. Starts supervisord as PID 1
     entrypoint_script = (
         'if [ -n "$GITHUB_AUTH_TOKEN" ]; then '
         'echo "//npm.pkg.github.com/:_authToken=$GITHUB_AUTH_TOKEN" > /root/.npmrc && '
         'echo "@jazzmind:registry=https://npm.pkg.github.com" >> /root/.npmrc; '
         'fi && '
-        'apt-get update && apt-get install -y git curl procps && '
-        # Create a marker log file so tail -F has something to follow initially
-        'touch /tmp/user-apps.log && '
-        'echo "[user-apps] Container ready, waiting for app deployments..." > /tmp/user-apps.log && '
-        # Use exec to replace shell with tail, streaming all .log files to stdout
-        'exec tail -F /tmp/*.log'
+        'apt-get update && apt-get install -y --no-install-recommends git curl procps supervisor && '
+        'mkdir -p /var/log/user-apps /var/log/supervisor /etc/supervisor/conf.d && '
+        # Create a minimal supervisord config if none exists
+        'if [ ! -f /etc/supervisor/supervisord.conf ]; then '
+        'cat > /etc/supervisor/supervisord.conf << \'SEOF\'\n'
+        '[supervisord]\n'
+        'nodaemon=true\n'
+        'logfile=/var/log/supervisor/supervisord.log\n'
+        'logfile_maxbytes=10MB\n'
+        'pidfile=/run/supervisord.pid\n'
+        'childlogdir=/var/log/supervisor\n'
+        'user=root\n'
+        'loglevel=info\n'
+        '\n'
+        '[include]\n'
+        'files = /etc/supervisor/conf.d/*.conf\n'
+        '\n'
+        '[unix_http_server]\n'
+        'file=/run/supervisord.sock\n'
+        'chmod=0700\n'
+        '\n'
+        '[supervisorctl]\n'
+        'serverurl=unix:///run/supervisord.sock\n'
+        '\n'
+        '[rpcinterface:supervisor]\n'
+        'supervisor.rpcinterface_factory = supervisor.rpcinterface:make_main_rpcinterface\n'
+        'SEOF\n'
+        'fi && '
+        # Start supervisord as PID 1 (exec replaces shell)
+        'exec supervisord -c /etc/supervisor/supervisord.conf'
     )
     
     run_cmd = [
@@ -350,32 +450,48 @@ async def recreate_user_apps_with_volumes(dev_app_ids: Set[str], logs: List[str]
         _user_apps_container_checked = True
         logs.append(f"✅ {USER_APPS_CONTAINER} running with {len(dev_app_ids)} app volumes")
         
-        # Restart previously running apps after container recreation
-        # The container was destroyed, so all apps need to be restarted
+        # Wait for supervisord to be ready inside the container
+        await asyncio.sleep(3)
+        
+        # Restart previously running apps after container recreation.
+        # The container was destroyed, so we need to recreate supervisord
+        # configs for all previously running apps and let supervisord start them.
         running_apps = get_running_apps_registry()
         logger.info(f"Running apps registry contains: {list(running_apps.keys())}")
         logger.info(f"dev_app_ids (apps needing volumes): {list(dev_app_ids)}")
         if running_apps:
-            logs.append(f"🔄 Restarting {len(running_apps)} previously running apps...")
+            logs.append(f"🔄 Restoring {len(running_apps)} previously running apps to supervisord...")
             for app_id_to_restart, app_info in running_apps.items():
                 try:
-                    # Wait a moment for container to stabilize
-                    await asyncio.sleep(1)
-                    logs.append(f"  ↪ Restarting {app_id_to_restart}...")
-                    restart_logs: List[str] = []
-                    success = await start_app(
+                    logs.append(f"  ↪ Configuring {app_id_to_restart}...")
+                    # Generate and write supervisord config for this app
+                    conf_content = generate_supervisor_conf(
                         app_id_to_restart,
-                        restart_logs,
-                        app_path=app_info["app_path"],
-                        start_command=app_info["start_command"],
-                        env_vars=app_info["env_vars"]
+                        app_info["app_path"],
+                        app_info["start_command"],
+                        app_info["env_vars"]
                     )
-                    if success:
-                        logs.append(f"  ✅ Restarted {app_id_to_restart}")
-                    else:
-                        logs.append(f"  ⚠️ Failed to restart {app_id_to_restart}: {'; '.join(restart_logs[-2:])}")
+                    conf_path = f"{SUPERVISOR_CONF_DIR}/{app_id_to_restart}.conf"
+                    escaped_conf = conf_content.replace("'", "'\\''")
+                    write_cmd = f"cat > {conf_path} << 'CONFEOF'\n{conf_content}\nCONFEOF"
+                    wr_stdout, wr_stderr, wr_code = await execute_docker_command(write_cmd, _retry=False)
+                    if wr_code != 0:
+                        logs.append(f"  ⚠️ Failed to write config for {app_id_to_restart}: {wr_stderr}")
+                        continue
+                    logs.append(f"  ✅ Config restored for {app_id_to_restart}")
                 except Exception as e:
-                    logs.append(f"  ❌ Error restarting {app_id_to_restart}: {e}")
+                    logs.append(f"  ❌ Error configuring {app_id_to_restart}: {e}")
+            
+            # Tell supervisord to pick up all new configs and start the apps
+            update_cmd = "supervisorctl reread && supervisorctl update"
+            upd_stdout, upd_stderr, upd_code = await execute_docker_command(update_cmd, _retry=False)
+            if upd_code == 0:
+                logs.append(f"✅ All apps submitted to supervisord for restart")
+                if upd_stdout.strip():
+                    for line in upd_stdout.strip().split('\n'):
+                        logs.append(f"   {line}")
+            else:
+                logs.append(f"⚠️ supervisorctl update returned errors: {upd_stderr or upd_stdout}")
         
         return True, "Container recreated with volumes"
     
@@ -1045,157 +1161,88 @@ chmod 644 {service_path}
 
 
 async def start_app(app_id: str, logs: List[str], app_path: str = None, start_command: str = None, env_vars: dict = None) -> bool:
-    """Start/restart app via systemd (LXC) or nohup (Docker)"""
+    """Start/restart app via systemd (LXC) or supervisord (Docker)"""
     logs.append("🚀 Starting application...")
     
     if is_docker_environment():
-        # Docker: Use nohup to run in background
+        # Docker: Use supervisord for process management with auto-restart
         if not app_path or not start_command:
             logs.append("❌ app_path and start_command required for Docker deployment")
             return False
         
-        # Get the port from env_vars for process detection
+        # Get the port from env_vars for health checking
         port = env_vars.get("PORT", "3000") if env_vars else "3000"
         
-        # Stop any existing process for THIS app only (by PID file or port)
-        # IMPORTANT: Don't use pkill -f 'next.*dev' as it kills ALL next processes including other apps
-        pid_file = f"/tmp/{app_id}.pid"
-        stop_command = f"""
-if [ -f {pid_file} ]; then
-    OLD_PID=$(cat {pid_file})
-    kill -9 $OLD_PID 2>/dev/null || true
-    rm -f {pid_file}
-fi
-# Also try to kill any process on this specific port
-if command -v lsof &>/dev/null; then
-    lsof -ti:{port} | xargs kill -9 2>/dev/null || true
-elif command -v fuser &>/dev/null; then
-    fuser -k {port}/tcp 2>/dev/null || true
-elif command -v ss &>/dev/null; then
-    # Extract pid=XXXX from ss output
+        # Stop any existing supervisord program for this app
+        # (supervisorctl stop is a no-op if program doesn't exist)
+        stop_cmd = f"supervisorctl stop {app_id} 2>/dev/null || true"
+        await execute_in_container(stop_cmd)
+        
+        # Also kill any leftover process on this port (from previous nohup-based deploys
+        # or crashed processes that supervisord hasn't cleaned up yet)
+        port_kill_cmd = f"""
+# Kill any process on this specific port to prevent conflicts
+if command -v ss &>/dev/null; then
     PIDS=$(ss -H -ltnp "sport = :{port}" 2>/dev/null | sed -n 's/.*pid=\\([0-9]\\+\\).*/\\1/p' | sort -u)
     for P in $PIDS; do
         kill -9 $P 2>/dev/null || true
     done
-elif command -v netstat &>/dev/null; then
-    # netstat output includes PID/Program at the end (e.g. 1234/node)
-    PIDS=$(netstat -tlnp 2>/dev/null | grep -E "[:.]{port}\\s" | awk '{{print $7}}' | cut -d/ -f1 | grep -E '^[0-9]+$' | sort -u)
-    for P in $PIDS; do
-        kill -9 $P 2>/dev/null || true
-    done
-else
-    # Fallback: find LISTEN socket inode(s) for port in /proc/net/tcp* and map inode -> PID by scanning /proc/*/fd.
-    # This is slower but works in minimal containers without lsof/fuser/ss.
-    PORT_HEX=$(printf '%04X' {port} | tr '[:lower:]' '[:upper:]')
-    INODES=$(awk -v p=":$PORT_HEX" '$4=="0A" && $2 ~ p {{print $10}}' /proc/net/tcp 2>/dev/null || true)
-    INODES="$INODES $(awk -v p=":$PORT_HEX" '$4=="0A" && $2 ~ p {{print $10}}' /proc/net/tcp6 2>/dev/null || true)"
-    for INO in $INODES; do
-        [ -n "$INO" ] || continue
-        for PD in /proc/[0-9]*; do
-            PID=$(basename "$PD")
-            for FD in "$PD"/fd/*; do
-                TARGET=$(readlink "$FD" 2>/dev/null || true)
-                case "$TARGET" in
-                    socket:\\[$INO\\]) kill -9 "$PID" 2>/dev/null || true ;;
-                esac
-            done
-        done
-    done
 fi
+# Clean up any legacy PID files from old nohup-based deploys
+rm -f /tmp/{app_id}.pid 2>/dev/null || true
 """
-        await execute_in_container(stop_command)
+        await execute_in_container(port_kill_cmd)
         
         # Give a moment for port to be released
         await asyncio.sleep(1)
         
-        # Build environment variables for the subshell
-        # We need to pass these to the bash -c subshell, so build them as inline env assignments
-        env_inline = " ".join([f'{k}="{v}"' for k, v in (env_vars or {}).items()])
+        # Generate supervisord config for this app
+        conf_content = generate_supervisor_conf(app_id, app_path, start_command, env_vars or {})
+        conf_path = f"{SUPERVISOR_CONF_DIR}/{app_id}.conf"
         
-        log_file = f"/tmp/{app_id}.log"
-        pid_file = f"/tmp/{app_id}.pid"
-        
-        # Start new process in background with nohup.
-        # We always write a per-app log file, and (when possible) also stream logs
-        # to the container stdout so `docker logs <user-apps>` shows activity.
-        #
-        # Note: The user-apps container currently runs `sleep infinity` (no log tail),
-        # so writing to /proc/1/fd/1 is the most reliable way to surface logs.
-        #
-        # IMPORTANT: Use env to pass environment variables into the bash -c subshell.
-        command = f"""
-cd {app_path}
-rm -f {log_file} {pid_file}
-touch {log_file}
-echo "[{app_id}] Starting: {start_command}" >> {log_file}
-echo "[{app_id}] Environment: NEXT_PUBLIC_BASE_PATH={env_vars.get('NEXT_PUBLIC_BASE_PATH', 'not set') if env_vars else 'none'}" >> {log_file}
-nohup env {env_inline} bash -c '
-  {start_command} 2>&1 |
-  while IFS= read -r line; do echo "[{app_id}] $line"; done |
-  if [ -w /proc/1/fd/1 ]; then
-    tee -a "{log_file}" /proc/1/fd/1 >/dev/null
-  else
-    tee -a "{log_file}" >/dev/null
-  fi
-' &
-APP_PID=$!
-echo $APP_PID > {pid_file}
-sleep 2
-echo $APP_PID
-"""
-        
-        stdout, stderr, code = await execute_in_container(command, timeout=20)
+        # Write the config file inside the container
+        write_cmd = f"cat > {conf_path} << 'CONFEOF'\n{conf_content}\nCONFEOF"
+        stdout, stderr, code = await execute_in_container(write_cmd)
         
         if code != 0:
-            logs.append(f"❌ Failed to start app: {stderr}")
+            logs.append(f"❌ Failed to write supervisord config: {stderr}")
             return False
         
-        # Extract just the PID from the last line of output
-        pid = stdout.strip().split('\n')[-1].strip()
-        logs.append(f"📝 Started process with PID: {pid}")
-
-        # If we didn't get a sane PID, fail early with context
-        if not pid.isdigit():
-            logs.append("❌ Failed to start app: invalid PID returned from start command")
-            if stdout.strip():
-                logs.append("📋 Start command output:")
-                for line in stdout.strip().split('\n')[-20:]:
-                    logs.append(f"   {line}")
-            if stderr.strip():
-                logs.append("📋 Start command stderr:")
-                for line in stderr.strip().split('\n')[-20:]:
-                    logs.append(f"   {line}")
-            return False
+        logs.append(f"📝 Supervisord config written to {conf_path}")
         
-        # Register this app so it can be restarted after container recreation
+        # Tell supervisord to pick up the new/updated config and start the app
+        # reread: re-reads config files; update: applies changes (starts new, stops removed)
+        update_cmd = f"supervisorctl reread && supervisorctl update"
+        stdout, stderr, code = await execute_in_container(update_cmd)
+        
+        if code != 0:
+            logs.append(f"⚠️ supervisorctl update had issues: {stderr or stdout}")
+            # Try a more forceful approach
+            force_cmd = f"supervisorctl restart {app_id} 2>/dev/null || supervisorctl start {app_id}"
+            stdout, stderr, code = await execute_in_container(force_cmd)
+            if code != 0:
+                logs.append(f"❌ Failed to start app via supervisord: {stderr or stdout}")
+                return False
+        
+        if stdout.strip():
+            logs.append(f"📋 supervisorctl: {stdout.strip()}")
+        
+        # Register this app so it can be restored after container recreation
         register_running_app(app_id, app_path, start_command, env_vars or {})
         
-        # Give it a moment to start and check if still running
+        # Give the app a moment to start
         await asyncio.sleep(3)
         
-        # Check if process is running
-        # Use multiple methods since lsof may not be available in slim containers
-        # First try: check if PID exists in /proc (works on Linux)
-        # Second try: use ps command
-        # Third try: check if port is listening using netstat or ss
-        check_cmd = f"""
-if [ -d /proc/{pid} ]; then
-    echo "running"
-elif ps -p {pid} -o pid= 2>/dev/null | grep -q .; then
-    echo "running"
-elif ss -tln 2>/dev/null | grep -q ":{port} "; then
-    echo "running"
-elif netstat -tln 2>/dev/null | grep -q ":{port} "; then
-    echo "running"
-else
-    echo ""
-fi
-"""
-        stdout, _, check_code = await execute_in_container(check_cmd)
+        # Check supervisord status for this app
+        status_cmd = f"supervisorctl status {app_id}"
+        stdout, stderr, code = await execute_in_container(status_cmd)
+        status_line = stdout.strip()
         
-        if stdout.strip() == "running":
-            logs.append(f"✅ Application started (PID: {pid}, log: {log_file})")
+        if "RUNNING" in status_line:
+            logs.append(f"✅ Application running under supervisord")
+            logs.append(f"   {status_line}")
             
+            log_file = f"/var/log/user-apps/{app_id}.log"
             # Show first few lines of log for debugging
             log_cmd = f"head -20 {log_file} 2>/dev/null || echo 'No log output yet'"
             log_stdout, _, _ = await execute_in_container(log_cmd)
@@ -1205,32 +1252,28 @@ fi
                     logs.append(f"   {line}")
             
             return True
-        else:
-            logs.append(f"❌ Application failed to start (PID: {pid}, port: {port})")
-
-            # Lightweight diagnostics that work in slim containers (no lsof required)
-            diag_cmd = f"""
-echo "[diag] /proc/{pid}: $([ -d /proc/{pid} ] && echo yes || echo no)"
-ps -p {pid} -o pid=,cmd= 2>/dev/null || true
-# Test whether port is accepting TCP connections (bash /dev/tcp)
-bash -c 'echo > /dev/tcp/127.0.0.1/{port}' >/dev/null 2>&1 && echo "[diag] port {port}: open" || echo "[diag] port {port}: closed"
-"""
-            diag_out, _, _ = await execute_in_container(diag_cmd)
-            if diag_out.strip():
-                logs.append("📋 Diagnostics:")
-                for line in diag_out.strip().split('\n')[-20:]:
-                    logs.append(f"   {line}")
-
+        elif "STARTING" in status_line:
+            logs.append(f"⏳ Application is starting... (supervisord will manage it)")
+            logs.append(f"   {status_line}")
+            # Still return True - supervisord will handle the startup
+            return True
+        elif "FATAL" in status_line or "BACKOFF" in status_line:
+            logs.append(f"❌ Application failed to start: {status_line}")
+            
+            log_file = f"/var/log/user-apps/{app_id}.log"
             # Show log output to help diagnose
-            log_cmd = f"cat {log_file} 2>/dev/null | tail -30"
+            log_cmd = f"tail -30 {log_file} 2>/dev/null || echo 'No log output'"
             log_stdout, _, _ = await execute_in_container(log_cmd)
-            if log_stdout.strip():
+            if log_stdout.strip() and log_stdout.strip() != 'No log output':
                 logs.append(f"📋 Log output:")
                 for line in log_stdout.strip().split('\n'):
                     logs.append(f"   {line}")
-            else:
-                logs.append("📋 Log output: (empty)")
             return False
+        else:
+            # Unknown status - could be STOPPED, EXITED, etc.
+            logs.append(f"⚠️ Unexpected supervisord status: {status_line or '(empty)'}")
+            logs.append("   supervisord will continue to manage the process")
+            return True
     else:
         # LXC: Use systemd
         command = f"""
@@ -1250,7 +1293,7 @@ systemctl restart {app_id}.service
 
 
 async def stop_app(app_id: str, logs: List[str], port: int = None) -> bool:
-    """Stop app via systemd (LXC) or kill process (Docker)
+    """Stop app via systemd (LXC) or supervisord (Docker)
     
     Args:
         app_id: Application ID
@@ -1260,46 +1303,35 @@ async def stop_app(app_id: str, logs: List[str], port: int = None) -> bool:
     logs.append("🛑 Stopping application...")
     
     if is_docker_environment():
-        # Docker: Kill process by app_id, PID file, and optionally by port
-        pid_file = f"/tmp/{app_id}.pid"
+        # Docker: Stop via supervisord and remove the config
+        # supervisorctl stop gracefully stops the process (SIGTERM, then SIGKILL after stopwaitsecs)
+        stop_cmd = f"supervisorctl stop {app_id} 2>/dev/null || true"
+        stdout, stderr, code = await execute_in_container(stop_cmd)
+        if stdout and stdout.strip():
+            logs.append(f"   supervisorctl: {stdout.strip()}")
         
-        # Build kill command - handle case where lsof/fuser might not be available
-        port_kill_cmd = ""
+        # Remove the supervisord config so it won't auto-restart
+        conf_path = f"{SUPERVISOR_CONF_DIR}/{app_id}.conf"
+        rm_cmd = f"rm -f {conf_path} && supervisorctl reread && supervisorctl update 2>/dev/null || true"
+        await execute_in_container(rm_cmd)
+        
+        # Clean up any legacy PID files from old nohup-based deploys
+        legacy_cleanup = f"rm -f /tmp/{app_id}.pid 2>/dev/null || true"
+        await execute_in_container(legacy_cleanup)
+        
+        # Also kill any leftover process on the port (belt-and-suspenders)
         if port:
             port_kill_cmd = f"""
-# Kill any process on port {port} using various methods
-# Try ss + awk (most reliable on minimal containers)
-PID_ON_PORT=$(ss -tlnp 2>/dev/null | grep ':{port}' | grep -oP 'pid=\\K\\d+' | head -1)
-if [ -n "$PID_ON_PORT" ]; then
-    echo "Killing process $PID_ON_PORT on port {port}"
-    kill -9 $PID_ON_PORT 2>/dev/null || true
+# Kill any leftover process on port {port}
+if command -v ss &>/dev/null; then
+    PIDS=$(ss -H -ltnp "sport = :{port}" 2>/dev/null | sed -n 's/.*pid=\\([0-9]\\+\\).*/\\1/p' | sort -u)
+    for P in $PIDS; do
+        kill -9 $P 2>/dev/null || true
+    done
 fi
-# Fallback: try fuser if available
-if command -v fuser &>/dev/null; then
-    fuser -k {port}/tcp 2>/dev/null || true
-fi
-# Fallback: try lsof if available
-if command -v lsof &>/dev/null; then
-    lsof -ti:{port} | xargs kill -9 2>/dev/null || true
-fi
-"""
-        
-        command = f"""
-if [ -f {pid_file} ]; then
-    PID=$(cat {pid_file})
-    echo "Killing PID $PID from pidfile"
-    kill -9 $PID 2>/dev/null || true
-    rm -f {pid_file}
-fi
-# Also kill any process with app_id in command line
-pkill -9 -f '{app_id}' 2>/dev/null || true
-{port_kill_cmd}
-# Give a moment for port to be released
 sleep 1
 """
-        stdout, stderr, code = await execute_in_container(command)
-        if stdout:
-            logs.append(stdout.strip())
+            await execute_in_container(port_kill_cmd)
     else:
         # LXC: Use systemd
         command = f"systemctl stop {app_id}.service 2>/dev/null || true"
@@ -1402,10 +1434,10 @@ async def undeploy_app(app_id: str, logs: List[str], remove_volumes: bool = True
             # LXC mode: nginx config removal handled by NginxConfigurator via SSH
             logs.append("Step 3: Nginx config removal requires NginxConfigurator (LXC mode)")
         
-        # Step 4: Clean up .next and node_modules directories in the source
+        # Step 4: Clean up .next, node_modules, and log files
         # This helps resolve the "cannot remove directory" issues
         if is_docker_environment():
-            logs.append("Step 4: Cleaning up build artifacts...")
+            logs.append("Step 4: Cleaning up build artifacts and logs...")
             
             dev_path = f"/srv/dev-apps/{app_id}"
             apps_path = f"/srv/apps/{app_id}"
@@ -1425,6 +1457,11 @@ if [ -d "{apps_path}" ]; then
     rm -rf "{apps_path}/.next" 2>/dev/null || true
     rm -rf "{apps_path}/node_modules" 2>/dev/null || true
 fi
+
+# Clean up log files (supervisord and legacy)
+rm -f /var/log/user-apps/{app_id}.log* 2>/dev/null || true
+rm -f /tmp/{app_id}.log 2>/dev/null || true
+rm -f /tmp/{app_id}.pid 2>/dev/null || true
 """
             stdout, stderr, code = await execute_in_container(cleanup_script)
             if stdout:
@@ -1487,8 +1524,8 @@ fi
     
     if not port_stdout.strip():
         logs.append(f"⏳ Port {port} not yet listening, waiting for app to start...")
-        # Show last lines of log to help debug
-        log_cmd = f"tail -10 /tmp/{app_id}.log 2>/dev/null || echo 'No log file yet'"
+        # Show last lines of log to help debug (check both old and new log locations)
+        log_cmd = f"tail -10 /var/log/user-apps/{app_id}.log 2>/dev/null || tail -10 /tmp/{app_id}.log 2>/dev/null || echo 'No log file yet'"
         log_stdout, _, _ = await execute_in_container(log_cmd)
         if log_stdout.strip() and 'No log file yet' not in log_stdout:
             logs.append(f"📋 Recent log output:")
@@ -1517,9 +1554,9 @@ fi
             # Check if port is still listening
             port_stdout, _, _ = await execute_in_container(port_check)
             if not port_stdout.strip():
-                logs.append(f"⚠️ Port {port} stopped listening - app may have crashed")
+                logs.append(f"⚠️ Port {port} stopped listening - app may have crashed (supervisord will auto-restart)")
                 # Show recent log
-                log_cmd = f"tail -15 /tmp/{app_id}.log 2>/dev/null"
+                log_cmd = f"tail -15 /var/log/user-apps/{app_id}.log 2>/dev/null || tail -15 /tmp/{app_id}.log 2>/dev/null"
                 log_stdout, _, _ = await execute_in_container(log_cmd)
                 if log_stdout.strip():
                     logs.append(f"📋 Recent log output:")
@@ -1548,8 +1585,8 @@ fi
     else:
         logs.append(f"⚠️ No process listening on port {port}")
     
-    # Show last lines of log
-    log_cmd = f"tail -20 /tmp/{app_id}.log 2>/dev/null"
+    # Show last lines of log (check both new supervisord and legacy log locations)
+    log_cmd = f"tail -20 /var/log/user-apps/{app_id}.log 2>/dev/null || tail -20 /tmp/{app_id}.log 2>/dev/null"
     log_stdout, _, _ = await execute_in_container(log_cmd)
     if log_stdout.strip():
         logs.append(f"📋 App log (last 20 lines):")
@@ -1693,7 +1730,7 @@ async def deploy_app(
         if not await create_systemd_service(manifest, app_path, env_vars, logs, dev_mode=is_dev_mode):
             return False
     else:
-        logs.append("⏭️ Skipping systemd service (Docker - will use nohup)")
+        logs.append("⏭️ Skipping systemd service (Docker - will use supervisord)")
     
     # Step 6: Start app
     if not await start_app(manifest.id, logs, app_path=app_path, start_command=start_command, env_vars=env_vars):

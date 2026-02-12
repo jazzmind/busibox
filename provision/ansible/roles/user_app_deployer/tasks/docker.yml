@@ -109,11 +109,11 @@
         app_port: "{{ available_port.stdout | trim }}"
   when: app_port == "" or app_port is not defined
 
-- name: Stop existing app process
+- name: Stop existing app process via supervisord
   ansible.builtin.command:
     cmd: >
       docker exec {{ user_apps_container }}
-      sh -c "pkill -f 'node.*{{ app_id }}' || true"
+      sh -c "supervisorctl stop {{ app_id }} 2>/dev/null || true"
   changed_when: true
   failed_when: false
 
@@ -128,11 +128,34 @@
       EOF"
   changed_when: true
 
-- name: Start app with nohup
+- name: Create supervisord config for app
   ansible.builtin.command:
     cmd: >
       docker exec {{ user_apps_container }}
-      sh -c "cd {{ app_path }} && nohup npm start > {{ app_log_path }}/app.log 2>&1 &"
+      sh -c "cat > /etc/supervisor/conf.d/{{ app_id }}.conf << 'EOF'
+      [program:{{ app_id }}]
+      command=/bin/bash -c '{{ final_start_command }}'
+      directory={{ app_path }}
+      environment=PORT=\"{{ app_port }}\",NODE_ENV=\"production\",APP_ID=\"{{ app_id }}\"
+      autostart=true
+      autorestart=true
+      startretries=5
+      startsecs=10
+      stopwaitsecs=15
+      stopasgroup=true
+      killasgroup=true
+      redirect_stderr=true
+      stdout_logfile=/var/log/user-apps/{{ app_id }}.log
+      stdout_logfile_maxbytes=10MB
+      stdout_logfile_backups=3
+      EOF"
+  changed_when: true
+
+- name: Start app via supervisord
+  ansible.builtin.command:
+    cmd: >
+      docker exec {{ user_apps_container }}
+      sh -c "supervisorctl reread && supervisorctl update"
   changed_when: true
 
 - name: Wait for app to start

@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 # Intent classification categories
 INTENT_CREATE = "create"
+INTENT_CONFIRM_CREATE = "confirm_create"
 INTENT_QUERY = "query"
 INTENT_UPDATE = "update"
 INTENT_CHAT = "chat"
@@ -165,6 +166,7 @@ class StatusAssistantAgent(BaseStreamingAgent):
         self._extracted_data: Dict[str, Any] = {}  # parsed from user text
         self._query_results: Dict[str, Any] = {}
         self._bootstrapping: bool = False  # True when creating initial data documents
+        self._awaiting_create_check: bool = False  # True when query_data is checking for existing projects before create
 
         # Lazy-init LLM agents for classification and extraction
         self._classifier: Optional[Agent] = None
@@ -200,12 +202,67 @@ class StatusAssistantAgent(BaseStreamingAgent):
             )
         return self._extractor
 
+    def _detect_confirm_create_from_history(self, query: str, context: AgentContext) -> bool:
+        """
+        Check if the conversation history indicates the user is confirming
+        a previously asked "create or update?" question.
+
+        Pattern:
+        - Last assistant message asked about existing projects / confirmation
+        - Current user message is affirmative
+        """
+        if not context.recent_messages:
+            return False
+
+        # Find the last assistant message
+        last_assistant_content = ""
+        for msg in reversed(context.recent_messages):
+            if msg.get("role") == "assistant":
+                last_assistant_content = msg.get("content", "").lower()
+                break
+
+        if not last_assistant_content:
+            return False
+
+        # Check if the assistant asked a confirmation question about projects
+        confirmation_phrases = [
+            "did you want to",
+            "would you like to create",
+            "shall i create",
+            "create new ones",
+            "update these",
+            "existing project",
+            "already have",
+            "found existing",
+            "found matching",
+        ]
+        asked_confirmation = any(
+            phrase in last_assistant_content for phrase in confirmation_phrases
+        )
+        if not asked_confirmation:
+            return False
+
+        # Check if the user's current message is affirmative
+        query_lower = query.lower().strip()
+        affirmative_patterns = [
+            "yes", "yeah", "yep", "yup", "sure", "ok", "okay",
+            "go ahead", "do it", "create", "create new", "create them",
+            "create new ones", "make new", "proceed", "confirm",
+            "please create", "yes create", "yes please",
+        ]
+        return any(pattern in query_lower for pattern in affirmative_patterns)
+
     async def _classify_intent(self, query: str, context: AgentContext) -> str:
         """
         Classify the user's intent using a lightweight LLM call.
 
         Falls back to keyword-based classification if LLM fails.
         """
+        # FIRST: Check if this is a confirmation of a previous create prompt
+        if self._detect_confirm_create_from_history(query, context):
+            logger.info("Detected INTENT_CONFIRM_CREATE from conversation history")
+            return INTENT_CONFIRM_CREATE
+
         # Quick keyword checks for obvious cases
         query_lower = query.lower()
         create_keywords = ["create", "add", "make", "build", "insert", "new project",
@@ -225,17 +282,6 @@ class StatusAssistantAgent(BaseStreamingAgent):
         for kw in query_keywords:
             if kw in query_lower:
                 return INTENT_QUERY
-
-        # Check conversation context for implied intent
-        if context.recent_messages:
-            last_assistant = None
-            for msg in reversed(context.recent_messages):
-                if msg.get("role") == "assistant":
-                    last_assistant = msg.get("content", "").lower()
-                    break
-            if last_assistant and "shall i" in last_assistant:
-                # Previous message asked for confirmation -- treat as create/update
-                return INTENT_CREATE
 
         # Fall back to LLM classification
         try:
@@ -308,6 +354,7 @@ class StatusAssistantAgent(BaseStreamingAgent):
         self._doc_ids = {}
         self._extracted_data = {}
         self._query_results = {}
+        self._awaiting_create_check = False
 
         # Always start by listing data documents to get IDs
         return [
@@ -343,6 +390,14 @@ class StatusAssistantAgent(BaseStreamingAgent):
             return self._handle_update_result(step, result, context)
         return []
 
+    def _get_original_query(self, context: AgentContext) -> str:
+        """Extract the original user query from context."""
+        if context.recent_messages:
+            for msg in reversed(context.recent_messages):
+                if msg.get("role") == "user":
+                    return msg.get("content", "")
+        return context.metadata.get("_original_query", "")
+
     async def _handle_list_docs_result(
         self,
         result: Any,
@@ -351,19 +406,32 @@ class StatusAssistantAgent(BaseStreamingAgent):
         """
         After listing documents, classify intent and build the remaining pipeline.
         """
-        # Extract document IDs by name
+        # Extract document IDs by name -- prefer exact well-known names first
         if hasattr(result, 'documents') and result.documents:
             for doc in result.documents:
                 name = doc.get("name", "")
                 doc_id = doc.get("id", "")
-                if name and doc_id:
-                    self._doc_ids[name] = doc_id
-                    # Also store simplified key mappings
-                    if "project" in name.lower():
+                if not name or not doc_id:
+                    continue
+                self._doc_ids[name] = doc_id
+                # Primary match: exact well-known names
+                if name == STATUS_DOC_PROJECTS:
+                    self._doc_ids["projects"] = doc_id
+                elif name == STATUS_DOC_TASKS:
+                    self._doc_ids["tasks"] = doc_id
+                elif name == STATUS_DOC_UPDATES:
+                    self._doc_ids["updates"] = doc_id
+
+            # Fallback: substring match if well-known names not found
+            if "projects" not in self._doc_ids or "tasks" not in self._doc_ids:
+                for doc in result.documents:
+                    name = doc.get("name", "").lower()
+                    doc_id = doc.get("id", "")
+                    if "projects" not in self._doc_ids and "project" in name:
                         self._doc_ids["projects"] = doc_id
-                    elif "task" in name.lower():
+                    elif "tasks" not in self._doc_ids and "task" in name:
                         self._doc_ids["tasks"] = doc_id
-                    elif "update" in name.lower():
+                    elif "updates" not in self._doc_ids and "update" in name:
                         self._doc_ids["updates"] = doc_id
 
         logger.info(f"Found documents: {self._doc_ids}")
@@ -372,26 +440,13 @@ class StatusAssistantAgent(BaseStreamingAgent):
             logger.info("No data documents found -- bootstrapping status-report documents")
             return self._build_bootstrap_pipeline()
 
-        # Classify intent from the original query
-        # The query is stored in context.tool_results or we can get it from context
-        # We need to get the original query -- it's in the conversation history
-        original_query = ""
-        if context.recent_messages:
-            for msg in reversed(context.recent_messages):
-                if msg.get("role") == "user":
-                    original_query = msg.get("content", "")
-                    break
-
-        # If no query from history, check tool_results for any clue
-        if not original_query:
-            # Fallback: the query should be in the metadata or context
-            original_query = context.metadata.get("_original_query", "")
+        original_query = self._get_original_query(context)
 
         self._intent = await self._classify_intent(original_query, context)
         logger.info(f"Classified intent: {self._intent} for query: {original_query[:80]}...")
 
         # Build pipeline based on intent
-        if self._intent == INTENT_CREATE:
+        if self._intent in (INTENT_CREATE, INTENT_CONFIRM_CREATE):
             return await self._build_create_pipeline(original_query, context)
         elif self._intent == INTENT_QUERY:
             return self._build_query_pipeline(original_query, context)
@@ -433,6 +488,7 @@ class StatusAssistantAgent(BaseStreamingAgent):
                         }
                     },
                     "visibility": "personal",
+                    "source_app": "status-report",
                 },
             ),
             PipelineStep(
@@ -452,6 +508,7 @@ class StatusAssistantAgent(BaseStreamingAgent):
                         }
                     },
                     "visibility": "personal",
+                    "source_app": "status-report",
                 },
             ),
             PipelineStep(
@@ -470,6 +527,7 @@ class StatusAssistantAgent(BaseStreamingAgent):
                         }
                     },
                     "visibility": "personal",
+                    "source_app": "status-report",
                 },
             ),
         ]
@@ -543,46 +601,70 @@ class StatusAssistantAgent(BaseStreamingAgent):
         """
         Build pipeline for creating projects and tasks.
 
-        1. Extract structured data from user text via LLM
-        2. Insert projects first (to get IDs)
-        3. Insert tasks (linked to project IDs)
+        For INTENT_CONFIRM_CREATE (user confirmed after being asked about matches):
+          1. Extract structured data from conversation history
+          2. Go straight to insert (skip duplicate check)
+
+        For INTENT_CREATE (first request):
+          1. Extract structured data from user text via LLM
+          2. Query existing projects to check for duplicates
+          3. In process_tool_result, decide: insert vs ask-confirm
         """
         self._extracted_data = await self._extract_records(query, context)
 
-        steps = []
         projects = self._extracted_data.get("projects", [])
         tasks = self._extracted_data.get("tasks", [])
 
         projects_doc_id = self._doc_ids.get("projects")
         tasks_doc_id = self._doc_ids.get("tasks")
 
-        if projects and projects_doc_id:
-            # Format projects for insertion
-            records = []
-            for p in projects:
-                records.append({
-                    "name": p.get("name", "Unnamed Project"),
-                    "description": p.get("description", ""),
-                    "status": p.get("status", "on-track"),
-                    "progress": p.get("progress", 0),
-                    "owner": p.get("owner", ""),
-                    "tags": p.get("tags", []),
-                })
-            steps.append(PipelineStep(
-                tool="insert_records",
-                args={
-                    "document_id": projects_doc_id,
-                    "records": records,
-                },
-            ))
-
         if tasks and tasks_doc_id:
-            # Note: tasks need projectId which we may not have yet.
-            # We'll handle this in process_tool_result after projects are inserted.
-            # For now, store tasks for later processing.
+            # Store tasks for later processing (after projects are inserted)
             self._extracted_data["_pending_tasks"] = tasks
 
-        return steps
+        if not projects or not projects_doc_id:
+            return []
+
+        # If user already confirmed creation, skip duplicate check
+        if self._intent == INTENT_CONFIRM_CREATE:
+            return self._build_insert_steps()
+
+        # Otherwise, query existing projects to check for matches first
+        self._awaiting_create_check = True
+        return [PipelineStep(
+            tool="query_data",
+            args={
+                "document_id": projects_doc_id,
+                "select": ["id", "name", "status", "progress"],
+                "limit": 50,
+            },
+        )]
+
+    def _build_insert_steps(self) -> List[PipelineStep]:
+        """Build the insert_records steps for projects (and tasks follow via chaining)."""
+        projects = self._extracted_data.get("projects", [])
+        projects_doc_id = self._doc_ids.get("projects")
+
+        if not projects or not projects_doc_id:
+            return []
+
+        records = []
+        for p in projects:
+            records.append({
+                "name": p.get("name", "Unnamed Project"),
+                "description": p.get("description", ""),
+                "status": p.get("status", "on-track"),
+                "progress": p.get("progress", 0),
+                "owner": p.get("owner", ""),
+                "tags": p.get("tags", []),
+            })
+        return [PipelineStep(
+            tool="insert_records",
+            args={
+                "document_id": projects_doc_id,
+                "records": records,
+            },
+        )]
 
     def _build_query_pipeline(
         self,
@@ -665,7 +747,7 @@ class StatusAssistantAgent(BaseStreamingAgent):
         result: Any,
         context: AgentContext,
     ) -> List[PipelineStep]:
-        """Store query results for synthesis."""
+        """Store query results for synthesis -- or chain inserts for create flow."""
         doc_id = step.args.get("document_id", "")
 
         # Determine which document this is
@@ -681,9 +763,74 @@ class StatusAssistantAgent(BaseStreamingAgent):
                 "total": getattr(result, 'total', len(result.records)),
             }
 
+        # If this was a "check existing before create" query, handle matching
+        if self._awaiting_create_check:
+            self._awaiting_create_check = False
+            return self._handle_create_query_result(result, context)
+
         # For update intent, after all queries are done, we would need to
         # build update steps. For now, we let the synthesis handle it.
         return []
+
+    def _handle_create_query_result(
+        self,
+        result: Any,
+        context: AgentContext,
+    ) -> List[PipelineStep]:
+        """
+        Compare extracted projects against existing ones.
+
+        If matches found: store match details and return [] (synthesis will ask user).
+        If no matches: proceed with insert steps.
+        """
+        existing_records = []
+        if hasattr(result, 'records') and result.records:
+            existing_records = result.records
+
+        extracted_projects = self._extracted_data.get("projects", [])
+        if not extracted_projects:
+            return []
+
+        # Compare extracted project names against existing ones (fuzzy match)
+        matches = []
+        unmatched = []
+        existing_names = {
+            rec.get("name", "").lower(): rec
+            for rec in existing_records
+            if rec.get("name")
+        }
+
+        for proj in extracted_projects:
+            proj_name = proj.get("name", "").lower()
+            matched = False
+            for existing_name, existing_rec in existing_names.items():
+                # Exact or substring match
+                if (proj_name == existing_name
+                        or proj_name in existing_name
+                        or existing_name in proj_name):
+                    matches.append({
+                        "extracted": proj,
+                        "existing": existing_rec,
+                    })
+                    matched = True
+                    break
+            if not matched:
+                unmatched.append(proj)
+
+        if matches:
+            # Store match details for synthesis to build a confirmation question
+            self._extracted_data["_matches"] = matches
+            self._extracted_data["_unmatched"] = unmatched
+            logger.info(
+                f"Found {len(matches)} matching projects, "
+                f"{len(unmatched)} new projects -- asking user to confirm"
+            )
+            # Return empty -- synthesis will ask the user
+            return []
+
+        # No matches at all -- safe to proceed with inserts
+        logger.info("No matching projects found -- proceeding with insert")
+        return self._build_insert_steps()
 
     def _handle_insert_result(
         self,
@@ -782,29 +929,61 @@ class StatusAssistantAgent(BaseStreamingAgent):
         parts.append(f"## Intent\n{self._intent}\n")
 
         # Add tool results
-        if self._intent == INTENT_CREATE:
-            parts.append("## Actions Taken")
-            for tool_name, result in context.tool_results.items():
-                if tool_name == "list_data_documents":
-                    continue  # Skip internal detail
-                if tool_name == "insert_records":
-                    if hasattr(result, 'success') and result.success:
-                        count = getattr(result, 'count', 0)
-                        parts.append(f"- Inserted **{count}** records successfully")
-                    elif hasattr(result, 'error'):
-                        parts.append(f"- Insert failed: {result.error}")
+        if self._intent in (INTENT_CREATE, INTENT_CONFIRM_CREATE):
+            # Check if we're asking the user to confirm (matches were found)
+            matches = self._extracted_data.get("_matches", [])
+            unmatched = self._extracted_data.get("_unmatched", [])
 
-            # Show what was extracted
-            projects = self._extracted_data.get("projects", [])
-            tasks = self._extracted_data.get("tasks", [])
-            if projects:
-                parts.append(f"\n### Projects Created ({len(projects)})")
-                for p in projects:
-                    parts.append(f"- **{p.get('name', 'Unnamed')}**: {p.get('description', 'No description')}")
-            if tasks:
-                parts.append(f"\n### Tasks Created ({len(tasks)})")
-                for t in tasks:
-                    parts.append(f"- **{t.get('title', 'Untitled')}** ({t.get('project_name', 'unassigned')})")
+            if matches and self._intent == INTENT_CREATE:
+                # Matches found -- ask the user what to do
+                parts.append("## Existing Projects Found")
+                parts.append(
+                    "The user asked to create projects, but similar ones already exist. "
+                    "Ask the user whether they want to UPDATE the existing projects or "
+                    "CREATE NEW entries. Be specific about which projects matched."
+                )
+                parts.append("\n### Matching Projects")
+                for m in matches:
+                    ext = m["extracted"]
+                    ex = m["existing"]
+                    parts.append(
+                        f"- Requested: **{ext.get('name', '?')}** ↔ "
+                        f"Existing: **{ex.get('name', '?')}** "
+                        f"(status: {ex.get('status', '?')}, "
+                        f"progress: {ex.get('progress', 0)}%)"
+                    )
+                if unmatched:
+                    parts.append(f"\n### New Projects (no match found, {len(unmatched)})")
+                    for p in unmatched:
+                        parts.append(f"- **{p.get('name', 'Unnamed')}**: {p.get('description', '')}")
+                parts.append(
+                    "\nAsk the user: would they like to update the existing projects, "
+                    "or create new entries for everything?"
+                )
+            else:
+                # Normal create flow -- show what was created
+                parts.append("## Actions Taken")
+                for tool_name, result in context.tool_results.items():
+                    if tool_name == "list_data_documents":
+                        continue  # Skip internal detail
+                    if tool_name == "insert_records":
+                        if hasattr(result, 'success') and result.success:
+                            count = getattr(result, 'count', 0)
+                            parts.append(f"- Inserted **{count}** records successfully")
+                        elif hasattr(result, 'error'):
+                            parts.append(f"- Insert failed: {result.error}")
+
+                # Show what was extracted
+                projects = self._extracted_data.get("projects", [])
+                tasks = self._extracted_data.get("tasks", [])
+                if projects:
+                    parts.append(f"\n### Projects Created ({len(projects)})")
+                    for p in projects:
+                        parts.append(f"- **{p.get('name', 'Unnamed')}**: {p.get('description', 'No description')}")
+                if tasks:
+                    parts.append(f"\n### Tasks Created ({len(tasks)})")
+                    for t in tasks:
+                        parts.append(f"- **{t.get('title', 'Untitled')}** ({t.get('project_name', 'unassigned')})")
 
         elif self._intent == INTENT_QUERY:
             parts.append("## Data")
@@ -850,7 +1029,25 @@ class StatusAssistantAgent(BaseStreamingAgent):
 
     def _build_fallback_response(self, query: str, context: AgentContext) -> str:
         """Build a fallback response if synthesis fails."""
-        if self._intent == INTENT_CREATE:
+        if self._intent in (INTENT_CREATE, INTENT_CONFIRM_CREATE):
+            # Check for the ask-confirmation case
+            matches = self._extracted_data.get("_matches", [])
+            if matches and self._intent == INTENT_CREATE:
+                parts = ["I found existing projects that match your request:\n"]
+                for m in matches:
+                    ext = m["extracted"]
+                    ex = m["existing"]
+                    parts.append(
+                        f"- **{ext.get('name', '?')}** matches existing "
+                        f"**{ex.get('name', '?')}** "
+                        f"({ex.get('status', '?')}, {ex.get('progress', 0)}%)"
+                    )
+                parts.append(
+                    "\nWould you like to update the existing projects "
+                    "or create new entries?"
+                )
+                return "\n".join(parts)
+
             projects = self._extracted_data.get("projects", [])
             tasks = self._extracted_data.get("tasks", [])
             parts = ["Here's what I did:\n"]

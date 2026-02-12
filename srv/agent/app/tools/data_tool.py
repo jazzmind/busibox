@@ -179,6 +179,7 @@ async def create_data_document(
     schema: Optional[Dict[str, Any]] = None,
     initial_records: Optional[List[Dict[str, Any]]] = None,
     visibility: str = "personal",
+    source_app: Optional[str] = None,
 ) -> CreateDataDocumentOutput:
     """
     Create a new structured data document for storing records.
@@ -192,6 +193,7 @@ async def create_data_document(
         schema: Optional schema definition for validation
         initial_records: Optional list of initial records to insert
         visibility: "personal" (default, user only) or "shared" (team access)
+        source_app: Optional app identifier (e.g. "status-report") for filtering
     
     Returns:
         CreateDataDocumentOutput with document_id if successful
@@ -206,16 +208,19 @@ async def create_data_document(
         }
     """
     try:
+        body: Dict[str, Any] = {
+            "name": name,
+            "schema": schema,
+            "initialRecords": initial_records,
+            "visibility": visibility,
+            "enableCache": False,  # Agents don't need caching by default
+        }
+        if source_app:
+            body["sourceApp"] = source_app
         response = await ctx.deps.busibox_client.request(
             method="POST",
             path="/data",
-            json={
-                "name": name,
-                "schema": schema,
-                "initialRecords": initial_records,
-                "visibility": visibility,
-                "enableCache": False,  # Agents don't need caching by default
-            },
+            json=body,
         )
         
         return CreateDataDocumentOutput(
