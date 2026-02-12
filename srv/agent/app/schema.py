@@ -94,6 +94,7 @@ def get_agent_schema() -> SchemaManager:
             scopes JSON NOT NULL,
             is_active BOOLEAN NOT NULL DEFAULT true,
             is_builtin BOOLEAN NOT NULL DEFAULT false,
+            allow_frontier_fallback BOOLEAN NOT NULL DEFAULT false,
             created_by VARCHAR(255),
             version INTEGER NOT NULL DEFAULT 1,
             created_at TIMESTAMP NOT NULL DEFAULT NOW(),

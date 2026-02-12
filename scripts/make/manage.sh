@@ -630,6 +630,19 @@ manage_host_native_service() {
 }
 
 # Manage individual service
+# Get companion services that should be managed together
+# e.g., data-api and data-worker always go together
+get_companion_services() {
+    local service="$1"
+    case "$service" in
+        data-api|ingest|data)
+            echo "data-worker"
+            ;;
+        # Add more companion mappings here as needed
+        # e.g., agent-api could include agent-scheduler in the future
+    esac
+}
+
 manage_service() {
     local service="$1"
     
@@ -652,6 +665,13 @@ manage_service() {
         local status
         status=$(get_service_status "$service")
         box_line "  ${CYAN}Status:${NC} $status"
+        
+        # Show companion services
+        local companions
+        companions=$(get_companion_services "$service")
+        if [[ -n "$companions" ]]; then
+            box_line "  ${DIM}Includes: ${companions}${NC}"
+        fi
         box_empty
         
         box_line "  ${BOLD}1)${NC} Start"
@@ -695,33 +715,57 @@ manage_service() {
             1) # Start
                 if [[ "$backend" == "docker" ]]; then
                     docker start "${prefix}-${service}" 2>/dev/null || echo "Failed to start"
+                    for companion in $(get_companion_services "$service"); do
+                        info "Also starting companion: ${companion}"
+                        docker start "${prefix}-${companion}" 2>/dev/null || echo "Failed to start ${companion}"
+                    done
                 else
                     local env
                     env=$(get_current_env)
                     cd "${REPO_ROOT}/provision/ansible"
                     make "start-${service}" INV="inventory/${env}" 2>/dev/null || echo "Failed to start"
+                    for companion in $(get_companion_services "$service"); do
+                        info "Also starting companion: ${companion}"
+                        make "start-${companion}" INV="inventory/${env}" 2>/dev/null || echo "Failed to start ${companion}"
+                    done
                 fi
                 read -n 1 -s -r -p "Press any key to continue..."
                 ;;
             2) # Stop
                 if [[ "$backend" == "docker" ]]; then
                     docker stop "${prefix}-${service}" 2>/dev/null || echo "Failed to stop"
+                    for companion in $(get_companion_services "$service"); do
+                        info "Also stopping companion: ${companion}"
+                        docker stop "${prefix}-${companion}" 2>/dev/null || echo "Failed to stop ${companion}"
+                    done
                 else
                     local env
                     env=$(get_current_env)
                     cd "${REPO_ROOT}/provision/ansible"
                     make "stop-${service}" INV="inventory/${env}" 2>/dev/null || echo "Failed to stop"
+                    for companion in $(get_companion_services "$service"); do
+                        info "Also stopping companion: ${companion}"
+                        make "stop-${companion}" INV="inventory/${env}" 2>/dev/null || echo "Failed to stop ${companion}"
+                    done
                 fi
                 read -n 1 -s -r -p "Press any key to continue..."
                 ;;
             3) # Restart
                 if [[ "$backend" == "docker" ]]; then
                     docker restart "${prefix}-${service}" 2>/dev/null || echo "Failed to restart"
+                    for companion in $(get_companion_services "$service"); do
+                        info "Also restarting companion: ${companion}"
+                        docker restart "${prefix}-${companion}" 2>/dev/null || echo "Failed to restart ${companion}"
+                    done
                 else
                     local env
                     env=$(get_current_env)
                     cd "${REPO_ROOT}/provision/ansible"
                     make "restart-${service}" INV="inventory/${env}" 2>/dev/null || echo "Failed to restart"
+                    for companion in $(get_companion_services "$service"); do
+                        info "Also restarting companion: ${companion}"
+                        make "restart-${companion}" INV="inventory/${env}" 2>/dev/null || echo "Failed to restart ${companion}"
+                    done
                 fi
                 read -n 1 -s -r -p "Press any key to continue..."
                 ;;
@@ -745,11 +789,17 @@ manage_service() {
                     env=$(get_current_env)
                     cd "$REPO_ROOT"
                     make docker-build SERVICE="$service" ENV="$env" && make docker-up SERVICE="$service" ENV="$env"
+                    for companion in $(get_companion_services "$service"); do
+                        echo ""
+                        info "Also redeploying companion: ${companion}"
+                        make docker-build SERVICE="$companion" ENV="$env" && make docker-up SERVICE="$companion" ENV="$env"
+                    done
                 else
                     local env
                     env=$(get_current_env)
                     cd "${REPO_ROOT}/provision/ansible"
                     # Map service to correct make target
+                    # Note: data-api redeploy uses 'data' target which already includes data-worker
                     local make_target
                     case "$service" in
                         core-apps|apps) make_target="apps" ;;

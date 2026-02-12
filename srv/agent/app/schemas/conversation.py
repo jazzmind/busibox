@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator
 
 
 # ========== Attachment Schema ==========
@@ -43,10 +43,16 @@ class ChatAttachmentRead(ChatAttachmentCreate):
 
 class MessageBase(BaseModel):
     """Base schema for message"""
+    model_config = {"populate_by_name": True}
+
     role: str = Field(description="Message role: user, assistant, or system")
     content: str = Field(description="Message content")
     attachments: Optional[List[Attachment]] = Field(None, description="File attachments (inline JSON)")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata: web_search_results, doc_search_results, used_insight_ids")
+    metadata: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Additional metadata: web_search_results, doc_search_results, used_insight_ids",
+        validation_alias=AliasChoices('metadata_json', 'metadata'),
+    )
     run_id: Optional[uuid.UUID] = Field(None, description="Associated run ID")
     routing_decision: Optional[Dict[str, Any]] = Field(None, description="Dispatcher routing decision")
     tool_calls: Optional[List[Dict[str, Any]]] = Field(None, description="Tool call results")
@@ -66,13 +72,12 @@ class MessageCreate(MessageBase):
 
 class MessageRead(MessageBase):
     """Schema for reading a message"""
+    model_config = {"from_attributes": True, "populate_by_name": True}
+
     id: uuid.UUID
     conversation_id: uuid.UUID
     chat_attachments: Optional[List[ChatAttachmentRead]] = Field(None, description="Linked chat attachments")
     created_at: datetime
-
-    class Config:
-        from_attributes = True
 
 
 class MessagePreview(BaseModel):

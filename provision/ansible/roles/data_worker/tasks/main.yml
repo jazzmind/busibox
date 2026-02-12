@@ -194,7 +194,7 @@
       
       # liteLLM configuration
       LITELLM_BASE_URL={{ litellm_base_url | default('http://10.96.200.207:8000') }}
-      LITELLM_API_KEY={{ secrets.litellm.master_key | default('') }}
+      LITELLM_API_KEY={{ secrets.litellm_master_key | default('') }}
       
       # Processing configuration
       CHUNK_SIZE_MIN=400

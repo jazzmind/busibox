@@ -1,8 +1,11 @@
 """
-Signal Bot Main Application
+Bridge Main Application
 
-This is the main entry point for the Signal bot service.
-It polls for incoming Signal messages and forwards them to the Agent API.
+Entry point for the Bridge service.  Runs two concurrent co-processes:
+
+1. **FastAPI HTTP server** — email sending, health check (always runs)
+2. **Signal bot** — polls for Signal messages and forwards to Agent API
+   (only runs when signal_enabled=True and signal_phone_number is set)
 """
 
 import asyncio
@@ -310,20 +313,62 @@ I can help you with questions, web searches, and more!
         logger.info("Bot stopping...")
 
 
+async def run_api_server(settings: Settings):
+    """Start the FastAPI HTTP server."""
+    import uvicorn
+    from .api import create_app
+
+    app = create_app(settings)
+    config = uvicorn.Config(
+        app,
+        host="0.0.0.0",
+        port=settings.bridge_api_port,
+        log_level=settings.log_level.lower(),
+    )
+    server = uvicorn.Server(config)
+    logger.info(f"Starting Bridge API on port {settings.bridge_api_port}")
+    await server.serve()
+
+
+async def run_signal_bot(settings: Settings):
+    """Run the Signal bot polling loop (if enabled and configured)."""
+    if not settings.signal_enabled:
+        logger.info("Signal channel disabled — skipping Signal bot")
+        return
+
+    if not settings.signal_phone_number:
+        logger.warning("Signal enabled but SIGNAL_PHONE_NUMBER not set — skipping Signal bot")
+        return
+
+    if not settings.delegation_token:
+        logger.warning("Signal enabled but DELEGATION_TOKEN not set — skipping Signal bot")
+        return
+
+    bot = SignalBot(settings)
+    try:
+        await bot.run()
+    except Exception as e:
+        logger.error(f"Signal bot crashed: {e}", exc_info=True)
+        raise
+
+
 async def main():
-    """Main entry point."""
+    """Main entry point — runs API server and Signal bot concurrently."""
     settings = get_settings()
 
     # Configure logging level
     logging.getLogger().setLevel(settings.log_level)
 
-    bot = SignalBot(settings)
+    logger.info(f"Bridge starting (env={settings.environment})")
+    logger.info(f"  API server:  port {settings.bridge_api_port}")
+    logger.info(f"  Signal bot:  {'enabled' if settings.signal_enabled else 'disabled'}")
+    logger.info(f"  Email:       {'enabled' if settings.email_enabled else 'disabled'}")
 
     # Handle shutdown gracefully
     loop = asyncio.get_event_loop()
 
     def signal_handler():
-        bot.stop()
+        logger.info("Shutdown signal received")
 
     try:
         import signal as sig
@@ -334,12 +379,14 @@ async def main():
         pass  # Windows doesn't support signal handlers
 
     try:
-        await bot.run()
+        await asyncio.gather(
+            run_api_server(settings),
+            run_signal_bot(settings),
+        )
     except KeyboardInterrupt:
         logger.info("Received keyboard interrupt")
-        bot.stop()
     except Exception as e:
-        logger.error(f"Bot crashed: {e}", exc_info=True)
+        logger.error(f"Bridge crashed: {e}", exc_info=True)
         raise
 
 

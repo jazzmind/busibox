@@ -104,7 +104,7 @@ async def get_message_or_404(
     """Get message by ID and verify ownership via conversation"""
     result = await session.execute(
         select(Message)
-        .options(selectinload(Message.conversation))
+        .options(selectinload(Message.conversation), selectinload(Message.chat_attachments))
         .where(Message.id == message_id)
     )
     message = result.scalar_one_or_none()
@@ -389,6 +389,7 @@ async def get_conversation(
         if include_messages:
             msg_query = (
                 select(Message)
+                .options(selectinload(Message.chat_attachments))
                 .where(Message.conversation_id == conversation_id)
                 .order_by(Message.created_at.asc())
                 .offset(message_offset)
@@ -541,6 +542,7 @@ async def list_messages(
         # Build query
         query = (
             select(Message)
+            .options(selectinload(Message.chat_attachments))
             .where(Message.conversation_id == conversation_id)
             .offset(offset)
             .limit(limit)
@@ -625,7 +627,6 @@ async def create_message(
         conversation.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
         
         await session.commit()
-        await session.refresh(message)
         
         # Link attachment IDs if provided
         if payload.attachment_ids:
@@ -637,6 +638,14 @@ async def create_message(
                 if attachment:
                     attachment.message_id = message.id
             await session.commit()
+        
+        # Re-fetch message with chat_attachments eagerly loaded
+        result = await session.execute(
+            select(Message)
+            .options(selectinload(Message.chat_attachments))
+            .where(Message.id == message.id)
+        )
+        message = result.scalar_one()
         
         logger.info(
             f"Created message {message.id} in conversation {conversation_id}",

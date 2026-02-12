@@ -37,6 +37,9 @@ signal_bot_max_message_length: 4000
 bridge_log_level: "INFO"
 bridge_debug: false
 
+# HTTP API server
+bridge_api_port: 8081
+
 # Phone number (from vault - Signal-specific)
 signal_bot_phone_number: "{{ secrets.bridge.phone_number | default('') }}"
 
@@ -48,7 +51,16 @@ bridge_delegation_token: "{{ secrets.bridge.delegation_token | default('') }}"
 # Allowed phone numbers (empty = allow all)
 signal_bot_allowed_numbers: []
 
+# Email channel configuration (from vault, managed via deploy-api config store)
+bridge_email_enabled: "{{ secrets.bridge.email_enabled | default('false') }}"
+bridge_smtp_host: "{{ secrets.bridge.smtp_host | default('') }}"
+bridge_smtp_port: "{{ secrets.bridge.smtp_port | default('') }}"
+bridge_smtp_user: "{{ secrets.bridge.smtp_user | default('') }}"
+bridge_smtp_password: "{{ secrets.bridge.smtp_password | default('') }}"
+bridge_smtp_secure: "{{ secrets.bridge.smtp_secure | default('false') }}"
+bridge_email_from: "{{ secrets.bridge.email_from | default('') }}"
+bridge_resend_api_key: "{{ secrets.bridge.resend_api_key | default('') }}"
+
 # Future channel configurations (placeholders)
-# email_enabled: false
 # whatsapp_enabled: false
 # webhook_enabled: false

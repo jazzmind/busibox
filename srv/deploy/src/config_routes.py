@@ -387,6 +387,75 @@ async def bulk_set_configs(
     )
 
 
+@router.post("/apply/{service}")
+async def apply_config(
+    service: str,
+    token_payload: dict = Depends(verify_admin_token)
+):
+    """
+    Apply configuration changes to a service by triggering an Ansible redeploy.
+    
+    This endpoint:
+    1. Triggers `make <service>` on the Proxmox host via SSH
+    2. Which re-renders the service's .env.j2 from vault/defaults
+    3. And restarts the service
+    
+    Currently supported services:
+    - bridge: Multi-channel communication (email, Signal)
+    
+    Requires admin authentication.
+    """
+    from .ansible_executor import INFRASTRUCTURE_ANSIBLE_MAP, AnsibleExecutor
+    
+    logger.info(f"Applying config for service={service}, user={token_payload.get('user_id')}")
+    
+    if service not in INFRASTRUCTURE_ANSIBLE_MAP:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Service '{service}' is not supported. "
+                   f"Supported: {', '.join(sorted(INFRASTRUCTURE_ANSIBLE_MAP.keys()))}"
+        )
+    
+    _, _, description = INFRASTRUCTURE_ANSIBLE_MAP[service]
+    
+    executor = AnsibleExecutor()
+    
+    # Determine environment from config or default to production
+    environment = getattr(config, 'environment', 'production')
+    if environment not in ('staging', 'production'):
+        environment = 'production'
+    
+    # Collect output from the streaming install
+    logs = []
+    success = False
+    
+    try:
+        async for event in executor.install_infrastructure_service_stream(service, environment):
+            msg_type = event.get('type', 'log')
+            message = event.get('message', '')
+            done = event.get('done', False)
+            
+            logs.append(f"[{msg_type}] {message}")
+            
+            if done:
+                success = msg_type == 'success'
+    except Exception as exc:
+        logger.error(f"Failed to apply config for {service}: {exc}")
+        raise HTTPException(status_code=500, detail=f"Failed to restart {service}: {str(exc)}")
+    
+    if not success:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to restart {description}. Check logs for details."
+        )
+    
+    return {
+        "success": True,
+        "message": f"{description} configuration applied and service restarted.",
+        "service": service,
+    }
+
+
 @router.get("/export/all")
 async def export_configs(
     token_payload: dict = Depends(verify_admin_token)

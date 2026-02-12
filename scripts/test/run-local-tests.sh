@@ -27,6 +27,41 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # Source UI library
 source "${REPO_ROOT}/scripts/lib/ui.sh"
 
+# Detect container prefix from .env.* files or running containers
+# The prefix determines Docker container names (e.g., dev-postgres, local-authz-api)
+detect_container_prefix() {
+    # 1. Check CONTAINER_PREFIX env var (may be set by caller)
+    if [[ -n "${CONTAINER_PREFIX:-}" ]]; then
+        echo "$CONTAINER_PREFIX"
+        return
+    fi
+    
+    # 2. Read from .env.dev or other .env.* state files
+    for env_file in "${REPO_ROOT}/.env.dev" "${REPO_ROOT}/.env.local-dev" "${REPO_ROOT}/.env.demo"; do
+        if [[ -f "$env_file" ]]; then
+            local prefix
+            prefix=$(grep -E '^CONTAINER_PREFIX=' "$env_file" 2>/dev/null | head -1 | cut -d= -f2 | tr -d ' "'"'" || true)
+            if [[ -n "$prefix" ]]; then
+                echo "$prefix"
+                return
+            fi
+        fi
+    done
+    
+    # 3. Detect from running Docker containers (look for *-postgres pattern)
+    local running
+    running=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -oE '^[a-z]+-postgres$' | head -1 | sed 's/-postgres$//' || true)
+    if [[ -n "$running" ]]; then
+        echo "$running"
+        return
+    fi
+    
+    # 4. Default fallback
+    echo "dev"
+}
+
+DOCKER_PREFIX=$(detect_container_prefix)
+
 # Parse arguments
 SERVICE="${1:-}"
 ENV="${2:-test}"
@@ -151,12 +186,12 @@ if [[ "$ENV" == "docker" ]]; then
     TEST_USER_EMAIL="test@busibox.local"
     
     # Verify the test user exists in test_authz database
-    USER_CHECK=$(docker exec local-postgres psql -U busibox_test_user -d test_authz -t -A -c "SELECT user_id FROM authz_users WHERE user_id = '${TEST_USER_ID}' LIMIT 1;" 2>/dev/null || echo "")
+    USER_CHECK=$(docker exec "${DOCKER_PREFIX}-postgres" psql -U busibox_test_user -d test_authz -t -A -c "SELECT user_id FROM authz_users WHERE user_id = '${TEST_USER_ID}' LIMIT 1;" 2>/dev/null || echo "")
     
     if [[ -z "$USER_CHECK" ]]; then
         info "Test user not found in test_authz. Attempting to create..."
         # Try to create the user directly
-        docker exec local-postgres psql -U busibox_test_user -d test_authz -c "INSERT INTO authz_users (user_id, email, created_at) VALUES ('${TEST_USER_ID}', '${TEST_USER_EMAIL}', NOW()) ON CONFLICT DO NOTHING;" 2>/dev/null || {
+        docker exec "${DOCKER_PREFIX}-postgres" psql -U busibox_test_user -d test_authz -c "INSERT INTO authz_users (user_id, email, created_at) VALUES ('${TEST_USER_ID}', '${TEST_USER_EMAIL}', NOW()) ON CONFLICT DO NOTHING;" 2>/dev/null || {
             warn "Could not create test user. Run 'make test-db-init' to bootstrap test databases."
         }
         info "Test user: ${TEST_USER_ID}"
@@ -403,14 +438,13 @@ run_service_tests() {
 run_docker_container_tests() {
     local service="$1"
     
-    # Map service name to container name
+    # Map service name to container name using detected prefix
     local container_name=""
     case "$service" in
-        authz)   container_name="local-authz-api" ;;
-        data)    container_name="local-data-api" ;;
-        data)  container_name="local-data-api" ;;  # Deprecated alias
-        search)  container_name="local-search-api" ;;
-        agent)   container_name="local-agent-api" ;;
+        authz)   container_name="${DOCKER_PREFIX}-authz-api" ;;
+        data)    container_name="${DOCKER_PREFIX}-data-api" ;;
+        search)  container_name="${DOCKER_PREFIX}-search-api" ;;
+        agent)   container_name="${DOCKER_PREFIX}-agent-api" ;;
         *)
             error "Unknown service: $service"
             return 1
@@ -501,11 +535,11 @@ run_docker_container_tests() {
     
     # Verify the test user exists in test_authz (created by make test-db-init)
     local user_check
-    user_check=$(docker exec local-postgres psql -U busibox_test_user -d test_authz -t -A -c "SELECT user_id FROM authz_users WHERE user_id = '${test_user_id}' LIMIT 1;" 2>/dev/null || echo "")
+    user_check=$(docker exec "${DOCKER_PREFIX}-postgres" psql -U busibox_test_user -d test_authz -t -A -c "SELECT user_id FROM authz_users WHERE user_id = '${test_user_id}' LIMIT 1;" 2>/dev/null || echo "")
     if [[ -z "$user_check" ]]; then
         warn "Test user not found in test_authz database. Run 'make test-db-init' first."
         warn "Attempting to create test user..."
-        docker exec local-postgres psql -U busibox_test_user -d test_authz -c "INSERT INTO authz_users (user_id, email, created_at) VALUES ('${test_user_id}', 'test@busibox.local', NOW()) ON CONFLICT DO NOTHING;" 2>/dev/null || true
+        docker exec "${DOCKER_PREFIX}-postgres" psql -U busibox_test_user -d test_authz -c "INSERT INTO authz_users (user_id, email, created_at) VALUES ('${test_user_id}', 'test@busibox.local', NOW()) ON CONFLICT DO NOTHING;" 2>/dev/null || true
     fi
     
     # Run tests with proper error handling
@@ -543,11 +577,11 @@ run_nodejs_app_tests() {
     local app_dir=""
     case "$app" in
         ai-portal)
-            container_name="local-ai-portal"
+            container_name="${DOCKER_PREFIX}-ai-portal"
             app_dir="${REPO_ROOT}/../ai-portal"
             ;;
         agent-manager)
-            container_name="local-agent-manager"
+            container_name="${DOCKER_PREFIX}-agent-manager"
             app_dir="${REPO_ROOT}/../agent-manager"
             ;;
         *)

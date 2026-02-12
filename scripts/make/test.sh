@@ -22,6 +22,33 @@ source "${REPO_ROOT}/scripts/lib/ui.sh"
 source "${REPO_ROOT}/scripts/lib/state.sh"
 source "${REPO_ROOT}/scripts/lib/services.sh"
 
+# Detect container prefix from .env.* files or running containers
+detect_container_prefix() {
+    if [[ -n "${CONTAINER_PREFIX:-}" ]]; then
+        echo "$CONTAINER_PREFIX"
+        return
+    fi
+    for env_file in "${REPO_ROOT}/.env.dev" "${REPO_ROOT}/.env.local-dev" "${REPO_ROOT}/.env.demo"; do
+        if [[ -f "$env_file" ]]; then
+            local prefix
+            prefix=$(grep -E '^CONTAINER_PREFIX=' "$env_file" 2>/dev/null | head -1 | cut -d= -f2 | tr -d ' "'"'" || true)
+            if [[ -n "$prefix" ]]; then
+                echo "$prefix"
+                return
+            fi
+        fi
+    done
+    local running
+    running=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -oE '^[a-z]+-postgres$' | head -1 | sed 's/-postgres$//' || true)
+    if [[ -n "$running" ]]; then
+        echo "$running"
+        return
+    fi
+    echo "dev"
+}
+
+DOCKER_PREFIX=$(detect_container_prefix)
+
 # Detect vault password method (shared with deploy script)
 get_vault_flags() {
     local vault_pass_file="$HOME/.vault_pass"
@@ -1409,7 +1436,7 @@ run_container_tests() {
 # Check if test databases are bootstrapped
 check_test_db_status() {
     local result
-    result=$(docker exec local-postgres psql -U busibox_test_user -d test_authz -t -c \
+    result=$(docker exec "${DOCKER_PREFIX}-postgres" psql -U busibox_test_user -d test_authz -t -c \
         "SELECT COUNT(*) FROM authz_signing_keys WHERE is_active = true;" 2>/dev/null | tr -d ' ' || echo "0")
     
     if [[ "$result" -gt 0 ]]; then

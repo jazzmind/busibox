@@ -4354,7 +4354,8 @@ main() {
             export SSO_JWT_SECRET=$(get_vault_secret "secrets.jwt_secret" || echo "")
             export MINIO_SECRET_KEY=$(get_vault_secret "secrets.minio.root_password" || echo "")
             export AUTHZ_MASTER_KEY=$(get_vault_secret "secrets.authz_master_key" || echo "")
-            export LITELLM_API_KEY=$(get_vault_secret "secrets.litellm_api_key" || echo "")
+            export LITELLM_MASTER_KEY=$(get_vault_secret "secrets.litellm_master_key" || echo "")
+            export LITELLM_API_KEY="${LITELLM_MASTER_KEY}"  # Same as master key for authentication
             
             # Restore protected config (admin settings from vault for integrity)
             local vault_admin_email=$(get_vault_secret "secrets.admin_email" || echo "")

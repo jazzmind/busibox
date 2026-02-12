@@ -139,6 +139,18 @@ is_valid_service() {
     [[ -n "$container" ]]
 }
 
+# Get companion services that should be managed together
+# e.g., data-api and data-worker always go together
+get_companion_services() {
+    local service="$1"
+    case "$service" in
+        data-api|ingest|data)
+            echo "data-worker"
+            ;;
+        # Add more companion mappings here as needed
+    esac
+}
+
 # ============================================================================
 # Functions
 # ============================================================================
@@ -649,10 +661,31 @@ main() {
     
     local any_failed=false
     
+    # Expand services to include companions (e.g., data-api -> data-api + data-worker)
+    local expanded_services=()
     for service in "${services[@]}"; do
-        # Trim whitespace
         service=$(echo "$service" | xargs)
-        
+        expanded_services+=("$service")
+        local companions
+        companions=$(get_companion_services "$service")
+        if [[ -n "$companions" ]]; then
+            for companion in $companions; do
+                # Avoid duplicates if user already specified the companion
+                local already_listed=false
+                for existing in "${expanded_services[@]}"; do
+                    if [[ "$existing" == "$companion" ]]; then
+                        already_listed=true
+                        break
+                    fi
+                done
+                if ! $already_listed; then
+                    expanded_services+=("$companion")
+                fi
+            done
+        fi
+    done
+    
+    for service in "${expanded_services[@]}"; do
         if ! is_valid_service "$service"; then
             error "Unknown service: $service"
             any_failed=true

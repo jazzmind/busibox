@@ -21,6 +21,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.auth.dependencies import get_principal
 from app.db.session import get_session
@@ -1024,6 +1025,7 @@ async def get_chat_history(
         # Get messages
         messages_result = await session.execute(
             select(Message)
+            .options(selectinload(Message.chat_attachments))
             .where(Message.conversation_id == conversation_id)
             .order_by(Message.created_at.asc())
             .limit(limit)

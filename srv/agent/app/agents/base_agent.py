@@ -187,6 +187,13 @@ TOOL_SCOPES: Dict[str, List[str]] = {
     "web_search": [],  # No auth needed
     "web_scraper": [],  # No auth needed
     "data_document": ["data.write"],
+    "list_data_documents": ["data.read"],
+    "query_data": ["data.read"],
+    "insert_records": ["data.write"],
+    "update_records": ["data.write"],
+    "delete_records": ["data.write"],
+    "create_data_document": ["data.write"],
+    "get_data_document": ["data.read"],
     "get_weather": [],  # No auth needed
     "rag_query": ["rag.read"],
     "create_task": ["task.write"],  # Create tasks
@@ -286,6 +293,28 @@ def _register_builtin_tools():
         ToolRegistry.register("send_notification", send_notification, NotificationOutput)
     except ImportError as e:
         logger.warning(f"Could not register task/notification tools: {e}")
+    
+    # Register data management tools (list, query, insert, update, delete data documents)
+    try:
+        from app.tools.data_tool import (
+            list_data_documents, ListDataDocumentsOutput,
+            query_data, QueryDataOutput,
+            insert_records, InsertRecordsOutput,
+            update_records, UpdateRecordsOutput,
+            delete_records, DeleteRecordsOutput,
+            create_data_document, CreateDataDocumentOutput,
+            get_data_document, GetDocumentOutput,
+        )
+        
+        ToolRegistry.register("list_data_documents", list_data_documents, ListDataDocumentsOutput)
+        ToolRegistry.register("query_data", query_data, QueryDataOutput)
+        ToolRegistry.register("insert_records", insert_records, InsertRecordsOutput)
+        ToolRegistry.register("update_records", update_records, UpdateRecordsOutput)
+        ToolRegistry.register("delete_records", delete_records, DeleteRecordsOutput)
+        ToolRegistry.register("create_data_document", create_data_document, CreateDataDocumentOutput)
+        ToolRegistry.register("get_data_document", get_data_document, GetDocumentOutput)
+    except ImportError as e:
+        logger.warning(f"Could not register data tools: {e}")
 
 
 # Initialize tool registry on module load

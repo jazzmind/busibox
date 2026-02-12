@@ -198,9 +198,10 @@
     method: GET
     status_code: 200
     return_content: true
+    timeout: 30
   register: health_check
-  retries: 30
-  delay: 5
+  retries: 60
+  delay: 10
   until: health_check.status == 200 and health_check.json.model_loaded | default(false)
   tags: [embedding_api, embedding_api_start]
 
