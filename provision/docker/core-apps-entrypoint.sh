@@ -20,18 +20,24 @@ MODE="${1:-dev}"
 # Generate self-signed SSL certificate if not present
 generate_ssl_cert() {
     local ssl_dir="/etc/nginx/ssl"
-    local cert_file="$ssl_dir/server.crt"
-    local key_file="$ssl_dir/server.key"
+    # Must match nginx-bundled.conf which expects localhost.crt and localhost.key
+    local cert_file="$ssl_dir/localhost.crt"
+    local key_file="$ssl_dir/localhost.key"
     
     if [ ! -f "$cert_file" ] || [ ! -f "$key_file" ]; then
-        echo "Generating self-signed SSL certificate..."
+        echo "Generating self-signed SSL certificate (localhost.crt/localhost.key)..."
         mkdir -p "$ssl_dir"
-        openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+        if ! openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
             -keyout "$key_file" \
             -out "$cert_file" \
             -subj "/CN=localhost/O=Busibox/C=US" \
-            2>/dev/null
+            -addext "subjectAltName=DNS:localhost,DNS:*.localhost,IP:127.0.0.1"; then
+            echo "ERROR: Failed to generate SSL certificate"
+            return 1
+        fi
         echo "SSL certificate generated."
+    else
+        echo "SSL certificates already exist, skipping generation."
     fi
 }
 
