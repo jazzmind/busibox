@@ -1056,6 +1056,8 @@ async def start_service_sse(
                         'deploy': ('deploy-api', 'deploy-api'),  # alias
                         'docs-api': ('docs-api', 'docs-api'),  # milvus-lxc
                         'docs': ('docs-api', 'docs-api'),  # alias
+                        'bridge-api': ('data-api', 'bridge'),  # data-lxc
+                        'bridge': ('data-api', 'bridge'),  # alias
                     }
                     
                     if service not in proxmox_service_map:

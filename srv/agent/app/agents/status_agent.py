@@ -1315,30 +1315,41 @@ Guidelines:
 
         prompt = f"{existing_context}\n## Conversation History\n{history}\n## Current Update\n{query}\n\nExtract the update actions as JSON."
 
-        try:
-            extractor = self._get_update_extractor()
-            result = await extractor.run(prompt)
-            output = str(result.output).strip()
+        for attempt in range(2):
+            try:
+                extractor = self._get_update_extractor()
+                p = prompt
+                if attempt > 0:
+                    p += "\n\nIMPORTANT: You MUST output valid JSON. No trailing commas. No comments."
+                result = await extractor.run(p)
+                output = str(result.output).strip()
 
-            # Parse JSON from response (handle markdown code blocks)
-            json_match = re.search(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', output)
-            if json_match:
-                output = json_match.group(1)
-            else:
-                brace_match = re.search(r'\{[\s\S]*\}', output)
-                if brace_match:
-                    output = brace_match.group(0)
+                # Extract JSON from response text
+                output = StatusAssistantAgent._extract_json_from_text(output)
 
-            parsed = json.loads(output)
-            logger.info(f"Extracted update: target={parsed.get('target_project')}, "
-                        f"project_updates={bool(parsed.get('project_updates'))}, "
-                        f"task_updates={len(parsed.get('task_updates', []))}, "
-                        f"new_tasks={len(parsed.get('new_tasks', []))}")
-            return parsed
+                # Try parsing directly first
+                try:
+                    parsed = json.loads(output)
+                except json.JSONDecodeError:
+                    fixed = StatusAssistantAgent._fix_json(output)
+                    parsed = json.loads(fixed)
 
-        except (json.JSONDecodeError, Exception) as e:
-            logger.error(f"Update extraction failed: {e}")
-            return {}
+                logger.info(f"Extracted update: target={parsed.get('target_project')}, "
+                            f"project_updates={bool(parsed.get('project_updates'))}, "
+                            f"task_updates={len(parsed.get('task_updates', []))}, "
+                            f"new_tasks={len(parsed.get('new_tasks', []))}")
+                return parsed
+
+            except json.JSONDecodeError as e:
+                logger.warning(f"Update JSON parse failed (attempt {attempt + 1}): {e}")
+                if attempt == 0:
+                    continue
+                logger.error(f"Update extraction failed after {attempt + 1} attempts: {e}")
+            except Exception as e:
+                logger.error(f"Update extraction failed: {e}")
+                break
+
+        return {}
 
     def pipeline_steps(self, query: str, context: AgentContext) -> List[PipelineStep]:
         # Reset state
