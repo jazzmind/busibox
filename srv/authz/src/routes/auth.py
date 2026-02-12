@@ -576,6 +576,9 @@ async def initiate_login(request: Request):
     Returns:
     - message: string ("ok")
     - expires_in: int (seconds until tokens expire)
+    
+    Test mode (X-Test-Mode: true + AUTHZ_TEST_MODE_ENABLED=true):
+    - Also returns: magic_link_token, totp_code (for automated test flows)
     """
     body = await request.json()
     try:
@@ -655,6 +658,23 @@ async def initiate_login(request: Request):
     # Send the email via Bridge API (fire-and-forget style — errors are logged
     # but never returned to the caller).
     await _send_magic_link_email(email, magic_link_url, totp_code)
+    
+    # Test mode: return tokens in response so automated tests can complete
+    # the login flow without email delivery. Only enabled when:
+    # 1. AUTHZ_TEST_MODE_ENABLED=true (opt-in server config)
+    # 2. X-Test-Mode: true header is present (per-request)
+    # This is safe because test mode uses an isolated test database.
+    is_test_mode = (
+        config.test_mode_enabled
+        and request.headers.get(TEST_MODE_HEADER, "").lower() == "true"
+    )
+    if is_test_mode:
+        return {
+            "message": "ok",
+            "expires_in": 900,
+            "magic_link_token": magic_link["token"],
+            "totp_code": totp_code,
+        }
     
     return ok_response
 
