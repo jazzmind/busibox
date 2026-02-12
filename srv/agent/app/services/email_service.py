@@ -37,7 +37,10 @@ class EmailResult(BaseModel):
 class EmailConfig(BaseModel):
     """Email service configuration."""
     
-    provider: str = Field("smtp", description="Email provider: smtp, sendgrid, ses")
+    provider: str = Field("smtp", description="Email provider: bridge, smtp, sendgrid, ses")
+    
+    # Bridge API settings (preferred provider)
+    bridge_api_url: Optional[str] = None
     
     # SMTP settings
     smtp_host: Optional[str] = None
@@ -60,11 +63,28 @@ class EmailConfig(BaseModel):
 
 
 def get_email_config() -> EmailConfig:
-    """Get email configuration from environment."""
+    """Get email configuration from environment.
+    
+    Auto-detects the best provider:
+    - If BRIDGE_API_URL is set, uses bridge-api (preferred)
+    - Otherwise falls back to EMAIL_PROVIDER env var (smtp, sendgrid, ses)
+    """
     settings = get_settings()
     
+    bridge_api_url = os.getenv("BRIDGE_API_URL", getattr(settings, "bridge_api_url", None))
+    explicit_provider = os.getenv("EMAIL_PROVIDER", "")
+    
+    # Auto-detect provider: prefer bridge if URL is configured
+    if explicit_provider:
+        provider = explicit_provider
+    elif bridge_api_url:
+        provider = "bridge"
+    else:
+        provider = "smtp"
+    
     return EmailConfig(
-        provider=os.getenv("EMAIL_PROVIDER", "smtp"),
+        provider=provider,
+        bridge_api_url=bridge_api_url,
         smtp_host=os.getenv("SMTP_HOST", getattr(settings, "smtp_host", None)),
         smtp_port=int(os.getenv("SMTP_PORT", "587")),
         smtp_username=os.getenv("SMTP_USERNAME", getattr(settings, "smtp_username", None)),
@@ -111,7 +131,15 @@ async def send_email(
     )
     
     try:
-        if config.provider == "sendgrid":
+        if config.provider == "bridge":
+            return await _send_via_bridge(
+                config=config,
+                to=to,
+                subject=subject,
+                body=body,
+                html_body=html_body,
+            )
+        elif config.provider == "sendgrid":
             return await _send_via_sendgrid(
                 config=config,
                 to=to,
@@ -152,6 +180,59 @@ async def send_email(
             success=False,
             error=str(e),
         )
+
+
+async def _send_via_bridge(
+    config: EmailConfig,
+    to: str,
+    subject: str,
+    body: str,
+    html_body: Optional[str] = None,
+) -> EmailResult:
+    """Send email via Bridge API.
+    
+    Bridge API handles SMTP/Resend configuration internally.
+    Endpoint: POST /api/v1/email/send
+    """
+    if not config.bridge_api_url:
+        return EmailResult(
+            success=False,
+            error="Bridge API URL not configured. Set BRIDGE_API_URL environment variable.",
+        )
+    
+    url = f"{config.bridge_api_url.rstrip('/')}/api/v1/email/send"
+    
+    payload = {
+        "to": to,
+        "subject": subject,
+        "html": html_body or body,
+        "text": body,
+    }
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, json=payload, timeout=30.0)
+            
+            if response.status_code == 200:
+                result_data = response.json()
+                logger.info(f"Email sent via bridge-api to {to}")
+                return EmailResult(
+                    success=result_data.get("success", True),
+                    message_id=result_data.get("message", ""),
+                )
+            else:
+                error = f"Bridge API error: {response.status_code} - {response.text}"
+                logger.error(error)
+                return EmailResult(success=False, error=error)
+    
+    except httpx.ConnectError as e:
+        error = f"Failed to connect to Bridge API at {url}: {e}"
+        logger.error(error)
+        return EmailResult(success=False, error=error)
+    except Exception as e:
+        error = f"Bridge API request failed: {e}"
+        logger.error(error)
+        return EmailResult(success=False, error=error)
 
 
 async def _send_via_smtp(
