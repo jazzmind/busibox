@@ -10,8 +10,28 @@ Loads settings from environment variables for all communication channels:
 from functools import lru_cache
 from typing import List, Optional
 
-from pydantic import AnyHttpUrl, Field, field_validator
+from pydantic import AnyHttpUrl, BeforeValidator, Field, field_validator
 from pydantic_settings import BaseSettings
+from typing_extensions import Annotated
+
+
+def _parse_comma_list(v: object) -> List[str]:
+    """Parse comma-separated string into a list.
+
+    Handles empty strings (from env vars like ALLOWED_PHONE_NUMBERS=)
+    which pydantic-settings cannot JSON-parse for List[str] fields.
+    """
+    if isinstance(v, str):
+        v = v.strip()
+        if not v:
+            return []
+        return [item.strip() for item in v.split(",") if item.strip()]
+    if isinstance(v, list):
+        return v
+    return []
+
+
+CommaSeparatedList = Annotated[List[str], BeforeValidator(_parse_comma_list)]
 
 
 class Settings(BaseSettings):
@@ -95,25 +115,13 @@ class Settings(BaseSettings):
     poll_interval: float = Field(1.0, description="Seconds between message polls")
 
     # Allowed phone numbers (empty = allow all)
-    allowed_phone_numbers: List[str] = Field(
+    # Uses CommaSeparatedList (Annotated BeforeValidator) instead of List[str]
+    # because pydantic-settings v2 tries to JSON-parse List fields from env vars
+    # BEFORE field_validators run, causing SettingsError on plain strings.
+    allowed_phone_numbers: CommaSeparatedList = Field(
         default_factory=list,
         description="List of allowed phone numbers (empty = all)",
     )
-
-    @field_validator("allowed_phone_numbers", mode="before")
-    @classmethod
-    def parse_comma_separated_list(cls, v: object) -> object:
-        """Parse comma-separated string into a list.
-
-        Handles empty strings (from env vars like ALLOWED_PHONE_NUMBERS=)
-        which pydantic-settings cannot JSON-parse.
-        """
-        if isinstance(v, str):
-            v = v.strip()
-            if not v:
-                return []
-            return [item.strip() for item in v.split(",") if item.strip()]
-        return v
 
     # -------------------------------------------------------------------------
     # Email Channel
