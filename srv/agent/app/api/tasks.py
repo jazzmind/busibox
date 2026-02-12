@@ -900,10 +900,12 @@ async def run_agent_task(
     
     try:
         if task.workflow_id:
-            # Execute workflow
+            # Execute workflow asynchronously — return immediately so the frontend
+            # can connect via SSE at /streams/task-executions/{execution_id} for live progress.
+            import asyncio
             from app.workflows.enhanced_engine import create_workflow_execution, run_workflow_execution
             
-            # Create workflow execution record
+            # Create workflow execution record (fast, just a DB insert)
             workflow_execution = await create_workflow_execution(
                 session=session,
                 principal=principal,
@@ -911,88 +913,159 @@ async def run_agent_task(
                 input_data=payload,
             )
             
-            # Run the workflow (synchronously for manual execution)
-            workflow_execution = await run_workflow_execution(
-                execution_id=workflow_execution.id,
-                principal=principal,
-                scopes=task.delegation_scopes or [],
-                purpose="task-manual-execution",
-            )
-            
-            # Update execution with workflow result
-            # WorkflowExecution stores outputs in step_outputs dict
-            output_summary = None
-            if workflow_execution.step_outputs:
-                # Get the last step's output or synthesize step output
-                last_output = None
-                if isinstance(workflow_execution.step_outputs, dict):
-                    # Try to get synthesize step output, or last step output
-                    last_output = workflow_execution.step_outputs.get("synthesize") or \
-                                  workflow_execution.step_outputs.get("result") or \
-                                  list(workflow_execution.step_outputs.values())[-1] if workflow_execution.step_outputs else None
-                if last_output:
-                    if isinstance(last_output, dict):
-                        output_summary = last_output.get("summary") or last_output.get("result") or str(last_output)[:500]
-                    else:
-                        output_summary = str(last_output)[:500]
-            
-            success = workflow_execution.status in ("completed", "succeeded")
-            
-            # Don't set run_id for workflow executions - it has FK to run_records
-            # Store workflow execution ID in output_data instead
+            # Store workflow_execution_id in task execution output_data immediately
+            # so the SSE stream can find the linked workflow execution
             await update_task_execution(
                 session=session,
                 execution_id=execution.id,
-                run_id=None,  # No run_id for workflow executions
-                status=workflow_execution.status,
-                output_summary=output_summary,
-                error=workflow_execution.error if not success else None,
+                run_id=None,
+                status="running",
                 output_data={
                     "workflow_execution_id": str(workflow_execution.id),
-                    "step_outputs": workflow_execution.step_outputs,
                 },
             )
             
-            await update_task_after_execution(
-                session=session,
-                task_id=task_id,
-                execution=execution,
-                success=success,
-            )
+            # Schedule workflow to run in background
+            # Captures all necessary IDs so the background task can handle
+            # post-execution updates (notifications, insights, library saving)
+            async def _run_workflow_background(
+                wf_exec_id: uuid.UUID,
+                task_exec_id: uuid.UUID,
+                bg_task_id: uuid.UUID,
+                bg_principal: Principal,
+                bg_scopes: list,
+                bg_task_name: str,
+                bg_notification_config: dict,
+                bg_insights_config: dict,
+                bg_output_saving_config: dict,
+                bg_authorization: str,
+            ):
+                """Background coroutine for workflow execution with post-processing."""
+                from app.db.session import get_session_context
+                
+                try:
+                    # Run the workflow (creates its own session)
+                    wf_result = await run_workflow_execution(
+                        execution_id=wf_exec_id,
+                        principal=bg_principal,
+                        scopes=bg_scopes,
+                        purpose="task-manual-execution",
+                    )
+                    
+                    if not wf_result:
+                        logger.error(f"Workflow execution {wf_exec_id} returned None")
+                        return
+                    
+                    # Post-processing in a new session
+                    async with get_session_context() as bg_session:
+                        # Extract output summary
+                        output_summary = None
+                        if wf_result.step_outputs:
+                            last_output = None
+                            if isinstance(wf_result.step_outputs, dict):
+                                last_output = wf_result.step_outputs.get("synthesize") or \
+                                              wf_result.step_outputs.get("result") or \
+                                              (list(wf_result.step_outputs.values())[-1] if wf_result.step_outputs else None)
+                            if last_output:
+                                if isinstance(last_output, dict):
+                                    output_summary = last_output.get("summary") or last_output.get("result") or str(last_output)[:500]
+                                else:
+                                    output_summary = str(last_output)[:500]
+                        
+                        success = wf_result.status in ("completed", "succeeded")
+                        
+                        # Update task execution with final result
+                        await update_task_execution(
+                            session=bg_session,
+                            execution_id=task_exec_id,
+                            run_id=None,
+                            status=wf_result.status,
+                            output_summary=output_summary,
+                            error=wf_result.error if not success else None,
+                            output_data={
+                                "workflow_execution_id": str(wf_exec_id),
+                                "step_outputs": wf_result.step_outputs,
+                            },
+                        )
+                        
+                        # Reload task and execution for post-processing
+                        bg_task = await get_task(bg_session, bg_task_id, bg_principal.sub)
+                        bg_execution = await bg_session.get(TaskExecution, task_exec_id)
+                        
+                        if bg_task and bg_execution:
+                            await update_task_after_execution(
+                                session=bg_session,
+                                task_id=bg_task_id,
+                                execution=bg_execution,
+                                success=success,
+                            )
+                            
+                            await _send_task_notification(
+                                session=bg_session,
+                                task=bg_task,
+                                execution=bg_execution,
+                                success=success,
+                                output_summary=output_summary,
+                            )
+                            
+                            if success and output_summary:
+                                await _save_task_insight(
+                                    task=bg_task,
+                                    execution=bg_execution,
+                                    output_summary=output_summary,
+                                    authorization=bg_authorization,
+                                )
+                            
+                            await _save_task_output_to_library(
+                                task=bg_task,
+                                execution=bg_execution,
+                                output_summary=output_summary,
+                                success=success,
+                                authorization=bg_authorization,
+                            )
+                        
+                        logger.info(
+                            f"Background workflow execution completed: task={bg_task_id}, "
+                            f"wf_exec={wf_exec_id}, status={wf_result.status}"
+                        )
+                
+                except Exception as e:
+                    logger.error(f"Background workflow execution failed: {e}", exc_info=True)
+                    try:
+                        from app.db.session import get_session_context
+                        async with get_session_context() as err_session:
+                            await update_task_execution(
+                                session=err_session,
+                                execution_id=task_exec_id,
+                                status="failed",
+                                error=str(e),
+                            )
+                    except Exception as inner_e:
+                        logger.error(f"Failed to update task execution on error: {inner_e}")
             
-            # Send notification for workflow execution
-            await _send_task_notification(
-                session=session,
-                task=task,
-                execution=execution,
-                success=success,
-                output_summary=output_summary,
-            )
-            
-            # Save insight from execution output (for duplicate detection)
-            if success and output_summary:
-                await _save_task_insight(
-                    task=task,
-                    execution=execution,
-                    output_summary=output_summary,
-                    authorization=principal.token,  # Use the caller's token for fresh auth
+            # Launch the background task
+            asyncio.create_task(
+                _run_workflow_background(
+                    wf_exec_id=workflow_execution.id,
+                    task_exec_id=execution.id,
+                    bg_task_id=task_id,
+                    bg_principal=principal,
+                    bg_scopes=task.delegation_scopes or [],
+                    bg_task_name=task.name,
+                    bg_notification_config=task.notification_config or {},
+                    bg_insights_config=task.insights_config or {},
+                    bg_output_saving_config=task.output_saving_config or {},
+                    bg_authorization=principal.token,
                 )
-            
-            # Save output to library if configured
-            await _save_task_output_to_library(
-                task=task,
-                execution=execution,
-                output_summary=output_summary,
-                success=success,
-                authorization=principal.token,  # Use the caller's token for fresh auth
             )
             
+            # Return immediately — frontend should connect to SSE for progress
             return TaskRunResponse(
                 execution_id=execution.id,
                 task_id=task_id,
                 run_id=workflow_execution.id,
-                status=workflow_execution.status,
-                message=f"Workflow execution {workflow_execution.status}",
+                status="running",
+                message="Workflow execution started. Connect to SSE stream for live progress.",
             )
         else:
             # Execute agent

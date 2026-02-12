@@ -139,13 +139,14 @@ services:
       authz-api:
         condition: service_healthy
     healthcheck:
-      # Check nginx and both apps are responding
-      # Note: Health endpoints are at /portal/api/health or /agents/api/health
-      test: ["CMD", "sh", "-c", "curl -f http://localhost:3000/portal/api/health && curl -f http://localhost:3001/agents/api/health"]
+      # Check nginx is responding (instant — returns "healthy" without hitting Next.js)
+      # Do NOT check /portal/api/health or /agents/api/health here — those trigger
+      # Turbopack compilation in dev mode and cause CPU spikes every 30s
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
       interval: 30s
-      timeout: 10s
-      start_period: 120s
-      retries: 5
+      timeout: 5s
+      start_period: 60s
+      retries: 3
     networks:
       busibox-net:
         aliases:

@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import admin, agents, auth, chat, conversations, dispatcher, evals, health, insights, llm, runs, scores, streams, tasks, tools, webhooks, workflows
+from app.api import admin, agents, auth, chat, conversations, dispatcher, evals, execution_streams, health, insights, llm, runs, scores, streams, tasks, tools, webhooks, workflows
 from app.config.settings import get_settings
 from app.db.session import SessionLocal
 from app.services.agent_registry import agent_registry
@@ -81,6 +81,7 @@ app.include_router(evals.router)
 app.include_router(dispatcher.router)
 app.include_router(runs.router)
 app.include_router(streams.router)
+app.include_router(execution_streams.router)
 app.include_router(scores.router)
 app.include_router(conversations.router)
 app.include_router(insights.router)
