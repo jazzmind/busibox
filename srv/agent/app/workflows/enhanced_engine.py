@@ -908,6 +908,24 @@ async def run_workflow_execution(
                 step = workflow.steps[current_step_idx]
                 step_id = step.get("id")
                 
+                # Check if execution was stopped by user (e.g. via stop API)
+                # Reload status from DB to pick up external changes
+                await session.refresh(execution)
+                if execution.status in ("stopped", "cancelled"):
+                    logger.info(
+                        f"Workflow execution {execution.id} was stopped by user at step {step_id}"
+                    )
+                    # completed_at and duration already set by the stop endpoint
+                    if not execution.completed_at:
+                        execution.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                        if execution.started_at:
+                            execution.duration_seconds = (
+                                execution.completed_at - execution.started_at
+                            ).total_seconds()
+                    await session.commit()
+                    await session.refresh(execution)
+                    return execution
+                
                 # Update current step
                 execution.current_step_id = step_id
                 await session.commit()

@@ -563,7 +563,7 @@ async def update_task_execution(
     if error:
         execution.error = error
     
-    if status in ("completed", "failed", "timeout"):
+    if status in ("completed", "failed", "timeout", "stopped"):
         execution.completed_at = _now()
         if execution.started_at:
             execution.duration_seconds = (
@@ -575,6 +575,179 @@ async def update_task_execution(
     await session.refresh(execution)
     
     return execution
+
+
+async def stop_task_execution(
+    session: AsyncSession,
+    execution_id: uuid.UUID,
+    task_id: uuid.UUID,
+    user_id: str,
+) -> Optional[TaskExecution]:
+    """
+    Stop a running or pending task execution.
+    
+    If the execution has a linked workflow execution, that is stopped too.
+    
+    Args:
+        session: Database session
+        execution_id: Execution UUID
+        task_id: Parent task UUID (for access control)
+        user_id: User ID for access control
+        
+    Returns:
+        Updated TaskExecution, or None if not found
+        
+    Raises:
+        ValueError: If execution cannot be stopped (already in terminal state)
+    """
+    from app.models.domain import WorkflowExecution
+    
+    # Verify task ownership
+    task = await get_task(session, task_id, user_id)
+    if not task:
+        return None
+    
+    # Get the execution
+    result = await session.execute(
+        select(TaskExecution).where(
+            TaskExecution.id == execution_id,
+            TaskExecution.task_id == task_id,
+        )
+    )
+    execution = result.scalar_one_or_none()
+    
+    if not execution:
+        return None
+    
+    # Only allow stopping non-terminal executions
+    terminal = {"completed", "failed", "timeout", "stopped", "succeeded"}
+    if execution.status in terminal:
+        raise ValueError(
+            f"Cannot stop execution with status '{execution.status}'. "
+            f"Only pending or running executions can be stopped."
+        )
+    
+    # If there's a linked workflow execution, stop it too
+    wf_exec_id = (execution.output_data or {}).get("workflow_execution_id")
+    if wf_exec_id:
+        try:
+            wf_exec = await session.get(WorkflowExecution, uuid.UUID(wf_exec_id))
+            if wf_exec and wf_exec.status in ("pending", "running", "awaiting_human"):
+                wf_exec.status = "stopped"
+                wf_exec.error = "Stopped by user"
+                wf_exec.completed_at = _now()
+                if wf_exec.started_at:
+                    wf_exec.duration_seconds = (
+                        wf_exec.completed_at - wf_exec.started_at
+                    ).total_seconds()
+                logger.info(f"Stopped linked workflow execution {wf_exec_id}")
+        except Exception as e:
+            logger.warning(f"Failed to stop linked workflow execution {wf_exec_id}: {e}")
+    
+    # Stop the task execution
+    execution.status = "stopped"
+    execution.error = "Stopped by user"
+    execution.completed_at = _now()
+    if execution.started_at:
+        execution.duration_seconds = (
+            execution.completed_at - execution.started_at
+        ).total_seconds()
+    execution.updated_at = _now()
+    
+    await session.commit()
+    await session.refresh(execution)
+    
+    logger.info(f"Stopped task execution {execution_id}")
+    return execution
+
+
+async def delete_task_execution(
+    session: AsyncSession,
+    execution_id: uuid.UUID,
+    task_id: uuid.UUID,
+    user_id: str,
+) -> bool:
+    """
+    Delete a task execution record.
+    
+    Only allows deletion of executions in terminal states (failed, stopped, timeout, completed).
+    Also cleans up linked workflow execution and its step executions.
+    
+    Args:
+        session: Database session
+        execution_id: Execution UUID
+        task_id: Parent task UUID (for access control)
+        user_id: User ID for access control
+        
+    Returns:
+        True if deleted, False if not found
+        
+    Raises:
+        ValueError: If execution is still running and cannot be deleted
+    """
+    from app.models.domain import WorkflowExecution, StepExecution, TaskNotification
+    
+    # Verify task ownership
+    task = await get_task(session, task_id, user_id)
+    if not task:
+        return False
+    
+    # Get the execution
+    result = await session.execute(
+        select(TaskExecution).where(
+            TaskExecution.id == execution_id,
+            TaskExecution.task_id == task_id,
+        )
+    )
+    execution = result.scalar_one_or_none()
+    
+    if not execution:
+        return False
+    
+    # Only allow deletion of terminal executions
+    terminal = {"completed", "failed", "timeout", "stopped", "succeeded"}
+    if execution.status not in terminal:
+        raise ValueError(
+            f"Cannot delete execution with status '{execution.status}'. "
+            f"Stop the execution first, then delete it."
+        )
+    
+    # Clean up linked workflow execution and its steps
+    wf_exec_id = (execution.output_data or {}).get("workflow_execution_id")
+    if wf_exec_id:
+        try:
+            wf_uuid = uuid.UUID(wf_exec_id)
+            # Delete step executions
+            step_result = await session.execute(
+                select(StepExecution).where(StepExecution.execution_id == wf_uuid)
+            )
+            for step in step_result.scalars().all():
+                await session.delete(step)
+            
+            # Delete workflow execution
+            wf_exec = await session.get(WorkflowExecution, wf_uuid)
+            if wf_exec:
+                await session.delete(wf_exec)
+                logger.info(f"Deleted linked workflow execution {wf_exec_id}")
+        except Exception as e:
+            logger.warning(f"Failed to delete linked workflow execution {wf_exec_id}: {e}")
+    
+    # Delete linked notifications
+    try:
+        notif_result = await session.execute(
+            select(TaskNotification).where(TaskNotification.execution_id == execution_id)
+        )
+        for notif in notif_result.scalars().all():
+            await session.delete(notif)
+    except Exception as e:
+        logger.warning(f"Failed to delete linked notifications: {e}")
+    
+    # Delete the task execution
+    await session.delete(execution)
+    await session.commit()
+    
+    logger.info(f"Deleted task execution {execution_id}")
+    return True
 
 
 async def mark_notification_sent(

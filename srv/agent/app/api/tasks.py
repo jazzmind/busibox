@@ -29,11 +29,13 @@ from app.services.task_service import (
     create_task,
     create_task_execution,
     delete_task,
+    delete_task_execution,
     get_task,
     list_task_executions,
     list_tasks,
     pause_task,
     resume_task,
+    stop_task_execution,
     task_to_read,
     update_task,
 )
@@ -1259,6 +1261,117 @@ async def get_task_execution_endpoint(
         )
     
     return TaskExecutionRead.model_validate(execution)
+
+
+@router.post("/{task_id}/executions/{execution_id}/stop", response_model=TaskExecutionRead)
+async def stop_task_execution_endpoint(
+    task_id: uuid.UUID,
+    execution_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+) -> TaskExecutionRead:
+    """
+    Stop a running or pending task execution.
+    
+    If the execution has a linked workflow execution, that is stopped too.
+    The workflow engine checks for stopped status between steps, so the
+    currently running step will complete before the workflow stops.
+    
+    Args:
+        task_id: Task UUID
+        execution_id: Execution UUID
+        principal: Authenticated user
+        session: Database session
+        
+    Returns:
+        Updated execution with status "stopped"
+        
+    Raises:
+        HTTPException: 404 if not found, 400 if already in terminal state
+    """
+    try:
+        execution = await stop_task_execution(
+            session=session,
+            execution_id=execution_id,
+            task_id=task_id,
+            user_id=principal.sub,
+        )
+        
+        if not execution:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Execution {execution_id} not found for task {task_id}",
+            )
+        
+        logger.info(
+            f"Stopped task execution {execution_id}",
+            extra={
+                "task_id": str(task_id),
+                "execution_id": str(execution_id),
+                "user_sub": principal.sub,
+            },
+        )
+        
+        return TaskExecutionRead.model_validate(execution)
+    
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@router.delete("/{task_id}/executions/{execution_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_task_execution_endpoint(
+    task_id: uuid.UUID,
+    execution_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """
+    Delete a task execution record.
+    
+    Only executions in terminal states (failed, stopped, completed, timeout)
+    can be deleted. Also cleans up linked workflow execution records and
+    step execution records.
+    
+    Args:
+        task_id: Task UUID
+        execution_id: Execution UUID
+        principal: Authenticated user
+        session: Database session
+        
+    Raises:
+        HTTPException: 404 if not found, 400 if execution is still running
+    """
+    try:
+        success = await delete_task_execution(
+            session=session,
+            execution_id=execution_id,
+            task_id=task_id,
+            user_id=principal.sub,
+        )
+        
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Execution {execution_id} not found for task {task_id}",
+            )
+        
+        logger.info(
+            f"Deleted task execution {execution_id}",
+            extra={
+                "task_id": str(task_id),
+                "execution_id": str(execution_id),
+                "user_sub": principal.sub,
+            },
+        )
+    
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
 
 
 @router.get("/{task_id}/insights")
