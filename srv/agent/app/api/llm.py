@@ -121,7 +121,7 @@ class CloudModelsResponse(BaseModel):
 
 class RegisterModelsRequest(BaseModel):
     """Request to register cloud models in LiteLLM."""
-    provider: str = Field(..., description="Provider: openai, anthropic")
+    provider: str = Field(..., description="Provider: openai, anthropic, bedrock")
     model_ids: List[str] = Field(..., description="Model IDs to register")
 
 
@@ -164,6 +164,40 @@ OPENAI_MODEL_EXCLUDES = {
 }
 
 ANTHROPIC_MODEL_EXCLUDES = set()  # Anthropic list is already clean
+
+# Curated list of popular Bedrock models (since we don't have boto3 for ListFoundationModels)
+# Format: (model_id, display_name, description)
+BEDROCK_CURATED_MODELS = [
+    # Anthropic Claude on Bedrock
+    ("anthropic.claude-sonnet-4-20250514-v1:0", "Claude Sonnet 4", "Anthropic Claude Sonnet 4 (latest)"),
+    ("anthropic.claude-3-7-sonnet-20250219-v1:0", "Claude 3.7 Sonnet", "Anthropic Claude 3.7 Sonnet"),
+    ("anthropic.claude-3-5-sonnet-20241022-v2:0", "Claude 3.5 Sonnet v2", "Anthropic Claude 3.5 Sonnet v2"),
+    ("anthropic.claude-3-5-haiku-20241022-v1:0", "Claude 3.5 Haiku", "Anthropic Claude 3.5 Haiku (fast)"),
+    ("anthropic.claude-3-opus-20240229-v1:0", "Claude 3 Opus", "Anthropic Claude 3 Opus"),
+    ("anthropic.claude-3-haiku-20240307-v1:0", "Claude 3 Haiku", "Anthropic Claude 3 Haiku"),
+    # Amazon Nova
+    ("amazon.nova-pro-v1:0", "Nova Pro", "Amazon Nova Pro"),
+    ("amazon.nova-lite-v1:0", "Nova Lite", "Amazon Nova Lite"),
+    ("amazon.nova-micro-v1:0", "Nova Micro", "Amazon Nova Micro (fast)"),
+    ("amazon.nova-2-lite-v1:0", "Nova 2 Lite", "Amazon Nova 2 Lite"),
+    ("amazon.nova-2-sonic-v1:0", "Nova 2 Sonic", "Amazon Nova 2 Sonic (speech)"),
+    # Meta Llama
+    ("meta.llama3-3-70b-instruct-v1:0", "Llama 3.3 70B", "Meta Llama 3.3 70B Instruct"),
+    ("meta.llama3-1-405b-instruct-v1:0", "Llama 3.1 405B", "Meta Llama 3.1 405B Instruct"),
+    ("meta.llama3-1-70b-instruct-v1:0", "Llama 3.1 70B", "Meta Llama 3.1 70B Instruct"),
+    ("meta.llama3-1-8b-instruct-v1:0", "Llama 3.1 8B", "Meta Llama 3.1 8B Instruct"),
+    # Mistral
+    ("mistral.mistral-large-2407-v1:0", "Mistral Large", "Mistral Large (2407)"),
+    ("mistral.mistral-small-2402-v1:0", "Mistral Small", "Mistral Small (2402)"),
+    # DeepSeek
+    ("deepseek.deepseek-r1-v1:0", "DeepSeek R1", "DeepSeek R1 reasoning model"),
+    # Cohere
+    ("cohere.command-r-plus-v1:0", "Command R+", "Cohere Command R+"),
+    ("cohere.command-r-v1:0", "Command R", "Cohere Command R"),
+    # AI21 Labs
+    ("ai21.jamba-1-5-large-v1:0", "Jamba 1.5 Large", "AI21 Jamba 1.5 Large"),
+    ("ai21.jamba-1-5-mini-v1:0", "Jamba 1.5 Mini", "AI21 Jamba 1.5 Mini"),
+]
 
 # Purposes that can be overridden via the UI
 CONFIGURABLE_PURPOSES = [
@@ -275,7 +309,21 @@ async def _get_api_key_for_provider(provider: str) -> Optional[str]:
     raw key for direct provider API calls (listing models).
     
     Strategy: check LiteLLM's env (it decrypts at startup), then os.environ.
+    
+    For Bedrock: we don't need an API key for listing models (we use a curated list),
+    but we return a truthy value if credentials are configured so the endpoint
+    knows that models can be shown.
     """
+    import os
+    
+    if provider == "bedrock":
+        # Check for any Bedrock credential: IAM creds or bearer token
+        if os.environ.get("AWS_ACCESS_KEY_ID") and os.environ.get("AWS_SECRET_ACCESS_KEY"):
+            return "iam-configured"
+        if os.environ.get("AWS_BEARER_TOKEN_BEDROCK"):
+            return "bearer-configured"
+        return None
+    
     env_var = CLOUD_PROVIDER_CONFIG.get(provider, {}).get("env_var", "")
     if not env_var:
         return None
@@ -283,7 +331,6 @@ async def _get_api_key_for_provider(provider: str) -> Optional[str]:
     # Try LiteLLM's runtime environment via /config/update stored values
     # LiteLLM decrypts them internally - we can't read encrypted values.
     # But the key may have been passed as a docker env var too.
-    import os
     val = os.environ.get(env_var, "")
     if val:
         return val
@@ -362,12 +409,33 @@ async def _fetch_live_anthropic_models(api_key: str) -> List[CloudModel]:
         return []
 
 
+def _get_bedrock_curated_models() -> List[CloudModel]:
+    """Return the curated list of popular Bedrock models.
+    
+    Bedrock doesn't have a simple REST list-models API like OpenAI/Anthropic.
+    The official way is via boto3 ListFoundationModels, but we don't require
+    boto3 in agent-api. Instead we return a curated list of the most popular
+    models. The model IDs follow AWS Bedrock naming conventions.
+    """
+    models = []
+    for model_id, display_name, description in BEDROCK_CURATED_MODELS:
+        models.append(CloudModel(
+            id=model_id,
+            name=display_name,
+            provider="bedrock",
+            description=description,
+        ))
+    return models
+
+
 async def _fetch_live_cloud_models(provider: str, api_key: str) -> List[CloudModel]:
     """Fetch live model list from a cloud provider."""
     if provider == "openai":
         return await _fetch_live_openai_models(api_key)
     elif provider == "anthropic":
         return await _fetch_live_anthropic_models(api_key)
+    elif provider == "bedrock":
+        return _get_bedrock_curated_models()
     return []
 
 
@@ -1174,11 +1242,14 @@ async def list_cloud_models(
     principal: Principal = Depends(get_principal),
 ) -> CloudModelsResponse:
     """
-    List available cloud models for a provider by querying the provider API live.
+    List available cloud models for a provider.
     
-    Returns the current model list from OpenAI/Anthropic with registration
-    status (whether each model is already configured in LiteLLM).
-    Requires the provider's API key to be configured.
+    For OpenAI/Anthropic: queries the provider API live.
+    For Bedrock: returns a curated list of popular models.
+    
+    Returns the model list with registration status (whether each model
+    is already configured in LiteLLM).
+    Requires the provider's credentials to be configured.
     Admin only.
     """
     _require_admin(principal)
@@ -1198,8 +1269,16 @@ async def list_cloud_models(
     # Also check LiteLLM DB (key might be stored there even if not in os.environ)
     if not key_configured:
         env_vars = await _get_configured_env_vars()
-        env_var = CLOUD_PROVIDER_CONFIG[provider]["env_var"]
-        key_configured = _is_key_configured(env_vars, env_var)
+        if provider == "bedrock":
+            # Bedrock: check IAM creds or bearer token
+            key_configured = (
+                (_is_key_configured(env_vars, "AWS_ACCESS_KEY_ID") and
+                 _is_key_configured(env_vars, "AWS_SECRET_ACCESS_KEY")) or
+                _is_key_configured(env_vars, "AWS_BEARER_TOKEN_BEDROCK")
+            )
+        else:
+            env_var = CLOUD_PROVIDER_CONFIG[provider]["env_var"]
+            key_configured = _is_key_configured(env_vars, env_var)
     
     models: List[CloudModel] = []
     
@@ -1266,6 +1345,8 @@ async def register_cloud_models(
             litellm_model = f"openai/{model_id}"
         elif provider == "anthropic":
             litellm_model = f"anthropic/{model_id}"
+        elif provider == "bedrock":
+            litellm_model = f"bedrock/{model_id}"
         
         new_models.append({
             "model_name": model_id,
