@@ -100,6 +100,21 @@ class Settings(BaseSettings):
         description="List of allowed phone numbers (empty = all)",
     )
 
+    @field_validator("allowed_phone_numbers", mode="before")
+    @classmethod
+    def parse_comma_separated_list(cls, v: object) -> object:
+        """Parse comma-separated string into a list.
+
+        Handles empty strings (from env vars like ALLOWED_PHONE_NUMBERS=)
+        which pydantic-settings cannot JSON-parse.
+        """
+        if isinstance(v, str):
+            v = v.strip()
+            if not v:
+                return []
+            return [item.strip() for item in v.split(",") if item.strip()]
+        return v
+
     # -------------------------------------------------------------------------
     # Email Channel
     # -------------------------------------------------------------------------
