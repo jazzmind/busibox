@@ -165,8 +165,42 @@ OPENAI_MODEL_EXCLUDES = {
 
 ANTHROPIC_MODEL_EXCLUDES = set()  # Anthropic list is already clean
 
+# AWS region to inference profile prefix mapping
+# Bedrock requires cross-region inference profiles with a geographic prefix
+# See: https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-support.html
+BEDROCK_REGION_PREFIX_MAP = {
+    # US regions
+    "us-east-1": "us", "us-east-2": "us", "us-west-1": "us", "us-west-2": "us",
+    # EU regions
+    "eu-west-1": "eu", "eu-west-2": "eu", "eu-west-3": "eu",
+    "eu-central-1": "eu", "eu-central-2": "eu",
+    "eu-north-1": "eu", "eu-south-1": "eu", "eu-south-2": "eu",
+    # Asia Pacific regions
+    "ap-southeast-1": "ap", "ap-southeast-2": "ap", "ap-southeast-3": "ap",
+    "ap-northeast-1": "ap", "ap-northeast-2": "ap", "ap-northeast-3": "ap",
+    "ap-south-1": "ap", "ap-south-2": "ap", "ap-east-1": "ap",
+    # Canada
+    "ca-central-1": "us",
+    # South America
+    "sa-east-1": "us",
+}
+
+
+def _get_bedrock_region_prefix(region: str = "") -> str:
+    """Get the geographic inference profile prefix for a Bedrock region.
+    
+    Bedrock models require a region prefix (e.g. 'us.', 'eu.', 'ap.')
+    for cross-region inference profiles. Falls back to 'us' if unknown.
+    """
+    if not region:
+        import os
+        region = os.environ.get("AWS_REGION_NAME", "us-east-1")
+    return BEDROCK_REGION_PREFIX_MAP.get(region, "us")
+
+
 # Curated list of popular Bedrock models (since we don't have boto3 for ListFoundationModels)
-# Format: (model_id, display_name, description)
+# Format: (base_model_id, display_name, description)
+# Note: base_model_id does NOT include the region prefix; it's added at runtime
 BEDROCK_CURATED_MODELS = [
     # Anthropic Claude on Bedrock
     ("anthropic.claude-sonnet-4-20250514-v1:0", "Claude Sonnet 4", "Anthropic Claude Sonnet 4 (latest)"),
@@ -410,20 +444,24 @@ async def _fetch_live_anthropic_models(api_key: str) -> List[CloudModel]:
 
 
 def _get_bedrock_curated_models() -> List[CloudModel]:
-    """Return the curated list of popular Bedrock models.
+    """Return the curated list of popular Bedrock models with region prefix.
     
     Bedrock doesn't have a simple REST list-models API like OpenAI/Anthropic.
     The official way is via boto3 ListFoundationModels, but we don't require
     boto3 in agent-api. Instead we return a curated list of the most popular
-    models. The model IDs follow AWS Bedrock naming conventions.
+    models with the appropriate geographic region prefix (e.g. 'us.', 'eu.')
+    based on the configured AWS region.
     """
+    prefix = _get_bedrock_region_prefix()
     models = []
-    for model_id, display_name, description in BEDROCK_CURATED_MODELS:
+    for base_model_id, display_name, description in BEDROCK_CURATED_MODELS:
+        # Bedrock inference profiles require region prefix: us.model-id, eu.model-id, etc.
+        model_id = f"{prefix}.{base_model_id}"
         models.append(CloudModel(
             id=model_id,
             name=display_name,
             provider="bedrock",
-            description=description,
+            description=f"{description} ({prefix})",
         ))
     return models
 
