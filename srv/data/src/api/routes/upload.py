@@ -281,10 +281,12 @@ async def upload_file(
         content_hash = hashlib.sha256(file_content).hexdigest()
         
         # Encrypt content if envelope encryption is enabled
+        # Skip encryption for video and image files (large binary, not user-sensitive documents)
         content_to_store = file_content
         is_encrypted = False
+        is_media_file = (file.content_type or "").startswith("video/") or (file.content_type or "").startswith("image/")
         
-        if encryption_client.enabled:
+        if encryption_client.enabled and not is_media_file:
             # Determine which keys to wrap the DEK with
             encrypt_role_ids = parsed_role_ids if visibility == "shared" else None
             encrypt_user_id = user_id if visibility == "personal" else None
@@ -310,6 +312,16 @@ async def upload_file(
                     file_id=file_id,
                     original_size=len(file_content),
                     encrypted_size=len(content_to_store),
+                )
+        else:
+            # Encryption disabled or media file - still need user_token for delegation token
+            user_token = getattr(request.state, 'user_context', None)
+            user_token = user_token.token if user_token else None
+            if is_media_file:
+                logger.info(
+                    "Skipping encryption for media file",
+                    file_id=file_id,
+                    mime_type=file.content_type,
                 )
         
         # Reset file pointer for upload
