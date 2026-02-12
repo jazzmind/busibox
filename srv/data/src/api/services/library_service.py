@@ -30,6 +30,7 @@ class PersonalLibraryTypes:
     DOCS = "DOCS"
     RESEARCH = "RESEARCH"
     TASKS = "TASKS"
+    MEDIA = "MEDIA"
 
 
 # Library display names by type
@@ -37,6 +38,7 @@ PERSONAL_LIBRARY_NAMES: Dict[str, str] = {
     PersonalLibraryTypes.DOCS: "Personal",
     PersonalLibraryTypes.RESEARCH: "Research",
     PersonalLibraryTypes.TASKS: "Tasks",
+    PersonalLibraryTypes.MEDIA: "Media",
 }
 
 # Folder name to library type mapping
@@ -48,6 +50,8 @@ FOLDER_TO_LIBRARY_TYPE: Dict[str, str] = {
     "research": PersonalLibraryTypes.RESEARCH,
     "personal-tasks": PersonalLibraryTypes.TASKS,
     "tasks": PersonalLibraryTypes.TASKS,
+    "personal-media": PersonalLibraryTypes.MEDIA,
+    "media": PersonalLibraryTypes.MEDIA,
 }
 
 
@@ -691,7 +695,7 @@ class LibraryService:
         """
         Ensure all personal library types exist for a user.
         
-        Creates DOCS, RESEARCH, and TASKS libraries if they don't exist.
+        Creates DOCS, RESEARCH, TASKS, and MEDIA libraries if they don't exist.
         
         Args:
             user_id: The user's UUID
@@ -701,7 +705,7 @@ class LibraryService:
         """
         libraries = []
         
-        for library_type in [PersonalLibraryTypes.DOCS, PersonalLibraryTypes.RESEARCH, PersonalLibraryTypes.TASKS]:
+        for library_type in [PersonalLibraryTypes.DOCS, PersonalLibraryTypes.RESEARCH, PersonalLibraryTypes.TASKS, PersonalLibraryTypes.MEDIA]:
             try:
                 library = await self.get_or_create_personal_library(user_id, library_type)
                 libraries.append(library)

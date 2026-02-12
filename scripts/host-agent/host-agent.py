@@ -237,21 +237,42 @@ async def mlx_start(
             cwd=str(BUSIBOX_ROOT),
         )
         
-        # Stream output
-        async def read_stream(stream, stream_type):
+        # Stream output from both stdout and stderr concurrently.
+        # Reading them sequentially can deadlock: if stderr's pipe buffer fills
+        # while we're still draining stdout, the subprocess blocks on stderr writes
+        # and stops producing stdout, creating a deadlock.
+        output_queue: asyncio.Queue = asyncio.Queue()
+        
+        async def drain_stream(stream, stream_type):
+            """Read all lines from a stream and put them on the shared queue."""
             while True:
                 line = await stream.readline()
                 if not line:
                     break
                 message = line.decode('utf-8', errors='replace').rstrip()
                 if message:
-                    yield f"data: {json.dumps({'type': 'log', 'stream': stream_type, 'message': message})}\n\n"
+                    await output_queue.put(
+                        f"data: {json.dumps({'type': 'log', 'stream': stream_type, 'message': message})}\n\n"
+                    )
+            # Signal this stream is done
+            await output_queue.put(None)
         
-        # Read both streams
-        async for msg in read_stream(process.stdout, "stdout"):
-            yield msg
-        async for msg in read_stream(process.stderr, "stderr"):
-            yield msg
+        # Start both drainers concurrently
+        stdout_task = asyncio.create_task(drain_stream(process.stdout, "stdout"))
+        stderr_task = asyncio.create_task(drain_stream(process.stderr, "stderr"))
+        
+        # Yield messages as they arrive from either stream
+        streams_done = 0
+        while streams_done < 2:
+            msg = await output_queue.get()
+            if msg is None:
+                streams_done += 1
+            else:
+                yield msg
+        
+        # Ensure both tasks are finished
+        await stdout_task
+        await stderr_task
         
         returncode = await process.wait()
         

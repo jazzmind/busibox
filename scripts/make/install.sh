@@ -3347,23 +3347,33 @@ ensure_mlx_running() {
         local test_model
         test_model=$(get_state "MLX_TEST_MODEL" 2>/dev/null || echo "mlx-community/Qwen3-0.6B-4bit")
         
-        local start_response
+        # Fire the start request in the background and don't wait for the SSE stream.
+        # The /mlx/start endpoint returns a streaming SSE response that can take 2+ minutes
+        # to complete (subprocess + health checks). We just need to trigger it and then
+        # poll for MLX health ourselves below.
+        local curl_args=(-s -X POST http://localhost:8089/mlx/start \
+            -H "Content-Type: application/json" \
+            -d "{\"model_type\": \"agent\"}" \
+            --max-time 5)
+        
         if [[ -n "$host_agent_token" ]]; then
-            start_response=$(curl -sf -X POST http://localhost:8089/mlx/start \
-                -H "Content-Type: application/json" \
-                -H "Authorization: Bearer ${host_agent_token}" \
-                -d "{\"model\": \"${test_model}\"}" 2>/dev/null)
-        else
-            start_response=$(curl -sf -X POST http://localhost:8089/mlx/start \
-                -H "Content-Type: application/json" \
-                -d "{\"model\": \"${test_model}\"}" 2>/dev/null)
+            curl_args+=(-H "Authorization: Bearer ${host_agent_token}")
         fi
         
-        if [[ -n "$start_response" ]]; then
-            info "MLX start command sent via host-agent"
-        else
-            warn "Failed to start MLX via host-agent, trying direct start..."
-        fi
+        # Use --max-time to avoid blocking on the stream.
+        # The host-agent will keep running the start script even after curl disconnects.
+        # We send to /dev/null because the response is SSE which curl can't parse easily.
+        curl "${curl_args[@]}" >/dev/null 2>&1 &
+        local curl_pid=$!
+        
+        # Give the host-agent a moment to accept the request and start the subprocess
+        sleep 2
+        
+        # Kill the background curl if it's still running (SSE stream)
+        kill "$curl_pid" 2>/dev/null || true
+        wait "$curl_pid" 2>/dev/null || true
+        
+        info "MLX start command sent via host-agent"
     fi
     
     # Wait for MLX to be ready (either from host-agent start or direct start)

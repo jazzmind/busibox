@@ -241,14 +241,18 @@ async def upload_file(
         # Resolve library_id (auto-create personal library if needed for personal files)
         resolved_library_id = library_id
         if visibility == "personal" and not library_id:
-            # Ensure user has a personal DOCS library and use it
+            # Ensure user has all personal libraries (DOCS, RESEARCH, TASKS, MEDIA)
             await library_service.ensure_all_personal_libraries(user_id)
             personal_libs = await library_service.list_user_libraries(user_id, include_shared=False)
-            docs_lib = next((lib for lib in personal_libs if lib["library_type"] == "DOCS"), None)
-            if docs_lib:
-                resolved_library_id = str(docs_lib["id"])
+            
+            # Route media files (video/image) to MEDIA library, everything else to DOCS
+            is_media_upload = (file.content_type or "").startswith("video/") or (file.content_type or "").startswith("image/")
+            target_library_type = "MEDIA" if is_media_upload else "DOCS"
+            target_lib = next((lib for lib in personal_libs if lib["library_type"] == target_library_type), None)
+            if target_lib:
+                resolved_library_id = str(target_lib["id"])
                 logger.info(
-                    "Auto-assigned to personal DOCS library",
+                    f"Auto-assigned to personal {target_library_type} library",
                     file_id=file_id,
                     library_id=resolved_library_id,
                 )
