@@ -452,6 +452,123 @@ def get_data_schema() -> SchemaManager:
         END $$;
     """)
     
+    # --------------------------------------------------------------------------
+    # data_chunks migrations
+    # --------------------------------------------------------------------------
+    
+    # processing_strategy column on data_chunks
+    schema.add_migration("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'data_chunks' AND column_name = 'processing_strategy'
+            ) THEN
+                ALTER TABLE data_chunks ADD COLUMN processing_strategy VARCHAR(50) DEFAULT 'simple';
+            END IF;
+        END $$;
+    """)
+    
+    # section_heading column on data_chunks
+    schema.add_migration("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'data_chunks' AND column_name = 'section_heading'
+            ) THEN
+                ALTER TABLE data_chunks ADD COLUMN section_heading VARCHAR(500);
+            END IF;
+        END $$;
+    """)
+    
+    # page_number column on data_chunks
+    schema.add_migration("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'data_chunks' AND column_name = 'page_number'
+            ) THEN
+                ALTER TABLE data_chunks ADD COLUMN page_number INTEGER;
+            END IF;
+        END $$;
+    """)
+    
+    # --------------------------------------------------------------------------
+    # processing_history migrations
+    # --------------------------------------------------------------------------
+    
+    # step_name column on processing_history
+    schema.add_migration("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'processing_history' AND column_name = 'step_name'
+            ) THEN
+                ALTER TABLE processing_history ADD COLUMN step_name VARCHAR(100);
+            END IF;
+        END $$;
+    """)
+    
+    # message column on processing_history
+    schema.add_migration("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'processing_history' AND column_name = 'message'
+            ) THEN
+                ALTER TABLE processing_history ADD COLUMN message TEXT;
+            END IF;
+        END $$;
+    """)
+    
+    # metadata column on processing_history
+    schema.add_migration("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'processing_history' AND column_name = 'metadata'
+            ) THEN
+                ALTER TABLE processing_history ADD COLUMN metadata JSONB DEFAULT '{}';
+            END IF;
+        END $$;
+    """)
+    
+    # created_at column on processing_history
+    schema.add_migration("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'processing_history' AND column_name = 'created_at'
+            ) THEN
+                ALTER TABLE processing_history ADD COLUMN created_at TIMESTAMPTZ DEFAULT NOW();
+            END IF;
+        END $$;
+    """)
+    
+    # --------------------------------------------------------------------------
+    # data_status migrations
+    # --------------------------------------------------------------------------
+    
+    # pages_processed column on data_status
+    schema.add_migration("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'data_status' AND column_name = 'pages_processed'
+            ) THEN
+                ALTER TABLE data_status ADD COLUMN pages_processed INTEGER;
+                ALTER TABLE data_status ADD COLUMN total_pages INTEGER;
+            END IF;
+        END $$;
+    """)
+    
     # ==========================================================================
     # Indexes
     # ==========================================================================

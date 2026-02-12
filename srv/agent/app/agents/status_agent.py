@@ -295,11 +295,51 @@ class StatusAssistantAgent(BaseStreamingAgent):
 
         return INTENT_CHAT
 
+    @staticmethod
+    def _fix_json(text: str) -> str:
+        """
+        Attempt to fix common LLM JSON errors:
+        - Trailing commas before ] or }
+        - Single quotes instead of double quotes
+        - Unquoted keys
+        - JavaScript-style comments
+        """
+        # Remove single-line comments (// ...)
+        text = re.sub(r'//[^\n]*', '', text)
+        # Remove multi-line comments (/* ... */)
+        text = re.sub(r'/\*[\s\S]*?\*/', '', text)
+        # Remove trailing commas before } or ]
+        text = re.sub(r',\s*([}\]])', r'\1', text)
+        # Replace single quotes with double quotes (crude but works for simple cases)
+        # Only do this if the text doesn't already parse
+        try:
+            json.loads(text)
+            return text
+        except json.JSONDecodeError:
+            pass
+        # Try replacing single quotes
+        fixed = re.sub(r"'", '"', text)
+        return fixed
+
+    @staticmethod
+    def _extract_json_from_text(text: str) -> str:
+        """Extract JSON object from LLM output, handling code blocks and noise."""
+        # Handle markdown code blocks
+        json_match = re.search(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', text)
+        if json_match:
+            return json_match.group(1)
+        # Try to find raw JSON object (greedy to get the outermost braces)
+        brace_match = re.search(r'\{[\s\S]*\}', text)
+        if brace_match:
+            return brace_match.group(0)
+        return text
+
     async def _extract_records(self, query: str, context: AgentContext) -> Dict[str, Any]:
         """
         Extract structured project/task data from user text using LLM.
 
         Returns dict with 'projects' and 'tasks' lists.
+        Includes robust JSON parsing with error correction for local LLMs.
         """
         # Build context with conversation history
         extract_prompt = query
@@ -314,33 +354,41 @@ class StatusAssistantAgent(BaseStreamingAgent):
             if history_parts:
                 extract_prompt = "\n\n".join(history_parts) + "\n\n" + query
 
-        try:
-            extractor = self._get_extractor()
-            result = await extractor.run(
-                f"Extract projects and tasks from this text:\n\n{extract_prompt}"
-            )
-            output = str(result.output).strip()
+        for attempt in range(2):
+            try:
+                extractor = self._get_extractor()
+                prompt = f"Extract projects and tasks from this text:\n\n{extract_prompt}"
+                if attempt > 0:
+                    prompt += "\n\nIMPORTANT: You MUST output valid JSON. No trailing commas. No comments."
+                result = await extractor.run(prompt)
+                output = str(result.output).strip()
 
-            # Try to parse JSON from the response
-            # Handle potential markdown code blocks
-            json_match = re.search(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', output)
-            if json_match:
-                output = json_match.group(1)
-            else:
-                # Try to find raw JSON object
-                brace_match = re.search(r'\{[\s\S]*\}', output)
-                if brace_match:
-                    output = brace_match.group(0)
+                # Extract JSON from response text
+                output = self._extract_json_from_text(output)
 
-            parsed = json.loads(output)
-            projects = parsed.get("projects", [])
-            tasks = parsed.get("tasks", [])
-            logger.info(f"Extracted {len(projects)} projects and {len(tasks)} tasks")
-            return {"projects": projects, "tasks": tasks}
+                # Try parsing directly first
+                try:
+                    parsed = json.loads(output)
+                except json.JSONDecodeError:
+                    # Try fixing common JSON errors
+                    fixed = self._fix_json(output)
+                    parsed = json.loads(fixed)
 
-        except (json.JSONDecodeError, Exception) as e:
-            logger.error(f"Record extraction failed: {e}")
-            return {"projects": [], "tasks": []}
+                projects = parsed.get("projects", [])
+                tasks = parsed.get("tasks", [])
+                logger.info(f"Extracted {len(projects)} projects and {len(tasks)} tasks (attempt {attempt + 1})")
+                return {"projects": projects, "tasks": tasks}
+
+            except json.JSONDecodeError as e:
+                logger.warning(f"JSON parse failed (attempt {attempt + 1}): {e}")
+                if attempt == 0:
+                    continue  # Retry with stricter prompt
+                logger.error(f"Record extraction failed after {attempt + 1} attempts: {e}")
+            except Exception as e:
+                logger.error(f"Record extraction failed: {e}")
+                break
+
+        return {"projects": [], "tasks": []}
 
     def pipeline_steps(self, query: str, context: AgentContext) -> List[PipelineStep]:
         """
@@ -1137,13 +1185,62 @@ class StatusAssistantAgent(BaseStreamingAgent):
 status_assistant_agent = StatusAssistantAgent()
 
 
+# Update extraction prompt -- used to parse user's status update into actionable changes
+UPDATE_EXTRACTION_PROMPT = """You are a status update parser. Given the user's message and existing project/task data, extract what changes should be made.
+
+You MUST respond with valid JSON only. No other text.
+
+Output format:
+{
+  "target_project": "Name of the project being updated (must match an existing project)",
+  "project_updates": {
+    "status": "on-track",
+    "progress": 50,
+    "description": "Updated description if provided"
+  },
+  "task_updates": [
+    {
+      "title": "Existing task title",
+      "status": "done",
+      "notes": "Optional update note"
+    }
+  ],
+  "new_tasks": [
+    {
+      "title": "New task title",
+      "description": "Brief description",
+      "status": "todo",
+      "priority": "medium"
+    }
+  ],
+  "status_summary": "One-sentence summary of what changed"
+}
+
+Rules:
+- target_project MUST match an existing project name from the provided data
+- Only include fields in project_updates that are actually changing
+- task_updates: for tasks that already exist and need status/field changes
+- new_tasks: for brand new tasks the user mentions
+- status for projects: "on-track", "at-risk", "off-track", "completed", "paused"
+- status for tasks: "todo", "in-progress", "blocked", "done"
+- If the user says they completed something, mark relevant tasks as "done"
+- If the user mentions new work, add it as new_tasks
+- Calculate progress from context (e.g., "3 of 5 tasks done" = 60)
+- If no project_updates are needed, use an empty object {}
+- If no task_updates, use an empty list []
+- If no new_tasks, use an empty list []"""
+
+
 class StatusUpdateAgent(BaseStreamingAgent):
     """
-    A simpler status update agent focused on recording quick updates.
+    Status update agent that records changes to projects and tasks.
 
-    Uses the same pipeline pattern but with a focus on:
-    1. Querying current project/task state
-    2. Applying updates based on user input
+    Pipeline:
+    1. list_data_documents -> discover doc IDs
+    2. query_data (projects + tasks) -> get current state
+    3. LLM extraction -> parse user's update into structured changes
+    4. update_records / insert_records -> persist changes
+    5. insert_records (status update log) -> record the update
     """
 
     def __init__(self):
@@ -1171,9 +1268,87 @@ Guidelines:
         )
         super().__init__(config)
         self._doc_ids: Dict[str, str] = {}
+        self._existing_projects: List[Dict[str, Any]] = []
+        self._existing_tasks: List[Dict[str, Any]] = []
+        self._update_data: Dict[str, Any] = {}
+        self._queries_done: int = 0
+        self._expected_queries: int = 0
+        self._write_steps_built: bool = False
+
+        # Lazy-init LLM agent for update extraction
+        self._update_extractor: Optional[Agent] = None
+
+    def _get_update_extractor(self) -> Agent:
+        """Get or create the update extractor (uses agent model)."""
+        if self._update_extractor is None:
+            _ensure_openai_env()
+            settings = get_settings()
+            model = OpenAIChatModel(
+                model_name=settings.default_model,
+                provider="openai",
+            )
+            self._update_extractor = Agent(
+                model=model,
+                system_prompt=UPDATE_EXTRACTION_PROMPT,
+            )
+        return self._update_extractor
+
+    async def _extract_update(self, query: str, context: AgentContext) -> Dict[str, Any]:
+        """Extract structured update data from the user's message using LLM."""
+        # Build context showing existing data so the LLM can match project/task names
+        existing_context = "## Existing Projects\n"
+        for p in self._existing_projects:
+            existing_context += f"- {p.get('name', '?')} (status: {p.get('status', '?')}, progress: {p.get('progress', 0)}%)\n"
+
+        existing_context += "\n## Existing Tasks\n"
+        for t in self._existing_tasks:
+            existing_context += f"- {t.get('title', '?')} (status: {t.get('status', '?')}, project: {t.get('projectId', '?')})\n"
+
+        # Include conversation history
+        history = ""
+        if context.recent_messages:
+            for msg in context.recent_messages[-4:]:
+                role = msg.get("role", "unknown")
+                content = msg.get("content", "")
+                if content:
+                    history += f"{role}: {content}\n"
+
+        prompt = f"{existing_context}\n## Conversation History\n{history}\n## Current Update\n{query}\n\nExtract the update actions as JSON."
+
+        try:
+            extractor = self._get_update_extractor()
+            result = await extractor.run(prompt)
+            output = str(result.output).strip()
+
+            # Parse JSON from response (handle markdown code blocks)
+            json_match = re.search(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', output)
+            if json_match:
+                output = json_match.group(1)
+            else:
+                brace_match = re.search(r'\{[\s\S]*\}', output)
+                if brace_match:
+                    output = brace_match.group(0)
+
+            parsed = json.loads(output)
+            logger.info(f"Extracted update: target={parsed.get('target_project')}, "
+                        f"project_updates={bool(parsed.get('project_updates'))}, "
+                        f"task_updates={len(parsed.get('task_updates', []))}, "
+                        f"new_tasks={len(parsed.get('new_tasks', []))}")
+            return parsed
+
+        except (json.JSONDecodeError, Exception) as e:
+            logger.error(f"Update extraction failed: {e}")
+            return {}
 
     def pipeline_steps(self, query: str, context: AgentContext) -> List[PipelineStep]:
+        # Reset state
         self._doc_ids = {}
+        self._existing_projects = []
+        self._existing_tasks = []
+        self._update_data = {}
+        self._queries_done = 0
+        self._expected_queries = 0
+        self._write_steps_built = False
         return [
             PipelineStep(
                 tool="list_data_documents",
@@ -1188,38 +1363,219 @@ Guidelines:
         context: AgentContext,
     ) -> List[PipelineStep]:
         if step.tool == "list_data_documents":
-            if hasattr(result, 'documents') and result.documents:
-                for doc in result.documents:
-                    name = doc.get("name", "")
-                    doc_id = doc.get("id", "")
-                    if "project" in name.lower():
-                        self._doc_ids["projects"] = doc_id
-                    elif "task" in name.lower():
-                        self._doc_ids["tasks"] = doc_id
-
-            # Always query projects and tasks for context
-            steps = []
-            if self._doc_ids.get("projects"):
-                steps.append(PipelineStep(
-                    tool="query_data",
-                    args={
-                        "document_id": self._doc_ids["projects"],
-                        "select": ["id", "name", "status", "progress"],
-                        "limit": 10,
-                    },
-                ))
-            if self._doc_ids.get("tasks"):
-                steps.append(PipelineStep(
-                    tool="query_data",
-                    args={
-                        "document_id": self._doc_ids["tasks"],
-                        "select": ["id", "projectId", "title", "status", "priority"],
-                        "limit": 20,
-                    },
-                ))
-            return steps
-
+            return self._handle_list_docs(result)
+        elif step.tool == "query_data":
+            return await self._handle_query(step, result, context)
+        elif step.tool in ("update_records", "insert_records"):
+            # Write steps complete -- nothing more to chain
+            return []
         return []
+
+    def _handle_list_docs(self, result: Any) -> List[PipelineStep]:
+        """Extract doc IDs and queue query steps."""
+        if hasattr(result, 'documents') and result.documents:
+            for doc in result.documents:
+                name = doc.get("name", "")
+                doc_id = doc.get("id", "")
+                if not name or not doc_id:
+                    continue
+                # Exact match first
+                if name == STATUS_DOC_PROJECTS:
+                    self._doc_ids["projects"] = doc_id
+                elif name == STATUS_DOC_TASKS:
+                    self._doc_ids["tasks"] = doc_id
+                elif name == STATUS_DOC_UPDATES:
+                    self._doc_ids["updates"] = doc_id
+                # Fallback substring
+                elif "projects" not in self._doc_ids and "project" in name.lower():
+                    self._doc_ids["projects"] = doc_id
+                elif "tasks" not in self._doc_ids and "task" in name.lower():
+                    self._doc_ids["tasks"] = doc_id
+                elif "updates" not in self._doc_ids and "update" in name.lower():
+                    self._doc_ids["updates"] = doc_id
+
+        steps = []
+        if self._doc_ids.get("projects"):
+            steps.append(PipelineStep(
+                tool="query_data",
+                args={
+                    "document_id": self._doc_ids["projects"],
+                    "select": ["id", "name", "status", "progress", "description"],
+                    "limit": 20,
+                },
+            ))
+        if self._doc_ids.get("tasks"):
+            steps.append(PipelineStep(
+                tool="query_data",
+                args={
+                    "document_id": self._doc_ids["tasks"],
+                    "select": ["id", "projectId", "title", "status", "priority", "description"],
+                    "limit": 50,
+                },
+            ))
+        self._expected_queries = len(steps)
+        return steps
+
+    async def _handle_query(
+        self,
+        step: PipelineStep,
+        result: Any,
+        context: AgentContext,
+    ) -> List[PipelineStep]:
+        """Collect query results; after all queries, extract update and build write steps."""
+        doc_id = step.args.get("document_id", "")
+
+        if hasattr(result, 'records') and result.records:
+            if doc_id == self._doc_ids.get("projects"):
+                self._existing_projects = result.records
+            elif doc_id == self._doc_ids.get("tasks"):
+                self._existing_tasks = result.records
+
+        self._queries_done += 1
+
+        # Wait until all queries have completed before building write steps
+        if self._queries_done < self._expected_queries:
+            return []
+
+        # Don't build write steps more than once
+        if self._write_steps_built:
+            return []
+        self._write_steps_built = True
+
+        # Extract the user's update using LLM
+        original_query = ""
+        if context.recent_messages:
+            for msg in reversed(context.recent_messages):
+                if msg.get("role") == "user":
+                    original_query = msg.get("content", "")
+                    break
+        if not original_query:
+            original_query = context.metadata.get("_original_query", "")
+
+        self._update_data = await self._extract_update(original_query, context)
+        if not self._update_data:
+            logger.warning("No update data extracted -- nothing to write")
+            return []
+
+        return self._build_write_steps()
+
+    def _build_write_steps(self) -> List[PipelineStep]:
+        """Build insert/update pipeline steps from extracted update data."""
+        steps: List[PipelineStep] = []
+
+        target_project_name = self._update_data.get("target_project", "")
+        project_updates = self._update_data.get("project_updates", {})
+        task_updates = self._update_data.get("task_updates", [])
+        new_tasks = self._update_data.get("new_tasks", [])
+        status_summary = self._update_data.get("status_summary", "")
+
+        # Find the target project ID
+        target_project_id = ""
+        target_project_old_status = ""
+        for p in self._existing_projects:
+            if p.get("name", "").lower() == target_project_name.lower():
+                target_project_id = p.get("id", "")
+                target_project_old_status = p.get("status", "")
+                break
+            # Fuzzy match
+            if (target_project_name.lower() in p.get("name", "").lower()
+                    or p.get("name", "").lower() in target_project_name.lower()):
+                target_project_id = p.get("id", "")
+                target_project_old_status = p.get("status", "")
+                break
+
+        projects_doc = self._doc_ids.get("projects")
+        tasks_doc = self._doc_ids.get("tasks")
+        updates_doc = self._doc_ids.get("updates")
+
+        # 1. Update project fields if needed
+        if project_updates and target_project_id and projects_doc:
+            # Only include fields that are present and non-empty
+            clean_updates = {k: v for k, v in project_updates.items() if v is not None and v != ""}
+            if clean_updates:
+                steps.append(PipelineStep(
+                    tool="update_records",
+                    args={
+                        "document_id": projects_doc,
+                        "updates": clean_updates,
+                        "where": {"field": "id", "op": "eq", "value": target_project_id},
+                    },
+                ))
+
+        # 2. Update existing tasks
+        for task_update in task_updates:
+            task_title = task_update.get("title", "")
+            if not task_title:
+                continue
+            # Find the task ID
+            task_id = ""
+            for t in self._existing_tasks:
+                if t.get("title", "").lower() == task_title.lower():
+                    task_id = t.get("id", "")
+                    break
+                if (task_title.lower() in t.get("title", "").lower()
+                        or t.get("title", "").lower() in task_title.lower()):
+                    task_id = t.get("id", "")
+                    break
+
+            if task_id and tasks_doc:
+                updates = {k: v for k, v in task_update.items()
+                           if k not in ("title", "notes") and v is not None and v != ""}
+                if updates:
+                    steps.append(PipelineStep(
+                        tool="update_records",
+                        args={
+                            "document_id": tasks_doc,
+                            "updates": updates,
+                            "where": {"field": "id", "op": "eq", "value": task_id},
+                        },
+                    ))
+
+        # 3. Insert new tasks
+        if new_tasks and tasks_doc:
+            records = []
+            for task in new_tasks:
+                records.append({
+                    "projectId": target_project_id,
+                    "title": task.get("title", "Untitled"),
+                    "description": task.get("description", ""),
+                    "status": task.get("status", "todo"),
+                    "priority": task.get("priority", "medium"),
+                    "assignee": task.get("assignee", ""),
+                })
+            if records:
+                steps.append(PipelineStep(
+                    tool="insert_records",
+                    args={
+                        "document_id": tasks_doc,
+                        "records": records,
+                    },
+                ))
+
+        # 4. Record the status update log entry
+        if updates_doc and (project_updates or task_updates or new_tasks):
+            completed_tasks = [t.get("title", "") for t in task_updates
+                               if t.get("status") == "done"]
+            added_tasks = [t.get("title", "") for t in new_tasks]
+
+            steps.append(PipelineStep(
+                tool="insert_records",
+                args={
+                    "document_id": updates_doc,
+                    "records": [{
+                        "projectId": target_project_id,
+                        "content": status_summary or "Status update",
+                        "author": "",  # Will be filled by RLS/context
+                        "tasksCompleted": completed_tasks,
+                        "tasksAdded": added_tasks,
+                        "previousStatus": target_project_old_status,
+                        "newStatus": project_updates.get("status", target_project_old_status),
+                    }],
+                },
+            ))
+
+        logger.info(f"Built {len(steps)} write steps for status update")
+        return steps
 
     def _build_synthesis_context(self, query: str, context: AgentContext) -> str:
         parts = [f"## User's Update\n{query}\n"]
@@ -1232,15 +1588,74 @@ Guidelines:
                 parts.append(f"{role.title()}: {content}")
             parts.append("")
 
-        parts.append("## Current Data")
-        for tool_name, result in context.tool_results.items():
-            if tool_name == "query_data" and hasattr(result, 'records'):
-                for rec in result.records[:10]:
-                    fields = [f"{k}: {v}" for k, v in rec.items() if k != "id" and v]
-                    parts.append(f"- {', '.join(fields)}")
+        # Show what was changed
+        if self._update_data:
+            parts.append("## Changes Applied")
+            target = self._update_data.get("target_project", "Unknown")
+            parts.append(f"**Target project:** {target}\n")
 
-        parts.append("\nSummarize the current status and help the user update it.")
+            project_updates = self._update_data.get("project_updates", {})
+            if project_updates:
+                parts.append("### Project Updates")
+                for k, v in project_updates.items():
+                    parts.append(f"- **{k}**: {v}")
+
+            task_updates = self._update_data.get("task_updates", [])
+            if task_updates:
+                parts.append(f"\n### Tasks Updated ({len(task_updates)})")
+                for t in task_updates:
+                    parts.append(f"- **{t.get('title', '?')}** → {t.get('status', '?')}")
+
+            new_tasks = self._update_data.get("new_tasks", [])
+            if new_tasks:
+                parts.append(f"\n### New Tasks Added ({len(new_tasks)})")
+                for t in new_tasks:
+                    parts.append(f"- **{t.get('title', '?')}** ({t.get('status', 'todo')})")
+
+            summary = self._update_data.get("status_summary", "")
+            if summary:
+                parts.append(f"\n### Summary\n{summary}")
+        else:
+            parts.append("## Current Data")
+            for tool_name, result in context.tool_results.items():
+                if tool_name == "query_data" and hasattr(result, 'records'):
+                    for rec in result.records[:10]:
+                        fields = [f"{k}: {v}" for k, v in rec.items() if k != "id" and v]
+                        parts.append(f"- {', '.join(fields)}")
+
+        # Show tool execution results
+        write_results = []
+        for tool_name, result in context.tool_results.items():
+            if tool_name == "update_records":
+                if hasattr(result, 'success') and result.success:
+                    write_results.append(f"- Updated **{getattr(result, 'count', 0)}** records")
+            elif tool_name == "insert_records":
+                if hasattr(result, 'success') and result.success:
+                    write_results.append(f"- Inserted **{getattr(result, 'count', 0)}** records")
+        if write_results:
+            parts.append("\n## Write Results")
+            parts.extend(write_results)
+
+        parts.append(
+            "\nProvide a concise summary of the status update. "
+            "Show what changed and suggest next steps."
+        )
         return "\n".join(parts)
+
+    async def run_with_streaming(
+        self,
+        query: str,
+        stream,
+        cancel,
+        context: Optional[dict] = None,
+    ) -> str:
+        """Store original query in metadata for access during pipeline."""
+        if context is None:
+            context = {}
+        if "metadata" not in context or context["metadata"] is None:
+            context["metadata"] = {}
+        context["metadata"]["_original_query"] = query
+        return await super().run_with_streaming(query, stream, cancel, context)
 
 
 status_update_agent = StatusUpdateAgent()
