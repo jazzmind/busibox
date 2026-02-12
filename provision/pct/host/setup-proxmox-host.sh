@@ -239,6 +239,14 @@ if command -v zfs &>/dev/null && zfs list rpool &>/dev/null 2>&1; then
     setup_zfs_dataset "minio" "/var/lib/data/minio" "1M" "throughput"
     setup_zfs_dataset "milvus" "/var/lib/data/milvus" "128K" "latency"
     
+    # Staging datasets (separate from production to avoid shared-state issues
+    # like MinIO baking credentials into its data dir on first start)
+    echo ""
+    echo "  Setting up staging datasets:"
+    setup_zfs_dataset "staging-postgres" "/var/lib/data-staging/postgres" "8K" "latency"
+    setup_zfs_dataset "staging-minio" "/var/lib/data-staging/minio" "1M" "throughput"
+    setup_zfs_dataset "staging-milvus" "/var/lib/data-staging/milvus" "128K" "latency"
+    
     # Setup LLM models dataset
     if ! zfs list rpool/llm-models &>/dev/null 2>&1; then
         echo "  Creating dataset: rpool/llm-models"
@@ -280,6 +288,10 @@ else
     mkdir -p /var/lib/data/postgres
     mkdir -p /var/lib/data/minio
     mkdir -p /var/lib/data/milvus
+    # Staging directories (separate from production)
+    mkdir -p /var/lib/data-staging/postgres
+    mkdir -p /var/lib/data-staging/minio
+    mkdir -p /var/lib/data-staging/milvus
     mkdir -p /var/lib/llm-models/ollama
     mkdir -p /var/lib/llm-models/huggingface
     mkdir -p /var/lib/embedding-models/fastembed

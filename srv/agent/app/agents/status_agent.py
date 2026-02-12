@@ -150,7 +150,11 @@ class StatusAssistantAgent(BaseStreamingAgent):
                 "insert_records",
                 "update_records",
             ],
-            execution_mode=ExecutionMode.RUN_ONCE,
+            # Must use RUN_MAX_ITERATIONS (not RUN_ONCE) because our pipeline
+            # uses dynamic chaining via process_tool_result(). RUN_ONCE breaks
+            # the loop after the first step, preventing chained steps from executing.
+            execution_mode=ExecutionMode.RUN_MAX_ITERATIONS,
+            max_iterations=20,
             tool_strategy=ToolStrategy.SEQUENTIAL,
         )
         super().__init__(config)
@@ -963,7 +967,9 @@ Guidelines:
                 "insert_records",
                 "update_records",
             ],
-            execution_mode=ExecutionMode.RUN_ONCE,
+            # Must use RUN_MAX_ITERATIONS for dynamic pipeline chaining
+            execution_mode=ExecutionMode.RUN_MAX_ITERATIONS,
+            max_iterations=20,
             tool_strategy=ToolStrategy.SEQUENTIAL,
         )
         super().__init__(config)

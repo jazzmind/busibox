@@ -55,6 +55,16 @@ source "${PCT_DIR}/lib/functions.sh"
 # Validate environment
 validate_env || exit 1
 
+# Use environment-specific data directories to isolate staging from production.
+# Without this, both environments mount the same host paths and share state
+# (e.g. MinIO bakes credentials into its data dir on first start, so a shared
+# dir means whichever env starts first wins and the other gets mismatched creds).
+if [[ "$MODE" == "staging" ]]; then
+  DATA_BASE="/var/lib/data-staging"
+else
+  DATA_BASE="/var/lib/data"
+fi
+
 # Track created containers for cleanup on error
 CREATED_CONTAINERS=()
 
@@ -78,12 +88,12 @@ cleanup_on_error() {
 # Create PostgreSQL container
 create_ct "$CT_PG" "$IP_PG" "${PREFIX}pg-lxc" unpriv || cleanup_on_error
 CREATED_CONTAINERS+=("$CT_PG")
-add_data_mount "$CT_PG" "/var/lib/data/postgres" "/var/lib/postgresql/data" "0"
+add_data_mount "$CT_PG" "${DATA_BASE}/postgres" "/var/lib/postgresql/data" "0"
 
 # Create Milvus container (privileged for better performance)
 create_ct "$CT_MILVUS" "$IP_MILVUS" "${PREFIX}milvus-lxc" priv || cleanup_on_error
 CREATED_CONTAINERS+=("$CT_MILVUS")
-add_data_mount "$CT_MILVUS" "/var/lib/data/milvus" "/srv/milvus/data" "0"
+add_data_mount "$CT_MILVUS" "${DATA_BASE}/milvus" "/srv/milvus/data" "0"
 
 # Configure Milvus container for Docker sysctls support
 # Docker containers inside need permission to set network sysctls
@@ -107,7 +117,7 @@ fi
 # Create MinIO container (privileged for storage access and Docker sysctls)
 create_ct "$CT_FILES" "$IP_FILES" "${PREFIX}files-lxc" priv || cleanup_on_error
 CREATED_CONTAINERS+=("$CT_FILES")
-add_data_mount "$CT_FILES" "/var/lib/data/minio" "/srv/minio/data" "0"
+add_data_mount "$CT_FILES" "${DATA_BASE}/minio" "/srv/minio/data" "0"
 
 # Configure sysctls support for Docker-in-LXC (MinIO container needs to set sysctls)
 echo "    Configuring Docker sysctl support for ${PREFIX}files-lxc..."

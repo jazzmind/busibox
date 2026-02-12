@@ -39,6 +39,14 @@ echo "Mode: ${MODE}"
 echo "=========================================="
 echo ""
 
+# Use environment-specific data directories to prevent staging/production
+# from sharing the same data (which causes credential and state conflicts).
+if [[ "$MODE" == "staging" ]]; then
+  DATA_BASE="/var/lib/data-staging"
+else
+  DATA_BASE="/var/lib/data"
+fi
+
 # Function to add mount point if not already present
 add_mount() {
     local ctid=$1
@@ -74,17 +82,17 @@ add_mount() {
 
 # Add mount for PostgreSQL container
 echo "PostgreSQL Container (${CT_PG}):"
-add_mount "$CT_PG" "/var/lib/data/postgres" "/var/lib/postgresql/data" "0"
+add_mount "$CT_PG" "${DATA_BASE}/postgres" "/var/lib/postgresql/data" "0"
 echo ""
 
 # Add mount for MinIO (files) container  
 echo "MinIO Container (${CT_FILES}):"
-add_mount "$CT_FILES" "/var/lib/data/minio" "/srv/minio/data" "0"
+add_mount "$CT_FILES" "${DATA_BASE}/minio" "/srv/minio/data" "0"
 echo ""
 
 # Add mount for Milvus container
 echo "Milvus Container (${CT_MILVUS}):"
-add_mount "$CT_MILVUS" "/var/lib/data/milvus" "/srv/milvus/data" "0"
+add_mount "$CT_MILVUS" "${DATA_BASE}/milvus" "/srv/milvus/data" "0"
 echo ""
 
 # Add mount for vLLM container (HuggingFace model cache)
