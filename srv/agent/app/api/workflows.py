@@ -438,9 +438,11 @@ async def list_workflow_executions(
     Returns:
         List of workflow executions
     """
-    # Verify workflow exists
+    from app.services.builtin_workflows import is_builtin_workflow
+    
+    # Verify workflow exists - check both database and built-in workflows
     workflow = await session.get(WorkflowDefinition, workflow_id)
-    if not workflow:
+    if not workflow and not is_builtin_workflow(workflow_id):
         raise HTTPException(status_code=404, detail="Workflow not found")
     
     # Build query
