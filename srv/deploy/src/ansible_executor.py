@@ -67,6 +67,8 @@ INFRASTRUCTURE_ANSIBLE_MAP = {
     
     # Apps (deploy via Deploy API, but can also use Ansible)
     'apps': ('apps', ['apps'], 'Frontend applications'),
+    'ai-portal': ('apps', ['app_deployer', 'secrets'], 'AI Portal'),
+    'agent-manager': ('apps', ['app_deployer', 'secrets'], 'Agent Manager'),
 }
 
 
@@ -97,7 +99,8 @@ INSTALLATION_ORDER = [
     ['agent-api', 'docs-api', 'bridge'],  # Agent services + Bridge
     
     # Group 6: Apps (need all APIs)
-    ['apps'],
+    ['ai-portal'],
+    ['agent-manager'],
 ]
 
 
@@ -248,6 +251,8 @@ class AnsibleExecutor:
             'bridge': 'bridge',
             'bridge-api': 'bridge',  # alias
             'apps': 'apps',
+            'ai-portal': 'deploy-ai-portal',
+            'agent-manager': 'deploy-agent-manager',
         }
         
         make_target = service_to_make_target.get(service, service)

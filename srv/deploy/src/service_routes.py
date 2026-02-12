@@ -1058,6 +1058,8 @@ async def start_service_sse(
                         'docs': ('docs-api', 'docs-api'),  # alias
                         'bridge-api': ('data-api', 'bridge'),  # data-lxc
                         'bridge': ('data-api', 'bridge'),  # alias
+                        'ai-portal': ('core-apps', 'ai-portal'),  # apps-lxc
+                        'agent-manager': ('core-apps', 'agent-manager'),  # apps-lxc
                     }
                     
                     if service not in proxmox_service_map:
