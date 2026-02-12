@@ -104,8 +104,8 @@ applications:
       # Deployment Service (deployed to authz-lxc)
       DEPLOYMENT_SERVICE_URL: "http://{{ authz_ip }}:8011/api/v1/deployment"
       DEPLOY_API_URL: "http://{{ authz_ip }}:8011"
-      # Bridge API (email, Signal - deployed to data-lxc)
-      BRIDGE_API_URL: "http://{{ data_ip }}:8081"
+      # Bridge API (email, Signal - deployed to bridge-lxc)
+      BRIDGE_API_URL: "http://{{ bridge_ip }}:8081"
   
   - name: agent-manager
     github_repo: jazzmind/agent-manager
