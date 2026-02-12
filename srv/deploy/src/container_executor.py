@@ -932,10 +932,18 @@ rm -rf {app_path}/node_modules/* \
     
     # Run install with one retry for flaky FS errors (ENOTEMPTY/EBUSY) that can
     # happen with large node_modules trees in Docker volumes.
+    #
+    # IMPORTANT: npm writes deprecation warnings to stderr even on success.
+    # We capture the exit code separately to avoid treating warnings as errors.
+    # The wrapper script uses `2>&1` to merge streams and captures the real exit code.
     async def _run_npm_install(attempt: int, extra_flags: str = "") -> tuple[str, str, int]:
         cmd = f"""
 cd {app_path} && \
-{npm_cmd} {extra_flags} 2>&1
+{npm_cmd} {extra_flags} 2>&1; NPM_EXIT=$?
+if [ $NPM_EXIT -ne 0 ]; then
+    echo "NPM_FAILED_WITH_EXIT_CODE=$NPM_EXIT" >&2
+fi
+exit $NPM_EXIT
 """
         logs.append(f"📦 Running npm ({attempt}/2)...")
         return await execute_in_container(cmd, timeout=600)
@@ -944,8 +952,28 @@ cd {app_path} && \
 
     if code != 0:
         combined = (stderr or stdout or "").strip()
+        
+        # Check if the "error" is actually just deprecation warnings with no real failure.
+        # npm sometimes exits 0 but the shell wrapper or docker exec layer can mangle the code.
+        # If we only see "npm warn" lines and no "npm error" or "ERR!" lines, treat as success.
+        combined_lines = combined.split('\n') if combined else []
+        has_real_error = any(
+            ('npm error' in line.lower() or 'npm ERR!' in line or 'NPM_FAILED_WITH_EXIT_CODE=' in line)
+            for line in combined_lines
+        )
+        is_only_warnings = all(
+            ('npm warn' in line.lower() or 'npm WARN' in line or line.strip() == '')
+            for line in combined_lines
+            if line.strip()
+        )
+        
+        if is_only_warnings and not has_real_error:
+            logger.info(f"npm exited with code {code} but output contains only warnings - treating as success")
+            logs.append(f"⚠️ npm had deprecation warnings (exit code {code}) but no actual errors - continuing")
+            code = 0  # Override to success
+        
         # Retry on transient directory cleanup issues
-        if "ENOTEMPTY" in combined or "EBUSY" in combined:
+        if code != 0 and ("ENOTEMPTY" in combined or "EBUSY" in combined):
             logs.append("⚠️ npm failed with ENOTEMPTY/EBUSY; retrying after full cleanup...")
             retry_cleanup = f"""
 rm -rf {app_path}/node_modules 2>/dev/null || true
@@ -959,7 +987,14 @@ npm cache clean --force 2>/dev/null || true
             stdout, stderr, code = await _run_npm_install(2, extra_flags="--force")
 
     if code != 0:
-        logs.append(f"❌ npm install failed: {stderr or stdout}")
+        # Filter out warning-only lines to show the actual error
+        combined = (stderr or stdout or "").strip()
+        error_lines = [
+            line for line in combined.split('\n')
+            if line.strip() and 'npm warn' not in line.lower() and 'npm WARN' not in line
+        ]
+        error_msg = '\n'.join(error_lines[-20:]) if error_lines else combined[-500:]
+        logs.append(f"❌ npm install failed (exit code {code}): {error_msg}")
         return False
     
     logs.append("✅ Dependencies installed")
