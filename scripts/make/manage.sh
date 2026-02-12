@@ -811,7 +811,10 @@ manage_service() {
                         agent*) make_target="agent" ;;
                         data*|ingest*) make_target="data" ;;
                         search*) make_target="search-api" ;;
+                        bridge*) make_target="bridge" ;;
+                        deploy*) make_target="deploy-api" ;;
                         docs*) make_target="docs" ;;
+                        embedding*) make_target="embedding-api" ;;
                         *) make_target="$service" ;;
                     esac
                     make "$make_target" INV="inventory/${env}"

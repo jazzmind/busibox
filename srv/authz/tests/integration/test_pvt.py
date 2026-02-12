@@ -159,7 +159,12 @@ class TestPVTAuth:
         
         This test catches the critical issue where signing keys exist in the database
         but cannot be decrypted (e.g., passphrase mismatch). The test initiates a login
-        which requires JWT signing - if signing fails, this test will fail.
+        which requires JWT signing - if signing fails, this will return 500.
+        
+        Note: The /auth/login/initiate endpoint intentionally does NOT return
+        magic_link_token or totp_code in the response (security: tokens are sent
+        via email only). A 200 with {"message": "ok", "expires_in": 900} confirms
+        the signing key worked.
         """
         async with httpx.AsyncClient() as client:
             # Initiate login - this creates a magic link which requires JWT signing
@@ -176,7 +181,8 @@ class TestPVTAuth:
             )
             
             data = resp.json()
-            assert "magic_link_token" in data, "Missing magic_link_token - signing may have failed"
+            assert data.get("message") == "ok", f"Unexpected response: {data}"
+            assert "expires_in" in data, "Missing expires_in in response"
     
     @pytest.mark.asyncio
     async def test_magic_link_endpoint_exists(self):
@@ -319,7 +325,11 @@ class TestPVTLoginFlow:
     
     @pytest.mark.asyncio
     async def test_login_initiate_endpoint(self):
-        """Login initiation endpoint works for valid email."""
+        """Login initiation endpoint works for valid email.
+        
+        Note: The endpoint intentionally returns only {"message": "ok", "expires_in": 900}
+        and never leaks tokens in the response. Magic link and TOTP are sent via email.
+        """
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 f"{SERVICE_URL}/auth/login/initiate",
@@ -328,9 +338,7 @@ class TestPVTLoginFlow:
             )
             assert resp.status_code == 200, f"Login initiate failed: {resp.text}"
             data = resp.json()
-            # Should return magic link token and TOTP code
-            assert "magic_link_token" in data, "Missing magic_link_token"
-            assert "totp_code" in data, "Missing totp_code"
+            assert data.get("message") == "ok", f"Unexpected response message: {data}"
             assert "expires_in" in data, "Missing expires_in"
     
     @pytest.mark.asyncio
