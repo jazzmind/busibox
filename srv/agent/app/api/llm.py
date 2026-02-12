@@ -235,7 +235,7 @@ BEDROCK_CURATED_MODELS = [
 
 # Purposes that can be overridden via the UI
 CONFIGURABLE_PURPOSES = [
-    "fast", "agent", "chat", "frontier", "tool_calling", "test", "default",
+    "fast", "agent", "chat", "frontier", "tool_calling", "test", "default", "video",
 ]
 
 
@@ -960,34 +960,34 @@ async def save_provider_key(
     for env_key, env_val in env_vars_to_save.items():
         os.environ[env_key] = env_val
     
-    # Auto-register sora-2 video model when OpenAI key is saved
+    # Auto-register video purpose model when OpenAI key is saved
     if provider == "openai":
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                sora_entry = {
-                    "model_name": "sora-2",
+                video_entry = {
+                    "model_name": "video",
                     "litellm_params": {
                         "model": "openai/sora-2",
                     },
                     "model_info": {
-                        "description": "OpenAI Sora-2 video generation",
+                        "description": "Video generation (OpenAI Sora-2)",
                     },
                 }
                 resp = await client.post(
                     f"{base_url}/model/new",
                     headers=headers,
-                    json=sora_entry,
+                    json=video_entry,
                 )
                 if resp.status_code == 200:
-                    logger.info("Auto-registered sora-2 video model in LiteLLM")
+                    logger.info("Auto-registered 'video' purpose model (sora-2) in LiteLLM")
                 else:
                     # 409 or other - model may already exist, that's fine
                     logger.debug(
-                        f"sora-2 model registration returned {resp.status_code}: "
+                        f"video model registration returned {resp.status_code}: "
                         f"{resp.text[:200]}"
                     )
         except Exception as e:
-            logger.warning(f"Failed to auto-register sora-2 model: {e}")
+            logger.warning(f"Failed to auto-register video model: {e}")
     
     return {
         "success": True,
@@ -1083,7 +1083,7 @@ async def list_provider_keys(
 
 class VideoCreateRequest(BaseModel):
     """Request to create a video via LiteLLM/OpenAI Sora."""
-    model: str = Field("sora-2", description="Video model name")
+    model: str = Field("video", description="Video model purpose name (resolved via model registry)")
     prompt: str = Field(..., description="Text prompt for video generation")
     seconds: str = Field(..., description="Duration in seconds (e.g. '4', '8', '12')")
     size: str = Field(..., description="Resolution (e.g. '1920x1080')")

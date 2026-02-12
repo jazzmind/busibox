@@ -218,6 +218,9 @@ model_purposes:
   tool_calling: "qwen3-30b"   # Tool calling model for tool calling tasks
   test: "qwen3-0.6b"   # Tiny model for validation tests
 
+  # Video generation (cloud API)
+  video: "sora-2"   # Video generation model (OpenAI Sora-2)
+
   # Embeddings (dedicated services)
   embedding: "bge-large"   # Text embedding generation (1024-d)
   visual-embedding: "colpali"   # Visual document embedding (dedicated service)
@@ -246,6 +249,9 @@ model_purposes_dev:
   fast: "qwen2.5-3b"   # Fast model for quick operations
   tool_calling: "qwen2.5-7b"   # Tool calling
   test: "qwen3-0.6b"   # Tiny model for validation tests (cached by warmup)
+
+  # Video generation (requires OpenAI API key even in dev)
+  video: "sora-2"   # Video generation model (OpenAI Sora-2)
 
   # Embeddings (use smaller models for dev)
   embedding: "bge-small"   # Text embedding (384-d, cached by warmup)
