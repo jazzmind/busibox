@@ -64,6 +64,9 @@ litellm>=1.17.0,<2.0.0  # For future LLM calls if needed
 openai>=1.65.2  # Required by marker-pdf
 tenacity>=8.2.3,<9.0.0  # Retry logic
 
+# Graph Database (optional - Neo4j)
+neo4j>=5.0.0,<6.0.0
+
 # Logging
 structlog>=24.1.0,<25.0.0
 

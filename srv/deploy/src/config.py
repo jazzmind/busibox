@@ -36,7 +36,7 @@ class Config:
     port: int = int(os.getenv('DEPLOY_PORT', '8011'))
     debug: bool = os.getenv('DEBUG', 'false').lower() == 'true'
     
-    # Deployment backend: "docker" or "proxmox"
+    # Deployment backend: "docker", "proxmox", or "k8s"
     # If not set, auto-detected from POSTGRES_HOST format
     deployment_backend: str = os.getenv('DEPLOYMENT_BACKEND', '')
     
@@ -98,6 +98,14 @@ class Config:
     
     # Rate limiting (in seconds for flexibility, default 10 seconds for testing)
     rate_limit_seconds: int = int(os.getenv('RATE_LIMIT_SECONDS', '10'))
+    
+    def is_k8s_backend(self) -> bool:
+        """Check if running on Kubernetes backend.
+        
+        Returns:
+            True if K8s backend, False otherwise
+        """
+        return self.deployment_backend.lower() == 'k8s'
     
     def is_docker_backend(self) -> bool:
         """Check if running on Docker backend.

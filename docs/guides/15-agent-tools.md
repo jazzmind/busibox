@@ -1,6 +1,6 @@
 ---
 title: "Agent Tools and Capabilities"
-category: "user"
+category: "platform"
 order: 15
 description: "Built-in and custom tools that make Busibox agents powerful and extensible"
 published: true

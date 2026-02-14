@@ -94,6 +94,19 @@ server {
         return 200 '{"status":"ok"}';
     }
 
+    # Next.js font files - served at root level by next/font
+    # next/font/google doesn't prepend basePath to font URLs,
+    # so requests come in as /__nextjs_font/* at the root level.
+    # Proxy to AI Portal (core-apps container) to serve these files.
+    location /__nextjs_font {
+        proxy_pass http://{{ core_apps_ip }}:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_valid 200 1y;
+    }
+
     # Redirect root to portal
     location = / {
         return 302 /portal;

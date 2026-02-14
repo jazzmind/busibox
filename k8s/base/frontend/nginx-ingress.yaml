@@ -1,0 +1,242 @@
+---
+# Nginx Ingress - Reverse proxy for all services
+# Uses NodePort for external access on Rackspace Spot
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx
+  labels:
+    app: nginx
+    tier: frontend
+spec:
+  type: NodePort
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+      nodePort: 30080
+    - name: https
+      port: 443
+      targetPort: 443
+      nodePort: 30443
+  selector:
+    app: nginx
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx
+  labels:
+    app: nginx
+    tier: frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+        tier: frontend
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:alpine
+          ports:
+            - containerPort: 80
+            - containerPort: 443
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+            - name: nginx-tls
+              mountPath: /etc/nginx/tls
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+      volumes:
+        - name: nginx-config
+          configMap:
+            name: nginx-config
+        - name: nginx-tls
+          secret:
+            secretName: nginx-tls
+            optional: true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+  labels:
+    app: nginx
+data:
+  nginx.conf: |
+    worker_processes auto;
+    error_log /var/log/nginx/error.log warn;
+    pid /var/run/nginx.pid;
+
+    events {
+        worker_connections 1024;
+    }
+
+    http {
+        include /etc/nginx/mime.types;
+        default_type application/octet-stream;
+
+        log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                        '$status $body_bytes_sent "$http_referer" '
+                        '"$http_user_agent"';
+        access_log /var/log/nginx/access.log main;
+
+        sendfile on;
+        keepalive_timeout 65;
+        client_max_body_size 500M;
+
+        # Upstream definitions
+        upstream authz_api { server authz-api:8010; }
+        upstream data_api { server data-api:8002; }
+        upstream search_api { server search-api:8003; }
+        upstream agent_api { server agent-api:8000; }
+        upstream docs_api { server docs-api:8004; }
+        upstream bridge_api { server bridge-api:8081; }
+        upstream litellm { server litellm:4000; }
+        upstream embedding_api { server embedding-api:8005; }
+        upstream deploy_api { server deploy-api:8011; }
+        upstream ai_portal { server ai-portal:3000; }
+        upstream agent_manager { server agent-manager:3001; }
+
+        server {
+            listen 80;
+            server_name _;
+
+            # Health check
+            location /health {
+                return 200 'OK';
+                add_header Content-Type text/plain;
+            }
+
+            # AuthZ API
+            location /auth/ {
+                proxy_pass http://authz_api/;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+            }
+
+            # Data API
+            location /data/ {
+                proxy_pass http://data_api/;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+            }
+
+            # Search API
+            location /search/ {
+                proxy_pass http://search_api/;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+            }
+
+            # Agent API
+            location /agent/ {
+                proxy_pass http://agent_api/;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+                # SSE support
+                proxy_buffering off;
+                proxy_cache off;
+                proxy_read_timeout 300;
+            }
+
+            # Docs API
+            location /docs/ {
+                proxy_pass http://docs_api/;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+            }
+
+            # Bridge API
+            location /bridge/ {
+                proxy_pass http://bridge_api/;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+            }
+
+            # LiteLLM
+            location /llm/ {
+                proxy_pass http://litellm/;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_read_timeout 120;
+            }
+
+            # AI Portal (core app)
+            location /portal/ {
+                proxy_pass http://ai_portal/portal/;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+            }
+
+            # Agent Manager (core app)
+            location /agents/ {
+                proxy_pass http://agent_manager/agents/;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+                # SSE support for agent streaming
+                proxy_buffering off;
+                proxy_cache off;
+                proxy_read_timeout 300;
+            }
+
+            # Deploy API
+            location /deploy/ {
+                proxy_pass http://deploy_api/;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+            }
+
+            # Embedding API
+            location /embedding/ {
+                proxy_pass http://embedding_api/;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+            }
+
+            # Root - return service info
+            location / {
+                return 200 '{"service": "busibox", "status": "running"}';
+                add_header Content-Type application/json;
+            }
+        }
+    }

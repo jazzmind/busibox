@@ -1,6 +1,6 @@
 ---
 title: "Unified Data Model"
-category: "user"
+category: "platform"
 order: 12
 description: "How Busibox connects documents, app data, and agent conversations into a single searchable layer"
 published: true

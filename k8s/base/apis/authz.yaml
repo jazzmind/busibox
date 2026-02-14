@@ -1,0 +1,98 @@
+---
+# AuthZ API - Authentication & Authorization Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: authz-api
+  labels:
+    app: authz-api
+    tier: api
+spec:
+  ports:
+    - port: 8010
+      targetPort: 8010
+  selector:
+    app: authz-api
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: authz-api
+  labels:
+    app: authz-api
+    tier: api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: authz-api
+  template:
+    metadata:
+      labels:
+        app: authz-api
+        tier: api
+    spec:
+      containers:
+        - name: authz-api
+          image: localhost:30500/authz-api:latest
+          ports:
+            - containerPort: 8010
+          env:
+            - name: POSTGRES_HOST
+              value: "postgres"
+            - name: POSTGRES_DB
+              value: "authz"
+            - name: POSTGRES_USER
+              value: "busibox_user"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: busibox-secrets
+                  key: POSTGRES_PASSWORD
+            - name: AUTHZ_ISSUER
+              value: "busibox-authz"
+            - name: AUTHZ_ACCESS_TOKEN_TTL
+              value: "900"
+            - name: AUTHZ_SIGNING_ALG
+              value: "RS256"
+            - name: AUTHZ_RSA_KEY_SIZE
+              value: "2048"
+            - name: AUTHZ_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: busibox-secrets
+                  key: AUTHZ_MASTER_KEY
+            - name: AUTHZ_BOOTSTRAP_ALLOWED_AUDIENCES
+              value: "data-api,search-api,agent-api,authz-api"
+            - name: AUTHZ_BOOTSTRAP_ALLOWED_SCOPES
+              value: "read,write,search.read,data.write,data.read,agent.execute"
+            - name: ADMIN_EMAILS
+              valueFrom:
+                secretKeyRef:
+                  name: busibox-secrets
+                  key: ADMIN_EMAILS
+            - name: APP_URL
+              value: "http://core-apps:3000/portal"
+            - name: BRIDGE_API_URL
+              value: "http://bridge-api:8081"
+            - name: DEV_MODE
+              value: "false"
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8010
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health/live
+              port: 8010
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

@@ -83,3 +83,11 @@ config/nginx-sites/apps/*
 dev-apps/*
 !dev-apps/.gitkeep
 !dev-apps/README.md
+
+# Kubernetes - sensitive files
+k8s/kubeconfig-*.yaml
+k8s/secrets/secrets.yaml
+k8s/overlays/*/ai-capabilities-patch.yaml
+k8s/terraform/*.tfvars
+k8s/terraform/.terraform/
+k8s/terraform/*.tfstate*

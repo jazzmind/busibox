@@ -1,6 +1,6 @@
 ---
 title: "Troubleshooting"
-category: "user"
+category: "platform"
 order: 3
 description: "Common issues and solutions when working with Busibox"
 published: true

@@ -1,0 +1,235 @@
+---
+# Data API - Document Processing Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: data-api
+  labels:
+    app: data-api
+    tier: api
+spec:
+  ports:
+    - port: 8002
+      targetPort: 8002
+  selector:
+    app: data-api
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: data-api
+  labels:
+    app: data-api
+    tier: api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: data-api
+  template:
+    metadata:
+      labels:
+        app: data-api
+        tier: api
+    spec:
+      containers:
+        - name: data-api
+          image: localhost:30500/data-api:latest
+          ports:
+            - containerPort: 8002
+          env:
+            - name: POSTGRES_HOST
+              value: "postgres"
+            - name: POSTGRES_DB
+              value: "data"
+            - name: POSTGRES_USER
+              value: "busibox_user"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: busibox-secrets
+                  key: POSTGRES_PASSWORD
+            - name: REDIS_HOST
+              value: "redis"
+            - name: MINIO_ENDPOINT
+              value: "minio:9000"
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: busibox-secrets
+                  key: MINIO_ACCESS_KEY
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: busibox-secrets
+                  key: MINIO_SECRET_KEY
+            - name: MINIO_SECURE
+              value: "false"
+            - name: MINIO_BUCKET
+              value: "documents"
+            - name: MILVUS_HOST
+              value: "milvus"
+            - name: MILVUS_COLLECTION
+              value: "documents"
+            - name: LITELLM_BASE_URL
+              value: "http://litellm:4000"
+            - name: LITELLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: busibox-secrets
+                  key: LITELLM_API_KEY
+            - name: AUTHZ_BASE_URL
+              value: "http://authz-api:8010"
+            - name: AUTHZ_JWKS_URL
+              value: "http://authz-api:8010/.well-known/jwks.json"
+            - name: AUTHZ_ISSUER
+              value: "busibox-authz"
+            - name: AUTHZ_AUDIENCE
+              value: "data-api"
+            - name: EMBEDDING_API_URL
+              value: "http://embedding-api:8005"
+            - name: EMBEDDING_DIMENSION
+              value: "1024"
+            - name: MARKER_ENABLED
+              value: "false"
+            - name: COLPALI_ENABLED
+              value: "false"
+            - name: LLM_CLEANUP_ENABLED
+              value: "false"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8002
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8002
+            initialDelaySeconds: 30
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+          volumeMounts:
+            - name: data-temp
+              mountPath: /tmp/data
+            - name: model-cache
+              mountPath: /root/.cache
+      volumes:
+        - name: data-temp
+          emptyDir: {}
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: model-cache
+---
+# Data Worker - Background Job Processor
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: data-worker
+  labels:
+    app: data-worker
+    tier: api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: data-worker
+  template:
+    metadata:
+      labels:
+        app: data-worker
+        tier: api
+    spec:
+      containers:
+        - name: data-worker
+          image: localhost:30500/data-api:latest
+          command: ["python", "src/worker.py"]
+          env:
+            - name: POSTGRES_HOST
+              value: "postgres"
+            - name: POSTGRES_DB
+              value: "data"
+            - name: POSTGRES_USER
+              value: "busibox_user"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: busibox-secrets
+                  key: POSTGRES_PASSWORD
+            - name: REDIS_HOST
+              value: "redis"
+            - name: REDIS_STREAM
+              value: "jobs:data"
+            - name: REDIS_CONSUMER_GROUP
+              value: "workers"
+            - name: MINIO_ENDPOINT
+              value: "minio:9000"
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: busibox-secrets
+                  key: MINIO_ACCESS_KEY
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: busibox-secrets
+                  key: MINIO_SECRET_KEY
+            - name: MINIO_SECURE
+              value: "false"
+            - name: MINIO_BUCKET
+              value: "documents"
+            - name: MILVUS_HOST
+              value: "milvus"
+            - name: MILVUS_COLLECTION
+              value: "documents"
+            - name: LITELLM_BASE_URL
+              value: "http://litellm:4000"
+            - name: LITELLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: busibox-secrets
+                  key: LITELLM_API_KEY
+            - name: EMBEDDING_API_URL
+              value: "http://embedding-api:8005"
+            - name: EMBEDDING_DIMENSION
+              value: "1024"
+            - name: MARKER_ENABLED
+              value: "false"
+            - name: COLPALI_ENABLED
+              value: "false"
+            - name: LLM_CLEANUP_ENABLED
+              value: "false"
+            - name: AUTHZ_BASE_URL
+              value: "http://authz-api:8010"
+            - name: AUTHZ_JWKS_URL
+              value: "http://authz-api:8010/.well-known/jwks.json"
+            - name: AUTHZ_ISSUER
+              value: "busibox-authz"
+            - name: AUTHZ_AUDIENCE
+              value: "data-api"
+            - name: WORKER_ID
+              value: "k8s-worker-1"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+          volumeMounts:
+            - name: data-temp
+              mountPath: /tmp/data
+            - name: model-cache
+              mountPath: /root/.cache
+      volumes:
+        - name: data-temp
+          emptyDir: {}
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: model-cache

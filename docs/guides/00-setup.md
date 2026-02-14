@@ -1,6 +1,6 @@
 ---
 title: "Getting Started"
-category: "user"
+category: "platform"
 order: 1
 description: "Quick start guide for setting up Busibox on your infrastructure"
 published: true

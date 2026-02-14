@@ -1,0 +1,56 @@
+---
+# ServiceAccount for deploy-api
+# Allows deploy-api to manage K8s resources for app deployment
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: deploy-api
+  labels:
+    app: deploy-api
+    tier: apis
+---
+# Role granting deploy-api permissions in the busibox namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: deploy-api-manager
+  labels:
+    app: deploy-api
+spec:
+  rules:
+    # Manage app Deployments (create, update, delete, rollout restart)
+    - apiGroups: ["apps"]
+      resources: ["deployments"]
+      verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    # Manage app Services
+    - apiGroups: [""]
+      resources: ["services"]
+      verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    # Read and patch ConfigMaps (nginx-config for routing)
+    - apiGroups: [""]
+      resources: ["configmaps"]
+      verbs: ["get", "list", "watch", "update", "patch"]
+    # List pods (for finding build-server pod)
+    - apiGroups: [""]
+      resources: ["pods"]
+      verbs: ["get", "list", "watch"]
+    # Exec into pods (build-server for builds, nginx for reload)
+    - apiGroups: [""]
+      resources: ["pods/exec"]
+      verbs: ["create"]
+---
+# Bind the role to the deploy-api ServiceAccount
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: deploy-api-manager-binding
+  labels:
+    app: deploy-api
+subjects:
+  - kind: ServiceAccount
+    name: deploy-api
+    namespace: busibox
+roleRef:
+  kind: Role
+  name: deploy-api-manager
+  apiGroup: rbac.authorization.k8s.io

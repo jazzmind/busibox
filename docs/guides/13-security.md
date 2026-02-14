@@ -1,6 +1,6 @@
 ---
 title: "Security and Privacy"
-category: "user"
+category: "platform"
 order: 13
 description: "How Busibox enforces granular security so users and agents only access authorized data"
 published: true

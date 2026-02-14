@@ -1,6 +1,6 @@
 ---
 title: "Local and Frontier AI Models"
-category: "user"
+category: "platform"
 order: 11
 description: "How Busibox lets you choose between local and cloud AI models per agent and per task"
 published: true

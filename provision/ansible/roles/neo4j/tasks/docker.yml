@@ -1,0 +1,29 @@
+---
+# Neo4j Docker Deployment Tasks
+#
+# Deploys Neo4j graph database via Docker Compose
+# Used when deploy_target == 'docker'
+
+- name: Start Neo4j
+  include_role:
+    name: docker_common
+    tasks_from: compose_up
+  vars:
+    docker_services_to_start:
+      - neo4j
+    docker_wait_for_health: true
+
+- name: Wait for Neo4j to be ready
+  include_role:
+    name: docker_common
+    tasks_from: wait_healthy
+  vars:
+    docker_wait_service: neo4j
+    docker_wait_timeout: 60
+
+- name: Display Neo4j status
+  ansible.builtin.debug:
+    msg: |
+      Neo4j is running and ready
+      Browser: http://localhost:7474
+      Bolt: bolt://localhost:7687

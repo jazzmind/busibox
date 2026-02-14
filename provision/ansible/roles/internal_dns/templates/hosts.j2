@@ -25,6 +25,7 @@ ff02::2     ip6-allrouters
 {{ redis_host }}        redis
 {{ minio_ip }}          minio files files-lxc
 {{ milvus_ip }}         milvus milvus-lxc
+{{ neo4j_host | default(milvus_ip) }}  neo4j graph
 {{ proxy_ip }}          nginx proxy proxy-lxc
 
 # Core API Services

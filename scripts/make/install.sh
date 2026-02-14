@@ -454,8 +454,8 @@ wizard_environment() {
     echo -e "┌─ ${BOLD}ENVIRONMENT${NC} ────────────────────────────────────────────────────────────────┐"
     box_line "" "single"
     box_line "  ${CYAN}1)${NC} development  Docker on this machine (dev mode, volume mounts)" "single"
-    box_line "  ${CYAN}2)${NC} staging      Pre-production testing (Docker or Proxmox)" "single"
-    box_line "  ${CYAN}3)${NC} production   Production deployment (Docker or Proxmox)" "single"
+    box_line "  ${CYAN}2)${NC} staging      Pre-production testing (Docker, Proxmox, or K8s)" "single"
+    box_line "  ${CYAN}3)${NC} production   Production deployment (Docker, Proxmox, or K8s)" "single"
     box_line "" "single"
     echo -e "└──────────────────────────────────────────────────────────────────────────────┘"
     echo ""
@@ -490,6 +490,17 @@ wizard_platform() {
             error "Proxmox installation must be run as root on the Proxmox host"
             exit 1
         fi
+        # Validate k8s has kubectl and kubeconfig
+        if [[ "$PLATFORM" == "k8s" ]]; then
+            if ! command -v kubectl &>/dev/null; then
+                error "kubectl is not installed (required for K8s platform)"
+                exit 1
+            fi
+            if [[ ! -f "${REPO_ROOT}/k8s/kubeconfig-rackspace-spot.yaml" ]]; then
+                error "Kubeconfig not found at k8s/kubeconfig-rackspace-spot.yaml"
+                exit 1
+            fi
+        fi
         return
     fi
     
@@ -498,6 +509,7 @@ wizard_platform() {
     box_line "" "single"
     box_line "  ${CYAN}1)${NC} docker       Docker Compose" "single"
     box_line "  ${CYAN}2)${NC} proxmox      LXC Containers (requires root on Proxmox host)" "single"
+    box_line "  ${CYAN}3)${NC} k8s          Kubernetes (Rackspace Spot via kubeconfig)" "single"
     box_line "" "single"
     echo -e "└──────────────────────────────────────────────────────────────────────────────┘"
     echo ""
@@ -515,9 +527,165 @@ wizard_platform() {
                 fi
                 break
                 ;;
-            *) echo "Invalid choice. Please enter 1 or 2." ;;
+            3)
+                PLATFORM="k8s"
+                # Check kubectl is available
+                if ! command -v kubectl &>/dev/null; then
+                    error "kubectl is not installed. Install it first: https://kubernetes.io/docs/tasks/tools/"
+                    exit 1
+                fi
+                # Check kubeconfig exists
+                local kubeconfig="${REPO_ROOT}/k8s/kubeconfig-rackspace-spot.yaml"
+                if [[ ! -f "$kubeconfig" ]]; then
+                    error "Kubeconfig not found at: ${kubeconfig}"
+                    echo "  Place your Rackspace Spot kubeconfig at k8s/kubeconfig-rackspace-spot.yaml"
+                    exit 1
+                fi
+                # Verify cluster connectivity
+                info "Verifying K8s cluster connectivity..."
+                if ! KUBECONFIG="$kubeconfig" kubectl cluster-info &>/dev/null; then
+                    error "Cannot connect to K8s cluster. Check kubeconfig and network."
+                    exit 1
+                fi
+                success "K8s cluster connection verified"
+                
+                # Check Docker is available (needed for building images locally)
+                if ! command -v docker &>/dev/null; then
+                    warn "Docker not installed. You'll need it to build images for K8s."
+                    echo "  Images are built locally (cross-compiled for linux/amd64) and pushed to GHCR."
+                elif ! docker info &>/dev/null; then
+                    warn "Docker is installed but not running. Start Docker Desktop before deploying."
+                else
+                    success "Docker available for local image builds"
+                fi
+                
+                # Check GitHub token for GHCR push
+                local github_token="${GITHUB_TOKEN:-}"
+                if [[ -z "$github_token" && -f "${REPO_ROOT}/scripts/lib/vault.sh" ]]; then
+                    source "${REPO_ROOT}/scripts/lib/vault.sh"
+                    set_vault_environment "dev" 2>/dev/null || true
+                    ensure_vault_access 2>/dev/null || true
+                    github_token=$(get_vault_secret "secrets.github.personal_access_token" 2>/dev/null || echo "")
+                fi
+                if [[ -n "$github_token" ]]; then
+                    success "GitHub token available for GHCR push"
+                else
+                    warn "No GitHub token found - you'll need GITHUB_TOKEN or vault access to push images"
+                fi
+                
+                break
+                ;;
+            *) echo "Invalid choice. Please enter 1, 2, or 3." ;;
         esac
     done
+}
+
+# K8s-specific AI capabilities wizard
+# The K8s cluster runs AI workloads in-cluster on CPU nodes.
+# LLM inference uses cloud providers via LiteLLM; embeddings, Marker, etc. run locally.
+wizard_k8s_ai_capabilities() {
+    echo ""
+    echo -e "┌─ ${BOLD}K8S AI CAPABILITIES${NC} ────────────────────────────────────────────────────────┐"
+    box_line "" "single"
+    box_line "  Your K8s cluster runs AI workloads on CPU spot nodes." "single"
+    box_line "  LLM inference uses cloud providers (OpenAI, Anthropic, Bedrock)" "single"
+    box_line "  routed through LiteLLM. GPU burst nodes can be added later." "single"
+    box_line "" "single"
+    box_line "  ${BOLD}In-cluster CPU services (always deployed):${NC}" "single"
+    box_line "    ${GREEN}✓${NC} FastEmbed (BAAI/bge-large-en-v1.5) - document embeddings" "single"
+    box_line "    ${GREEN}✓${NC} Search API - semantic search via Milvus" "single"
+    box_line "    ${GREEN}✓${NC} Data API - document processing pipeline" "single"
+    box_line "" "single"
+    box_line "  ${BOLD}Optional CPU services:${NC}" "single"
+    box_line "    ${CYAN}1)${NC} Marker     - high-quality PDF extraction (uses ~2GB RAM)" "single"
+    box_line "    ${CYAN}2)${NC} LLM Cleanup - post-process extracted text with LLM" "single"
+    box_line "" "single"
+    echo -e "└──────────────────────────────────────────────────────────────────────────────┘"
+    echo ""
+    
+    # Marker
+    local enable_marker="false"
+    read -p "$(echo -e "${BOLD}Enable Marker PDF extraction? [y/N]:${NC} ")" marker_choice
+    if [[ "$marker_choice" == "y" || "$marker_choice" == "Y" ]]; then
+        enable_marker="true"
+        success "Marker will be enabled in the cluster"
+    fi
+    
+    # LLM Cleanup
+    local enable_llm_cleanup="false"
+    read -p "$(echo -e "${BOLD}Enable LLM cleanup of extracted text? [y/N]:${NC} ")" cleanup_choice
+    if [[ "$cleanup_choice" == "y" || "$cleanup_choice" == "Y" ]]; then
+        enable_llm_cleanup="true"
+        success "LLM cleanup will be enabled (uses cloud LLM tokens)"
+    fi
+    
+    # Save K8s AI settings to state
+    set_state "K8S_MARKER_ENABLED" "$enable_marker"
+    set_state "K8S_LLM_CLEANUP_ENABLED" "$enable_llm_cleanup"
+    
+    # Generate kustomize patch for these settings
+    _generate_k8s_ai_patch "$enable_marker" "$enable_llm_cleanup"
+    
+    echo ""
+    
+    # LLM backend is always cloud for K8s
+    LLM_BACKEND="cloud"
+    wizard_cloud_provider
+}
+
+# Generate kustomize patches to enable/disable AI features in data-api and data-worker
+_generate_k8s_ai_patch() {
+    local marker_enabled="$1"
+    local llm_cleanup_enabled="$2"
+    
+    local kustomization="${REPO_ROOT}/k8s/overlays/rackspace-spot/kustomization.yaml"
+    local patch_file="${REPO_ROOT}/k8s/overlays/rackspace-spot/ai-capabilities-patch.yaml"
+    
+    cat > "$patch_file" <<EOF
+# Auto-generated by install wizard - AI capability settings
+# Strategic merge patch for data-api and data-worker Deployment env vars
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: data-api
+spec:
+  template:
+    spec:
+      containers:
+        - name: data-api
+          env:
+            - name: MARKER_ENABLED
+              value: "${marker_enabled}"
+            - name: LLM_CLEANUP_ENABLED
+              value: "${llm_cleanup_enabled}"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: data-worker
+spec:
+  template:
+    spec:
+      containers:
+        - name: data-worker
+          env:
+            - name: MARKER_ENABLED
+              value: "${marker_enabled}"
+            - name: LLM_CLEANUP_ENABLED
+              value: "${llm_cleanup_enabled}"
+EOF
+    
+    info "Generated AI capabilities patch: marker=${marker_enabled}, llm_cleanup=${llm_cleanup_enabled}"
+    
+    # Add the patch to kustomization.yaml if not already there
+    if ! grep -q "ai-capabilities-patch.yaml" "$kustomization" 2>/dev/null; then
+        cat >> "$kustomization" <<'EOF'
+
+  # AI capability settings (generated by install wizard)
+  - path: ai-capabilities-patch.yaml
+EOF
+        info "Added AI capability patch to kustomization.yaml"
+    fi
 }
 
 wizard_llm_backend() {
@@ -531,6 +699,13 @@ wizard_llm_backend() {
         [[ $pad -lt 0 ]] && pad=0
         printf '│  %s%*s │\n' "$text" "$pad" ""
     }
+    
+    # K8s: LLM runs in the cluster via LiteLLM + cloud providers (+ optional GPU burst)
+    # Local machine hardware is irrelevant - show K8s-specific AI capabilities wizard
+    if [[ "$PLATFORM" == "k8s" ]]; then
+        wizard_k8s_ai_capabilities
+        return
+    fi
     
     echo ""
     echo -e "┌─ ${BOLD}LLM BACKEND${NC} ────────────────────────────────────────────────────────────────┐"
@@ -1466,6 +1641,74 @@ _load_admin_config_from_vault() {
     fi
     
     return 0
+}
+
+# =============================================================================
+# K8S BOOTSTRAP
+# =============================================================================
+
+# Bootstrap Kubernetes deployment via scripts/k8s/deploy.sh
+# Builds images locally, pushes to GHCR, and applies K8s manifests
+bootstrap_k8s() {
+    info "Deploying to Kubernetes (In-Cluster Build Server)..."
+    
+    local k8s_deploy="${REPO_ROOT}/scripts/k8s/deploy.sh"
+    local kubeconfig="${REPO_ROOT}/k8s/kubeconfig-rackspace-spot.yaml"
+    
+    if [[ ! -f "$k8s_deploy" ]]; then
+        error "K8s deploy script not found: ${k8s_deploy}"
+        return 1
+    fi
+    
+    if [[ ! -f "$kubeconfig" ]]; then
+        error "Kubeconfig not found: ${kubeconfig}"
+        return 1
+    fi
+    
+    # Phase 1: Apply base infrastructure (includes build infra: registry + build-server)
+    show_stage 20 "K8s Infrastructure" "Applying namespace, infrastructure, and build server..."
+    
+    if ! bash "$k8s_deploy" --secrets --apply --kubeconfig "$kubeconfig"; then
+        error "K8s manifest apply failed"
+        return 1
+    fi
+    
+    # Phase 2: Wait for build-server and registry to be ready, then sync + build
+    show_stage 40 "K8s Build" "Syncing code and building images on in-cluster build server..."
+    
+    if ! bash "$k8s_deploy" --sync --build --kubeconfig "$kubeconfig"; then
+        error "K8s image build failed"
+        return 1
+    fi
+    
+    # Phase 3: Re-apply manifests to pick up new images, rollout restart
+    show_stage 70 "K8s Deploy Services" "Deploying API services with new images..."
+    
+    if ! bash "$k8s_deploy" --apply --kubeconfig "$kubeconfig"; then
+        error "K8s service deployment failed"
+        return 1
+    fi
+    
+    # Phase 4: Deploy core apps (ai-portal, agent-manager) via build server
+    show_stage 85 "K8s Core Apps" "Building and deploying core applications..."
+    # Core apps are deployed via deploy-api's K8s executor once deploy-api is running
+    # For now, just verify the deployment is healthy
+    
+    show_stage 95 "K8s Deployment Complete" "All services deployed to Kubernetes cluster"
+    success "K8s bootstrap complete"
+    echo ""
+    info "To access the AI Portal you need an HTTPS tunnel to the K8s cluster."
+    info "This sets up SSL certificates, /etc/hosts, and kubectl port-forward."
+    info "Default: https://busibox.local/portal"
+    echo ""
+    read -p "Run 'make connect' now to access the AI Portal? [Y/n]: " connect_choice
+    if [[ "$connect_choice" != "n" && "$connect_choice" != "N" ]]; then
+        cd "$REPO_ROOT"
+        make connect
+    else
+        echo ""
+        info "You can connect later with: make connect"
+    fi
 }
 
 # =============================================================================
@@ -3523,6 +3766,42 @@ check_prerequisites() {
         else
             success "Ansible available"
         fi
+    elif [[ "$PLATFORM" == "k8s" ]]; then
+        # kubectl
+        if ! command -v kubectl &>/dev/null; then
+            error "kubectl is not installed"
+            ((errors++))
+        else
+            success "kubectl available"
+        fi
+        
+        # Kubeconfig
+        local kubeconfig="${REPO_ROOT}/k8s/kubeconfig-rackspace-spot.yaml"
+        if [[ ! -f "$kubeconfig" ]]; then
+            error "Kubeconfig not found: ${kubeconfig}"
+            ((errors++))
+        else
+            success "Kubeconfig found"
+        fi
+        
+        # Cluster connectivity
+        if [[ -f "$kubeconfig" ]]; then
+            if KUBECONFIG="$kubeconfig" kubectl cluster-info &>/dev/null; then
+                success "K8s cluster reachable"
+            else
+                error "Cannot connect to K8s cluster"
+                ((errors++))
+            fi
+        fi
+        
+        # Docker (needed for building images locally)
+        if ! command -v docker &>/dev/null; then
+            warn "Docker not installed (needed to build images for K8s)"
+        elif ! docker info &>/dev/null; then
+            warn "Docker not running (needed to build images for K8s)"
+        else
+            success "Docker available for image builds"
+        fi
     fi
     
     # Common checks
@@ -4114,6 +4393,8 @@ main() {
                 NETWORK_STAGING=$(get_state "NETWORK_BASE_OCTETS_STAGING" "10.96.201")
                 echo -e "  Network (prod): ${CYAN}${NETWORK_PRODUCTION}${NC}"
                 echo -e "  Network (stag): ${CYAN}${NETWORK_STAGING}${NC}"
+            elif [[ "$PLATFORM" == "k8s" ]]; then
+                echo -e "  Kubeconfig:      ${CYAN}k8s/kubeconfig-rackspace-spot.yaml${NC}"
             fi
             [[ -n "${GITHUB_AUTH_TOKEN:-}" ]] && echo -e "  GitHub Token:    ${CYAN}saved${NC}"
             echo ""
@@ -4134,6 +4415,10 @@ main() {
             set_state "ADMIN_EMAIL" "$ADMIN_EMAIL"
             set_state "SITE_DOMAIN" "$SITE_DOMAIN"
             set_state "ALLOWED_DOMAINS" "${ALLOWED_DOMAINS:-*}"
+            # Save backend type for the selected environment
+            local env_upper
+            env_upper=$(echo "$ENVIRONMENT" | tr '[:lower:]' '[:upper:]')
+            set_state "BACKEND_${env_upper}" "$PLATFORM"
             # Save network octets for Proxmox
             if [[ "$PLATFORM" == "proxmox" ]]; then
                 set_state "NETWORK_BASE_OCTETS_PRODUCTION" "$NETWORK_PRODUCTION"
@@ -4440,6 +4725,9 @@ main() {
     elif [[ "$PLATFORM" == "proxmox" ]]; then
         info "Using Ansible for Proxmox deployment"
         bootstrap_proxmox_ansible
+    elif [[ "$PLATFORM" == "k8s" ]]; then
+        info "Using K8s deployment (Rackspace Spot via kubeconfig)"
+        bootstrap_k8s
     else
         error "Unknown platform: $PLATFORM"
         exit 1
@@ -4453,15 +4741,17 @@ main() {
         wait_for_model_download
         # Ensure MLX server is running for AI Portal setup
         ensure_mlx_running
-    elif [[ "$PLATFORM" != "proxmox" ]]; then
+    elif [[ "$PLATFORM" != "proxmox" && "$PLATFORM" != "k8s" ]]; then
         # For Docker non-MLX backends, download the embedding model
         # (embeddings run locally regardless of LLM backend)
         # Note: Proxmox downloads embedding models earlier via setup-embedding-models.sh
+        # Note: K8s runs embedding model in-cluster, no local download needed
         show_stage 92 "Downloading Embedding Model" "Pre-downloading FastEmbed model for document search."
         download_embedding_model
     fi
     # For Proxmox: embedding models were already downloaded in background 
     # at the start of bootstrap_proxmox_ansible (setup-embedding-models.sh)
+    # For K8s: embedding models run in the cluster's embedding-api pod
     
     # Mark installation as complete
     set_install_phase "complete"

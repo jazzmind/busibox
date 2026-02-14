@@ -71,6 +71,9 @@ source "${REPO_ROOT}/scripts/lib/ui.sh"
 source "${REPO_ROOT}/scripts/lib/state.sh"
 source "${REPO_ROOT}/scripts/lib/status.sh"
 
+# Source backend common library (for tunnel status, detection helpers)
+source "${REPO_ROOT}/scripts/lib/backends/common.sh"
+
 # ============================================================================
 # Constants
 # ============================================================================
@@ -222,6 +225,30 @@ detect_installation_status() {
                 echo "not_installed"
             fi
             ;;
+        k8s)
+            if ! command -v kubectl &>/dev/null; then
+                echo "not_installed"
+                return
+            fi
+            
+            local kubeconfig="${REPO_ROOT}/k8s/kubeconfig-rackspace-spot.yaml"
+            if [[ ! -f "$kubeconfig" ]]; then
+                echo "not_installed"
+                return
+            fi
+            
+            local running_pods
+            running_pods=$(KUBECONFIG="$kubeconfig" kubectl get pods -n busibox \
+                --field-selector=status.phase=Running --no-headers 2>/dev/null | wc -l | tr -d ' ')
+            
+            if [[ "$running_pods" -ge 3 ]]; then
+                echo "installed"
+            elif [[ "$running_pods" -gt 0 ]]; then
+                echo "partial"
+            else
+                echo "not_installed"
+            fi
+            ;;
         *)
             echo "not_installed"
             ;;
@@ -339,6 +366,36 @@ get_proxmox_container_status_string() {
     fi
 }
 
+# Get K8s pod status string
+get_k8s_status_string() {
+    local repo_root
+    repo_root=$(_get_repo_root "$(pwd)" 2>/dev/null || echo "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)")
+    local kubeconfig="${repo_root}/k8s/kubeconfig-rackspace-spot.yaml"
+    
+    if [[ ! -f "$kubeconfig" ]]; then
+        echo "${YELLOW}No kubeconfig${NC}"
+        return
+    fi
+    
+    if ! command -v kubectl &>/dev/null; then
+        echo "${YELLOW}kubectl not installed${NC}"
+        return
+    fi
+    
+    local total running pending failed
+    total=$(KUBECONFIG="$kubeconfig" kubectl get pods -n busibox --no-headers 2>/dev/null | wc -l | tr -d ' ')
+    running=$(KUBECONFIG="$kubeconfig" kubectl get pods -n busibox --field-selector=status.phase=Running --no-headers 2>/dev/null | wc -l | tr -d ' ')
+    pending=$((total - running))
+    
+    if [[ "$total" -eq 0 ]]; then
+        echo "${YELLOW}No pods found${NC}"
+    elif [[ "$pending" -eq 0 ]]; then
+        echo "${GREEN}$running running${NC}"
+    else
+        echo "${GREEN}$running running${NC}, ${YELLOW}$pending pending${NC}"
+    fi
+}
+
 show_status_view() {
     local install_status
     install_status=$(detect_installation_status)
@@ -365,6 +422,19 @@ show_status_view() {
             local container_status
             container_status=$(get_proxmox_container_status_string "$env")
             box_line "  ${CYAN}Containers:${NC}  $container_status"
+        elif [[ "$backend" == "k8s" ]]; then
+            local pod_status
+            pod_status=$(get_k8s_status_string)
+            box_line "  ${CYAN}Pods:${NC}        $pod_status"
+            
+            # Show tunnel status for K8s
+            local pid_file="${REPO_ROOT}/.k8s-connect.pid"
+            if [[ -f "$pid_file" ]] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
+                local domain="${DOMAIN:-busibox.local}"
+                box_line "  ${CYAN}Tunnel:${NC}      ${GREEN}ACTIVE${NC} - https://${domain}/portal"
+            else
+                box_line "  ${CYAN}Tunnel:${NC}      ${DIM}inactive${NC} ${DIM}(run 'make connect')${NC}"
+            fi
         fi
         
         box_empty
@@ -403,6 +473,20 @@ show_main_menu() {
         box_line "  ${BOLD}2)${NC} Update"
         box_line "  ${BOLD}3)${NC} Manage"
         box_line "  ${BOLD}4)${NC} Test"
+        
+        # K8s: Show Connect option when installed
+        local env backend
+        env=$(get_state "ENVIRONMENT" || echo "")
+        backend=$(get_current_backend "$env")
+        if [[ "$backend" == "k8s" ]]; then
+            box_empty
+            local pid_file="${REPO_ROOT}/.k8s-connect.pid"
+            if [[ -f "$pid_file" ]] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
+                box_line "  ${BOLD}5)${NC} Disconnect (tunnel active)"
+            else
+                box_line "  ${BOLD}5)${NC} Connect (start tunnel)"
+            fi
+        fi
     fi
     
     box_empty
@@ -495,7 +579,7 @@ select_environment() {
     esac
 }
 
-# Select backend (docker or proxmox) for an environment
+# Select backend (docker, proxmox, or k8s) for an environment
 select_backend_for_env() {
     local env="$1"
     local env_upper
@@ -507,6 +591,7 @@ select_backend_for_env() {
     box_empty
     box_line "  ${BOLD}1)${NC} Docker    ${DIM}Docker containers on this machine${NC}"
     box_line "  ${BOLD}2)${NC} Proxmox   ${DIM}LXC containers on Proxmox server${NC}"
+    box_line "  ${BOLD}3)${NC} K8s       ${DIM}Kubernetes cluster (Rackspace Spot)${NC}"
     box_empty
     box_footer
     echo ""
@@ -520,6 +605,9 @@ select_backend_for_env() {
             ;;
         2)
             set_state "BACKEND_${env_upper}" "proxmox"
+            ;;
+        3)
+            set_state "BACKEND_${env_upper}" "k8s"
             ;;
     esac
 }
@@ -548,11 +636,20 @@ show_help() {
     box_line "    ${CYAN}make test${NC}     Testing system"
     box_line "                    Integration tests, health checks"
     box_empty
-    box_line "  ${BOLD}Direct Commands${NC}"
+    box_line "  ${BOLD}Docker Commands${NC}"
     box_line "    ${DIM}make docker-up${NC}       Start Docker services"
     box_line "    ${DIM}make docker-down${NC}     Stop Docker services"
     box_line "    ${DIM}make docker-logs${NC}     View Docker logs"
     box_line "    ${DIM}make docker-ps${NC}       List containers"
+    box_empty
+    box_line "  ${BOLD}K8s Commands${NC}"
+    box_line "    ${DIM}make k8s-deploy${NC}      Full deploy (sync+build+apply)"
+    box_line "    ${DIM}make k8s-sync${NC}        Sync code to build server"
+    box_line "    ${DIM}make k8s-build${NC}       Build images on build server"
+    box_line "    ${DIM}make k8s-status${NC}      Show K8s pod status"
+    box_line "    ${DIM}make k8s-logs${NC}        View K8s pod logs"
+    box_line "    ${DIM}make connect${NC}         HTTPS tunnel to K8s portal"
+    box_line "    ${DIM}make disconnect${NC}      Stop K8s tunnel"
     box_empty
     box_footer
     echo ""
@@ -654,6 +751,39 @@ perform_uninstall() {
         done
         
         success "Proxmox uninstall complete"
+        
+    elif [[ "$backend" == "k8s" ]]; then
+        local kubeconfig="${REPO_ROOT}/k8s/kubeconfig-rackspace-spot.yaml"
+        if [[ ! -f "$kubeconfig" ]]; then
+            error "Kubeconfig not found: ${kubeconfig}"
+            return 1
+        fi
+        
+        warn "K8s uninstall will delete all Busibox resources from the cluster"
+        read -p "Are you sure? Type 'YES' to confirm: " confirm
+        if [[ "$confirm" != "YES" ]]; then
+            echo "Cancelled."
+            return
+        fi
+        
+        # Disconnect tunnel first
+        if [[ -f "${REPO_ROOT}/.k8s-connect.pid" ]]; then
+            info "Disconnecting tunnel..."
+            cd "$REPO_ROOT"
+            make disconnect 2>/dev/null || true
+        fi
+        
+        info "Deleting K8s resources..."
+        
+        local overlay_dir="${REPO_ROOT}/k8s/overlays/rackspace-spot"
+        if [[ -d "$overlay_dir" ]]; then
+            KUBECONFIG="$kubeconfig" kubectl delete -k "$overlay_dir" --ignore-not-found 2>/dev/null || true
+        fi
+        
+        KUBECONFIG="$kubeconfig" kubectl delete secret busibox-secrets -n busibox --ignore-not-found 2>/dev/null || true
+        KUBECONFIG="$kubeconfig" kubectl delete namespace busibox --timeout=120s 2>/dev/null || true
+        
+        success "K8s uninstall complete"
     else
         error "Unknown backend: $backend"
         return 1
@@ -795,6 +925,24 @@ main() {
                 ;;
             4)
                 handle_test
+                ;;
+            5)
+                # K8s Connect/Disconnect toggle
+                local env backend
+                env=$(get_state "ENVIRONMENT" || echo "")
+                backend=$(get_current_backend "$env")
+                if [[ "$backend" == "k8s" ]]; then
+                    local pid_file="${REPO_ROOT}/.k8s-connect.pid"
+                    echo ""
+                    if [[ -f "$pid_file" ]] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
+                        cd "$REPO_ROOT"
+                        make disconnect
+                    else
+                        cd "$REPO_ROOT"
+                        make connect
+                    fi
+                    read -n 1 -s -r -p "Press any key to continue..."
+                fi
                 ;;
             e|E)
                 select_environment

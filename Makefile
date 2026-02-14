@@ -5,7 +5,10 @@
         install update manage recover-admin demo warmup demo-clean demo-status \
         docker-deploy docker-deploy-infra docker-deploy-apis docker-deploy-llm docker-deploy-frontend \
         deploy-user-app undeploy-user-app list-user-apps user-app-logs user-app-status \
-        mlx-status mlx-start mlx-stop mlx-restart host-agent-status host-agent-start host-agent-stop host-agent-restart
+        mlx-status mlx-start mlx-stop mlx-restart host-agent-status host-agent-start host-agent-stop host-agent-restart \
+        k8s-deploy k8s-sync k8s-build k8s-apply k8s-status k8s-delete k8s-secrets k8s-logs \
+        k8s-gpu-up k8s-gpu-down k8s-gpu-status k8s-gpu-window \
+        connect disconnect k8s-connect-status
 
 # Default target - interactive menu with health check
 .DEFAULT_GOAL := menu
@@ -219,6 +222,32 @@ help:
 	@echo "    make host-agent-start          # Start host-agent"
 	@echo "    make host-agent-stop           # Stop host-agent"
 	@echo "    make host-agent-restart        # Restart host-agent"
+	@echo ""
+	@echo "═══════════════════════════════════════════════════════════════════════"
+	@echo "                   KUBERNETES (Rackspace Spot)"
+	@echo "═══════════════════════════════════════════════════════════════════════"
+	@echo ""
+	@echo "  make k8s-deploy                    # Full deploy (sync+build+push+apply)"
+	@echo "  make k8s-sync                      # Sync code to in-cluster build server"
+	@echo "  make k8s-build                     # Build images on build server"
+	@echo "  make k8s-apply                     # Apply manifests only"
+	@echo "  make k8s-secrets                   # Generate secrets from vault"
+	@echo "  make k8s-status                    # Show deployment status"
+	@echo "  make k8s-delete                    # Delete all resources"
+	@echo "  make k8s-logs SERVICE=authz-api    # View pod logs"
+	@echo ""
+	@echo "  Access (HTTPS tunnel to K8s cluster):"
+	@echo "    make connect                         # Connect (HTTPS tunnel + /etc/hosts)"
+	@echo "    make connect DOMAIN=my.local          # Custom domain"
+	@echo "    make connect LOCAL_PORT=8443          # High port (no sudo)"
+	@echo "    make disconnect                       # Tear down tunnel"
+	@echo "    make k8s-connect-status               # Check connection status"
+	@echo ""
+	@echo "  GPU Burst (on-demand GPU for heavy AI):"
+	@echo "    make k8s-gpu-up                    # Provision GPU + start vLLM"
+	@echo "    make k8s-gpu-down                  # Stop vLLM + deprovision GPU"
+	@echo "    make k8s-gpu-status                # Show GPU burst status"
+	@echo "    make k8s-gpu-window MINUTES=60     # Timed burst window"
 	@echo ""
 	@echo "═══════════════════════════════════════════════════════════════════════"
 	@echo "                      ENVIRONMENTS"
@@ -909,3 +938,128 @@ host-agent-restart: host-agent-stop
 
 # Backward compatibility
 docker-test: test-docker
+
+# ============================================================================
+# KUBERNETES DEPLOYMENT (Rackspace Spot / Cloud)
+# ============================================================================
+# Deploy Busibox to a Kubernetes cluster using in-cluster build server.
+# Code is synced to a DinD build-server pod, built natively on x86, and
+# pushed to an in-cluster registry (localhost:30500).
+#
+# Usage:
+#   make k8s-deploy                    # Full deploy (sync, build, push, apply)
+#   make k8s-sync                      # Sync code to in-cluster build server
+#   make k8s-build                     # Build images on build server + push
+#   make k8s-build SERVICE=authz-api   # Build one service
+#   make k8s-apply                     # Apply manifests only
+#   make k8s-secrets                   # Generate and apply secrets from vault
+#   make k8s-status                    # Show deployment status
+#   make k8s-delete                    # Delete all resources
+#   make k8s-logs SERVICE=authz-api    # View pod logs
+#
+# Variables:
+#   K8S_OVERLAY  - Kustomize overlay (default: rackspace-spot)
+#   K8S_TAG      - Image tag (default: git short SHA)
+#   KUBECONFIG   - Path to kubeconfig (default: k8s/kubeconfig-rackspace-spot.yaml)
+
+K8S_OVERLAY ?= rackspace-spot
+K8S_TAG ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "latest")
+
+# Full deployment: sync code, build on build-server, push to registry, apply manifests
+k8s-deploy:
+ifdef SERVICE
+	@OVERLAY=$(K8S_OVERLAY) TAG=$(K8S_TAG) bash scripts/k8s/deploy.sh --all --service $(SERVICE)
+else
+	@OVERLAY=$(K8S_OVERLAY) TAG=$(K8S_TAG) bash scripts/k8s/deploy.sh --all
+endif
+
+# Sync source code to in-cluster build server
+k8s-sync:
+ifdef SERVICE
+	@OVERLAY=$(K8S_OVERLAY) TAG=$(K8S_TAG) bash scripts/k8s/deploy.sh --sync --service $(SERVICE)
+else
+	@OVERLAY=$(K8S_OVERLAY) TAG=$(K8S_TAG) bash scripts/k8s/deploy.sh --sync
+endif
+
+# Build images on build-server + push to in-cluster registry
+k8s-build:
+ifdef SERVICE
+	@OVERLAY=$(K8S_OVERLAY) TAG=$(K8S_TAG) bash scripts/k8s/deploy.sh --build --service $(SERVICE)
+else
+	@OVERLAY=$(K8S_OVERLAY) TAG=$(K8S_TAG) bash scripts/k8s/deploy.sh --build
+endif
+
+# Apply Kubernetes manifests (images must already be in registry)
+k8s-apply:
+	@OVERLAY=$(K8S_OVERLAY) TAG=$(K8S_TAG) bash scripts/k8s/deploy.sh --apply
+
+# Generate and apply secrets from vault
+k8s-secrets:
+	@OVERLAY=$(K8S_OVERLAY) bash scripts/k8s/deploy.sh --secrets
+
+# Show Kubernetes deployment status
+k8s-status:
+	@OVERLAY=$(K8S_OVERLAY) bash scripts/k8s/deploy.sh --status
+
+# Delete all Kubernetes resources
+k8s-delete:
+	@OVERLAY=$(K8S_OVERLAY) bash scripts/k8s/deploy.sh --delete
+
+# View logs for a Kubernetes pod
+k8s-logs:
+ifndef SERVICE
+	@echo ""
+	@echo "Usage: make k8s-logs SERVICE=<service>"
+	@echo ""
+	@echo "Services: postgres, redis, minio, milvus, etcd, authz-api, data-api,"
+	@echo "          data-worker, search-api, agent-api, bridge-api, docs-api,"
+	@echo "          embedding-api, litellm, nginx"
+	@echo ""
+	@exit 1
+endif
+	@kubectl --kubeconfig=k8s/kubeconfig-rackspace-spot.yaml logs -n busibox -l app=$(SERVICE) -f --tail=100
+
+# GPU Burst Window Management
+# Provision GPU node, deploy vLLM, run AI tasks, deprovision
+# Usage:
+#   make k8s-gpu-up                     # Provision GPU + start vLLM
+#   make k8s-gpu-down                   # Stop vLLM + deprovision GPU
+#   make k8s-gpu-status                 # Show GPU burst status
+#   make k8s-gpu-window MINUTES=60      # Timed burst window (auto-shutdown)
+
+MINUTES ?= 60
+
+k8s-gpu-up:
+	@bash scripts/k8s/gpu-burst.sh --up
+
+k8s-gpu-down:
+	@bash scripts/k8s/gpu-burst.sh --down
+
+k8s-gpu-status:
+	@bash scripts/k8s/gpu-burst.sh --status
+
+k8s-gpu-window:
+	@bash scripts/k8s/gpu-burst.sh --window $(MINUTES)
+
+# K8s Connect - Local HTTPS tunnel to K8s cluster
+# Sets up SSL cert, patches nginx for HTTPS, configures /etc/hosts,
+# and starts kubectl port-forward for seamless local access.
+#
+# Usage:
+#   make connect                          # Connect with defaults (busibox.local:443)
+#   make connect DOMAIN=my.local          # Custom domain
+#   make connect LOCAL_PORT=8443          # Custom port (avoids sudo)
+#   make disconnect                       # Tear down tunnel
+#   make k8s-connect-status               # Check connection status
+
+DOMAIN ?= busibox.local
+LOCAL_PORT ?= 443
+
+connect:
+	@DOMAIN=$(DOMAIN) LOCAL_PORT=$(LOCAL_PORT) bash scripts/k8s/connect.sh
+
+disconnect:
+	@bash scripts/k8s/connect.sh --disconnect
+
+k8s-connect-status:
+	@bash scripts/k8s/connect.sh --status

@@ -124,6 +124,15 @@ services:
         condition: service_healthy
       authz-api:
         condition: service_healthy
+    # Resource limits - standalone mode keeps each app under 512MB
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
     healthcheck:
       # Check nginx health first (apps may not be deployed yet on first start)
       # Full health check includes apps once deployed

@@ -31,12 +31,16 @@ Environment="{{ key }}={{ value }}"
 # Port configuration
 Environment="PORT={{ app.port }}"
 Environment="NODE_ENV=production"
+Environment="HOSTNAME=0.0.0.0"
+# Cap V8 heap to prevent unbounded memory growth
+Environment="NODE_OPTIONS=--max-old-space-size=512"
 
 # Start command
+# Prefer standalone server if available (much lower memory footprint)
 {% if app.start_command is defined %}
 ExecStart=/bin/bash -c '{{ app.start_command }}'
 {% else %}
-ExecStart=/usr/bin/npm start
+ExecStart=/bin/bash -c 'if [ -f .next/standalone/server.js ]; then exec node .next/standalone/server.js; else exec npm start; fi'
 {% endif %}
 
 # Restart configuration

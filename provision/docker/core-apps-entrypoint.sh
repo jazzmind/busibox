@@ -220,7 +220,7 @@ case "$MODE" in
 
     prod)
         echo "Starting Core Apps in local production mode (build + serve)..."
-        echo "Source code is volume-mounted but apps are built and served with 'next start'."
+        echo "Source code is volume-mounted but apps are built and served with standalone server."
         echo "No hot-reload — restart the container to pick up code changes."
         
         # Override NODE_ENV for production build and serve
@@ -249,6 +249,22 @@ case "$MODE" in
             exit 1
         }
         
+        # Copy static assets into standalone directories
+        # Standalone mode doesn't include public/ or .next/static/ automatically
+        for app_dir in /srv/ai-portal /srv/agent-manager; do
+            if [ -d "$app_dir/.next/standalone" ]; then
+                echo "Copying static assets for $(basename $app_dir)..."
+                cp -r "$app_dir/public" "$app_dir/.next/standalone/public" 2>/dev/null || true
+                mkdir -p "$app_dir/.next/standalone/.next"
+                cp -r "$app_dir/.next/static" "$app_dir/.next/standalone/.next/static"
+            fi
+        done
+        
+        # Prune dev dependencies to reduce memory footprint
+        echo "Pruning dev dependencies..."
+        (cd /srv/ai-portal && npm prune --omit=dev 2>/dev/null) || true
+        (cd /srv/agent-manager && npm prune --omit=dev 2>/dev/null) || true
+        
         # Sync database schema (if prisma is configured)
         if [ -d "/srv/ai-portal/prisma" ] && [ -f "/srv/ai-portal/prisma.config.ts" ]; then
             echo "Syncing database schema..."
@@ -259,20 +275,21 @@ case "$MODE" in
         fi
         
         echo ""
-        echo "Build complete. Starting production servers..."
+        echo "Build complete. Starting standalone production servers..."
         echo ""
         
-        # Start both apps with concurrently using npm start (next start)
+        # Start both apps with standalone server (much lower memory than npm start)
+        # NODE_OPTIONS caps V8 heap to prevent unbounded growth
         exec concurrently \
             --names "portal,agents" \
             --prefix-colors "blue,green" \
             --kill-others-on-fail \
-            "cd /srv/ai-portal && PORT=3000 HOSTNAME=0.0.0.0 npm start" \
-            "cd /srv/agent-manager && PORT=3001 HOSTNAME=0.0.0.0 npm start"
+            "cd /srv/ai-portal && PORT=3000 HOSTNAME=0.0.0.0 NODE_OPTIONS='--max-old-space-size=512' node .next/standalone/server.js" \
+            "cd /srv/agent-manager && PORT=3001 HOSTNAME=0.0.0.0 NODE_OPTIONS='--max-old-space-size=512' node .next/standalone/server.js"
         ;;
         
     start)
-        echo "Starting Core Apps in production mode (pre-built)..."
+        echo "Starting Core Apps in production mode (pre-built, standalone)..."
         
         # Start nginx first (handles routing)
         start_nginx
@@ -288,23 +305,24 @@ case "$MODE" in
             }
         fi
         
-        # Start both apps with concurrently using npm start (next start)
+        # Start both apps with standalone server (much lower memory than npm start)
         # NEXT_PUBLIC_BASE_PATH was set at build time and is baked into the bundle
         # PORT and HOSTNAME must be set at runtime
+        # NODE_OPTIONS caps V8 heap to prevent unbounded growth
         exec concurrently \
             --names "portal,agents" \
             --prefix-colors "blue,green" \
             --kill-others-on-fail \
-            "cd /srv/ai-portal && PORT=3000 HOSTNAME=0.0.0.0 npm start" \
-            "cd /srv/agent-manager && PORT=3001 HOSTNAME=0.0.0.0 npm start"
+            "cd /srv/ai-portal && PORT=3000 HOSTNAME=0.0.0.0 NODE_OPTIONS='--max-old-space-size=512' node .next/standalone/server.js" \
+            "cd /srv/agent-manager && PORT=3001 HOSTNAME=0.0.0.0 NODE_OPTIONS='--max-old-space-size=512' node .next/standalone/server.js"
         ;;
         
     *)
         echo "Usage: $0 {dev|prod|start}"
         echo ""
         echo "  dev   - Development mode with Turbopack hot-reload (default)"
-        echo "  prod  - Build from volume-mounted source, then serve with 'next start'"
-        echo "  start - Serve pre-built apps with 'next start' (used by runtime Dockerfile)"
+        echo "  prod  - Build from volume-mounted source, then serve with standalone server"
+        echo "  start - Serve pre-built apps with standalone server (used by runtime Dockerfile)"
         exit 1
         ;;
 esac

@@ -36,7 +36,7 @@ import re
 import uuid
 import yaml
 from pydantic import BaseModel
-from .auth import verify_admin_token
+from .auth import verify_admin_token, verify_service_or_admin_token
 from .config import config
 from .platform_detection import get_platform_info
 from .core_app_executor import is_docker_environment, execute_ssh_command
@@ -572,12 +572,17 @@ async def check_service_health(
             'postgres': ('postgres', 5432, None, None, 'postgres'),
             'minio': ('minio', 9000, '/minio/health/live', 'http', 'http'),
             'milvus': ('milvus', 9091, '/healthz', 'http', 'http'),
+            'etcd': ('etcd', 2379, '/health', 'http', 'http'),
+            'milvus-minio': ('milvus-minio', 9000, '/minio/health/live', 'http', 'http'),
+            'neo4j': ('neo4j', 7474, '/', 'http', 'http'),
+            'nginx': ('nginx', 443, '/health', 'https', 'http'),
             
             # API services
             'authz-api': ('authz-api', 8010, '/health/live', 'http', 'http'),
             # deploy-api runs on authz container - use localhost for self-check
             'deploy-api': ('127.0.0.1', 8011, '/health/live', 'http', 'http'),
             'data-api': ('data-api', 8002, '/health', 'http', 'http'),
+            'data-worker': ('data-api', 8002, '/health', 'http', 'http'),  # Worker runs alongside data-api
             'search-api': ('search-api', 8003, '/health', 'http', 'http'),
             'agent-api': ('agent-api', 8000, '/health', 'http', 'http'),
             'embedding-api': ('embedding-api', 8005, '/health', 'http', 'http'),
@@ -588,9 +593,8 @@ async def check_service_health(
             'litellm': ('litellm', 4000, '/health/liveliness', 'http', 'http'),
             'vllm': ('vllm', 8000, '/health', 'http', 'http'),
             'vllm-verify': ('vllm', 8000, '/health', 'http', 'http'),  # Same as vllm, used for staging verification
-            
-            # Frontend
-            'nginx': ('nginx', 443, '/health', 'https', 'http'),
+            'mlx': ('host.docker.internal', 8080, '/health', 'http', 'http'),  # MLX runs on host
+            'host-agent': ('host.docker.internal', 8089, '/health', 'http', 'http'),  # Host agent runs on host
         }
         
         if service not in health_config:
@@ -1751,6 +1755,118 @@ MLX_SERVER_URL = os.getenv("MLX_SERVER_URL", "http://host.docker.internal:8080")
 VLLM_URL = os.getenv("VLLM_URL", "http://vllm:8000")  # Configured by Ansible on Proxmox
 LLM_BACKEND = os.getenv("LLM_BACKEND", "")  # mlx, vllm, or cloud
 DEPLOYMENT_BACKEND = os.getenv("DEPLOYMENT_BACKEND", "docker")  # docker or proxmox
+
+
+@router.post("/mlx/ensure/quick")
+async def ensure_mlx_quick(
+    request: Request,
+    admin: dict = Depends(verify_service_or_admin_token)
+):
+    """
+    Quick (non-SSE) endpoint to ensure MLX server is running.
+    
+    Called automatically by agent-api and other services before LLM calls.
+    Returns JSON with the current MLX status and whether a start was triggered.
+    
+    If MLX is already running, returns immediately.
+    If MLX is not running, triggers a start via host-agent and returns
+    immediately (caller should retry LLM call with normal timeout).
+    
+    Response:
+        {
+            "status": "running" | "starting" | "unavailable" | "skipped",
+            "message": "...",
+            "backend": "mlx" | "vllm" | "cloud" | "unknown"
+        }
+    """
+    llm_backend = LLM_BACKEND or 'unknown'
+    
+    # Skip if not MLX backend
+    if llm_backend != 'mlx':
+        return {
+            "status": "skipped",
+            "message": f"LLM backend is {llm_backend}, MLX ensure not needed",
+            "backend": llm_backend
+        }
+    
+    # Build headers for host-agent
+    host_agent_headers = {'Content-Type': 'application/json'}
+    if HOST_AGENT_TOKEN:
+        host_agent_headers['Authorization'] = f'Bearer {HOST_AGENT_TOKEN}'
+    
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        # Step 1: Check if MLX is already running
+        try:
+            response = await client.get(f'{MLX_SERVER_URL}/v1/models', timeout=3.0)
+            if response.status_code == 200:
+                models_data = response.json()
+                model_count = len(models_data.get('data', []))
+                return {
+                    "status": "running",
+                    "message": f"MLX is running ({model_count} model(s))",
+                    "backend": "mlx"
+                }
+        except Exception:
+            pass  # MLX not responding, try host-agent
+        
+        # Step 2: Check host-agent and start MLX if needed
+        try:
+            status_response = await client.get(
+                f'{HOST_AGENT_URL}/mlx/status',
+                headers=host_agent_headers,
+                timeout=5.0
+            )
+            
+            if status_response.status_code == 200:
+                mlx_status = status_response.json()
+                if mlx_status.get('running'):
+                    if mlx_status.get('healthy', False):
+                        return {
+                            "status": "running",
+                            "message": f"MLX is running (model: {mlx_status.get('model', 'unknown')})",
+                            "backend": "mlx"
+                        }
+                    else:
+                        # Process running but not yet healthy — still loading
+                        return {
+                            "status": "starting",
+                            "message": "MLX process running, waiting for model to load",
+                            "backend": "mlx"
+                        }
+                
+                # MLX not running — trigger start (fire-and-forget, don't wait)
+                logger.info("MLX not running, triggering start via host-agent")
+                try:
+                    await client.post(
+                        f'{HOST_AGENT_URL}/mlx/start',
+                        headers=host_agent_headers,
+                        json={'model_type': 'agent'},
+                        timeout=10.0
+                    )
+                    return {
+                        "status": "starting",
+                        "message": "MLX start triggered, server is loading",
+                        "backend": "mlx"
+                    }
+                except Exception as e:
+                    logger.warning(f"Failed to start MLX via host-agent: {e}")
+                    return {
+                        "status": "unavailable",
+                        "message": f"Host-agent start failed: {str(e)[:100]}",
+                        "backend": "mlx"
+                    }
+            else:
+                return {
+                    "status": "unavailable",
+                    "message": f"Host-agent returned {status_response.status_code}",
+                    "backend": "mlx"
+                }
+        except Exception as e:
+            return {
+                "status": "unavailable",
+                "message": f"Host-agent unreachable: {str(e)[:100]}",
+                "backend": "mlx"
+            }
 
 
 @router.get("/mlx/ensure")

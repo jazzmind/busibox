@@ -3,25 +3,49 @@ Documentation file loader service.
 
 Handles reading and parsing markdown documentation files with frontmatter,
 as well as OpenAPI specification files.
+
+Supported categories:
+  - platform: End-user guides for using Busibox (previously 'user')
+  - apps: Per-app documentation contributed by installed applications
+  - developer: Technical/developer documentation
+
+For backward compatibility, 'user' is accepted as an alias for 'platform'.
+
+App docs use additional frontmatter fields:
+  - app_id: Identifier for the app (e.g. 'agent-manager')
+  - app_name: Human-readable app name (e.g. 'Agent Manager')
 """
 
 import os
 import re
 from pathlib import Path
 from typing import Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import yaml
+
+# Valid categories for documentation
+VALID_CATEGORIES = ('platform', 'apps', 'developer')
+
+# Backward compatibility: 'user' maps to 'platform'
+CATEGORY_ALIASES = {'user': 'platform'}
+
+
+def normalize_category(category: str) -> str:
+    """Normalize category name, applying aliases."""
+    return CATEGORY_ALIASES.get(category, category)
 
 
 @dataclass
 class DocFrontmatter:
     """Frontmatter schema for documentation files."""
     title: str
-    category: str  # 'user' or 'developer'
+    category: str  # 'platform', 'apps', or 'developer'
     order: int
     description: str
     published: bool
+    app_id: Optional[str] = None
+    app_name: Optional[str] = None
 
 
 @dataclass
@@ -40,6 +64,16 @@ class DocNavItem:
     title: str
     description: str
     order: int
+    app_id: Optional[str] = None
+    app_name: Optional[str] = None
+
+
+@dataclass
+class AppDocsGroup:
+    """A group of docs belonging to a single app."""
+    app_id: str
+    app_name: str
+    docs: list[DocNavItem] = field(default_factory=list)
 
 
 @dataclass
@@ -77,22 +111,37 @@ class DocsLoader:
         if data is None:
             return False
         
-        return (
+        raw_category = data.get('category', '')
+        category = normalize_category(raw_category)
+        
+        base_valid = (
             isinstance(data.get('title'), str) and
-            data.get('category') in ('user', 'developer') and
+            category in VALID_CATEGORIES and
             isinstance(data.get('order'), (int, float)) and
             isinstance(data.get('description'), str) and
             data.get('published') is True
         )
+        
+        if not base_valid:
+            return False
+        
+        # Apps category requires app_id
+        if category == 'apps':
+            return isinstance(data.get('app_id'), str) and len(data['app_id']) > 0
+        
+        return True
     
     def _to_doc_frontmatter(self, data: dict) -> DocFrontmatter:
         """Convert raw dict to DocFrontmatter."""
+        category = normalize_category(data['category'])
         return DocFrontmatter(
             title=data['title'],
-            category=data['category'],
+            category=category,
             order=int(data['order']),
             description=data['description'],
             published=data['published'],
+            app_id=data.get('app_id'),
+            app_name=data.get('app_name'),
         )
     
     def _generate_slug(self, file_path: Path) -> str:
@@ -121,8 +170,12 @@ class DocsLoader:
         return files
     
     def get_docs_by_category(self, category: str) -> list[DocFile]:
-        """Get all published documentation files for a category."""
-        if category not in ('user', 'developer'):
+        """Get all published documentation files for a category.
+        
+        Accepts 'user' as alias for 'platform' for backward compatibility.
+        """
+        category = normalize_category(category)
+        if category not in VALID_CATEGORIES:
             return []
         
         files = self._find_markdown_files(self.docs_path)
@@ -133,7 +186,11 @@ class DocsLoader:
                 content = file_path.read_text(encoding='utf-8')
                 frontmatter_data, body = self._parse_frontmatter(content)
                 
-                if self._has_valid_frontmatter(frontmatter_data) and frontmatter_data.get('category') == category:
+                if not self._has_valid_frontmatter(frontmatter_data):
+                    continue
+                
+                doc_category = normalize_category(frontmatter_data.get('category', ''))
+                if doc_category == category:
                     docs.append(DocFile(
                         slug=self._generate_slug(file_path),
                         frontmatter=self._to_doc_frontmatter(frontmatter_data),
@@ -156,9 +213,45 @@ class DocsLoader:
                 title=doc.frontmatter.title,
                 description=doc.frontmatter.description,
                 order=doc.frontmatter.order,
+                app_id=doc.frontmatter.app_id,
+                app_name=doc.frontmatter.app_name,
             )
             for doc in docs
         ]
+    
+    def get_apps_docs_groups(self) -> list[AppDocsGroup]:
+        """Get app docs grouped by app_id.
+        
+        Returns a list of AppDocsGroup, each containing the docs for one app,
+        sorted by app_name. Docs within each group are sorted by order.
+        """
+        docs = self.get_docs_by_category('apps')
+        groups: dict[str, AppDocsGroup] = {}
+        
+        for doc in docs:
+            app_id = doc.frontmatter.app_id
+            if not app_id:
+                continue
+            
+            if app_id not in groups:
+                groups[app_id] = AppDocsGroup(
+                    app_id=app_id,
+                    app_name=doc.frontmatter.app_name or app_id.replace('-', ' ').title(),
+                    docs=[],
+                )
+            
+            groups[app_id].docs.append(DocNavItem(
+                slug=doc.slug,
+                title=doc.frontmatter.title,
+                description=doc.frontmatter.description,
+                order=doc.frontmatter.order,
+                app_id=doc.frontmatter.app_id,
+                app_name=doc.frontmatter.app_name,
+            ))
+        
+        # Sort groups by app_name, docs within each group already sorted by order
+        result = sorted(groups.values(), key=lambda g: g.app_name.lower())
+        return result
     
     def get_doc_by_slug(self, category: str, slug: str) -> Optional[DocFile]:
         """Get a single documentation file by slug and category."""

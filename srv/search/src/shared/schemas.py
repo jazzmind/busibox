@@ -45,6 +45,11 @@ class SearchRequest(BaseModel):
         default_factory=HighlightConfig,
         description="Highlighting configuration"
     )
+    expand_graph: bool = Field(
+        False,
+        description="Expand results with graph context (Graph-RAG). "
+        "If True, related entities and documents from the knowledge graph are included."
+    )
 
 
 class MMRSearchRequest(SearchRequest):
@@ -122,6 +127,13 @@ class SearchResult(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
 
+class GraphContext(BaseModel):
+    """Graph context from knowledge graph expansion."""
+    related_entities: List[Dict[str, Any]] = Field(default_factory=list, description="Related entities from graph")
+    related_documents: List[Dict[str, Any]] = Field(default_factory=list, description="Related documents from graph")
+    graph_context: str = Field("", description="Text context for RAG injection")
+
+
 class SearchResponse(BaseModel):
     """Search response with results and metadata."""
     
@@ -132,6 +144,7 @@ class SearchResponse(BaseModel):
     offset: int = Field(..., description="Current offset")
     execution_time_ms: int = Field(..., description="Execution time in milliseconds")
     results: List[SearchResult] = Field(..., description="Search results")
+    graph: Optional[GraphContext] = Field(None, description="Graph context (when expand_graph=True)")
 
 
 class BatchSearchRequest(BaseModel):

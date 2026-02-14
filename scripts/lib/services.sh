@@ -39,6 +39,7 @@ _SERVICE_postgres="203:busibox::tcp:5432"
 _SERVICE_redis="206:busibox::tcp:6379"
 _SERVICE_milvus="204:milvus::/healthz:9091"
 _SERVICE_minio="205:minio::/minio/health/live:9000"
+_SERVICE_neo4j="204:neo4j::/:7474"  # Neo4j graph database (shares milvus-lxc in Proxmox, own container in Docker)
 _SERVICE_data="206:busibox:srv/data:/health:8002"  # Placeholder for consolidated data display
 _SERVICE_data_api="206:busibox:srv/data:/health:8002"
 _SERVICE_data_worker="206:busibox:srv/data::8002"
@@ -66,6 +67,7 @@ _NAME_postgres="PostgreSQL"
 _NAME_redis="Redis"
 _NAME_milvus="Milvus"
 _NAME_minio="MinIO"
+_NAME_neo4j="Neo4j"
 _NAME_data="Data API & Worker"  # Consolidated display name
 _NAME_data_api="Data API"
 _NAME_data_worker="Data Worker"
@@ -87,11 +89,11 @@ _NAME_deploy_api="Deploy API"
 _NAME_user_apps="User Apps"
 
 # Service categories (reorganized per user request)
-# Core: authz, postgres, redis, milvus, minio
+# Core: authz, postgres, redis, milvus, minio, neo4j
 # LLM: litellm, mlx/vllm (platform-dependent), embedding
 # API: deploy, data, search, agent, docs
 # App: nginx, ai-portal, agent-manager
-_CORE_SERVICES="authz postgres redis milvus minio"
+_CORE_SERVICES="authz postgres redis milvus minio neo4j"
 # LLM services - mlx or vllm depends on platform (detected at runtime)
 _LLM_SERVICES_BASE="litellm"
 _LLM_SERVICES_GPU="vllm"     # For Linux with NVIDIA GPU
@@ -102,7 +104,7 @@ _APP_SERVICES="nginx ai-portal agent-manager"
 
 # All services combined (includes individual services for status checking)
 # Note: "data" is used for display, but we check "data-api" and "data-worker" individually
-ALL_SERVICES="authz postgres redis milvus minio nginx litellm vllm mlx embedding data-api data-worker search-api agent-api deploy-api bridge docs-api ai-portal agent-manager"
+ALL_SERVICES="authz postgres redis milvus minio neo4j nginx litellm vllm mlx embedding data-api data-worker search-api agent-api deploy-api bridge docs-api ai-portal agent-manager"
 
 # ============================================================================
 # Service Metadata Functions
@@ -236,6 +238,7 @@ get_service_hostname() {
         redis)               echo "redis" ;;
         milvus)              echo "milvus" ;;
         minio|files)         echo "minio" ;;
+        neo4j|graph)         echo "neo4j" ;;
         nginx|proxy)         echo "nginx" ;;
         litellm)             echo "litellm" ;;
         vllm)                echo "vllm" ;;

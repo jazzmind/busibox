@@ -1,0 +1,73 @@
+---
+# Bridge API - Multi-channel Communication Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: bridge-api
+  labels:
+    app: bridge-api
+    tier: api
+spec:
+  ports:
+    - port: 8081
+      targetPort: 8081
+  selector:
+    app: bridge-api
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bridge-api
+  labels:
+    app: bridge-api
+    tier: api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bridge-api
+  template:
+    metadata:
+      labels:
+        app: bridge-api
+        tier: api
+    spec:
+      containers:
+        - name: bridge-api
+          image: localhost:30500/bridge-api:latest
+          ports:
+            - containerPort: 8081
+          env:
+            - name: ENVIRONMENT
+              value: "production"
+            - name: LOG_LEVEL
+              value: "INFO"
+            - name: BRIDGE_API_PORT
+              value: "8081"
+            - name: SIGNAL_ENABLED
+              value: "false"
+            - name: AGENT_API_URL
+              value: "http://agent-api:8000"
+            - name: AUTH_TOKEN_URL
+              value: "http://authz-api:8010/oauth/token"
+            - name: EMAIL_ENABLED
+              value: "false"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi

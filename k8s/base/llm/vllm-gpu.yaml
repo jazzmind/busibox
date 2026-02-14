@@ -1,0 +1,123 @@
+---
+# vLLM - GPU-accelerated LLM Inference
+# ====================================
+# This deployment is activated only when a GPU node is available.
+# It runs on GPU-tainted nodes via tolerations and node affinity.
+#
+# Lifecycle:
+#   1. GPU node provisioned via Terraform (make k8s-gpu-up)
+#   2. This deployment starts on the GPU node
+#   3. LiteLLM config updated to route "gpu-agent" model to vLLM
+#   4. Tasks run using "gpu-agent" model
+#   5. GPU node deprovisioned (make k8s-gpu-down)
+#   6. LiteLLM falls back to cloud models for "gpu-agent"
+#
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm
+  labels:
+    app: vllm
+    tier: llm
+    busibox/role: gpu-burst
+spec:
+  ports:
+    - port: 8000
+      targetPort: 8000
+  selector:
+    app: vllm
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm
+  labels:
+    app: vllm
+    tier: llm
+    busibox/role: gpu-burst
+spec:
+  replicas: 0  # Start with 0 replicas - scaled up by gpu-burst script
+  selector:
+    matchLabels:
+      app: vllm
+  template:
+    metadata:
+      labels:
+        app: vllm
+        tier: llm
+        busibox/role: gpu-burst
+    spec:
+      # Tolerate the GPU taint so we can schedule on GPU nodes
+      tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Equal"
+          value: "present"
+          effect: "NoSchedule"
+      # Prefer GPU nodes
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: "busibox/role"
+                    operator: "In"
+                    values: ["gpu-burst"]
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:latest
+          args:
+            - "--model"
+            - "Qwen/Qwen2.5-7B-Instruct-AWQ"
+            - "--quantization"
+            - "awq"
+            - "--max-model-len"
+            - "8192"
+            - "--host"
+            - "0.0.0.0"
+            - "--port"
+            - "8000"
+          ports:
+            - containerPort: 8000
+          resources:
+            requests:
+              cpu: "2"
+              memory: 8Gi
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "8"
+              memory: 32Gi
+              nvidia.com/gpu: "1"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 120
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 120
+            periodSeconds: 5
+          volumeMounts:
+            - name: vllm-cache
+              mountPath: /root/.cache/huggingface
+      volumes:
+        - name: vllm-cache
+          persistentVolumeClaim:
+            claimName: vllm-cache
+---
+# PVC for vLLM model cache - persists across GPU burst windows
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vllm-cache
+  labels:
+    app: vllm
+    busibox/role: gpu-burst
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: ssd
+  resources:
+    requests:
+      storage: 20Gi

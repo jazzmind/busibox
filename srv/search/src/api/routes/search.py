@@ -20,6 +20,7 @@ from shared.schemas import (
     MMRSearchRequest,
     ExplainRequest,
     ExplainResponse,
+    GraphContext,
 )
 from services.milvus_search import MilvusSearchService
 from services.embedder import EmbeddingService
@@ -263,6 +264,24 @@ async def search(
             execution_time_ms=execution_time_ms,
         )
         
+        # Optional: Graph context expansion (Graph-RAG)
+        graph_context = None
+        if search_request.expand_graph and search_results:
+            try:
+                graph_service = getattr(request.app.state, "graph_search_service", None)
+                if graph_service and graph_service.available:
+                    doc_ids = [r.file_id for r in search_results if r.file_id]
+                    if doc_ids:
+                        graph_data = await graph_service.expand_context(
+                            document_ids=doc_ids,
+                            user_id=user_id,
+                            depth=1,
+                            limit=10,
+                        )
+                        graph_context = GraphContext(**graph_data)
+            except Exception as ge:
+                logger.warning("Graph expansion failed (non-blocking)", error=str(ge))
+        
         return SearchResponse(
             query=search_request.query,
             mode=search_request.mode,
@@ -271,6 +290,7 @@ async def search(
             offset=search_request.offset,
             execution_time_ms=execution_time_ms,
             results=search_results,
+            graph=graph_context,
         )
     
     except HTTPException:

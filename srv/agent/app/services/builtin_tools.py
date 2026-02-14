@@ -397,6 +397,95 @@ BUILTIN_TOOL_METADATA = {
             }
         }
     },
+    # Graph database tools for knowledge graph operations
+    "graph_query_tool": {
+        "name": "graph_query",
+        "description": "Search the knowledge graph for entities (people, organizations, technologies, concepts) and their relationships. Use this to find connections between entities.",
+        "entrypoint": "app.tools.graph_tool:graph_query",
+        "scopes": ["graph:read"],
+        "version": 1,
+        "schema": {
+            "input": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query to find entities by name"},
+                    "entity_type": {"type": "string", "description": "Optional filter: Person, Organization, Technology, Concept, Location, Project"},
+                    "depth": {"type": "integer", "description": "Graph traversal depth (1-5, default 2)", "default": 2},
+                    "limit": {"type": "integer", "description": "Maximum results (default 20)", "default": 20}
+                },
+                "required": ["query"]
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "found": {"type": "boolean", "description": "Whether results were found"},
+                    "node_count": {"type": "integer", "description": "Number of nodes returned"},
+                    "edge_count": {"type": "integer", "description": "Number of edges returned"},
+                    "context": {"type": "string", "description": "Formatted context for reasoning"},
+                    "nodes": {"type": "array", "description": "Graph nodes"},
+                    "edges": {"type": "array", "description": "Graph edges"},
+                    "error": {"type": "string", "description": "Error message if query failed"}
+                }
+            }
+        }
+    },
+    "graph_explore_tool": {
+        "name": "graph_explore",
+        "description": "Explore the neighborhood of a specific entity in the knowledge graph. Use this to discover what an entity is connected to.",
+        "entrypoint": "app.tools.graph_tool:graph_explore",
+        "scopes": ["graph:read"],
+        "version": 1,
+        "schema": {
+            "input": {
+                "type": "object",
+                "properties": {
+                    "node_id": {"type": "string", "description": "ID of the node to explore"},
+                    "depth": {"type": "integer", "description": "Traversal depth (1-5, default 2)", "default": 2},
+                    "rel_types": {"type": "array", "description": "Optional relationship type filter"},
+                    "limit": {"type": "integer", "description": "Maximum neighbors (default 30)", "default": 30}
+                },
+                "required": ["node_id"]
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "found": {"type": "boolean", "description": "Whether the node was found"},
+                    "center_node": {"type": "object", "description": "The explored node"},
+                    "neighbor_count": {"type": "integer", "description": "Number of connected nodes"},
+                    "context": {"type": "string", "description": "Formatted context"},
+                    "neighbors": {"type": "array", "description": "Connected nodes"},
+                    "relationships": {"type": "array", "description": "Connecting relationships"},
+                    "error": {"type": "string", "description": "Error message"}
+                }
+            }
+        }
+    },
+    "graph_relate_tool": {
+        "name": "graph_relate",
+        "description": "Create a relationship between two entities in the knowledge graph. Use this to explicitly connect things you discover during conversation.",
+        "entrypoint": "app.tools.graph_tool:graph_relate",
+        "scopes": ["graph:write"],
+        "version": 1,
+        "schema": {
+            "input": {
+                "type": "object",
+                "properties": {
+                    "from_id": {"type": "string", "description": "Source node ID"},
+                    "relationship": {"type": "string", "description": "Relationship type (e.g., WORKS_ON, DEPENDS_ON, RELATED_TO)"},
+                    "to_id": {"type": "string", "description": "Target node ID"}
+                },
+                "required": ["from_id", "relationship", "to_id"]
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean", "description": "Whether the relationship was created"},
+                    "message": {"type": "string", "description": "Status message"},
+                    "error": {"type": "string", "description": "Error message"}
+                }
+            }
+        }
+    },
 }
 
 
@@ -506,6 +595,10 @@ def get_tool_executor(tool_name: str) -> Optional[Callable]:
         "delete_records": ("app.tools.data_tool", "delete_records"),
         "list_data_documents": ("app.tools.data_tool", "list_data_documents"),
         "get_data_document": ("app.tools.data_tool", "get_data_document"),
+        # Graph tools
+        "graph_query": ("app.tools.graph_tool", "graph_query"),
+        "graph_explore": ("app.tools.graph_tool", "graph_explore"),
+        "graph_relate": ("app.tools.graph_tool", "graph_relate"),
     }
     
     if tool_name not in executors:
@@ -549,6 +642,10 @@ def get_tool_object(tool_name: str) -> Optional[Any]:
         "delete_records": ("app.tools.data_tool", "delete_records_tool"),
         "list_data_documents": ("app.tools.data_tool", "list_data_documents_tool"),
         "get_data_document": ("app.tools.data_tool", "get_data_document_tool"),
+        # Graph tools
+        "graph_query": ("app.tools.graph_tool", "graph_query_tool"),
+        "graph_explore": ("app.tools.graph_tool", "graph_explore_tool"),
+        "graph_relate": ("app.tools.graph_tool", "graph_relate_tool"),
     }
     
     if tool_name not in tool_objects:

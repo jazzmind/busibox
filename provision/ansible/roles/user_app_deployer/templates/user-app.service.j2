@@ -6,7 +6,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory={{ app_path }}
-ExecStart=/usr/bin/npm start
+ExecStart=/bin/bash -c 'if [ -f .next/standalone/server.js ]; then exec node .next/standalone/server.js; else exec npm start; fi'
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal
@@ -17,6 +17,8 @@ SyslogIdentifier={{ app_id }}
 Environment=NODE_ENV=production
 Environment=PORT={{ app_port }}
 Environment=APP_ID={{ app_id }}
+# Cap V8 heap to prevent unbounded memory growth
+Environment=NODE_OPTIONS=--max-old-space-size=512
 EnvironmentFile=-{{ app_path }}/.env
 
 # Resource limits

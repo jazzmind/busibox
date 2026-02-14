@@ -1,6 +1,6 @@
 ---
 title: "Building Apps on Busibox"
-category: "user"
+category: "platform"
 order: 16
 description: "How to build and deploy Next.js apps that leverage the full Busibox AI and data infrastructure"
 published: true

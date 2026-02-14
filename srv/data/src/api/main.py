@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.middleware.jwt_auth import JWTAuthMiddleware
 from api.middleware.logging import LoggingMiddleware
-from api.routes import content, data, embeddings, extract, files, health, libraries, markdown, roles, status, upload, authz, test_docs
+from api.routes import content, data, embeddings, extract, files, graph, health, libraries, markdown, roles, status, upload, authz, test_docs
 from api.services.redis_service import RedisService
 from api.services.postgres import PostgresService
 from shared.config import Config
@@ -133,6 +133,10 @@ For issues or questions, contact the Busibox infrastructure team.
             "name": "Data",
             "description": "Structured data documents - create, query, and manage data like Notion/Coda databases",
         },
+        {
+            "name": "Graph",
+            "description": "Knowledge graph visualization and exploration - entities, relationships, and knowledge maps",
+        },
     ],
     contact={
         "name": "Busibox Infrastructure Team",
@@ -169,6 +173,7 @@ app.include_router(extract.router, tags=["Extract"])  # Remote Marker extraction
 app.include_router(authz.router, prefix="/authz", tags=["Authz"])
 app.include_router(libraries.router, prefix="/libraries", tags=["Libraries"])
 app.include_router(data.router, prefix="/data", tags=["Data"])
+app.include_router(graph.router, prefix="/data/graph", tags=["Graph"])
 app.include_router(test_docs.router, tags=["Test Docs"])
 
 
@@ -185,6 +190,19 @@ async def startup_event():
     except Exception as e:
         logger.warning("Redis connection failed (caching disabled)", error=str(e))
     
+    # Connect Neo4j for graph database (optional)
+    try:
+        from services.graph_service import get_graph_service
+        graph_service = await get_graph_service()
+        app.state.graph_service = graph_service
+        if graph_service.available:
+            logger.info("Neo4j graph service connected")
+        else:
+            logger.info("Neo4j graph service not available (graph features disabled)")
+    except Exception as e:
+        logger.warning("Neo4j connection failed (graph features disabled)", error=str(e))
+        app.state.graph_service = None
+    
     # Run library migration from AI Portal if configured
     from api.services.library_migration import run_migration_if_needed
     await run_migration_if_needed(pg_service.pool)
@@ -196,6 +214,10 @@ async def shutdown_event():
     logger.info("Data API shutting down")
     await redis_service.disconnect()
     await pg_service.disconnect()
+    
+    # Disconnect Neo4j
+    if hasattr(app.state, "graph_service") and app.state.graph_service:
+        await app.state.graph_service.disconnect()
 
 
 @app.get("/")
