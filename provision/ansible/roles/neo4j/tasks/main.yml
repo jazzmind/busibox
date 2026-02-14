@@ -1,0 +1,75 @@
+---
+# Neo4j LXC/Proxmox Deployment Tasks
+#
+# Deploys Neo4j graph database in an LXC container
+# Used when deploy_target != 'docker' (Proxmox)
+
+- name: Install Docker on Neo4j container
+  ansible.builtin.apt:
+    name:
+      - docker.io
+      - docker-compose-plugin
+    state: present
+    update_cache: true
+
+- name: Create Neo4j directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - /srv/neo4j
+    - /srv/neo4j/data
+    - /srv/neo4j/logs
+
+- name: Deploy Neo4j docker-compose file
+  ansible.builtin.copy:
+    dest: /srv/neo4j/docker-compose.yml
+    mode: "0644"
+    content: |
+      version: '3.8'
+      services:
+        neo4j:
+          image: neo4j:5-community
+          container_name: neo4j
+          hostname: neo4j
+          environment:
+            NEO4J_AUTH: "{{ neo4j_user | default('neo4j') }}/{{ neo4j_password | default('devpassword') }}"
+            NEO4J_PLUGINS: '["apoc"]'
+            NEO4J_server_memory_heap_initial__size: 256m
+            NEO4J_server_memory_heap_max__size: 512m
+          ports:
+            - "7474:7474"
+            - "7687:7687"
+          volumes:
+            - /srv/neo4j/data:/data
+            - /srv/neo4j/logs:/logs
+          healthcheck:
+            test: ["CMD-SHELL", "wget -q --spider http://localhost:7474 || exit 1"]
+            interval: 10s
+            timeout: 5s
+            start_period: 30s
+            retries: 5
+          restart: unless-stopped
+
+- name: Start Neo4j
+  ansible.builtin.command:
+    cmd: docker compose up -d
+    chdir: /srv/neo4j
+
+- name: Wait for Neo4j to be healthy
+  ansible.builtin.uri:
+    url: "http://localhost:7474"
+    method: GET
+    status_code: 200
+  register: neo4j_health
+  until: neo4j_health.status == 200
+  retries: 30
+  delay: 2
+
+- name: Display Neo4j status
+  ansible.builtin.debug:
+    msg: |
+      Neo4j is running and ready
+      Browser: http://{{ ansible_host }}:7474
+      Bolt: bolt://{{ ansible_host }}:7687

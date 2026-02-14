@@ -1,0 +1,84 @@
+---
+# Deploy API - Application deployment service for K8s
+# Uses build-server for image builds and manages Deployments/Services
+apiVersion: v1
+kind: Service
+metadata:
+  name: deploy-api
+  labels:
+    app: deploy-api
+    tier: apis
+spec:
+  ports:
+    - port: 8011
+      targetPort: 8011
+  selector:
+    app: deploy-api
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deploy-api
+  labels:
+    app: deploy-api
+    tier: apis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: deploy-api
+  template:
+    metadata:
+      labels:
+        app: deploy-api
+        tier: apis
+    spec:
+      serviceAccountName: deploy-api
+      containers:
+        - name: deploy-api
+          image: localhost:30500/deploy-api:latest
+          ports:
+            - containerPort: 8011
+          env:
+            - name: DEPLOY_PORT
+              value: "8011"
+            - name: DEPLOYMENT_BACKEND
+              value: "k8s"
+            - name: POSTGRES_HOST
+              value: "postgres"
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: POSTGRES_ADMIN_USER
+              value: "postgres"
+            - name: POSTGRES_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: busibox-secrets
+                  key: POSTGRES_PASSWORD
+            - name: AUTHZ_URL
+              value: "http://authz-api:8010"
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: busibox-secrets
+                  key: GITHUB_TOKEN
+                  optional: true
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8011
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8011
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

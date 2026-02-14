@@ -179,6 +179,19 @@ deploy_app() {
     
     log_info "Build complete"
     
+    # Copy static assets into standalone directory
+    # Standalone mode doesn't include public/ or .next/static/ automatically
+    if [ -d ".next/standalone" ]; then
+        log_info "Copying static assets into standalone directory..."
+        cp -r public .next/standalone/public 2>/dev/null || true
+        mkdir -p .next/standalone/.next
+        cp -r .next/static .next/standalone/.next/static
+    fi
+    
+    # Prune dev dependencies to reduce memory footprint
+    log_info "Pruning dev dependencies..."
+    npm prune --omit=dev 2>&1 || true
+    
     # Run database migrations for ai-portal
     if [ "${app_name}" = "ai-portal" ] && [ -d "prisma" ]; then
         log_info "Running database migrations..."
@@ -209,8 +222,8 @@ is_app_deployed() {
     local app_name="$1"
     local app_dir="/srv/${app_name}"
     
-    # Check if package.json exists with built output (.next directory)
-    if [ -f "${app_dir}/package.json" ] && [ -d "${app_dir}/.next" ]; then
+    # Check if package.json exists with standalone build output
+    if [ -f "${app_dir}/package.json" ] && [ -f "${app_dir}/.next/standalone/server.js" ]; then
         return 0
     fi
     

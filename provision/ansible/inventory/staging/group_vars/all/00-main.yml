@@ -101,6 +101,13 @@ files_password: "{{ secrets.postgresql.password }}"
 milvus_host: "{{ milvus_ip }}"
 milvus_port: 19530
 
+# Neo4j Graph Database (runs as Docker container on milvus-lxc)
+neo4j_host: "{{ milvus_ip }}"  # Shares milvus container
+neo4j_bolt_port: 7687
+neo4j_http_port: 7474
+neo4j_user: neo4j
+neo4j_password: "{{ secrets.neo4j.password | default('changeme') }}"
+
 minio_host: "{{ minio_ip }}"
 minio_port: 9000
 minio_console_port: 9001

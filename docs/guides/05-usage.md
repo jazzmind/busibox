@@ -1,6 +1,6 @@
 ---
 title: "Using Busibox Services"
-category: "user"
+category: "platform"
 order: 2
 description: "Learn how to use Busibox APIs, upload documents, search, and interact with agents"
 published: true

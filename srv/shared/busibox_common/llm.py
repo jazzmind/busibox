@@ -30,6 +30,8 @@ Usage:
 
 import json
 import os
+import time
+import threading
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -508,12 +510,129 @@ def ensure_openai_env(
     This is a convenience function that creates a client and configures env.
     Called lazily when agents are instantiated, not at module import time.
     
+    Also triggers MLX auto-start if the LLM backend is MLX and the server
+    is not currently running. This check is cached and non-blocking.
+    
     Args:
         base_url: Optional override for LITELLM_BASE_URL
         api_key: Optional override for LITELLM_API_KEY
     """
     client = LiteLLMClient(base_url=base_url, api_key=api_key)
     client.configure_openai_env()
+    
+    # Trigger MLX auto-start check (cached, non-blocking)
+    _ensure_mlx_if_needed()
+
+
+# ============================================================================
+# MLX Auto-Start
+# ============================================================================
+# When LLM_BACKEND=mlx, the MLX server runs on the host machine and may
+# shut down when idle. This module automatically checks and starts it
+# before LLM calls, with a TTL cache to avoid hammering the deploy-api.
+
+_mlx_check_lock = threading.Lock()
+_mlx_last_check: float = 0.0
+_mlx_last_status: Optional[str] = None  # "running", "starting", "unavailable", "skipped"
+_MLX_CHECK_TTL = 300.0  # 5 minutes — don't re-check if MLX was running recently
+_MLX_RETRY_TTL = 30.0   # 30 seconds — retry sooner if MLX was not running
+
+
+def _ensure_mlx_if_needed() -> None:
+    """
+    Check if MLX needs to be started and trigger auto-start if needed.
+    
+    This function is called from ensure_openai_env() and is:
+    - Non-blocking: fires a background thread if a check is needed
+    - Cached: skips if we checked recently (5min if running, 30s if not)
+    - Best-effort: never raises, just logs warnings
+    - Safe: uses a lock to prevent concurrent checks
+    """
+    global _mlx_last_check, _mlx_last_status
+    
+    llm_backend = os.environ.get("LLM_BACKEND", "")
+    if llm_backend != "mlx":
+        return
+    
+    deploy_api_url = os.environ.get("DEPLOY_API_URL", "")
+    if not deploy_api_url:
+        return
+    
+    now = time.monotonic()
+    ttl = _MLX_CHECK_TTL if _mlx_last_status == "running" else _MLX_RETRY_TTL
+    
+    if now - _mlx_last_check < ttl:
+        return  # Cache is still warm
+    
+    # Fire background thread for the check (don't block the caller)
+    thread = threading.Thread(
+        target=_do_mlx_ensure_check,
+        args=(deploy_api_url,),
+        daemon=True,
+    )
+    thread.start()
+
+
+def _do_mlx_ensure_check(deploy_api_url: str) -> None:
+    """
+    Perform the actual MLX ensure check in a background thread.
+    
+    Calls deploy-api's /mlx/ensure/quick endpoint which:
+    1. Checks if MLX is already running (fast return)
+    2. Triggers a start via host-agent if not running
+    """
+    global _mlx_last_check, _mlx_last_status
+    
+    if not _mlx_check_lock.acquire(blocking=False):
+        return  # Another thread is already checking
+    
+    try:
+        # Get auth token from LiteLLM API key (deploy-api accepts it)
+        api_key = os.environ.get("LITELLM_API_KEY", "")
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        
+        with httpx.Client(timeout=15.0) as client:
+            response = client.post(
+                f"{deploy_api_url}/api/v1/services/mlx/ensure/quick",
+                headers=headers,
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                status = data.get("status", "unknown")
+                message = data.get("message", "")
+                
+                _mlx_last_check = time.monotonic()
+                _mlx_last_status = status
+                
+                if status == "running":
+                    logger.debug("MLX auto-start check: running", message=message)
+                elif status == "starting":
+                    logger.info("MLX auto-start: server is starting", message=message)
+                elif status == "skipped":
+                    logger.debug("MLX auto-start check: skipped (not MLX backend)")
+                else:
+                    logger.warning(
+                        "MLX auto-start check: unavailable",
+                        status=status,
+                        message=message,
+                    )
+            else:
+                logger.warning(
+                    "MLX auto-start check failed",
+                    status_code=response.status_code,
+                )
+                _mlx_last_check = time.monotonic()
+                _mlx_last_status = "unavailable"
+                
+    except Exception as e:
+        logger.warning("MLX auto-start check error", error=str(e)[:100])
+        _mlx_last_check = time.monotonic()
+        _mlx_last_status = "unavailable"
+    finally:
+        _mlx_check_lock.release()
 
 
 # Global client instance (lazy initialization)

@@ -10,6 +10,7 @@ pyjwt[crypto]==2.10.1
 structlog==24.4.0
 cachetools==5.5.0
 redis==5.0.1
+kubernetes==31.0.0
 
 # Testing
 pytest==8.3.3

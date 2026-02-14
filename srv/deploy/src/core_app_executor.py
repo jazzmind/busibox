@@ -38,6 +38,12 @@ logger = logging.getLogger(__name__)
 CONTAINER_PREFIX = os.environ.get("CONTAINER_PREFIX", "local")
 CORE_APPS_CONTAINER = f"{CONTAINER_PREFIX}-core-apps"
 
+# Docs content directory where docs-api reads from
+# In Docker: /app/docs (inside docs-api container)
+# In Proxmox: /srv/docs/docs (on docs-lxc or apps-lxc)
+DOCS_CONTENT_DIR = os.environ.get("DOCS_CONTENT_DIR", "/srv/docs/docs")
+DOCS_API_CONTAINER = f"{CONTAINER_PREFIX}-docs-api"
+
 # Core app definitions
 CORE_APPS = {
     "ai-portal": {
@@ -72,6 +78,11 @@ def is_core_app(app_id: str) -> bool:
     }
     
     return app_id.lower() in FRONTEND_CORE_APPS
+
+
+def is_k8s_environment() -> bool:
+    """Check if running on Kubernetes backend."""
+    return config.is_k8s_backend()
 
 
 def is_docker_environment() -> bool:
@@ -160,6 +171,134 @@ async def execute_in_core_apps(
         return await execute_ssh_command(target_host, command, timeout)
 
 
+async def sync_app_docs(
+    app_id: str,
+    logs: Optional[List[str]] = None,
+    environment: str = "docker"
+) -> bool:
+    """
+    Sync app documentation to the docs-api content directory.
+    
+    After an app is deployed, checks if it has a docs/portal/ directory.
+    If so, copies those markdown files to the docs content directory under
+    apps/<app_id>/ so the docs-api can serve them.
+    
+    Works for both Docker (docker exec into docs-api container) and
+    Proxmox (SSH to apps-lxc where docs content lives).
+    
+    Args:
+        app_id: App identifier (e.g., "agent-manager")
+        logs: List to append log messages
+        environment: Target environment
+        
+    Returns:
+        True if docs were synced (or no docs to sync), False on error
+    """
+    if logs is None:
+        logs = []
+    
+    if is_docker_environment():
+        # Docker: app is in core-apps container at /srv/apps/<app_id>
+        # docs-api reads from /app/docs which is a volume mount
+        # We need to copy docs into the docs-api container's docs volume
+        # The shared volume 'app-docs' is mounted at /app/docs/apps in docs-api
+        # and accessible from deploy-api at /app/app-docs
+        app_docs_dir = f"/srv/apps/{app_id}/docs/portal"
+        target_dir = "/app/app-docs"  # Shared volume mount point in deploy-api
+        
+        # Check if docs/portal exists in the app (in core-apps container)
+        check_cmd = f"test -d {app_docs_dir} && echo 'EXISTS' || echo 'NONE'"
+        stdout, stderr, code = await execute_docker_command(check_cmd, timeout=10)
+        
+        if 'EXISTS' not in stdout:
+            logger.debug(f"No docs/portal/ directory in {app_id} - skipping docs sync")
+            return True
+        
+        logs.append(f"📚 Syncing {app_id} documentation to docs-api...")
+        
+        # Copy docs from core-apps container to a temp location,
+        # then into the shared app-docs volume
+        # First, clean up old docs for this app
+        sync_cmd = f"""
+            set -e
+            # Copy docs from core-apps to deploy-api's shared volume
+            # The app-docs volume is mounted at {target_dir} in deploy-api
+            mkdir -p {target_dir}/{app_id}
+            rm -rf {target_dir}/{app_id}/*
+            
+            # We need to get files from core-apps container
+            # Use docker cp to extract, then place in shared volume
+            TMPDIR=$(mktemp -d)
+            docker cp {CORE_APPS_CONTAINER}:{app_docs_dir}/. "$TMPDIR/"
+            cp -r "$TMPDIR"/. {target_dir}/{app_id}/
+            rm -rf "$TMPDIR"
+            echo "DOCS_SYNCED"
+        """
+        
+        # This runs on the host (deploy-api container), not inside core-apps
+        proc = await asyncio.create_subprocess_exec(
+            '/bin/bash', '-c', sync_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+            stdout_str = stdout.decode()
+            stderr_str = stderr.decode()
+            
+            if proc.returncode == 0 and 'DOCS_SYNCED' in stdout_str:
+                logs.append(f"📚 Documentation synced for {app_id}")
+                return True
+            else:
+                logs.append(f"⚠️ Docs sync had issues: {stderr_str}")
+                return True  # Non-fatal
+        except asyncio.TimeoutError:
+            logs.append(f"⚠️ Docs sync timed out for {app_id}")
+            return True  # Non-fatal
+    else:
+        # Proxmox: app is at /srv/apps/<app_id> on apps-lxc
+        # docs content lives at DOCS_CONTENT_DIR (e.g., /srv/docs/docs on docs-lxc)
+        # We need to SSH to apps-lxc to read docs, then SSH to the docs host to write
+        app_docs_dir = f"/srv/apps/{app_id}/docs/portal"
+        target_dir = f"{DOCS_CONTENT_DIR}/apps/{app_id}"
+        
+        # Check and sync docs (runs on apps-lxc via SSH)
+        sync_cmd = f"""
+            set -e
+            if [ -d "{app_docs_dir}" ]; then
+                echo "Found docs/portal/ in {app_id}"
+                # Ensure target directory exists
+                mkdir -p {target_dir}
+                # Clean old docs and copy new ones
+                rm -rf {target_dir}/*
+                cp -r {app_docs_dir}/. {target_dir}/
+                echo "DOCS_SYNCED: $(ls {target_dir}/ | wc -l) files"
+            else
+                echo "NO_DOCS"
+            fi
+        """
+        
+        stdout, stderr, code = await execute_in_core_apps(
+            sync_cmd,
+            environment=environment,
+            timeout=30
+        )
+        
+        if 'NO_DOCS' in stdout:
+            logger.debug(f"No docs/portal/ directory in {app_id} - skipping docs sync")
+            return True
+        
+        if 'DOCS_SYNCED' in stdout:
+            logs.append(f"📚 Documentation synced for {app_id}")
+            return True
+        
+        if code != 0:
+            logs.append(f"⚠️ Docs sync had issues: {stderr}")
+        
+        return True  # Non-fatal - don't fail deployment over docs
+
+
 async def deploy_core_app(
     app_id: str,
     github_ref: str = "main",
@@ -196,6 +335,22 @@ async def deploy_core_app(
         return False, f"Unknown core app: {app_id}"
     
     logs.append(f"🚀 Deploying {app_id} (ref: {github_ref})...")
+    
+    # K8s backend: delegate to k8s_executor
+    if is_k8s_environment():
+        from .k8s_executor import deploy_core_app as k8s_deploy_core_app
+        app_info = CORE_APPS[app_id]
+        return await k8s_deploy_core_app(
+            app_id=app_id,
+            github_repo=app_info["github_repo"],
+            github_ref=github_ref,
+            port=app_info["default_port"],
+            base_path=app_info["base_path"],
+            health_endpoint=app_info["health_endpoint"],
+            github_token=github_token,
+            env_vars=env_vars,
+            logs=logs,
+        )
     
     # Determine deployment command based on environment
     if is_docker_environment():
@@ -335,6 +490,21 @@ NPMRC_EOF
             NODE_ENV=production npm run build
             echo "=== NPM BUILD END ==="
             
+            # Copy static assets into standalone directory
+            # Standalone mode doesn't include public/ or .next/static/ automatically
+            if [ -d ".next/standalone" ]; then
+                echo "=== STANDALONE ASSETS START ==="
+                cp -r public .next/standalone/public 2>/dev/null || true
+                mkdir -p .next/standalone/.next
+                cp -r .next/static .next/standalone/.next/static
+                echo "=== STANDALONE ASSETS END ==="
+            fi
+            
+            # Prune dev dependencies to reduce memory footprint
+            echo "=== PRUNE DEV DEPS START ==="
+            npm prune --omit=dev 2>/dev/null || true
+            echo "=== PRUNE DEV DEPS END ==="
+            
             # Restart with systemd (on Proxmox, apps run as systemd services)
             echo "Restarting service..."
             systemctl restart {app_id} || echo "Service restart skipped (may not exist yet)"
@@ -367,6 +537,9 @@ NPMRC_EOF
         # Combine stdout and stderr for the error message
         combined_output = stderr or stdout
         return False, f"Deployment failed: {combined_output}"
+    
+    # Sync app documentation to docs-api content directory
+    await sync_app_docs(app_id, logs, environment)
     
     logs.append(f"✅ {app_id} deployed successfully")
     return True, f"{app_id} deployed successfully"

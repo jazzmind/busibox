@@ -24,7 +24,7 @@
 #
 # Tags:
 #   - all: Everything
-#   - infrastructure: postgres, redis, minio, milvus
+#   - infrastructure: postgres, redis, minio, milvus, neo4j
 #   - apis: authz, data, search, agent, docs, deploy, bridge
 #   - llm: litellm
 #   - frontend: core-apps, nginx
@@ -146,6 +146,18 @@
         - infrastructure
         - milvus
         - data
+
+    - name: Deploy Neo4j
+      ansible.builtin.include_role:
+        name: neo4j
+        tasks_from: docker
+        apply:
+          tags:
+            - infrastructure
+            - neo4j
+      tags:
+        - infrastructure
+        - neo4j
 
     # =========================================================================
     # API SERVICES - Backend services

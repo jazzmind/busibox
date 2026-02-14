@@ -37,7 +37,7 @@ issues:
 [ ] - improve existing agents - chat (has websearch, filesearch, upload), web search (focus on deep research), RAG Search Agent
 [ ] - model registry overrides in env/dockercompose/ansible, or dynamically set during make install, or menu
 [ ] a "warmup" screen for ai-portal when models need to be cached/downloaded.
-[ ] dispatcher can recommend activation of tools, ask questions with yes/no buttons, option lists to click on. e.g. should I create an agent task for this? Yes / No if yes - activates agent task tool. 
+[ ] dispatcher can recommend activation of tools, ask questions with yes/no buttons, option lists to click on. e.g. should I create an agent task for this? Yes / No` if yes - activates agent task tool. 
 [ ] tasks can be initiated by a document ingest. So we need an event to be emitted that the task manager listens to (webhook?) that gives library folder, keywords and tags for docs. Tasks will trigger based on matching keywords, tags, folders, etc.
 vestiges.
 [ ] - chat agent should be able to create agent tasks automatically

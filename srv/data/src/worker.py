@@ -1112,6 +1112,66 @@ class IngestWorker:
             chunk_dicts = [c.to_dict() for c in chunks]
             self.postgres_service.insert_chunks(file_id, chunk_dicts)
             
+            # Stage 4.55: Entity Extraction for Knowledge Graph (optional)
+            entity_extraction_enabled = (
+                processing_config.get("entity_extraction_enabled", False)
+                if processing_config else False
+            )
+            if entity_extraction_enabled:
+                try:
+                    from processors.entity_extractor import EntityExtractor
+                    from services.graph_service import GraphService
+                    
+                    logger.info(
+                        "Stage 4.55: Starting entity extraction for knowledge graph",
+                        file_id=file_id,
+                    )
+                    self.postgres_service.update_status(
+                        file_id=file_id,
+                        stage="entity_extraction",
+                        progress=51,
+                    )
+                    
+                    entity_extractor = EntityExtractor(
+                        litellm_base_url=os.getenv("LITELLM_BASE_URL", "http://litellm:4000"),
+                        litellm_api_key=os.getenv("LITELLM_API_KEY", ""),
+                    )
+                    
+                    graph = GraphService()
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        connected = loop.run_until_complete(graph.connect())
+                        if connected:
+                            entity_count = loop.run_until_complete(
+                                entity_extractor.extract_and_store_graph(
+                                    text=extraction_result.text,
+                                    file_id=file_id,
+                                    filename=original_filename,
+                                    owner_id=user_id,
+                                    visibility=visibility,
+                                    graph_service=graph,
+                                )
+                            )
+                            logger.info(
+                                "Entity extraction complete",
+                                file_id=file_id,
+                                entity_count=entity_count,
+                            )
+                        else:
+                            logger.debug("Neo4j not available, skipping entity extraction", file_id=file_id)
+                    finally:
+                        loop.run_until_complete(graph.disconnect())
+                        loop.close()
+                except Exception as e:
+                    logger.warning(
+                        "Entity extraction failed (non-blocking)",
+                        file_id=file_id,
+                        error=str(e),
+                    )
+            else:
+                logger.debug("Entity extraction disabled, skipping", file_id=file_id)
+            
             # Stage 4.6: Markdown and Image Generation
             markdown_start = time.time()
             try:
@@ -1439,8 +1499,13 @@ class IngestWorker:
             )
             
             # Generate ColPali embeddings for PDF pages (if available and enabled)
+            # Check per-job processing_config first, then fall back to worker-level setting
+            colpali_enabled_for_job = (
+                processing_config.get("colpali_enabled", self.colpali is not None)
+                if processing_config else (self.colpali is not None)
+            )
             page_embeddings = None
-            if extraction_result.page_images and mime_type == "application/pdf" and self.colpali is not None:
+            if extraction_result.page_images and mime_type == "application/pdf" and self.colpali is not None and colpali_enabled_for_job:
                 colpali_start = time.time()
                 logger.info(
                     "Generating ColPali visual embeddings",

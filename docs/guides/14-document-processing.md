@@ -1,6 +1,6 @@
 ---
 title: "Document Processing Pipeline"
-category: "user"
+category: "platform"
 order: 14
 description: "How Busibox extracts, chunks, embeds, and indexes documents for search and AI"
 published: true

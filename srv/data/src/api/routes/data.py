@@ -58,11 +58,21 @@ class SchemaFieldDef(BaseModel):
     auto: Optional[str] = Field(None, description="Auto-fill: 'now' for datetime, 'uuid' for string")
 
 
+class GraphRelationshipDef(BaseModel):
+    """Defines how records map to graph relationships."""
+    source_label: str = Field(..., description="Label for source node (e.g., 'Task')")
+    target_field: str = Field(..., description="Field containing target node ID (e.g., 'projectId')")
+    target_label: str = Field(..., description="Label for target node (e.g., 'Project')")
+    relationship: str = Field(..., description="Relationship type (e.g., 'BELONGS_TO')")
+
+
 class DataSchema(BaseModel):
     """Data document schema."""
     fields: Dict[str, SchemaFieldDef] = Field(default_factory=dict, description="Field definitions")
     indexes: List[str] = Field(default_factory=list, description="Fields to index")
     embedFields: List[str] = Field(default_factory=list, description="Fields to generate embeddings for")
+    graphNode: Optional[str] = Field(None, description="Graph node label for records (e.g., 'Task'). If set, records are auto-synced to graph DB.")
+    graphRelationships: Optional[List[GraphRelationshipDef]] = Field(None, description="Graph relationship definitions mapping record fields to graph edges")
 
 
 class CreateDataDocumentRequest(BaseModel):
@@ -235,6 +245,53 @@ async def get_query_engine() -> QueryEngine:
     return QueryEngine()
 
 
+async def _sync_graph(request: Request, document_id: str, document_name: str, schema: Optional[Dict], records: list, visibility: str = "personal"):
+    """
+    Sync data document records to graph database (best-effort, non-blocking).
+    
+    Only syncs if schema has graphNode defined and Neo4j is available.
+    Failures are logged but never block the API response.
+    """
+    try:
+        graph_service = getattr(request.app.state, "graph_service", None)
+        if not graph_service or not graph_service.available:
+            return
+        
+        if not schema or not schema.get("graphNode"):
+            return
+        
+        owner_id = getattr(request.state, "user_id", "")
+        await graph_service.sync_data_document_records(
+            document_id=document_id,
+            document_name=document_name,
+            schema=schema,
+            records=records,
+            owner_id=owner_id,
+            visibility=visibility,
+        )
+    except Exception as e:
+        logger.warning(
+            "[DATA API] Graph sync failed (non-blocking)",
+            document_id=document_id,
+            error=str(e),
+        )
+
+
+async def _delete_graph(request: Request, document_id: str):
+    """Delete graph data for a document (best-effort, non-blocking)."""
+    try:
+        graph_service = getattr(request.app.state, "graph_service", None)
+        if not graph_service or not graph_service.available:
+            return
+        await graph_service.delete_document_graph(document_id)
+    except Exception as e:
+        logger.warning(
+            "[DATA API] Graph delete failed (non-blocking)",
+            document_id=document_id,
+            error=str(e),
+        )
+
+
 # =============================================================================
 # Document Endpoints
 # =============================================================================
@@ -354,6 +411,16 @@ async def create_data_document(
             name=body.name,
         )
         
+        # Sync to graph database (non-blocking)
+        await _sync_graph(
+            request,
+            document_id=document.get("id", ""),
+            document_name=body.name,
+            schema=body.schema_def,
+            records=body.initialRecords or [],
+            visibility=body.visibility,
+        )
+        
         return document
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -448,6 +515,9 @@ async def delete_data_document(
         if not deleted:
             raise HTTPException(status_code=404, detail="Document not found")
         
+        # Clean up graph data (non-blocking)
+        await _delete_graph(request, document_id)
+        
         return None
     except HTTPException:
         raise
@@ -482,6 +552,21 @@ async def insert_records(
             records=body.records,
             validate=body.validate_schema,
         )
+        
+        # Sync new records to graph (non-blocking, re-reads full doc for schema)
+        try:
+            doc = await data_service.get_document(request, document_id, include_records=True)
+            if doc:
+                await _sync_graph(
+                    request,
+                    document_id=document_id,
+                    document_name=doc.get("name", ""),
+                    schema=doc.get("schema"),
+                    records=doc.get("records", []),
+                    visibility=doc.get("visibility", "personal"),
+                )
+        except Exception as graph_err:
+            logger.warning("[DATA API] Graph sync after insert failed", error=str(graph_err))
         
         return RecordOperationResponse(
             success=True,

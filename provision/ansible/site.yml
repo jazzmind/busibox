@@ -3,7 +3,7 @@
 # =============================================================================
 #
 # Deployment order organized into 4 groups:
-#   1. CORE: nginx, minio, postgres, milvus (infrastructure)
+#   1. CORE: nginx, minio, postgres, milvus, neo4j (infrastructure)
 #   2. LLM: vllm, litellm, colpali, embedding (AI/ML services)
 #   3. APIs: authz, data, search, agent, docs (application services)
 #   4. APPS: ai-portal, agent-manager (frontend applications)
@@ -75,6 +75,13 @@
   roles:
     - role: milvus
       tags: [core, core_vectorstore, milvus]
+
+# 1.5 Neo4j (graph database - runs as Docker container on milvus-lxc)
+- hosts: milvus
+  tags: [core, core_graph]
+  roles:
+    - role: neo4j
+      tags: [core, core_graph, neo4j]
 
 # =============================================================================
 # GROUP 2: LLM SERVICES (tag: llm)

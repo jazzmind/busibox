@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - embedding.yaml
+  - authz.yaml
+  - data.yaml
+  - search.yaml
+  - agent.yaml
+  - bridge.yaml
+  - docs.yaml
+  - deploy.yaml

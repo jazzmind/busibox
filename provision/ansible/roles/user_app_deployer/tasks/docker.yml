@@ -81,6 +81,14 @@
   register: build_result
   changed_when: true
 
+- name: Prune dev dependencies after build
+  ansible.builtin.command:
+    cmd: >
+      docker exec {{ user_apps_container }}
+      sh -c "cd {{ app_path }} && npm prune --omit=dev"
+  when: has_build.rc == 0
+  changed_when: true
+
 - name: Determine start command from package.json
   ansible.builtin.command:
     cmd: >
@@ -136,7 +144,7 @@
       [program:{{ app_id }}]
       command=/bin/bash -c '{{ final_start_command }}'
       directory={{ app_path }}
-      environment=PORT=\"{{ app_port }}\",NODE_ENV=\"production\",APP_ID=\"{{ app_id }}\"
+      environment=PORT=\"{{ app_port }}\",NODE_ENV=\"production\",APP_ID=\"{{ app_id }}\",NODE_OPTIONS=\"--max-old-space-size=512\"
       autostart=true
       autorestart=true
       startretries=5

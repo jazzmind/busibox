@@ -1,0 +1,139 @@
+---
+# PostgreSQL - Shared Database
+# StatefulSet with persistent storage
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels:
+    app: postgres
+    tier: infrastructure
+spec:
+  ports:
+    - port: 5432
+      targetPort: 5432
+  selector:
+    app: postgres
+  clusterIP: None  # Headless for StatefulSet
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  labels:
+    app: postgres
+    tier: infrastructure
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+        tier: infrastructure
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: "postgres"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: busibox-secrets
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              value: "busibox"
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+            - name: init-scripts
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+      volumes:
+        - name: init-scripts
+          configMap:
+            name: postgres-init
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: ssd
+        resources:
+          requests:
+            storage: 20Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  labels:
+    app: postgres
+data:
+  01-init-databases.sh: |
+    #!/bin/bash
+    # PostgreSQL initialization script
+    # Uses POSTGRES_PASSWORD from environment (set by Kubernetes Secret)
+    set -e
+
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+        -- Create application user with password from environment
+        DO \$\$
+        BEGIN
+            IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'busibox_user') THEN
+                CREATE USER busibox_user WITH PASSWORD '${POSTGRES_PASSWORD}';
+            ELSE
+                ALTER USER busibox_user WITH PASSWORD '${POSTGRES_PASSWORD}';
+            END IF;
+        END \$\$;
+
+        -- Grant createdb permission (needed by deploy-api for app databases)
+        ALTER USER busibox_user CREATEDB;
+
+        -- Create databases
+        SELECT 'CREATE DATABASE authz OWNER busibox_user'
+        WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'authz')\gexec
+
+        SELECT 'CREATE DATABASE data OWNER busibox_user'
+        WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'data')\gexec
+
+        SELECT 'CREATE DATABASE agent OWNER busibox_user'
+        WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'agent')\gexec
+
+        SELECT 'CREATE DATABASE litellm OWNER busibox_user'
+        WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'litellm')\gexec
+
+        SELECT 'CREATE DATABASE ai_portal OWNER busibox_user'
+        WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'ai_portal')\gexec
+
+        -- Grant permissions
+        GRANT ALL PRIVILEGES ON DATABASE authz TO busibox_user;
+        GRANT ALL PRIVILEGES ON DATABASE data TO busibox_user;
+        GRANT ALL PRIVILEGES ON DATABASE agent TO busibox_user;
+        GRANT ALL PRIVILEGES ON DATABASE litellm TO busibox_user;
+        GRANT ALL PRIVILEGES ON DATABASE ai_portal TO busibox_user;
+    EOSQL

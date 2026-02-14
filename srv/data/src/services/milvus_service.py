@@ -456,6 +456,13 @@ class MilvusService:
         if len(chunks) != len(embeddings):
             raise ValueError(f"Chunk count ({len(chunks)}) != embedding count ({len(embeddings)})")
         
+        if len(chunks) == 0:
+            logger.warning(
+                "No chunks to insert into Milvus, skipping",
+                file_id=file_id,
+            )
+            return 0
+        
         # Prepare data for insertion
         # Note: text_sparse is NOT included - Milvus auto-generates it from 'text' via BM25 Function
         entities = []

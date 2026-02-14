@@ -1,0 +1,110 @@
+---
+# Agent API - AI Agent Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-api
+  labels:
+    app: agent-api
+    tier: api
+spec:
+  ports:
+    - port: 8000
+      targetPort: 8000
+  selector:
+    app: agent-api
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-api
+  labels:
+    app: agent-api
+    tier: api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agent-api
+  template:
+    metadata:
+      labels:
+        app: agent-api
+        tier: api
+    spec:
+      containers:
+        - name: agent-api
+          image: localhost:30500/agent-api:latest
+          command:
+            - sh
+            - -c
+            - |
+              export DATABASE_URL="postgresql+asyncpg://busibox_user:${POSTGRES_PASSWORD}@postgres:5432/agent"
+              export LITELLM_DATABASE_URL="postgresql://busibox_user:${POSTGRES_PASSWORD}@postgres:5432/litellm"
+              python -m alembic upgrade head && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+          ports:
+            - containerPort: 8000
+          env:
+            - name: ENVIRONMENT
+              value: "production"
+            - name: DEBUG
+              value: "false"
+            - name: LOG_LEVEL
+              value: "INFO"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: busibox-secrets
+                  key: POSTGRES_PASSWORD
+            - name: REDIS_URL
+              value: "redis://redis:6379/0"
+            - name: SEARCH_API_URL
+              value: "http://search-api:8003"
+            - name: DATA_API_URL
+              value: "http://data-api:8002"
+            - name: RAG_API_URL
+              value: "http://search-api:8003"
+            - name: MILVUS_HOST
+              value: "milvus"
+            - name: MILVUS_PORT
+              value: "19530"
+            - name: EMBEDDING_API_URL
+              value: "http://embedding-api:8005"
+            - name: LITELLM_BASE_URL
+              value: "http://litellm:4000/v1"
+            - name: LITELLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: busibox-secrets
+                  key: LITELLM_API_KEY
+            - name: DEFAULT_MODEL
+              value: "agent"
+            - name: AUTH_JWKS_URL
+              value: "http://authz-api:8010/.well-known/jwks.json"
+            - name: AUTH_ISSUER
+              value: "busibox-authz"
+            - name: AUTH_AUDIENCE
+              value: "agent-api"
+            - name: AUTH_TOKEN_URL
+              value: "http://authz-api:8010/oauth/token"
+            - name: BRIDGE_API_URL
+              value: "http://bridge-api:8081"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 2Gi

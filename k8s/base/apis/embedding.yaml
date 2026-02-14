@@ -1,0 +1,100 @@
+---
+# Embedding API - Dedicated embedding service
+# Infrastructure tier - loads model once at startup
+apiVersion: v1
+kind: Service
+metadata:
+  name: embedding-api
+  labels:
+    app: embedding-api
+    tier: infrastructure
+spec:
+  ports:
+    - port: 8005
+      targetPort: 8005
+  selector:
+    app: embedding-api
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: embedding-api
+  labels:
+    app: embedding-api
+    tier: infrastructure
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: embedding-api
+  template:
+    metadata:
+      labels:
+        app: embedding-api
+        tier: infrastructure
+    spec:
+      containers:
+        - name: embedding-api
+          image: localhost:30500/embedding-api:latest
+          ports:
+            - containerPort: 8005
+          env:
+            - name: FASTEMBED_MODEL
+              value: "BAAI/bge-large-en-v1.5"
+            - name: EMBEDDING_BATCH_SIZE
+              value: "32"
+            - name: FASTEMBED_CACHE_DIR
+              value: "/root/.cache/fastembed"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8005
+            initialDelaySeconds: 120
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8005
+            initialDelaySeconds: 120
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 500m
+              memory: 2Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          volumeMounts:
+            - name: fastembed-cache
+              mountPath: /root/.cache/fastembed
+            - name: model-cache
+              mountPath: /root/.cache/huggingface
+      volumes:
+        - name: fastembed-cache
+          persistentVolumeClaim:
+            claimName: fastembed-cache
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: model-cache
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: fastembed-cache
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: ssd
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: model-cache
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: ssd
+  resources:
+    requests:
+      storage: 10Gi

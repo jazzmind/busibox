@@ -28,6 +28,7 @@ PROXMOX_SERVICE_MAP = {
     'postgres': ('postgres', 'postgresql'),  # pg-lxc
     'milvus': ('milvus', 'milvus'),  # milvus-lxc
     'minio': ('minio', 'minio'),  # files-lxc
+    'neo4j': ('neo4j', 'neo4j'),  # milvus-lxc (runs as Docker container)
     'litellm': ('litellm', 'litellm'),  # litellm-lxc
     'authz-api': ('authz-api', 'authz'),  # authz-lxc
     'authz': ('authz-api', 'authz'),  # alias

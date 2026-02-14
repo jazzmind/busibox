@@ -119,6 +119,39 @@ async def verify_admin_token(
         raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
 
 
+async def verify_service_or_admin_token(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+) -> dict:
+    """
+    Verify that the request has a valid admin token OR a service-to-service key.
+    
+    Used for internal endpoints that need to be callable from other Busibox services
+    (e.g., agent-api calling /mlx/ensure/quick) without requiring a full JWT exchange.
+    
+    Accepts:
+    1. The LITELLM_API_KEY as a shared service secret (service-to-service calls)
+    2. The DEPLOY_BOOTSTRAP_TOKEN (during provisioning)
+    3. A valid admin JWT (user-facing calls)
+    
+    Returns the validated token payload with user context.
+    Raises HTTPException if invalid.
+    """
+    token = credentials.credentials
+    
+    # Check for service-to-service key (LiteLLM API key shared between services)
+    litellm_key = os.getenv("LITELLM_API_KEY", "")
+    if litellm_key and token == litellm_key:
+        return {
+            "user_id": "service:internal",
+            "email": "service@internal",
+            "roles": [{"id": "service", "name": "Service"}],
+            "scopes": ["services:manage"],
+        }
+    
+    # Fall through to full admin token verification
+    return await verify_admin_token(credentials)
+
+
 def verify_token(token: str) -> dict:
     """
     Verify a JWT token synchronously (for WebSocket authentication).

@@ -24,6 +24,9 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 source "${SCRIPT_DIR}/../lib/ui.sh"
 source "${SCRIPT_DIR}/../lib/state.sh"
 
+# Source backend common library
+source "${SCRIPT_DIR}/../lib/backends/common.sh"
+
 # Flags
 DIRECT_MODE=false
 FROM_LAUNCHER=false
@@ -58,6 +61,11 @@ check_docker_available() {
 # Check if Proxmox is available
 check_proxmox_available() {
     command -v pct &>/dev/null
+}
+
+# Check if K8s (kubectl + kubeconfig) is available
+check_k8s_available() {
+    command -v kubectl &>/dev/null && [[ -f "${REPO_ROOT}/k8s/kubeconfig-rackspace-spot.yaml" ]]
 }
 
 # Detect installation status for current environment
@@ -142,6 +150,26 @@ detect_installation_status() {
             status=$(pct status "$base_ctid" 2>/dev/null | awk '{print $2}')
             if [[ "$status" == "running" ]]; then
                 echo "installed"
+            else
+                echo "not_installed"
+            fi
+            ;;
+        k8s)
+            if ! check_k8s_available 2>/dev/null; then
+                echo "not_installed"
+                return
+            fi
+            
+            # Check if core pods are running in the busibox namespace
+            local running_pods
+            running_pods=$(KUBECONFIG="${REPO_ROOT}/k8s/kubeconfig-rackspace-spot.yaml" \
+                kubectl get pods -n busibox --field-selector=status.phase=Running \
+                --no-headers 2>/dev/null | wc -l | tr -d ' ')
+            
+            if [[ "$running_pods" -ge 3 ]]; then
+                echo "installed"
+            elif [[ "$running_pods" -gt 0 ]]; then
+                echo "partial"
             else
                 echo "not_installed"
             fi
@@ -243,6 +271,37 @@ perform_uninstall() {
         done
         
         success "Proxmox uninstall complete"
+        
+    elif [[ "$backend" == "k8s" ]]; then
+        warn "K8s uninstall will delete all Busibox resources from the cluster"
+        read -p "Are you sure? Type 'YES' to confirm: " confirm
+        if [[ "$confirm" != "YES" ]]; then
+            echo "Cancelled."
+            return 1
+        fi
+        
+        local kubeconfig="${REPO_ROOT}/k8s/kubeconfig-rackspace-spot.yaml"
+        if [[ ! -f "$kubeconfig" ]]; then
+            error "Kubeconfig not found: ${kubeconfig}"
+            return 1
+        fi
+        
+        info "Deleting K8s resources..."
+        
+        # Delete kustomized resources first
+        local overlay_dir="${REPO_ROOT}/k8s/overlays/rackspace-spot"
+        if [[ -d "$overlay_dir" ]]; then
+            KUBECONFIG="$kubeconfig" kubectl delete -k "$overlay_dir" --ignore-not-found 2>/dev/null || true
+        fi
+        
+        # Delete secrets
+        KUBECONFIG="$kubeconfig" kubectl delete secret busibox-secrets -n busibox --ignore-not-found 2>/dev/null || true
+        KUBECONFIG="$kubeconfig" kubectl delete secret ghcr-pull-secret -n busibox --ignore-not-found 2>/dev/null || true
+        
+        # Delete namespace
+        KUBECONFIG="$kubeconfig" kubectl delete namespace busibox --timeout=120s 2>/dev/null || true
+        
+        success "K8s uninstall complete"
     else
         error "Unknown backend: $backend"
         return 1
@@ -285,6 +344,8 @@ main() {
         box_line "  ${BOLD}1)${NC} Continue Install - pick up from where we last failed"
         box_line "  ${BOLD}2)${NC} Full Install - redeploy all services, keep config & data"
         box_line "  ${BOLD}3)${NC} Clean Install - clear everything and start fresh"
+        box_empty
+        box_line "  ${BOLD}e)${NC} New Environment - install to a different environment/backend"
         box_empty
         if [[ "$FROM_LAUNCHER" == true ]]; then
             box_line "  ${DIM}b = back${NC}"
@@ -360,6 +421,13 @@ main() {
                     exit 0
                 fi
                 ;;
+            e|E)
+                # New Environment - launch the full wizard without any pre-set environment/backend
+                echo ""
+                info "Starting fresh install wizard (choose a new environment and backend)..."
+                sleep 1
+                exec bash "${SCRIPT_DIR}/install.sh" "$@"
+                ;;
             b|B)
                 if [[ "$FROM_LAUNCHER" == true ]]; then
                     # Return to launcher menu
@@ -374,8 +442,7 @@ main() {
                 exit 0
                 ;;
             *)
-                echo "Invalid option. Exiting."
-                exit 1
+                echo "Invalid option."
                 ;;
         esac
     else

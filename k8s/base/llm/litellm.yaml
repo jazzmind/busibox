@@ -1,0 +1,164 @@
+---
+# LiteLLM - Unified LLM Gateway
+apiVersion: v1
+kind: Service
+metadata:
+  name: litellm
+  labels:
+    app: litellm
+    tier: llm
+spec:
+  ports:
+    - port: 4000
+      targetPort: 4000
+  selector:
+    app: litellm
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: litellm
+  labels:
+    app: litellm
+    tier: llm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: litellm
+  template:
+    metadata:
+      labels:
+        app: litellm
+        tier: llm
+    spec:
+      containers:
+        - name: litellm
+          image: ghcr.io/berriai/litellm:main-latest
+          command:
+            - sh
+            - -c
+            - |
+              export DATABASE_URL="postgresql://busibox_user:${POSTGRES_PASSWORD}@postgres:5432/litellm"
+              exec litellm --config /app/config.yaml --port 4000
+          ports:
+            - containerPort: 4000
+          env:
+            - name: LITELLM_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: busibox-secrets
+                  key: LITELLM_MASTER_KEY
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: busibox-secrets
+                  key: POSTGRES_PASSWORD
+            - name: STORE_MODEL_IN_DB
+              value: "True"
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: busibox-secrets
+                  key: OPENAI_API_KEY
+                  optional: true
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: busibox-secrets
+                  key: ANTHROPIC_API_KEY
+                  optional: true
+            # AWS Bedrock - bearer token (or IAM keys set at runtime via AI Portal)
+            - name: AWS_BEARER_TOKEN_BEDROCK
+              valueFrom:
+                secretKeyRef:
+                  name: busibox-secrets
+                  key: BEDROCK_API_KEY
+                  optional: true
+            - name: AWS_REGION_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: busibox-secrets
+                  key: AWS_REGION_NAME
+                  optional: true
+          livenessProbe:
+            httpGet:
+              path: /health/liveliness
+              port: 4000
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health/liveliness
+              port: 4000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+          volumeMounts:
+            - name: litellm-config
+              mountPath: /app/config.yaml
+              subPath: litellm-config.yaml
+      volumes:
+        - name: litellm-config
+          configMap:
+            name: litellm-config
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: litellm-config
+  labels:
+    app: litellm
+data:
+  litellm-config.yaml: |
+    # Bootstrap config only - models are managed at runtime via AI Portal
+    # (Settings -> AI Models). With STORE_MODEL_IN_DB=True, models added
+    # via the UI are persisted in PostgreSQL and override this config.
+    #
+    # This file provides:
+    #   1. Minimal purpose aliases so the system works before admin setup
+    #   2. GPU burst routing (vLLM primary -> cloud fallback)
+
+    model_list:
+      # GPU burst model - routes to local vLLM when available
+      # When GPU node is up: vLLM serves this at high speed
+      # When GPU node is down: falls back to cloud provider
+      # Model routing priority: vLLM (local) -> cloud fallback
+      - model_name: gpu-agent
+        litellm_params:
+          model: openai/Qwen/Qwen2.5-7B-Instruct-AWQ
+          api_base: http://vllm:8000/v1
+          api_key: "not-needed"
+          timeout: 10  # Short timeout - fail fast if vLLM is down
+      - model_name: gpu-agent
+        litellm_params:
+          model: openai/gpt-4o-mini
+          api_key: os.environ/OPENAI_API_KEY
+
+    litellm_settings:
+      drop_params: true
+      set_verbose: false
+      num_retries: 3
+      request_timeout: 120
+      cache: true
+      cache_params:
+        type: redis
+        host: redis
+        port: 6379
+
+    router_settings:
+      # When vLLM is unreachable (GPU node down), fail over to cloud quickly
+      num_retries: 2
+      timeout: 15
+      # Use lowest-latency routing - vLLM will be faster when available
+      routing_strategy: "latency-based-routing"
+
+    general_settings:
+      master_key: os.environ/LITELLM_MASTER_KEY
+      database_url: os.environ/DATABASE_URL

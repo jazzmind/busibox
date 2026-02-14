@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.middleware.jwt_auth import JWTAuthMiddleware
 from api.middleware.logging import LoggingMiddleware
-from api.routes import search, health, web_search, insights
+from api.routes import search, health, web_search, insights, graph_search
 from busibox_common import AsyncPGPoolManager
 from services.insights_service import InsightsService
 from shared.config import config
@@ -79,6 +79,7 @@ app.state.insights_service = insights_service
 
 # Include routers
 app.include_router(search.router, prefix="/search", tags=["search"])
+app.include_router(graph_search.router, prefix="/search/graph", tags=["graph-search"])
 app.include_router(web_search.router, prefix="/web-search", tags=["web-search"])
 app.include_router(insights.router, prefix="/insights", tags=["insights"])
 app.include_router(health.router, prefix="/health", tags=["health"])
@@ -95,6 +96,20 @@ async def startup_event():
         milvus_collection=config.milvus_collection,
     )
     await pg_pool.connect()
+    
+    # Connect Neo4j for graph-enhanced search (optional)
+    try:
+        from services.graph_search import GraphSearchService
+        graph_search_service = GraphSearchService(config.to_dict())
+        connected = await graph_search_service.connect()
+        app.state.graph_search_service = graph_search_service
+        if connected:
+            logger.info("Neo4j graph search service connected")
+        else:
+            logger.info("Neo4j graph search not available (graph features disabled)")
+    except Exception as e:
+        logger.warning("Neo4j graph search init failed", error=str(e))
+        app.state.graph_search_service = None
 
 
 @app.on_event("shutdown")
@@ -102,6 +117,11 @@ async def shutdown_event():
     """Cleanup on shutdown."""
     logger.info("Shutting down Search API")
     await pg_pool.disconnect()
+    
+    # Disconnect Neo4j
+    graph_svc = getattr(app.state, "graph_search_service", None)
+    if graph_svc:
+        await graph_svc.disconnect()
 
 
 @app.get("/")

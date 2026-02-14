@@ -4,7 +4,7 @@
 # ==========================
 #
 # Interactive menu for managing deployed services.
-# Supports both Docker and Proxmox backends.
+# Supports Docker, Proxmox, and K8s backends via modular backend files.
 #
 # Usage:
 #   make manage              # Interactive management menu
@@ -33,23 +33,19 @@ _read_last_env() {
 }
 
 # Auto-detect deployed environment BEFORE sourcing state library
-# This allows the state library to use the correct state file
 _auto_detect_env() {
-    # If BUSIBOX_ENV is already set, use it
     if [[ -n "${BUSIBOX_ENV:-}" ]]; then
         echo "$BUSIBOX_ENV"
         return
     fi
-    
-    # Check for last used environment in simple state file
+
     local last_env
     last_env=$(_read_last_env)
     if [[ -n "$last_env" ]]; then
         echo "$last_env"
         return
     fi
-    
-    # No saved environment - return empty to trigger environment selector
+
     echo ""
 }
 
@@ -62,65 +58,13 @@ source "${REPO_ROOT}/scripts/lib/state.sh"
 source "${REPO_ROOT}/scripts/lib/status.sh"
 source "${REPO_ROOT}/scripts/lib/services.sh"
 
-# ============================================================================
-# Configuration
-# ============================================================================
-
-# Service group order
-SERVICE_GROUP_ORDER=("Infrastructure" "APIs" "LLM" "Frontend" "User Apps")
-
-# Detect if running on Apple Silicon
-is_apple_silicon() {
-    local os arch
-    os=$(uname -s)
-    arch=$(uname -m)
-    [[ "$os" == "Darwin" && ("$arch" == "arm64" || "$arch" == "aarch64") ]]
-}
-
-# Get services for a group (replaces associative array for bash 3.2 compatibility)
-get_services_for_group() {
-    local group="$1"
-    local backend
-    backend=$(get_backend_type)
-    
-    case "$group" in
-        "Infrastructure")
-            echo "postgres redis minio milvus"
-            ;;
-            "APIs")
-                echo "authz-api agent-api data-api search-api deploy-api bridge-api docs-api embedding-api"
-            ;;
-        "LLM")
-            # Show MLX on Apple Silicon, vLLM otherwise
-            if is_apple_silicon; then
-                echo "litellm mlx"
-            else
-                echo "litellm vllm"
-            fi
-            ;;
-        "Frontend")
-            # On Proxmox, nginx is a separate container; on Docker, it's bundled
-            if [[ "$backend" == "docker" ]]; then
-                echo "core-apps"  # nginx is part of core-apps container in Docker
-            else
-                echo "nginx core-apps"  # nginx is separate on Proxmox
-            fi
-            ;;
-        "User Apps")
-            echo "user-apps"
-            ;;
-        *)
-            echo ""
-            ;;
-    esac
-}
+# Source backend libraries
+source "${REPO_ROOT}/scripts/lib/backends/common.sh"
 
 # ============================================================================
 # Backend Detection
 # ============================================================================
 
-# Get current environment with fallback to BUSIBOX_ENV
-# This handles the case where ENVIRONMENT isn't set in the state file yet
 get_current_env() {
     local env
     env=$(get_state "ENVIRONMENT")
@@ -141,11 +85,9 @@ get_backend_type() {
     echo "$backend"
 }
 
-# Get container prefix based on environment
 get_container_prefix() {
     local env
     env=$(get_current_env)
-    
     case "$env" in
         production) echo "prod" ;;
         staging) echo "staging" ;;
@@ -155,227 +97,66 @@ get_container_prefix() {
     esac
 }
 
-# Set CONTAINER_PREFIX for use by functions
+# Set globals used by backend files
 CONTAINER_PREFIX=$(get_container_prefix)
+CURRENT_ENV=$(get_current_env)
+export CONTAINER_PREFIX CURRENT_ENV
+
+# Load the appropriate backend
+_CURRENT_BACKEND=$(get_backend_type)
+load_backend "$_CURRENT_BACKEND"
 
 # ============================================================================
-# Service Status
+# Service Groups (delegated to backend)
 # ============================================================================
 
-# Get status of a single service (Docker)
-get_docker_service_status() {
-    local service="$1"
-    local prefix="${CONTAINER_PREFIX:-dev}"
-    local container_name="${prefix}-${service}"
-    
-    # Special case: MLX runs on host, not in Docker container
-    # Check via direct HTTP call to the MLX server on localhost
-    if [[ "$service" == "mlx" ]]; then
-        # Try host-agent status endpoint first
-        local host_agent_port
-        host_agent_port=$(get_state "HOST_AGENT_PORT" "8089")
-        local host_agent_token
-        host_agent_token=$(get_state "HOST_AGENT_TOKEN" "")
-        
-        if [[ -n "$host_agent_token" ]]; then
-            local response
-            response=$(curl -s -w "%{http_code}" -o /dev/null \
-                -H "Authorization: Bearer $host_agent_token" \
-                "http://localhost:${host_agent_port}/mlx/status" 2>/dev/null || echo "000")
-            if [[ "$response" == "200" ]]; then
-                echo "running"
-                return
-            fi
-        fi
-        
-        # Fallback: direct MLX health check on localhost:8080
-        local mlx_response
-        mlx_response=$(curl -s -w "%{http_code}" -o /dev/null --max-time 2 \
-            "http://localhost:8080/v1/models" 2>/dev/null || echo "000")
-        if [[ "$mlx_response" == "200" ]]; then
-            echo "running"
-        else
-            echo "stopped"
-        fi
-        return
-    fi
-    
-    # Check if container exists
-    if ! docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${container_name}$"; then
-        echo "missing"
-        return
-    fi
-    
-    # Check if running
-    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${container_name}$"; then
-        # Check health if available
-        local health
-        health=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null || echo "")
-        if [[ "$health" == "healthy" ]]; then
-            echo "healthy"
-        elif [[ "$health" == "unhealthy" ]]; then
-            echo "unhealthy"
-        else
-            echo "running"
-        fi
-    else
-        echo "stopped"
-    fi
+# Get services for a group, using the current backend
+get_services_for_group() {
+    local group="$1"
+    backend_get_services_for_group "$group" "$_CURRENT_BACKEND"
 }
 
-# Get status of a single service (Proxmox LXC)
-# Uses actual HTTP health endpoint checks for APIs, not just container ping
-get_proxmox_service_status() {
-    local service="$1"
-    local env
-    env=$(get_current_env)
-    
-    # Normalize service name for lookup in service registry
-    # The registry uses underscores (e.g., agent_api, ai_portal)
-    # The menu uses hyphens (e.g., agent-api, ai-portal)
-    # First convert hyphens to underscores, then handle special cases
-    local lookup_service="${service//-/_}"
-    case "$service" in
-        pg) lookup_service="postgres" ;;
-        files) lookup_service="minio" ;;
-        # Short names that need expansion
-        agent) lookup_service="agent_api" ;;
-        ingest|data) lookup_service="data_api" ;;
-        search) lookup_service="search_api" ;;
-        deploy) lookup_service="deploy_api" ;;
-        docs) lookup_service="docs_api" ;;
-        # App services
-        apps) lookup_service="ai_portal" ;;
-        proxy) lookup_service="nginx" ;;
-        core-apps) lookup_service="ai_portal" ;;
-        user-apps) lookup_service="user_apps" ;;
-    esac
-    
-    # Get health URL from service registry
-    local health_url
-    health_url=$(get_service_health_url "$lookup_service" "$env" "proxmox" 2>/dev/null)
-    
-    if [[ -z "$health_url" ]]; then
-        # Fallback to container ping for services without health endpoints
-        local network_base
-        case "$env" in
-            staging) network_base="10.96.201" ;;
-            production) network_base="10.96.200" ;;
-            *) network_base="10.96.201" ;;
-        esac
-        
-        local ip
-        case "$service" in
-            postgres|pg) ip="${network_base}.203" ;;
-            minio|files) ip="${network_base}.205" ;;
-            milvus) ip="${network_base}.204" ;;
-            agent|agent-api|docs-api|docs) ip="${network_base}.202" ;;
-            ingest|data-api|data) ip="${network_base}.206" ;;
-            authz|authz-api) ip="${network_base}.210" ;;
-            core-apps|apps) ip="${network_base}.201" ;;
-            proxy|nginx) ip="${network_base}.200" ;;
-            litellm) ip="${network_base}.207" ;;
-            vllm) ip="${network_base}.208" ;;
-            embedding) ip="${network_base}.208" ;;
-            redis) ip="${network_base}.206" ;;
-            user-apps) ip="${network_base}.212" ;;
-            *) echo "unknown"; return ;;
-        esac
-        
-        if ping -c 1 -W 1 "$ip" &>/dev/null 2>&1; then
-            echo "running"
-        else
-            echo "unreachable"
-        fi
-        return
-    fi
-    
-    # Check actual health endpoint with short timeout
-    local http_code
-    http_code=$(curl -s -w "%{http_code}" --max-time 3 --connect-timeout 2 -o /dev/null "$health_url" 2>/dev/null || echo "000")
-    
-    case "$http_code" in
-        200|301|302)
-            echo "healthy"
-            ;;
-        401|403)
-            # Auth required but service is up
-            echo "healthy"
-            ;;
-        000)
-            # Connection failed - check if container is at least pingable
-            # Use get_service_ip for correct resolution (e.g. vllm uses prod when staging+use_production_vllm)
-            local ip
-            ip=$(get_service_ip "$lookup_service" "$env" "proxmox" 2>/dev/null || echo "")
-            if [[ -n "$ip" ]]; then
-                if ping -c 1 -W 1 "$ip" &>/dev/null 2>&1; then
-                    echo "stopped"  # Container up but service not responding
-                else
-                    echo "unreachable"  # Container not reachable
-                fi
-            else
-                echo "unreachable"
-            fi
-            ;;
-        5*)
-            # Server error - service unhealthy
-            echo "unhealthy"
-            ;;
-        *)
-            # Other codes
-            echo "unknown"
-            ;;
-    esac
-}
-
-# Get service status based on backend
-get_service_status() {
-    local service="$1"
-    local backend
-    backend=$(get_backend_type)
-    
-    if [[ "$backend" == "docker" ]]; then
-        get_docker_service_status "$service"
-    else
-        get_proxmox_service_status "$service"
-    fi
+# Get group order for the current backend
+_get_group_order() {
+    local order_str
+    order_str=$(backend_get_group_order "$_CURRENT_BACKEND")
+    echo "$order_str"
 }
 
 # ============================================================================
 # Service Display
 # ============================================================================
 
-# Display all services with status (in 2 columns, with parallel health checks)
 show_services_status() {
-    local backend
-    backend=$(get_backend_type)
-    
     echo ""
-    
-    # Collect all services first
+
+    # Get group order
+    local groups_str
+    groups_str=$(_get_group_order)
+
+    # Collect all services
     local all_services=()
-    for group in "${SERVICE_GROUP_ORDER[@]}"; do
+    for group in $groups_str; do
+        # Convert underscored group names back for display
+        local display_group="${group//_/ }"
         local services
         services=$(get_services_for_group "$group")
         for service in $services; do
             all_services+=("$service")
         done
     done
-    
-    # Run health checks in parallel and store results in temp files
+
+    # Run health checks in parallel
     local tmpdir=$(mktemp -d)
-    
+
     for service in "${all_services[@]}"; do
         (
-            status=$(get_service_status "$service")
+            status=$(backend_get_service_status "$service")
             echo "$status" > "$tmpdir/$service.status"
         ) &
     done
-    
-    # Wait for all background jobs to complete
     wait
-    
-    # Helper function to get status from temp file (Bash 3.2 compatible)
+
     get_cached_status() {
         local service="$1"
         if [[ -f "$tmpdir/$service.status" ]]; then
@@ -384,12 +165,12 @@ show_services_status() {
             echo "unknown"
         fi
     }
-    
+
     # Count statuses
     local running_count=0
     local stopped_count=0
     local stopped_services=()
-    
+
     for service in "${all_services[@]}"; do
         local status=$(get_cached_status "$service")
         case "$status" in
@@ -402,29 +183,40 @@ show_services_status() {
                 ;;
         esac
     done
-    
+
     # Show summary
     printf "  ${CYAN}Status:${NC} ${GREEN}%d running${NC}" "$running_count"
     if [[ $stopped_count -gt 0 ]]; then
         printf ", ${RED}%d stopped${NC} ${DIM}(%s)${NC}" "$stopped_count" "$(IFS=', '; echo "${stopped_services[*]}")"
     fi
     echo ""
+
+    # K8s: show tunnel status
+    if [[ "$_CURRENT_BACKEND" == "k8s" ]] && type backend_get_tunnel_status_string &>/dev/null; then
+        local tunnel_status
+        tunnel_status=$(backend_get_tunnel_status_string)
+        printf "  ${CYAN}Tunnel:${NC}  %b\n" "$tunnel_status"
+    fi
+
     echo ""
-    
+
     # Display services by group
-    for group in "${SERVICE_GROUP_ORDER[@]}"; do
+    for group in $groups_str; do
+        local display_group="${group//_/ }"
+
         local services
         services=$(get_services_for_group "$group")
-        
-        printf "  ${BOLD}${group}${NC}\n"
-        
-        # Collect services into an array
+
+        # Skip empty groups
+        [[ -z "$services" ]] && continue
+
+        printf "  ${BOLD}${display_group}${NC}\n"
+
         local services_arr=()
         for service in $services; do
             services_arr+=("$service")
         done
-        
-        # Display in 2 columns
+
         local i=0
         local count=${#services_arr[@]}
         while [[ $i -lt $count ]]; do
@@ -432,152 +224,97 @@ show_services_status() {
             local status1=$(get_cached_status "$service1")
             local status_icon1 status_color1
             case "$status1" in
-                healthy)    status_icon1="●" ; status_color1="${GREEN}" ;;
-                running)    status_icon1="●" ; status_color1="${GREEN}" ;;
-                stopped)    status_icon1="○" ; status_color1="${RED}" ;;
-                unhealthy)  status_icon1="●" ; status_color1="${YELLOW}" ;;
-                missing)    status_icon1="○" ; status_color1="${DIM}" ;;
+                healthy)     status_icon1="●" ; status_color1="${GREEN}" ;;
+                running)     status_icon1="●" ; status_color1="${GREEN}" ;;
+                stopped)     status_icon1="○" ; status_color1="${RED}" ;;
+                unhealthy)   status_icon1="●" ; status_color1="${YELLOW}" ;;
+                missing)     status_icon1="○" ; status_color1="${DIM}" ;;
                 unreachable) status_icon1="○" ; status_color1="${RED}" ;;
-                *)          status_icon1="?" ; status_color1="${DIM}" ;;
+                pending)     status_icon1="◐" ; status_color1="${YELLOW}" ;;
+                failed)      status_icon1="●" ; status_color1="${RED}" ;;
+                *)           status_icon1="?" ; status_color1="${DIM}" ;;
             esac
-            
-            # Second column (if exists)
+
             if [[ $((i+1)) -lt $count ]]; then
                 local service2="${services_arr[$((i+1))]}"
                 local status2=$(get_cached_status "$service2")
                 local status_icon2 status_color2
                 case "$status2" in
-                    healthy)    status_icon2="●" ; status_color2="${GREEN}" ;;
-                    running)    status_icon2="●" ; status_color2="${GREEN}" ;;
-                    stopped)    status_icon2="○" ; status_color2="${RED}" ;;
-                    unhealthy)  status_icon2="●" ; status_color2="${YELLOW}" ;;
-                    missing)    status_icon2="○" ; status_color2="${DIM}" ;;
+                    healthy)     status_icon2="●" ; status_color2="${GREEN}" ;;
+                    running)     status_icon2="●" ; status_color2="${GREEN}" ;;
+                    stopped)     status_icon2="○" ; status_color2="${RED}" ;;
+                    unhealthy)   status_icon2="●" ; status_color2="${YELLOW}" ;;
+                    missing)     status_icon2="○" ; status_color2="${DIM}" ;;
                     unreachable) status_icon2="○" ; status_color2="${RED}" ;;
-                    *)          status_icon2="?" ; status_color2="${DIM}" ;;
+                    pending)     status_icon2="◐" ; status_color2="${YELLOW}" ;;
+                    failed)      status_icon2="●" ; status_color2="${RED}" ;;
+                    *)           status_icon2="?" ; status_color2="${DIM}" ;;
                 esac
                 local display1 display2
-                display1=$(get_service_display_name_for_env "$service1" "$(get_current_env)")
-                display2=$(get_service_display_name_for_env "$service2" "$(get_current_env)")
+                display1=$(get_service_display_name_for_env "$service1" "$(get_current_env)" 2>/dev/null || echo "$service1")
+                display2=$(get_service_display_name_for_env "$service2" "$(get_current_env)" 2>/dev/null || echo "$service2")
                 printf "    ${status_color1}${status_icon1}${NC} %-22s ${DIM}%-10s${NC}  ${status_color2}${status_icon2}${NC} %-22s ${DIM}%s${NC}\n" \
                     "$display1" "$status1" "$display2" "$status2"
             else
-                # Single item on last row
                 local display1
-                display1=$(get_service_display_name_for_env "$service1" "$(get_current_env)")
+                display1=$(get_service_display_name_for_env "$service1" "$(get_current_env)" 2>/dev/null || echo "$service1")
                 printf "    ${status_color1}${status_icon1}${NC} %-22s ${DIM}%s${NC}\n" "$display1" "$status1"
             fi
-            
+
             i=$((i+2))
         done
-        
+
         echo ""
     done
-    
-    # Clean up temp files
+
     rm -rf "$tmpdir"
 }
 
 # ============================================================================
-# Service Actions
+# Service Actions (delegate to backend)
 # ============================================================================
 
-# Start all services
 start_all_services() {
-    local backend
-    backend=$(get_backend_type)
-    
     echo ""
-    info "Starting all services..."
-    
-    if [[ "$backend" == "docker" ]]; then
-        cd "$REPO_ROOT"
-        make docker-up
-    else
-        local env
-        env=$(get_current_env)
-        cd "${REPO_ROOT}/provision/ansible"
-        make start-all INV="inventory/${env}"
-    fi
-    
-    success "Services started"
+    backend_start_all
     read -n 1 -s -r -p "Press any key to continue..."
 }
 
-# Stop all services
 stop_all_services() {
-    local backend
-    backend=$(get_backend_type)
-    
     echo ""
-    info "Stopping all services..."
-    
-    if [[ "$backend" == "docker" ]]; then
-        cd "$REPO_ROOT"
-        make docker-down
-    else
-        local env
-        env=$(get_current_env)
-        cd "${REPO_ROOT}/provision/ansible"
-        make stop-all INV="inventory/${env}"
-    fi
-    
-    success "Services stopped"
+    backend_stop_all
     read -n 1 -s -r -p "Press any key to continue..."
 }
 
-# Restart all services
 restart_all_services() {
-    local backend
-    backend=$(get_backend_type)
-    
     echo ""
-    info "Restarting all services..."
-    
-    if [[ "$backend" == "docker" ]]; then
-        cd "$REPO_ROOT"
-        make docker-restart
-    else
-        local env
-        env=$(get_current_env)
-        cd "${REPO_ROOT}/provision/ansible"
-        make restart-all INV="inventory/${env}"
-    fi
-    
-    success "Services restarted"
+    backend_restart_all
     read -n 1 -s -r -p "Press any key to continue..."
 }
 
-# Check if a service runs on the host (not in Docker/Proxmox)
-is_host_native_service() {
-    local service="$1"
-    case "$service" in
-        mlx|host-agent) return 0 ;;
-        *) return 1 ;;
-    esac
-}
+# ============================================================================
+# Manage Individual Service
+# ============================================================================
 
-# Manage a host-native service (MLX, host-agent)
-# These run directly on the host machine, not in Docker or Proxmox containers.
-# Actions are routed to Makefile targets (e.g., make mlx-start, make mlx-stop).
 manage_host_native_service() {
     local service="$1"
-    
+
     while true; do
         clear
         box_start 70 double "$CYAN"
         box_header "MANAGE: $service (host-native)"
         box_empty
-        
+
         local status
-        status=$(get_service_status "$service")
+        status=$(backend_get_service_status "$service" 2>/dev/null || echo "unknown")
         box_line "  ${CYAN}Status:${NC} $status"
         box_empty
-        
+
         box_line "  ${BOLD}1)${NC} Start"
         box_line "  ${BOLD}2)${NC} Stop"
         box_line "  ${BOLD}3)${NC} Restart"
         box_line "  ${BOLD}4)${NC} Status (detailed)"
-        
+
         box_empty
         box_line "  ${DIM}This service runs on the host machine, not in a container.${NC}"
         box_line "  ${DIM}Managed via: make ${service}-start/stop/restart/status${NC}"
@@ -586,102 +323,77 @@ manage_host_native_service() {
         box_empty
         box_footer
         echo ""
-        
+
         read -n 1 -s -r -p "Select option: " choice
         echo ""
-        
+
         case "$choice" in
-            1) # Start
-                echo ""
-                cd "$REPO_ROOT"
-                make "${service}-start" || echo "Failed to start"
-                echo ""
-                read -n 1 -s -r -p "Press any key to continue..."
-                ;;
-            2) # Stop
-                echo ""
-                cd "$REPO_ROOT"
-                make "${service}-stop" || echo "Failed to stop"
-                echo ""
-                read -n 1 -s -r -p "Press any key to continue..."
-                ;;
-            3) # Restart
-                echo ""
-                cd "$REPO_ROOT"
-                make "${service}-restart" || echo "Failed to restart"
-                echo ""
-                read -n 1 -s -r -p "Press any key to continue..."
-                ;;
-            4) # Status (detailed)
-                echo ""
-                cd "$REPO_ROOT"
-                make "${service}-status" || echo "Failed to get status"
-                echo ""
-                read -n 1 -s -r -p "Press any key to continue..."
-                ;;
-            b|B)
-                return
-                ;;
-            m|M)
-                return 1
-                ;;
+            1) host_native_action "$service" "start"; read -n 1 -s -r -p "Press any key to continue..." ;;
+            2) host_native_action "$service" "stop"; read -n 1 -s -r -p "Press any key to continue..." ;;
+            3) host_native_action "$service" "restart"; read -n 1 -s -r -p "Press any key to continue..." ;;
+            4) host_native_action "$service" "status"; read -n 1 -s -r -p "Press any key to continue..." ;;
+            b|B) return ;;
+            m|M) return 1 ;;
         esac
     done
 }
 
-# Manage individual service
-# Get companion services that should be managed together
-# e.g., data-api and data-worker always go together
-get_companion_services() {
-    local service="$1"
-    case "$service" in
-        data-api|ingest|data)
-            echo "data-worker"
-            ;;
-        # Add more companion mappings here as needed
-        # e.g., agent-api could include agent-scheduler in the future
-    esac
-}
-
 manage_service() {
     local service="$1"
-    
+
     # Host-native services get their own management flow
     if is_host_native_service "$service"; then
         manage_host_native_service "$service"
         return $?
     fi
-    
-    local backend
-    backend=$(get_backend_type)
+
     local prefix="${CONTAINER_PREFIX:-dev}"
-    
+    local env
+    env=$(get_current_env)
+
     while true; do
         clear
         box_start 70 double "$CYAN"
         box_header "MANAGE: $service"
         box_empty
-        
+
         local status
-        status=$(get_service_status "$service")
+        status=$(backend_get_service_status "$service")
         box_line "  ${CYAN}Status:${NC} $status"
-        
-        # Show companion services
+
         local companions
         companions=$(get_companion_services "$service")
         if [[ -n "$companions" ]]; then
             box_line "  ${DIM}Includes: ${companions}${NC}"
         fi
         box_empty
-        
+
         box_line "  ${BOLD}1)${NC} Start"
         box_line "  ${BOLD}2)${NC} Stop"
         box_line "  ${BOLD}3)${NC} Restart"
         box_line "  ${BOLD}4)${NC} View Logs"
-        box_line "  ${BOLD}5)${NC} Redeploy (rebuild container)"
-        
-        # Add dev mode note for Python API services
-        if [[ "$backend" == "docker" ]]; then
+        box_line "  ${BOLD}5)${NC} Redeploy (rebuild)"
+
+        # Backend-specific extras for Docker core-apps
+        if [[ "$_CURRENT_BACKEND" == "docker" && "$service" == "core-apps" ]]; then
+            box_line "  ${BOLD}6)${NC} Rebuild Container (full Docker rebuild)"
+            box_line "  ${BOLD}7)${NC} Rebuild App (from source, no container restart)"
+
+            local current_mode
+            current_mode=$(docker inspect --format='{{join .Args " "}}' "${prefix}-core-apps" 2>/dev/null || echo "unknown")
+            if [[ "$current_mode" == "prod" ]]; then
+                box_line "  ${BOLD}8)${NC} Switch to Dev mode (Turbopack hot-reload)"
+                box_empty
+                box_line "  ${DIM}Currently running in ${BOLD}prod${NC}${DIM} mode (built, no hot-reload)${NC}"
+            else
+                box_line "  ${BOLD}8)${NC} Switch to Prod mode (build + serve, lower CPU)"
+                box_empty
+                box_line "  ${DIM}Currently running in ${BOLD}dev${NC}${DIM} mode (Turbopack hot-reload)${NC}"
+            fi
+        fi
+
+        # Add dev mode note for Docker Python API services
+        if [[ "$_CURRENT_BACKEND" == "docker" ]]; then
             case "$service" in
                 authz-api|data-api|search-api|agent-api|deploy-api|docs-api|embedding-api)
                     box_empty
@@ -691,320 +403,215 @@ manage_service() {
                     ;;
             esac
         fi
-        
-        # Add options for core-apps service
-        if [[ "$service" == "core-apps" ]]; then
-            # Option 6: Rebuild Container (Docker only)
-            if [[ "$backend" == "docker" ]]; then
-                box_line "  ${BOLD}6)${NC} Rebuild Container (full Docker rebuild)"
-            fi
-            # Option 7: Rebuild App (always available)
-            box_line "  ${BOLD}7)${NC} Rebuild App (from source, no container restart)"
-            # Option 8: Switch mode (Docker dev only)
-            if [[ "$backend" == "docker" ]]; then
-                # Detect current mode from the running container's command
-                local current_mode
-                current_mode=$(docker inspect --format='{{join .Args " "}}' "${prefix}-core-apps" 2>/dev/null || echo "unknown")
-                if [[ "$current_mode" == "prod" ]]; then
-                    box_line "  ${BOLD}8)${NC} Switch to Dev mode (Turbopack hot-reload)"
-                    box_empty
-                    box_line "  ${DIM}Currently running in ${BOLD}prod${NC}${DIM} mode (built, no hot-reload)${NC}"
-                else
-                    box_line "  ${BOLD}8)${NC} Switch to Prod mode (build + serve, lower CPU)"
-                    box_empty
-                    box_line "  ${DIM}Currently running in ${BOLD}dev${NC}${DIM} mode (Turbopack hot-reload)${NC}"
-                fi
-            fi
+
+        # K8s note
+        if [[ "$_CURRENT_BACKEND" == "k8s" ]]; then
+            box_empty
+            box_line "  ${DIM}Note: Stop scales to 0 replicas. Start scales to 1.${NC}"
+            box_line "  ${DIM}Redeploy syncs code, rebuilds image, and restarts.${NC}"
         fi
-        
+
         box_empty
         box_line "  ${DIM}b = back to service list    m = main menu${NC}"
         box_empty
         box_footer
         echo ""
-        
+
         read -n 1 -s -r -p "Select option: " choice
         echo ""
-        
+
         case "$choice" in
             1) # Start
-                if [[ "$backend" == "docker" ]]; then
-                    docker start "${prefix}-${service}" 2>/dev/null || echo "Failed to start"
-                    for companion in $(get_companion_services "$service"); do
-                        info "Also starting companion: ${companion}"
-                        docker start "${prefix}-${companion}" 2>/dev/null || echo "Failed to start ${companion}"
-                    done
-                else
-                    local env
-                    env=$(get_current_env)
-                    cd "${REPO_ROOT}/provision/ansible"
-                    make "start-${service}" INV="inventory/${env}" 2>/dev/null || echo "Failed to start"
-                    for companion in $(get_companion_services "$service"); do
-                        info "Also starting companion: ${companion}"
-                        make "start-${companion}" INV="inventory/${env}" 2>/dev/null || echo "Failed to start ${companion}"
-                    done
-                fi
+                backend_service_action "$service" "start" "$env" "$prefix"
+                for companion in $(get_companion_services "$service"); do
+                    info "Also starting companion: ${companion}"
+                    backend_service_action "$companion" "start" "$env" "$prefix"
+                done
                 read -n 1 -s -r -p "Press any key to continue..."
                 ;;
             2) # Stop
-                if [[ "$backend" == "docker" ]]; then
-                    docker stop "${prefix}-${service}" 2>/dev/null || echo "Failed to stop"
-                    for companion in $(get_companion_services "$service"); do
-                        info "Also stopping companion: ${companion}"
-                        docker stop "${prefix}-${companion}" 2>/dev/null || echo "Failed to stop ${companion}"
-                    done
-                else
-                    local env
-                    env=$(get_current_env)
-                    cd "${REPO_ROOT}/provision/ansible"
-                    make "stop-${service}" INV="inventory/${env}" 2>/dev/null || echo "Failed to stop"
-                    for companion in $(get_companion_services "$service"); do
-                        info "Also stopping companion: ${companion}"
-                        make "stop-${companion}" INV="inventory/${env}" 2>/dev/null || echo "Failed to stop ${companion}"
-                    done
-                fi
+                backend_service_action "$service" "stop" "$env" "$prefix"
+                for companion in $(get_companion_services "$service"); do
+                    info "Also stopping companion: ${companion}"
+                    backend_service_action "$companion" "stop" "$env" "$prefix"
+                done
                 read -n 1 -s -r -p "Press any key to continue..."
                 ;;
             3) # Restart
-                if [[ "$backend" == "docker" ]]; then
-                    docker restart "${prefix}-${service}" 2>/dev/null || echo "Failed to restart"
-                    for companion in $(get_companion_services "$service"); do
-                        info "Also restarting companion: ${companion}"
-                        docker restart "${prefix}-${companion}" 2>/dev/null || echo "Failed to restart ${companion}"
-                    done
-                else
-                    local env
-                    env=$(get_current_env)
-                    cd "${REPO_ROOT}/provision/ansible"
-                    make "restart-${service}" INV="inventory/${env}" 2>/dev/null || echo "Failed to restart"
-                    for companion in $(get_companion_services "$service"); do
-                        info "Also restarting companion: ${companion}"
-                        make "restart-${companion}" INV="inventory/${env}" 2>/dev/null || echo "Failed to restart ${companion}"
-                    done
-                fi
+                backend_service_action "$service" "restart" "$env" "$prefix"
+                for companion in $(get_companion_services "$service"); do
+                    info "Also restarting companion: ${companion}"
+                    backend_service_action "$companion" "restart" "$env" "$prefix"
+                done
                 read -n 1 -s -r -p "Press any key to continue..."
                 ;;
             4) # Logs
                 clear
-                echo "Showing logs for ${service} (Ctrl+C to exit)..."
-                echo ""
-                if [[ "$backend" == "docker" ]]; then
-                    docker logs -f "${prefix}-${service}" 2>/dev/null || echo "No logs available"
-                else
-                    local env
-                    env=$(get_current_env)
-                    ssh "root@${service}" "journalctl -u ${service} -f" 2>/dev/null || echo "No logs available"
-                fi
+                backend_service_action "$service" "logs" "$env" "$prefix"
                 ;;
             5) # Redeploy
                 echo ""
-                info "Redeploying ${service}..."
-                if [[ "$backend" == "docker" ]]; then
-                    local env
-                    env=$(get_current_env)
-                    cd "$REPO_ROOT"
-                    make docker-build SERVICE="$service" ENV="$env" && make docker-up SERVICE="$service" ENV="$env"
-                    for companion in $(get_companion_services "$service"); do
-                        echo ""
-                        info "Also redeploying companion: ${companion}"
-                        make docker-build SERVICE="$companion" ENV="$env" && make docker-up SERVICE="$companion" ENV="$env"
-                    done
-                else
-                    local env
-                    env=$(get_current_env)
-                    cd "${REPO_ROOT}/provision/ansible"
-                    # Map service to correct make target
-                    # Note: data-api redeploy uses 'data' target which already includes data-worker
-                    local make_target
-                    case "$service" in
-                        core-apps|apps) make_target="apps" ;;
-                        user-apps) make_target="user-apps" ;;
-                        nginx|proxy) make_target="nginx" ;;
-                        postgres|pg) make_target="pg" ;;
-                        minio|files) make_target="files" ;;
-                        authz*) make_target="authz" ;;
-                        agent*) make_target="agent" ;;
-                        data*|ingest*) make_target="data" ;;
-                        search*) make_target="search-api" ;;
-                        bridge*) make_target="bridge" ;;
-                        deploy*) make_target="deploy-api" ;;
-                        docs*) make_target="docs" ;;
-                        embedding*) make_target="embedding-api" ;;
-                        *) make_target="$service" ;;
-                    esac
-                    make "$make_target" INV="inventory/${env}"
-                fi
+                backend_service_action "$service" "redeploy" "$env" "$prefix"
+                for companion in $(get_companion_services "$service"); do
+                    echo ""
+                    info "Also redeploying companion: ${companion}"
+                    backend_service_action "$companion" "redeploy" "$env" "$prefix"
+                done
                 read -n 1 -s -r -p "Press any key to continue..."
                 ;;
-            6) # Rebuild Container (only for core-apps + Docker)
-                if [[ "$service" != "core-apps" ]] || [[ "$backend" != "docker" ]]; then
+            6) # Rebuild Container (Docker core-apps only)
+                if [[ "$service" != "core-apps" ]] || [[ "$_CURRENT_BACKEND" != "docker" ]]; then
                     continue
                 fi
-                
                 echo ""
                 info "Rebuilding core-apps container (full Docker rebuild)..."
-                local env
-                env=$(get_current_env)
                 cd "$REPO_ROOT"
                 make docker-build SERVICE=core-apps ENV="$env" && make docker-up SERVICE=core-apps ENV="$env"
                 read -n 1 -s -r -p "Press any key to continue..."
                 ;;
-            8) # Switch mode (only for core-apps + Docker)
-                if [[ "$service" != "core-apps" ]] || [[ "$backend" != "docker" ]]; then
+            7) # Rebuild App (core-apps only)
+                if [[ "$service" != "core-apps" ]]; then
                     continue
                 fi
-                
+                _rebuild_app_submenu "$env" "$prefix"
+                ;;
+            8) # Switch mode (Docker core-apps only)
+                if [[ "$service" != "core-apps" ]] || [[ "$_CURRENT_BACKEND" != "docker" ]]; then
+                    continue
+                fi
                 echo ""
-                # Detect current mode
                 local current_mode
                 current_mode=$(docker inspect --format='{{join .Args " "}}' "${prefix}-core-apps" 2>/dev/null || echo "dev")
-                
                 local new_mode
                 if [[ "$current_mode" == "prod" ]]; then
                     new_mode="dev"
-                    info "Switching core-apps to dev mode (Turbopack hot-reload)..."
+                    info "Switching core-apps to dev mode..."
                 else
                     new_mode="prod"
-                    info "Switching core-apps to prod mode (build + serve)..."
-                    warn "This will build both apps before starting. It may take a minute."
+                    info "Switching core-apps to prod mode..."
+                    warn "This will build both apps before starting."
                 fi
-                
                 cd "$REPO_ROOT"
                 export CORE_APPS_MODE="$new_mode"
                 make docker-up SERVICE="core-apps"
-                
                 echo ""
                 success "core-apps now running in ${new_mode} mode"
                 read -n 1 -s -r -p "Press any key to continue..."
                 ;;
-            7) # Rebuild App (only for core-apps)
-                if [[ "$service" != "core-apps" ]]; then
-                    continue
-                fi
-                
-                clear
-                box_start 70 double "$CYAN"
-                box_header "REBUILD APP"
-                box_empty
-                box_line "  ${BOLD}Select app to rebuild:${NC}"
-                box_empty
-                box_line "    ${BOLD}1)${NC} ai-portal"
-                box_line "    ${BOLD}2)${NC} agent-manager"
-                box_line "    ${BOLD}3)${NC} both"
-                box_empty
-                box_line "  ${DIM}b = back${NC}"
-                box_empty
-                box_footer
-                echo ""
-                
-                read -n 1 -s -r -p "Select app: " app_choice
-                echo ""
-                
-                case "$app_choice" in
-                    1) # ai-portal
-                        echo ""
-                        info "Rebuilding ai-portal from source..."
-                        if [[ "$backend" == "docker" ]]; then
-                            # Docker dev: reinstall deps and restart container
-                            # In dev mode, apps are volume-mounted and run with hot-reload
-                            docker exec "${prefix}-core-apps" bash -c "cd /srv/ai-portal && npm install"
-                            info "Restarting core-apps container..."
-                            docker restart "${prefix}-core-apps"
-                        else
-                            # Proxmox: use Ansible
-                            local env
-                            env=$(get_current_env)
-                            cd "${REPO_ROOT}/provision/ansible"
-                            make deploy-ai-portal INV="inventory/${env}"
-                        fi
-                        read -n 1 -s -r -p "Press any key to continue..."
-                        ;;
-                    2) # agent-manager
-                        echo ""
-                        info "Rebuilding agent-manager from source..."
-                        if [[ "$backend" == "docker" ]]; then
-                            # Docker dev: reinstall deps and restart container
-                            docker exec "${prefix}-core-apps" bash -c "cd /srv/agent-manager && npm install"
-                            info "Restarting core-apps container..."
-                            docker restart "${prefix}-core-apps"
-                        else
-                            # Proxmox: use Ansible
-                            local env
-                            env=$(get_current_env)
-                            cd "${REPO_ROOT}/provision/ansible"
-                            make deploy-agent-manager INV="inventory/${env}"
-                        fi
-                        read -n 1 -s -r -p "Press any key to continue..."
-                        ;;
-                    3) # both
-                        echo ""
-                        info "Rebuilding ai-portal from source..."
-                        if [[ "$backend" == "docker" ]]; then
-                            # Docker dev: reinstall deps for both apps and restart
-                            docker exec "${prefix}-core-apps" bash -c "cd /srv/ai-portal && npm install"
-                            echo ""
-                            info "Rebuilding agent-manager from source..."
-                            docker exec "${prefix}-core-apps" bash -c "cd /srv/agent-manager && npm install"
-                            info "Restarting core-apps container..."
-                            docker restart "${prefix}-core-apps"
-                        else
-                            # Proxmox: use Ansible
-                            local env
-                            env=$(get_current_env)
-                            cd "${REPO_ROOT}/provision/ansible"
-                            make deploy-ai-portal INV="inventory/${env}"
-                            echo ""
-                            info "Rebuilding agent-manager from source..."
-                            make deploy-agent-manager INV="inventory/${env}"
-                        fi
-                        read -n 1 -s -r -p "Press any key to continue..."
-                        ;;
-                    b|B)
-                        # Go back to service menu
-                        ;;
-                esac
-                ;;
-            b|B)
-                # Return to select_service (the calling function loops back)
-                return
-                ;;
-            m|M)
-                # Return to main menu (return 1 to signal main menu)
-                return 1
-                ;;
+            b|B) return ;;
+            m|M) return 1 ;;
         esac
     done
 }
 
-# Select a service to manage (in 2 columns, no status check)
+# Rebuild app submenu (core-apps only)
+_rebuild_app_submenu() {
+    local env="$1"
+    local prefix="$2"
+
+    clear
+    box_start 70 double "$CYAN"
+    box_header "REBUILD APP"
+    box_empty
+    box_line "  ${BOLD}Select app to rebuild:${NC}"
+    box_empty
+    box_line "    ${BOLD}1)${NC} ai-portal"
+    box_line "    ${BOLD}2)${NC} agent-manager"
+    box_line "    ${BOLD}3)${NC} both"
+    box_empty
+    box_line "  ${DIM}b = back${NC}"
+    box_empty
+    box_footer
+    echo ""
+
+    read -n 1 -s -r -p "Select app: " app_choice
+    echo ""
+
+    case "$app_choice" in
+        1)
+            echo ""
+            info "Rebuilding ai-portal from source..."
+            if [[ "$_CURRENT_BACKEND" == "docker" ]]; then
+                docker exec "${prefix}-core-apps" bash -c "cd /srv/ai-portal && npm install"
+                docker restart "${prefix}-core-apps"
+            else
+                cd "${REPO_ROOT}/provision/ansible"
+                make deploy-ai-portal INV="inventory/${env}"
+            fi
+            read -n 1 -s -r -p "Press any key to continue..."
+            ;;
+        2)
+            echo ""
+            info "Rebuilding agent-manager from source..."
+            if [[ "$_CURRENT_BACKEND" == "docker" ]]; then
+                docker exec "${prefix}-core-apps" bash -c "cd /srv/agent-manager && npm install"
+                docker restart "${prefix}-core-apps"
+            else
+                cd "${REPO_ROOT}/provision/ansible"
+                make deploy-agent-manager INV="inventory/${env}"
+            fi
+            read -n 1 -s -r -p "Press any key to continue..."
+            ;;
+        3)
+            echo ""
+            info "Rebuilding ai-portal from source..."
+            if [[ "$_CURRENT_BACKEND" == "docker" ]]; then
+                docker exec "${prefix}-core-apps" bash -c "cd /srv/ai-portal && npm install"
+                echo ""
+                info "Rebuilding agent-manager from source..."
+                docker exec "${prefix}-core-apps" bash -c "cd /srv/agent-manager && npm install"
+                docker restart "${prefix}-core-apps"
+            else
+                cd "${REPO_ROOT}/provision/ansible"
+                make deploy-ai-portal INV="inventory/${env}"
+                echo ""
+                info "Rebuilding agent-manager from source..."
+                make deploy-agent-manager INV="inventory/${env}"
+            fi
+            read -n 1 -s -r -p "Press any key to continue..."
+            ;;
+        b|B) ;;
+    esac
+}
+
+# ============================================================================
+# Service Selector
+# ============================================================================
+
 select_service() {
     while true; do
         clear
         box_header "SELECT SERVICE"
         echo ""
-        
+
         local services=()
         local idx=1
-        
-        for group in "${SERVICE_GROUP_ORDER[@]}"; do
-            echo -e "  ${BOLD}${group}${NC}"
-            
-            # Collect services for this group
+        local groups_str
+        groups_str=$(_get_group_order)
+
+        for group in $groups_str; do
+            local display_group="${group//_/ }"
+
+            local group_services_list
+            group_services_list=$(get_services_for_group "$group")
+            [[ -z "$group_services_list" ]] && continue
+
+            echo -e "  ${BOLD}${display_group}${NC}"
+
             local group_services=()
-            for service in $(get_services_for_group "$group"); do
+            for service in $group_services_list; do
                 services+=("$service")
                 group_services+=("$service:$idx")
                 ((idx++))
             done
-            
-            # Display in 2 columns
+
             local i=0
             local count=${#group_services[@]}
             while [[ $i -lt $count ]]; do
                 local entry1="${group_services[$i]}"
                 local service1="${entry1%%:*}"
                 local num1="${entry1##*:}"
-                
+
                 if [[ $((i+1)) -lt $count ]]; then
                     local entry2="${group_services[$((i+1))]}"
                     local service2="${entry2%%:*}"
@@ -1013,31 +620,29 @@ select_service() {
                 else
                     printf "    ${BOLD}%2d)${NC} %s\n" "$num1" "$service1"
                 fi
-                
+
                 i=$((i+2))
             done
             echo ""
         done
-        
+
         echo -e "  ${DIM}b = back to main menu${NC}"
         echo ""
         box_footer
         echo ""
-        
+
         read -p "Enter service number: " choice
-        
+
         if [[ "$choice" == "b" ]] || [[ "$choice" == "B" ]]; then
             return
         fi
-        
+
         if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#services[@]} )); then
             manage_service "${services[$((choice-1))]}"
             local ret=$?
-            # If manage_service returned 1, user wants to go to main menu
             if [[ $ret -eq 1 ]]; then
                 return
             fi
-            # Otherwise loop back to select_service (don't return to main)
         fi
     done
 }
@@ -1047,18 +652,16 @@ select_service() {
 # ============================================================================
 
 show_manage_menu() {
-    local backend
-    backend=$(get_backend_type)
     local env
     env=$(get_current_env)
-    
+
     clear
     box_header "BUSIBOX - SERVICE MANAGEMENT"
     echo ""
-    printf "  ${CYAN}Environment:${NC} %s (%s)\n" "$env" "$backend"
-    
+    printf "  ${CYAN}Environment:${NC} %s (%s)\n" "$env" "$_CURRENT_BACKEND"
+
     show_services_status
-    
+
     printf "  ${BOLD}Actions${NC}\n"
     printf "    ${BOLD}1)${NC} Start All\n"
     printf "    ${BOLD}2)${NC} Stop All\n"
@@ -1066,9 +669,20 @@ show_manage_menu() {
     printf "    ${BOLD}4)${NC} Manage Service\n"
     printf "    ${BOLD}5)${NC} View Logs (all)\n"
     printf "    ${BOLD}6)${NC} Refresh Status\n"
+
+    # K8s-specific menu items
+    if [[ "$_CURRENT_BACKEND" == "k8s" ]]; then
+        echo ""
+        printf "  ${BOLD}Tunnel${NC}\n"
+        printf "    ${BOLD}7)${NC} Connect (start tunnel)\n"
+        printf "    ${BOLD}8)${NC} Disconnect (stop tunnel)\n"
+    fi
+
     echo ""
     printf "  ${BOLD}Utilities${NC}\n"
-    printf "    ${BOLD}d)${NC} Update Internal DNS (/etc/hosts on all containers)\n"
+    if [[ "$_CURRENT_BACKEND" != "k8s" ]]; then
+        printf "    ${BOLD}d)${NC} Update Internal DNS (/etc/hosts on all containers)\n"
+    fi
     echo ""
     printf "  ${DIM}b = back to main menu    q = quit${NC}\n"
     echo ""
@@ -1076,28 +690,26 @@ show_manage_menu() {
 }
 
 main() {
-    # If no environment is set, show error and exit
     if [[ -z "$BUSIBOX_ENV" ]]; then
         echo ""
         echo "No environment configured."
         echo "Run 'make' to select an environment first."
         exit 1
     fi
-    
-    # Ensure ENVIRONMENT is set in state file if BUSIBOX_ENV is known
+
     local current_env
     current_env=$(get_state "ENVIRONMENT")
     if [[ -z "$current_env" ]] && [[ -n "$BUSIBOX_ENV" ]]; then
         set_state "ENVIRONMENT" "$BUSIBOX_ENV"
     fi
-    
+
     while true; do
         show_manage_menu
         echo ""
-        
+
         read -n 1 -s -r -p "Select option: " choice
         echo ""
-        
+
         case "$choice" in
             1)
                 start_all_services
@@ -1115,29 +727,52 @@ main() {
                 clear
                 echo "Showing all logs (Ctrl+C to exit)..."
                 echo ""
-                local backend
-                backend=$(get_backend_type)
-                if [[ "$backend" == "docker" ]]; then
+                if [[ "$_CURRENT_BACKEND" == "docker" ]]; then
                     cd "$REPO_ROOT"
                     make docker-logs
+                elif [[ "$_CURRENT_BACKEND" == "k8s" ]]; then
+                    # Show combined logs from all pods
+                    info "Streaming logs from all K8s pods (Ctrl+C to exit)..."
+                    echo ""
+                    KUBECONFIG="$REPO_ROOT/k8s/kubeconfig-rackspace-spot.yaml" \
+                        kubectl logs -n busibox --all-containers --max-log-requests=20 -f --tail=50 2>/dev/null || \
+                        echo "Could not stream logs. Try 'Manage Service' -> 'View Logs' for individual services."
+                    read -n 1 -s -r -p "Press any key to continue..."
                 else
                     echo "Proxmox log viewing not implemented yet"
                     read -n 1 -s -r -p "Press any key to continue..."
                 fi
                 ;;
             6)
-                # Just refresh by continuing loop
+                # Refresh by continuing loop
+                ;;
+            7)
+                # Connect (K8s only)
+                if [[ "$_CURRENT_BACKEND" == "k8s" ]]; then
+                    echo ""
+                    backend_connect
+                    read -n 1 -s -r -p "Press any key to continue..."
+                fi
+                ;;
+            8)
+                # Disconnect (K8s only)
+                if [[ "$_CURRENT_BACKEND" == "k8s" ]]; then
+                    echo ""
+                    backend_disconnect
+                    read -n 1 -s -r -p "Press any key to continue..."
+                fi
                 ;;
             d|D)
-                # Update internal DNS
-                echo ""
-                info "Updating internal DNS (/etc/hosts) on all containers..."
-                local env
-                env=$(get_current_env)
-                cd "${REPO_ROOT}/provision/ansible"
-                make internal-dns INV="inventory/${env}"
-                success "Internal DNS updated"
-                read -n 1 -s -r -p "Press any key to continue..."
+                if [[ "$_CURRENT_BACKEND" != "k8s" ]]; then
+                    echo ""
+                    info "Updating internal DNS (/etc/hosts) on all containers..."
+                    local env
+                    env=$(get_current_env)
+                    cd "${REPO_ROOT}/provision/ansible"
+                    make internal-dns INV="inventory/${env}"
+                    success "Internal DNS updated"
+                    read -n 1 -s -r -p "Press any key to continue..."
+                fi
                 ;;
             b|B)
                 exec bash "${SCRIPT_DIR}/launcher.sh"
@@ -1151,5 +786,4 @@ main() {
     done
 }
 
-# Run main
 main "$@"

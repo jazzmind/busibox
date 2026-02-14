@@ -3,8 +3,8 @@
 # Busibox Service Deployment
 # ==========================
 #
-# Deploy specific service(s) via Ansible, automatically detecting
-# the current environment and backend (Docker/Proxmox).
+# Deploy specific service(s) automatically detecting
+# the current environment and backend (Docker/Proxmox/K8s).
 #
 # Usage:
 #   make install SERVICE=authz
@@ -38,6 +38,7 @@ get_ansible_tag() {
         redis) echo "redis" ;;
         minio|files) echo "minio" ;;
         milvus|etcd) echo "milvus" ;;
+        neo4j|graph) echo "neo4j" ;;
         
         # APIs
         authz|authz-api) echo "authz" ;;
@@ -89,7 +90,7 @@ expand_services() {
         # Check if it's a group
         case "$svc" in
             infrastructure|infra)
-                expanded="${expanded} postgres redis minio milvus"
+                expanded="${expanded} postgres redis minio milvus neo4j"
                 ;;
             apis)
                 expanded="${expanded} authz agent data search deploy bridge docs embedding"
@@ -101,7 +102,7 @@ expand_services() {
                 expanded="${expanded} core-apps nginx"
                 ;;
             all)
-                expanded="${expanded} postgres redis minio milvus authz agent data search deploy bridge docs embedding litellm core-apps nginx"
+                expanded="${expanded} postgres redis minio milvus neo4j authz agent data search deploy bridge docs embedding litellm core-apps nginx"
                 ;;
             *)
                 expanded="${expanded} ${svc}"
@@ -241,6 +242,84 @@ deploy_service() {
 }
 
 # ============================================================================
+# K8s Deployment
+# ============================================================================
+
+# Map make service names to K8s buildable image names
+get_k8s_image_name() {
+    local service="$1"
+    case "$service" in
+        authz|authz-api) echo "authz-api" ;;
+        agent|agent-api) echo "agent-api" ;;
+        ingest|data|data-api) echo "data-api" ;;
+        search|search-api) echo "search-api" ;;
+        deploy|deploy-api) echo "deploy-api" ;;
+        bridge|bridge-api) echo "bridge-api" ;;
+        docs|docs-api) echo "docs-api" ;;
+        embedding|embedding-api) echo "embedding-api" ;;
+        # Infrastructure and other services use upstream images - no build needed
+        *) echo "" ;;
+    esac
+}
+
+# Deploy service(s) to K8s cluster using in-cluster build server
+deploy_service_k8s() {
+    local service="$1"
+    local env="$2"
+    
+    local k8s_deploy="${REPO_ROOT}/scripts/k8s/deploy.sh"
+    
+    if [[ ! -f "$k8s_deploy" ]]; then
+        error "K8s deploy script not found: ${k8s_deploy}"
+        return 1
+    fi
+    
+    # Check for kubeconfig
+    local kubeconfig="${REPO_ROOT}/k8s/kubeconfig-rackspace-spot.yaml"
+    if [[ ! -f "$kubeconfig" ]]; then
+        error "Kubeconfig not found: ${kubeconfig}"
+        error "Place your Rackspace Spot kubeconfig at k8s/kubeconfig-rackspace-spot.yaml"
+        return 1
+    fi
+    
+    # Check if this service has a buildable image
+    local image_name
+    image_name=$(get_k8s_image_name "$service")
+    
+    if [[ -n "$image_name" ]]; then
+        info "Syncing + building ${BOLD}${service}${NC} (image: ${image_name}) on build server..."
+        bash "$k8s_deploy" --sync --build --service "$image_name" --kubeconfig "$kubeconfig"
+    else
+        info "Service ${BOLD}${service}${NC} uses upstream image - skipping build"
+    fi
+    
+    # Apply manifests (idempotent)
+    info "Applying K8s manifests..."
+    bash "$k8s_deploy" --apply --kubeconfig "$kubeconfig"
+    
+    success "Service ${service} deployed to K8s"
+    return 0
+}
+
+# Deploy all services to K8s (optimized: sync+build all at once, apply once)
+deploy_all_k8s() {
+    local env="$1"
+    
+    local k8s_deploy="${REPO_ROOT}/scripts/k8s/deploy.sh"
+    local kubeconfig="${REPO_ROOT}/k8s/kubeconfig-rackspace-spot.yaml"
+    
+    if [[ ! -f "$kubeconfig" ]]; then
+        error "Kubeconfig not found: ${kubeconfig}"
+        return 1
+    fi
+    
+    info "Deploying all services to K8s (sync, build, push, apply)..."
+    bash "$k8s_deploy" --all --kubeconfig "$kubeconfig"
+    
+    return $?
+}
+
+# ============================================================================
 # Main
 # ============================================================================
 
@@ -258,7 +337,7 @@ main() {
         echo "  make install SERVICE=apis          # All API services"
         echo "  make install SERVICE=infrastructure  # postgres, redis, minio, milvus"
         echo ""
-        echo "Services: postgres, redis, minio, milvus, authz, agent, data,"
+        echo "Services: postgres, redis, minio, milvus, neo4j, authz, agent, data,"
         echo "          search, deploy, docs, embedding, litellm, core-apps, nginx"
         echo ""
         echo "Groups: infrastructure, apis, llm, frontend, all"
@@ -300,6 +379,60 @@ main() {
     info "Services to deploy: ${BOLD}${services}${NC}"
     echo ""
     
+    # K8s backend: optimize for full-stack deployment
+    if [[ "$backend" == "k8s" ]]; then
+        # Check if deploying all services - use optimized path
+        if [[ "$services_input" == "all" ]]; then
+            if deploy_all_k8s "$env"; then
+                success "All services deployed to K8s"
+            else
+                error "K8s deployment failed"
+                exit 1
+            fi
+            return
+        fi
+        
+        # Per-service K8s deployment
+        local failed_services=""
+        local deployed_services=""
+        
+        for service in $services; do
+            if ! is_valid_service "$service"; then
+                error "Unknown service: $service"
+                failed_services="${failed_services} ${service}"
+                continue
+            fi
+            
+            if deploy_service_k8s "$service" "$env"; then
+                deployed_services="${deployed_services} ${service}"
+            else
+                failed_services="${failed_services} ${service}"
+            fi
+            echo ""
+        done
+        
+        # Summary
+        echo ""
+        box_start 70 single "$GREEN"
+        box_header "K8S DEPLOYMENT SUMMARY"
+        box_empty
+        if [[ -n "$deployed_services" ]]; then
+            box_line "  ${GREEN}✓${NC} Deployed:${deployed_services}"
+        fi
+        if [[ -n "$failed_services" ]]; then
+            box_line "  ${RED}✗${NC} Failed:${failed_services}"
+        fi
+        box_empty
+        box_footer
+        echo ""
+        
+        if [[ -n "$failed_services" ]]; then
+            exit 1
+        fi
+        return
+    fi
+    
+    # Docker/Proxmox: Ansible-based deployment
     local failed_services=""
     local deployed_services=""
     

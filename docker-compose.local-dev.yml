@@ -149,6 +149,14 @@ services:
         condition: service_healthy
       authz-api:
         condition: service_healthy
+    # Resource limits - dev mode needs more memory for Turbopack compilation
+    # prod mode (CORE_APPS_MODE=prod) uses standalone and needs much less
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 512M
     healthcheck:
       # Check nginx is responding (instant — returns "healthy" without hitting Next.js)
       # Do NOT check /portal/api/health or /agents/api/health here — those trigger

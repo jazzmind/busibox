@@ -1,6 +1,6 @@
 ---
 title: "Busibox Platform Overview"
-category: "user"
+category: "platform"
 order: 10
 description: "What Busibox is, what it does, and why it matters for your organization"
 published: true

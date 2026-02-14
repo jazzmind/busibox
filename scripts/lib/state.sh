@@ -60,8 +60,8 @@ get_vault_pass_path() {
 # ENVIRONMENT=development|demo|staging|production
 # BACKEND_DEVELOPMENT=docker (always)
 # BACKEND_DEMO=docker (always)
-# BACKEND_STAGING=docker|proxmox
-# BACKEND_PRODUCTION=docker|proxmox
+# BACKEND_STAGING=docker|proxmox|k8s
+# BACKEND_PRODUCTION=docker|proxmox|k8s
 # INSTALL_STATUS=not_installed|installed|configured|deployed|healthy
 # LAST_COMMAND="make test-docker SERVICE=agent"
 # LAST_COMMAND_TIME="2026-01-16T10:30:00"
@@ -70,8 +70,8 @@ get_vault_pass_path() {
 # Environment behavior:
 #   development - Docker with dev overlay (volume mounts, npm link busibox-app)
 #   demo        - Docker with prod overlay (for demos, uses GitHub/npm packages)
-#   staging     - Docker or Proxmox (10.96.201.x network)
-#   production  - Docker or Proxmox (10.96.200.x network)
+#   staging     - Docker, Proxmox (10.96.201.x), or K8s (Rackspace Spot via kubeconfig)
+#   production  - Docker, Proxmox (10.96.200.x), or K8s (Rackspace Spot via kubeconfig)
 # ============================================================================
 
 # Initialize state file if it doesn't exist
@@ -84,7 +84,7 @@ init_state() {
 # Current environment: development, demo, staging, production
 ENVIRONMENT=
 
-# Backend type per environment: docker or proxmox
+# Backend type per environment: docker, proxmox, or k8s
 # development and demo are always docker
 BACKEND_DEVELOPMENT=docker
 BACKEND_DEMO=docker

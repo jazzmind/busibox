@@ -1,0 +1,63 @@
+---
+# Docs API - Documentation Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: docs-api
+  labels:
+    app: docs-api
+    tier: api
+spec:
+  ports:
+    - port: 8004
+      targetPort: 8004
+  selector:
+    app: docs-api
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: docs-api
+  labels:
+    app: docs-api
+    tier: api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: docs-api
+  template:
+    metadata:
+      labels:
+        app: docs-api
+        tier: api
+    spec:
+      containers:
+        - name: docs-api
+          image: localhost:30500/docs-api:latest
+          ports:
+            - containerPort: 8004
+          env:
+            - name: DOCS_PATH
+              value: "/app/docs"
+            - name: OPENAPI_PATH
+              value: "/app/openapi"
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8004
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health/live
+              port: 8004
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
