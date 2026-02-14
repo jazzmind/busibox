@@ -16,44 +16,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-# Simple state file for storing last used environment
-BUSIBOX_SIMPLE_STATE="${REPO_ROOT}/.busibox-state"
-
-# Read last environment from simple state file
-_read_last_env() {
-    if [[ -f "$BUSIBOX_SIMPLE_STATE" ]]; then
-        local last_env
-        last_env=$(grep "^LAST_ENV=" "$BUSIBOX_SIMPLE_STATE" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
-        if [[ -n "$last_env" ]]; then
-            echo "$last_env"
-            return
-        fi
-    fi
-    echo ""
-}
-
-# Auto-detect deployed environment BEFORE sourcing state library
-_auto_detect_env() {
-    if [[ -n "${BUSIBOX_ENV:-}" ]]; then
-        echo "$BUSIBOX_ENV"
-        return
-    fi
-
-    local last_env
-    last_env=$(_read_last_env)
-    if [[ -n "$last_env" ]]; then
-        echo "$last_env"
-        return
-    fi
-
-    echo ""
-}
-
-# Set environment before sourcing state library
-export BUSIBOX_ENV="${BUSIBOX_ENV:-$(_auto_detect_env)}"
-
-# Source libraries
+# Source libraries (profiles.sh is sourced by state.sh automatically)
 source "${REPO_ROOT}/scripts/lib/ui.sh"
+source "${REPO_ROOT}/scripts/lib/profiles.sh"
 source "${REPO_ROOT}/scripts/lib/state.sh"
 source "${REPO_ROOT}/scripts/lib/status.sh"
 source "${REPO_ROOT}/scripts/lib/services.sh"
@@ -61,20 +26,34 @@ source "${REPO_ROOT}/scripts/lib/services.sh"
 # Source backend libraries
 source "${REPO_ROOT}/scripts/lib/backends/common.sh"
 
+# Initialize profiles
+profile_init
+
 # ============================================================================
-# Backend Detection
+# Backend Detection (profile-aware)
 # ============================================================================
 
+# Active profile info
+_active_profile=$(profile_get_active)
+
 get_current_env() {
+    if [[ -n "$_active_profile" ]]; then
+        profile_get "$_active_profile" "environment"
+        return
+    fi
     local env
     env=$(get_state "ENVIRONMENT")
     if [[ -z "$env" ]]; then
-        env="${BUSIBOX_ENV:-staging}"
+        env="${BUSIBOX_ENV:-development}"
     fi
     echo "$env"
 }
 
 get_backend_type() {
+    if [[ -n "$_active_profile" ]]; then
+        profile_get "$_active_profile" "backend"
+        return
+    fi
     local env
     env=$(get_current_env)
     local backend
@@ -86,6 +65,10 @@ get_backend_type() {
 }
 
 get_container_prefix() {
+    if [[ -n "$_active_profile" ]]; then
+        profile_get_env_prefix "$_active_profile"
+        return
+    fi
     local env
     env=$(get_current_env)
     case "$env" in
@@ -101,6 +84,7 @@ get_container_prefix() {
 CONTAINER_PREFIX=$(get_container_prefix)
 CURRENT_ENV=$(get_current_env)
 export CONTAINER_PREFIX CURRENT_ENV
+export BUSIBOX_ENV="$CURRENT_ENV"
 
 # Load the appropriate backend
 _CURRENT_BACKEND=$(get_backend_type)
@@ -658,7 +642,15 @@ show_manage_menu() {
     clear
     box_header "BUSIBOX - SERVICE MANAGEMENT"
     echo ""
-    printf "  ${CYAN}Environment:${NC} %s (%s)\n" "$env" "$_CURRENT_BACKEND"
+    
+    # Show profile info if available
+    if [[ -n "$_active_profile" ]]; then
+        local display
+        display=$(profile_get_display "$_active_profile")
+        printf "  ${CYAN}Profile:${NC}     %s (%s)\n" "$_active_profile" "$display"
+    else
+        printf "  ${CYAN}Environment:${NC} %s (%s)\n" "$env" "$_CURRENT_BACKEND"
+    fi
 
     show_services_status
 
@@ -680,6 +672,7 @@ show_manage_menu() {
 
     echo ""
     printf "  ${BOLD}Utilities${NC}\n"
+    printf "    ${BOLD}r)${NC} Rotate Secrets\n"
     if [[ "$_CURRENT_BACKEND" != "k8s" ]]; then
         printf "    ${BOLD}d)${NC} Update Internal DNS (/etc/hosts on all containers)\n"
     fi
@@ -690,17 +683,11 @@ show_manage_menu() {
 }
 
 main() {
-    if [[ -z "$BUSIBOX_ENV" ]]; then
+    if [[ -z "$_active_profile" && -z "${BUSIBOX_ENV:-}" ]]; then
         echo ""
-        echo "No environment configured."
-        echo "Run 'make' to select an environment first."
+        echo "No profile or environment configured."
+        echo "Run 'make' to create a profile first."
         exit 1
-    fi
-
-    local current_env
-    current_env=$(get_state "ENVIRONMENT")
-    if [[ -z "$current_env" ]] && [[ -n "$BUSIBOX_ENV" ]]; then
-        set_state "ENVIRONMENT" "$BUSIBOX_ENV"
     fi
 
     while true; do
@@ -731,10 +718,16 @@ main() {
                     cd "$REPO_ROOT"
                     make docker-logs
                 elif [[ "$_CURRENT_BACKEND" == "k8s" ]]; then
+                    # Get kubeconfig from profile or fallback
+                    local kc=""
+                    if [[ -n "$_active_profile" ]]; then
+                        kc=$(profile_get_kubeconfig "$_active_profile" 2>/dev/null)
+                    fi
+                    kc="${kc:-$REPO_ROOT/k8s/kubeconfig-rackspace-spot.yaml}"
                     # Show combined logs from all pods
                     info "Streaming logs from all K8s pods (Ctrl+C to exit)..."
                     echo ""
-                    KUBECONFIG="$REPO_ROOT/k8s/kubeconfig-rackspace-spot.yaml" \
+                    KUBECONFIG="$kc" \
                         kubectl logs -n busibox --all-containers --max-log-requests=20 -f --tail=50 2>/dev/null || \
                         echo "Could not stream logs. Try 'Manage Service' -> 'View Logs' for individual services."
                     read -n 1 -s -r -p "Press any key to continue..."
@@ -761,6 +754,11 @@ main() {
                     backend_disconnect
                     read -n 1 -s -r -p "Press any key to continue..."
                 fi
+                ;;
+            r|R)
+                echo ""
+                bash "${SCRIPT_DIR}/rotate-secrets.sh"
+                read -n 1 -s -r -p "Press any key to continue..."
                 ;;
             d|D)
                 if [[ "$_CURRENT_BACKEND" != "k8s" ]]; then

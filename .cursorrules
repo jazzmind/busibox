@@ -39,19 +39,16 @@ See `.cursor/rules/010-make-commands.md` for complete reference.
 
 Read: `.cursor/rules/001-documentation-organization.md`
 
-**Quick Reference:**
-- Architecture/design → `docs/architecture/`
-- Deployment guides → `docs/deployment/`
-- Configuration → `docs/configuration/`
-- Troubleshooting → `docs/troubleshooting/`
-- Reference/API → `docs/reference/`
-- How-to guides → `docs/guides/`
-- Session notes → `docs/session-notes/`
+**Quick Reference (organized by audience):**
+- Deployment/config/operations → `docs/administrators/`
+- Architecture/API guides/reference → `docs/developers/`
+- End-user platform guides → `docs/users/`
+- Historical/outdated → `docs/archive/`
 
 **Naming:**
 - Use `kebab-case` for all files
-- Include metadata header (created, updated, status, category)
-- Example: `docs/deployment/ai-portal.md`
+- Include docs-api frontmatter (title, category, order, description, published)
+- Example: `docs/administrators/02-install.md`
 
 ### Script Organization
 
@@ -83,14 +80,15 @@ Read: `.cursor/rules/002-script-organization.md`
 ### "Where should this doc go?"
 
 ```
-What is the primary purpose?
-├─ System design/architecture → docs/architecture/
-├─ Deployment procedure → docs/deployment/
-├─ Setup/configuration → docs/configuration/
-├─ Fixing issues → docs/troubleshooting/
-├─ API/reference → docs/reference/
-├─ Tutorial/guide → docs/guides/
-└─ Session notes → docs/session-notes/
+Who is the primary audience?
+├─ Operators/admins (deploy, configure, troubleshoot)
+│  └→ docs/administrators/
+├─ Developers (architecture, APIs, reference)
+│  └→ docs/developers/
+├─ End users (platform features, how-to)
+│  └→ docs/users/
+└─ Outdated/historical
+   └→ docs/archive/
 ```
 
 ### "Where should this script go?"
@@ -120,14 +118,11 @@ Where does this script execute?
 ```
 busibox/
 ├── .cursor/rules/       # Detailed rules (READ THESE)
-├── docs/                # All documentation (by category)
-│   ├── architecture/
-│   ├── deployment/
-│   ├── configuration/
-│   ├── troubleshooting/
-│   ├── reference/
-│   ├── guides/
-│   └── session-notes/
+├── docs/                # All documentation (by audience)
+│   ├── administrators/  # Deployment, configuration, troubleshooting
+│   ├── developers/      # Architecture, API guides, reference
+│   ├── users/           # End-user platform guides
+│   └── archive/         # Historical/outdated content
 ├── scripts/             # Admin workstation scripts
 ├── provision/
 │   ├── pct/            # Proxmox host scripts
@@ -139,7 +134,7 @@ busibox/
 
 ❌ Running `docker compose` or `docker` directly - Use `make` commands
 ❌ Running `ansible-playbook` directly - Use `make` commands
-❌ Placing docs in root or flat `docs/` - Use category subdirectories
+❌ Placing docs in root or flat `docs/` - Use audience subdirectories (administrators/developers/users)
 ❌ Using UPPERCASE filenames - Use `kebab-case`
 ❌ Proxmox scripts in `scripts/` - They go in `provision/pct/`
 ❌ Missing script headers - Always include execution context
@@ -186,10 +181,11 @@ make test                          # Interactive menu
 
 ## Related Documentation
 
+- `docs/README.md` - Documentation organization guide
 - `.cursor/rules/001-documentation-organization.md` - Detailed doc rules
 - `.cursor/rules/002-script-organization.md` - Detailed script rules
 - `CLAUDE.md` - Complete project guide
-- `docs/architecture/architecture.md` - System architecture
+- `docs/developers/architecture/` - System architecture
 - `provision/ansible/SETUP.md` - Ansible setup
 
 

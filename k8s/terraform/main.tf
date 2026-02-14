@@ -44,18 +44,17 @@ variable "cloudspace_name" {
 variable "region" {
   description = "Rackspace Spot region"
   type        = string
-  default     = "us-central-ord-1"
+  default     = "us-east-iad-1"
 }
 
 # Base node pool configuration
-# Storage note: build-server (30Gi) + registry (20Gi) + existing PVCs (95Gi) = ~145Gi
-# Ensure the node has at least 200Gi of disk to leave headroom.
-# Rackspace Spot node storage depends on server class; check available classes
-# or attach additional Cinder volumes if needed.
+# Persistent storage: db-ssd (50Gi ssdv2-performance) + objects-store (100Gi ssdv2)
+# Everything else uses ephemeral node storage (emptyDir).
+# Node ephemeral disk is used for Docker layer cache, image registry, model caches.
 variable "base_server_class" {
   description = "Server class for the base node pool"
   type        = string
-  default     = "mh.vs1.xlarge-ord"  # 8 CPU, 60GB RAM - current node
+  default     = "mh.vs1.xlarge-iad"  # 8 CPU, 60GB RAM - IAD region
 }
 
 variable "base_bid_price" {
@@ -80,7 +79,7 @@ variable "gpu_enabled" {
 variable "gpu_server_class" {
   description = "Server class for GPU nodes (check available classes with terraform data source)"
   type        = string
-  default     = "gpu.vs1.large-ord"  # Placeholder - check actual GPU classes available
+  default     = "gpu.vs1.large-iad"  # Placeholder - check actual GPU classes available
 }
 
 variable "gpu_bid_price" {

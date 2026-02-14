@@ -21,7 +21,7 @@ patches:
   # Adjust resource limits for the single-node setup (60GB RAM, 8 CPU)
   # Milvus needs less since it's a smaller deployment
   - target:
-      kind: StatefulSet
+      kind: Deployment
       name: milvus
     patch: |
       - op: replace
@@ -33,7 +33,7 @@ patches:
 
   # PostgreSQL - moderate sizing
   - target:
-      kind: StatefulSet
+      kind: Deployment
       name: postgres
     patch: |
       - op: replace

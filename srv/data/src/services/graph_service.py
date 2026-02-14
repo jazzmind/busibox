@@ -710,6 +710,7 @@ class GraphService:
         depth: int = 2,
         owner_id: Optional[str] = None,
         limit: int = 100,
+        library_ids: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Get graph data formatted for frontend visualization.
@@ -723,6 +724,7 @@ class GraphService:
             depth: Traversal depth from center
             owner_id: Owner filter for multi-tenancy
             limit: Maximum nodes to return
+            library_ids: Optional list of library IDs to filter (Document nodes only)
             
         Returns:
             Dict with "nodes" and "edges" lists
@@ -740,7 +742,27 @@ class GraphService:
                 )
                 params["owner_id"] = owner_id
             
-            if center_id:
+            if library_ids:
+                # Filter by library: Document nodes with library_id in list + connected entities
+                lib_clause = "AND (d.owner_id = $owner_id OR d.visibility = 'shared')" if owner_id else ""
+                params["library_ids"] = library_ids
+                cypher = (
+                    f"MATCH (d:Document) WHERE d.library_id IN $library_ids {lib_clause} "
+                    f"WITH d LIMIT $limit "
+                    f"OPTIONAL MATCH (e)-[:MENTIONED_IN|KEYWORD_OF]->(d) "
+                    f"WITH collect(DISTINCT d) + collect(DISTINCT e) as rawNodes "
+                    f"UNWIND rawNodes as n "
+                    f"WITH DISTINCT n WHERE n IS NOT NULL "
+                    f"WITH collect(n) as nodeList "
+                    f"UNWIND nodeList as n1 "
+                    f"UNWIND nodeList as n2 "
+                    f"OPTIONAL MATCH (a:GraphNode {{node_id: n1.node_id}})-[r]-(b:GraphNode {{node_id: n2.node_id}}) "
+                    f"WHERE n1.node_id < n2.node_id "
+                    f"WITH nodeList, collect(r) as rels "
+                    f"RETURN [x IN nodeList | properties(x)] as nodes, "
+                    f"[r IN rels WHERE r IS NOT NULL | {{type: type(r), from: startNode(r).node_id, to: endNode(r).node_id}}] as edges"
+                )
+            elif center_id:
                 # Expand from a center node
                 params["center_id"] = center_id
                 cypher = (

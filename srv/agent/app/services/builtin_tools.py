@@ -486,6 +486,72 @@ BUILTIN_TOOL_METADATA = {
             }
         }
     },
+    # Library trigger tools
+    "library_trigger_tool": {
+        "name": "create_library_trigger",
+        "description": "Create a library trigger that automatically fires an agent when documents complete processing in a specific library. Use this to set up automated extraction pipelines.",
+        "entrypoint": "app.tools.library_trigger_tool:create_library_trigger",
+        "scopes": ["data:write"],
+        "version": 1,
+        "schema": {
+            "input": {
+                "type": "object",
+                "properties": {
+                    "library_id": {"type": "string", "description": "UUID of the library to watch"},
+                    "name": {"type": "string", "description": "Human-readable trigger name"},
+                    "agent_id": {"type": "string", "description": "UUID of the agent to execute"},
+                    "prompt": {"type": "string", "description": "Instructions for the agent"},
+                    "description": {"type": "string", "description": "Optional description"},
+                    "schema_document_id": {"type": "string", "description": "Optional schema data document UUID"}
+                },
+                "required": ["library_id", "name", "agent_id", "prompt"]
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean", "description": "Whether creation succeeded"},
+                    "trigger_id": {"type": "string", "description": "UUID of the created trigger"},
+                    "name": {"type": "string", "description": "Trigger name"},
+                    "library_id": {"type": "string", "description": "Library being watched"},
+                    "message": {"type": "string", "description": "Status message"},
+                    "error": {"type": "string", "description": "Error message if failed"}
+                }
+            }
+        }
+    },
+    # Extraction schema tool
+    "extraction_schema_tool": {
+        "name": "create_extraction_schema",
+        "description": "Create a data document with an extraction schema optimized for automated document processing. Includes graph node and relationship configuration for knowledge graph population.",
+        "entrypoint": "app.tools.extraction_schema_tool:create_extraction_schema",
+        "scopes": ["data:write"],
+        "version": 1,
+        "schema": {
+            "input": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Name for the data document (e.g., 'Parsed Resumes')"},
+                    "item_label": {"type": "string", "description": "Label for individual records (e.g., 'Resume', 'RFP')"},
+                    "graph_node_label": {"type": "string", "description": "Neo4j node label (e.g., 'Resume', 'RFP')"},
+                    "fields": {"type": "object", "description": "Schema field definitions with types and metadata"},
+                    "graph_relationships": {"type": "array", "description": "Graph relationship definitions"},
+                    "description": {"type": "string", "description": "Optional schema description"}
+                },
+                "required": ["name", "item_label", "fields"]
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean", "description": "Whether creation succeeded"},
+                    "document_id": {"type": "string", "description": "UUID of the created data document"},
+                    "name": {"type": "string", "description": "Document name"},
+                    "field_count": {"type": "integer", "description": "Number of schema fields"},
+                    "message": {"type": "string", "description": "Status message"},
+                    "error": {"type": "string", "description": "Error message if failed"}
+                }
+            }
+        }
+    },
 }
 
 
@@ -599,6 +665,10 @@ def get_tool_executor(tool_name: str) -> Optional[Callable]:
         "graph_query": ("app.tools.graph_tool", "graph_query"),
         "graph_explore": ("app.tools.graph_tool", "graph_explore"),
         "graph_relate": ("app.tools.graph_tool", "graph_relate"),
+        # Library trigger tools
+        "create_library_trigger": ("app.tools.library_trigger_tool", "create_library_trigger"),
+        # Extraction schema tool
+        "create_extraction_schema": ("app.tools.extraction_schema_tool", "create_extraction_schema"),
     }
     
     if tool_name not in executors:
@@ -646,6 +716,10 @@ def get_tool_object(tool_name: str) -> Optional[Any]:
         "graph_query": ("app.tools.graph_tool", "graph_query_tool"),
         "graph_explore": ("app.tools.graph_tool", "graph_explore_tool"),
         "graph_relate": ("app.tools.graph_tool", "graph_relate_tool"),
+        # Library trigger tools
+        "create_library_trigger": ("app.tools.library_trigger_tool", "create_library_trigger_tool"),
+        # Extraction schema tool
+        "create_extraction_schema": ("app.tools.extraction_schema_tool", "create_extraction_schema_tool"),
     }
     
     if tool_name not in tool_objects:

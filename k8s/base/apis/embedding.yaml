@@ -1,6 +1,7 @@
 ---
 # Embedding API - Dedicated embedding service
 # Infrastructure tier - loads model once at startup
+# Uses ephemeral storage for model caches; re-downloads on pod restart (~2-5 min)
 apiVersion: v1
 kind: Service
 metadata:
@@ -71,30 +72,6 @@ spec:
               mountPath: /root/.cache/huggingface
       volumes:
         - name: fastembed-cache
-          persistentVolumeClaim:
-            claimName: fastembed-cache
+          emptyDir: {}
         - name: model-cache
-          persistentVolumeClaim:
-            claimName: model-cache
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: fastembed-cache
-spec:
-  accessModes: ["ReadWriteOnce"]
-  storageClassName: ssd
-  resources:
-    requests:
-      storage: 5Gi
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: model-cache
-spec:
-  accessModes: ["ReadWriteOnce"]
-  storageClassName: ssd
-  resources:
-    requests:
-      storage: 10Gi
+          emptyDir: {}

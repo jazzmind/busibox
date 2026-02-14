@@ -31,7 +31,7 @@ make test
 make mcp
 ```
 
-All commands are interactive and will guide you through the process. See the [Interactive Commands Guide](docs/guides/interactive-commands.md) for detailed information about each command.
+All commands are interactive and will guide you through the process. See `docs/administrators/` for deployment and configuration guides.
 
 ## For Cursor Users
 
@@ -53,4 +53,4 @@ The MCP server provides:
 - Get script information and usage
 - Guided assistance for common tasks
 
-See [MCP Server Usage Guide](docs/guides/mcp-server-usage.md) for details.
+See `docs/developers/reference/mcp-server.md` for details.

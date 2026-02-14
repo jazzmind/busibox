@@ -602,6 +602,72 @@ async def get_file_metadata(fileId: str, request: Request):
         pass
 
 
+class PatchFileMetadataBody(BaseModel):
+    """Body for PATCH /files/{fileId} - update file metadata."""
+    extractedKeywords: Optional[List[str]] = Field(None, description="Replace extracted keywords/tags")
+
+
+@router.patch("/{fileId}", dependencies=[Depends(require_data_write)])
+async def patch_file_metadata(fileId: str, request: Request, body: PatchFileMetadataBody):
+    """
+    Update file metadata (e.g. extracted keywords/tags).
+    
+    Requires data.write scope.
+    """
+    file_uuid, error_response = validate_uuid(fileId)
+    if error_response:
+        return error_response
+    
+    user_id = request.state.user_id
+    postgres_service = _get_postgres_service()
+    if not postgres_service.pool:
+        await postgres_service.connect()
+    
+    try:
+        async with postgres_service.acquire(request) as conn:
+            has_access, _, error_msg = await check_file_access(
+                conn, file_uuid, user_id, request
+            )
+            if not has_access:
+                status_code = status.HTTP_404_NOT_FOUND if error_msg == "File not found" else status.HTTP_403_FORBIDDEN
+                return JSONResponse(status_code=status_code, content={"error": error_msg})
+            
+            if body.extractedKeywords is not None:
+                keywords = [k.strip() for k in body.extractedKeywords if k and k.strip()]
+                await conn.execute(
+                    """
+                    UPDATE data_files
+                    SET extracted_keywords = $1, updated_at = NOW()
+                    WHERE file_id = $2
+                    """,
+                    keywords,
+                    file_uuid,
+                )
+                logger.info(
+                    "Updated extracted_keywords",
+                    file_id=fileId,
+                    user_id=user_id,
+                    count=len(keywords),
+                )
+            
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={"ok": True, "fileId": fileId},
+            )
+    except Exception as e:
+        logger.error(
+            "Failed to patch file metadata",
+            file_id=fileId,
+            user_id=user_id,
+            error=str(e),
+            exc_info=True,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": "Failed to update file metadata", "details": str(e)},
+        )
+
+
 @router.get("/{fileId}/history", dependencies=[Depends(require_data_read)])
 async def get_processing_history(fileId: str, request: Request):
     """

@@ -117,6 +117,7 @@ class CloudModelsResponse(BaseModel):
     provider: str
     models: List[CloudModel]
     api_key_configured: bool
+    needs_key_resave: bool = False  # True when key is in LiteLLM DB but not accessible for API calls
 
 
 class RegisterModelsRequest(BaseModel):
@@ -334,6 +335,21 @@ def _is_key_configured(env_vars: Dict[str, str], env_var_name: str) -> bool:
     return bool(key_val and key_val != "" and key_val != "None")
 
 
+def _looks_like_real_key(value: str) -> bool:
+    """Check if a value looks like a real API key vs an encrypted/placeholder value."""
+    if not value:
+        return False
+    # LiteLLM encrypted values often start with these patterns
+    if value.startswith("os.environ/"):
+        return False
+    if value.startswith("encrypted:"):
+        return False
+    # Very short values are likely placeholders
+    if len(value) < 8:
+        return False
+    return True
+
+
 async def _get_api_key_for_provider(provider: str) -> Optional[str]:
     """
     Get the actual (decrypted) API key for a cloud provider.
@@ -342,7 +358,10 @@ async def _get_api_key_for_provider(provider: str) -> Optional[str]:
     are called, LiteLLM resolves them from its own env. So we also need the
     raw key for direct provider API calls (listing models).
     
-    Strategy: check LiteLLM's env (it decrypts at startup), then os.environ.
+    Strategy:
+    1. Check os.environ (fastest, set when keys are saved via UI)
+    2. Query LiteLLM config/DB for stored env vars (survives agent-api restarts)
+    3. If found in LiteLLM, also populate os.environ for future calls
     
     For Bedrock: we don't need an API key for listing models (we use a curated list),
     but we return a truthy value if credentials are configured so the endpoint
@@ -351,10 +370,27 @@ async def _get_api_key_for_provider(provider: str) -> Optional[str]:
     import os
     
     if provider == "bedrock":
-        # Check for any Bedrock credential: IAM creds or bearer token
+        # Check os.environ first
         if os.environ.get("AWS_ACCESS_KEY_ID") and os.environ.get("AWS_SECRET_ACCESS_KEY"):
             return "iam-configured"
         if os.environ.get("AWS_BEARER_TOKEN_BEDROCK"):
+            return "bearer-configured"
+        # Try LiteLLM config/DB
+        env_vars = await _get_configured_env_vars()
+        if (env_vars.get("AWS_ACCESS_KEY_ID") and _looks_like_real_key(env_vars.get("AWS_ACCESS_KEY_ID", "")) and
+            env_vars.get("AWS_SECRET_ACCESS_KEY") and _looks_like_real_key(env_vars.get("AWS_SECRET_ACCESS_KEY", ""))):
+            # Restore to os.environ for future calls
+            os.environ["AWS_ACCESS_KEY_ID"] = env_vars["AWS_ACCESS_KEY_ID"]
+            os.environ["AWS_SECRET_ACCESS_KEY"] = env_vars["AWS_SECRET_ACCESS_KEY"]
+            if env_vars.get("AWS_REGION_NAME"):
+                os.environ["AWS_REGION_NAME"] = env_vars["AWS_REGION_NAME"]
+            logger.info("Restored Bedrock IAM credentials from LiteLLM config to os.environ")
+            return "iam-configured"
+        if env_vars.get("AWS_BEARER_TOKEN_BEDROCK") and _looks_like_real_key(env_vars.get("AWS_BEARER_TOKEN_BEDROCK", "")):
+            os.environ["AWS_BEARER_TOKEN_BEDROCK"] = env_vars["AWS_BEARER_TOKEN_BEDROCK"]
+            if env_vars.get("AWS_REGION_NAME"):
+                os.environ["AWS_REGION_NAME"] = env_vars["AWS_REGION_NAME"]
+            logger.info("Restored Bedrock bearer token from LiteLLM config to os.environ")
             return "bearer-configured"
         return None
     
@@ -362,15 +398,23 @@ async def _get_api_key_for_provider(provider: str) -> Optional[str]:
     if not env_var:
         return None
     
-    # Try LiteLLM's runtime environment via /config/update stored values
-    # LiteLLM decrypts them internally - we can't read encrypted values.
-    # But the key may have been passed as a docker env var too.
+    # Strategy 1: Check os.environ (set during key save or container startup)
     val = os.environ.get(env_var, "")
     if val:
         return val
     
-    # If not in os.environ, the key is only in LiteLLM's DB (encrypted).
-    # We can't decrypt it, but LiteLLM itself can use it.
+    # Strategy 2: Query LiteLLM config/DB for stored env vars
+    # This handles the case where keys were saved via UI but agent-api restarted
+    env_vars = await _get_configured_env_vars()
+    val = env_vars.get(env_var, "")
+    if val and _looks_like_real_key(val):
+        # Restore to os.environ so future calls don't need to re-query
+        os.environ[env_var] = val
+        logger.info(f"Restored {provider} API key from LiteLLM config to os.environ")
+        return val
+    
+    # If not in os.environ and not readable from LiteLLM, the key may be
+    # encrypted in LiteLLM's DB. We can't decrypt it.
     # Return None to signal we can't make direct provider API calls.
     return None
 
@@ -1319,6 +1363,7 @@ async def list_cloud_models(
             key_configured = _is_key_configured(env_vars, env_var)
     
     models: List[CloudModel] = []
+    needs_resave = False
     
     if api_key:
         # Fetch live models from the provider
@@ -1332,8 +1377,9 @@ async def list_cloud_models(
     
     if not models and key_configured:
         # Key is in LiteLLM DB but we can't access it for direct calls.
-        # Return empty list with a note that key is configured but we
-        # need it in agent-api env to fetch live models.
+        # This happens when the key is encrypted in LiteLLM's DB and
+        # agent-api can't decrypt it (e.g., after a restart).
+        needs_resave = True
         logger.info(
             f"{provider} key is in LiteLLM but not accessible to agent-api "
             f"for direct API calls. Re-save the key to enable live model listing."
@@ -1343,6 +1389,7 @@ async def list_cloud_models(
         provider=provider,
         models=models,
         api_key_configured=key_configured,
+        needs_key_resave=needs_resave,
     )
 
 

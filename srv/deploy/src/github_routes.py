@@ -23,7 +23,6 @@ from .deployment_models import (
     GitHubVerifyRepoResponse,
 )
 from . import deployment_db as db
-from .crypto_utils import decrypt
 
 logger = logging.getLogger(__name__)
 

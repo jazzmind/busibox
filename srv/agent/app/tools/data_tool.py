@@ -29,7 +29,7 @@ from app.agents.core import BusiboxDeps
 class CreateDataDocumentInput(BaseModel):
     """Input for creating a data document."""
     name: str = Field(description="Name of the data document (like a database name)")
-    schema: Optional[Dict[str, Any]] = Field(
+    doc_schema: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Optional schema definition with field types and validation"
     )

@@ -110,24 +110,14 @@ data:
         keepalive_timeout 65;
         client_max_body_size 500M;
 
-        # Upstream definitions
-        upstream authz_api { server authz-api:8010; }
-        upstream data_api { server data-api:8002; }
-        upstream search_api { server search-api:8003; }
-        upstream agent_api { server agent-api:8000; }
-        upstream docs_api { server docs-api:8004; }
-        upstream bridge_api { server bridge-api:8081; }
-        upstream litellm { server litellm:4000; }
-        upstream embedding_api { server embedding-api:8005; }
-        upstream deploy_api { server deploy-api:8011; }
-        upstream ai_portal { server ai-portal:3000; }
-        upstream agent_manager { server agent-manager:3001; }
+        # Use kube-dns for runtime DNS resolution (allows services to start later)
+        resolver kube-dns.kube-system.svc.cluster.local valid=10s;
 
         server {
             listen 80;
             server_name _;
 
-            # Health check
+            # Health check (always responds, even if backends are down)
             location /health {
                 return 200 'OK';
                 add_header Content-Type text/plain;
@@ -135,7 +125,8 @@ data:
 
             # AuthZ API
             location /auth/ {
-                proxy_pass http://authz_api/;
+                set $backend_authz "authz-api.busibox.svc.cluster.local:8010";
+                proxy_pass http://$backend_authz/;
                 proxy_set_header Host $host;
                 proxy_set_header X-Real-IP $remote_addr;
                 proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -144,7 +135,8 @@ data:
 
             # Data API
             location /data/ {
-                proxy_pass http://data_api/;
+                set $backend_data "data-api.busibox.svc.cluster.local:8002";
+                proxy_pass http://$backend_data/;
                 proxy_set_header Host $host;
                 proxy_set_header X-Real-IP $remote_addr;
                 proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -153,7 +145,8 @@ data:
 
             # Search API
             location /search/ {
-                proxy_pass http://search_api/;
+                set $backend_search "search-api.busibox.svc.cluster.local:8003";
+                proxy_pass http://$backend_search/;
                 proxy_set_header Host $host;
                 proxy_set_header X-Real-IP $remote_addr;
                 proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -162,7 +155,8 @@ data:
 
             # Agent API
             location /agent/ {
-                proxy_pass http://agent_api/;
+                set $backend_agent "agent-api.busibox.svc.cluster.local:8000";
+                proxy_pass http://$backend_agent/;
                 proxy_set_header Host $host;
                 proxy_set_header X-Real-IP $remote_addr;
                 proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -175,38 +169,43 @@ data:
 
             # Docs API
             location /docs/ {
-                proxy_pass http://docs_api/;
+                set $backend_docs "docs-api.busibox.svc.cluster.local:8004";
+                proxy_pass http://$backend_docs/;
                 proxy_set_header Host $host;
                 proxy_set_header X-Real-IP $remote_addr;
             }
 
             # Bridge API
             location /bridge/ {
-                proxy_pass http://bridge_api/;
+                set $backend_bridge "bridge-api.busibox.svc.cluster.local:8081";
+                proxy_pass http://$backend_bridge/;
                 proxy_set_header Host $host;
                 proxy_set_header X-Real-IP $remote_addr;
             }
 
             # LiteLLM
             location /llm/ {
-                proxy_pass http://litellm/;
+                set $backend_litellm "litellm.busibox.svc.cluster.local:4000";
+                proxy_pass http://$backend_litellm/;
                 proxy_set_header Host $host;
                 proxy_set_header X-Real-IP $remote_addr;
                 proxy_read_timeout 120;
             }
 
-            # AI Portal (core app)
+            # AI Portal (core app - may not be deployed yet)
             location /portal/ {
-                proxy_pass http://ai_portal/portal/;
+                set $backend_portal "ai-portal.busibox.svc.cluster.local:3000";
+                proxy_pass http://$backend_portal/portal/;
                 proxy_set_header Host $host;
                 proxy_set_header X-Real-IP $remote_addr;
                 proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
                 proxy_set_header X-Forwarded-Proto $scheme;
             }
 
-            # Agent Manager (core app)
+            # Agent Manager (core app - may not be deployed yet)
             location /agents/ {
-                proxy_pass http://agent_manager/agents/;
+                set $backend_agents "agent-manager.busibox.svc.cluster.local:3001";
+                proxy_pass http://$backend_agents/agents/;
                 proxy_set_header Host $host;
                 proxy_set_header X-Real-IP $remote_addr;
                 proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -219,7 +218,8 @@ data:
 
             # Deploy API
             location /deploy/ {
-                proxy_pass http://deploy_api/;
+                set $backend_deploy "deploy-api.busibox.svc.cluster.local:8011";
+                proxy_pass http://$backend_deploy/;
                 proxy_set_header Host $host;
                 proxy_set_header X-Real-IP $remote_addr;
                 proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -228,7 +228,8 @@ data:
 
             # Embedding API
             location /embedding/ {
-                proxy_pass http://embedding_api/;
+                set $backend_embedding "embedding-api.busibox.svc.cluster.local:8005";
+                proxy_pass http://$backend_embedding/;
                 proxy_set_header Host $host;
                 proxy_set_header X-Real-IP $remote_addr;
             }

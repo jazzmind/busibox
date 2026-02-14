@@ -24,6 +24,7 @@ from api.services.library_service import (
     LibraryService,
     PersonalLibraryTypes,
     PERSONAL_LIBRARY_NAMES,
+    FIXED_PERSONAL_LIBRARY_TYPES,
     library_to_response,
 )
 
@@ -258,10 +259,16 @@ async def create_library(
                 status_code=http_status.HTTP_400_BAD_REQUEST,
                 content={"error": "library_type is required for personal libraries"}
             )
-        if body.library_type not in [PersonalLibraryTypes.DOCS, PersonalLibraryTypes.RESEARCH, PersonalLibraryTypes.TASKS]:
+        valid_types = [PersonalLibraryTypes.DOCS, PersonalLibraryTypes.RESEARCH, PersonalLibraryTypes.TASKS, PersonalLibraryTypes.MEDIA, PersonalLibraryTypes.CUSTOM]
+        if body.library_type not in valid_types:
             return JSONResponse(
                 status_code=http_status.HTTP_400_BAD_REQUEST,
-                content={"error": f"Invalid library_type. Must be one of: DOCS, RESEARCH, TASKS"}
+                content={"error": f"Invalid library_type. Must be one of: DOCS, RESEARCH, TASKS, MEDIA, CUSTOM"}
+            )
+        if body.library_type == PersonalLibraryTypes.CUSTOM and (not body.name or not body.name.strip()):
+            return JSONResponse(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                content={"error": "Library name is required for custom personal libraries"}
             )
     
     try:
@@ -285,8 +292,11 @@ async def create_library(
                 library_id=body.id,
             )
         elif body.is_personal:
-            # Use get_or_create to handle existing libraries
-            library = await library_service.get_or_create_personal_library(user_id, body.library_type)
+            if body.library_type == PersonalLibraryTypes.CUSTOM:
+                library = await library_service.create_custom_personal_library(user_id, body.name)
+            else:
+                # Use get_or_create to handle existing libraries for fixed types
+                library = await library_service.get_or_create_personal_library(user_id, body.library_type)
         else:
             library = await library_service.create_library(
                 name=body.name,
@@ -587,6 +597,13 @@ async def delete_library(
                 status_code=http_status.HTTP_403_FORBIDDEN,
                 content={"error": "Cannot delete another user's personal library"}
             )
+
+        # Only CUSTOM personal libraries can be deleted; fixed types (DOCS, RESEARCH, TASKS, MEDIA) cannot
+        if existing["is_personal"] and existing.get("library_type") in FIXED_PERSONAL_LIBRARY_TYPES:
+            return JSONResponse(
+                status_code=http_status.HTTP_403_FORBIDDEN,
+                content={"error": "Cannot delete default personal libraries (Personal, Research, Tasks, Media). Create a custom library to organize documents."}
+            )
         
         deleted = await library_service.delete_library(library_id, soft_delete=not hard_delete)
         
@@ -618,6 +635,7 @@ async def get_library_documents(
     status: Optional[str] = None,
     search: Optional[str] = None,
     tag: Optional[str] = None,
+    tags: Optional[str] = None,
     _: dict = Depends(require_data_read),
 ):
     """
@@ -656,6 +674,13 @@ async def get_library_documents(
                 content={"error": "Library not found or access denied"}
             )
         
+        # Parse tags (comma-separated) for multi-tag filter
+        tags_list: Optional[List[str]] = None
+        if tags:
+            tags_list = [t.strip() for t in tags.split(",") if t.strip()]
+        elif tag:
+            tags_list = [tag]
+
         # Get documents from data_files (uses RLS)
         documents = await library_service.get_library_documents(
             library_id=library_id,
@@ -665,6 +690,7 @@ async def get_library_documents(
             status_filter=status,
             search=search,
             tag=tag,
+            tags=tags_list,
         )
         print(f"[get_library_documents] returning {len(documents)} documents")
         
@@ -681,6 +707,293 @@ async def get_library_documents(
         return JSONResponse(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"error": "Failed to get library documents", "details": str(e)}
+        )
+
+
+# =============================================================================
+# Library Trigger Models
+# =============================================================================
+
+class CreateTriggerRequest(BaseModel):
+    """Request body for creating a library trigger."""
+    name: str = Field(..., description="Trigger name")
+    description: Optional[str] = Field(None, description="Trigger description")
+    agent_id: Optional[str] = Field(None, alias="agentId", description="Agent ID to execute")
+    prompt: Optional[str] = Field(None, description="Prompt for the agent")
+    schema_document_id: Optional[str] = Field(None, alias="schemaDocumentId", description="Data document ID containing extraction schema")
+    delegation_token: Optional[str] = Field(None, alias="delegationToken", description="Pre-authorized token for agent execution")
+    delegation_scopes: Optional[List[str]] = Field(None, alias="delegationScopes", description="Scopes for delegation token")
+    
+    class Config:
+        populate_by_name = True
+
+
+class UpdateTriggerRequest(BaseModel):
+    """Request body for updating a library trigger."""
+    name: Optional[str] = Field(None, description="New trigger name")
+    description: Optional[str] = Field(None, description="New description")
+    is_active: Optional[bool] = Field(None, alias="isActive", description="Enable/disable trigger")
+    prompt: Optional[str] = Field(None, description="New prompt")
+    schema_document_id: Optional[str] = Field(None, alias="schemaDocumentId", description="New schema document ID")
+    agent_id: Optional[str] = Field(None, alias="agentId", description="New agent ID")
+    
+    class Config:
+        populate_by_name = True
+
+
+def trigger_to_response(trigger: dict) -> dict:
+    """Convert a trigger DB row to API response format."""
+    return {
+        "id": str(trigger["id"]),
+        "libraryId": str(trigger["library_id"]),
+        "name": trigger["name"],
+        "description": trigger.get("description"),
+        "agentId": str(trigger["agent_id"]) if trigger.get("agent_id") else None,
+        "prompt": trigger.get("prompt"),
+        "schemaDocumentId": str(trigger["schema_document_id"]) if trigger.get("schema_document_id") else None,
+        "isActive": trigger.get("is_active", True),
+        "createdBy": str(trigger["created_by"]),
+        "executionCount": trigger.get("execution_count", 0),
+        "lastExecutionAt": trigger["last_execution_at"].isoformat() if trigger.get("last_execution_at") else None,
+        "lastError": trigger.get("last_error"),
+        "createdAt": trigger["created_at"].isoformat() if trigger.get("created_at") else None,
+        "updatedAt": trigger["updated_at"].isoformat() if trigger.get("updated_at") else None,
+    }
+
+
+# =============================================================================
+# Library Trigger Endpoints
+# =============================================================================
+
+@router.get("/{library_id}/triggers")
+async def list_library_triggers(
+    request: Request,
+    library_id: str,
+    active_only: bool = Query(False, alias="activeOnly", description="Only return active triggers"),
+    _: dict = Depends(require_data_read),
+):
+    """List triggers configured for a library."""
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        return JSONResponse(
+            status_code=http_status.HTTP_401_UNAUTHORIZED,
+            content={"error": "User ID not found in request"}
+        )
+    
+    lib_uuid, error_response = validate_uuid(library_id, "Library ID")
+    if error_response:
+        return error_response
+    
+    try:
+        from api.main import pg_service
+        triggers = await pg_service.list_library_triggers(library_id, active_only=active_only)
+        return JSONResponse(
+            status_code=http_status.HTTP_200_OK,
+            content={
+                "data": [trigger_to_response(t) for t in triggers],
+                "total": len(triggers),
+            }
+        )
+    except Exception as e:
+        logger.error("Failed to list library triggers", library_id=library_id, error=str(e), exc_info=True)
+        return JSONResponse(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": "Failed to list library triggers", "details": str(e)}
+        )
+
+
+@router.post("/{library_id}/triggers")
+async def create_library_trigger(
+    request: Request,
+    library_id: str,
+    body: CreateTriggerRequest,
+    _: dict = Depends(require_data_write),
+):
+    """Create a new trigger on a library. When a document completes processing in this library, the trigger fires."""
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        return JSONResponse(
+            status_code=http_status.HTTP_401_UNAUTHORIZED,
+            content={"error": "User ID not found in request"}
+        )
+    
+    lib_uuid, error_response = validate_uuid(library_id, "Library ID")
+    if error_response:
+        return error_response
+    
+    if not body.agent_id:
+        return JSONResponse(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            content={"error": "agent_id is required"}
+        )
+    
+    try:
+        from api.main import pg_service
+        trigger = await pg_service.create_library_trigger(
+            library_id=library_id,
+            name=body.name,
+            created_by=user_id,
+            agent_id=body.agent_id,
+            prompt=body.prompt,
+            schema_document_id=body.schema_document_id,
+            description=body.description,
+            delegation_token=body.delegation_token,
+            delegation_scopes=body.delegation_scopes,
+        )
+        return JSONResponse(
+            status_code=http_status.HTTP_201_CREATED,
+            content={"data": trigger_to_response(trigger)}
+        )
+    except Exception as e:
+        logger.error("Failed to create library trigger", library_id=library_id, error=str(e), exc_info=True)
+        return JSONResponse(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": "Failed to create library trigger", "details": str(e)}
+        )
+
+
+@router.get("/{library_id}/triggers/{trigger_id}")
+async def get_library_trigger(
+    request: Request,
+    library_id: str,
+    trigger_id: str,
+    _: dict = Depends(require_data_read),
+):
+    """Get a specific library trigger."""
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        return JSONResponse(
+            status_code=http_status.HTTP_401_UNAUTHORIZED,
+            content={"error": "User ID not found in request"}
+        )
+    
+    _, error_response = validate_uuid(trigger_id, "Trigger ID")
+    if error_response:
+        return error_response
+    
+    try:
+        from api.main import pg_service
+        trigger = await pg_service.get_library_trigger(trigger_id)
+        if not trigger or str(trigger["library_id"]) != library_id:
+            return JSONResponse(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                content={"error": "Trigger not found"}
+            )
+        return JSONResponse(
+            status_code=http_status.HTTP_200_OK,
+            content={"data": trigger_to_response(trigger)}
+        )
+    except Exception as e:
+        logger.error("Failed to get library trigger", trigger_id=trigger_id, error=str(e), exc_info=True)
+        return JSONResponse(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": "Failed to get library trigger", "details": str(e)}
+        )
+
+
+@router.put("/{library_id}/triggers/{trigger_id}")
+async def update_library_trigger(
+    request: Request,
+    library_id: str,
+    trigger_id: str,
+    body: UpdateTriggerRequest,
+    _: dict = Depends(require_data_write),
+):
+    """Update a library trigger (enable/disable, change settings)."""
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        return JSONResponse(
+            status_code=http_status.HTTP_401_UNAUTHORIZED,
+            content={"error": "User ID not found in request"}
+        )
+    
+    _, error_response = validate_uuid(trigger_id, "Trigger ID")
+    if error_response:
+        return error_response
+    
+    try:
+        from api.main import pg_service
+        
+        # Verify trigger belongs to this library
+        existing = await pg_service.get_library_trigger(trigger_id)
+        if not existing or str(existing["library_id"]) != library_id:
+            return JSONResponse(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                content={"error": "Trigger not found"}
+            )
+        
+        update_kwargs = {}
+        if body.name is not None:
+            update_kwargs["name"] = body.name
+        if body.description is not None:
+            update_kwargs["description"] = body.description
+        if body.is_active is not None:
+            update_kwargs["is_active"] = body.is_active
+        if body.prompt is not None:
+            update_kwargs["prompt"] = body.prompt
+        if body.schema_document_id is not None:
+            update_kwargs["schema_document_id"] = body.schema_document_id
+        if body.agent_id is not None:
+            update_kwargs["agent_id"] = body.agent_id
+        
+        trigger = await pg_service.update_library_trigger(trigger_id, **update_kwargs)
+        return JSONResponse(
+            status_code=http_status.HTTP_200_OK,
+            content={"data": trigger_to_response(trigger)}
+        )
+    except Exception as e:
+        logger.error("Failed to update library trigger", trigger_id=trigger_id, error=str(e), exc_info=True)
+        return JSONResponse(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": "Failed to update library trigger", "details": str(e)}
+        )
+
+
+@router.delete("/{library_id}/triggers/{trigger_id}")
+async def delete_library_trigger(
+    request: Request,
+    library_id: str,
+    trigger_id: str,
+    _: dict = Depends(require_data_write),
+):
+    """Delete a library trigger."""
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        return JSONResponse(
+            status_code=http_status.HTTP_401_UNAUTHORIZED,
+            content={"error": "User ID not found in request"}
+        )
+    
+    _, error_response = validate_uuid(trigger_id, "Trigger ID")
+    if error_response:
+        return error_response
+    
+    try:
+        from api.main import pg_service
+        
+        # Verify trigger belongs to this library
+        existing = await pg_service.get_library_trigger(trigger_id)
+        if not existing or str(existing["library_id"]) != library_id:
+            return JSONResponse(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                content={"error": "Trigger not found"}
+            )
+        
+        deleted = await pg_service.delete_library_trigger(trigger_id)
+        if deleted:
+            return JSONResponse(
+                status_code=http_status.HTTP_200_OK,
+                content={"message": "Trigger deleted", "id": trigger_id}
+            )
+        return JSONResponse(
+            status_code=http_status.HTTP_404_NOT_FOUND,
+            content={"error": "Trigger not found"}
+        )
+    except Exception as e:
+        logger.error("Failed to delete library trigger", trigger_id=trigger_id, error=str(e), exc_info=True)
+        return JSONResponse(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": "Failed to delete library trigger", "details": str(e)}
         )
 
 

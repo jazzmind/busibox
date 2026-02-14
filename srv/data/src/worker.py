@@ -615,6 +615,316 @@ class IngestWorker:
         except Exception as e:
             logger.error("Failed to save chunk embeddings", file_id=file_id, error=str(e), exc_info=True)
     
+    def _check_library_triggers(
+        self,
+        file_id: str,
+        user_id: str,
+        delegation_token: Optional[str] = None,
+    ):
+        """
+        Check if the completed file's library has any active triggers.
+        If so, fire them by calling the Agent API.
+        
+        This is non-blocking -- failures here do not affect the document processing result.
+        """
+        try:
+            # Get the file's library_id
+            conn = self.postgres_service._get_connection(self._current_rls_context)
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT library_id, filename, markdown_path, has_markdown,
+                               extracted_title, mime_type
+                        FROM data_files WHERE file_id = %s
+                    """, (file_id,))
+                    row = cur.fetchone()
+            finally:
+                self.postgres_service._return_connection(conn)
+            
+            if not row or not row[0]:
+                # No library_id -- nothing to trigger
+                return
+            
+            library_id = str(row[0])
+            filename = row[1]
+            markdown_path = row[2]
+            has_markdown = row[3]
+            extracted_title = row[4]
+            mime_type = row[5]
+            
+            # Check for active triggers on this library
+            conn = self.postgres_service._get_connection(self._current_rls_context)
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT id, agent_id, prompt, schema_document_id,
+                               delegation_token, name
+                        FROM library_triggers
+                        WHERE library_id = %s AND is_active = true
+                    """, (library_id,))
+                    triggers = cur.fetchall()
+            finally:
+                self.postgres_service._return_connection(conn)
+            
+            if not triggers:
+                return
+            
+            logger.info(
+                "Library triggers found for completed document",
+                file_id=file_id,
+                library_id=library_id,
+                trigger_count=len(triggers),
+            )
+            
+            # Get markdown content if available
+            markdown_content = None
+            if has_markdown and markdown_path:
+                try:
+                    import io
+                    response = self.file_service.client.get_object(
+                        bucket_name=self.file_service.bucket,
+                        object_name=markdown_path,
+                    )
+                    markdown_content = response.read().decode('utf-8')
+                    response.close()
+                    response.release_conn()
+                except Exception as e:
+                    logger.warning(
+                        "Failed to read markdown for trigger",
+                        file_id=file_id,
+                        error=str(e),
+                    )
+            
+            # Get schema content for each trigger that references a schema document
+            for trigger in triggers:
+                trigger_id = str(trigger[0])
+                agent_id = str(trigger[1]) if trigger[1] else None
+                trigger_prompt = trigger[2]
+                schema_document_id = str(trigger[3]) if trigger[3] else None
+                trigger_delegation_token = trigger[4]
+                trigger_name = trigger[5]
+                
+                if not agent_id:
+                    logger.warning(
+                        "Library trigger has no agent_id, skipping",
+                        trigger_id=trigger_id,
+                    )
+                    continue
+                
+                # Get schema if referenced
+                schema_content = None
+                if schema_document_id:
+                    try:
+                        conn = self.postgres_service._get_connection(self._current_rls_context)
+                        try:
+                            with conn.cursor() as cur:
+                                cur.execute("""
+                                    SELECT data_schema FROM data_files
+                                    WHERE file_id = %s AND doc_type = 'data'
+                                """, (schema_document_id,))
+                                schema_row = cur.fetchone()
+                                if schema_row and schema_row[0]:
+                                    schema_content = schema_row[0] if isinstance(schema_row[0], dict) else json.loads(schema_row[0])
+                        finally:
+                            self.postgres_service._return_connection(conn)
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to load schema for trigger",
+                            trigger_id=trigger_id,
+                            schema_document_id=schema_document_id,
+                            error=str(e),
+                        )
+                
+                # Fire the trigger via Agent API
+                self._fire_library_trigger(
+                    trigger_id=trigger_id,
+                    trigger_name=trigger_name,
+                    agent_id=agent_id,
+                    prompt=trigger_prompt,
+                    file_id=file_id,
+                    filename=filename,
+                    extracted_title=extracted_title,
+                    markdown_content=markdown_content,
+                    schema_content=schema_content,
+                    schema_document_id=schema_document_id,
+                    user_id=user_id,
+                    library_id=library_id,
+                    delegation_token=trigger_delegation_token or delegation_token,
+                )
+        
+        except Exception as e:
+            logger.error(
+                "Library trigger check failed (non-fatal)",
+                file_id=file_id,
+                error=str(e),
+                exc_info=True,
+            )
+    
+    def _fire_library_trigger(
+        self,
+        trigger_id: str,
+        trigger_name: str,
+        agent_id: str,
+        prompt: Optional[str],
+        file_id: str,
+        filename: str,
+        extracted_title: Optional[str],
+        markdown_content: Optional[str],
+        schema_content: Optional[dict],
+        schema_document_id: Optional[str],
+        user_id: str,
+        library_id: str,
+        delegation_token: Optional[str],
+    ):
+        """Fire a single library trigger by calling the Agent API."""
+        import urllib.request
+        import urllib.error
+        
+        agent_api_url = self.config.get("agent_api_url", "")
+        if not agent_api_url:
+            # Try to construct from environment
+            agent_host = os.environ.get("AGENT_API_HOST", "")
+            agent_port = os.environ.get("AGENT_API_PORT", "4111")
+            if agent_host:
+                agent_api_url = f"http://{agent_host}:{agent_port}"
+            else:
+                logger.warning(
+                    "No agent_api_url configured, cannot fire library trigger",
+                    trigger_id=trigger_id,
+                )
+                return
+        
+        try:
+            # Build the prompt for the agent
+            effective_prompt = prompt or "Extract structured data from this document."
+            
+            full_prompt = f"""## Library Trigger: {trigger_name}
+
+{effective_prompt}
+
+### Document Information
+- **File ID**: {file_id}
+- **Filename**: {filename}
+- **Title**: {extracted_title or filename}
+- **Library ID**: {library_id}
+"""
+            
+            if schema_content:
+                full_prompt += f"""
+### Extraction Schema
+Use this schema to structure the extracted data. Insert the results as records into the data document with ID `{schema_document_id}`.
+
+```json
+{json.dumps(schema_content, indent=2)}
+```
+"""
+            
+            if markdown_content:
+                # Truncate if very long to avoid overwhelming the agent
+                max_content_len = 50000
+                content = markdown_content[:max_content_len]
+                if len(markdown_content) > max_content_len:
+                    content += f"\n\n... (truncated, {len(markdown_content)} total characters)"
+                full_prompt += f"""
+### Document Content (Markdown)
+{content}
+"""
+            
+            # Call Agent API POST /webhooks/library-trigger
+            payload = json.dumps({
+                "trigger_id": trigger_id,
+                "agent_id": agent_id,
+                "prompt": full_prompt,
+                "file_id": file_id,
+                "user_id": user_id,
+                "library_id": library_id,
+                "schema_document_id": schema_document_id,
+                "delegation_token": delegation_token,
+            }).encode('utf-8')
+            
+            url = f"{agent_api_url}/webhooks/library-trigger"
+            req = urllib.request.Request(
+                url,
+                data=payload,
+                headers={
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
+            
+            # Add delegation token as auth if available
+            if delegation_token:
+                req.add_header("Authorization", f"Bearer {delegation_token}")
+            
+            response = urllib.request.urlopen(req, timeout=30)
+            response_data = json.loads(response.read().decode('utf-8'))
+            
+            logger.info(
+                "Library trigger fired successfully",
+                trigger_id=trigger_id,
+                trigger_name=trigger_name,
+                file_id=file_id,
+                agent_id=agent_id,
+                response=response_data,
+            )
+            
+            # Record successful execution
+            try:
+                conn = self.postgres_service._get_connection(self._current_rls_context)
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute("""
+                            UPDATE library_triggers
+                            SET execution_count = execution_count + 1,
+                                last_execution_at = NOW(),
+                                last_error = NULL,
+                                updated_at = NOW()
+                            WHERE id = %s
+                        """, (trigger_id,))
+                        conn.commit()
+                finally:
+                    self.postgres_service._return_connection(conn)
+            except Exception:
+                pass  # Non-fatal
+        
+        except (urllib.error.URLError, urllib.error.HTTPError) as e:
+            error_msg = str(e)
+            logger.error(
+                "Failed to fire library trigger",
+                trigger_id=trigger_id,
+                trigger_name=trigger_name,
+                file_id=file_id,
+                error=error_msg,
+            )
+            
+            # Record failed execution
+            try:
+                conn = self.postgres_service._get_connection(self._current_rls_context)
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute("""
+                            UPDATE library_triggers
+                            SET execution_count = execution_count + 1,
+                                last_execution_at = NOW(),
+                                last_error = %s,
+                                updated_at = NOW()
+                            WHERE id = %s
+                        """, (error_msg, trigger_id))
+                        conn.commit()
+                finally:
+                    self.postgres_service._return_connection(conn)
+            except Exception:
+                pass  # Non-fatal
+        
+        except Exception as e:
+            logger.error(
+                "Library trigger fire failed unexpectedly",
+                trigger_id=trigger_id,
+                file_id=file_id,
+                error=str(e),
+                exc_info=True,
+            )
+    
     def process_job(self, job_id: str, job_data: dict, trace_id: str):
         """
         Process a single data job.
@@ -674,9 +984,9 @@ class IngestWorker:
                 )
         
         # Get start_stage for partial reprocessing
-        # Stages in order: parsing, chunking, cleanup, markdown, embedding, indexing
+        # Stages in order: parsing, chunking, cleanup, markdown, entity_extraction, embedding, indexing
         start_stage = job_data.get("start_stage", "parsing")
-        stage_order = ["parsing", "chunking", "cleanup", "markdown", "embedding", "indexing"]
+        stage_order = ["parsing", "chunking", "cleanup", "markdown", "entity_extraction", "embedding", "indexing"]
         start_stage_idx = stage_order.index(start_stage) if start_stage in stage_order else 0
         
         if start_stage != "parsing":
@@ -757,7 +1067,79 @@ class IngestWorker:
             
             # For partial reprocessing, load existing data if starting from later stage
             existing_chunks = None
-            if start_stage in ["embedding", "indexing"]:
+            if start_stage == "entity_extraction":
+                # Entity extraction only: load chunks for text, run entity extraction
+                existing_chunks = self._load_chunks_from_db(file_id)
+                if existing_chunks:
+                    entity_extraction_enabled = (
+                        processing_config.get("entity_extraction_enabled", False)
+                        if processing_config else False
+                    )
+                    if entity_extraction_enabled:
+                        try:
+                            from processors.entity_extractor import EntityExtractor
+                            from services.graph_service import GraphService
+                            text_from_chunks = "\n\n".join(c.text for c in existing_chunks if c.text)
+                            if text_from_chunks:
+                                library_id = None
+                                reprocess_filename = original_filename
+                                conn = self.postgres_service._get_connection(self._current_rls_context)
+                                try:
+                                    cur = conn.cursor()
+                                    cur.execute(
+                                        "SELECT library_id, filename FROM data_files WHERE file_id = %s",
+                                        (file_id,),
+                                    )
+                                    row = cur.fetchone()
+                                    if row:
+                                        library_id = str(row[0])
+                                        if row[1]:
+                                            reprocess_filename = row[1]
+                                finally:
+                                    self.postgres_service._return_connection(conn)
+                                entity_extractor = EntityExtractor(
+                                    litellm_base_url=os.getenv("LITELLM_BASE_URL", "http://litellm:4000"),
+                                    litellm_api_key=os.getenv("LITELLM_API_KEY", ""),
+                                )
+                                graph = GraphService()
+                                loop = asyncio.new_event_loop()
+                                asyncio.set_event_loop(loop)
+                                try:
+                                    connected = loop.run_until_complete(graph.connect())
+                                    if connected:
+                                        loop.run_until_complete(
+                                            entity_extractor.extract_and_store_graph(
+                                                text=text_from_chunks,
+                                                file_id=file_id,
+                                                filename=reprocess_filename,
+                                                owner_id=user_id,
+                                                visibility=visibility,
+                                                graph_service=graph,
+                                                library_id=library_id,
+                                            )
+                                        )
+                                finally:
+                                    loop.run_until_complete(graph.disconnect())
+                                    loop.close()
+                        except Exception as e:
+                            logger.warning(
+                                "Entity extraction reprocess failed (non-blocking)",
+                                file_id=file_id,
+                                error=str(e),
+                            )
+                    logger.info(
+                        "Entity extraction reprocess complete",
+                        file_id=file_id,
+                    )
+                    return
+                else:
+                    logger.warning(
+                        "No existing chunks found for entity extraction, starting from parsing",
+                        file_id=file_id,
+                    )
+                    start_stage = "parsing"
+                    start_stage_idx = 0
+            elif start_stage in ["embedding", "indexing"]:
                 # Fast path: just re-embed or re-index existing chunks
                 existing_chunks = self._load_chunks_from_db(file_id)
                 if existing_chunks:
@@ -1132,6 +1514,21 @@ class IngestWorker:
                         progress=51,
                     )
                     
+                    # Get library_id for graph filtering (Document nodes store library_id)
+                    library_id = None
+                    conn = self.postgres_service._get_connection(self._current_rls_context)
+                    try:
+                        cur = conn.cursor()
+                        cur.execute(
+                            "SELECT library_id FROM data_files WHERE file_id = %s",
+                            (file_id,),
+                        )
+                        row = cur.fetchone()
+                        if row:
+                            library_id = str(row[0])
+                    finally:
+                        self.postgres_service._return_connection(conn)
+                    
                     entity_extractor = EntityExtractor(
                         litellm_base_url=os.getenv("LITELLM_BASE_URL", "http://litellm:4000"),
                         litellm_api_key=os.getenv("LITELLM_API_KEY", ""),
@@ -1151,6 +1548,7 @@ class IngestWorker:
                                     owner_id=user_id,
                                     visibility=visibility,
                                     graph_service=graph,
+                                    library_id=library_id,
                                 )
                             )
                             logger.info(
@@ -1808,6 +2206,13 @@ class IngestWorker:
                 chunk_count=total_chunks,
                 vector_count=vector_count,
                 multi_flow_enabled=processing_config.get("multi_flow_enabled", False) if processing_config else False,
+            )
+            
+            # Stage 9: Check library triggers (non-blocking)
+            self._check_library_triggers(
+                file_id=file_id,
+                user_id=user_id,
+                delegation_token=delegation_token,
             )
         
         except asyncio.TimeoutError as e:

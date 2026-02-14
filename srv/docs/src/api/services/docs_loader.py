@@ -6,6 +6,7 @@ as well as OpenAPI specification files.
 
 Supported categories:
   - platform: End-user guides for using Busibox (previously 'user')
+  - administrator: Deployment, configuration, and operational guides
   - apps: Per-app documentation contributed by installed applications
   - developer: Technical/developer documentation
 
@@ -25,7 +26,7 @@ from dataclasses import dataclass, field
 import yaml
 
 # Valid categories for documentation
-VALID_CATEGORIES = ('platform', 'apps', 'developer')
+VALID_CATEGORIES = ('platform', 'administrator', 'apps', 'developer')
 
 # Backward compatibility: 'user' maps to 'platform'
 CATEGORY_ALIASES = {'user': 'platform'}

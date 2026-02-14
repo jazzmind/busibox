@@ -44,6 +44,12 @@ else
     warn() { echo "[WARN] $*"; }
 fi
 
+# Source profiles library if available
+if [[ -f "${REPO_ROOT}/scripts/lib/profiles.sh" ]]; then
+    source "${REPO_ROOT}/scripts/lib/profiles.sh"
+    profile_init 2>/dev/null || true
+fi
+
 # ============================================================================
 # Configuration
 # ============================================================================
@@ -52,7 +58,16 @@ OVERLAY="${OVERLAY:-rackspace-spot}"
 NAMESPACE="busibox"
 REGISTRY="localhost:30500"
 REGISTRY_INTERNAL="registry.busibox.svc.cluster.local:5000"
-KUBECONFIG_FILE="${KUBECONFIG:-${REPO_ROOT}/k8s/kubeconfig-rackspace-spot.yaml}"
+
+# Determine kubeconfig: profile > KUBECONFIG env > fallback
+_k8s_kubeconfig=""
+if type profile_get_active &>/dev/null; then
+    _k8s_active=$(profile_get_active 2>/dev/null)
+    if [[ -n "$_k8s_active" ]]; then
+        _k8s_kubeconfig=$(profile_get_kubeconfig "$_k8s_active" 2>/dev/null)
+    fi
+fi
+KUBECONFIG_FILE="${KUBECONFIG:-${_k8s_kubeconfig:-${REPO_ROOT}/k8s/kubeconfig-rackspace-spot.yaml}}"
 TAG="${TAG:-$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null || echo 'latest')}"
 BUILD_SERVER_POD="build-server"
 
@@ -77,6 +92,7 @@ DO_APPLY=false
 DO_STATUS=false
 DO_DELETE=false
 DO_SECRETS=false
+DO_CLEAN_STORAGE=false
 SERVICE_FILTER=""  # Empty = all services, otherwise specific image name
 
 # ============================================================================
@@ -93,6 +109,7 @@ while [[ $# -gt 0 ]]; do
         --apply) DO_APPLY=true; shift ;;
         --service) SERVICE_FILTER="$2"; shift 2 ;;
         --all) DO_SYNC=true; DO_BUILD=true; DO_APPLY=true; DO_SECRETS=true; shift ;;
+        --clean-storage) DO_CLEAN_STORAGE=true; shift ;;
         --status) DO_STATUS=true; shift ;;
         --delete) DO_DELETE=true; shift ;;
         --secrets) DO_SECRETS=true; shift ;;
@@ -109,6 +126,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --service NAME     Build only a specific service (e.g., authz-api)"
             echo "  --secrets          Generate and apply secrets from vault"
             echo "  --all              Sync, build, generate secrets, and apply"
+            echo "  --clean-storage    Delete deployments + PVCs (for resizing/migrating volumes)"
             echo "  --status           Show deployment status"
             echo "  --delete           Delete all busibox resources"
             echo "  -h, --help         Show this help"
@@ -119,7 +137,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # If no action specified, show help
-if ! $DO_SYNC && ! $DO_BUILD && ! $DO_APPLY && ! $DO_STATUS && ! $DO_DELETE && ! $DO_SECRETS; then
+if ! $DO_SYNC && ! $DO_BUILD && ! $DO_APPLY && ! $DO_STATUS && ! $DO_DELETE && ! $DO_SECRETS && ! $DO_CLEAN_STORAGE; then
     echo "No action specified. Use --help for usage."
     exit 1
 fi
@@ -130,6 +148,126 @@ fi
 
 kctl() {
     kubectl --kubeconfig="${KUBECONFIG_FILE}" "$@"
+}
+
+# ============================================================================
+# Progress-reporting wait helpers
+# ============================================================================
+
+# Get a compact status line for a resource's pods
+# Usage: pod_status_line "deployment/authz-api"
+pod_status_line() {
+    local resource="$1"
+    local name="${resource##*/}"
+
+    # Use kubectl get with wide output for a quick summary
+    local pod_lines
+    pod_lines=$(kctl get pods -n "${NAMESPACE}" -l "app=${name}" \
+        --no-headers -o wide 2>/dev/null || echo "")
+
+    if [[ -z "$pod_lines" ]]; then
+        echo "  ${name}: no pods found"
+        return
+    fi
+
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        local pod_name status restarts age
+        pod_name=$(echo "$line" | awk '{print $1}')
+        status=$(echo "$line" | awk '{print $3}')
+        restarts=$(echo "$line" | awk '{print $4}')
+        age=$(echo "$line" | awk '{print $5}')
+
+        local detail="${status}"
+        [[ "$restarts" != "0" ]] && detail="${detail}, ${restarts} restarts"
+
+        # For non-Running pods, get the reason from container status
+        if [[ "$status" != "Running" && "$status" != "Completed" ]]; then
+            local reason
+            reason=$(kctl get pod "$pod_name" -n "${NAMESPACE}" \
+                -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}' 2>/dev/null || echo "")
+            [[ -z "$reason" ]] && reason=$(kctl get pod "$pod_name" -n "${NAMESPACE}" \
+                -o jsonpath='{.status.initContainerStatuses[0].state.waiting.reason}' 2>/dev/null || echo "")
+            [[ -n "$reason" ]] && detail="${detail} (${reason})"
+        fi
+
+        echo "  ${name}: ${detail} [${age}]"
+    done <<< "$pod_lines"
+}
+
+# Wait for a group of resources with periodic progress reporting
+# Usage: wait_for_rollout "Group Name" timeout_seconds resource1 resource2 ...
+wait_for_rollout() {
+    local group_name="$1"
+    local timeout="$2"
+    shift 2
+    local resources=("$@")
+
+    info "Waiting for ${group_name}..."
+
+    local start_time=$SECONDS
+    local all_ready=false
+    # Track which resources we've already printed as ready
+    declare -A already_ready
+
+    while [[ $(( SECONDS - start_time )) -lt $timeout ]]; do
+        local pending=()
+
+        for resource in "${resources[@]}"; do
+            local name="${resource##*/}"
+            # Skip if already reported ready
+            [[ -n "${already_ready[$name]:-}" ]] && continue
+            # Quick check: is rollout complete?
+            if kctl rollout status "$resource" -n "${NAMESPACE}" --timeout=2s &>/dev/null; then
+                echo "  ✓ ${name}"
+                already_ready[$name]=1
+            else
+                pending+=("$resource")
+            fi
+        done
+
+        # If all ready, done
+        if [[ ${#pending[@]} -eq 0 ]]; then
+            all_ready=true
+            break
+        fi
+
+        # Print status of pending ones
+        for resource in "${pending[@]}"; do
+            pod_status_line "$resource"
+        done
+
+        # Show recent warning/error events for the namespace
+        local elapsed=$(( SECONDS - start_time ))
+        if [[ $elapsed -gt 15 ]]; then
+            local recent_events
+            recent_events=$(kctl get events -n "${NAMESPACE}" \
+                --sort-by='.lastTimestamp' \
+                --field-selector="type!=Normal" \
+                -o custom-columns='REASON:.reason,OBJECT:.involvedObject.name,MESSAGE:.message' \
+                --no-headers 2>/dev/null | tail -3)
+            if [[ -n "$recent_events" ]]; then
+                echo "  Recent warnings:"
+                echo "$recent_events" | while IFS= read -r evt; do
+                    echo "    $evt"
+                done
+            fi
+        fi
+
+        echo "  ... elapsed ${elapsed}s / ${timeout}s timeout"
+        sleep 10
+    done
+
+    if $all_ready; then
+        success "${group_name} ready"
+    else
+        warn "${group_name}: some services not ready after ${timeout}s (continuing anyway)"
+        for resource in "${resources[@]}"; do
+            local name="${resource##*/}"
+            [[ -z "${already_ready[$name]:-}" ]] && pod_status_line "$resource"
+        done
+    fi
+    echo ""
 }
 
 # ============================================================================
@@ -331,7 +469,33 @@ generate_secrets() {
 
     if [[ -f "${REPO_ROOT}/scripts/lib/vault.sh" ]]; then
         source "${REPO_ROOT}/scripts/lib/vault.sh"
-        set_vault_environment "dev" 2>/dev/null || true
+        # Determine vault environment from active profile or fallback to state files.
+        local vault_env="prod"
+        if type profile_get_active &>/dev/null; then
+            local _active
+            _active=$(profile_get_active 2>/dev/null)
+            if [[ -n "$_active" ]]; then
+                vault_env=$(profile_get_vault_prefix "$_active" 2>/dev/null)
+                vault_env="${vault_env:-prod}"
+            fi
+        fi
+        
+        # Fallback: scan legacy state files if profile didn't provide vault env
+        if [[ "$vault_env" == "prod" ]] && ! type profile_get_active &>/dev/null; then
+            for state_prefix in prod staging dev demo; do
+                local state_file="${REPO_ROOT}/.busibox-state-${state_prefix}"
+                if [[ -f "$state_file" ]]; then
+                    local state_backend
+                    state_backend=$(grep "^BACKEND_.*=k8s" "$state_file" 2>/dev/null | head -1)
+                    if [[ -n "$state_backend" ]]; then
+                        vault_env="$state_prefix"
+                        break
+                    fi
+                fi
+            done
+        fi
+        info "Using vault environment: ${vault_env}"
+        set_vault_environment "$vault_env" 2>/dev/null || true
         if ensure_vault_access 2>/dev/null; then
             postgres_password=$(get_vault_secret "secrets.postgresql.password" 2>/dev/null || echo "$postgres_password")
             minio_access_key=$(get_vault_secret "secrets.minio.root_user" 2>/dev/null || echo "$minio_access_key")
@@ -377,6 +541,10 @@ EOF
 
     success "Secrets written to ${secrets_file}"
 
+    # Ensure namespace exists before applying secrets
+    info "Ensuring namespace '${NAMESPACE}' exists..."
+    kctl apply -f "${REPO_ROOT}/k8s/base/namespace.yaml"
+
     # Apply secrets
     info "Applying secrets to cluster..."
     kctl apply -f "${secrets_file}"
@@ -414,16 +582,15 @@ apply_manifests() {
 
     echo ""
 
-    # Wait for build infrastructure first
-    info "Waiting for build infrastructure..."
-    kctl rollout status deployment/registry -n "${NAMESPACE}" --timeout=60s 2>/dev/null || warn "Registry not ready yet"
-    kctl rollout status deployment/build-server -n "${NAMESPACE}" --timeout=120s 2>/dev/null || warn "Build server not ready yet"
+    # ---- Wait with progress reporting ----
+    wait_for_rollout "Build Infrastructure" 120 \
+        "deployment/registry" \
+        "deployment/build-server"
 
-    # Wait for infrastructure to be ready
-    info "Waiting for infrastructure services..."
-    kctl rollout status statefulset/postgres -n "${NAMESPACE}" --timeout=120s 2>/dev/null || warn "PostgreSQL not ready yet"
-    kctl rollout status statefulset/redis -n "${NAMESPACE}" --timeout=60s 2>/dev/null || warn "Redis not ready yet"
-    kctl rollout status statefulset/minio -n "${NAMESPACE}" --timeout=60s 2>/dev/null || warn "MinIO not ready yet"
+    wait_for_rollout "Infrastructure Services" 180 \
+        "deployment/postgres" \
+        "deployment/redis" \
+        "deployment/minio"
 
     # Run init jobs
     info "Running init jobs..."
@@ -433,13 +600,15 @@ apply_manifests() {
     # Re-apply to recreate jobs
     kctl apply -k "$overlay_dir"
 
-    info "Waiting for Milvus..."
-    kctl rollout status statefulset/milvus -n "${NAMESPACE}" --timeout=180s 2>/dev/null || warn "Milvus not ready yet"
+    wait_for_rollout "Milvus" 180 \
+        "deployment/etcd" \
+        "deployment/milvus-minio" \
+        "deployment/milvus"
 
-    info "Waiting for API services..."
-    kctl rollout status deployment/embedding-api -n "${NAMESPACE}" --timeout=300s 2>/dev/null || warn "Embedding API not ready yet"
-    kctl rollout status deployment/authz-api -n "${NAMESPACE}" --timeout=120s 2>/dev/null || warn "AuthZ API not ready yet"
-    kctl rollout status deployment/litellm -n "${NAMESPACE}" --timeout=120s 2>/dev/null || warn "LiteLLM not ready yet"
+    wait_for_rollout "API Services" 300 \
+        "deployment/embedding-api" \
+        "deployment/authz-api" \
+        "deployment/litellm"
 
     echo ""
     success "Deployment applied successfully!"
@@ -504,6 +673,51 @@ show_status() {
     echo "    make connect                    # HTTPS tunnel to https://busibox.local/portal"
     echo "    make connect DOMAIN=my.local    # Custom domain"
     echo "    make disconnect                 # Stop tunnel"
+    echo ""
+}
+
+# ============================================================================
+# Clean Storage (delete StatefulSets + PVCs for resizing)
+# ============================================================================
+
+clean_storage() {
+    warn "This will delete all Deployments with PVCs and all PVCs in namespace '${NAMESPACE}'!"
+    warn "Data in persistent volumes will be LOST."
+    echo ""
+    read -p "Are you sure? (y/N) " confirm
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        echo "Cancelled."
+        return 1
+    fi
+
+    # Delete any remaining StatefulSets from previous deployments
+    info "Deleting StatefulSets (legacy)..."
+    kctl delete statefulsets --all -n "${NAMESPACE}" --ignore-not-found 2>/dev/null || true
+
+    info "Deleting Deployments that use persistent storage..."
+    for dep in postgres etcd milvus-minio milvus neo4j minio; do
+        kctl delete deployment "$dep" -n "${NAMESPACE}" --ignore-not-found 2>/dev/null || true
+    done
+
+    info "Deleting all PVCs..."
+    kctl delete pvc --all -n "${NAMESPACE}" --ignore-not-found 2>/dev/null || true
+
+    # Wait for PVCs to be fully deleted
+    info "Waiting for PVC cleanup..."
+    local retries=30
+    local i=0
+    while [[ $i -lt $retries ]]; do
+        local remaining
+        remaining=$(kctl get pvc -n "${NAMESPACE}" --no-headers 2>/dev/null | wc -l | tr -d ' ')
+        if [[ "$remaining" == "0" ]]; then
+            break
+        fi
+        echo "  ${remaining} PVCs remaining..."
+        sleep 2
+        ((i++))
+    done
+
+    success "Storage cleaned. Re-run with --apply to recreate with new sizes."
     echo ""
 }
 
@@ -575,7 +789,8 @@ if ! kctl cluster-info &>/dev/null; then
 fi
 info "Cluster connection verified"
 
-# Execute requested actions (order matters: sync -> build -> push -> secrets -> apply)
+# Execute requested actions (order matters: clean -> sync -> build -> push -> secrets -> apply)
+$DO_CLEAN_STORAGE && clean_storage
 $DO_SYNC && sync_to_build_server
 if $DO_BUILD; then
     # Sync is required before build if not explicitly done

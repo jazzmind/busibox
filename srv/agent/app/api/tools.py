@@ -158,7 +158,7 @@ async def update_tool(
         raise HTTPException(status_code=404, detail="Tool not found")
     
     # Update fields
-    update_data = payload.model_dump(exclude_unset=True)
+    update_data = payload.model_dump(exclude_unset=True, by_alias=True)
     for key, value in update_data.items():
         setattr(tool, key, value)
     

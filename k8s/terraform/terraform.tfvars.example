@@ -9,15 +9,15 @@ rackspace_spot_token = "YOUR_TOKEN_HERE"
 
 # Cloudspace configuration
 cloudspace_name = "sonnenreich-dev"
-region          = "us-central-ord-1"
+region          = "us-east-iad-1"
 
 # Base node pool (always running)
-base_server_class = "mh.vs1.xlarge-ord"  # 8 CPU, 60GB RAM
+base_server_class = "mh.vs1.xlarge-iad"  # 8 CPU, 60GB RAM
 base_bid_price    = 0.05
 base_node_count   = 1
 
 # GPU burst (set to true when needed, false to destroy)
 gpu_enabled      = false
-gpu_server_class = "gpu.vs1.large-ord"  # Check actual available classes first
+gpu_server_class = "gpu.vs1.large-iad"  # Check actual available classes first
 gpu_bid_price    = 0.50
 gpu_node_count   = 1

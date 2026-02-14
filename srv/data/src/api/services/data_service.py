@@ -617,7 +617,7 @@ class DataService:
             record_ids: Optional list of specific record IDs to delete
             
         Returns:
-            Number of records deleted
+            Tuple of (number of records deleted, list of deleted record IDs)
         """
         user_id = getattr(request.state, "user_id", None)
         
@@ -637,6 +637,7 @@ class DataService:
             
             # Filter records to keep
             deleted_count = 0
+            deleted_ids: List[str] = []
             kept_records = []
             batch_id = str(uuid.uuid4())
             
@@ -650,6 +651,9 @@ class DataService:
                 
                 if should_delete:
                     deleted_count += 1
+                    rid = record.get("id")
+                    if rid:
+                        deleted_ids.append(rid)
                     # Record history
                     await conn.execute("""
                         INSERT INTO data_record_history (
@@ -691,7 +695,7 @@ class DataService:
             count=deleted_count,
         )
         
-        return deleted_count
+        return deleted_count, deleted_ids
     
     # ========================================================================
     # Schema Operations

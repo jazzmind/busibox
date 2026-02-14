@@ -65,7 +65,7 @@ class ModelRegistry:
     # The real model registry comes from provision/ansible/group_vars/all/model_registry.yml
     # which is deployed as JSON to /etc/data/model_registry.json via Ansible
     DEFAULT_MODELS = {
-        "embedding": {"model": "embedding", "provider": "litellm"},
+        "embedding": {"model": "embedding", "provider": "litellm", "dimension": 1024},
         "cleanup": {"model": "cleanup", "provider": "litellm", "temperature": 0.1, "max_tokens": 32768},
         "parsing": {"model": "parsing", "provider": "litellm", "temperature": 0.1, "max_tokens": 8192},
         "analysis": {"model": "analysis", "provider": "litellm", "temperature": 0.7},
@@ -242,7 +242,7 @@ class ModelRegistry:
                 config["dimension"] = 384
             else:
                 config["dimension"] = 1024  # Safe default
-            logger.warning(
+            logger.debug(
                 "Embedding dimension not in config, using inferred value",
                 model=model_name,
                 dimension=config["dimension"]

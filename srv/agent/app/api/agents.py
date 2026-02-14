@@ -329,7 +329,7 @@ async def create_tool(
     principal: Principal = Depends(get_principal),
     session: AsyncSession = Depends(get_session),
 ) -> ToolDefinitionRead:
-    definition = ToolDefinition(**payload.model_dump())
+    definition = ToolDefinition(**payload.model_dump(by_alias=True))
     session.add(definition)
     await session.commit()
     await session.refresh(definition)

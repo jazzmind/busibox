@@ -2,12 +2,13 @@
         docker-up docker-up-prod docker-start docker-down docker-down-all docker-restart docker-restart-apis docker-restart-data docker-build docker-logs docker-ps docker-ps-all docker-clean docker-clean-all \
         vault-generate-env vault-migrate vault-sync ssl-check \
         github-check github-ensure \
-        install update manage recover-admin demo warmup demo-clean demo-status \
+        install update manage recover-admin rotate-secrets profile demo warmup demo-clean demo-status \
         docker-deploy docker-deploy-infra docker-deploy-apis docker-deploy-llm docker-deploy-frontend \
         deploy-user-app undeploy-user-app list-user-apps user-app-logs user-app-status \
         mlx-status mlx-start mlx-stop mlx-restart host-agent-status host-agent-start host-agent-stop host-agent-restart \
         k8s-deploy k8s-sync k8s-build k8s-apply k8s-status k8s-delete k8s-secrets k8s-logs \
         k8s-gpu-up k8s-gpu-down k8s-gpu-status k8s-gpu-window \
+        spot-check spot-swap spot-price \
         connect disconnect k8s-connect-status
 
 # Default target - interactive menu with health check
@@ -22,10 +23,10 @@
 #   staging     - Docker or Proxmox (10.96.201.x network)
 #   production  - Docker or Proxmox (10.96.200.x network)
 #
-# Environment is persisted in .busibox-state (shared with menu and Ansible Makefile)
-# If not set, defaults to development for Docker workflows
-SAVED_ENV := $(shell grep '^ENVIRONMENT=' .busibox-state 2>/dev/null | cut -d= -f2)
-ENV ?= $(if $(SAVED_ENV),$(SAVED_ENV),development)
+# Environment is read from the active deployment profile (.busibox/profiles.json)
+# Falls back to development if no profile is configured
+PROFILE_ENV := $(shell python3 -c "import json; d=json.load(open('.busibox/profiles.json')); p=d['profiles'][d['active']]; print(p['environment'])" 2>/dev/null)
+ENV ?= $(if $(PROFILE_ENV),$(PROFILE_ENV),development)
 
 # Service for targeted operations (comma-separated for multiple)
 SERVICE ?=
@@ -125,7 +126,6 @@ help:
 	@echo "  make                         # Interactive launcher menu"
 	@echo "  make install                 # Fresh installation wizard"
 	@echo "  make install SERVICE=authz   # Deploy specific service (via Ansible)"
-	@echo "  make update                  # Update existing installation"
 	@echo "  make manage                  # Service management (interactive)"
 	@echo "  make manage SERVICE=authz ACTION=restart  # Direct service action"
 	@echo "  CORE_APPS_MODE=prod make manage SERVICE=core-apps ACTION=restart  # Prod mode"
@@ -629,18 +629,17 @@ else
 	@USE_ANSIBLE_FOR_DOCKER=$(USE_ANSIBLE) bash scripts/make/install-menu.sh $(if $(VERBOSE),-v)
 endif
 
-# Update existing installation
-# Preserves: PostgreSQL, Redis, MinIO, Milvus, model cache, user apps
-# Updates: APIs, apps, nginx, runs migrations
-# Supports both Docker and Proxmox (auto-detected)
-#
-# Usage: make update                       # Interactive update (auto-detect platform)
-#        make update ENV=staging           # Update staging environment
-#        make update VERBOSE=1             # Show all logs
-#        make update REBUILD=1             # Force rebuild all containers (Docker only)
-#        make update USE_ANSIBLE=1         # Use Ansible for Docker deployment
+# DEPRECATED: Use 'make manage' for service management or 'make install SERVICE=x' to redeploy.
+# Kept for backward compatibility - redirects to manage menu.
 update:
-	@USE_ANSIBLE_FOR_DOCKER=$(USE_ANSIBLE) ENV=$(ENV) INV=$(INV) bash scripts/make/update.sh $(if $(VERBOSE),-v) $(if $(REBUILD),--rebuild-all)
+	@echo ""
+	@echo "  'make update' has been merged into 'make manage' and 'make install'."
+	@echo ""
+	@echo "  Use instead:"
+	@echo "    make manage                    # Interactive service management"
+	@echo "    make install SERVICE=authz     # Redeploy a specific service"
+	@echo "    make manage SERVICE=x ACTION=redeploy  # Rebuild and restart"
+	@echo ""
 
 # Service management menu OR direct service action
 # Interactive menu for stopping/starting/redeploying services
@@ -662,6 +661,16 @@ ifdef SERVICE
 else
 	@bash scripts/make/manage.sh
 endif
+
+# Rotate secrets (interactive)
+# Usage: make rotate-secrets
+rotate-secrets:
+	@bash scripts/make/rotate-secrets.sh
+
+# Profile management (interactive)
+# Usage: make profile
+profile:
+	@bash scripts/make/launcher.sh --profile
 
 # Generate recovery magic link for admin access
 # Use when browser/passkey access is lost
@@ -1040,6 +1049,31 @@ k8s-gpu-status:
 
 k8s-gpu-window:
 	@bash scripts/k8s/gpu-burst.sh --window $(MINUTES)
+
+# Rackspace Spot Node Management
+# Check market prices and available server classes
+spot-check:
+	@bash scripts/k8s/spot-manager.sh check
+
+# Swap to a different server class (persistent volumes re-attach automatically)
+# Usage: make spot-swap CLASS=mh.vs1.large-iad [BID=0.04]
+spot-swap:
+ifndef CLASS
+	$(error CLASS is required. Example: make spot-swap CLASS=mh.vs1.large-iad)
+endif
+ifdef BID
+	@bash scripts/k8s/spot-manager.sh swap --class $(CLASS) --bid $(BID)
+else
+	@bash scripts/k8s/spot-manager.sh swap --class $(CLASS)
+endif
+
+# Adjust bid price without changing server class
+# Usage: make spot-price BID=0.04
+spot-price:
+ifndef BID
+	$(error BID is required. Example: make spot-price BID=0.04)
+endif
+	@bash scripts/k8s/spot-manager.sh price --bid $(BID)
 
 # K8s Connect - Local HTTPS tunnel to K8s cluster
 # Sets up SSL cert, patches nginx for HTTPS, configures /etc/hosts,

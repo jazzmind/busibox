@@ -68,10 +68,14 @@ trap _handle_interrupt INT TERM
 # Source libraries (note: state.sh uses BUSIBOX_ENV for state file path)
 # We'll manage our own state file path after ENVIRONMENT is determined
 source "${SCRIPT_DIR}/../lib/ui.sh"
+source "${SCRIPT_DIR}/../lib/profiles.sh"
 source "${SCRIPT_DIR}/../lib/state.sh"
 source "${SCRIPT_DIR}/../lib/vault.sh"    # Must be before github.sh for vault functions
 source "${SCRIPT_DIR}/../lib/github.sh"
 source "${SCRIPT_DIR}/../lib/services.sh"  # Service registry for health checks
+
+# Initialize profiles
+profile_init
 
 # =============================================================================
 # STATE FILE MANAGEMENT
@@ -81,6 +85,7 @@ source "${SCRIPT_DIR}/../lib/services.sh"  # Service registry for health checks
 
 # Update state file path and vault environment for current environment
 # Call this after ENVIRONMENT is set
+# Profile-aware: creates or uses existing profile for this installation
 _update_state_file_for_env() {
     local prefix
     case "$ENVIRONMENT" in
@@ -90,13 +95,40 @@ _update_state_file_for_env() {
         production) prefix="prod" ;;
         *) prefix="dev" ;;
     esac
-    # Override the global state file path from state.sh
-    BUSIBOX_STATE_FILE="${REPO_ROOT}/.busibox-state-${prefix}"
+    
+    # Check if we have an active profile that matches this environment/platform
+    local active_profile
+    active_profile=$(profile_get_active 2>/dev/null)
+    
+    if [[ -n "$active_profile" ]]; then
+        local profile_env profile_backend
+        profile_env=$(profile_get "$active_profile" "environment" 2>/dev/null)
+        profile_backend=$(profile_get "$active_profile" "backend" 2>/dev/null)
+        
+        if [[ "$profile_env" == "$ENVIRONMENT" && ( -z "${PLATFORM:-}" || "$profile_backend" == "${PLATFORM:-}" ) ]]; then
+            # Active profile matches - use its state file
+            BUSIBOX_STATE_FILE=$(profile_get_state_file "$active_profile")
+            prefix=$(profile_get_vault_prefix "$active_profile")
+        else
+            # Active profile doesn't match - create a new one or find matching
+            _ensure_profile_for_install "$prefix"
+        fi
+    else
+        # No active profile - create one
+        _ensure_profile_for_install "$prefix"
+    fi
     
     # Set vault environment for this prefix
     # This configures VAULT_FILE and VAULT_PASS_FILE
     set_vault_environment "$prefix"
     export BUSIBOX_STATE_FILE
+    
+    # Also write legacy state file for backward compat
+    local legacy_state="${REPO_ROOT}/.busibox-state-${prefix}"
+    if [[ "$BUSIBOX_STATE_FILE" != "$legacy_state" ]]; then
+        # Symlink legacy path to profile state for backward compat
+        ln -sf "$BUSIBOX_STATE_FILE" "$legacy_state" 2>/dev/null || true
+    fi
     
     # Ensure vault is encrypted if it exists
     if [[ -f "$VAULT_FILE" ]] && ! is_vault_encrypted; then
@@ -118,6 +150,66 @@ _update_state_file_for_env() {
             error "Failed to encrypt vault"
             exit 1
         fi
+    fi
+}
+
+# Ensure a profile exists for the current install and activate it
+_ensure_profile_for_install() {
+    local prefix="$1"
+    local platform="${PLATFORM:-docker}"
+    
+    # Generate a label
+    local label
+    if [[ "$ENVIRONMENT" == "development" ]]; then
+        label="local"
+    elif [[ "$platform" == "k8s" ]]; then
+        # Try to derive label from kubeconfig name
+        local kc_files
+        kc_files=$(ls "${REPO_ROOT}"/k8s/kubeconfig-*.yaml 2>/dev/null | head -1)
+        if [[ -n "$kc_files" ]]; then
+            label=$(basename "$kc_files" | sed 's/^kubeconfig-//; s/\.yaml$//')
+        else
+            label="${ENVIRONMENT}"
+        fi
+    else
+        label="${ENVIRONMENT}"
+    fi
+    
+    # Check if a matching profile already exists
+    local existing_ids
+    existing_ids=$(_profile_list_ids 2>/dev/null)
+    while IFS= read -r pid; do
+        [[ -z "$pid" ]] && continue
+        local p_env p_backend
+        p_env=$(profile_get "$pid" "environment" 2>/dev/null)
+        p_backend=$(profile_get "$pid" "backend" 2>/dev/null)
+        if [[ "$p_env" == "$ENVIRONMENT" && "$p_backend" == "$platform" ]]; then
+            # Found matching profile - activate and use it
+            profile_set_active "$pid"
+            BUSIBOX_STATE_FILE=$(profile_get_state_file "$pid")
+            return
+        fi
+    done <<< "$existing_ids"
+    
+    # No matching profile - create one
+    local kubeconfig=""
+    if [[ "$platform" == "k8s" ]]; then
+        local kc
+        kc=$(ls "${REPO_ROOT}"/k8s/kubeconfig-*.yaml 2>/dev/null | head -1)
+        if [[ -n "$kc" ]]; then
+            kubeconfig=$(echo "$kc" | sed "s|^${REPO_ROOT}/||")
+        fi
+    fi
+    
+    local new_id
+    new_id=$(profile_create "$ENVIRONMENT" "$platform" "$label" "$prefix" "$kubeconfig" 2>/dev/null)
+    if [[ -n "$new_id" ]]; then
+        profile_set_active "$new_id"
+        BUSIBOX_STATE_FILE=$(profile_get_state_file "$new_id")
+        info "Created deployment profile: ${new_id} (${ENVIRONMENT}/${platform}/${label})"
+    else
+        # Fallback to legacy behavior
+        BUSIBOX_STATE_FILE="${REPO_ROOT}/.busibox-state-${prefix}"
     fi
 }
 
@@ -1358,9 +1450,6 @@ generate_secrets() {
     export GITHUB_CLIENT_ID="${GITHUB_CLIENT_ID:-CHANGE_ME}"
     export GITHUB_CLIENT_SECRET="${GITHUB_CLIENT_SECRET:-CHANGE_ME}"
     export GITHUB_REDIRECT_URI="${GITHUB_REDIRECT_URI:-https://localhost/portal/api/admin/github/callback}"
-    
-    # Encryption key (use JWT secret if not set)
-    export ENCRYPTION_KEY="${ENCRYPTION_KEY:-${SSO_JWT_SECRET}}"
     
     # Export configuration values for vault sync
     export SITE_DOMAIN

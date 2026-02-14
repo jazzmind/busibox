@@ -71,6 +71,10 @@ provision/ansible/group_vars/all/model_config.yml
 .busibox-state
 .busibox-state-*
 
+# Deployment profiles directory (local workstation state)
+# Contains profiles.json, per-profile state files, env files, kubeconfigs
+.busibox/
+
 # Demo mode generated files
 config/litellm-demo.yaml
 

@@ -3,11 +3,13 @@ Webhook API endpoints for Agent Tasks.
 
 Provides webhook receivers for triggering agent tasks from external sources:
 - Generic task webhooks (with secret validation)
+- Library triggers (from data-worker on document completion)
 - Microsoft Teams incoming webhooks
 - Slack event subscriptions
 - Email webhooks (from providers like SendGrid/Mailgun)
 """
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -109,7 +111,18 @@ async def trigger_task_webhook(
         },
     )
     
-    # TODO: Queue the actual execution
+    # Execute the agent task in the background
+    asyncio.create_task(
+        _execute_task_in_background(
+            task=task,
+            execution_id=execution.id,
+            input_data={
+                "webhook_payload": body,
+                "prompt": task.prompt,
+                **task.input_config,
+            },
+        )
+    )
     
     return WebhookResponse(
         success=True,
@@ -365,6 +378,193 @@ async def email_webhook(
         message="Task execution queued from email",
         execution_id=str(execution.id),
     )
+
+
+class LibraryTriggerPayload(BaseModel):
+    """Payload from data-worker when a document completes processing in a library with triggers."""
+    
+    trigger_id: str = Field(..., description="Library trigger ID")
+    agent_id: str = Field(..., description="Agent ID to execute")
+    prompt: str = Field(..., description="Full prompt including document content and schema")
+    file_id: str = Field(..., description="Completed file ID")
+    user_id: str = Field(..., description="File owner's user ID")
+    library_id: str = Field(..., description="Library ID")
+    schema_document_id: Optional[str] = Field(None, description="Schema data document ID")
+    delegation_token: Optional[str] = Field(None, description="Delegation token for auth")
+
+
+@router.post("/library-trigger", response_model=WebhookResponse)
+async def library_trigger_webhook(
+    payload: LibraryTriggerPayload,
+    session: AsyncSession = Depends(get_session),
+) -> WebhookResponse:
+    """
+    Receive a library trigger from the data-worker.
+    
+    Called when a document completes processing in a library that has active triggers.
+    Executes the configured agent with the document content and extraction schema.
+    
+    No webhook secret validation is needed since this is an internal service call.
+    """
+    logger.info(
+        f"Library trigger received: trigger={payload.trigger_id}, "
+        f"file={payload.file_id}, agent={payload.agent_id}"
+    )
+    
+    try:
+        agent_uuid = uuid.UUID(payload.agent_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid agent_id: {payload.agent_id}",
+        )
+    
+    # Execute the agent in the background
+    asyncio.create_task(
+        _execute_library_trigger(
+            agent_id=agent_uuid,
+            prompt=payload.prompt,
+            user_id=payload.user_id,
+            file_id=payload.file_id,
+            library_id=payload.library_id,
+            trigger_id=payload.trigger_id,
+            schema_document_id=payload.schema_document_id,
+            delegation_token=payload.delegation_token,
+        )
+    )
+    
+    return WebhookResponse(
+        success=True,
+        message="Library trigger execution started",
+        execution_id=payload.trigger_id,
+    )
+
+
+async def _execute_task_in_background(
+    task,
+    execution_id: uuid.UUID,
+    input_data: Dict[str, Any],
+) -> None:
+    """Execute a task's agent in the background after webhook trigger."""
+    try:
+        from app.db.session import SessionLocal
+        from app.services.run_service import create_run
+        from app.schemas.auth import Principal
+        
+        if not task.agent_id:
+            logger.warning(f"Task {task.id} has no agent_id, skipping execution")
+            return
+        
+        # Create a principal from the task's user_id
+        principal = Principal(
+            sub=task.user_id,
+            scopes=task.delegation_scopes or ["agent.execute"],
+            token=task.delegation_token or "",
+        )
+        
+        async with SessionLocal() as session:
+            run = await create_run(
+                session=session,
+                principal=principal,
+                agent_id=task.agent_id,
+                payload={"prompt": input_data.get("prompt", task.prompt), **input_data},
+                scopes=task.delegation_scopes or ["agent.execute", "data.write", "data.read", "search.read"],
+                purpose="webhook-task",
+                agent_tier="complex",
+            )
+            
+            # Update execution with run_id
+            from app.models.domain import TaskExecution
+            from sqlalchemy import update
+            
+            await session.execute(
+                update(TaskExecution)
+                .where(TaskExecution.id == execution_id)
+                .values(
+                    run_id=run.id,
+                    status=run.status or "completed",
+                    output_summary=str(run.output)[:500] if run.output else None,
+                )
+            )
+            await session.commit()
+            
+            logger.info(
+                f"Webhook task execution completed: task={task.id}, run={run.id}, status={run.status}"
+            )
+    
+    except Exception as e:
+        logger.error(
+            f"Background task execution failed: task={task.id}, error={e}",
+            exc_info=True,
+        )
+        # Update execution status to failed
+        try:
+            from app.db.session import SessionLocal
+            from app.models.domain import TaskExecution
+            from sqlalchemy import update
+            
+            async with SessionLocal() as session:
+                await session.execute(
+                    update(TaskExecution)
+                    .where(TaskExecution.id == execution_id)
+                    .values(status="failed", output_summary=str(e)[:500])
+                )
+                await session.commit()
+        except Exception:
+            pass
+
+
+async def _execute_library_trigger(
+    agent_id: uuid.UUID,
+    prompt: str,
+    user_id: str,
+    file_id: str,
+    library_id: str,
+    trigger_id: str,
+    schema_document_id: Optional[str] = None,
+    delegation_token: Optional[str] = None,
+) -> None:
+    """Execute a library trigger's agent in the background."""
+    try:
+        from app.db.session import SessionLocal
+        from app.services.run_service import create_run
+        from app.schemas.auth import Principal
+        
+        # Create a principal from the user_id
+        principal = Principal(
+            sub=user_id,
+            scopes=["agent.execute", "data.write", "data.read", "search.read", "graph.read", "graph.write"],
+            token=delegation_token or "",
+        )
+        
+        async with SessionLocal() as session:
+            run = await create_run(
+                session=session,
+                principal=principal,
+                agent_id=agent_id,
+                payload={
+                    "prompt": prompt,
+                    "file_id": file_id,
+                    "library_id": library_id,
+                    "trigger_id": trigger_id,
+                    "schema_document_id": schema_document_id,
+                },
+                scopes=["agent.execute", "data.write", "data.read", "search.read", "graph.read", "graph.write"],
+                purpose="library-trigger",
+                agent_tier="complex",
+            )
+            
+            logger.info(
+                f"Library trigger execution completed: trigger={trigger_id}, "
+                f"file={file_id}, agent={agent_id}, run={run.id}, status={run.status}"
+            )
+    
+    except Exception as e:
+        logger.error(
+            f"Library trigger execution failed: trigger={trigger_id}, "
+            f"file={file_id}, error={e}",
+            exc_info=True,
+        )
 
 
 @router.get("/health")

@@ -1,5 +1,6 @@
 ---
 # Etcd - Milvus metadata store
+# Deployment with shared persistent storage (db-ssd PVC, subPath: etcd)
 apiVersion: v1
 kind: Service
 metadata:
@@ -15,15 +16,16 @@ spec:
     app: etcd
 ---
 apiVersion: apps/v1
-kind: StatefulSet
+kind: Deployment
 metadata:
   name: etcd
   labels:
     app: etcd
     tier: infrastructure
 spec:
-  serviceName: etcd
   replicas: 1
+  strategy:
+    type: Recreate  # Required for RWO volume
   selector:
     matchLabels:
       app: etcd
@@ -67,17 +69,14 @@ spec:
           volumeMounts:
             - name: etcd-data
               mountPath: /etcd
-  volumeClaimTemplates:
-    - metadata:
-        name: etcd-data
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        storageClassName: ssd
-        resources:
-          requests:
-            storage: 5Gi
+              subPath: etcd
+      volumes:
+        - name: etcd-data
+          persistentVolumeClaim:
+            claimName: db-ssd
 ---
 # Milvus MinIO - Separate MinIO instance for Milvus internal storage
+# Deployment with shared persistent storage (objects-store PVC, subPath: milvus-minio)
 apiVersion: v1
 kind: Service
 metadata:
@@ -93,15 +92,16 @@ spec:
     app: milvus-minio
 ---
 apiVersion: apps/v1
-kind: StatefulSet
+kind: Deployment
 metadata:
   name: milvus-minio
   labels:
     app: milvus-minio
     tier: infrastructure
 spec:
-  serviceName: milvus-minio
   replicas: 1
+  strategy:
+    type: Recreate  # Required for RWO volume
   selector:
     matchLabels:
       app: milvus-minio
@@ -138,17 +138,14 @@ spec:
           volumeMounts:
             - name: milvus-minio-data
               mountPath: /minio_data
-  volumeClaimTemplates:
-    - metadata:
-        name: milvus-minio-data
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        storageClassName: ssd
-        resources:
-          requests:
-            storage: 10Gi
+              subPath: milvus-minio
+      volumes:
+        - name: milvus-minio-data
+          persistentVolumeClaim:
+            claimName: objects-store
 ---
 # Milvus - Vector Database
+# Deployment with shared persistent storage (db-ssd PVC, subPath: milvus)
 apiVersion: v1
 kind: Service
 metadata:
@@ -168,15 +165,16 @@ spec:
     app: milvus
 ---
 apiVersion: apps/v1
-kind: StatefulSet
+kind: Deployment
 metadata:
   name: milvus
   labels:
     app: milvus
     tier: infrastructure
 spec:
-  serviceName: milvus
   replicas: 1
+  strategy:
+    type: Recreate  # Required for RWO volume
   selector:
     matchLabels:
       app: milvus
@@ -226,12 +224,8 @@ spec:
           volumeMounts:
             - name: milvus-data
               mountPath: /var/lib/milvus
-  volumeClaimTemplates:
-    - metadata:
-        name: milvus-data
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        storageClassName: ssd
-        resources:
-          requests:
-            storage: 20Gi
+              subPath: milvus
+      volumes:
+        - name: milvus-data
+          persistentVolumeClaim:
+            claimName: db-ssd

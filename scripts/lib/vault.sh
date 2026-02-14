@@ -801,11 +801,6 @@ sync_secrets_to_vault() {
         values_to_update+=("secrets.litellm_master_key=${LITELLM_MASTER_KEY}")
     fi
     
-    # Encryption key
-    if [[ -n "${ENCRYPTION_KEY:-}" ]]; then
-        values_to_update+=("secrets.encryption_key=${ENCRYPTION_KEY}")
-    fi
-    
     # GitHub
     if [[ -n "${GITHUB_AUTH_TOKEN:-}" ]]; then
         values_to_update+=("secrets.github.personal_access_token=${GITHUB_AUTH_TOKEN}")

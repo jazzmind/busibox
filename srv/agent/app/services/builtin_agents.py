@@ -73,6 +73,14 @@ BUILTIN_AGENT_METADATA = {
         "version": 1,
         "tools": ["get_weather"],
     },
+    "schema_builder_agent": {
+        "name": "schema-builder",
+        "display_name": "Schema Builder",
+        "description": "Helps create extraction schemas and library triggers for automated document processing into structured data and knowledge graphs",
+        "model": "agent",
+        "version": 1,
+        "tools": ["document_search", "create_data_document", "create_extraction_schema", "create_library_trigger", "list_data_documents", "query_data"],
+    },
 }
 
 

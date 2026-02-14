@@ -4,7 +4,7 @@
 
 For comprehensive testing documentation, see:
 
-**[docs/testing/master-guide.md](docs/testing/master-guide.md)** - Complete testing guide with:
+**[docs/developers/01-testing.md](docs/developers/01-testing.md)** - Complete testing guide with:
 - Testing architecture overview
 - All test levels (infrastructure, service, integration)
 - Running tests from Proxmox host

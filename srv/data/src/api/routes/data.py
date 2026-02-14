@@ -292,6 +292,31 @@ async def _delete_graph(request: Request, document_id: str):
         )
 
 
+async def _delete_graph_nodes(request: Request, record_ids: List[str]):
+    """Delete graph nodes for specific record IDs (best-effort, non-blocking)."""
+    if not record_ids:
+        return
+    try:
+        graph_service = getattr(request.app.state, "graph_service", None)
+        if not graph_service or not graph_service.available:
+            return
+        for node_id in record_ids:
+            try:
+                await graph_service.delete_node(node_id)
+            except Exception as node_err:
+                logger.warning(
+                    "[DATA API] Graph node delete failed (non-blocking)",
+                    node_id=node_id,
+                    error=str(node_err),
+                )
+    except Exception as e:
+        logger.warning(
+            "[DATA API] Graph nodes delete failed (non-blocking)",
+            record_count=len(record_ids),
+            error=str(e),
+        )
+
+
 # =============================================================================
 # Document Endpoints
 # =============================================================================
@@ -604,6 +629,21 @@ async def update_records(
             validate=body.validate_schema,
         )
         
+        # Sync updated records to graph (non-blocking, re-reads full doc for schema)
+        try:
+            doc = await data_service.get_document(request, document_id, include_records=True)
+            if doc:
+                await _sync_graph(
+                    request,
+                    document_id=document_id,
+                    document_name=doc.get("name", ""),
+                    schema=doc.get("schema"),
+                    records=doc.get("records", []),
+                    visibility=doc.get("visibility", "personal"),
+                )
+        except Exception as graph_err:
+            logger.warning("[DATA API] Graph sync after update failed", error=str(graph_err))
+        
         return RecordOperationResponse(
             success=True,
             count=count,
@@ -631,12 +671,34 @@ async def delete_records(
     validate_uuid(document_id, "document_id")
     
     try:
-        count = await data_service.delete_records(
+        count, deleted_ids = await data_service.delete_records(
             request,
             document_id,
             where=body.where,
             record_ids=body.recordIds,
         )
+        
+        # Delete graph nodes for removed records (non-blocking)
+        if deleted_ids:
+            try:
+                await _delete_graph_nodes(request, deleted_ids)
+            except Exception as graph_err:
+                logger.warning("[DATA API] Graph node delete after record delete failed", error=str(graph_err))
+        
+        # Sync remaining records to graph (non-blocking, re-reads full doc for schema)
+        try:
+            doc = await data_service.get_document(request, document_id, include_records=True)
+            if doc:
+                await _sync_graph(
+                    request,
+                    document_id=document_id,
+                    document_name=doc.get("name", ""),
+                    schema=doc.get("schema"),
+                    records=doc.get("records", []),
+                    visibility=doc.get("visibility", "personal"),
+                )
+        except Exception as graph_err:
+            logger.warning("[DATA API] Graph sync after delete failed", error=str(graph_err))
         
         return RecordOperationResponse(
             success=True,

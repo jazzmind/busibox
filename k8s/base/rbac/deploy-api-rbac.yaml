@@ -16,8 +16,7 @@ metadata:
   name: deploy-api-manager
   labels:
     app: deploy-api
-spec:
-  rules:
+rules:
     # Manage app Deployments (create, update, delete, rollout restart)
     - apiGroups: ["apps"]
       resources: ["deployments"]

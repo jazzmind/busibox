@@ -1,5 +1,6 @@
 ---
 # Redis - Job Queue and Caching
+# Deployment with ephemeral storage (data loss on restart is acceptable)
 apiVersion: v1
 kind: Service
 metadata:
@@ -15,14 +16,13 @@ spec:
     app: redis
 ---
 apiVersion: apps/v1
-kind: StatefulSet
+kind: Deployment
 metadata:
   name: redis
   labels:
     app: redis
     tier: infrastructure
 spec:
-  serviceName: redis
   replicas: 1
   selector:
     matchLabels:
@@ -58,12 +58,6 @@ spec:
           volumeMounts:
             - name: redis-data
               mountPath: /data
-  volumeClaimTemplates:
-    - metadata:
-        name: redis-data
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        storageClassName: ssd
-        resources:
-          requests:
-            storage: 5Gi
+      volumes:
+        - name: redis-data
+          emptyDir: {}

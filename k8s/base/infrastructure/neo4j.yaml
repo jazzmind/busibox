@@ -1,5 +1,6 @@
 ---
 # Neo4j - Graph Database (Knowledge Graph)
+# Deployment with shared persistent storage (db-ssd PVC, subPath: neo4j/*)
 apiVersion: v1
 kind: Service
 metadata:
@@ -19,15 +20,16 @@ spec:
     app: neo4j
 ---
 apiVersion: apps/v1
-kind: StatefulSet
+kind: Deployment
 metadata:
   name: neo4j
   labels:
     app: neo4j
     tier: infrastructure
 spec:
-  serviceName: neo4j
   replicas: 1
+  strategy:
+    type: Recreate  # Required for RWO volume
   selector:
     matchLabels:
       app: neo4j
@@ -82,22 +84,14 @@ spec:
           volumeMounts:
             - name: neo4j-data
               mountPath: /data
+              subPath: neo4j/data
             - name: neo4j-logs
               mountPath: /logs
-  volumeClaimTemplates:
-    - metadata:
-        name: neo4j-data
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        storageClassName: ssd
-        resources:
-          requests:
-            storage: 10Gi
-    - metadata:
-        name: neo4j-logs
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        storageClassName: ssd
-        resources:
-          requests:
-            storage: 2Gi
+              subPath: neo4j/logs
+      volumes:
+        - name: neo4j-data
+          persistentVolumeClaim:
+            claimName: db-ssd
+        - name: neo4j-logs
+          persistentVolumeClaim:
+            claimName: db-ssd

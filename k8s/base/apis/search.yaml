@@ -102,5 +102,4 @@ spec:
               mountPath: /root/.cache
       volumes:
         - name: model-cache
-          persistentVolumeClaim:
-            claimName: model-cache
+          emptyDir: {}

@@ -490,10 +490,20 @@ class AgentTask(Base):
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
     input_config: Mapped[dict] = mapped_column(JSON, default=dict, comment="Additional input parameters")
     
+    # Library trigger fields
+    library_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True, index=True,
+        comment="Library ID for library-triggered tasks"
+    )
+    schema_document_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True,
+        comment="Data document ID containing the extraction schema"
+    )
+    
     # Trigger configuration
     trigger_type: Mapped[str] = mapped_column(
         String(50), nullable=False, index=True,
-        comment="Trigger type: cron, webhook, one_time"
+        comment="Trigger type: cron, webhook, one_time, library"
     )
     trigger_config: Mapped[dict] = mapped_column(
         JSON, default=dict,

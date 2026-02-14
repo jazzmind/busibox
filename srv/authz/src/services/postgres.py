@@ -568,6 +568,23 @@ class PostgresService:
     # Envelope Encryption - Key Encryption Keys (KEKs)
     # ---------------------------------------------------------------------
 
+    @staticmethod
+    def _parse_owner_id(owner_id: str | None, owner_type: str = "") -> uuid.UUID | None:
+        """Parse an owner_id string into a UUID.
+        
+        For role/user owner types, owner_id must be a valid UUID.
+        For system owner types, owner_id can be a human-readable string
+        (e.g., 'deploy-api') which is converted to a deterministic UUID5.
+        """
+        if owner_id is None:
+            return None
+        try:
+            return uuid.UUID(owner_id)
+        except ValueError:
+            # Not a valid UUID -- generate a deterministic one from the string
+            # This allows system owners like "deploy-api" to have stable UUIDs
+            return uuid.uuid5(uuid.NAMESPACE_OID, f"busibox-system:{owner_id}")
+
     async def create_kek(
         self,
         *,
@@ -581,14 +598,14 @@ class PostgresService:
         
         Args:
             owner_type: 'role', 'user', or 'system'
-            owner_id: UUID of the role/user, or None for system keys
+            owner_id: UUID of the role/user, or string name for system keys
             encrypted_key: The KEK encrypted with the system master key
             key_algorithm: Algorithm used for encryption (default AES-256-GCM)
             
         Returns:
             Dict with kek_id and metadata
         """
-        oid = uuid.UUID(owner_id) if owner_id else None
+        oid = self._parse_owner_id(owner_id, owner_type)
         
         async with self.acquire(None, None) as conn:
             row = await conn.fetchrow(
@@ -627,7 +644,7 @@ class PostgresService:
         Get the active KEK for a specific owner (role, user, or system).
         Returns the most recent active key version.
         """
-        oid = uuid.UUID(owner_id) if owner_id else None
+        oid = self._parse_owner_id(owner_id, owner_type)
         
         async with self.acquire(None, None) as conn:
             if oid:
@@ -690,7 +707,7 @@ class PostgresService:
         
         Returns the new KEK record.
         """
-        oid = uuid.UUID(owner_id) if owner_id else None
+        oid = self._parse_owner_id(owner_id, owner_type)
         
         async with self.acquire(None, None) as conn:
             async with conn.transaction():
@@ -884,6 +901,43 @@ class PostgresService:
                 """,
                 uuid.UUID(file_id),
                 uuid.UUID(user_id),
+            )
+            return dict(row) if row else None
+
+    async def get_wrapped_dek_for_system(
+        self, file_id: str, system_owner_id: str
+    ) -> Optional[dict]:
+        """
+        Get a wrapped DEK for a system owner (for service-level encryption).
+        Used by internal services like deploy-api that encrypt data with a system KEK.
+        """
+        # Convert system_owner_id (e.g., "deploy-api") to its deterministic UUID
+        system_oid = self._parse_owner_id(system_owner_id, "system")
+        
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT 
+                    wdk.id::text,
+                    wdk.file_id::text,
+                    wdk.kek_id::text,
+                    wdk.wrapped_dek,
+                    wdk.dek_algorithm,
+                    wdk.created_at,
+                    kek.owner_type,
+                    kek.owner_id::text as kek_owner_id,
+                    kek.encrypted_key as kek_encrypted_key,
+                    kek.key_algorithm as kek_algorithm
+                FROM authz_wrapped_data_keys wdk
+                JOIN authz_key_encryption_keys kek ON wdk.kek_id = kek.kek_id
+                WHERE wdk.file_id = $1 
+                    AND kek.owner_type = 'system'
+                    AND kek.owner_id = $2
+                    AND kek.is_active = true
+                LIMIT 1
+                """,
+                uuid.UUID(file_id),
+                system_oid,
             )
             return dict(row) if row else None
 

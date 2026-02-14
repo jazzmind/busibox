@@ -43,14 +43,16 @@ except ImportError:
 
 
 # Prompt template for entity extraction
-ENTITY_EXTRACTION_PROMPT = """Extract named entities from the following text. Return a JSON array of entities.
+ENTITY_EXTRACTION_PROMPT = """Extract named entities and key concepts/keywords from the following text. Return a JSON array of entities.
 
 Each entity should have:
 - "name": The entity name (normalized, title case)
-- "type": One of: Person, Organization, Technology, Concept, Location, Project
+- "type": One of: Person, Organization, Technology, Concept, Location, Project, Keyword
 - "context": A brief phrase describing how the entity appears in the text
 
-Only extract clearly named entities. Skip generic terms.
+For "Keyword" type: extract important terms, topics, and concepts that summarize the document (e.g., "machine learning", "budget planning", "compliance"). These should be meaningful phrases or single important terms, not generic words like "the" or "and".
+
+Only extract clearly named entities and significant keywords. Skip generic terms.
 Return ONLY valid JSON array, no other text.
 
 Text:
@@ -166,15 +168,17 @@ class EntityExtractor:
         owner_id: str,
         visibility: str = "personal",
         graph_service=None,
+        library_id: Optional[str] = None,
     ) -> int:
         """
         Extract entities and store them in the graph database.
         
         Creates:
-        - A Document node for the file
+        - A Document node for the file (with library_id for filtering)
         - Entity nodes for each extracted entity
         - MENTIONED_IN relationships (Entity -> Document)
-        - RELATED_TO relationships between co-occurring entities
+        - KEYWORD_OF relationships (Keyword -> Document)
+        - RELATED_TO and CO_OCCURS_WITH between co-occurring entities
         
         Args:
             text: Document text
@@ -183,6 +187,7 @@ class EntityExtractor:
             owner_id: Owner user ID
             visibility: Document visibility
             graph_service: GraphService instance
+            library_id: Optional library ID for graph filtering
             
         Returns:
             Number of entities extracted
@@ -194,20 +199,25 @@ class EntityExtractor:
         if not entities:
             return 0
         
-        # Create document node
+        # Create document node with library_id for filtering
+        doc_props: Dict[str, Any] = {
+            "id": file_id,
+            "name": filename,
+            "doc_type": "file",
+        }
+        if library_id:
+            doc_props["library_id"] = library_id
+        
         await graph_service.upsert_node(
             label="Document",
-            properties={
-                "id": file_id,
-                "name": filename,
-                "doc_type": "file",
-            },
+            properties=doc_props,
             owner_id=owner_id,
             visibility=visibility,
         )
         
-        # Create entity nodes and MENTIONED_IN relationships
+        # Create entity nodes and relationships
         entity_ids = []
+        keyword_ids = []
         for entity in entities:
             entity_id = f"entity:{entity['type'].lower()}:{entity['name'].lower().replace(' ', '_')}"
             
@@ -224,22 +234,41 @@ class EntityExtractor:
                 visibility=visibility,
             )
             
-            # Entity MENTIONED_IN Document
-            await graph_service.create_relationship(
-                from_id=entity_id,
-                rel_type="MENTIONED_IN",
-                to_id=file_id,
-            )
+            if entity["type"] == "Keyword":
+                # Keyword KEYWORD_OF Document
+                await graph_service.create_relationship(
+                    from_id=entity_id,
+                    rel_type="KEYWORD_OF",
+                    to_id=file_id,
+                )
+                keyword_ids.append(entity_id)
+            else:
+                # Entity MENTIONED_IN Document
+                await graph_service.create_relationship(
+                    from_id=entity_id,
+                    rel_type="MENTIONED_IN",
+                    to_id=file_id,
+                )
             
             entity_ids.append(entity_id)
         
-        # Create RELATED_TO between co-occurring entities (within same document)
+        # Create CO_OCCURS_WITH between keywords in the same document
+        for i, kid1 in enumerate(keyword_ids):
+            for kid2 in keyword_ids[i + 1:]:
+                await graph_service.create_relationship(
+                    from_id=kid1,
+                    rel_type="CO_OCCURS_WITH",
+                    to_id=kid2,
+                    properties={"source_document": file_id},
+                )
+        
+        # Create RELATED_TO between co-occurring non-keyword entities (within same document)
         # Only link entities of different types to avoid noise
-        for i, eid1 in enumerate(entity_ids):
-            for eid2 in entity_ids[i + 1:]:
-                # Get types from entities list
+        non_keyword_ids = [(i, eid) for i, eid in enumerate(entity_ids) if entities[i]["type"] != "Keyword"]
+        for idx, (i, eid1) in enumerate(non_keyword_ids):
+            for j, eid2 in non_keyword_ids[idx + 1:]:
                 type1 = entities[i]["type"]
-                type2 = entities[entity_ids.index(eid2)]["type"]
+                type2 = entities[j]["type"]
                 if type1 != type2:
                     await graph_service.create_relationship(
                         from_id=eid1,
@@ -312,12 +341,16 @@ class EntityExtractor:
             "project": "Project",
             "initiative": "Project",
             "program": "Project",
+            "keyword": "Keyword",
+            "key concept": "Keyword",
+            "topic": "Keyword",
+            "term": "Keyword",
         }
         
         normalized = type_map.get(entity_type.lower().strip(), "")
         if not normalized:
             # Try exact match
-            allowed = {"Person", "Organization", "Technology", "Concept", "Location", "Project"}
+            allowed = {"Person", "Organization", "Technology", "Concept", "Location", "Project", "Keyword"}
             if entity_type in allowed:
                 return entity_type
         return normalized

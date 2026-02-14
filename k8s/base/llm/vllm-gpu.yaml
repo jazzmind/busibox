@@ -104,20 +104,4 @@ spec:
               mountPath: /root/.cache/huggingface
       volumes:
         - name: vllm-cache
-          persistentVolumeClaim:
-            claimName: vllm-cache
----
-# PVC for vLLM model cache - persists across GPU burst windows
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: vllm-cache
-  labels:
-    app: vllm
-    busibox/role: gpu-burst
-spec:
-  accessModes: ["ReadWriteOnce"]
-  storageClassName: ssd
-  resources:
-    requests:
-      storage: 20Gi
+          emptyDir: {}

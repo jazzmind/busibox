@@ -31,14 +31,24 @@ class PersonalLibraryTypes:
     RESEARCH = "RESEARCH"
     TASKS = "TASKS"
     MEDIA = "MEDIA"
+    CUSTOM = "CUSTOM"  # User-created personal libraries with custom names
 
 
-# Library display names by type
+# Library display names by type (CUSTOM uses user-provided name)
 PERSONAL_LIBRARY_NAMES: Dict[str, str] = {
     PersonalLibraryTypes.DOCS: "Personal",
     PersonalLibraryTypes.RESEARCH: "Research",
     PersonalLibraryTypes.TASKS: "Tasks",
     PersonalLibraryTypes.MEDIA: "Media",
+    PersonalLibraryTypes.CUSTOM: "Custom",  # Placeholder; actual name comes from user
+}
+
+# Fixed types that cannot be deleted by users (only CUSTOM can be deleted)
+FIXED_PERSONAL_LIBRARY_TYPES = {
+    PersonalLibraryTypes.DOCS,
+    PersonalLibraryTypes.RESEARCH,
+    PersonalLibraryTypes.TASKS,
+    PersonalLibraryTypes.MEDIA,
 }
 
 # Folder name to library type mapping
@@ -214,6 +224,29 @@ class LibraryService:
             )
             
             return dict(library)
+
+    async def create_custom_personal_library(
+        self,
+        user_id: str,
+        name: str,
+    ) -> Dict:
+        """
+        Create a user-named personal library (CUSTOM type).
+
+        Args:
+            user_id: The user's UUID
+            name: Custom library name
+
+        Returns:
+            Created library record
+        """
+        return await self.create_library(
+            name=name.strip() or "New Library",
+            created_by=user_id,
+            is_personal=True,
+            user_id=user_id,
+            library_type=PersonalLibraryTypes.CUSTOM,
+        )
     
     async def get_library_by_folder(
         self,
@@ -320,14 +353,15 @@ class LibraryService:
         
         async with self.pool.acquire() as conn:
             # Custom sort order for personal library types:
-            # DOCS first (main personal), then RESEARCH, TASKS, MEDIA last
+            # DOCS first (main personal), then RESEARCH, TASKS, MEDIA, then CUSTOM
             personal_type_order = """
                 CASE library_type
                     WHEN 'DOCS' THEN 1
                     WHEN 'RESEARCH' THEN 2
                     WHEN 'TASKS' THEN 3
                     WHEN 'MEDIA' THEN 4
-                    ELSE 5
+                    WHEN 'CUSTOM' THEN 5
+                    ELSE 6
                 END
             """
             
@@ -594,6 +628,7 @@ class LibraryService:
         status_filter: Optional[str] = None,
         search: Optional[str] = None,
         tag: Optional[str] = None,
+        tags: Optional[List[str]] = None,
     ) -> List[Dict]:
         """
         Get documents in a library from data_files table.
@@ -641,6 +676,7 @@ class LibraryService:
                     f.size_bytes as "sizeBytes",
                     f.storage_path as "storagePath",
                     f.content_hash as "contentHash",
+                    f.extracted_keywords as "extractedKeywords",
                     f.metadata,
                     f.visibility,
                     f.library_id as "libraryId",
@@ -669,6 +705,13 @@ class LibraryService:
                 query += f" AND (f.filename ILIKE ${param_idx} OR f.original_filename ILIKE ${param_idx})"
                 params.append(f"%{search}%")
                 param_idx += 1
+
+            # Add tags filter: documents where extracted_keywords overlaps with any tag
+            tags_to_use = tags if tags else ([tag] if tag else None)
+            if tags_to_use:
+                query += f" AND f.extracted_keywords && ${param_idx}::text[]"
+                params.append(tags_to_use)
+                param_idx += 1
             
             # Add ordering
             query += f" ORDER BY f.{sort_column} {order}"
@@ -696,6 +739,10 @@ class LibraryService:
                         doc["metadata"] = json.loads(doc["metadata"])
                     except json.JSONDecodeError:
                         pass
+                # Ensure extractedKeywords is a list (PostgreSQL returns array)
+                if doc.get("extractedKeywords") is None:
+                    doc["extractedKeywords"] = []
+                doc["extractedKeywords"] = list(doc["extractedKeywords"]) if doc["extractedKeywords"] else []
                 documents.append(doc)
             
             return documents

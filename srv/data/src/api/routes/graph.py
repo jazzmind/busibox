@@ -48,6 +48,7 @@ async def get_graph(
     label: Optional[str] = Query(None, description="Filter by node label (e.g., 'Person', 'Project')"),
     depth: int = Query(2, ge=1, le=5, description="Traversal depth from center"),
     limit: int = Query(100, ge=1, le=500, description="Maximum nodes to return"),
+    library_ids: Optional[str] = Query(None, description="Comma-separated library IDs to filter graph (Document nodes only)"),
 ):
     """
     Get graph data for knowledge map visualization.
@@ -84,12 +85,16 @@ async def get_graph(
     user_id = getattr(request.state, "user_id", None)
     
     try:
+        library_ids_list: Optional[List[str]] = None
+        if library_ids:
+            library_ids_list = [lid.strip() for lid in library_ids.split(",") if lid.strip()]
         result = await graph_service.get_graph_visualization(
             center_id=center,
             label=label,
             depth=depth,
             owner_id=user_id,
             limit=limit,
+            library_ids=library_ids_list,
         )
         
         nodes = result.get("nodes", [])

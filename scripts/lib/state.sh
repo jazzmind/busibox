@@ -3,7 +3,8 @@
 # Busibox State Management Library
 #
 # Manages persistent state for the interactive menu system.
-# State is stored in .busibox-state in the project root.
+# Supports the deployment profile system (.busibox/profiles.json) with
+# backward compatibility for legacy .busibox-state-* files.
 #
 # Usage: source "$(dirname "$0")/lib/state.sh"
 
@@ -21,8 +22,28 @@ _get_repo_root() {
     echo "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 }
 
-# Get container prefix from environment variable or default
+# Source profiles library if available
+_STATE_REPO_ROOT="$(_get_repo_root "$(pwd)")"
+if [[ -f "${_STATE_REPO_ROOT}/scripts/lib/profiles.sh" ]]; then
+    # Only source if not already loaded (avoid double-source)
+    if [[ -z "${_PROFILES_DIR:-}" ]]; then
+        REPO_ROOT="$_STATE_REPO_ROOT" source "${_STATE_REPO_ROOT}/scripts/lib/profiles.sh"
+    fi
+fi
+
+# Get container prefix from environment variable, active profile, or default
 _get_env_prefix() {
+    # If profiles system is available and initialized, use it
+    if [[ -f "${_STATE_REPO_ROOT}/.busibox/profiles.json" ]] && type profile_get_active &>/dev/null; then
+        local active
+        active=$(profile_get_active 2>/dev/null)
+        if [[ -n "$active" ]]; then
+            profile_get_env_prefix "$active"
+            return
+        fi
+    fi
+
+    # Fallback: use BUSIBOX_ENV or ENV
     local env="${BUSIBOX_ENV:-${ENV:-development}}"
     case "$env" in
         demo) echo "demo" ;;
@@ -33,22 +54,71 @@ _get_env_prefix() {
     esac
 }
 
-# State file location
-# Supports environment-specific state files via BUSIBOX_STATE_FILE or ENV variable
-# Examples:
-#   .busibox-state-demo    (for make demo)
-#   .busibox-state-dev     (for local development)
-#   .busibox-state-staging (for staging)
-#   .busibox-state-prod    (for production)
-BUSIBOX_STATE_FILE="${BUSIBOX_STATE_FILE:-$(_get_repo_root "$(pwd)")/.busibox-state-$(_get_env_prefix)}"
+# Determine state file path from active profile or legacy behavior
+_get_state_file_path() {
+    # If BUSIBOX_STATE_FILE is explicitly set (e.g., by install.sh), use it
+    if [[ -n "${BUSIBOX_STATE_FILE_OVERRIDE:-}" ]]; then
+        echo "$BUSIBOX_STATE_FILE_OVERRIDE"
+        return
+    fi
 
-# Get env file path (matches state file naming)
+    # If profiles system is available and initialized, use active profile's state file
+    if [[ -f "${_STATE_REPO_ROOT}/.busibox/profiles.json" ]] && type profile_get_state_file &>/dev/null; then
+        local active
+        active=$(profile_get_active 2>/dev/null)
+        if [[ -n "$active" ]]; then
+            local pf
+            pf=$(profile_get_state_file "$active" 2>/dev/null)
+            if [[ -n "$pf" ]]; then
+                echo "$pf"
+                return
+            fi
+        fi
+    fi
+
+    # Fallback: legacy behavior
+    echo "${_STATE_REPO_ROOT}/.busibox-state-$(_get_env_prefix)"
+}
+
+# State file location
+# Priority: BUSIBOX_STATE_FILE (explicit) > active profile > legacy env-based
+BUSIBOX_STATE_FILE="${BUSIBOX_STATE_FILE:-$(_get_state_file_path)}"
+
+# Get env file path (matches state file naming or profile)
 get_env_file_path() {
-    echo "$(_get_repo_root "$(pwd)")/.env.$(_get_env_prefix)"
+    # If profiles system is available, use profile's env file
+    if [[ -f "${_STATE_REPO_ROOT}/.busibox/profiles.json" ]] && type profile_get_env_file &>/dev/null; then
+        local active
+        active=$(profile_get_active 2>/dev/null)
+        if [[ -n "$active" ]]; then
+            local ef
+            ef=$(profile_get_env_file "$active" 2>/dev/null)
+            if [[ -n "$ef" ]]; then
+                echo "$ef"
+                return
+            fi
+        fi
+    fi
+    # Fallback
+    echo "${_STATE_REPO_ROOT}/.env.$(_get_env_prefix)"
 }
 
 # Get vault password file path (in home directory)
 get_vault_pass_path() {
+    # If profiles system is available, use profile's vault prefix
+    if [[ -f "${_STATE_REPO_ROOT}/.busibox/profiles.json" ]] && type profile_get_vault_prefix &>/dev/null; then
+        local active
+        active=$(profile_get_active 2>/dev/null)
+        if [[ -n "$active" ]]; then
+            local vp
+            vp=$(profile_get_vault_prefix "$active" 2>/dev/null)
+            if [[ -n "$vp" ]]; then
+                echo "${HOME}/.busibox-vault-pass-${vp}"
+                return
+            fi
+        fi
+    fi
+    # Fallback
     echo "${HOME}/.busibox-vault-pass-$(_get_env_prefix)"
 }
 

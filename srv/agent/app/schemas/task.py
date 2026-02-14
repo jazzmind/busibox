@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # Trigger types
-TriggerType = Literal["cron", "webhook", "one_time"]
+TriggerType = Literal["cron", "webhook", "one_time", "library"]
 
 # Notification channels
 NotificationChannel = Literal["email", "teams", "slack", "webhook"]
@@ -42,6 +42,16 @@ class TriggerConfig(BaseModel):
     webhook_path: Optional[str] = Field(
         None,
         description="Custom webhook path suffix (auto-generated if not provided)"
+    )
+    
+    # For library triggers
+    library_id: Optional[str] = Field(
+        None,
+        description="Library ID to watch for document completions"
+    )
+    schema_document_id: Optional[str] = Field(
+        None,
+        description="Data document ID containing the extraction schema"
     )
 
 
@@ -273,6 +283,8 @@ class TaskCreate(BaseModel):
             raise ValueError("Cron trigger requires 'cron' expression in trigger_config")
         if trigger_type == 'one_time' and not v.run_at:
             raise ValueError("One-time trigger requires 'run_at' datetime in trigger_config")
+        if trigger_type == 'library' and not v.library_id:
+            raise ValueError("Library trigger requires 'library_id' in trigger_config")
         return v
     
     @model_validator(mode='after')

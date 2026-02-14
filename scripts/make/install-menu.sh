@@ -20,12 +20,19 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-# Source libraries
+# Source libraries (profiles.sh is sourced by state.sh automatically)
 source "${SCRIPT_DIR}/../lib/ui.sh"
+source "${SCRIPT_DIR}/../lib/profiles.sh"
 source "${SCRIPT_DIR}/../lib/state.sh"
 
 # Source backend common library
 source "${SCRIPT_DIR}/../lib/backends/common.sh"
+
+# Initialize profiles
+profile_init
+
+# Active profile info
+_active_profile=$(profile_get_active)
 
 # Flags
 DIRECT_MODE=false
@@ -65,32 +72,48 @@ check_proxmox_available() {
 
 # Check if K8s (kubectl + kubeconfig) is available
 check_k8s_available() {
-    command -v kubectl &>/dev/null && [[ -f "${REPO_ROOT}/k8s/kubeconfig-rackspace-spot.yaml" ]]
+    if ! command -v kubectl &>/dev/null; then
+        return 1
+    fi
+    # Check profile kubeconfig first
+    if [[ -n "${_active_profile:-}" ]]; then
+        local kc
+        kc=$(profile_get_kubeconfig "$_active_profile" 2>/dev/null)
+        if [[ -n "$kc" && -f "$kc" ]]; then
+            return 0
+        fi
+    fi
+    # Fallback
+    [[ -f "${REPO_ROOT}/k8s/kubeconfig-rackspace-spot.yaml" ]]
 }
 
 # Detect installation status for current environment
 # Returns: not_installed, partial, installed
 detect_installation_status() {
     local env backend
-    env=$(get_state "ENVIRONMENT" 2>/dev/null || echo "")
     
-    # No environment configured
-    if [[ -z "$env" ]]; then
-        echo "not_installed"
-        return
+    # Use profile if available
+    if [[ -n "${_active_profile:-}" ]]; then
+        env=$(profile_get "$_active_profile" "environment")
+        backend=$(profile_get "$_active_profile" "backend")
+    else
+        env=$(get_state "ENVIRONMENT" 2>/dev/null || echo "")
+        
+        if [[ -z "$env" ]]; then
+            echo "not_installed"
+            return
+        fi
+        
+        local env_upper
+        env_upper=$(echo "$env" | tr '[:lower:]' '[:upper:]')
+        backend=$(get_state "BACKEND_${env_upper}" 2>/dev/null || echo "")
+        
+        if [[ "$env" == "development" ]]; then
+            backend="docker"
+        fi
     fi
     
-    # Determine backend
-    local env_upper
-    env_upper=$(echo "$env" | tr '[:lower:]' '[:upper:]')
-    backend=$(get_state "BACKEND_${env_upper}" 2>/dev/null || echo "")
-    
-    # Development always uses docker
-    if [[ "$env" == "development" ]]; then
-        backend="docker"
-    fi
-    
-    if [[ -z "$backend" ]]; then
+    if [[ -z "$env" || -z "$backend" ]]; then
         echo "not_installed"
         return
     fi
@@ -160,9 +183,16 @@ detect_installation_status() {
                 return
             fi
             
+            # Get kubeconfig from profile or fallback
+            local kubeconfig=""
+            if [[ -n "${_active_profile:-}" ]]; then
+                kubeconfig=$(profile_get_kubeconfig "$_active_profile" 2>/dev/null)
+            fi
+            kubeconfig="${kubeconfig:-${REPO_ROOT}/k8s/kubeconfig-rackspace-spot.yaml}"
+            
             # Check if core pods are running in the busibox namespace
             local running_pods
-            running_pods=$(KUBECONFIG="${REPO_ROOT}/k8s/kubeconfig-rackspace-spot.yaml" \
+            running_pods=$(KUBECONFIG="$kubeconfig" \
                 kubectl get pods -n busibox --field-selector=status.phase=Running \
                 --no-headers 2>/dev/null | wc -l | tr -d ' ')
             
@@ -180,9 +210,16 @@ detect_installation_status() {
     esac
 }
 
-# Get backend for current environment
+# Get backend for current environment (profile-aware)
 get_current_backend() {
     local env="$1"
+    
+    # Use profile if available
+    if [[ -n "${_active_profile:-}" ]]; then
+        profile_get "$_active_profile" "backend"
+        return
+    fi
+    
     local env_upper
     env_upper=$(echo "$env" | tr '[:lower:]' '[:upper:]')
     
@@ -321,10 +358,15 @@ main() {
     local install_status
     install_status=$(detect_installation_status)
     
-    # Get current environment info
+    # Get current environment info (profile-aware)
     local env backend
-    env=$(get_state "ENVIRONMENT" 2>/dev/null || echo "")
-    backend=$(get_current_backend "$env")
+    if [[ -n "${_active_profile:-}" ]]; then
+        env=$(profile_get "$_active_profile" "environment")
+        backend=$(profile_get "$_active_profile" "backend")
+    else
+        env=$(get_state "ENVIRONMENT" 2>/dev/null || echo "")
+        backend=$(get_current_backend "$env")
+    fi
     
     if [[ "$install_status" == "installed" || "$install_status" == "partial" ]]; then
         # Show install options submenu
@@ -335,7 +377,14 @@ main() {
         box_start 70 double "$CYAN"
         box_header "INSTALL OPTIONS"
         box_empty
-        if [[ -n "$env" ]]; then
+        if [[ -n "${_active_profile:-}" ]]; then
+            local display
+            display=$(profile_get_display "$_active_profile")
+            box_line "  ${CYAN}Profile:${NC} $_active_profile ($display)"
+            box_empty
+            box_separator
+            box_empty
+        elif [[ -n "$env" ]]; then
             box_line "  ${CYAN}Environment:${NC} $env ($backend)"
             box_empty
             box_separator

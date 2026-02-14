@@ -8,9 +8,8 @@
 #
 # Usage:
 #   make                    # Interactive launcher
-#   make install            # Fresh installation
-#   make update             # Update existing installation
-#   make manage             # Service management
+#   make install            # Fresh installation / add services
+#   make manage             # Service management (start/stop/logs/secrets)
 #   make test               # Testing system
 #
 set -euo pipefail
@@ -19,60 +18,23 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-# Simple state file for storing last used environment
-BUSIBOX_SIMPLE_STATE="${REPO_ROOT}/.busibox-state"
-
-# Read last environment from simple state file
-_read_last_env() {
-    if [[ -f "$BUSIBOX_SIMPLE_STATE" ]]; then
-        local last_env
-        last_env=$(grep "^LAST_ENV=" "$BUSIBOX_SIMPLE_STATE" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
-        if [[ -n "$last_env" ]]; then
-            echo "$last_env"
-            return
-        fi
-    fi
-    echo ""
-}
-
-# Save environment to simple state file
-_save_last_env() {
-    local env="$1"
-    echo "# Busibox - Last used environment" > "$BUSIBOX_SIMPLE_STATE"
-    echo "LAST_ENV=$env" >> "$BUSIBOX_SIMPLE_STATE"
-}
-
-# Auto-detect deployed environment BEFORE sourcing state library
-# This allows the state library to use the correct state file
-_auto_detect_env() {
-    # If BUSIBOX_ENV is already set, use it
-    if [[ -n "${BUSIBOX_ENV:-}" ]]; then
-        echo "$BUSIBOX_ENV"
-        return
-    fi
-    
-    # Check for last used environment in simple state file
-    local last_env
-    last_env=$(_read_last_env)
-    if [[ -n "$last_env" ]]; then
-        echo "$last_env"
-        return
-    fi
-    
-    # No saved environment - return empty to trigger environment selector
-    echo ""
-}
-
-# Set environment before sourcing state library
-export BUSIBOX_ENV="${BUSIBOX_ENV:-$(_auto_detect_env)}"
-
-# Source libraries
+# Source libraries (profiles.sh is sourced by state.sh automatically)
 source "${REPO_ROOT}/scripts/lib/ui.sh"
+source "${REPO_ROOT}/scripts/lib/profiles.sh"
 source "${REPO_ROOT}/scripts/lib/state.sh"
 source "${REPO_ROOT}/scripts/lib/status.sh"
 
 # Source backend common library (for tunnel status, detection helpers)
 source "${REPO_ROOT}/scripts/lib/backends/common.sh"
+
+# Initialize profiles (migrates from legacy if needed)
+profile_init
+
+# Legacy compat: set BUSIBOX_ENV from active profile
+_active_profile=$(profile_get_active)
+if [[ -n "$_active_profile" ]]; then
+    export BUSIBOX_ENV=$(profile_get "$_active_profile" "environment")
+fi
 
 # ============================================================================
 # Constants
@@ -231,7 +193,14 @@ detect_installation_status() {
                 return
             fi
             
-            local kubeconfig="${REPO_ROOT}/k8s/kubeconfig-rackspace-spot.yaml"
+            # Get kubeconfig from active profile or fallback
+            local kubeconfig=""
+            if [[ -n "${_active_profile:-}" ]]; then
+                kubeconfig=$(profile_get_kubeconfig "$_active_profile" 2>/dev/null)
+            fi
+            if [[ -z "$kubeconfig" || ! -f "$kubeconfig" ]]; then
+                kubeconfig="${REPO_ROOT}/k8s/kubeconfig-rackspace-spot.yaml"
+            fi
             if [[ ! -f "$kubeconfig" ]]; then
                 echo "not_installed"
                 return
@@ -271,8 +240,15 @@ get_current_backend() {
     get_state "BACKEND_${env_upper}" || echo ""
 }
 
-# Get environment display info
+# Get environment display info (profile-aware)
 get_env_display() {
+    if [[ -n "$_active_profile" ]]; then
+        local display
+        display=$(profile_get_display "$_active_profile")
+        echo "$display"
+        return
+    fi
+    
     local env backend
     env=$(get_state "ENVIRONMENT" || echo "not set")
     
@@ -370,7 +346,16 @@ get_proxmox_container_status_string() {
 get_k8s_status_string() {
     local repo_root
     repo_root=$(_get_repo_root "$(pwd)" 2>/dev/null || echo "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)")
-    local kubeconfig="${repo_root}/k8s/kubeconfig-rackspace-spot.yaml"
+    
+    # Try to get kubeconfig from active profile first
+    local kubeconfig=""
+    if [[ -n "${_active_profile:-}" ]]; then
+        kubeconfig=$(profile_get_kubeconfig "$_active_profile" 2>/dev/null)
+    fi
+    # Fallback to legacy path
+    if [[ -z "$kubeconfig" || ! -f "$kubeconfig" ]]; then
+        kubeconfig="${repo_root}/k8s/kubeconfig-rackspace-spot.yaml"
+    fi
     
     if [[ ! -f "$kubeconfig" ]]; then
         echo "${YELLOW}No kubeconfig${NC}"
@@ -462,154 +447,233 @@ show_main_menu() {
     local install_status
     install_status=$(detect_installation_status)
     
+    local profile_count
+    profile_count=$(profile_count)
+    
     # Menu options based on installation status
     if [[ "$install_status" == "not_installed" ]] || [[ "$install_status" == "partial" ]]; then
         box_line "  ${BOLD}1)${NC} Install"
-        box_line "  ${DIM}2) Update (requires installation)${NC}"
-        box_line "  ${DIM}3) Manage (requires installation)${NC}"
-        box_line "  ${DIM}4) Test (requires installation)${NC}"
+        box_line "  ${DIM}2) Manage (requires installation)${NC}"
+        box_line "  ${DIM}3) Test (requires installation)${NC}"
     else
         box_line "  ${BOLD}1)${NC} Uninstall / Reinstall"
-        box_line "  ${BOLD}2)${NC} Update"
-        box_line "  ${BOLD}3)${NC} Manage"
-        box_line "  ${BOLD}4)${NC} Test"
+        box_line "  ${BOLD}2)${NC} Manage"
+        box_line "  ${BOLD}3)${NC} Test"
         
         # K8s: Show Connect option when installed
-        local env backend
-        env=$(get_state "ENVIRONMENT" || echo "")
-        backend=$(get_current_backend "$env")
-        if [[ "$backend" == "k8s" ]]; then
+        local active_backend=""
+        if [[ -n "$_active_profile" ]]; then
+            active_backend=$(profile_get "$_active_profile" "backend")
+        fi
+        if [[ "$active_backend" == "k8s" ]]; then
             box_empty
             local pid_file="${REPO_ROOT}/.k8s-connect.pid"
             if [[ -f "$pid_file" ]] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
-                box_line "  ${BOLD}5)${NC} Disconnect (tunnel active)"
+                box_line "  ${BOLD}4)${NC} Disconnect (tunnel active)"
             else
-                box_line "  ${BOLD}5)${NC} Connect (start tunnel)"
+                box_line "  ${BOLD}4)${NC} Connect (start tunnel)"
             fi
         fi
     fi
     
     box_empty
-    box_line "  ${DIM}e = environment    h = help    q = quit${NC}"
+    if [[ "$profile_count" -gt 1 ]]; then
+        box_line "  ${DIM}p = switch profile [${profile_count}]    h = help    q = quit${NC}"
+    else
+        box_line "  ${DIM}p = profiles    h = help    q = quit${NC}"
+    fi
 }
 
 # ============================================================================
-# Environment Selection
+# Profile Selection
 # ============================================================================
 
-select_environment() {
+select_profile() {
     clear
     box_start 70 double "$CYAN"
-    box_header "SELECT ENVIRONMENT"
+    box_header "DEPLOYMENT PROFILES"
     box_empty
     
-    local current_env current_backend
-    current_env=$(get_state "ENVIRONMENT" || echo "none")
-    current_backend=$(get_current_backend "$current_env")
+    local active
+    active=$(profile_get_active)
     
-    if [[ "$current_env" == "none" ]] || [[ -z "$current_env" ]]; then
-        box_line "  Current: ${DIM}Not configured${NC}"
-    elif [[ -n "$current_backend" ]]; then
-        box_line "  Current: ${CYAN}${current_env}${NC} (${current_backend})"
+    local count
+    count=$(profile_count)
+    
+    if [[ "$count" -eq 0 ]]; then
+        box_line "  ${DIM}No profiles configured${NC}"
     else
-        box_line "  Current: ${CYAN}${current_env}${NC}"
+        profile_list
     fi
+    
     box_empty
     box_separator
     box_empty
-    
-    # Show current backend for staging/production if set
-    local staging_backend production_backend
-    staging_backend=$(get_current_backend "staging")
-    production_backend=$(get_current_backend "production")
-    
-    box_line "  ${BOLD}1)${NC} development  ${DIM}Docker on this machine${NC}"
-    if [[ -n "$staging_backend" ]]; then
-        box_line "  ${BOLD}2)${NC} staging      ${DIM}${staging_backend}${NC}"
-    else
-        box_line "  ${BOLD}2)${NC} staging      ${DIM}(select backend)${NC}"
+    box_line "  ${BOLD}n)${NC} New profile"
+    if [[ "$count" -gt 0 ]]; then
+        box_line "  ${BOLD}d)${NC} Delete profile"
     fi
-    if [[ -n "$production_backend" ]]; then
-        box_line "  ${BOLD}3)${NC} production   ${DIM}${production_backend}${NC}"
-    else
-        box_line "  ${BOLD}3)${NC} production   ${DIM}(select backend)${NC}"
-    fi
-    box_empty
     box_line "  ${DIM}b = back${NC}"
     box_empty
     box_footer
     echo ""
     
-    read -n 1 -s -r -p "Select environment: " choice
-    echo ""
+    read -r -p "Select profile number or action: " choice
     
     case "$choice" in
-        1)
-            set_state "ENVIRONMENT" "development"
-            set_state "BACKEND_DEVELOPMENT" "docker"
-            _save_last_env "development"
-            export BUSIBOX_ENV="development"
-            export CONTAINER_PREFIX="dev"
-            info "Switched to development environment"
-            sleep 1
+        n|N)
+            _create_profile_interactive
             ;;
-        2)
-            set_state "ENVIRONMENT" "staging"
-            _save_last_env "staging"
-            export BUSIBOX_ENV="staging"
-            export CONTAINER_PREFIX="staging"
-            # Always ask for backend to allow changing it
-            select_backend_for_env "staging"
-            info "Switched to staging environment"
-            sleep 1
-            ;;
-        3)
-            set_state "ENVIRONMENT" "production"
-            _save_last_env "production"
-            export BUSIBOX_ENV="production"
-            export CONTAINER_PREFIX="prod"
-            # Always ask for backend to allow changing it
-            select_backend_for_env "production"
-            info "Switched to production environment"
-            sleep 1
+        d|D)
+            _delete_profile_interactive
             ;;
         b|B)
             return
             ;;
+        [0-9]*)
+            local target_id
+            target_id=$(profile_get_by_index "$choice" 2>/dev/null)
+            if [[ -n "$target_id" ]]; then
+                profile_set_active "$target_id"
+                _active_profile="$target_id"
+                export BUSIBOX_ENV=$(profile_get "$target_id" "environment")
+                # Re-source state to pick up new profile's state file
+                BUSIBOX_STATE_FILE=""
+                source "${REPO_ROOT}/scripts/lib/state.sh"
+                info "Switched to profile: $target_id ($(profile_get_display "$target_id"))"
+                sleep 1
+            else
+                warn "Invalid selection"
+                sleep 1
+            fi
+            ;;
     esac
 }
 
-# Select backend (docker, proxmox, or k8s) for an environment
-select_backend_for_env() {
-    local env="$1"
-    local env_upper
-    env_upper=$(echo "$env" | tr '[:lower:]' '[:upper:]')
-    
+# Interactive profile creation
+_create_profile_interactive() {
     echo ""
-    box_start 70 double "$CYAN"
-    box_header "SELECT BACKEND FOR ${env_upper}"
+    box_start 70 double "$GREEN"
+    box_header "NEW PROFILE"
     box_empty
-    box_line "  ${BOLD}1)${NC} Docker    ${DIM}Docker containers on this machine${NC}"
-    box_line "  ${BOLD}2)${NC} Proxmox   ${DIM}LXC containers on Proxmox server${NC}"
-    box_line "  ${BOLD}3)${NC} K8s       ${DIM}Kubernetes cluster (Rackspace Spot)${NC}"
+    box_line "  ${BOLD}Environment:${NC}"
+    box_line "    ${BOLD}1)${NC} development"
+    box_line "    ${BOLD}2)${NC} staging"
+    box_line "    ${BOLD}3)${NC} production"
     box_empty
     box_footer
     echo ""
     
-    read -n 1 -s -r -p "Select backend: " choice
+    read -n 1 -s -r -p "Select environment: " env_choice
     echo ""
     
-    case "$choice" in
-        1)
-            set_state "BACKEND_${env_upper}" "docker"
-            ;;
-        2)
-            set_state "BACKEND_${env_upper}" "proxmox"
-            ;;
-        3)
-            set_state "BACKEND_${env_upper}" "k8s"
-            ;;
+    local environment
+    case "$env_choice" in
+        1) environment="development" ;;
+        2) environment="staging" ;;
+        3) environment="production" ;;
+        *) warn "Invalid choice"; sleep 1; return ;;
     esac
+    
+    echo ""
+    box_start 70 double "$GREEN"
+    box_header "SELECT BACKEND"
+    box_empty
+    box_line "  ${BOLD}1)${NC} Docker    ${DIM}Docker containers (local or remote)${NC}"
+    box_line "  ${BOLD}2)${NC} Proxmox   ${DIM}LXC containers on Proxmox server${NC}"
+    box_line "  ${BOLD}3)${NC} K8s       ${DIM}Kubernetes cluster${NC}"
+    box_empty
+    box_footer
+    echo ""
+    
+    read -n 1 -s -r -p "Select backend: " backend_choice
+    echo ""
+    
+    local backend
+    case "$backend_choice" in
+        1) backend="docker" ;;
+        2) backend="proxmox" ;;
+        3) backend="k8s" ;;
+        *) warn "Invalid choice"; sleep 1; return ;;
+    esac
+    
+    # Get label
+    local default_label
+    if [[ "$environment" == "development" && "$backend" == "docker" ]]; then
+        default_label="local"
+    else
+        default_label="${environment}"
+    fi
+    
+    echo ""
+    read -r -p "Profile label [${default_label}]: " label
+    label="${label:-$default_label}"
+    
+    # K8s: ask for kubeconfig
+    local kubeconfig=""
+    if [[ "$backend" == "k8s" ]]; then
+        echo ""
+        # Auto-detect kubeconfig files
+        local kc_files
+        kc_files=$(ls "${REPO_ROOT}"/k8s/kubeconfig-*.yaml 2>/dev/null || true)
+        if [[ -n "$kc_files" ]]; then
+            echo "Available kubeconfigs:"
+            local kc_idx=1
+            while IFS= read -r kc; do
+                echo "  ${kc_idx}) $(basename "$kc")"
+                ((kc_idx++))
+            done <<< "$kc_files"
+            echo ""
+        fi
+        read -r -p "Kubeconfig path (relative to repo root): " kubeconfig
+    fi
+    
+    # Create the profile
+    local profile_id
+    profile_id=$(profile_create "$environment" "$backend" "$label" "" "$kubeconfig")
+    
+    if [[ -n "$profile_id" ]]; then
+        profile_set_active "$profile_id"
+        _active_profile="$profile_id"
+        export BUSIBOX_ENV="$environment"
+        BUSIBOX_STATE_FILE=""
+        source "${REPO_ROOT}/scripts/lib/state.sh"
+        success "Created and activated profile: ${profile_id} (${environment}/${backend}/${label})"
+    else
+        error "Failed to create profile"
+    fi
+    sleep 2
+}
+
+# Interactive profile deletion
+_delete_profile_interactive() {
+    echo ""
+    read -r -p "Enter profile number to delete: " del_choice
+    
+    local target_id
+    target_id=$(profile_get_by_index "$del_choice" 2>/dev/null)
+    if [[ -z "$target_id" ]]; then
+        warn "Invalid selection"
+        sleep 1
+        return
+    fi
+    
+    local display
+    display=$(profile_get_display "$target_id")
+    echo ""
+    read -r -p "Delete profile '${target_id}' (${display})? [y/N]: " confirm
+    if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
+        profile_delete "$target_id"
+        # If we deleted the active profile, clear it
+        if [[ "$_active_profile" == "$target_id" ]]; then
+            _active_profile=""
+            export BUSIBOX_ENV=""
+        fi
+        success "Deleted profile: ${target_id}"
+    else
+        echo "Cancelled."
+    fi
+    sleep 1
 }
 
 # ============================================================================
@@ -623,14 +687,11 @@ show_help() {
     box_empty
     box_line "  ${BOLD}Installation${NC}"
     box_line "    ${CYAN}make install${NC}  Fresh installation wizard"
-    box_empty
-    box_line "  ${BOLD}Update${NC}"
-    box_line "    ${CYAN}make update${NC}   Update existing installation"
-    box_line "                    Preserves data (postgres, minio, etc)"
+    box_line "                    Also used to add/update individual services"
     box_empty
     box_line "  ${BOLD}Manage${NC}"
     box_line "    ${CYAN}make manage${NC}   Service management"
-    box_line "                    Start/stop services, view logs"
+    box_line "                    Start/stop, logs, rotate secrets, redeploy"
     box_empty
     box_line "  ${BOLD}Test${NC}"
     box_line "    ${CYAN}make test${NC}     Testing system"
@@ -753,9 +814,16 @@ perform_uninstall() {
         success "Proxmox uninstall complete"
         
     elif [[ "$backend" == "k8s" ]]; then
-        local kubeconfig="${REPO_ROOT}/k8s/kubeconfig-rackspace-spot.yaml"
+        # Get kubeconfig from active profile or fallback
+        local kubeconfig=""
+        if [[ -n "${_active_profile:-}" ]]; then
+            kubeconfig=$(profile_get_kubeconfig "$_active_profile" 2>/dev/null)
+        fi
+        if [[ -z "$kubeconfig" || ! -f "$kubeconfig" ]]; then
+            kubeconfig="${REPO_ROOT}/k8s/kubeconfig-rackspace-spot.yaml"
+        fi
         if [[ ! -f "$kubeconfig" ]]; then
-            error "Kubeconfig not found: ${kubeconfig}"
+            error "Kubeconfig not found"
             return 1
         fi
         
@@ -795,24 +863,6 @@ perform_uninstall() {
     
     success "Uninstall complete!"
     sleep 2
-}
-
-handle_update() {
-    local install_status
-    install_status=$(detect_installation_status)
-    
-    if [[ "$install_status" == "not_installed" ]]; then
-        echo ""
-        printf "${YELLOW}Installation required. Please run Install first.${NC}\n"
-        sleep 2
-        return
-    fi
-    
-    local env backend
-    env=$(get_state "ENVIRONMENT" || echo "")
-    backend=$(get_current_backend "$env")
-    
-    exec bash "${SCRIPT_DIR}/update.sh" --env "$env" --backend "$backend"
 }
 
 handle_manage() {
@@ -859,16 +909,25 @@ main() {
     # Initialize state if needed
     init_state
     
-    # If no environment is set, show environment selector first
-    if [[ -z "$BUSIBOX_ENV" ]]; then
-        select_environment
-        # If user didn't select anything (pressed b), exit
-        if [[ -z "$BUSIBOX_ENV" ]]; then
+    # If no active profile, prompt to create or select one
+    if [[ -z "$_active_profile" ]]; then
+        local count
+        count=$(profile_count)
+        if [[ "$count" -eq 0 ]]; then
             echo ""
-            echo "No environment selected. Exiting."
+            info "No deployment profiles found. Let's create one."
+            _create_profile_interactive
+        else
+            select_profile
+        fi
+        _active_profile=$(profile_get_active)
+        if [[ -z "$_active_profile" ]]; then
+            echo ""
+            echo "No profile selected. Exiting."
             exit 0
         fi
-        # Re-source state library with new environment
+        export BUSIBOX_ENV=$(profile_get "$_active_profile" "environment")
+        BUSIBOX_STATE_FILE=""
         source "${REPO_ROOT}/scripts/lib/state.sh"
     fi
     
@@ -882,7 +941,7 @@ main() {
         # Reset box state and start fresh
         box_start 70 double "$CYAN"
         
-        # Show header with environment
+        # Show header with profile
         if [[ "$env_display" == "Not configured" ]]; then
             box_header "BUSIBOX"
         else
@@ -918,20 +977,18 @@ main() {
                 handle_install
                 ;;
             2)
-                handle_update
-                ;;
-            3)
                 handle_manage
                 ;;
-            4)
+            3)
                 handle_test
                 ;;
-            5)
+            4)
                 # K8s Connect/Disconnect toggle
-                local env backend
-                env=$(get_state "ENVIRONMENT" || echo "")
-                backend=$(get_current_backend "$env")
-                if [[ "$backend" == "k8s" ]]; then
+                local active_backend=""
+                if [[ -n "$_active_profile" ]]; then
+                    active_backend=$(profile_get "$_active_profile" "backend")
+                fi
+                if [[ "$active_backend" == "k8s" ]]; then
                     local pid_file="${REPO_ROOT}/.k8s-connect.pid"
                     echo ""
                     if [[ -f "$pid_file" ]] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
@@ -944,8 +1001,8 @@ main() {
                     read -n 1 -s -r -p "Press any key to continue..."
                 fi
                 ;;
-            e|E)
-                select_environment
+            p|P)
+                select_profile
                 ;;
             h|H)
                 show_help

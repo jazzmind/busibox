@@ -116,6 +116,7 @@ class EncryptContentRequest(BaseModel):
     content: str = Field(..., description="Base64 encoded content to encrypt")
     role_ids: List[str] = Field(default_factory=list, description="Role IDs that should have access")
     user_id: Optional[str] = Field(None, description="User ID for personal files")
+    system_owner_id: Optional[str] = Field(None, description="System owner ID for service-level encryption (e.g., 'deploy-api')")
 
 
 class EncryptContentResponse(BaseModel):
@@ -394,10 +395,25 @@ async def encrypt_content(request: Request, body: EncryptContentRequest):
             user_kek = await pg.get_kek(user_kek_result["kek_id"])
         keks.append((user_kek["kek_id"], user_kek["encrypted_key"]))
     
+    # Get or create KEK for system owner (service-level encryption)
+    if body.system_owner_id:
+        system_kek = await pg.get_kek_for_owner("system", body.system_owner_id)
+        if not system_kek:
+            # Create KEK for system owner
+            new_kek = encryption.generate_kek()
+            encrypted_kek = encryption.encrypt_kek(new_kek)
+            system_kek_result = await pg.create_kek(
+                owner_type="system",
+                owner_id=body.system_owner_id,
+                encrypted_key=encrypted_kek,
+            )
+            system_kek = await pg.get_kek(system_kek_result["kek_id"])
+        keks.append((system_kek["kek_id"], system_kek["encrypted_key"]))
+    
     if not keks:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="At least one role_id or user_id must be specified"
+            detail="At least one role_id, user_id, or system_owner_id must be specified"
         )
     
     # Encrypt content and wrap DEK
@@ -458,6 +474,9 @@ async def decrypt_content(request: Request, body: DecryptContentRequest):
     if not user_id:
         user_id = request.headers.get("x-user-id")
     
+    # System owner ID for service-level decryption (e.g., deploy-api)
+    system_owner_id = request.headers.get("x-system-owner-id")
+    
     wrapped_dek_data = None
     
     # Try to find a wrapped DEK the caller can access
@@ -466,6 +485,9 @@ async def decrypt_content(request: Request, body: DecryptContentRequest):
     
     if not wrapped_dek_data and user_id:
         wrapped_dek_data = await pg.get_wrapped_dek_for_user(body.file_id, user_id)
+    
+    if not wrapped_dek_data and system_owner_id:
+        wrapped_dek_data = await pg.get_wrapped_dek_for_system(body.file_id, system_owner_id)
     
     if not wrapped_dek_data:
         raise HTTPException(

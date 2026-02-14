@@ -59,7 +59,6 @@ applications:
       - github_client_id
       - github_client_secret
       - github_redirect_uri
-      - encryption_key
       - current_container_ip
       - apps_container_ip
       - agent_container_ip

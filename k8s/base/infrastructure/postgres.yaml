@@ -1,6 +1,6 @@
 ---
 # PostgreSQL - Shared Database
-# StatefulSet with persistent storage
+# Deployment with shared persistent storage (db-ssd PVC, subPath: postgres)
 apiVersion: v1
 kind: Service
 metadata:
@@ -14,18 +14,18 @@ spec:
       targetPort: 5432
   selector:
     app: postgres
-  clusterIP: None  # Headless for StatefulSet
 ---
 apiVersion: apps/v1
-kind: StatefulSet
+kind: Deployment
 metadata:
   name: postgres
   labels:
     app: postgres
     tier: infrastructure
 spec:
-  serviceName: postgres
   replicas: 1
+  strategy:
+    type: Recreate  # Required for RWO volume
   selector:
     matchLabels:
       app: postgres
@@ -50,9 +50,12 @@ spec:
                   key: POSTGRES_PASSWORD
             - name: POSTGRES_DB
               value: "busibox"
+            - name: PGDATA
+              value: "/var/lib/postgresql/data/pgdata"
           volumeMounts:
             - name: postgres-data
               mountPath: /var/lib/postgresql/data
+              subPath: postgres
             - name: init-scripts
               mountPath: /docker-entrypoint-initdb.d
               readOnly: true
@@ -74,18 +77,12 @@ spec:
               cpu: "2"
               memory: 2Gi
       volumes:
+        - name: postgres-data
+          persistentVolumeClaim:
+            claimName: db-ssd
         - name: init-scripts
           configMap:
             name: postgres-init
-  volumeClaimTemplates:
-    - metadata:
-        name: postgres-data
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        storageClassName: ssd
-        resources:
-          requests:
-            storage: 20Gi
 ---
 apiVersion: v1
 kind: ConfigMap

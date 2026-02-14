@@ -1,0 +1,44 @@
+---
+# Shared Persistent Storage
+# =========================
+# Two shared PVCs for the entire cluster. Services use subPath to isolate
+# their data within the shared volume. This minimizes the number of Cinder
+# volumes and keeps costs low on Rackspace Spot Gen-2 (us-east-iad).
+#
+# Available storage classes:
+#   ssd:  SSD-backed block storage
+#   sata: SATA-backed block storage (lower cost)
+#
+# Total: 50GB SSD + 100GB SATA
+
+# Database SSD - postgres, milvus, neo4j, etcd
+# SSD for database workloads requiring higher IOPS
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: db-ssd
+  labels:
+    tier: infrastructure
+    storage-role: database
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: ssd
+  resources:
+    requests:
+      storage: 50Gi
+---
+# Object storage - minio, milvus-minio
+# SATA tier - lower cost, sufficient for blob/object workloads
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: objects-store
+  labels:
+    tier: infrastructure
+    storage-role: objects
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: sata
+  resources:
+    requests:
+      storage: 100Gi

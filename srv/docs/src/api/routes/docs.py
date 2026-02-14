@@ -5,6 +5,7 @@ Serves markdown documentation files with frontmatter parsing.
 
 Categories:
   - platform: End-user guides (previously 'user', still accepted for backward compat)
+  - administrator: Deployment, configuration, and operational guides
   - apps: Per-app documentation contributed by installed applications
   - developer: Technical/developer documentation
 """
@@ -18,7 +19,7 @@ from api.services.docs_loader import get_docs_loader, normalize_category
 router = APIRouter()
 
 # Accepted category values (includes 'user' alias for backward compatibility)
-CategoryType = Literal["platform", "apps", "developer", "user"]
+CategoryType = Literal["platform", "administrator", "apps", "developer", "user"]
 
 
 class DocNavItemResponse(BaseModel):

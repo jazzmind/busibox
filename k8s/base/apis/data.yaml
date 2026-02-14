@@ -124,8 +124,7 @@ spec:
         - name: data-temp
           emptyDir: {}
         - name: model-cache
-          persistentVolumeClaim:
-            claimName: model-cache
+          emptyDir: {}
 ---
 # Data Worker - Background Job Processor
 apiVersion: apps/v1
@@ -231,5 +230,4 @@ spec:
         - name: data-temp
           emptyDir: {}
         - name: model-cache
-          persistentVolumeClaim:
-            claimName: model-cache
+          emptyDir: {}

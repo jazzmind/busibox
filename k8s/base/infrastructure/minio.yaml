@@ -1,5 +1,6 @@
 ---
 # MinIO - Object Storage (S3-compatible)
+# Deployment with shared persistent storage (objects-store PVC, subPath: minio)
 apiVersion: v1
 kind: Service
 metadata:
@@ -19,15 +20,16 @@ spec:
     app: minio
 ---
 apiVersion: apps/v1
-kind: StatefulSet
+kind: Deployment
 metadata:
   name: minio
   labels:
     app: minio
     tier: infrastructure
 spec:
-  serviceName: minio
   replicas: 1
+  strategy:
+    type: Recreate  # Required for RWO volume
   selector:
     matchLabels:
       app: minio
@@ -79,12 +81,8 @@ spec:
           volumeMounts:
             - name: minio-data
               mountPath: /data
-  volumeClaimTemplates:
-    - metadata:
-        name: minio-data
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        storageClassName: ssd
-        resources:
-          requests:
-            storage: 20Gi
+              subPath: minio
+      volumes:
+        - name: minio-data
+          persistentVolumeClaim:
+            claimName: objects-store

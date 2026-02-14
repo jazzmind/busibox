@@ -20,11 +20,13 @@ See `.cursor/rules/010-make-commands.md` for complete details.
 ## Quick Start
 
 ### Key Documentation
-- **Architecture**: `docs/architecture/architecture.md` - System design and components
-- **Deployment**: `docs/deployment/` - Deployment guides and procedures
-- **Configuration**: `docs/configuration/` - Setup and configuration guides
+- **Architecture**: `docs/developers/architecture/` - System design and components
+- **Administrators**: `docs/administrators/` - Deployment, configuration, troubleshooting
+- **Users**: `docs/users/` - End-user platform guides
+- **Developers**: `docs/developers/` - Technical docs, API guides, reference
 - **Testing**: `TESTING.md` - Testing strategy and procedures
 - **Make Commands**: `.cursor/rules/010-make-commands.md` - Service management reference
+- **Doc Organization**: `docs/README.md` - Documentation structure guide
 
 ### Common Commands (from repo root)
 
@@ -142,8 +144,7 @@ npm install && npm run build
 
 **Documentation:**
 - Setup: `tools/mcp-server/README.md`
-- Reference: `docs/reference/mcp-server.md`
-- Usage Guide: `docs/guides/mcp-server-usage.md`
+- Reference: `docs/developers/reference/mcp-server.md`
 
 ## AI Agent Rules
 
@@ -166,10 +167,10 @@ This project uses structured rules to ensure consistency. **All rules are in `.c
 ### Quick Decision Guides
 
 **Creating Documentation:**
-1. Determine category (architecture/deployment/configuration/troubleshooting/reference/guides/session-notes)
-2. Place in `docs/{category}/`
+1. Determine audience (administrators/developers/users)
+2. Place in `docs/{audience}/` with appropriate subdirectory
 3. Use descriptive `kebab-case` filename
-4. Include metadata header
+4. Include docs-api frontmatter (title, category, order, description, published)
 
 **Creating Scripts:**
 1. Determine execution context (Proxmox host / admin workstation / inside container)
@@ -182,7 +183,11 @@ This project uses structured rules to ensure consistency. **All rules are in `.c
 ```
 busibox/
 ├── .cursor/rules/          # AI agent rules (READ THESE!)
-├── docs/                   # All documentation (organized by category)
+├── docs/                   # All documentation (organized by audience)
+│   ├── administrators/    # Deployment, configuration, troubleshooting
+│   ├── developers/        # Architecture, API guides, reference
+│   ├── users/             # End-user platform guides
+│   └── archive/           # Historical/outdated content
 ├── scripts/                # Admin workstation scripts
 ├── provision/
 │   ├── pct/               # Proxmox host scripts
@@ -191,7 +196,9 @@ busibox/
 │       └── roles/         # Service roles
 ├── srv/                   # Service source code
 │   ├── agent/            # Agent API (FastAPI)
-│   └── ingest/           # Ingest worker (Python)
+│   ├── data/             # Data API and Ingest Worker
+│   ├── docs/             # Docs API
+│   └── deploy/           # Deploy API
 ├── specs/                 # Project specifications
 └── tools/                 # Utility tools
 ```
@@ -370,9 +377,9 @@ make manage SERVICE=authz ACTION=redeploy  # ✅
 ### When Creating Files
 
 1. **Documentation**:
-   - Place in appropriate `docs/{category}/` directory
+   - Place in appropriate `docs/{audience}/` directory (administrators/developers/users)
    - Use descriptive `kebab-case` names
-   - Include metadata header
+   - Include docs-api frontmatter (title, category, order, description, published)
    - Link to related docs
 
 2. **Scripts**:
@@ -396,27 +403,27 @@ make manage SERVICE=authz ACTION=redeploy  # ✅
 
 ### When Troubleshooting
 
-1. **Check documentation** in `docs/troubleshooting/`
+1. **Check documentation** in `docs/administrators/08-troubleshooting.md`
 2. **Review logs** using journalctl
 3. **Validate configuration** matches environment
-4. **Document solution** in troubleshooting docs
+4. **Document solution** in `docs/administrators/`
 
 ## References
 
 - **Rules**: `.cursor/rules/` - AI agent organization rules
-- **Architecture**: `docs/architecture/architecture.md` - System design
-- **Deployment**: `docs/deployment/` - Deployment procedures
-- **Configuration**: `docs/configuration/` - Setup guides
+- **Doc Organization**: `docs/README.md` - Documentation structure
+- **Architecture**: `docs/developers/architecture/` - System design
+- **Deployment**: `docs/administrators/` - Deployment and operations
 - **Testing**: `TESTING.md` - Testing strategy
 - **Ansible Setup**: `provision/ansible/SETUP.md` - Ansible usage
 
 ## Questions?
 
 If you're unsure about:
-- **Where to place a file** → Check `.cursor/rules/`
-- **How to deploy** → Check `docs/deployment/`
-- **How to configure** → Check `docs/configuration/`
-- **System design** → Check `docs/architecture/architecture.md`
+- **Where to place a file** → Check `docs/README.md` and `.cursor/rules/`
+- **How to deploy** → Check `docs/administrators/02-install.md`
+- **How to configure** → Check `docs/administrators/03-configure.md`
+- **System design** → Check `docs/developers/architecture/`
 - **Testing** → Check `TESTING.md`
 
 ## Important Notes

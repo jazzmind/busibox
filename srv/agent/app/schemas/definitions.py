@@ -82,9 +82,11 @@ class AgentDefinitionUpdate(BaseModel):
 
 
 class ToolDefinitionCreate(BaseModel):
+    model_config = {"populate_by_name": True}
+
     name: str
     description: Optional[str] = None
-    schema: Dict[str, Any] = Field(default_factory=dict)
+    tool_schema: Dict[str, Any] = Field(default_factory=dict, validation_alias="schema", serialization_alias="schema")
     entrypoint: str
     scopes: List[str] = Field(default_factory=list)
     is_active: bool = True
@@ -92,24 +94,25 @@ class ToolDefinitionCreate(BaseModel):
 
 class ToolDefinitionUpdate(BaseModel):
     """Schema for updating tool definitions."""
+    model_config = {"populate_by_name": True}
+
     name: Optional[str] = Field(None, pattern=r'^[a-zA-Z_][a-zA-Z0-9_]*$')
     description: Optional[str] = None
-    schema: Optional[Dict[str, Any]] = None
+    tool_schema: Optional[Dict[str, Any]] = Field(None, validation_alias="schema", serialization_alias="schema")
     entrypoint: Optional[str] = Field(None, pattern=r'^[a-zA-Z_][a-zA-Z0-9_.]*:[a-zA-Z_][a-zA-Z0-9_]*$')
     scopes: Optional[List[str]] = None
     is_active: Optional[bool] = None
 
 
 class ToolDefinitionRead(ToolDefinitionCreate):
+    model_config = {"populate_by_name": True, "from_attributes": True}
+
     id: uuid.UUID
     is_builtin: bool
     created_by: Optional[str] = None
     version: int
     created_at: datetime
     updated_at: datetime
-
-    class Config:
-        from_attributes = True
 
 
 class WorkflowDefinitionCreate(BaseModel):

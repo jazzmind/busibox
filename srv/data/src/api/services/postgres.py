@@ -733,3 +733,159 @@ class PostgresService:
                 file_id=file_id,
                 visibility=visibility,
             )
+    
+    # =========================================================================
+    # Library Trigger Operations
+    # =========================================================================
+    
+    async def create_library_trigger(
+        self,
+        library_id: str,
+        name: str,
+        created_by: str,
+        agent_id: Optional[str] = None,
+        prompt: Optional[str] = None,
+        schema_document_id: Optional[str] = None,
+        description: Optional[str] = None,
+        delegation_token: Optional[str] = None,
+        delegation_scopes: Optional[List] = None,
+    ) -> Dict:
+        """Create a library trigger that fires when docs complete in a library."""
+        trigger_id = uuid.uuid4()
+        async with self.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO library_triggers (
+                    id, library_id, name, description, agent_id, prompt,
+                    schema_document_id, is_active, created_by,
+                    delegation_token, delegation_scopes
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, true, $8, $9, $10)
+            """,
+                trigger_id,
+                uuid.UUID(library_id),
+                name,
+                description,
+                uuid.UUID(agent_id) if agent_id else None,
+                prompt,
+                uuid.UUID(schema_document_id) if schema_document_id else None,
+                uuid.UUID(created_by),
+                delegation_token,
+                str(delegation_scopes or []),
+            )
+            
+            row = await conn.fetchrow(
+                "SELECT * FROM library_triggers WHERE id = $1", trigger_id
+            )
+            
+            logger.info(
+                "Library trigger created",
+                trigger_id=str(trigger_id),
+                library_id=library_id,
+                name=name,
+            )
+            return dict(row)
+    
+    async def list_library_triggers(
+        self,
+        library_id: str,
+        active_only: bool = False,
+    ) -> List[Dict]:
+        """List triggers for a library."""
+        async with self.acquire() as conn:
+            query = "SELECT * FROM library_triggers WHERE library_id = $1"
+            params = [uuid.UUID(library_id)]
+            if active_only:
+                query += " AND is_active = true"
+            query += " ORDER BY created_at DESC"
+            rows = await conn.fetch(query, *params)
+            return [dict(r) for r in rows]
+    
+    async def get_library_trigger(self, trigger_id: str) -> Optional[Dict]:
+        """Get a single library trigger by ID."""
+        async with self.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM library_triggers WHERE id = $1",
+                uuid.UUID(trigger_id),
+            )
+            return dict(row) if row else None
+    
+    async def update_library_trigger(
+        self,
+        trigger_id: str,
+        **kwargs,
+    ) -> Optional[Dict]:
+        """Update a library trigger. Accepts is_active, name, description, prompt, schema_document_id."""
+        set_clauses = ["updated_at = NOW()"]
+        params = []
+        idx = 1
+        
+        allowed = {"is_active", "name", "description", "prompt", "schema_document_id", "agent_id"}
+        for key, value in kwargs.items():
+            if key in allowed and value is not None:
+                idx += 1
+                if key in ("schema_document_id", "agent_id"):
+                    set_clauses.append(f"{key} = ${idx}")
+                    params.append(uuid.UUID(value) if value else None)
+                else:
+                    set_clauses.append(f"{key} = ${idx}")
+                    params.append(value)
+        
+        if len(set_clauses) == 1:
+            # Nothing to update
+            return await self.get_library_trigger(trigger_id)
+        
+        async with self.acquire() as conn:
+            await conn.execute(
+                f"UPDATE library_triggers SET {', '.join(set_clauses)} WHERE id = $1",
+                uuid.UUID(trigger_id),
+                *params,
+            )
+            return await self.get_library_trigger(trigger_id)
+    
+    async def delete_library_trigger(self, trigger_id: str) -> bool:
+        """Delete a library trigger."""
+        async with self.acquire() as conn:
+            result = await conn.execute(
+                "DELETE FROM library_triggers WHERE id = $1",
+                uuid.UUID(trigger_id),
+            )
+            deleted = result == "DELETE 1"
+            if deleted:
+                logger.info("Library trigger deleted", trigger_id=trigger_id)
+            return deleted
+    
+    async def get_active_triggers_for_library(self, library_id: str) -> List[Dict]:
+        """Get all active triggers for a library (used by worker on doc completion)."""
+        async with self.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT lt.*, l.name as library_name
+                FROM library_triggers lt
+                JOIN libraries l ON l.id = lt.library_id
+                WHERE lt.library_id = $1 AND lt.is_active = true
+            """, uuid.UUID(library_id))
+            return [dict(r) for r in rows]
+    
+    async def record_trigger_execution(
+        self,
+        trigger_id: str,
+        error: Optional[str] = None,
+    ) -> None:
+        """Record that a trigger was executed (increment count, update timestamp)."""
+        async with self.acquire() as conn:
+            if error:
+                await conn.execute("""
+                    UPDATE library_triggers
+                    SET execution_count = execution_count + 1,
+                        last_execution_at = NOW(),
+                        last_error = $2,
+                        updated_at = NOW()
+                    WHERE id = $1
+                """, uuid.UUID(trigger_id), error)
+            else:
+                await conn.execute("""
+                    UPDATE library_triggers
+                    SET execution_count = execution_count + 1,
+                        last_execution_at = NOW(),
+                        last_error = NULL,
+                        updated_at = NOW()
+                    WHERE id = $1
+                """, uuid.UUID(trigger_id))

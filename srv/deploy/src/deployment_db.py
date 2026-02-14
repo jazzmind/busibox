@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Optional, List, Tuple, Any
 
 from .database import execute_sql
-from .crypto_utils import encrypt, decrypt
+from . import authz_crypto
 
 logger = logging.getLogger(__name__)
 
@@ -138,8 +138,8 @@ async def upsert_github_connection(
     scopes: List[str],
 ) -> dict:
     """Insert or update a GitHub connection for a user."""
-    enc_access = encrypt(access_token)
-    enc_refresh = encrypt(refresh_token) if refresh_token else None
+    enc_access = await authz_crypto.encrypt(access_token, f"github:{user_id}:access")
+    enc_refresh = await authz_crypto.encrypt(refresh_token, f"github:{user_id}:refresh") if refresh_token else None
 
     sql = f"""
         INSERT INTO github_connections (user_id, access_token, refresh_token, token_expires_at, github_user_id, github_username, scopes)
@@ -172,7 +172,7 @@ async def get_decrypted_github_token(user_id: str) -> Optional[str]:
     conn = await get_github_connection_by_user(user_id)
     if not conn or not conn.get('access_token'):
         return None
-    return decrypt(conn['access_token'])
+    return await authz_crypto.decrypt(conn['access_token'], f"github:{user_id}:access")
 
 
 # ============================================================================
@@ -451,7 +451,7 @@ async def upsert_secret(
     secret_type: str = 'CUSTOM',
     description: Optional[str] = None,
 ) -> dict:
-    enc_value = encrypt(value)
+    enc_value = await authz_crypto.encrypt(value, f"secret:{config_id}:{key}")
     sql = f"""
         INSERT INTO app_secrets (deployment_config_id, key, encrypted_value, type, description)
         VALUES ({_escape(config_id)}, {_escape(key)}, {_escape(enc_value)}, {_escape(secret_type)}, {_escape(description)})
@@ -482,7 +482,7 @@ async def get_secret_decrypted(config_id: str, key: str) -> Optional[str]:
     rows = _parse_rows(result, ['encrypted_value'])
     if not rows or not rows[0].get('encrypted_value'):
         return None
-    return decrypt(rows[0]['encrypted_value'])
+    return await authz_crypto.decrypt(rows[0]['encrypted_value'], f"secret:{config_id}:{key}")
 
 
 # ============================================================================
@@ -602,7 +602,7 @@ async def create_app_database(
     host: str = 'postgres',
     port: int = 5432,
 ) -> dict:
-    enc_password = encrypt(password)
+    enc_password = await authz_crypto.encrypt(password, f"dbpass:{config_id}")
     sql = f"""
         INSERT INTO app_databases (deployment_config_id, database_name, database_user, encrypted_password, host, port)
         VALUES ({_escape(config_id)}, {_escape(database_name)}, {_escape(database_user)}, {_escape(enc_password)}, {_escape(host)}, {_escape(port)})
@@ -623,7 +623,7 @@ async def get_app_database_url(config_id: str) -> Optional[str]:
     if not rows:
         return None
     row = rows[0]
-    password = decrypt(row['encrypted_password'])
+    password = await authz_crypto.decrypt(row['encrypted_password'], f"dbpass:{config_id}")
     return f"postgresql://{row['database_user']}:{password}@{row['host']}:{row['port']}/{row['database_name']}"
 
 

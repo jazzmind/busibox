@@ -85,6 +85,10 @@ class MetadataExtractor:
         if not metadata.get("title"):
             heuristic = self._extract_heuristic_metadata(text)
             metadata.update(heuristic)
+        else:
+            # Always extract keywords even when embedded title exists
+            keywords = self._extract_keywords(text)
+            metadata["keywords"] = keywords
         
         return metadata
     
@@ -109,6 +113,10 @@ class MetadataExtractor:
         if not metadata.get("title"):
             heuristic = self._extract_heuristic_metadata(text)
             metadata.update(heuristic)
+        else:
+            # Always extract keywords even when embedded title exists
+            keywords = self._extract_keywords(text)
+            metadata["keywords"] = keywords
         
         return metadata
     

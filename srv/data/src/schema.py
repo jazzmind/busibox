@@ -284,6 +284,42 @@ def get_data_schema() -> SchemaManager:
     """)
     
     # ==========================================================================
+    # Library Triggers - fire agent tasks when docs complete in a library
+    # ==========================================================================
+    
+    schema.add_table("""
+        CREATE TABLE IF NOT EXISTS library_triggers (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            library_id UUID NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
+            name VARCHAR(255) NOT NULL,
+            description TEXT,
+            agent_id UUID,
+            prompt TEXT,
+            schema_document_id UUID,
+            is_active BOOLEAN DEFAULT true,
+            created_by UUID NOT NULL,
+            delegation_token TEXT,
+            delegation_scopes JSONB DEFAULT '[]'::jsonb,
+            execution_count INTEGER DEFAULT 0,
+            last_execution_at TIMESTAMP,
+            last_error TEXT,
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
+    
+    schema.add_index("""
+        CREATE INDEX IF NOT EXISTS idx_library_triggers_library_id
+        ON library_triggers(library_id)
+        WHERE is_active = true
+    """)
+    
+    schema.add_index("""
+        CREATE INDEX IF NOT EXISTS idx_library_triggers_created_by
+        ON library_triggers(created_by)
+    """)
+    
+    # ==========================================================================
     # Structured Data Tables
     # ==========================================================================
     
@@ -964,5 +1000,6 @@ def get_data_schema() -> SchemaManager:
     schema.add_function("GRANT SELECT, INSERT, UPDATE, DELETE ON library_tag_cache TO busibox_user")
     schema.add_function("GRANT SELECT, INSERT, UPDATE, DELETE ON data_document_cache TO busibox_user")
     schema.add_function("GRANT SELECT, INSERT ON data_record_history TO busibox_user")
+    schema.add_function("GRANT SELECT, INSERT, UPDATE, DELETE ON library_triggers TO busibox_user")
     
     return schema

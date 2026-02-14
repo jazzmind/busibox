@@ -65,19 +65,24 @@ async def sync_releases(
         raise HTTPException(status_code=404, detail="Deployment config not found")
 
     # Get GitHub token
-    conn = await db.get_github_connection_by_user(token_payload.get("user_id", ""))
+    user_id = token_payload.get("user_id", "")
+    conn = await db.get_github_connection_by_user(user_id)
     if not conn:
         # Try getting the token from the config's connection
-        from .crypto_utils import decrypt as crypto_decrypt
-        # Fetch connection directly
-        conn_sql = f"SELECT access_token FROM github_connections WHERE id = '{dc['github_connection_id']}'"
+        from . import authz_crypto
         from .database import execute_sql
+        # Fetch connection directly (need user_id for the file_id)
+        conn_sql = f"SELECT user_id, access_token FROM github_connections WHERE id = '{dc['github_connection_id']}'"
         stdout, stderr, code = await execute_sql(conn_sql, 'data')
         if code != 0 or not stdout.strip():
             raise HTTPException(status_code=400, detail="GitHub connection not available")
-        access_token = crypto_decrypt(stdout.strip())
+        parts = stdout.strip().split('|')
+        if len(parts) < 2:
+            raise HTTPException(status_code=400, detail="GitHub connection not available")
+        conn_user_id, enc_token = parts[0], parts[1]
+        access_token = await authz_crypto.decrypt(enc_token, f"github:{conn_user_id}:access")
     else:
-        access_token = await db.get_decrypted_github_token(token_payload.get("user_id", ""))
+        access_token = await db.get_decrypted_github_token(user_id)
         if not access_token:
             raise HTTPException(status_code=400, detail="GitHub token not available")
 

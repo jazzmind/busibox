@@ -75,7 +75,6 @@
             secrets.session_secret if secret_key == 'session_secret' else
             secrets.jwt_secret if secret_key == 'sso_jwt_secret' else
             (secrets.litellm_master_key | default('')) if secret_key == 'litellm_api_key' else
-            secrets.encryption_key if secret_key == 'encryption_key' else
             (secrets.allowed_email_domains | default('')) if secret_key == 'allowed_email_domains' else
             (secrets.smtp.from_email | default('')) if secret_key == 'email_from' else
             (secrets.smtp.host | default('')) if secret_key == 'smtp_host' else
@@ -122,7 +121,6 @@
             secrets.session_secret if opt_secret_key == 'session_secret' else
             secrets.jwt_secret if opt_secret_key == 'sso_jwt_secret' else
             (secrets.litellm_master_key | default('')) if opt_secret_key == 'litellm_api_key' else
-            secrets.encryption_key if opt_secret_key == 'encryption_key' else
             (secrets.allowed_email_domains | default('')) if opt_secret_key == 'allowed_email_domains' else
             (secrets.smtp.from_email | default('')) if opt_secret_key == 'email_from' else
             (secrets.smtp.host | default('')) if opt_secret_key == 'smtp_host' else
