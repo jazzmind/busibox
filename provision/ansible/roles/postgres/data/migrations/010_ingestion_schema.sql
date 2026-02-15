@@ -60,7 +60,8 @@ CREATE TABLE IF NOT EXISTS data_status (
   -- Current processing state
   stage VARCHAR(50) NOT NULL CHECK (stage IN (
     'queued', 'parsing', 'classifying', 'extracting_metadata', 
-    'chunking', 'embedding', 'indexing', 'completed', 'failed'
+    'chunking', 'cleanup', 'markdown', 'entity_extraction',
+    'embedding', 'indexing', 'completed', 'failed'
   )),
   progress INTEGER NOT NULL DEFAULT 0 CHECK (progress >= 0 AND progress <= 100),
   

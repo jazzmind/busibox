@@ -25,10 +25,15 @@
 # Tags:
 #   - all: Everything
 #   - infrastructure: postgres, redis, minio, milvus, neo4j
-#   - apis: authz, data, search, agent, docs, deploy, bridge
+#   - apis: authz, embedding, data, search, agent, docs, deploy, bridge
 #   - llm: litellm
 #   - frontend: core-apps, nginx
 #   - user-apps: user-apps container
+#
+#   Each service has its own tag for targeted deployment:
+#     postgres, redis, minio, milvus, neo4j (infrastructure)
+#     authz, embedding, data, search, agent, docs, deploy, bridge (apis)
+#     litellm (llm), core-apps, nginx (frontend)
 
 - name: Busibox Docker Deployment
   hosts: localhost
@@ -113,11 +118,9 @@
           tags:
             - infrastructure
             - postgres
-            - data
       tags:
         - infrastructure
         - postgres
-        - data
 
     - name: Deploy MinIO
       ansible.builtin.include_role:
@@ -127,11 +130,9 @@
           tags:
             - infrastructure
             - minio
-            - data
       tags:
         - infrastructure
         - minio
-        - data
 
     - name: Deploy Milvus
       ansible.builtin.include_role:
@@ -141,11 +142,40 @@
           tags:
             - infrastructure
             - milvus
-            - data
       tags:
         - infrastructure
         - milvus
-        - data
+
+    - name: Deploy Redis
+      ansible.builtin.include_role:
+        name: docker_common
+        tasks_from: compose_up
+        apply:
+          tags:
+            - infrastructure
+            - redis
+      vars:
+        docker_services_to_start:
+          - redis
+        docker_wait_for_health: true
+      tags:
+        - infrastructure
+        - redis
+
+    - name: Wait for Redis to be ready
+      ansible.builtin.include_role:
+        name: docker_common
+        tasks_from: wait_healthy
+        apply:
+          tags:
+            - infrastructure
+            - redis
+      vars:
+        docker_wait_service: redis
+        docker_wait_timeout: 30
+      tags:
+        - infrastructure
+        - redis
 
     - name: Deploy Neo4j
       ansible.builtin.include_role:
@@ -174,6 +204,18 @@
       tags:
         - apis
         - authz
+
+    - name: Deploy Embedding API
+      ansible.builtin.include_role:
+        name: embedding_api
+        tasks_from: docker
+        apply:
+          tags:
+            - apis
+            - embedding
+      tags:
+        - apis
+        - embedding
 
     - name: Deploy Data Services
       ansible.builtin.include_role:

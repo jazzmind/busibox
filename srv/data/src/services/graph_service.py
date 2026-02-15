@@ -236,15 +236,22 @@ class GraphService:
         rel_type: str,
         to_id: str,
         properties: Optional[Dict[str, Any]] = None,
+        owner_id: Optional[str] = None,
     ) -> bool:
         """
         Create a relationship between two nodes.
+        
+        When owner_id is provided, both nodes must belong to the same owner
+        (or have visibility='shared') for the relationship to be created.
+        Internal callers (e.g. sync_data_document_records) that have already
+        verified ownership can omit owner_id.
         
         Args:
             from_id: Source node ID
             rel_type: Relationship type (e.g., "BELONGS_TO", "DEPENDS_ON")
             to_id: Target node ID
             properties: Optional relationship properties
+            owner_id: Optional owner filter for tenant isolation
             
         Returns:
             True if successful, False otherwise
@@ -256,16 +263,39 @@ class GraphService:
             safe_rel = self._sanitize_label(rel_type)
             rel_props = properties or {}
             
+            # Build owner validation clause
+            owner_clause = ""
+            params: Dict[str, Any] = {
+                "from_id": from_id,
+                "to_id": to_id,
+                "props": rel_props,
+            }
+            if owner_id:
+                owner_clause = (
+                    "WHERE (a.owner_id = $owner_id OR a.visibility = 'shared') "
+                    "AND (b.owner_id = $owner_id OR b.visibility = 'shared') "
+                )
+                params["owner_id"] = owner_id
+            
             async with self._driver.session() as session:
-                await session.run(
+                result = await session.run(
                     f"MATCH (a:GraphNode {{node_id: $from_id}}) "
                     f"MATCH (b:GraphNode {{node_id: $to_id}}) "
+                    f"{owner_clause}"
                     f"MERGE (a)-[r:{safe_rel}]->(b) "
-                    f"SET r += $props",
-                    from_id=from_id,
-                    to_id=to_id,
-                    props=rel_props,
+                    f"SET r += $props "
+                    f"RETURN count(r) as created",
+                    **params,
                 )
+                record = await result.single()
+                if owner_id and (not record or record["created"] == 0):
+                    logger.warning(
+                        "[GRAPH] Relationship creation blocked by ownership check",
+                        from_id=from_id,
+                        to_id=to_id,
+                        owner_id=owner_id,
+                    )
+                    return False
             
             logger.debug(
                 "[GRAPH] Relationship created",
@@ -284,12 +314,21 @@ class GraphService:
             )
             return False
     
-    async def delete_node(self, node_id: str) -> bool:
+    async def delete_node(
+        self,
+        node_id: str,
+        owner_id: Optional[str] = None,
+    ) -> bool:
         """
         Delete a node and all its relationships.
         
+        When owner_id is provided, only deletes the node if it belongs to
+        the specified owner (or has visibility='shared'). Internal callers
+        that have already verified ownership can omit owner_id.
+        
         Args:
             node_id: Node identifier to delete
+            owner_id: Optional owner filter for tenant isolation
             
         Returns:
             True if successful, False otherwise
@@ -298,12 +337,28 @@ class GraphService:
             return False
         
         try:
+            owner_clause = ""
+            params: Dict[str, Any] = {"node_id": node_id}
+            if owner_id:
+                owner_clause = "AND (n.owner_id = $owner_id OR n.visibility = 'shared') "
+                params["owner_id"] = owner_id
+            
             async with self._driver.session() as session:
-                await session.run(
-                    "MATCH (n:GraphNode {node_id: $node_id}) "
-                    "DETACH DELETE n",
-                    node_id=node_id,
+                result = await session.run(
+                    f"MATCH (n:GraphNode {{node_id: $node_id}}) "
+                    f"{owner_clause}"
+                    f"DETACH DELETE n "
+                    f"RETURN count(n) as deleted",
+                    **params,
                 )
+                record = await result.single()
+                if owner_id and (not record or record["deleted"] == 0):
+                    logger.warning(
+                        "[GRAPH] Node deletion blocked by ownership check",
+                        node_id=node_id,
+                        owner_id=owner_id,
+                    )
+                    return False
             
             logger.debug("[GRAPH] Node deleted", node_id=node_id)
             return True
@@ -319,13 +374,18 @@ class GraphService:
         self,
         node_id: str,
         rel_type: Optional[str] = None,
+        owner_id: Optional[str] = None,
     ) -> bool:
         """
         Delete relationships for a node.
         
+        When owner_id is provided, only deletes relationships where the
+        source node belongs to the specified owner.
+        
         Args:
             node_id: Node identifier
             rel_type: Optional relationship type to filter (deletes all if None)
+            owner_id: Optional owner filter for tenant isolation
             
         Returns:
             True if successful, False otherwise
@@ -334,19 +394,27 @@ class GraphService:
             return False
         
         try:
+            owner_clause = ""
+            params: Dict[str, Any] = {"node_id": node_id}
+            if owner_id:
+                owner_clause = "AND (n.owner_id = $owner_id OR n.visibility = 'shared') "
+                params["owner_id"] = owner_id
+            
             async with self._driver.session() as session:
                 if rel_type:
                     safe_rel = self._sanitize_label(rel_type)
                     await session.run(
                         f"MATCH (n:GraphNode {{node_id: $node_id}})-[r:{safe_rel}]-() "
+                        f"WHERE true {owner_clause}"
                         f"DELETE r",
-                        node_id=node_id,
+                        **params,
                     )
                 else:
                     await session.run(
-                        "MATCH (n:GraphNode {node_id: $node_id})-[r]-() "
-                        "DELETE r",
-                        node_id=node_id,
+                        f"MATCH (n:GraphNode {{node_id: $node_id}})-[r]-() "
+                        f"WHERE true {owner_clause}"
+                        f"DELETE r",
+                        **params,
                     )
             
             logger.debug(
@@ -506,30 +574,51 @@ class GraphService:
         to_id: str,
         max_depth: int = 5,
         owner_id: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> Dict[str, Any]:
         """
         Find shortest path between two nodes.
+        
+        When owner_id is provided, both start and end nodes must belong to
+        the specified owner, and all intermediate nodes in the path are
+        filtered to only include owned/shared nodes.
         
         Args:
             from_id: Start node ID
             to_id: End node ID
             max_depth: Maximum path length
-            owner_id: Optional owner filter
+            owner_id: Optional owner filter for tenant isolation
             
         Returns:
-            List of nodes in the path
+            Dict with "nodes" and "relationships" lists
         """
         if not self._available:
-            return []
+            return {"nodes": [], "relationships": []}
         
         try:
             params: Dict[str, Any] = {"from_id": from_id, "to_id": to_id}
             
+            # Build owner filter for start/end nodes and path nodes
+            start_owner_clause = ""
+            path_filter = ""
+            if owner_id:
+                start_owner_clause = (
+                    "WHERE (a.owner_id = $owner_id OR a.visibility = 'shared') "
+                    "AND (b.owner_id = $owner_id OR b.visibility = 'shared') "
+                )
+                path_filter = (
+                    "WITH path "
+                    "WHERE ALL(n IN nodes(path) WHERE "
+                    "n.owner_id = $owner_id OR n.visibility = 'shared') "
+                )
+                params["owner_id"] = owner_id
+            
             cypher = (
-                f"MATCH path = shortestPath("
-                f"(a:GraphNode {{node_id: $from_id}})-[*..{max_depth}]-"
-                f"(b:GraphNode {{node_id: $to_id}}))"
-                f" RETURN [n IN nodes(path) | properties(n)] as nodes, "
+                f"MATCH (a:GraphNode {{node_id: $from_id}}), "
+                f"(b:GraphNode {{node_id: $to_id}}) "
+                f"{start_owner_clause}"
+                f"MATCH path = shortestPath((a)-[*..{max_depth}]-(b)) "
+                f"{path_filter}"
+                f"RETURN [n IN nodes(path) | properties(n)] as nodes, "
                 f"[r IN relationships(path) | "
                 f"{{type: type(r), from: startNode(r).node_id, to: endNode(r).node_id}}] as rels"
             )
@@ -658,12 +747,21 @@ class GraphService:
         
         return count
     
-    async def delete_document_graph(self, document_id: str) -> bool:
+    async def delete_document_graph(
+        self,
+        document_id: str,
+        owner_id: Optional[str] = None,
+    ) -> bool:
         """
         Delete all graph nodes associated with a data document.
         
+        When owner_id is provided, only deletes if the document node
+        belongs to the specified owner. Internal callers that have already
+        verified ownership via PostgreSQL RLS can omit owner_id.
+        
         Args:
             document_id: Data document ID
+            owner_id: Optional owner filter for tenant isolation
             
         Returns:
             True if successful
@@ -672,18 +770,43 @@ class GraphService:
             return False
         
         try:
+            owner_clause = ""
+            params: Dict[str, Any] = {"doc_id": document_id}
+            if owner_id:
+                owner_clause = "AND (d.owner_id = $owner_id OR d.visibility = 'shared') "
+                params["owner_id"] = owner_id
+            
             async with self._driver.session() as session:
+                # Verify ownership of the document node first (if owner_id given)
+                if owner_id:
+                    check = await session.run(
+                        f"MATCH (d:GraphNode {{node_id: $doc_id}}) "
+                        f"WHERE d.owner_id = $owner_id OR d.visibility = 'shared' "
+                        f"RETURN count(d) as cnt",
+                        **params,
+                    )
+                    record = await check.single()
+                    if not record or record["cnt"] == 0:
+                        logger.warning(
+                            "[GRAPH] Document graph deletion blocked by ownership check",
+                            document_id=document_id,
+                            owner_id=owner_id,
+                        )
+                        return False
+                
                 # Delete all records that belong to this document
                 await session.run(
-                    "MATCH (r:GraphNode)-[:RECORD_OF]->(d:GraphNode {node_id: $doc_id}) "
-                    "DETACH DELETE r",
-                    doc_id=document_id,
+                    f"MATCH (r:GraphNode)-[:RECORD_OF]->(d:GraphNode {{node_id: $doc_id}}) "
+                    f"{owner_clause}"
+                    f"DETACH DELETE r",
+                    **params,
                 )
                 # Delete the document node itself
                 await session.run(
-                    "MATCH (d:GraphNode {node_id: $doc_id}) "
-                    "DETACH DELETE d",
-                    doc_id=document_id,
+                    f"MATCH (d:GraphNode {{node_id: $doc_id}}) "
+                    f"{owner_clause}"
+                    f"DETACH DELETE d",
+                    **params,
                 )
             
             logger.info(
@@ -698,6 +821,87 @@ class GraphService:
                 error=str(e),
             )
             return False
+    
+    # ========================================================================
+    # Document Entity Queries
+    # ========================================================================
+    
+    async def get_document_entities(
+        self,
+        document_id: str,
+        owner_id: Optional[str] = None,
+        limit: int = 50,
+    ) -> Dict[str, Any]:
+        """
+        Get all entities connected to a specific document.
+        
+        Uses direct MENTIONED_IN/KEYWORD_OF relationship traversal
+        rather than generic graph expansion, which is more reliable
+        for document-specific entity views.
+        
+        Args:
+            document_id: The document's file_id (used as node_id)
+            owner_id: Owner filter for multi-tenancy
+            limit: Maximum entities to return
+            
+        Returns:
+            Dict with "nodes" and "edges" lists
+        """
+        if not self._available:
+            return {"nodes": [], "edges": []}
+        
+        try:
+            params: Dict[str, Any] = {
+                "document_id": document_id,
+                "limit": limit,
+            }
+            
+            owner_filter = ""
+            if owner_id:
+                owner_filter = "AND (d.owner_id = $owner_id OR d.visibility = 'shared')"
+                params["owner_id"] = owner_id
+            
+            # Find the Document node and all entities connected via
+            # MENTIONED_IN or KEYWORD_OF relationships
+            cypher = (
+                f"MATCH (d:Document {{node_id: $document_id}}) {owner_filter} "
+                f"OPTIONAL MATCH (e)-[:MENTIONED_IN|KEYWORD_OF]->(d) "
+                f"WITH d, collect(DISTINCT e)[0..$limit] as entities "
+                f"WITH [d] + entities as allNodes "
+                f"UNWIND allNodes as n "
+                f"WITH DISTINCT n WHERE n IS NOT NULL "
+                f"WITH collect(n) as nodeList "
+                f"UNWIND nodeList as n1 "
+                f"UNWIND nodeList as n2 "
+                f"WITH nodeList, n1, n2 WHERE id(n1) < id(n2) "
+                f"OPTIONAL MATCH (n1)-[r]-(n2) "
+                f"WITH nodeList, collect(CASE WHEN r IS NOT NULL THEN "
+                f"{{type: type(r), from: n1.node_id, to: n2.node_id}} END) as rels "
+                f"RETURN [x IN nodeList | properties(x)] as nodes, "
+                f"[r IN rels WHERE r IS NOT NULL] as edges"
+            )
+            
+            async with self._driver.session() as session:
+                result = await session.run(cypher, params)
+                record = await result.single()
+                
+                if record:
+                    nodes = record.get("nodes", [])
+                    edges = record.get("edges", [])
+                    edges = [e for e in edges if e and e.get("from") and e.get("to")]
+                    return {
+                        "nodes": nodes,
+                        "edges": edges,
+                    }
+                
+                return {"nodes": [], "edges": []}
+        except Exception as e:
+            logger.warning(
+                "[GRAPH] Document entity query failed",
+                document_id=document_id,
+                error=str(e),
+            )
+            return {"nodes": [], "edges": []}
     
     # ========================================================================
     # Visualization
@@ -742,6 +946,13 @@ class GraphService:
                 )
                 params["owner_id"] = owner_id
             
+            # Helper: RETURN clause includes Neo4j labels alongside properties
+            node_return = "[x IN nodeList | properties(x) {.*, _labels: labels(x)}]"
+            edge_collect = (
+                "collect(DISTINCT CASE WHEN r IS NOT NULL THEN "
+                "{type: type(r), from: startNode(r).node_id, to: endNode(r).node_id} END)"
+            )
+            
             if library_ids:
                 # Filter by library: Document nodes with library_id in list + connected entities
                 lib_clause = "AND (d.owner_id = $owner_id OR d.visibility = 'shared')" if owner_id else ""
@@ -754,13 +965,11 @@ class GraphService:
                     f"UNWIND rawNodes as n "
                     f"WITH DISTINCT n WHERE n IS NOT NULL "
                     f"WITH collect(n) as nodeList "
+                    f"WITH nodeList, [n IN nodeList | n.node_id] as nodeIds "
                     f"UNWIND nodeList as n1 "
-                    f"UNWIND nodeList as n2 "
-                    f"OPTIONAL MATCH (a:GraphNode {{node_id: n1.node_id}})-[r]-(b:GraphNode {{node_id: n2.node_id}}) "
-                    f"WHERE n1.node_id < n2.node_id "
-                    f"WITH nodeList, collect(r) as rels "
-                    f"RETURN [x IN nodeList | properties(x)] as nodes, "
-                    f"[r IN rels WHERE r IS NOT NULL | {{type: type(r), from: startNode(r).node_id, to: endNode(r).node_id}}] as edges"
+                    f"OPTIONAL MATCH (n1)-[r]-(m:GraphNode) WHERE m.node_id IN nodeIds "
+                    f"RETURN {node_return} as nodes, "
+                    f"{edge_collect} as edges"
                 )
             elif center_id:
                 # Expand from a center node
@@ -770,33 +979,64 @@ class GraphService:
                     f"OPTIONAL MATCH path = (start)-[*1..{depth}]-(related:GraphNode) "
                     f"{owner_clause.replace('n.', 'related.')} "
                     f"WITH start, collect(DISTINCT related)[0..$limit] as neighbors "
-                    f"UNWIND ([start] + neighbors) as n "
-                    f"WITH DISTINCT n "
-                    f"OPTIONAL MATCH (n)-[r]-(m:GraphNode) WHERE m.node_id IN "
-                    f"[x IN ([start] + neighbors) | x.node_id] "  # Simplified
-                    f"RETURN collect(DISTINCT properties(n)) as nodes, "
-                    f"collect(DISTINCT {{type: type(r), from: startNode(r).node_id, "
-                    f"to: endNode(r).node_id}}) as edges"
+                    f"WITH [start] + neighbors as nodeList "
+                    f"WITH nodeList, [n IN nodeList | n.node_id] as nodeIds "
+                    f"UNWIND nodeList as n "
+                    f"WITH DISTINCT n, nodeIds "
+                    f"WITH collect(DISTINCT n) as nodeList, nodeIds "
+                    f"UNWIND nodeList as n1 "
+                    f"OPTIONAL MATCH (n1)-[r]-(m:GraphNode) WHERE m.node_id IN nodeIds "
+                    f"RETURN {node_return} as nodes, "
+                    f"{edge_collect} as edges"
                 )
             elif label:
-                safe_label = self._sanitize_label(label)
-                cypher = (
-                    f"MATCH (n:{safe_label}) {owner_clause} "
-                    f"WITH n LIMIT $limit "
-                    f"OPTIONAL MATCH (n)-[r]-(m:{safe_label}) "
-                    f"RETURN collect(DISTINCT properties(n)) as nodes, "
-                    f"collect(DISTINCT {{type: type(r), from: startNode(r).node_id, "
-                    f"to: endNode(r).node_id}}) as edges"
-                )
+                # Support comma-separated labels (e.g. "StatusProject,StatusTask,StatusUpdate")
+                label_parts = [self._sanitize_label(l.strip()) for l in label.split(",") if l.strip()]
+                if len(label_parts) == 1:
+                    # Single label: direct label match for efficiency
+                    safe_label = label_parts[0]
+                    cypher = (
+                        f"MATCH (n:{safe_label}) {owner_clause} "
+                        f"WITH n LIMIT $limit "
+                        f"WITH collect(n) as nodeList "
+                        f"WITH nodeList, [n IN nodeList | n.node_id] as nodeIds "
+                        f"UNWIND nodeList as n1 "
+                        f"OPTIONAL MATCH (n1)-[r]-(m:GraphNode) WHERE m.node_id IN nodeIds "
+                        f"RETURN {node_return} as nodes, "
+                        f"{edge_collect} as edges"
+                    )
+                else:
+                    # Multiple labels: use ANY() filter
+                    params["label_filter"] = label_parts
+                    multi_owner = ""
+                    if owner_id:
+                        multi_owner = (
+                            "AND (n.owner_id = $owner_id "
+                            "OR n.visibility = 'shared') "
+                        )
+                    cypher = (
+                        f"MATCH (n:GraphNode) "
+                        f"WHERE ANY(l IN labels(n) WHERE l IN $label_filter) "
+                        f"{multi_owner}"
+                        f"WITH n LIMIT $limit "
+                        f"WITH collect(n) as nodeList "
+                        f"WITH nodeList, [n IN nodeList | n.node_id] as nodeIds "
+                        f"UNWIND nodeList as n1 "
+                        f"OPTIONAL MATCH (n1)-[r]-(m:GraphNode) WHERE m.node_id IN nodeIds "
+                        f"RETURN {node_return} as nodes, "
+                        f"{edge_collect} as edges"
+                    )
             else:
+                # Default: get all nodes with their relationships
                 cypher = (
                     f"MATCH (n:GraphNode) {owner_clause} "
                     f"WITH n LIMIT $limit "
-                    f"OPTIONAL MATCH (n)-[r]-(m:GraphNode) "
-                    f"WHERE m.node_id IN [x IN collect(n) | x.node_id] "
-                    f"RETURN collect(DISTINCT properties(n)) as nodes, "
-                    f"collect(DISTINCT {{type: type(r), from: startNode(r).node_id, "
-                    f"to: endNode(r).node_id}}) as edges"
+                    f"WITH collect(n) as nodeList "
+                    f"WITH nodeList, [n IN nodeList | n.node_id] as nodeIds "
+                    f"UNWIND nodeList as n1 "
+                    f"OPTIONAL MATCH (n1)-[r]-(m:GraphNode) WHERE m.node_id IN nodeIds "
+                    f"RETURN {node_return} as nodes, "
+                    f"{edge_collect} as edges"
                 )
             
             async with self._driver.session() as session:

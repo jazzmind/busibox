@@ -1069,64 +1069,60 @@ Use this schema to structure the extracted data. Insert the results as records i
             existing_chunks = None
             if start_stage == "entity_extraction":
                 # Entity extraction only: load chunks for text, run entity extraction
+                # User explicitly selected this reprocess option - always run extraction
                 existing_chunks = self._load_chunks_from_db(file_id)
                 if existing_chunks:
-                    entity_extraction_enabled = (
-                        processing_config.get("entity_extraction_enabled", False)
-                        if processing_config else False
-                    )
-                    if entity_extraction_enabled:
-                        try:
-                            from processors.entity_extractor import EntityExtractor
-                            from services.graph_service import GraphService
-                            text_from_chunks = "\n\n".join(c.text for c in existing_chunks if c.text)
-                            if text_from_chunks:
-                                library_id = None
-                                reprocess_filename = original_filename
-                                conn = self.postgres_service._get_connection(self._current_rls_context)
-                                try:
-                                    cur = conn.cursor()
-                                    cur.execute(
-                                        "SELECT library_id, filename FROM data_files WHERE file_id = %s",
-                                        (file_id,),
-                                    )
-                                    row = cur.fetchone()
-                                    if row:
-                                        library_id = str(row[0])
-                                        if row[1]:
-                                            reprocess_filename = row[1]
-                                finally:
-                                    self.postgres_service._return_connection(conn)
-                                entity_extractor = EntityExtractor(
-                                    litellm_base_url=os.getenv("LITELLM_BASE_URL", "http://litellm:4000"),
-                                    litellm_api_key=os.getenv("LITELLM_API_KEY", ""),
+                    try:
+                        from processors.entity_extractor import EntityExtractor
+                        from services.graph_service import GraphService
+                        text_from_chunks = "\n\n".join(c.text for c in existing_chunks if c.text)
+                        if text_from_chunks:
+                            library_id = None
+                            reprocess_filename = original_filename
+                            conn = self.postgres_service._get_connection(self._current_rls_context)
+                            try:
+                                cur = conn.cursor()
+                                cur.execute(
+                                    "SELECT library_id, filename FROM data_files WHERE file_id = %s",
+                                    (file_id,),
                                 )
-                                graph = GraphService()
-                                loop = asyncio.new_event_loop()
-                                asyncio.set_event_loop(loop)
-                                try:
-                                    connected = loop.run_until_complete(graph.connect())
-                                    if connected:
-                                        loop.run_until_complete(
-                                            entity_extractor.extract_and_store_graph(
-                                                text=text_from_chunks,
-                                                file_id=file_id,
-                                                filename=reprocess_filename,
-                                                owner_id=user_id,
-                                                visibility=visibility,
-                                                graph_service=graph,
-                                                library_id=library_id,
-                                            )
-                                        )
-                                finally:
-                                    loop.run_until_complete(graph.disconnect())
-                                    loop.close()
-                        except Exception as e:
-                            logger.warning(
-                                "Entity extraction reprocess failed (non-blocking)",
-                                file_id=file_id,
-                                error=str(e),
+                                row = cur.fetchone()
+                                if row:
+                                    library_id = str(row[0])
+                                    if row[1]:
+                                        reprocess_filename = row[1]
+                            finally:
+                                self.postgres_service._return_connection(conn)
+                            entity_extractor = EntityExtractor(
+                                litellm_base_url=os.getenv("LITELLM_BASE_URL", "http://litellm:4000"),
+                                litellm_api_key=os.getenv("LITELLM_API_KEY", ""),
                             )
+                            graph = GraphService()
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            try:
+                                connected = loop.run_until_complete(graph.connect())
+                                if connected:
+                                    loop.run_until_complete(
+                                        entity_extractor.extract_and_store_graph(
+                                            text=text_from_chunks,
+                                            file_id=file_id,
+                                            filename=reprocess_filename,
+                                            owner_id=user_id,
+                                            visibility=visibility,
+                                            graph_service=graph,
+                                            library_id=library_id,
+                                        )
+                                    )
+                            finally:
+                                loop.run_until_complete(graph.disconnect())
+                                loop.close()
+                    except Exception as e:
+                        logger.warning(
+                            "Entity extraction reprocess failed (non-blocking)",
+                            file_id=file_id,
+                            error=str(e),
+                        )
                     logger.info(
                         "Entity extraction reprocess complete",
                         file_id=file_id,

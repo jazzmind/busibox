@@ -88,12 +88,13 @@ expand_services() {
         svc=$(echo "$svc" | xargs)
         
         # Check if it's a group
+        # Order matters! Dependencies must come before dependents.
         case "$svc" in
             infrastructure|infra)
                 expanded="${expanded} postgres redis minio milvus neo4j"
                 ;;
             apis)
-                expanded="${expanded} authz agent data search deploy bridge docs embedding"
+                expanded="${expanded} authz embedding data search agent deploy bridge docs"
                 ;;
             llm)
                 expanded="${expanded} litellm"
@@ -102,7 +103,7 @@ expand_services() {
                 expanded="${expanded} core-apps nginx"
                 ;;
             all)
-                expanded="${expanded} postgres redis minio milvus neo4j authz agent data search deploy bridge docs embedding litellm core-apps nginx"
+                expanded="${expanded} postgres redis minio milvus neo4j authz embedding data search agent deploy bridge docs litellm core-apps nginx"
                 ;;
             *)
                 expanded="${expanded} ${svc}"
@@ -110,8 +111,8 @@ expand_services() {
         esac
     done
     
-    # Remove duplicates and extra spaces
-    echo "$expanded" | tr ' ' '\n' | sort -u | tr '\n' ' ' | xargs
+    # Remove duplicates while preserving order, and trim extra spaces
+    echo "$expanded" | tr ' ' '\n' | awk '!seen[$0]++' | tr '\n' ' ' | xargs
 }
 
 # ============================================================================

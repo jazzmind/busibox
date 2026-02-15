@@ -978,3 +978,91 @@ async def deactivate_cache(
     except Exception as e:
         logger.error("Failed to deactivate cache", document_id=document_id, error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/{document_id}/graph-sync",
+    summary="Re-sync document records to graph database",
+    dependencies=[Depends(require_data_write)],
+)
+async def sync_document_to_graph(
+    request: Request,
+    document_id: str,
+    data_service: DataService = Depends(get_data_service),
+):
+    """
+    Re-sync all records in a data document to the graph database (Neo4j).
+    
+    This reads all records from the document and pushes them to the graph,
+    creating/updating nodes and relationships based on the document's schema
+    (graphNode and graphRelationships fields).
+    
+    Useful for:
+    - Populating the graph with pre-existing records
+    - Recovering from graph database issues
+    - Re-syncing after schema changes
+    """
+    validate_uuid(document_id, "document_id")
+    
+    graph_service = getattr(request.app.state, "graph_service", None)
+    if not graph_service or not graph_service.available:
+        raise HTTPException(
+            status_code=503,
+            detail="Graph database not available. Ensure Neo4j is running and NEO4J_URI is configured.",
+        )
+    
+    try:
+        # Get the document with records
+        document = await data_service.get_document(
+            request,
+            document_id,
+            include_records=True,
+        )
+        
+        if not document:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        schema = document.get("schema")
+        if not schema or not schema.get("graphNode"):
+            raise HTTPException(
+                status_code=400,
+                detail="Document schema does not have graphNode defined. Graph sync requires a graphNode label in the schema.",
+            )
+        
+        records = document.get("records", [])
+        document_name = document.get("name", "")
+        visibility = document.get("visibility", "personal")
+        owner_id = getattr(request.state, "user_id", "")
+        
+        # Sync to graph
+        count = await graph_service.sync_data_document_records(
+            document_id=document_id,
+            document_name=document_name,
+            schema=schema,
+            records=records,
+            owner_id=owner_id,
+            visibility=visibility,
+        )
+        
+        logger.info(
+            "[DATA API] Graph sync completed",
+            document_id=document_id,
+            document_name=document_name,
+            graph_node=schema.get("graphNode"),
+            record_count=len(records),
+            synced_count=count,
+        )
+        
+        return {
+            "documentId": document_id,
+            "documentName": document_name,
+            "graphNode": schema.get("graphNode"),
+            "recordCount": len(records),
+            "syncedCount": count,
+            "message": f"Synced {count} records to graph database",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to sync graph", document_id=document_id, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))

@@ -196,10 +196,9 @@ async def get_document_graph(
     user_id = getattr(request.state, "user_id", None)
     
     try:
-        # Get the document's graph neighborhood
-        result = await graph_service.get_graph_visualization(
-            center_id=document_id,
-            depth=depth,
+        # Use dedicated document entity query for reliable results
+        result = await graph_service.get_document_entities(
+            document_id=document_id,
             owner_id=user_id,
             limit=limit,
         )

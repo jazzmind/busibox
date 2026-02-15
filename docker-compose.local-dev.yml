@@ -190,6 +190,12 @@ services:
       # Mount busibox-app for shared utilities
       - ${BUSIBOX_APP_DIR:-../busibox-app}:/srv/busibox-app:ro
 
+  # Re-expose Neo4j ports for local development browser access
+  neo4j:
+    ports:
+      - "7474:7474"   # HTTP Browser
+      - "7687:7687"   # Bolt protocol
+
 # Named volumes for node_modules and .next cache
 # These preserve installed dependencies across container restarts
 volumes:

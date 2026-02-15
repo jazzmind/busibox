@@ -172,7 +172,8 @@ def get_data_schema() -> SchemaManager:
             file_id UUID PRIMARY KEY REFERENCES data_files(file_id) ON DELETE CASCADE,
             stage VARCHAR(50) NOT NULL DEFAULT 'queued' CHECK (stage IN (
                 'queued', 'parsing', 'classifying', 'extracting_metadata',
-                'chunking', 'cleanup', 'embedding', 'indexing', 'completed', 'failed'
+                'chunking', 'cleanup', 'markdown', 'entity_extraction',
+                'embedding', 'indexing', 'completed', 'failed'
             )),
             progress INTEGER NOT NULL DEFAULT 0 CHECK (progress >= 0 AND progress <= 100),
             chunks_processed INTEGER,
@@ -601,6 +602,27 @@ def get_data_schema() -> SchemaManager:
             ) THEN
                 ALTER TABLE data_status ADD COLUMN pages_processed INTEGER;
                 ALTER TABLE data_status ADD COLUMN total_pages INTEGER;
+            END IF;
+        END $$;
+    """)
+    
+    # Add entity_extraction and markdown to data_status stage CHECK constraint
+    # Existing tables may have an older CHECK that doesn't include these stages
+    schema.add_migration("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'data_status_stage_check'
+                  AND pg_get_constraintdef(oid) LIKE '%entity_extraction%'
+            ) THEN
+                ALTER TABLE data_status DROP CONSTRAINT IF EXISTS data_status_stage_check;
+                ALTER TABLE data_status ADD CONSTRAINT data_status_stage_check
+                    CHECK (stage IN (
+                        'queued', 'parsing', 'classifying', 'extracting_metadata',
+                        'chunking', 'cleanup', 'markdown', 'entity_extraction',
+                        'embedding', 'indexing', 'completed', 'failed'
+                    ));
             END IF;
         END $$;
     """)

@@ -200,7 +200,9 @@ get_ansible_tag() {
         docs*) echo "docs" ;;
         embedding*) echo "embedding" ;;
         postgres|pg) echo "postgres" ;;
+        redis) echo "redis" ;;
         minio|files) echo "minio" ;;
+        milvus) echo "milvus" ;;
         neo4j|graph) echo "neo4j" ;;
         core-apps|apps) echo "core-apps" ;;
         nginx|proxy) echo "nginx" ;;

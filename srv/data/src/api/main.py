@@ -172,8 +172,8 @@ app.include_router(health.router, prefix="/health", tags=["Health"])
 app.include_router(extract.router, tags=["Extract"])  # Remote Marker extraction
 app.include_router(authz.router, prefix="/authz", tags=["Authz"])
 app.include_router(libraries.router, prefix="/libraries", tags=["Libraries"])
+app.include_router(graph.router, prefix="/data/graph", tags=["Graph"])  # Must be before data router (has /{id} catch-all)
 app.include_router(data.router, prefix="/data", tags=["Data"])
-app.include_router(graph.router, prefix="/data/graph", tags=["Graph"])
 app.include_router(test_docs.router, tags=["Test Docs"])
 
 

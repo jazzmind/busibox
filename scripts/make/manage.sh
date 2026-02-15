@@ -436,11 +436,14 @@ manage_service() {
             5) # Redeploy
                 echo ""
                 backend_service_action "$service" "redeploy" "$env" "$prefix"
-                for companion in $(get_companion_services "$service"); do
-                    echo ""
-                    info "Also redeploying companion: ${companion}"
-                    backend_service_action "$companion" "redeploy" "$env" "$prefix"
-                done
+                # Skip companion redeploy - the Ansible playbook already deploys
+                # all services under the same tag (e.g. --tags data deploys both
+                # data-api and data-worker). Running it again would be redundant.
+                local companions_msg
+                companions_msg=$(get_companion_services "$service")
+                if [[ -n "$companions_msg" ]]; then
+                    info "Companions (${companions_msg}) already included in playbook run"
+                fi
                 read -n 1 -s -r -p "Press any key to continue..."
                 ;;
             6) # Rebuild Container (Docker core-apps only)

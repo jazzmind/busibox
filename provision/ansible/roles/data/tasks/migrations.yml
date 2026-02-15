@@ -121,6 +121,38 @@
     msg: "{{ 'Cleanup stage migration applied successfully' if (cleanup_migration_result.changed | default(false)) else ('Cleanup migration skipped - file not found' if not cleanup_migration_file.stat.exists else 'Cleanup stage migration already applied') }}"
   tags: [data, data_migrations]
 
+# Entity extraction + markdown stage migration
+- name: Check if entity_extraction stage migration file exists
+  stat:
+    path: /srv/data/migrations/add_entity_extraction_stage.sql
+  register: entity_extraction_migration_file
+  tags: [data, data_migrations]
+
+- name: Check if entity_extraction stage migration has been applied
+  shell: |
+    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -tAc \
+    "SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='data_status_stage_check' AND consrc LIKE '%entity_extraction%');"
+  register: entity_extraction_migration_check
+  changed_when: false
+  failed_when: false
+  when: entity_extraction_migration_file.stat.exists
+  tags: [data, data_migrations]
+
+- name: Apply entity_extraction stage migration
+  shell: |
+    PGPASSWORD='{{ secrets.postgresql.password }}' psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ files_db }} -f /srv/data/migrations/add_entity_extraction_stage.sql
+  when:
+    - entity_extraction_migration_file.stat.exists
+    - entity_extraction_migration_check.stdout is defined
+    - entity_extraction_migration_check.stdout != 't'
+  register: entity_extraction_migration_result
+  tags: [data, data_migrations]
+
+- name: Display entity_extraction migration status
+  debug:
+    msg: "{{ 'Entity extraction stage migration applied successfully' if (entity_extraction_migration_result.changed | default(false)) else ('Entity extraction migration skipped - file not found' if not entity_extraction_migration_file.stat.exists else 'Entity extraction stage migration already applied') }}"
+  tags: [data, data_migrations]
+
 # Processing history columns migration (step_name, message, metadata, created_at)
 - name: Check if processing_history columns migration file exists
   stat:

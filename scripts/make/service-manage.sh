@@ -213,21 +213,26 @@ main() {
     for service in "${services[@]}"; do
         service=$(echo "$service" | xargs)
         expanded_services+=("$service")
-        local companions
-        companions=$(get_companion_services "$service")
-        if [[ -n "$companions" ]]; then
-            for companion in $companions; do
-                local already_listed=false
-                for existing in "${expanded_services[@]}"; do
-                    if [[ "$existing" == "$companion" ]]; then
-                        already_listed=true
-                        break
+        # For redeploy, skip companion expansion - the Ansible playbook already
+        # deploys all services under the same tag (e.g. --tags data deploys both
+        # data-api and data-worker). Expanding companions would run it twice.
+        if [[ "$action" != "redeploy" ]]; then
+            local companions
+            companions=$(get_companion_services "$service")
+            if [[ -n "$companions" ]]; then
+                for companion in $companions; do
+                    local already_listed=false
+                    for existing in "${expanded_services[@]}"; do
+                        if [[ "$existing" == "$companion" ]]; then
+                            already_listed=true
+                            break
+                        fi
+                    done
+                    if ! $already_listed; then
+                        expanded_services+=("$companion")
                     fi
                 done
-                if ! $already_listed; then
-                    expanded_services+=("$companion")
-                fi
-            done
+            fi
         fi
     done
 
