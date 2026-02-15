@@ -116,35 +116,33 @@ make nginx-reload                           # Reload nginx config
 make core-apps-shell                        # Open shell in core-apps container
 ```
 
-### MCP Server for Cursor
+### MCP Servers for Cursor
 
-**Busibox MCP Server** provides structured access to documentation and scripts for Cursor:
+Busibox provides **three focused MCP servers** for different workflows. Add one or more to Cursor MCP settings:
 
+| Server | Audience | Use Case |
+|--------|----------|----------|
+| **mcp-core-dev** | Core developers | Build, test, debug busibox services |
+| **mcp-app-builder** | App developers | Build Next.js apps for busibox deployment |
+| **mcp-admin** | Operators | Deploy, manage, troubleshoot (Claude Code/Cowork) |
+
+**Build all servers** (also writes config to `.cursor/`):
 ```bash
-# Quick setup (shows Cursor configuration):
-cd tools/mcp-server
-bash setup.sh
-
-# Or install manually:
-npm install && npm run build
+make mcp
 ```
 
-**What it provides:**
-- Browse documentation by category
-- Search documentation by keyword
-- Get script information and usage
-- Find scripts by execution context
-- Guided assistance for common tasks (deployment, troubleshooting, etc.)
+**Config auto-generated:**
+- **Cursor:** `.cursor/mcp.json` — Cursor loads this automatically when you open the project
+- **Claude Desktop:** `.cursor/claude-mcp.json` (template) and `.cursor/CLAUDE_MCP_README.md` — copy `mcpServers` into your Claude config, replacing `__BUSIBOX_ROOT__` with your busibox path
 
-**Usage in Cursor:**
-- "Show me the architecture documentation"
-- "Search docs for GPU passthrough"
-- "Tell me about deploy-ai-portal.sh"
-- "How do I deploy agent-lxc to test?"
+**What each provides:**
+- **Core Dev**: Docs, scripts, testing (Docker/remote/container), container logs, make help
+- **App Builder**: busibox-app exports, auth patterns, app-template reference, service endpoints
+- **Admin**: Deployment (make targets), SSH/Proxmox, git, container management. Destructive ops require `confirm: true`
 
-**Documentation:**
-- Setup: `tools/mcp-server/README.md`
-- Reference: `docs/developers/reference/mcp-server.md`
+**Environments:** All servers support `staging` (10.96.201.x) and `production` (10.96.200.x).
+
+**Documentation:** `tools/mcp-server/README.md` (deprecated - points to new servers)
 
 ## AI Agent Rules
 

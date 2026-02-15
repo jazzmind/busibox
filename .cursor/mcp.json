@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "busibox-core-dev": {
+      "command": "node",
+      "args": ["tools/mcp-core-dev/dist/index.js"]
+    },
+    "busibox-app-builder": {
+      "command": "node",
+      "args": ["tools/mcp-app-builder/dist/index.js"]
+    },
+    "busibox-admin": {
+      "command": "node",
+      "args": ["tools/mcp-admin/dist/index.js"]
+    }
+  }
+}

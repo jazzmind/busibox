@@ -22,6 +22,9 @@ Usage:
 """
 
 import os
+import re
+from datetime import datetime, timezone
+from itertools import combinations
 from typing import Any, Dict, List, Optional
 
 import structlog
@@ -906,6 +909,214 @@ class GraphService:
     # ========================================================================
     # Visualization
     # ========================================================================
+
+    async def compute_project_similarities(
+        self,
+        owner_id: Optional[str] = None,
+        label: str = "StatusProject",
+        threshold: float = 0.30,
+    ) -> Dict[str, Any]:
+        """
+        Compute cross-project similarity edges and upsert SIMILAR_TO relationships.
+
+        Similarity combines:
+        - tags overlap (Jaccard)
+        - team overlap (Jaccard)
+        - text overlap across name + description (Jaccard)
+
+        Args:
+            owner_id: Optional owner filter for tenant isolation
+            label: Graph label for project nodes (default: StatusProject)
+            threshold: Minimum similarity score to create an edge
+
+        Returns:
+            Counts of created/updated/removed relationships and candidates processed
+        """
+        if not self._available:
+            return {
+                "available": False,
+                "created": 0,
+                "updated": 0,
+                "removed": 0,
+                "pairs_evaluated": 0,
+                "pairs_above_threshold": 0,
+            }
+
+        safe_label = self._sanitize_label(label)
+        owner_filter = ""
+        params: Dict[str, Any] = {}
+        if owner_id:
+            owner_filter = "WHERE (p.owner_id = $owner_id OR p.visibility = 'shared') "
+            params["owner_id"] = owner_id
+
+        try:
+            async with self._driver.session() as session:
+                # 1) Fetch candidate projects
+                project_result = await session.run(
+                    f"MATCH (p:{safe_label}) "
+                    f"{owner_filter}"
+                    f"RETURN p.node_id as node_id, "
+                    f"coalesce(p.name, '') as name, "
+                    f"coalesce(p.description, '') as description, "
+                    f"coalesce(p.tags, []) as tags, "
+                    f"coalesce(p.team, []) as team",
+                    **params,
+                )
+                projects = [dict(record) async for record in project_result]
+
+                if len(projects) < 2:
+                    return {
+                        "available": True,
+                        "created": 0,
+                        "updated": 0,
+                        "removed": 0,
+                        "pairs_evaluated": 0,
+                        "pairs_above_threshold": 0,
+                    }
+
+                created = 0
+                updated = 0
+                pairs_evaluated = 0
+                pairs_above_threshold = 0
+                keep_pairs: List[str] = []
+                timestamp = datetime.now(timezone.utc).isoformat()
+
+                # 2) Compute pairwise similarity and upsert relationships
+                for project_a, project_b in combinations(projects, 2):
+                    a_id = project_a.get("node_id")
+                    b_id = project_b.get("node_id")
+                    if not a_id or not b_id:
+                        continue
+
+                    pairs_evaluated += 1
+
+                    tags_score = self._jaccard_similarity(
+                        {str(v).strip().lower() for v in project_a.get("tags", []) if str(v).strip()},
+                        {str(v).strip().lower() for v in project_b.get("tags", []) if str(v).strip()},
+                    )
+                    team_score = self._jaccard_similarity(
+                        {str(v).strip().lower() for v in project_a.get("team", []) if str(v).strip()},
+                        {str(v).strip().lower() for v in project_b.get("team", []) if str(v).strip()},
+                    )
+                    text_score = self._jaccard_similarity(
+                        self._normalize_text_tokens(
+                            f"{project_a.get('name', '')} {project_a.get('description', '')}"
+                        ),
+                        self._normalize_text_tokens(
+                            f"{project_b.get('name', '')} {project_b.get('description', '')}"
+                        ),
+                    )
+
+                    score = round((0.45 * tags_score) + (0.25 * team_score) + (0.30 * text_score), 4)
+                    if score < threshold:
+                        continue
+
+                    pairs_above_threshold += 1
+                    left_id, right_id = sorted([str(a_id), str(b_id)])
+                    pair_key = f"{left_id}::{right_id}"
+                    keep_pairs.append(pair_key)
+
+                    upsert_params: Dict[str, Any] = {
+                        "left_id": left_id,
+                        "right_id": right_id,
+                        "score": score,
+                        "tags_score": round(tags_score, 4),
+                        "team_score": round(team_score, 4),
+                        "text_score": round(text_score, 4),
+                        "computed_at": timestamp,
+                    }
+                    if owner_id:
+                        upsert_params["owner_id"] = owner_id
+
+                    owner_check = ""
+                    if owner_id:
+                        owner_check = (
+                            "WHERE (a.owner_id = $owner_id OR a.visibility = 'shared') "
+                            "AND (b.owner_id = $owner_id OR b.visibility = 'shared') "
+                        )
+
+                    upsert_result = await session.run(
+                        "MATCH (a:GraphNode {node_id: $left_id}) "
+                        "MATCH (b:GraphNode {node_id: $right_id}) "
+                        f"{owner_check}"
+                        "OPTIONAL MATCH (a)-[existing:SIMILAR_TO]->(b) "
+                        "WITH a, b, existing "
+                        "MERGE (a)-[r:SIMILAR_TO]->(b) "
+                        "ON CREATE SET r.created_at = $computed_at "
+                        "SET r.updated_at = $computed_at, "
+                        "r.similarity_score = $score, "
+                        "r.tags_similarity = $tags_score, "
+                        "r.team_similarity = $team_score, "
+                        "r.text_similarity = $text_score "
+                        "RETURN (existing IS NULL) as created",
+                        **upsert_params,
+                    )
+                    upsert_record = await upsert_result.single()
+                    if upsert_record and upsert_record.get("created"):
+                        created += 1
+                    else:
+                        updated += 1
+
+                # 3) Remove stale similarity edges that are no longer above threshold
+                cleanup_params: Dict[str, Any] = {"keep_pairs": keep_pairs}
+                if owner_id:
+                    cleanup_params["owner_id"] = owner_id
+                    cleanup_owner = (
+                        "WHERE (a.owner_id = $owner_id OR a.visibility = 'shared') "
+                        "AND (b.owner_id = $owner_id OR b.visibility = 'shared') "
+                    )
+                else:
+                    cleanup_owner = ""
+
+                cleanup_result = await session.run(
+                    "MATCH (a:GraphNode)-[r:SIMILAR_TO]->(b:GraphNode) "
+                    f"{cleanup_owner}"
+                    "WITH r, "
+                    "CASE WHEN a.node_id < b.node_id "
+                    "THEN a.node_id + '::' + b.node_id "
+                    "ELSE b.node_id + '::' + a.node_id END as pair_key "
+                    "WHERE NOT pair_key IN $keep_pairs "
+                    "DELETE r "
+                    "RETURN count(r) as removed",
+                    **cleanup_params,
+                )
+                cleanup_record = await cleanup_result.single()
+                removed = int(cleanup_record["removed"]) if cleanup_record and cleanup_record.get("removed") else 0
+
+            logger.info(
+                "[GRAPH] Project similarity computation complete",
+                owner_id=owner_id,
+                threshold=threshold,
+                pairs_evaluated=pairs_evaluated,
+                pairs_above_threshold=pairs_above_threshold,
+                created=created,
+                updated=updated,
+                removed=removed,
+            )
+            return {
+                "available": True,
+                "created": created,
+                "updated": updated,
+                "removed": removed,
+                "pairs_evaluated": pairs_evaluated,
+                "pairs_above_threshold": pairs_above_threshold,
+            }
+        except Exception as e:
+            logger.warning(
+                "[GRAPH] Failed to compute project similarities",
+                owner_id=owner_id,
+                threshold=threshold,
+                error=str(e),
+            )
+            return {
+                "available": True,
+                "created": 0,
+                "updated": 0,
+                "removed": 0,
+                "pairs_evaluated": 0,
+                "pairs_above_threshold": 0,
+                "error": str(e),
+            }
     
     async def get_graph_visualization(
         self,
@@ -946,11 +1157,12 @@ class GraphService:
                 )
                 params["owner_id"] = owner_id
             
-            # Helper: RETURN clause includes Neo4j labels alongside properties
-            node_return = "[x IN nodeList | properties(x) {.*, _labels: labels(x)}]"
+            # Helper: RETURN clause for nodes and edges
+            # Return properties and labels separately, merged in post-processing
+            node_return = "[x IN nodeList | {props: properties(x), lbls: labels(x)}]"
             edge_collect = (
                 "collect(DISTINCT CASE WHEN r IS NOT NULL THEN "
-                "{type: type(r), from: startNode(r).node_id, to: endNode(r).node_id} END)"
+                "{type: type(r), from: startNode(r).node_id, to: endNode(r).node_id, props: properties(r)} END)"
             )
             
             if library_ids:
@@ -1044,10 +1256,33 @@ class GraphService:
                 record = await result.single()
                 
                 if record:
-                    nodes = record.get("nodes", [])
-                    edges = record.get("edges", [])
+                    raw_nodes = record.get("nodes", [])
+                    raw_edges = record.get("edges", [])
                     # Filter out null edges
-                    edges = [e for e in edges if e.get("from") and e.get("to")]
+                    edges = []
+                    for edge in raw_edges:
+                        if not edge or not edge.get("from") or not edge.get("to"):
+                            continue
+                        edge_data = {
+                            "type": edge.get("type"),
+                            "from": edge.get("from"),
+                            "to": edge.get("to"),
+                        }
+                        props = edge.get("props", {})
+                        if isinstance(props, dict):
+                            edge_data.update(props)
+                        edges.append(edge_data)
+                    # Merge labels into node properties
+                    nodes = []
+                    for item in raw_nodes:
+                        if isinstance(item, dict) and "props" in item:
+                            # New format: {props: {...}, lbls: [...]}
+                            node = dict(item["props"])
+                            node["_labels"] = item.get("lbls", [])
+                            nodes.append(node)
+                        else:
+                            # Fallback: plain properties dict
+                            nodes.append(item)
                     return {
                         "nodes": nodes,
                         "edges": edges,
@@ -1067,6 +1302,38 @@ class GraphService:
     # Internal Helpers
     # ========================================================================
     
+    @staticmethod
+    def _normalize_text_tokens(text: str) -> set[str]:
+        """Tokenize text into normalized words for lightweight similarity checks."""
+        words = re.findall(r"[a-z0-9]+", (text or "").lower())
+        stop_words = {
+            "the",
+            "and",
+            "for",
+            "with",
+            "from",
+            "that",
+            "this",
+            "into",
+            "over",
+            "under",
+            "about",
+            "project",
+            "status",
+            "report",
+        }
+        return {w for w in words if len(w) > 2 and w not in stop_words}
+
+    @staticmethod
+    def _jaccard_similarity(left: set[str], right: set[str]) -> float:
+        """Compute Jaccard similarity (0..1) between two sets."""
+        if not left or not right:
+            return 0.0
+        union_size = len(left | right)
+        if union_size == 0:
+            return 0.0
+        return len(left & right) / union_size
+
     @staticmethod
     def _sanitize_label(label: str) -> str:
         """Sanitize a label/type string to prevent Cypher injection."""

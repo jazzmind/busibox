@@ -12,25 +12,27 @@
 #
 set -euo pipefail
 
-# Get script directory
+# Get script directory and repo root
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-MCP_DIR="${REPO_ROOT}/tools/mcp-server"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+MCP_SERVERS=("mcp-shared" "mcp-core-dev" "mcp-app-builder" "mcp-admin")
 
-# Source UI library
-source "${SCRIPT_DIR}/lib/ui.sh"
+# Source UI library (scripts/lib/ui.sh)
+source "${SCRIPT_DIR}/../lib/ui.sh"
 
-# Display welcome
-clear
-box "Busibox MCP Server" 70
-echo ""
-info "MCP (Model Context Protocol) server provides structured access to"
-info "Busibox documentation and scripts for Cursor AI and Claude Desktop."
-echo ""
+# Non-interactive: skip welcome, go straight to build
+if [[ "${MCP_BUILD:-0}" != "1" ]] && [[ "${1:-}" != "build" ]]; then
+    clear
+    box "Busibox MCP Server" 70
+    echo ""
+    info "MCP (Model Context Protocol) server provides structured access to"
+    info "Busibox documentation and scripts for Cursor AI and Claude Desktop."
+    echo ""
+fi
 
-# Check if MCP directory exists
-if [[ ! -d "$MCP_DIR" ]]; then
-    error "MCP server directory not found: $MCP_DIR"
+# Check if tools directory exists
+if [[ ! -d "${REPO_ROOT}/tools/mcp-shared" ]]; then
+    error "MCP shared directory not found: ${REPO_ROOT}/tools/mcp-shared"
     exit 1
 fi
 
@@ -55,54 +57,150 @@ check_nodejs() {
     return 0
 }
 
-# Build MCP server
+# Build all MCP servers (shared first, then dependent servers)
 build_mcp() {
-    header "Building MCP Server" 70
+    header "Building MCP Servers" 70
     
-    cd "$MCP_DIR"
+    for mcp in "${MCP_SERVERS[@]}"; do
+        local mcp_dir="${REPO_ROOT}/tools/${mcp}"
+        if [[ ! -d "$mcp_dir" ]]; then
+            error "MCP directory not found: $mcp_dir"
+            return 1
+        fi
+        
+        echo ""
+        info "Building ${mcp}..."
+        cd "$mcp_dir"
+        npm install || {
+            error "Failed to install dependencies for ${mcp}"
+            cd "$REPO_ROOT"
+            return 1
+        }
+        npm run build || {
+            error "Failed to build ${mcp}"
+            cd "$REPO_ROOT"
+            return 1
+        }
+    done
     
-    info "Installing dependencies..."
-    npm install || {
-        error "Failed to install dependencies"
-        return 1
-    }
-    
-    echo ""
-    info "Building TypeScript..."
-    npm run build || {
-        error "Failed to build MCP server"
-        return 1
-    }
+    cd "$REPO_ROOT"
     
     cd "$REPO_ROOT"
     
     echo ""
-    success "MCP server built successfully!"
+    success "All MCP servers built successfully!"
+    
+    # Write config files for Cursor and Claude
+    write_config
     return 0
+}
+
+# Write MCP config to .cursor/ for Cursor (project-level) and Claude (template)
+# Idempotent: uses atomic writes; skips claude-mcp.json if user has customized it
+write_config() {
+    local cursor_dir="${REPO_ROOT}/.cursor"
+    mkdir -p "$cursor_dir"
+    
+    # Cursor: .cursor/mcp.json (atomic write - safe for repeat runs)
+    local mcp_tmp
+    mcp_tmp=$(mktemp)
+    cat > "$mcp_tmp" << 'MCPJSON'
+{
+  "mcpServers": {
+    "busibox-core-dev": {
+      "command": "node",
+      "args": ["tools/mcp-core-dev/dist/index.js"]
+    },
+    "busibox-app-builder": {
+      "command": "node",
+      "args": ["tools/mcp-app-builder/dist/index.js"]
+    },
+    "busibox-admin": {
+      "command": "node",
+      "args": ["tools/mcp-admin/dist/index.js"]
+    }
+  }
+}
+MCPJSON
+    mv "$mcp_tmp" "${cursor_dir}/mcp.json"
+    
+    # Claude: .cursor/claude-mcp.json - only write if missing or still has placeholder
+    # (user may have replaced __BUSIBOX_ROOT__ with their path - don't overwrite)
+    local claude_file="${cursor_dir}/claude-mcp.json"
+    local wrote_claude=""
+    if [[ ! -f "$claude_file" ]] || grep -q '__BUSIBOX_ROOT__' "$claude_file" 2>/dev/null; then
+        local claude_tmp
+        claude_tmp=$(mktemp)
+        cat > "$claude_tmp" << 'CLAUDEJSON'
+{
+  "mcpServers": {
+    "busibox-core-dev": {
+      "command": "node",
+      "args": ["__BUSIBOX_ROOT__/tools/mcp-core-dev/dist/index.js"]
+    },
+    "busibox-app-builder": {
+      "command": "node",
+      "args": ["__BUSIBOX_ROOT__/tools/mcp-app-builder/dist/index.js"]
+    },
+    "busibox-admin": {
+      "command": "node",
+      "args": ["__BUSIBOX_ROOT__/tools/mcp-admin/dist/index.js"]
+    }
+  }
+}
+CLAUDEJSON
+        mv "$claude_tmp" "$claude_file"
+        wrote_claude="1"
+    fi
+    
+    # Claude instructions (always overwrite - static docs)
+    cat > "${cursor_dir}/CLAUDE_MCP_README.md" << 'READMEEOF'
+# Claude Desktop MCP Setup
+
+To add Busibox MCP servers to Claude Desktop:
+
+1. Open `claude-mcp.json` and replace `__BUSIBOX_ROOT__` with your busibox path (e.g. `/path/to/busibox`).
+2. Copy the `mcpServers` object into your Claude config:
+   - **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+   - **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+   - **Linux:** `~/.config/Claude/claude_desktop_config.json`
+3. Merge the servers into the existing `mcpServers` object (or replace if empty).
+4. Restart Claude Desktop.
+READMEEOF
+    
+    if [[ "${MCP_BUILD:-0}" == "1" ]] || [[ "${1:-}" == "build" ]]; then
+        if [[ -n "$wrote_claude" ]]; then
+            info "Config written: .cursor/mcp.json (Cursor), .cursor/claude-mcp.json (Claude template)"
+        else
+            info "Config written: .cursor/mcp.json (Cursor); .cursor/claude-mcp.json preserved (customized)"
+        fi
+    fi
 }
 
 # Clean build artifacts
 clean_mcp() {
     header "Cleaning Build Artifacts" 70
     
-    cd "$MCP_DIR"
-    
-    if [[ -d "dist" ]]; then
-        info "Removing dist directory..."
-        rm -rf dist
-        success "Cleaned dist/"
-    else
-        info "No dist directory to clean"
-    fi
-    
-    if [[ -d "node_modules" ]]; then
-        if confirm "Remove node_modules? (will require reinstall)" "n"; then
-            info "Removing node_modules..."
-            rm -rf node_modules
-            success "Cleaned node_modules/"
-        else
-            info "Keeping node_modules/"
+    for mcp in "${MCP_SERVERS[@]}"; do
+        local mcp_dir="${REPO_ROOT}/tools/${mcp}"
+        if [[ -d "$mcp_dir" ]]; then
+            cd "$mcp_dir"
+            if [[ -d "dist" ]]; then
+                info "Removing ${mcp}/dist..."
+                rm -rf dist
+                success "Cleaned ${mcp}/dist/"
+            fi
         fi
+    done
+    
+    if confirm "Remove node_modules from all MCP packages? (will require reinstall)" "n"; then
+        for mcp in "${MCP_SERVERS[@]}"; do
+            local mcp_dir="${REPO_ROOT}/tools/${mcp}"
+            if [[ -d "${mcp_dir}/node_modules" ]]; then
+                rm -rf "${mcp_dir}/node_modules"
+                success "Removed ${mcp}/node_modules/"
+            fi
+        done
     fi
     
     cd "$REPO_ROOT"
@@ -117,29 +215,17 @@ show_config() {
     header "Cursor AI Configuration" 70
     
     echo ""
-    info "To use the MCP server with Cursor AI, add this to your Cursor settings:"
+    info "Config is auto-written to .cursor/mcp.json when you build (make mcp)."
+    info "Cursor loads it automatically when you open this project."
     echo ""
     separator 70
     echo ""
-    echo -e "${CYAN}File: .cursorrules or Cursor Settings${NC}"
-    echo ""
-    cat << 'EOF'
-{
-  "mcpServers": {
-    "busibox": {
-      "command": "node",
-      "args": ["/path/to/busibox/tools/mcp-server/dist/index.js"]
-    }
-  }
-}
-EOF
+    info "For Claude Desktop: see .cursor/CLAUDE_MCP_README.md"
+    info "Template: .cursor/claude-mcp.json (replace __BUSIBOX_ROOT__)"
     echo ""
     separator 70
     echo ""
-    info "Replace /path/to/busibox with your actual busibox repository path:"
-    echo "  ${CYAN}${REPO_ROOT}${NC}"
-    echo ""
-    info "After configuring, restart Cursor AI to load the MCP server"
+    info "Server purposes: core-dev (build/test), app-builder (apps), admin (deploy/manage)"
     echo ""
     
     pause
@@ -149,13 +235,16 @@ EOF
 install_deps() {
     header "Installing Dependencies" 70
     
-    cd "$MCP_DIR"
-    
-    info "Installing npm packages..."
-    npm install || {
-        error "Failed to install dependencies"
-        return 1
-    }
+    for mcp in "${MCP_SERVERS[@]}"; do
+        local mcp_dir="${REPO_ROOT}/tools/${mcp}"
+        if [[ -d "$mcp_dir" ]]; then
+            info "Installing ${mcp}..."
+            (cd "$mcp_dir" && npm install) || {
+                error "Failed to install ${mcp}"
+                return 1
+            }
+        fi
+    done
     
     cd "$REPO_ROOT"
     
@@ -168,7 +257,7 @@ install_deps() {
 main_menu() {
     while true; do
         echo ""
-        menu "MCP Server Management" \
+        menu "MCP Servers Management" \
             "Build MCP Server" \
             "Clean Build Artifacts" \
             "Show Cursor Configuration" \
@@ -209,7 +298,15 @@ main_menu() {
     done
 }
 
-# Run main menu
+# Non-interactive build (e.g. make mcp or MCP_BUILD=1 bash mcp.sh)
+if [[ "${MCP_BUILD:-0}" == "1" ]] || [[ "${1:-}" == "build" ]]; then
+    if check_nodejs; then
+        build_mcp
+    fi
+    exit $?
+fi
+
+# Interactive menu
 main_menu
 
 exit 0

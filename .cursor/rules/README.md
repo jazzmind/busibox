@@ -85,13 +85,20 @@ make manage SERVICE=authz ACTION=status
 
 ### "Where should I put this documentation?"
 
-1. **Architecture/Design** → `docs/architecture/`
-2. **Deployment guides** → `docs/deployment/`
-3. **Configuration** → `docs/configuration/`
-4. **Troubleshooting** → `docs/troubleshooting/`
-5. **Reference/API** → `docs/reference/`
-6. **How-to guides** → `docs/guides/`
-7. **Session notes** → `docs/session-notes/`
+1. **Operators/Admins** → `docs/administrators/`
+2. **Developers** → `docs/developers/` (architecture, services, reference, tasks)
+3. **End users** → `docs/users/`
+4. **Historical** → `docs/archive/`
+
+See `.cursor/rules/001-documentation-organization.md` for full decision tree.
+
+### "Which MCP server should I use?"
+
+- **Core development** (build, test, debug services) → `busibox-core-dev`
+- **Building apps** (Next.js apps for busibox) → `busibox-app-builder`
+- **Deployment/operations** (manage staging/production) → `busibox-admin`
+
+Build with `make mcp`. See CLAUDE.md for Cursor configuration.
 
 ### "Where should I put this script?"
 

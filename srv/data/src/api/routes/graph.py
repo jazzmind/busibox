@@ -276,3 +276,58 @@ async def get_graph_stats(request: Request):
     except Exception as e:
         logger.error("[GRAPH API] Failed to get stats", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/compute-similarities",
+    summary="Compute similarity edges between project nodes",
+    dependencies=[Depends(require_data_read)],
+)
+async def compute_similarities(
+    request: Request,
+    label: str = Query("StatusProject", description="Project node label to compare"),
+    threshold: float = Query(0.30, ge=0.0, le=1.0, description="Minimum similarity score (0..1)"),
+):
+    """
+    Compute project-to-project similarity relationships in Neo4j.
+
+    This creates or updates SIMILAR_TO relationships using weighted
+    overlap across tags, team members, and project text fields.
+    """
+    graph_service = _get_graph_service(request)
+
+    if not graph_service:
+        return {
+            "success": False,
+            "graph_available": False,
+            "created": 0,
+            "updated": 0,
+            "removed": 0,
+            "pairs_evaluated": 0,
+            "pairs_above_threshold": 0,
+        }
+
+    user_id = getattr(request.state, "user_id", None)
+
+    try:
+        result = await graph_service.compute_project_similarities(
+            owner_id=user_id,
+            label=label,
+            threshold=threshold,
+        )
+        return {
+            "success": True,
+            "graph_available": True,
+            "label": label,
+            "threshold": threshold,
+            **result,
+        }
+    except Exception as e:
+        logger.error(
+            "[GRAPH API] Failed to compute similarities",
+            error=str(e),
+            user_id=user_id,
+            label=label,
+            threshold=threshold,
+        )
+        raise HTTPException(status_code=500, detail=str(e))

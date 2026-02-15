@@ -1,29 +1,19 @@
 {
-  "name": "@busibox/mcp-server",
-  "version": "3.0.0",
-  "description": "MCP server for Busibox documentation and script access",
+  "name": "@busibox/mcp-admin",
+  "version": "1.0.0",
+  "description": "MCP server for Busibox administrators - deployment and management",
   "type": "module",
   "main": "dist/index.js",
-  "bin": {
-    "busibox-mcp": "dist/index.js"
-  },
+  "bin": { "busibox-mcp-admin": "dist/index.js" },
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
     "start": "node dist/index.js",
     "clean": "rm -rf dist"
   },
-  "keywords": [
-    "mcp",
-    "busibox",
-    "documentation",
-    "ai-tools"
-  ],
-  "author": "Busibox Team",
-  "license": "MIT",
   "dependencies": {
+    "@busibox/mcp-shared": "file:../mcp-shared",
     "@modelcontextprotocol/sdk": "^1.26.0",
-    "glob": "^10.3.10",
     "ssh2": "^1.15.0"
   },
   "devDependencies": {

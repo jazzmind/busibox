@@ -171,6 +171,8 @@ make test-local SERVICE=agent INV=staging  # Remote tests
 make test                          # Interactive menu
 ```
 
+**MCP Servers** (Cursor): `make mcp` builds core-dev, app-builder, admin. See CLAUDE.md for config.
+
 ## When Unsure
 
 1. Read the detailed rules in `.cursor/rules/`

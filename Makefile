@@ -366,7 +366,7 @@ test-security:
 # MCP SERVER
 # ============================================================================
 mcp:
-	@bash scripts/make/mcp.sh
+	@MCP_BUILD=1 bash scripts/make/mcp.sh
 
 # ============================================================================
 # DOCKER LOCAL DEVELOPMENT

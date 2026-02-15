@@ -1,0 +1,1 @@
+{"mcpServers":{"busibox-admin":{"command":"node","args":["/tmp/busibox/tools/mcp-admin/dist/index.js"]}}}

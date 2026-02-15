@@ -455,6 +455,7 @@ show_main_menu() {
         box_line "  ${BOLD}1)${NC} Install"
         box_line "  ${DIM}2) Manage (requires installation)${NC}"
         box_line "  ${DIM}3) Test (requires installation)${NC}"
+        box_line "  ${BOLD}4)${NC} Install MCP locally"
     else
         box_line "  ${BOLD}1)${NC} Uninstall / Reinstall"
         box_line "  ${BOLD}2)${NC} Manage"
@@ -473,6 +474,9 @@ show_main_menu() {
             else
                 box_line "  ${BOLD}4)${NC} Connect (start tunnel)"
             fi
+            box_line "  ${BOLD}5)${NC} Install MCP locally"
+        else
+            box_line "  ${BOLD}4)${NC} Install MCP locally"
         fi
     fi
     
@@ -697,6 +701,9 @@ show_help() {
     box_line "    ${CYAN}make test${NC}     Testing system"
     box_line "                    Integration tests, health checks"
     box_empty
+    box_line "  ${BOLD}MCP (Cursor/Claude)${NC}"
+    box_line "    ${CYAN}make mcp${NC}      Build MCP servers and write .cursor config"
+    box_empty
     box_line "  ${BOLD}Docker Commands${NC}"
     box_line "    ${DIM}make docker-up${NC}       Start Docker services"
     box_line "    ${DIM}make docker-down${NC}     Stop Docker services"
@@ -901,6 +908,13 @@ handle_test() {
     exec bash "${SCRIPT_DIR}/test-menu.sh" --env "$env" --backend "$backend"
 }
 
+handle_mcp_install() {
+    echo ""
+    MCP_BUILD=1 bash "${SCRIPT_DIR}/mcp.sh" build
+    echo ""
+    read -n 1 -s -r -p "Press any key to continue..."
+}
+
 # ============================================================================
 # Main Loop
 # ============================================================================
@@ -983,12 +997,12 @@ main() {
                 handle_test
                 ;;
             4)
-                # K8s Connect/Disconnect toggle
                 local active_backend=""
                 if [[ -n "$_active_profile" ]]; then
                     active_backend=$(profile_get "$_active_profile" "backend")
                 fi
                 if [[ "$active_backend" == "k8s" ]]; then
+                    # K8s Connect/Disconnect toggle
                     local pid_file="${REPO_ROOT}/.k8s-connect.pid"
                     echo ""
                     if [[ -f "$pid_file" ]] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
@@ -999,6 +1013,18 @@ main() {
                         make connect
                     fi
                     read -n 1 -s -r -p "Press any key to continue..."
+                else
+                    handle_mcp_install
+                fi
+                ;;
+            5)
+                # K8s only: Install MCP locally
+                local active_backend=""
+                if [[ -n "$_active_profile" ]]; then
+                    active_backend=$(profile_get "$_active_profile" "backend")
+                fi
+                if [[ "$active_backend" == "k8s" ]]; then
+                    handle_mcp_install
                 fi
                 ;;
             p|P)

@@ -1,10 +1,20 @@
 # Busibox MCP Server
 
 **Created**: 2025-11-06  
-**Updated**: 2026-01-17  
+**Updated**: 2026-02-15  
 **Version**: 3.0.0  
-**Status**: Active  
+**Status**: DEPRECATED - Use the new focused MCP servers instead  
 **Category**: Tools
+
+> **DEPRECATED**: This monolithic MCP server has been replaced by three focused servers. Use `make mcp` to build the new servers:
+>
+> - **mcp-core-dev** (`tools/mcp-core-dev/`) - For developers building/testing busibox services
+> - **mcp-app-builder** (`tools/mcp-app-builder/`) - For developers building Next.js apps for busibox
+> - **mcp-admin** (`tools/mcp-admin/`) - For operators managing deployments (with destructive op confirmation)
+>
+> See CLAUDE.md for Cursor configuration. This server remains for backward compatibility but will not receive updates.
+
+---
 
 A Model Context Protocol (MCP) server that provides AI coding agents and maintainers with easy access to Busibox documentation, scripts, infrastructure operations, and project structure.
 
