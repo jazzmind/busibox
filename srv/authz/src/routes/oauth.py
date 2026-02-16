@@ -293,13 +293,23 @@ async def _ensure_bootstrap_admin_users() -> None:
             logger.info("Assigned Admin role to user", email=email_lower, user_id=user_id)
 
 
-async def _ensure_bootstrap() -> None:
+_bootstrap_done = False
+
+
+async def _ensure_bootstrap(force: bool = False) -> None:
     """
     Ensure authz has at least one active signing key and (optionally) a bootstrap OAuth client.
     
     If an existing key cannot be decrypted (e.g., passphrase changed), it will be
     deleted and a new key generated.
+    
+    This is called once at startup (from main.py lifespan) and is a no-op on
+    subsequent calls unless force=True. Per-request calls act as a safety net
+    in case the startup bootstrap was missed.
     """
+    global _bootstrap_done
+    if _bootstrap_done and not force:
+        return
     await _pg.connect()
 
     # 1) signing key - check if we have one and can decrypt it
@@ -354,6 +364,9 @@ async def _ensure_bootstrap() -> None:
     
     # 6) bootstrap admin users from ADMIN_EMAILS config
     await _ensure_bootstrap_admin_users()
+
+    _bootstrap_done = True
+    logger.info("Bootstrap complete")
 
 
 async def _require_client(client_id: str, client_secret: str) -> dict:
