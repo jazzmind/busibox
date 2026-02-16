@@ -10,6 +10,7 @@ import logging
 import math
 import asyncio
 import re
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -36,6 +37,14 @@ MIN_FIELDS_FOR_BATCH_MODE = 8
 FIELD_BATCH_SIZE = 6
 FIELD_SEARCH_TOP_K = 6
 MAX_PARALLEL_BATCH_RUNS = 3
+
+# Built-in agent IDs used for extraction routing decisions.
+SCHEMA_BUILDER_AGENT_ID = str(
+    uuid.uuid5(uuid.NAMESPACE_DNS, "busibox.builtin.schema-builder")
+)
+DEFAULT_EXTRACTION_AGENT_ID = os.getenv("DEFAULT_EXTRACTION_AGENT_ID") or str(
+    uuid.uuid5(uuid.NAMESPACE_DNS, "busibox.builtin.record-extractor")
+)
 
 
 class ExtractRequest(BaseModel):
@@ -772,13 +781,29 @@ async def extract_document(
     schema_meta = schema_doc.get("metadata") or {}
     resolved_agent_id = payload.agent_id or schema_meta.get("extractionAgentId")
     if not resolved_agent_id:
-        # Default workflow-style extraction agent to schema-builder built-in.
-        resolved_agent_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, "busibox.builtin.schema-builder"))
+        resolved_agent_id = DEFAULT_EXTRACTION_AGENT_ID
+    elif (
+        not payload.agent_id
+        and str(resolved_agent_id) == SCHEMA_BUILDER_AGENT_ID
+    ):
+        # Schema-builder is for schema authoring/chat, not record extraction execution.
+        # Keep explicit payload.agent_id overrides intact.
+        resolved_agent_id = DEFAULT_EXTRACTION_AGENT_ID
 
     try:
         agent_uuid = uuid.UUID(str(resolved_agent_id))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"Invalid agent_id: {resolved_agent_id}") from exc
+
+    logger.info(
+        "Resolved extraction agent",
+        extra={
+            "file_id": payload.file_id,
+            "schema_document_id": payload.schema_document_id,
+            "resolved_agent_id": str(agent_uuid),
+            "explicit_agent_override": payload.agent_id is not None,
+        },
+    )
 
     instructions = payload.prompt_override or (
         "Extract data from this document into records matching the schema. "

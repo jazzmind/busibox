@@ -90,6 +90,14 @@ BUILTIN_AGENT_METADATA = {
         "version": 1,
         "tools": ["document_search", "list_data_documents"],
     },
+    "record_extractor_agent": {
+        "name": "record-extractor",
+        "display_name": "Record Extractor",
+        "description": "Executes structured extraction runs and returns schema-aligned JSON records",
+        "model": "agent",
+        "version": 1,
+        "tools": [],
+    },
     "image_agent": {
         "name": "image-agent",
         "display_name": "Image Agent",

@@ -878,6 +878,13 @@ class IngestWorker:
         """Fire a single library trigger by calling the Agent API."""
         import urllib.request
         import urllib.error
+
+        # Extraction can take longer than regular webhook/workflow calls.
+        # Make trigger timeouts configurable with safe defaults.
+        default_timeout = int(os.environ.get("LIBRARY_TRIGGER_HTTP_TIMEOUT", "90"))
+        extract_timeout = int(
+            os.environ.get("LIBRARY_TRIGGER_EXTRACT_TIMEOUT", str(max(default_timeout, 300)))
+        )
         
         agent_api_url = self.config.get("agent_api_url") or os.environ.get("AGENT_API_URL", "")
         if not agent_api_url:
@@ -897,6 +904,18 @@ class IngestWorker:
                 return False
         
         try:
+            # Agent API validates audience=agent-api, while delegation tokens created
+            # at upload time are generic. Exchange once and reuse for this trigger call.
+            agent_api_token = delegation_token
+            if delegation_token:
+                exchanged = self._exchange_token_for_audience(
+                    subject_token=delegation_token,
+                    target_audience="agent-api",
+                    user_id=user_id,
+                )
+                if exchanged:
+                    agent_api_token = exchanged
+
             default_prompt = (
                 f"Process the completed document '{filename}'. "
                 f"file_id={file_id}, library_id={library_id}."
@@ -912,10 +931,16 @@ class IngestWorker:
                 )
 
             if trigger_type == "apply_schema" or (trigger_type == "run_agent" and schema_document_id):
+                # For apply_schema, match manual document-view behavior:
+                # only pass prompt_override when explicitly configured on the trigger.
+                # Otherwise let /extract use its built-in extraction instructions.
+                schema_prompt_override = (
+                    prompt if trigger_type == "apply_schema" else effective_prompt
+                )
                 extract_payload = {
                     "file_id": file_id,
                     "schema_document_id": schema_document_id,
-                    "prompt_override": effective_prompt,
+                    "prompt_override": schema_prompt_override,
                     "store_results": True,
                     "user_id": user_id,
                     "delegation_token": delegation_token,
@@ -929,10 +954,10 @@ class IngestWorker:
                     headers={"Content-Type": "application/json"},
                     method="POST",
                 )
-                if delegation_token:
-                    req.add_header("Authorization", f"Bearer {delegation_token}")
+                if agent_api_token:
+                    req.add_header("Authorization", f"Bearer {agent_api_token}")
 
-                response = urllib.request.urlopen(req, timeout=30)
+                response = urllib.request.urlopen(req, timeout=extract_timeout)
                 response_data = json.loads(response.read().decode("utf-8"))
             else:
                 # Attempt workflow execution first; if not a workflow ID, fallback to agent webhook.
@@ -954,10 +979,10 @@ class IngestWorker:
                         headers={"Content-Type": "application/json"},
                         method="POST",
                     )
-                    if delegation_token:
-                        workflow_req.add_header("Authorization", f"Bearer {delegation_token}")
+                    if agent_api_token:
+                        workflow_req.add_header("Authorization", f"Bearer {agent_api_token}")
                     try:
-                        workflow_response = urllib.request.urlopen(workflow_req, timeout=30)
+                        workflow_response = urllib.request.urlopen(workflow_req, timeout=default_timeout)
                         response_data = json.loads(workflow_response.read().decode("utf-8"))
                     except urllib.error.HTTPError as workflow_err:
                         if workflow_err.code not in (400, 401, 403, 404, 422):
@@ -980,7 +1005,9 @@ class IngestWorker:
                         headers={"Content-Type": "application/json"},
                         method="POST",
                     )
-                    webhook_response = urllib.request.urlopen(webhook_req, timeout=30)
+                    if agent_api_token:
+                        webhook_req.add_header("Authorization", f"Bearer {agent_api_token}")
+                    webhook_response = urllib.request.urlopen(webhook_req, timeout=default_timeout)
                     response_data = json.loads(webhook_response.read().decode("utf-8"))
 
             logger.info(
@@ -995,7 +1022,27 @@ class IngestWorker:
             self._record_trigger_execution(trigger_id=trigger_id, error=None)
             return True
         
-        except (urllib.error.URLError, urllib.error.HTTPError) as e:
+        except urllib.error.HTTPError as e:
+            try:
+                error_body = e.read().decode("utf-8", errors="ignore")
+            except Exception:
+                error_body = ""
+            error_msg = str(e)
+            if error_body:
+                error_msg = f"{error_msg}: {error_body[:500]}"
+            logger.error(
+                "Failed to fire library trigger",
+                trigger_id=trigger_id,
+                trigger_name=trigger_name,
+                trigger_type=trigger_type,
+                file_id=file_id,
+                status_code=getattr(e, "code", None),
+                error=error_msg,
+            )
+            self._record_trigger_execution(trigger_id=trigger_id, error=error_msg)
+            return False
+
+        except urllib.error.URLError as e:
             error_msg = str(e)
             logger.error(
                 "Failed to fire library trigger",
@@ -1018,6 +1065,75 @@ class IngestWorker:
             )
             self._record_trigger_execution(trigger_id=trigger_id, error=str(e))
             return False
+
+    def _exchange_token_for_audience(
+        self,
+        subject_token: str,
+        target_audience: str,
+        user_id: str,
+    ) -> Optional[str]:
+        """Exchange a subject token for an audience-bound token via authz."""
+        import urllib.request
+        import urllib.error
+        import urllib.parse
+
+        if not subject_token:
+            return None
+
+        authz_token_url = (
+            self.config.get("authz_token_url")
+            or os.environ.get("AUTHZ_TOKEN_URL")
+            or os.environ.get("AUTH_TOKEN_URL")
+        )
+        if not authz_token_url:
+            authz_base_url = self.config.get("authz_base_url") or os.environ.get("AUTHZ_BASE_URL")
+            if authz_base_url:
+                authz_token_url = f"{str(authz_base_url).rstrip('/')}/oauth/token"
+            else:
+                authz_token_url = "http://authz-api:8010/oauth/token"
+
+        payload = urllib.parse.urlencode(
+            {
+                "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                "subject_token": subject_token,
+                "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+                "audience": target_audience,
+                "scope": "",
+            }
+        ).encode("utf-8")
+
+        req = urllib.request.Request(
+            authz_token_url,
+            data=payload,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            method="POST",
+        )
+        try:
+            response = urllib.request.urlopen(req, timeout=10)
+            data = json.loads(response.read().decode("utf-8"))
+            access_token = data.get("access_token")
+            if access_token:
+                return str(access_token)
+            logger.warning(
+                "Token exchange returned no access_token",
+                user_id=user_id,
+                target_audience=target_audience,
+            )
+        except (urllib.error.HTTPError, urllib.error.URLError) as e:
+            logger.warning(
+                "Token exchange failed for trigger call",
+                user_id=user_id,
+                target_audience=target_audience,
+                error=str(e),
+            )
+        except Exception as e:
+            logger.warning(
+                "Unexpected token exchange error",
+                user_id=user_id,
+                target_audience=target_audience,
+                error=str(e),
+            )
+        return None
 
     def _render_trigger_template(self, template: Optional[str], values: dict, default: str) -> str:
         if not template:
