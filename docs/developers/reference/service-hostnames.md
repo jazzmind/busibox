@@ -48,8 +48,8 @@ All Busibox services are accessible via canonical hostnames that work consistent
 
 | Service | Hostname | Port | Aliases | Description |
 |---------|----------|------|---------|-------------|
-| AI Portal | `ai-portal` | 3000 | - | Main web interface |
-| Agent Manager | `agent-manager` | 3001 | - | Agent management UI |
+| Busibox Portal | `busibox-portal` | 3000 | - | Main web interface |
+| Busibox Agents | `busibox-agents` | 3001 | - | Agent management UI |
 | User Apps | `user-apps` | varies | - | External/user applications |
 
 ### Host Services (Apple Silicon Only)

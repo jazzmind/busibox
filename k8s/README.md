@@ -239,7 +239,7 @@ make k8s-status
 # View logs
 make k8s-logs SERVICE=authz-api
 make k8s-logs SERVICE=postgres
-make k8s-logs SERVICE=nginx
+make k8s-logs SERVICE=proxy
 
 # Describe a failing pod
 kubectl --kubeconfig=k8s/kubeconfig-rackspace-spot.yaml describe pod -n busibox -l app=authz-api
@@ -267,8 +267,8 @@ make connect
 
 **Port-forward dies**: Just run `make connect` again - it's idempotent.
 
-**Nginx not serving HTTPS**: Run `make connect` to configure HTTPS, or check:
+**Proxy not serving HTTPS**: Run `make connect` to configure HTTPS, or check:
 ```bash
-make k8s-logs SERVICE=nginx
-kubectl --kubeconfig=k8s/kubeconfig-rackspace-spot.yaml get secret nginx-tls -n busibox
+make k8s-logs SERVICE=proxy
+kubectl --kubeconfig=k8s/kubeconfig-rackspace-spot.yaml get secret proxy-tls -n busibox
 ```

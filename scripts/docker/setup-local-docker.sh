@@ -115,7 +115,7 @@ start_services() {
     print_success "Services started"
     print_info ""
     print_info "Service URLs:"
-    echo "  - AI Portal:      http://localhost:3000"
+    echo "  - Busibox Portal:      http://localhost:3000"
     echo "  - Agent Manager:  http://localhost:3001"
     echo "  - Agent API:      http://localhost:8000/docs"
     echo "  - Data API:     http://localhost:8002/docs"
@@ -216,7 +216,7 @@ show_help() {
     echo "Examples:"
     echo "  $0 setup              # Initial setup"
     echo "  $0 start              # Start all services"
-    echo "  $0 logs ai-portal     # View logs for ai-portal only"
+    echo "  $0 logs busibox-portal     # View logs for busibox-portal only"
     echo "  $0 logs -f agent-api  # Follow logs for agent-api"
 }
 

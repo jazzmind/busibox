@@ -114,7 +114,7 @@
   tags: [deploy_api, deploy_api_ssh]
 
 # ============================================================================
-# Core Apps Container (core-apps-lxc) - for ai-portal and agent-manager
+# Core Apps Container (core-apps-lxc) - for busibox-portal and busibox-agents
 # ============================================================================
 
 - name: Ensure .ssh directory exists on core-apps container
@@ -326,7 +326,7 @@
   tags: [deploy_api, deploy_api_ssh]
 
 - name: Test SSH connection from authz to core-apps
-  shell: "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@ai-portal 'echo SSH_OK'"
+  shell: "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@busibox-portal 'echo SSH_OK'"
   register: ssh_test_core_apps
   changed_when: false
   failed_when: false

@@ -28,12 +28,12 @@ applications:
   # Public Web Applications
   # ============================================================================
   
-  - name: ai-portal
-    github_repo: jazzmind/ai-portal
+  - name: busibox-portal
+    github_repo: jazzmind/busibox-portal
     container: core-apps-lxc
     container_ip: "{{ core_apps_ip }}"
     port: 3000
-    deploy_path: /srv/apps/ai-portal
+    deploy_path: /srv/apps/busibox-portal
     health_endpoint: /portal/api/health  # Include basePath since Next.js runs with NEXT_PUBLIC_BASE_PATH=/portal
     build_command: "npm run build"
     start_command: "npm start"  # Standard Next.js start (not standalone mode)
@@ -43,7 +43,7 @@ applications:
       - type: path
         domain: "{{ full_domain }}"
         path: /portal
-        strip_path: false  # Keep /portal path - ai-portal will use basePath
+        strip_path: false  # Keep /portal path - busibox-portal will use basePath
     secrets:
       - database_url
       - sso_jwt_secret
@@ -81,7 +81,6 @@ applications:
       PORT: "3000"
       # AuthZ Service (for downstream token exchange)
       AUTHZ_BASE_URL: "http://{{ authz_ip }}:8010"
-      AUTHZ_CLIENT_ID: "ai-portal"
       # Log viewing - hosts for remote journalctl access
       DATA_API_HOST: "{{ data_ip }}"
       MILVUS_HOST: "{{ milvus_ip }}"
@@ -106,12 +105,12 @@ applications:
       # Bridge API (email, Signal - deployed to bridge-lxc)
       BRIDGE_API_URL: "http://{{ bridge_ip }}:8081"
   
-  - name: agent-manager
-    github_repo: jazzmind/agent-manager
+  - name: busibox-agents
+    github_repo: jazzmind/busibox-agents
     container: core-apps-lxc
     container_ip: "{{ core_apps_ip }}"
     port: 3001
-    deploy_path: /srv/apps/agent-manager
+    deploy_path: /srv/apps/busibox-agents
     health_endpoint: /agents/api/health  # Include basePath since Next.js runs with NEXT_PUBLIC_BASE_PATH=/agents
     build_command: "npm run build"
     start_command: "npm start"  # Standard Next.js start (not standalone mode)
@@ -146,16 +145,15 @@ applications:
       AGENT_API_HOST: "{{ agent_api_host }}"
       AGENT_API_PORT: "{{ agent_api_port }}"
       NEXT_PUBLIC_AGENT_API_URL: "http://{{ agent_api_host }}:{{ agent_api_port }}"
-      # AI Portal URL
-      AI_PORTAL_URL: "https://{{ full_domain }}"
-      NEXT_PUBLIC_AI_PORTAL_URL: "https://{{ full_domain }}"
+      # Busibox Portal URL
+      BUSIBOX_PORTAL_URL: "https://{{ full_domain }}"
+      NEXT_PUBLIC_BUSIBOX_PORTAL_URL: "https://{{ full_domain }}"
       NEXT_PUBLIC_APP_URL: "https://{{ full_domain }}/agents"
       NEXT_PUBLIC_BASE_PATH: "/agents"
       # LiteLLM Configuration
       LITELLM_BASE_URL: "http://{{ litellm_ip }}:{{ litellm_port }}/v1"
       # AuthZ Service Configuration
       AUTHZ_BASE_URL: "http://{{ authz_ip }}:8010"
-      AUTHZ_CLIENT_ID: "agent-manager"
       # SSO Configuration
       SSO_TOKEN_EXPIRY: "900"
       # Application Configuration

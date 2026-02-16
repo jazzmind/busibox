@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Busibox K8s Connect - Local access to K8s AI Portal
+# Busibox K8s Connect - Local access to K8s Busibox Portal
 # =============================================================================
 #
 # Execution Context: Admin workstation (macOS/Linux)
@@ -290,12 +290,12 @@ patch_nginx_for_tls() {
 
     info "Patching nginx configuration for HTTPS..."
 
-    # Get the current nginx ConfigMap
+    # Get the current proxy ConfigMap
     local current_config
-    current_config=$(kctl get configmap nginx-config -n "$NAMESPACE" -o jsonpath='{.data.nginx\.conf}' 2>/dev/null)
+    current_config=$(kctl get configmap proxy-config -n "$NAMESPACE" -o jsonpath='{.data.nginx\.conf}' 2>/dev/null)
 
     if [[ -z "$current_config" ]]; then
-        error "Could not read nginx-config ConfigMap"
+        error "Could not read proxy-config ConfigMap"
         return 1
     fi
 
@@ -343,8 +343,8 @@ http {
     upstream litellm { server litellm:4000; }
     upstream embedding_api { server embedding-api:8005; }
     upstream deploy_api { server deploy-api:8011; }
-    upstream ai_portal { server ai-portal:3000; }
-    upstream agent_manager { server agent-manager:3001; }
+    upstream ai_portal { server busibox-portal:3000; }
+    upstream agent_manager { server busibox-agents:3001; }
 
     # HTTP -> HTTPS redirect
     server {
@@ -442,7 +442,7 @@ http {
             proxy_read_timeout 120;
         }
 
-        # AI Portal (core app)
+        # Busibox Portal (core app)
         location /portal/ {
             proxy_pass http://ai_portal/portal/;
             proxy_set_header Host $host;
@@ -494,12 +494,12 @@ NGINX_CONF
 
     # Apply the patched ConfigMap
     # We use kubectl create configmap --dry-run + apply to update
-    echo "$patched_config" | kctl create configmap nginx-config \
+    echo "$patched_config" | kctl create configmap proxy-config \
         -n "$NAMESPACE" \
         --from-file=nginx.conf=/dev/stdin \
         --dry-run=client -o yaml | kctl apply -f -
 
-    success "Nginx ConfigMap patched with HTTPS configuration"
+    success "Proxy ConfigMap patched with HTTPS configuration"
 }
 
 # ============================================================================
@@ -708,7 +708,7 @@ connect() {
     echo "║                    K8s Connect Ready                        ║"
     echo "╠══════════════════════════════════════════════════════════════╣"
     echo "║                                                             ║"
-    echo "║  AI Portal:  ${url}/portal/"
+    echo "║  Busibox Portal:  ${url}/portal/"
     echo "║  Agents:     ${url}/agents/"
     echo "║                                                             ║"
     echo "║  Disconnect: make disconnect                                ║"

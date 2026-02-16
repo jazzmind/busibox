@@ -71,12 +71,12 @@ main() {
     site_domain=$(get_state "SITE_DOMAIN" "")
     [[ -z "$site_domain" ]] && site_domain=$(get_state "BASE_DOMAIN" "localhost")
     
-    # TODO: Magic link flow not yet implemented in AI Portal
+    # TODO: Magic link flow not yet implemented in Busibox Portal
     # For now, just point to the portal login page
     # The proper flow would be:
     # 1. Generate a secure token
     # 2. Store it in the database with expiry and admin email
-    # 3. AI Portal validates token and creates session
+    # 3. Busibox Portal validates token and creates session
     
     local portal_url
     if [[ "$site_domain" == "localhost" ]]; then
@@ -90,7 +90,7 @@ main() {
     echo -e "${GREEN}║${NC}                           ${BOLD}ADMIN ACCESS INFO${NC}                                ${GREEN}║${NC}"
     echo -e "${GREEN}╠══════════════════════════════════════════════════════════════════════════════╣${NC}"
     echo -e "${GREEN}║${NC}                                                                              ${GREEN}║${NC}"
-    echo -e "${GREEN}║${NC}  Access the AI Portal at:                                                   ${GREEN}║${NC}"
+    echo -e "${GREEN}║${NC}  Access the Busibox Portal at:                                                   ${GREEN}║${NC}"
     echo -e "${GREEN}║${NC}                                                                              ${GREEN}║${NC}"
     echo -e "${GREEN}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
     echo ""
@@ -106,9 +106,9 @@ main() {
     
     # If on Docker, also check if services are running
     if [[ "$platform" == "docker" ]]; then
-        # Check for any ai-portal container (any prefix: demo-, dev-, staging-, prod-)
-        if ! docker ps --format '{{.Names}}' | grep -q "ai-portal"; then
-            warn "AI Portal container is not running"
+        # Check for any busibox-portal container (any prefix: demo-, dev-, staging-, prod-)
+        if ! docker ps --format '{{.Names}}' | grep -q "busibox-portal"; then
+            warn "Busibox Portal container is not running"
             info "Start services with: make docker-up"
         fi
     fi

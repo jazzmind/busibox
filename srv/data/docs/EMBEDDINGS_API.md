@@ -52,7 +52,7 @@ OpenAI-compatible embeddings API:
 - **Language**: English (optimized)
 - **Quality**: High (better than OpenAI ada-002)
 
-## Usage from ai-portal (TypeScript/Next.js)
+## Usage from busibox-portal (TypeScript/Next.js)
 
 ### Option 1: Direct HTTP Client
 

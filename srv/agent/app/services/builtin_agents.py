@@ -44,10 +44,19 @@ BUILTIN_AGENT_METADATA = {
     "chat_agent": {
         "name": "chat-agent",
         "display_name": "Chat Assistant",
-        "description": "General purpose chat agent with access to web search, weather, document search, and ingestion tools",
+        "description": "General purpose chat agent with access to search, weather, document, task, notification, and media tools",
         "model": "chat",
         "version": 1,
-        "tools": ["web_search", "get_weather", "document_search", "data_document"],
+        "tools": [
+            "web_search",
+            "get_weather",
+            "document_search",
+            "create_task",
+            "send_notification",
+            "generate_image",
+            "transcribe_audio",
+            "text_to_speech",
+        ],
     },
     "document_agent": {
         "name": "document-agent",
@@ -76,10 +85,34 @@ BUILTIN_AGENT_METADATA = {
     "schema_builder_agent": {
         "name": "schema-builder",
         "display_name": "Schema Builder",
-        "description": "Helps create extraction schemas and library triggers for automated document processing into structured data and knowledge graphs",
+        "description": "Designs extraction schemas from sample document content for chat and programmatic workflow use cases",
         "model": "agent",
         "version": 1,
-        "tools": ["document_search", "create_data_document", "create_extraction_schema", "create_library_trigger", "list_data_documents", "query_data"],
+        "tools": ["document_search", "list_data_documents"],
+    },
+    "image_agent": {
+        "name": "image-agent",
+        "display_name": "Image Agent",
+        "description": "Generates images from text prompts using built-in media tools.",
+        "model": "agent",
+        "version": 1,
+        "tools": ["generate_image"],
+    },
+    "transcription_agent": {
+        "name": "transcription-agent",
+        "display_name": "Transcription Agent",
+        "description": "Transcribes audio to text and can reference documents for follow-up analysis.",
+        "model": "agent",
+        "version": 1,
+        "tools": ["transcribe_audio", "document_search"],
+    },
+    "voice_agent": {
+        "name": "voice-agent",
+        "display_name": "Voice Agent",
+        "description": "Converts text into spoken audio and returns playable URLs.",
+        "model": "agent",
+        "version": 1,
+        "tools": ["text_to_speech"],
     },
 }
 

@@ -13,11 +13,11 @@ published: true
 ```bash
 # View logs (environment: staging or production)
 bash scripts/view-app-logs.sh <app-name> <environment> [lines]
-bash scripts/view-app-logs.sh ai-portal staging 100
+bash scripts/view-app-logs.sh busibox-portal staging 100
 
 # Follow logs (real-time)
 bash scripts/tail-app-logs.sh <app-name> <environment>
-bash scripts/tail-app-logs.sh ai-portal staging
+bash scripts/tail-app-logs.sh busibox-portal staging
 ```
 
 ## From apps-lxc Container
@@ -25,22 +25,22 @@ bash scripts/tail-app-logs.sh ai-portal staging
 ```bash
 # View logs
 view-app-logs.sh <app-name> [lines]
-view-app-logs.sh ai-portal 100
+view-app-logs.sh busibox-portal 100
 
 # Follow logs (real-time)
 tail-app-logs.sh <app-name>
-tail-app-logs.sh ai-portal
+tail-app-logs.sh busibox-portal
 
 # Or use journalctl directly
 journalctl -u <app-name>.service -f
-journalctl -u ai-portal.service -n 100 --no-pager
+journalctl -u busibox-portal.service -n 100 --no-pager
 ```
 
 ## Systemd/Journalctl Commands
 
 ```bash
 # List running services
-systemctl list-units --type=service --state=running | grep -E '(ai-portal|agent-manager|doc-intel|innovation)'
+systemctl list-units --type=service --state=running | grep -E '(busibox-portal|busibox-agents|doc-intel|innovation)'
 
 # View logs (real-time)
 journalctl -u <app-name>.service -f
@@ -74,8 +74,8 @@ journalctl -u <app-name>.service > /tmp/app-logs.txt
 
 ## Common App Names
 
-- `ai-portal` - AI Portal application
-- `agent-manager` - Agent Client application
+- `busibox-portal` - Busibox Portal application
+- `busibox-agents` - Busibox Agents application
 - `agent-api` - Agent API (runs on agent-lxc container)
 
 ## Container IPs
@@ -85,5 +85,5 @@ journalctl -u <app-name>.service > /tmp/app-logs.txt
 
 ## Web UI
 
-AI Portal Admin → Apps → [Select Internal App] → Application Logs section
+Busibox Portal Admin → Apps → [Select Internal App] → Application Logs section
 

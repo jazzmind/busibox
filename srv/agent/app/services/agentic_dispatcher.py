@@ -24,6 +24,7 @@ from app.agents.document_agent import document_agent, DocumentAgent
 from app.agents.weather_agent import weather_agent, WeatherAgent
 from app.agents.chat_agent import chat_agent, ChatAgent
 from app.agents.status_agent import status_assistant_agent, status_update_agent
+from app.agents.image_agent import image_agent
 from app.agents.base_agent import create_agent_from_definition, BaseStreamingAgent
 from app.config.settings import get_settings
 from app.core.logging import get_logger
@@ -57,6 +58,10 @@ STREAMING_AGENTS: Dict[str, StreamingAgent] = {
     "status_update": status_update_agent,
     "status-update": status_update_agent,  # Alias with hyphen
     "status_update_agent": status_update_agent,
+    # Image agent (LLM-driven tool calling for image generation)
+    "image": image_agent,
+    "image_agent": image_agent,  # Alias
+    "image-agent": image_agent,  # Alias with hyphen
 }
 
 # Map agent names/types to streaming agent keys
@@ -86,6 +91,11 @@ AGENT_TYPE_MAPPING = {
     "chat_agent": "chat",
     "chat-agent": "chat",
     "chat assistant": "chat",
+    # Image agent mappings
+    "image": "image",
+    "image_agent": "image",
+    "image-agent": "image",
+    "image agent": "image",
     # Status agent mappings
     "status_assistant": "status_assistant",
     "status-assistant": "status_assistant",
@@ -103,6 +113,7 @@ AGENT_DESCRIPTIONS = {
     "document": "Search internal documents and knowledge bases",
     "weather": "Get current weather information for a location",
     "chat": "General conversation and questions",
+    "image": "Generate images from text prompts",
     "status_assistant": "Manage project status, create/query/update projects and tasks",
     "status_update": "Record quick status updates for projects and tasks",
 }
@@ -730,6 +741,7 @@ Choose the most appropriate single agent for the query.""",
             "document": "Document Search Agent",
             "weather": "Weather Agent",
             "chat": "Chat Assistant",
+            "image": "Image Agent",
             "status_assistant": "Project Status Assistant",
             "status_update": "Status Update Assistant",
         }

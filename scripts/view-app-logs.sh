@@ -11,9 +11,9 @@
 #   In container: bash /usr/local/bin/view-app-logs.sh <app-name> [lines]
 # 
 # Examples:
-#   bash scripts/view-app-logs.sh ai-portal production 100
-#   bash scripts/view-app-logs.sh agent-manager test 50
-#   bash /usr/local/bin/view-app-logs.sh ai-portal 100  # From inside container
+#   bash scripts/view-app-logs.sh busibox-portal production 100
+#   bash scripts/view-app-logs.sh busibox-agents test 50
+#   bash /usr/local/bin/view-app-logs.sh busibox-portal 100  # From inside container
 
 set -euo pipefail
 
@@ -47,14 +47,14 @@ usage() {
         echo "  $0 <app-name> [lines]"
         echo ""
         echo "Examples:"
-        echo "  $0 ai-portal 50         # Show last 50 lines"
-        echo "  $0 agent-manager         # Show last 100 lines (default)"
+        echo "  $0 busibox-portal 50         # Show last 50 lines"
+        echo "  $0 busibox-agents         # Show last 100 lines (default)"
     else
         echo "  $0 <app-name> [environment] [lines]"
         echo ""
         echo "Examples:"
-        echo "  $0 ai-portal production 50   # Show last 50 lines from production"
-        echo "  $0 agent-manager test         # Show last 100 lines from test"
+        echo "  $0 busibox-portal production 50   # Show last 50 lines from production"
+        echo "  $0 busibox-agents test         # Show last 100 lines from test"
     fi
     exit 1
 }
@@ -77,7 +77,7 @@ view_logs() {
         echo -e "${RED}Error: Service '${app}' not found${NC}"
         echo ""
         echo -e "${YELLOW}Available services:${NC}"
-        systemctl list-units --type=service --state=running | grep -E '(ai-portal|agent-manager|doc-intel|innovation)'
+        systemctl list-units --type=service --state=running | grep -E '(busibox-portal|busibox-agents|doc-intel|innovation)'
         exit 1
     fi
     
@@ -120,7 +120,7 @@ else
             echo \"Error: Service '\'$APP_NAME\'' not found\"
             echo \"\"
             echo \"Available services:\"
-            systemctl list-units --type=service --state=running | grep -E '\''(ai-portal|agent-manager|doc-intel|innovation)'\''
+            systemctl list-units --type=service --state=running | grep -E '\''(busibox-portal|busibox-agents|doc-intel|innovation)'\''
             exit 1
         fi
         

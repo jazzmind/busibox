@@ -2,7 +2,7 @@
 # Default variables for Next.js app deployment
 
 # App configuration
-app_name: "ai-portal"
+app_name: "busibox-portal"
 app_user: "appuser"
 app_group: "appuser"
 app_home: "/opt/{{ app_name }}"

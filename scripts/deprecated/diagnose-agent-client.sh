@@ -1,7 +1,7 @@
 #!/bin/bash
 # Agent Manager Diagnostic Script
 # Execution Context: Proxmox host
-# Usage: bash scripts/diagnose/diagnose-agent-manager.sh
+# Usage: bash scripts/diagnose/diagnose-busibox-agents.sh
 # Created: 2025-11-06
 # Status: Active
 # Category: Diagnostics
@@ -9,8 +9,8 @@
 set -euo pipefail
 
 APPS_IP="10.96.200.201"
-AGENT_CLIENT_PATH="/srv/apps/agent-manager"
-FAILED_PATH="/srv/apps/agent-manager.failed.20251106-205132"
+AGENT_CLIENT_PATH="/srv/apps/busibox-agents"
+FAILED_PATH="/srv/apps/busibox-agents.failed.20251106-205132"
 
 echo "==================================="
 echo "Agent Manager Diagnostic"
@@ -26,11 +26,11 @@ ssh root@${APPS_IP} "ls -la ${FAILED_PATH}/ 2>/dev/null || echo 'Failed deployme
 echo ""
 
 echo "=== Systemd Service Status ==="
-ssh root@${APPS_IP} "systemctl status agent-manager.service"
+ssh root@${APPS_IP} "systemctl status busibox-agents.service"
 echo ""
 
 echo "=== Service Logs (last 50 lines) ==="
-ssh root@${APPS_IP} "journalctl -u agent-manager.service -n 50 --no-pager 2>/dev/null || echo 'No logs found'"
+ssh root@${APPS_IP} "journalctl -u busibox-agents.service -n 50 --no-pager 2>/dev/null || echo 'No logs found'"
 echo ""
 
 echo "=== Check if port 3001 is listening ==="

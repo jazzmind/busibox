@@ -47,7 +47,7 @@ server {
     root /var/www/placeholder;
     index index.html;
     
-    # Path routing for agent-manager (exact match)
+    # Path routing for busibox-agents (exact match)
     location = /agents {
         try_files /agents.html =404;
     }
@@ -62,7 +62,7 @@ server {
         try_files /innovation.html =404;
     }
     
-    # Root / home - ai-portal
+    # Root / home - busibox-portal
     location / {
         try_files /index.html =404;
     }

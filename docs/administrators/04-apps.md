@@ -27,8 +27,8 @@ Core apps ship with Busibox and are deployed automatically:
 
 | App | Path | Purpose |
 |-----|------|---------|
-| **AI Portal** | `/` | Main dashboard, document management, admin settings |
-| **Agent Manager** | `/agents/` | Agent configuration, chat interface, workflow builder |
+| **Busibox Portal** | `/` | Main dashboard, document management, admin settings |
+| **Busibox Agents** | `/agents/` | Agent configuration, chat interface, workflow builder |
 
 ### Deploying Core Apps
 
@@ -37,11 +37,11 @@ Core apps ship with Busibox and are deployed automatically:
 make install SERVICE=core-apps
 
 # Deploy individually
-make install SERVICE=ai-portal
-make install SERVICE=agent-manager
+make install SERVICE=busibox-portal
+make install SERVICE=busibox-agents
 
 # Deploy a specific version
-make install SERVICE=ai-portal REF=v1.2.3
+make install SERVICE=busibox-portal REF=v1.2.3
 ```
 
 To rebuild core apps without restarting the container, use the **Rebuild App** option in `make manage` → core-apps. See [Core App Rebuild](../developers/reference/core-app-rebuild.md).
@@ -50,16 +50,16 @@ To rebuild core apps without restarting the container, use the **Rebuild App** o
 
 ```bash
 # Check status
-make manage SERVICE=ai-portal ACTION=status
+make manage SERVICE=busibox-portal ACTION=status
 
 # View logs
-make manage SERVICE=ai-portal ACTION=logs
+make manage SERVICE=busibox-portal ACTION=logs
 
 # Restart
-make manage SERVICE=ai-portal ACTION=restart
+make manage SERVICE=busibox-portal ACTION=restart
 
 # Full redeploy (pull, build, restart)
-make manage SERVICE=ai-portal ACTION=redeploy
+make manage SERVICE=busibox-portal ACTION=redeploy
 ```
 
 For GitHub Packages (npm) authentication and user app development mode, see [GitHub Packages Authentication](../developers/reference/github-packages-authentication.md) and [User App Dev Mode](../developers/reference/user-app-dev-mode.md).
@@ -74,8 +74,8 @@ Each app is defined in `apps.yml`:
 
 ```yaml
 apps:
-  - name: status-report
-    repo: "https://github.com/org/status-report.git"
+  - name: busibox-projects
+    repo: "https://github.com/org/busibox-projects.git"
     port: 3003
     path: /status
     auto_deploy: false
@@ -97,15 +97,15 @@ apps:
 
 ```bash
 # Deploy a specific app
-make install SERVICE=status-report
+make install SERVICE=busibox-projects
 
 # Deploy a specific version/branch
-make install SERVICE=status-report REF=main
+make install SERVICE=busibox-projects REF=main
 ```
 
-### Installing via AI Portal
+### Installing via Busibox Portal
 
-Admins can also install apps through the AI Portal admin interface:
+Admins can also install apps through the Busibox Portal admin interface:
 
 1. Navigate to **Admin > Apps**
 2. Click **Install Custom App**
@@ -142,10 +142,10 @@ If a database is required, the Deploy API will automatically provision it in Pos
 
 ```bash
 # Pull latest code and rebuild
-make manage SERVICE=status-report ACTION=redeploy
+make manage SERVICE=busibox-projects ACTION=redeploy
 
 # Deploy a specific version
-make install SERVICE=status-report REF=v2.0.0
+make install SERVICE=busibox-projects REF=v2.0.0
 ```
 
 ### Rolling Back
@@ -153,24 +153,24 @@ make install SERVICE=status-report REF=v2.0.0
 Deploy a previous version by specifying the git ref:
 
 ```bash
-make install SERVICE=status-report REF=v1.9.0
+make install SERVICE=busibox-projects REF=v1.9.0
 ```
 
 ### Stopping and Starting
 
 ```bash
-make manage SERVICE=status-report ACTION=stop
-make manage SERVICE=status-report ACTION=start
+make manage SERVICE=busibox-projects ACTION=stop
+make manage SERVICE=busibox-projects ACTION=start
 ```
 
 ### Viewing Logs
 
 ```bash
 # Follow logs in real-time
-make manage SERVICE=status-report ACTION=logs
+make manage SERVICE=busibox-projects ACTION=logs
 ```
 
-Logs are also available through the AI Portal's admin log viewer.
+Logs are also available through the Busibox Portal's admin log viewer.
 
 ## App Access Control
 
@@ -187,7 +187,7 @@ Users without the required role won't see the app in the portal launcher.
 Apps may need secrets (API keys, database credentials). These are managed through:
 
 1. **Ansible Vault** -- for secrets defined in `apps.yml` env_vars
-2. **AI Portal Admin** -- for secrets managed through the deployment UI
+2. **Busibox Portal Admin** -- for secrets managed through the deployment UI
 
 Secrets are injected as environment variables at deploy time and never stored in the app's git repository.
 
@@ -197,9 +197,9 @@ Each app gets a path-based route through nginx:
 
 | App | URL Path |
 |-----|----------|
-| AI Portal | `/` |
-| Agent Manager | `/agents/` |
-| Status Report | `/status/` |
+| Busibox Portal | `/` |
+| Busibox Agents | `/agents/` |
+| Busibox Projects | `/status/` |
 | Custom App | `/<configured-path>/` |
 
 Nginx configuration is updated automatically when apps are deployed. To manually reload:

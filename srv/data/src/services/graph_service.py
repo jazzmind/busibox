@@ -861,11 +861,12 @@ class GraphService:
             
             owner_filter = ""
             if owner_id:
-                owner_filter = "AND (d.owner_id = $owner_id OR d.visibility = 'shared')"
+                owner_filter = "WHERE (d.owner_id = $owner_id OR d.visibility = 'shared')"
                 params["owner_id"] = owner_id
             
             # Find the Document node and all entities connected via
-            # MENTIONED_IN or KEYWORD_OF relationships
+            # MENTIONED_IN or KEYWORD_OF relationships.
+            # Note: elementId() replaces deprecated id() in Neo4j 5.x+
             cypher = (
                 f"MATCH (d:Document {{node_id: $document_id}}) {owner_filter} "
                 f"OPTIONAL MATCH (e)-[:MENTIONED_IN|KEYWORD_OF]->(d) "
@@ -876,7 +877,7 @@ class GraphService:
                 f"WITH collect(n) as nodeList "
                 f"UNWIND nodeList as n1 "
                 f"UNWIND nodeList as n2 "
-                f"WITH nodeList, n1, n2 WHERE id(n1) < id(n2) "
+                f"WITH nodeList, n1, n2 WHERE elementId(n1) < elementId(n2) "
                 f"OPTIONAL MATCH (n1)-[r]-(n2) "
                 f"WITH nodeList, collect(CASE WHEN r IS NOT NULL THEN "
                 f"{{type: type(r), from: n1.node_id, to: n2.node_id}} END) as rels "
@@ -952,17 +953,48 @@ class GraphService:
         try:
             async with self._driver.session() as session:
                 # 1) Fetch candidate projects
-                project_result = await session.run(
+                query = (
                     f"MATCH (p:{safe_label}) "
                     f"{owner_filter}"
+                    f"OPTIONAL MATCH (child:GraphNode)-[:BELONGS_TO]->(p) "
+                    f"WITH p, collect(DISTINCT CASE "
+                    f"WHEN child IS NULL THEN '' "
+                    f"ELSE coalesce(child.name, '') + ' ' + "
+                    f"coalesce(child.title, '') + ' ' + "
+                    f"coalesce(child.description, '') + ' ' + "
+                    f"coalesce(child.content, '') "
+                    f"END) as connected_texts "
                     f"RETURN p.node_id as node_id, "
                     f"coalesce(p.name, '') as name, "
                     f"coalesce(p.description, '') as description, "
                     f"coalesce(p.tags, []) as tags, "
-                    f"coalesce(p.team, []) as team",
-                    **params,
+                    f"coalesce(p.team, []) as team, "
+                    f"connected_texts"
                 )
+                logger.info(
+                    "[GRAPH] Similarity query",
+                    query=query,
+                    params=params,
+                    label=safe_label,
+                    owner_filter=owner_filter,
+                )
+                project_result = await session.run(query, **params)
                 projects = [dict(record) async for record in project_result]
+
+                logger.info(
+                    "[GRAPH] Similarity candidates",
+                    project_count=len(projects),
+                    projects=[
+                        {
+                            "node_id": p.get("node_id"),
+                            "name": p.get("name"),
+                            "tags": p.get("tags"),
+                            "team": p.get("team"),
+                            "connected_texts_count": len(p.get("connected_texts", [])),
+                        }
+                        for p in projects
+                    ],
+                )
 
                 if len(projects) < 2:
                     return {
@@ -1000,14 +1032,111 @@ class GraphService:
                     )
                     text_score = self._jaccard_similarity(
                         self._normalize_text_tokens(
-                            f"{project_a.get('name', '')} {project_a.get('description', '')}"
+                            " ".join(
+                                [
+                                    str(project_a.get("name", "")),
+                                    str(project_a.get("description", "")),
+                                    " ".join(
+                                        [
+                                            str(v)
+                                            for v in project_a.get("connected_texts", [])
+                                            if isinstance(v, str) and v.strip()
+                                        ]
+                                    ),
+                                ]
+                            )
                         ),
                         self._normalize_text_tokens(
-                            f"{project_b.get('name', '')} {project_b.get('description', '')}"
+                            " ".join(
+                                [
+                                    str(project_b.get("name", "")),
+                                    str(project_b.get("description", "")),
+                                    " ".join(
+                                        [
+                                            str(v)
+                                            for v in project_b.get("connected_texts", [])
+                                            if isinstance(v, str) and v.strip()
+                                        ]
+                                    ),
+                                ]
+                            )
+                        ),
+                    )
+                    name_score = self._jaccard_similarity(
+                        self._normalize_text_tokens(str(project_a.get("name", ""))),
+                        self._normalize_text_tokens(str(project_b.get("name", ""))),
+                    )
+                    char_score = self._char_ngram_similarity(
+                        " ".join(
+                            [
+                                str(project_a.get("name", "")),
+                                str(project_a.get("description", "")),
+                                " ".join(
+                                    [
+                                        str(v)
+                                        for v in project_a.get("connected_texts", [])
+                                        if isinstance(v, str) and v.strip()
+                                    ]
+                                ),
+                            ]
+                        ),
+                        " ".join(
+                            [
+                                str(project_b.get("name", "")),
+                                str(project_b.get("description", "")),
+                                " ".join(
+                                    [
+                                        str(v)
+                                        for v in project_b.get("connected_texts", [])
+                                        if isinstance(v, str) and v.strip()
+                                    ]
+                                ),
+                            ]
                         ),
                     )
 
-                    score = round((0.45 * tags_score) + (0.25 * team_score) + (0.30 * text_score), 4)
+                    # Adaptive weighting: if tags and team are both empty for
+                    # a pair, redistribute their weight to text-based scores
+                    # so the total still sums to 1.0.
+                    a_has_tags = bool(project_a.get("tags"))
+                    b_has_tags = bool(project_b.get("tags"))
+                    a_has_team = bool(project_a.get("team"))
+                    b_has_team = bool(project_b.get("team"))
+
+                    w_tags = 0.25 if (a_has_tags and b_has_tags) else 0.0
+                    w_team = 0.15 if (a_has_team and b_has_team) else 0.0
+                    w_text = 0.30
+                    w_name = 0.10
+                    w_char = 0.15
+                    # Redistribute unused weight proportionally to text scores
+                    unused = 1.0 - (w_tags + w_team + w_text + w_name + w_char)
+                    if unused > 0:
+                        text_total = w_text + w_name + w_char
+                        w_text += unused * (w_text / text_total)
+                        w_name += unused * (w_name / text_total)
+                        w_char += unused * (w_char / text_total)
+
+                    score = round(
+                        (w_tags * tags_score)
+                        + (w_team * team_score)
+                        + (w_text * text_score)
+                        + (w_name * name_score)
+                        + (w_char * char_score),
+                        4,
+                    )
+                    logger.info(
+                        "[GRAPH] Similarity pair",
+                        a_name=project_a.get("name"),
+                        b_name=project_b.get("name"),
+                        tags_score=round(tags_score, 4),
+                        team_score=round(team_score, 4),
+                        text_score=round(text_score, 4),
+                        name_score=round(name_score, 4),
+                        char_score=round(char_score, 4),
+                        total_score=score,
+                        threshold=threshold,
+                        above_threshold=score >= threshold,
+                    )
                     if score < threshold:
                         continue
 
@@ -1023,6 +1152,8 @@ class GraphService:
                         "tags_score": round(tags_score, 4),
                         "team_score": round(team_score, 4),
                         "text_score": round(text_score, 4),
+                        "name_score": round(name_score, 4),
+                        "char_score": round(char_score, 4),
                         "computed_at": timestamp,
                     }
                     if owner_id:
@@ -1047,7 +1178,9 @@ class GraphService:
                         "r.similarity_score = $score, "
                         "r.tags_similarity = $tags_score, "
                         "r.team_similarity = $team_score, "
-                        "r.text_similarity = $text_score "
+                        "r.text_similarity = $text_score, "
+                        "r.name_similarity = $name_score, "
+                        "r.char_similarity = $char_score "
                         "RETURN (existing IS NULL) as created",
                         **upsert_params,
                     )
@@ -1333,6 +1466,22 @@ class GraphService:
         if union_size == 0:
             return 0.0
         return len(left & right) / union_size
+
+    @staticmethod
+    def _char_ngram_similarity(left_text: str, right_text: str, n: int = 3) -> float:
+        """
+        Character n-gram Jaccard similarity for fuzzy textual overlap.
+
+        Useful when two project descriptions are similar but don't share
+        enough exact word tokens.
+        """
+        left = re.sub(r"[^a-z0-9]+", " ", (left_text or "").lower()).strip()
+        right = re.sub(r"[^a-z0-9]+", " ", (right_text or "").lower()).strip()
+        if len(left) < n or len(right) < n:
+            return 0.0
+        left_grams = {left[i : i + n] for i in range(len(left) - n + 1)}
+        right_grams = {right[i : i + n] for i in range(len(right) - n + 1)}
+        return GraphService._jaccard_similarity(left_grams, right_grams)
 
     @staticmethod
     def _sanitize_label(label: str) -> str:

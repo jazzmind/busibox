@@ -240,6 +240,7 @@ async def upload_file(
     try:
         # Resolve library_id (auto-create personal library if needed for personal files)
         resolved_library_id = library_id
+        resolved_library_type = None  # Track library type for processing decisions
         if visibility == "personal" and not library_id:
             # Ensure user has all personal libraries (DOCS, RESEARCH, TASKS, MEDIA)
             await library_service.ensure_all_personal_libraries(user_id)
@@ -251,11 +252,17 @@ async def upload_file(
             target_lib = next((lib for lib in personal_libs if lib["library_type"] == target_library_type), None)
             if target_lib:
                 resolved_library_id = str(target_lib["id"])
+                resolved_library_type = target_library_type
                 logger.info(
                     f"Auto-assigned to personal {target_library_type} library",
                     file_id=file_id,
                     library_id=resolved_library_id,
                 )
+        elif library_id:
+            # Explicit library_id provided - look up the library type
+            target_lib = await library_service.get_library_by_id(library_id)
+            if target_lib:
+                resolved_library_type = target_lib.get("library_type")
         # Determine storage path based on visibility
         # Personal files: personal/{user_id}/{file_id}/{filename}
         # Shared files: role/{primary_role_id}/{file_id}/{filename}
@@ -440,11 +447,22 @@ async def upload_file(
             is_encrypted=is_encrypted,  # Track encryption status
         )
         
-        # Skip processing queue for video and image files (they're stored but not processed)
+        # Skip processing queue for media files and MEDIA library uploads
+        # Media = video/image by mime type, or any file uploaded to a MEDIA library
         is_video = file.content_type and file.content_type.startswith("video/")
         is_image = file.content_type and file.content_type.startswith("image/")
+        is_media_library = resolved_library_type == "MEDIA"
+        skip_processing = is_video or is_image or is_media_library
         
-        if not is_video and not is_image:
+        if is_media_library and not is_video and not is_image:
+            logger.info(
+                "Skipping ingestion for MEDIA library upload",
+                file_id=file_id,
+                mime_type=file.content_type,
+                library_id=resolved_library_id,
+            )
+        
+        if not skip_processing:
             # Create a delegation token so the worker can perform Zero Trust
             # token exchanges on behalf of this user during processing
             delegation_token = await _create_delegation_token_for_processing(
@@ -492,8 +510,8 @@ async def upload_file(
                 }
             )
         else:
-            # Video and image files are stored but not processed
-            file_type = "Video" if is_video else "Image"
+            # Media files (video/image/MEDIA library) are stored but not processed
+            file_type = "Video" if is_video else "Image" if is_image else "Media"
             logger.info(
                 f"{file_type} file uploaded and stored",
                 file_id=file_id,
@@ -502,6 +520,14 @@ async def upload_file(
                 role_count=len(parsed_role_ids) if parsed_role_ids else 0,
                 content_hash=content_hash,
             )
+            
+            # Mark status as completed since no processing is needed
+            async with pg_service.pool.acquire() as conn:
+                await conn.execute("""
+                    UPDATE data_status
+                    SET stage = 'completed', progress = 100, completed_at = NOW(), updated_at = NOW()
+                    WHERE file_id = $1
+                """, uuid.UUID(file_id))
             
             return JSONResponse(
                 status_code=status.HTTP_200_OK,

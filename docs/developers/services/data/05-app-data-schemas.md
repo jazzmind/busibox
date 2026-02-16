@@ -23,7 +23,7 @@ Apps that store structured data in the data-api can define schemas that:
 2. **Provide display hints** - Control how fields appear in forms and lists
 3. **Declare relationships** - Link documents together for navigation
 
-The AI Portal uses these schemas to render data views with proper formatting, validation, and navigation between related records.
+The Busibox Portal uses these schemas to render data views with proper formatting, validation, and navigation between related records.
 
 ## Schema Structure
 
@@ -121,7 +121,7 @@ interface AppDataFieldDef {
 
 ## Relationships
 
-Relationships allow navigation between related data documents. The AI Portal displays these as clickable links.
+Relationships allow navigation between related data documents. The Busibox Portal displays these as clickable links.
 
 ### Relation Types
 
@@ -180,9 +180,9 @@ const taskSchema: AppDataSchema = {
 };
 ```
 
-## AI Portal Integration
+## Busibox Portal Integration
 
-The AI Portal Admin Data view uses schemas to:
+The Busibox Portal Admin Data view uses schemas to:
 
 1. **Display records** - Uses `displayName`, `itemLabel`, field `label` and `order`
 2. **Render forms** - Uses field types and `widget` hints
@@ -191,7 +191,7 @@ The AI Portal Admin Data view uses schemas to:
 
 ### How It Works
 
-When viewing a data document in AI Portal:
+When viewing a data document in Busibox Portal:
 
 1. **BelongsTo relations**: Shown as inline links on each record
    - Example: Task shows "Project: My Project" as a clickable link
@@ -244,7 +244,7 @@ await dataApiRequest(token, '/data', {
 
 ## Best Practices
 
-1. **Always set `sourceApp`** - Required for AI Portal to group documents
+1. **Always set `sourceApp`** - Required for Busibox Portal to group documents
 2. **Use meaningful labels** - Helps users understand the data
 3. **Set field order** - Controls display order in forms
 4. **Hide internal fields** - Use `hidden: true` for IDs and timestamps

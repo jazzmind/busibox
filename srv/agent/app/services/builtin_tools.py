@@ -519,6 +519,87 @@ BUILTIN_TOOL_METADATA = {
             }
         }
     },
+    "image_tool": {
+        "name": "generate_image",
+        "description": "Generate an image from a text prompt and return a URL to the generated image.",
+        "entrypoint": "app.tools.image_tool:generate_image",
+        "scopes": ["media:write"],
+        "version": 1,
+        "schema": {
+            "input": {
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "description": "Prompt describing the image to generate"},
+                    "size": {"type": "string", "description": "Image size (e.g. 1024x1024)", "default": "1024x1024"},
+                    "style": {"type": "string", "description": "Optional style guidance"}
+                },
+                "required": ["prompt"]
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "image_url": {"type": "string"},
+                    "revised_prompt": {"type": "string"},
+                    "error": {"type": "string"}
+                }
+            }
+        }
+    },
+    "transcription_tool": {
+        "name": "transcribe_audio",
+        "description": "Transcribe an audio file from URL and return text output.",
+        "entrypoint": "app.tools.transcription_tool:transcribe_audio",
+        "scopes": ["media:read"],
+        "version": 1,
+        "schema": {
+            "input": {
+                "type": "object",
+                "properties": {
+                    "file_url": {"type": "string", "description": "URL to the audio file"},
+                    "language": {"type": "string", "description": "Optional language hint (e.g. en)"}
+                },
+                "required": ["file_url"]
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "text": {"type": "string"},
+                    "language": {"type": "string"},
+                    "duration": {"type": "number"},
+                    "error": {"type": "string"}
+                }
+            }
+        }
+    },
+    "tts_tool": {
+        "name": "text_to_speech",
+        "description": "Convert text to speech and return a URL to the generated audio file.",
+        "entrypoint": "app.tools.tts_tool:text_to_speech",
+        "scopes": ["media:write"],
+        "version": 1,
+        "schema": {
+            "input": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "Text to synthesize into speech"},
+                    "voice": {"type": "string", "description": "Voice preset", "default": "alloy"},
+                    "speed": {"type": "number", "description": "Speech speed", "default": 1.0}
+                },
+                "required": ["text"]
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "audio_url": {"type": "string"},
+                    "duration_seconds": {"type": "number"},
+                    "error": {"type": "string"}
+                }
+            }
+        }
+    },
     # Extraction schema tool
     "extraction_schema_tool": {
         "name": "create_extraction_schema",
@@ -669,6 +750,10 @@ def get_tool_executor(tool_name: str) -> Optional[Callable]:
         "create_library_trigger": ("app.tools.library_trigger_tool", "create_library_trigger"),
         # Extraction schema tool
         "create_extraction_schema": ("app.tools.extraction_schema_tool", "create_extraction_schema"),
+        # Media tools
+        "generate_image": ("app.tools.image_tool", "generate_image"),
+        "transcribe_audio": ("app.tools.transcription_tool", "transcribe_audio"),
+        "text_to_speech": ("app.tools.tts_tool", "text_to_speech"),
     }
     
     if tool_name not in executors:
@@ -720,6 +805,10 @@ def get_tool_object(tool_name: str) -> Optional[Any]:
         "create_library_trigger": ("app.tools.library_trigger_tool", "create_library_trigger_tool"),
         # Extraction schema tool
         "create_extraction_schema": ("app.tools.extraction_schema_tool", "create_extraction_schema_tool"),
+        # Media tools
+        "generate_image": ("app.tools.image_tool", "image_tool"),
+        "transcribe_audio": ("app.tools.transcription_tool", "transcription_tool"),
+        "text_to_speech": ("app.tools.tts_tool", "tts_tool"),
     }
     
     if tool_name not in tool_objects:

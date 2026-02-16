@@ -33,7 +33,7 @@ This document provides an index of OpenAPI specifications for Busibox APIs and e
 - `/admin/user-roles` - User-role bindings
 - `/admin/oauth-clients` - OAuth client management
 - `/admin/users/{user_id}/roles` - User role queries
-- `/internal/sync/user` - User sync from ai-portal
+- `/internal/sync/user` - User sync from busibox-portal
 - `/authz/audit` - Audit logging
 - `/health` - Health checks
 

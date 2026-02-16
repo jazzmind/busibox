@@ -364,6 +364,11 @@ def get_authz_schema() -> SchemaManager:
     # Users
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_authz_users_email ON authz_users(email)")
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_authz_users_status ON authz_users(status)")
+    schema.add_migration("ALTER TABLE authz_users ADD COLUMN IF NOT EXISTS display_name text NULL")
+    schema.add_migration("ALTER TABLE authz_users ADD COLUMN IF NOT EXISTS first_name text NULL")
+    schema.add_migration("ALTER TABLE authz_users ADD COLUMN IF NOT EXISTS last_name text NULL")
+    schema.add_migration("ALTER TABLE authz_users ADD COLUMN IF NOT EXISTS avatar_url text NULL")
+    schema.add_migration("ALTER TABLE authz_users ADD COLUMN IF NOT EXISTS favorite_color text NULL")
     
     # User roles
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_authz_user_roles_user ON authz_user_roles(user_id)")

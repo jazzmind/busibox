@@ -157,7 +157,7 @@ Different agents can use different models. Configure the default model for agent
 |----------|---------|
 | `AGENT_SERVER_DEFAULT_MODEL` | Default model for all agents |
 
-Individual agents can override this in their configuration through the Agent Manager interface.
+Individual agents can override this in their configuration through the Busibox Agents interface.
 
 ### Recommended Model Assignments
 

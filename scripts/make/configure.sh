@@ -608,10 +608,10 @@ container_configuration() {
 
 app_configuration() {
     # Check if we're on Proxmox without local app repos
-    local AI_PORTAL_DIR="${AI_PORTAL_DIR:-$(cd "${REPO_ROOT}/../ai-portal" 2>/dev/null && pwd || echo "")}"
+    local BUSIBOX_PORTAL_DIR="${BUSIBOX_PORTAL_DIR:-$(cd "${REPO_ROOT}/../busibox-portal" 2>/dev/null && pwd || echo "")}"
     local has_local_repos=true
     
-    if [[ -z "$AI_PORTAL_DIR" ]] || [[ ! -d "$AI_PORTAL_DIR" ]]; then
+    if [[ -z "$BUSIBOX_PORTAL_DIR" ]] || [[ ! -d "$BUSIBOX_PORTAL_DIR" ]]; then
         has_local_repos=false
     fi
     
@@ -619,14 +619,14 @@ app_configuration() {
         echo ""
         
         if [[ "$has_local_repos" == "false" ]]; then
-            warn "ai-portal directory not found locally"
+            warn "busibox-portal directory not found locally"
             info "On Proxmox, app configuration must be run from the apps container"
             echo ""
             echo "To configure apps, SSH to the apps container and run:"
-            echo "  ${CYAN}cd /srv/apps/ai-portal && npx tsx scripts/activate-user.ts${NC}"
-            echo "  ${CYAN}cd /srv/apps/ai-portal && npx tsx scripts/fix-builtin-apps.ts${NC}"
+            echo "  ${CYAN}cd /srv/apps/busibox-portal && npx tsx scripts/activate-user.ts${NC}"
+            echo "  ${CYAN}cd /srv/apps/busibox-portal && npx tsx scripts/fix-builtin-apps.ts${NC}"
             echo ""
-            echo "Or set AI_PORTAL_DIR environment variable if ai-portal is elsewhere."
+            echo "Or set BUSIBOX_PORTAL_DIR environment variable if busibox-portal is elsewhere."
             echo ""
             
             menu "App Configuration (Limited - No Local Repos)" \
@@ -762,7 +762,7 @@ configure_dev_apps_dir() {
     echo ""
     info "Dev Apps Directory is used for local development with hot-reload."
     echo ""
-    echo "When set, you can deploy apps in 'Local Development' mode from AI Portal."
+    echo "When set, you can deploy apps in 'Local Development' mode from Busibox Portal."
     echo "The directory should contain your app source code as ${BOLD}actual subdirectories${NC}."
     echo ""
     warn "IMPORTANT: Docker cannot follow symlinks in volume mounts!"
@@ -771,7 +771,7 @@ configure_dev_apps_dir() {
     echo "Example structure:"
     echo "  /Users/you/Code/"
     echo "    ├── estimator/        <- Your app with busibox.json"
-    echo "    ├── project-analysis/ <- Another app"
+    echo "    ├── busibox-analysis/ <- Another app"
     echo "    └── my-app/           <- etc."
     echo ""
     echo "Tip: Point DEV_APPS_DIR to your main code directory (e.g., ~/Code)"

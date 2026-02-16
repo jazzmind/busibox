@@ -154,7 +154,7 @@ class TestPVTSSHConnectivity:
         import socket
         
         # Test a few key service hostnames
-        hostnames_to_test = ["postgres", "redis", "ai-portal"]
+        hostnames_to_test = ["postgres", "redis", "busibox-portal"]
         
         for hostname in hostnames_to_test:
             try:

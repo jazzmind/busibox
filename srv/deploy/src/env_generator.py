@@ -103,10 +103,22 @@ def generate_env_vars(
     # Base environment
     env['NODE_ENV'] = 'production' if deploy_config.environment == 'production' else 'development'
     env['PORT'] = str(manifest.defaultPort)
+    # Use stable app identity for auth audience checks.
+    env['APP_NAME'] = manifest.id
     
     # Next.js basePath for apps deployed at non-root paths
     if manifest.defaultPath and manifest.defaultPath != '/':
         env['NEXT_PUBLIC_BASE_PATH'] = manifest.defaultPath.rstrip('/')
+
+    # Explicit SSO audiences accepted by apps:
+    # - manifest.id (canonical audience from busibox.json)
+    # - defaultPath segment (legacy/path-based audiences from older app records)
+    audience_values = [manifest.id]
+    if manifest.defaultPath:
+        path_audience = manifest.defaultPath.strip('/').lower()
+        if path_audience and path_audience not in audience_values:
+            audience_values.append(path_audience)
+    env['SSO_AUDIENCE'] = ",".join(audience_values)
     
     # Database URL (if provisioned)
     if database_url:

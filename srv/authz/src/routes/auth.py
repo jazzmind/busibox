@@ -87,6 +87,11 @@ async def _sign_session_jwt(
     user_id: str,
     email: str,
     session_id: str,
+    display_name: str | None = None,
+    first_name: str | None = None,
+    last_name: str | None = None,
+    avatar_url: str | None = None,
+    favorite_color: str | None = None,
     roles: List[dict] = None,
     db=None
 ) -> tuple[str, int]:
@@ -122,13 +127,18 @@ async def _sign_session_jwt(
     claims = {
         "iss": config.issuer,
         "sub": str(user_id),
-        "aud": "ai-portal",  # Session tokens are for ai-portal
+        "aud": "busibox-portal",  # Session tokens are for busibox-portal
         "exp": exp,
         "iat": now,
         "nbf": now,
         "jti": str(session_id),  # Use session ID as JTI for revocation tracking
         "typ": "session",
         "email": email,
+        "name": display_name or " ".join(part for part in [first_name, last_name] if part) or None,
+        "given_name": first_name,
+        "family_name": last_name,
+        "picture": avatar_url,
+        "favorite_color": favorite_color,
         "roles": [{"id": r["id"], "name": r["name"]} for r in (roles or [])],
     }
     
@@ -313,7 +323,7 @@ async def create_session(request: Request):
     """
     Create or sync a session.
     
-    Used by ai-portal to sync better-auth sessions to authz.
+    Used by busibox-portal to sync better-auth sessions to authz.
     
     Body:
     - client_id, client_secret (OAuth client auth)
@@ -418,6 +428,11 @@ async def validate_session(request: Request, token: str):
         user_id=session["user_id"],
         email=email,
         session_id=session["session_id"],
+        display_name=user.get("display_name"),
+        first_name=user.get("first_name"),
+        last_name=user.get("last_name"),
+        avatar_url=user.get("avatar_url"),
+        favorite_color=user.get("favorite_color"),
         roles=user_roles,
         db=db
     )
@@ -898,6 +913,11 @@ async def use_magic_link(request: Request, token: str):
         user_id=user["user_id"],
         email=user["email"],
         session_id=session["session_id"],
+        display_name=user.get("display_name"),
+        first_name=user.get("first_name"),
+        last_name=user.get("last_name"),
+        avatar_url=user.get("avatar_url"),
+        favorite_color=user.get("favorite_color"),
         roles=user_roles,
         db=db,
     )
@@ -939,7 +959,7 @@ async def create_totp_code(request: Request):
     - email: string (required)
     - expires_in_seconds: int (default: 300 = 5 minutes)
     
-    Returns the plaintext code (to be sent via email by ai-portal).
+    Returns the plaintext code (to be sent via email by busibox-portal).
     """
     await _require_client_auth(request)
     
@@ -1018,6 +1038,11 @@ async def verify_totp_code(request: Request):
         user_id=user["user_id"],
         email=user["email"],
         session_id=session["session_id"],
+        display_name=user.get("display_name"),
+        first_name=user.get("first_name"),
+        last_name=user.get("last_name"),
+        avatar_url=user.get("avatar_url"),
+        favorite_color=user.get("favorite_color"),
         roles=user_roles,
         db=db,
     )
@@ -1294,7 +1319,7 @@ async def authenticate_with_passkey(request: Request):
     """
     Authenticate using a passkey.
     
-    The caller (ai-portal) is responsible for:
+    The caller (busibox-portal) is responsible for:
     1. Getting the challenge from /auth/passkeys/challenge
     2. Calling navigator.credentials.get() in the browser
     3. Verifying the signature against the stored public key
@@ -1342,6 +1367,11 @@ async def authenticate_with_passkey(request: Request):
         user_id=user["user_id"],
         email=user["email"],
         session_id=session["session_id"],
+        display_name=user.get("display_name"),
+        first_name=user.get("first_name"),
+        last_name=user.get("last_name"),
+        avatar_url=user.get("avatar_url"),
+        favorite_color=user.get("favorite_color"),
         roles=user_roles,
         db=db,
     )

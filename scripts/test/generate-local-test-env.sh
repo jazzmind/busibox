@@ -191,7 +191,7 @@ try:
     print(f"AUTHZ_MASTER_KEY={master_key}")
     
     # Bootstrap client - uses jwt_secret as the shared secret (same as deployed services)
-    # ai-portal client is created with jwt_secret as its secret
+    # busibox-portal client is created with jwt_secret as its secret
     jwt_secret = secrets.get('jwt_secret', '')
     
     # Test credentials

@@ -66,7 +66,7 @@ async def data_content(
         content: Text or markdown content
         title: Document title
         url: Optional source URL
-        folder: Target folder name (resolved via AI Portal API)
+        folder: Target folder name (resolved via Busibox Portal API)
         library_id: Target library ID (alternative to folder)
         metadata: Additional metadata
     
@@ -274,7 +274,7 @@ async def _resolve_library_from_folder(
     """
     Resolve a folder name to a library ID using the local library service.
     
-    This replaces the previous implementation that called AI Portal API.
+    This replaces the previous implementation that called Busibox Portal API.
     The library service handles folder name mapping and auto-creates
     personal libraries (DOCS, RESEARCH, TASKS) if they don't exist.
     

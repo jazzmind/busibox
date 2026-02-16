@@ -126,7 +126,7 @@ _get_github_token() {
 }
 
 # Get GitHub repo name for an app from Ansible config
-# Usage: _get_app_github_repo "ai-portal"
+# Usage: _get_app_github_repo "busibox-portal"
 # Returns: "owner/repo" or empty string
 _get_app_github_repo() {
     local app_name=$1
@@ -243,7 +243,7 @@ check_service_status() {
         docker)
             # Check if service runs on host (not in Docker)
             case "$service" in
-                ai-portal)
+                busibox-portal)
                     # Check if something is listening on port 3000
                     if lsof -i :3000 -sTCP:LISTEN -t >/dev/null 2>&1; then
                         echo "up"
@@ -252,7 +252,7 @@ check_service_status() {
                     fi
                     return
                     ;;
-                agent-manager)
+                busibox-agents)
                     # Check if something is listening on port 3001
                     if lsof -i :3001 -sTCP:LISTEN -t >/dev/null 2>&1; then
                         echo "up"
@@ -368,17 +368,17 @@ check_service_status() {
                         echo "down"
                     fi
                     ;;
-                agent-manager)
+                busibox-agents)
                     # Agent manager is systemd but service name might be agent-client (legacy)
-                    if timeout $SSH_TIMEOUT ssh -o ConnectTimeout=$SSH_TIMEOUT -o StrictHostKeyChecking=no "root@${container_ip}" "systemctl is-active agent-manager 2>/dev/null || systemctl is-active agent-client 2>/dev/null" | grep -q "^active$"; then
+                    if timeout $SSH_TIMEOUT ssh -o ConnectTimeout=$SSH_TIMEOUT -o StrictHostKeyChecking=no "root@${container_ip}" "systemctl is-active busibox-agents 2>/dev/null || systemctl is-active agent-client 2>/dev/null" | grep -q "^active$"; then
                         echo "up"
                     else
                         echo "down"
                     fi
                     ;;
-                ai-portal)
-                    # AI Portal runs as systemd service
-                    if timeout $SSH_TIMEOUT ssh -o ConnectTimeout=$SSH_TIMEOUT -o StrictHostKeyChecking=no "root@${container_ip}" "systemctl is-active ai-portal" 2>/dev/null | grep -q "^active$"; then
+                busibox-portal)
+                    # Busibox Portal runs as systemd service
+                    if timeout $SSH_TIMEOUT ssh -o ConnectTimeout=$SSH_TIMEOUT -o StrictHostKeyChecking=no "root@${container_ip}" "systemctl is-active busibox-portal" 2>/dev/null | grep -q "^active$"; then
                         echo "up"
                     else
                         echo "down"
@@ -645,10 +645,10 @@ get_deployed_version() {
             
             # Handle Next.js apps (volume-mounted in Docker, so read from host)
             case "$service" in
-                ai-portal)
+                busibox-portal)
                     # Apps are volume-mounted, so read from host repo
-                    if [[ -d "${REPO_ROOT}/../ai-portal/.git" ]]; then
-                        version=$(cd "${REPO_ROOT}/../ai-portal" && git rev-parse --short HEAD 2>/dev/null)
+                    if [[ -d "${REPO_ROOT}/../busibox-portal/.git" ]]; then
+                        version=$(cd "${REPO_ROOT}/../busibox-portal" && git rev-parse --short HEAD 2>/dev/null)
                         if [[ -n "$version" ]]; then
                             echo "$version"
                         else
@@ -659,10 +659,10 @@ get_deployed_version() {
                     fi
                     return
                     ;;
-                agent-manager)
+                busibox-agents)
                     # Apps are volume-mounted, so read from host repo
-                    if [[ -d "${REPO_ROOT}/../agent-manager/.git" ]]; then
-                        version=$(cd "${REPO_ROOT}/../agent-manager" && git rev-parse --short HEAD 2>/dev/null)
+                    if [[ -d "${REPO_ROOT}/../busibox-agents/.git" ]]; then
+                        version=$(cd "${REPO_ROOT}/../busibox-agents" && git rev-parse --short HEAD 2>/dev/null)
                         if [[ -n "$version" ]]; then
                             echo "$version"
                         else
@@ -809,7 +809,7 @@ get_deployed_version() {
                     ;;
                     
                 # Next.js apps - read from .deployed-version file created by deploywatch
-                ai-portal|agent-manager)
+                busibox-portal|busibox-agents)
                     # Apps are deployed to /srv/apps/{service-name}
                     local app_path="/srv/apps/${service}"
                     # Read .deployed-version and extract commit hash (first 7 chars)
@@ -896,7 +896,7 @@ get_current_version() {
             return
             ;;
         # Apps come from their own repos - check local first, then remote with token
-        ai-portal|agent-manager)
+        busibox-portal|busibox-agents)
             if [[ -d "${REPO_ROOT}/../${service}/.git" ]]; then
                 (cd "${REPO_ROOT}/../${service}" && git rev-parse --short HEAD 2>/dev/null) || echo "unknown"
             else
@@ -927,11 +927,11 @@ get_current_version() {
         busibox)
             git_dir="${_STATUS_SCRIPT_DIR}/../.."
             ;;
-        ai-portal)
-            git_dir="${_STATUS_SCRIPT_DIR}/../../../ai-portal"
+        busibox-portal)
+            git_dir="${_STATUS_SCRIPT_DIR}/../../../busibox-portal"
             ;;
-        agent-manager)
-            git_dir="${_STATUS_SCRIPT_DIR}/../../../agent-manager"
+        busibox-agents)
+            git_dir="${_STATUS_SCRIPT_DIR}/../../../busibox-agents"
             ;;
         *)
             echo "unknown"

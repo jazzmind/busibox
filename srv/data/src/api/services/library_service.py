@@ -3,7 +3,7 @@ Library Service for managing document libraries.
 
 Handles library CRUD operations, personal library management, and folder resolution.
 This service consolidates library management that was previously split between
-AI Portal and data-api.
+Busibox Portal and data-api.
 
 RLS (Row-Level Security):
 - Libraries table does NOT have RLS (application-level filtering)
@@ -412,7 +412,7 @@ class LibraryService:
             is_personal: Whether this is a personal library
             user_id: Owner user ID (for personal libraries)
             library_type: Type of personal library (DOCS, RESEARCH, TASKS)
-            library_id: Optional explicit library ID (for syncing from AI Portal)
+            library_id: Optional explicit library ID (for syncing from Busibox Portal)
             
         Returns:
             Created library record

@@ -46,3 +46,8 @@ class AccessTokenClaims(BaseModel):
     # User email for display purposes
     # Included in access tokens so downstream apps can display user info
     email: Optional[str] = None
+    name: Optional[str] = None
+    given_name: Optional[str] = None
+    family_name: Optional[str] = None
+    picture: Optional[str] = None
+    favorite_color: Optional[str] = None

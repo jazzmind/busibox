@@ -766,7 +766,7 @@ apis_menu() {
     done
 }
 
-# Apps deployment submenu (ai-portal, agent-manager)
+# Apps deployment submenu (busibox-portal, busibox-agents)
 deploy_apps_menu() {
     local env="$1"
     
@@ -778,7 +778,7 @@ deploy_apps_menu() {
         echo ""
         
         echo -e "  ${CYAN}1)${NC} Deploy All Apps (latest release)"
-        echo -e "  ${CYAN}2)${NC} Deploy AI Portal"
+        echo -e "  ${CYAN}2)${NC} Deploy Busibox Portal"
         echo -e "  ${CYAN}3)${NC} Deploy Agent Manager"
         echo -e "  ${CYAN}4)${NC} Back"
         echo ""
@@ -794,11 +794,11 @@ deploy_apps_menu() {
                 pause
                 ;;
             2)
-                deploy_single_app "ai-portal" "AI Portal" "$env"
+                deploy_single_app "busibox-portal" "Busibox Portal" "$env"
                 pause
                 ;;
             3)
-                deploy_single_app "agent-manager" "Agent Manager" "$env"
+                deploy_single_app "busibox-agents" "Agent Manager" "$env"
                 pause
                 ;;
             4)
@@ -861,7 +861,7 @@ deployment_menu() {
             "Deploy Core Services (nginx, minio, postgres, milvus)" \
             "Deploy LLM Services (vllm, litellm, colpali)" \
             "Deploy APIs (authz, data, search, agent, docs)" \
-            "Deploy Apps (ai-portal, agent-manager)" \
+            "Deploy Apps (busibox-portal, busibox-agents)" \
             "Verify Deployment (Health Checks)" \
             "Back to Main Menu"
         

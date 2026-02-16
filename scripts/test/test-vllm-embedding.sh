@@ -242,7 +242,7 @@ echo "  To change: Update model_purposes.embedding and redeploy"
 echo ""
 echo "Next steps:"
 echo "  1. Deploy data service: cd provision/ansible && make data"
-echo "  2. Upload test document via AI Portal"
+echo "  2. Upload test document via Busibox Portal"
 echo "  3. Monitor processing: bash scripts/check-document-status.sh"
 echo ""
 

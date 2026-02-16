@@ -151,10 +151,10 @@ if [ -d "prisma/migrations" ]; then
   fi
 fi
 
-{% if busibox_env == 'test' or app_to_deploy.name == 'ai-portal' %}
+{% if busibox_env == 'test' or app_to_deploy.name == 'busibox-portal' %}
 # Run database seeding
 # - Always runs in test environment for all apps
-# - Always runs for ai-portal (creates core apps and role bindings)
+# - Always runs for busibox-portal (creates core apps and role bindings)
 if [ -f "package.json" ] && grep -q '"db:seed"' package.json; then
   echo ""
   echo "========================================"

@@ -6,7 +6,7 @@ Protected by (in order of precedence):
 - OAuth client credentials (service account) with allowed_scopes
 - Admin token (deprecated)
 
-These endpoints allow ai-portal (or other admin tools) to manage users:
+These endpoints allow busibox-portal (or other admin tools) to manage users:
 - Create, list, get, update, delete users
 - Activate, deactivate, reactivate users
 - Manage user roles
@@ -30,7 +30,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field, EmailStr
 
 from config import Config
-from oauth.jwt_auth import require_auth, AuthContext
+from oauth.jwt_auth import require_auth, authenticate_self_service, AuthContext
 
 router = APIRouter()
 config = Config()
@@ -73,14 +73,32 @@ class UserCreate(BaseModel):
     email: EmailStr
     role_ids: List[str] = Field(default_factory=list)
     status: str = Field(default="PENDING", pattern="^(PENDING|ACTIVE|DEACTIVATED)$")
+    display_name: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    favorite_color: Optional[str] = None
 
 
 class UserUpdate(BaseModel):
     email: Optional[EmailStr] = None
     status: Optional[str] = Field(None, pattern="^(PENDING|ACTIVE|DEACTIVATED)$")
+    display_name: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    favorite_color: Optional[str] = None
     email_verified_at: Optional[str] = None
     last_login_at: Optional[str] = None
     pending_expires_at: Optional[str] = None
+
+
+class MeUpdate(BaseModel):
+    display_name: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    favorite_color: Optional[str] = None
 
 
 class RoleResponse(BaseModel):
@@ -96,6 +114,11 @@ class UserResponse(BaseModel):
     user_id: str
     email: str
     status: Optional[str] = None
+    display_name: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    favorite_color: Optional[str] = None
     email_verified_at: Optional[str] = None
     last_login_at: Optional[str] = None
     pending_expires_at: Optional[str] = None
@@ -166,6 +189,11 @@ def _format_user(user: dict) -> dict:
         "user_id": user_id_str,
         "email": user.get("email"),
         "status": user.get("status"),
+        "display_name": user.get("display_name"),
+        "first_name": user.get("first_name"),
+        "last_name": user.get("last_name"),
+        "avatar_url": user.get("avatar_url"),
+        "favorite_color": user.get("favorite_color"),
         "email_verified_at": user.get("email_verified_at").isoformat() if user.get("email_verified_at") else None,
         "last_login_at": user.get("last_login_at").isoformat() if user.get("last_login_at") else None,
         "pending_expires_at": user.get("pending_expires_at").isoformat() if user.get("pending_expires_at") else None,
@@ -245,6 +273,11 @@ async def create_user(request: Request):
     user = await db.create_user(
         email=user_data.email,
         status=user_data.status,
+        display_name=user_data.display_name,
+        first_name=user_data.first_name,
+        last_name=user_data.last_name,
+        avatar_url=user_data.avatar_url,
+        favorite_color=user_data.favorite_color,
         role_ids=user_data.role_ids,
         assigned_by=assigned_by,
     )
@@ -388,6 +421,11 @@ async def update_user(request: Request, user_id: str):
         user_id,
         email=user_data.email,
         status=user_data.status,
+        display_name=user_data.display_name,
+        first_name=user_data.first_name,
+        last_name=user_data.last_name,
+        avatar_url=user_data.avatar_url,
+        favorite_color=user_data.favorite_color,
         email_verified_at=user_data.email_verified_at,
         last_login_at=user_data.last_login_at,
         pending_expires_at=user_data.pending_expires_at,
@@ -423,6 +461,105 @@ async def delete_user(request: Request, user_id: str):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     return {"status": "ok", "deleted": True}
+
+
+@router.get("/me", response_model=UserResponse)
+async def get_me(request: Request):
+    """Get the authenticated user's profile (self-service)."""
+    db = _get_pg(request)
+    await db.connect()
+    auth = await authenticate_self_service(request, db)
+    user = await db.get_user_with_roles(auth.actor_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    return _format_user(user)
+
+
+@router.patch("/me", response_model=UserResponse)
+async def patch_me(request: Request):
+    """Update the authenticated user's profile fields (self-service)."""
+    body = await request.json()
+    try:
+        me_data = MeUpdate.model_validate(body)
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+
+    db = _get_pg(request)
+    await db.connect()
+    auth = await authenticate_self_service(request, db)
+
+    user = await db.update_user(
+        auth.actor_id,
+        display_name=me_data.display_name,
+        first_name=me_data.first_name,
+        last_name=me_data.last_name,
+        avatar_url=me_data.avatar_url,
+        favorite_color=me_data.favorite_color,
+    )
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    return _format_user(user)
+
+
+@router.post("/me/refresh-session")
+async def refresh_session_jwt(request: Request):
+    """
+    Re-sign the caller's session JWT with fresh profile data from the database.
+
+    This is called after a profile update so that downstream apps (navbar, etc.)
+    see the updated display name, avatar, etc. without requiring a full re-login.
+
+    The caller must present a valid session JWT. The endpoint:
+    1. Verifies the session JWT and extracts the session ID (jti)
+    2. Reads the user's current profile + roles from the database
+    3. Re-signs a new session JWT with the same session ID (jti)
+    4. Returns the new JWT
+
+    Returns:
+        { "session_jwt": "<new_jwt>", "expires_at": <unix_timestamp> }
+    """
+    import jwt as pyjwt
+    from routes.auth import _sign_session_jwt
+
+    db = _get_pg(request)
+    await db.connect()
+    auth = await authenticate_self_service(request, db)
+
+    # Extract session ID (jti) from the current session JWT
+    auth_header = request.headers.get("authorization", "")
+    token = auth_header.replace("Bearer ", "").strip() if auth_header.startswith("Bearer ") else ""
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing session JWT")
+
+    try:
+        claims = pyjwt.decode(token, options={"verify_signature": False})
+        session_id = claims.get("jti")
+        if not session_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Session JWT missing jti claim")
+    except pyjwt.DecodeError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JWT") from e
+
+    # Get fresh user data from DB
+    user = await db.get_user_with_roles(auth.actor_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    # Re-sign the session JWT with fresh profile data, preserving the session ID
+    roles = user.get("roles", [])
+    new_jwt, exp = await _sign_session_jwt(
+        user_id=str(user["id"]),
+        email=user["email"],
+        session_id=session_id,
+        display_name=user.get("display_name"),
+        first_name=user.get("first_name"),
+        last_name=user.get("last_name"),
+        avatar_url=user.get("avatar_url"),
+        favorite_color=user.get("favorite_color"),
+        roles=roles,
+        db=db,
+    )
+
+    return {"session_jwt": new_jwt, "expires_at": exp}
 
 
 # ============================================================================

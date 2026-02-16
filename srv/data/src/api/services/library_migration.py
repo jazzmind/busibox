@@ -1,8 +1,8 @@
 """
-Library Migration Service - Migrates libraries from AI Portal to data-api.
+Library Migration Service - Migrates libraries from Busibox Portal to data-api.
 
 This service runs on container startup to automatically migrate library data
-from AI Portal's database to data-api's database.
+from Busibox Portal's database to data-api's database.
 
 The migration is idempotent - it only imports libraries that don't already exist.
 """
@@ -18,28 +18,28 @@ logger = structlog.get_logger()
 
 def get_ai_portal_db_url() -> Optional[str]:
     """
-    Get AI Portal database connection URL from environment.
+    Get Busibox Portal database connection URL from environment.
     
     Returns None if not configured (migration won't run).
     """
-    if url := os.environ.get("AI_PORTAL_DB_URL"):
+    if url := os.environ.get("BUSIBOX_PORTAL_DB_URL"):
         return url
     
     # Check for individual components
-    host = os.environ.get("AI_PORTAL_DB_HOST")
+    host = os.environ.get("BUSIBOX_PORTAL_DB_HOST")
     if not host:
         return None  # Not configured
     
-    port = os.environ.get("AI_PORTAL_DB_PORT", "5432")
-    dbname = os.environ.get("AI_PORTAL_DB_NAME", "ai_portal")
-    user = os.environ.get("AI_PORTAL_DB_USER", "ai_portal")
-    password = os.environ.get("AI_PORTAL_DB_PASSWORD", "")
+    port = os.environ.get("BUSIBOX_PORTAL_DB_PORT", "5432")
+    dbname = os.environ.get("BUSIBOX_PORTAL_DB_NAME", "ai_portal")
+    user = os.environ.get("BUSIBOX_PORTAL_DB_USER", "ai_portal")
+    password = os.environ.get("BUSIBOX_PORTAL_DB_PASSWORD", "")
     
     return f"postgresql://{user}:{password}@{host}:{port}/{dbname}"
 
 
 async def check_ai_portal_has_libraries(portal_conn: asyncpg.Connection) -> bool:
-    """Check if AI Portal has the Library table with data."""
+    """Check if Busibox Portal has the Library table with data."""
     try:
         # Check if table exists and has data
         result = await portal_conn.fetchval(
@@ -49,7 +49,7 @@ async def check_ai_portal_has_libraries(portal_conn: asyncpg.Connection) -> bool
     except asyncpg.UndefinedTableError:
         return False
     except Exception as e:
-        logger.warning("Could not check AI Portal libraries", error=str(e))
+        logger.warning("Could not check Busibox Portal libraries", error=str(e))
         return False
 
 
@@ -60,17 +60,17 @@ async def check_migration_needed(
     """
     Check if migration is needed by comparing library counts.
     
-    Migration is needed if AI Portal has libraries that don't exist in data.
+    Migration is needed if Busibox Portal has libraries that don't exist in data.
     """
     try:
-        # Get count from AI Portal
+        # Get count from Busibox Portal
         portal_count = await portal_conn.fetchval('SELECT COUNT(*) FROM "Library"')
         
         # Get count from ingest
         data_count = await data_conn.fetchval('SELECT COUNT(*) FROM libraries')
         
         if portal_count == 0:
-            logger.info("No libraries in AI Portal, skipping migration")
+            logger.info("No libraries in Busibox Portal, skipping migration")
             return False
         
         if data_count >= portal_count:
@@ -99,12 +99,12 @@ async def migrate_libraries(
     data_conn: asyncpg.Connection,
 ) -> Tuple[int, int]:
     """
-    Migrate libraries from AI Portal to data.
+    Migrate libraries from Busibox Portal to data.
     
     Returns:
         Tuple of (libraries_migrated, tag_caches_migrated)
     """
-    # Fetch libraries from AI Portal
+    # Fetch libraries from Busibox Portal
     libraries = await portal_conn.fetch("""
         SELECT 
             id,
@@ -232,11 +232,11 @@ async def update_file_library_ids(
     data_conn: asyncpg.Connection,
 ) -> int:
     """
-    Update library_id column in data_files based on AI Portal Document records.
+    Update library_id column in data_files based on Busibox Portal Document records.
     
     Returns count of files updated.
     """
-    # Get document-library mappings from AI Portal
+    # Get document-library mappings from Busibox Portal
     documents = await portal_conn.fetch("""
         SELECT id, "libraryId" as library_id
         FROM "Document"
@@ -267,16 +267,16 @@ async def update_file_library_ids(
 
 async def run_migration_if_needed(data_pool: asyncpg.Pool) -> None:
     """
-    Run library migration from AI Portal if needed.
+    Run library migration from Busibox Portal if needed.
     
     This function is called on container startup after schema is applied.
     It's safe to call multiple times (idempotent).
     """
-    # Get AI Portal connection URL
+    # Get Busibox Portal connection URL
     portal_url = get_ai_portal_db_url()
     if not portal_url:
-        print("[library-migration] AI Portal DB not configured, skipping migration")
-        logger.debug("AI Portal DB not configured, skipping library migration")
+        print("[library-migration] Busibox Portal DB not configured, skipping migration")
+        logger.debug("Busibox Portal DB not configured, skipping library migration")
         return
     
     print("[library-migration] Checking for library migration...")
@@ -285,20 +285,20 @@ async def run_migration_if_needed(data_pool: asyncpg.Pool) -> None:
     data_conn = None
     
     try:
-        # Connect to AI Portal
+        # Connect to Busibox Portal
         try:
             portal_conn = await asyncpg.connect(portal_url)
         except Exception as e:
             logger.debug(
-                "Could not connect to AI Portal DB, skipping migration",
+                "Could not connect to Busibox Portal DB, skipping migration",
                 error=str(e)
             )
             return
         
-        # Check if AI Portal has libraries
+        # Check if Busibox Portal has libraries
         has_libraries = await check_ai_portal_has_libraries(portal_conn)
         if not has_libraries:
-            logger.debug("AI Portal has no libraries, skipping migration")
+            logger.debug("Busibox Portal has no libraries, skipping migration")
             return
         
         # Get data connection
@@ -311,8 +311,8 @@ async def run_migration_if_needed(data_pool: asyncpg.Pool) -> None:
             return
         
         # Run migration
-        print("[library-migration] Starting library migration from AI Portal...")
-        logger.info("Starting library migration from AI Portal...")
+        print("[library-migration] Starting library migration from Busibox Portal...")
+        logger.info("Starting library migration from Busibox Portal...")
         
         libs, caches = await migrate_libraries(portal_conn, data_conn)
         files = await update_file_library_ids(portal_conn, data_conn)

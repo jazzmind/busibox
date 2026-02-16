@@ -1,5 +1,5 @@
 """
-Internal-only endpoints used by first-party services (ai-portal) to sync RBAC state.
+Internal-only endpoints used by first-party services (busibox-portal) to sync RBAC state.
 
 These endpoints are protected by OAuth client credentials in request body (client_id/client_secret).
 """
@@ -68,7 +68,7 @@ async def _require_oauth_client(request: Request, body: dict) -> dict:
 async def sync_user(request: Request):
     """
     Upsert user + roles + user_role assignments in authz.
-    Called by ai-portal (server-to-server).
+    Called by busibox-portal (server-to-server).
     """
     body = await request.json()
     await _require_oauth_client(request, body)
@@ -85,11 +85,11 @@ async def sync_user(request: Request):
     # Upsert roles and get mapping of role names to IDs
     role_name_to_id = await db.upsert_roles([r.model_dump() for r in su.roles])
     
-    # Build a mapping of role IDs (from ai-portal) to role names for lookup
+    # Build a mapping of role IDs (from busibox-portal) to role names for lookup
     role_id_to_name = {r.id: r.name for r in su.roles}
     
-    # Resolve user_role_ids: map ai-portal role IDs to actual authz role IDs
-    # This handles the case where ai-portal and authz have the same role name but different IDs
+    # Resolve user_role_ids: map busibox-portal role IDs to actual authz role IDs
+    # This handles the case where busibox-portal and authz have the same role name but different IDs
     resolved_role_ids = []
     for role_id_or_name in su.user_role_ids:
         # Check if it's a UUID (role ID)
@@ -105,7 +105,7 @@ async def sync_user(request: Request):
                 if role_id_or_name in role_id_to_name:
                     role_name = role_id_to_name[role_id_or_name]
                     if role_name in role_name_to_id:
-                        # Use the actual ID from upsert_roles (may be different from ai-portal's ID)
+                        # Use the actual ID from upsert_roles (may be different from busibox-portal's ID)
                         resolved_role_ids.append(role_name_to_id[role_name])
         except ValueError:
             # Not a valid UUID, treat as role name
@@ -122,6 +122,11 @@ async def sync_user(request: Request):
         user_id=su.user_id,
         email=su.email,
         status=su.status,
+        display_name=su.display_name,
+        first_name=su.first_name,
+        last_name=su.last_name,
+        avatar_url=su.avatar_url,
+        favorite_color=su.favorite_color,
         idp_provider=su.idp_provider,
         idp_tenant_id=su.idp_tenant_id,
         idp_object_id=su.idp_object_id,

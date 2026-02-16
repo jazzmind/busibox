@@ -70,9 +70,9 @@ backend_get_services_for_group() {
             ;;
         "Frontend")
             if [[ "$backend" == "docker" ]]; then
-                echo "core-apps"  # nginx is bundled in Docker
+                echo "proxy core-apps"
             elif [[ "$backend" == "k8s" ]]; then
-                echo "nginx ai-portal agent-manager"
+                echo "proxy busibox-portal busibox-agents"
             else
                 echo "nginx core-apps"  # Proxmox has separate nginx
             fi
@@ -138,7 +138,7 @@ get_container_for_service() {
         host-agent) echo "host-agent" ;;
 
         # Frontend
-        core-apps|apps|ai-portal|agent-manager) echo "core-apps" ;;
+        core-apps|apps|busibox-portal|busibox-agents) echo "core-apps" ;;
         nginx|proxy) echo "nginx" ;;
 
         # User apps

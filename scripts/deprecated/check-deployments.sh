@@ -56,16 +56,16 @@ check_nginx() {
 
 echo "=== Direct Service Checks ==="
 check_service "agent-api" "${AGENT_IP}" "8000" "/auth/health"
-check_service "ai-portal" "${APPS_IP}" "3000" "/api/health"
-check_service "agent-manager" "${APPS_IP}" "3001" "/api/health"
+check_service "busibox-portal" "${APPS_IP}" "3000" "/api/health"
+check_service "busibox-agents" "${APPS_IP}" "3001" "/api/health"
 check_service "doc-intel" "${APPS_IP}" "3002" "/api/health"
 check_service "innovation" "${APPS_IP}" "3003" "/api/health"
 
 echo ""
 echo "=== NGINX Proxy Routes ==="
-check_nginx "https://${PROXY_IP}" "ai-portal (IP access)"
-check_nginx "https://ai.jaycashman.com" "ai-portal (domain)"
-check_nginx "https://agents.ai.jaycashman.com" "agent-manager"
+check_nginx "https://${PROXY_IP}" "busibox-portal (IP access)"
+check_nginx "https://ai.jaycashman.com" "busibox-portal (domain)"
+check_nginx "https://agents.ai.jaycashman.com" "busibox-agents"
 check_nginx "https://docs.ai.jaycashman.com" "doc-intel"
 check_nginx "https://innovation.ai.jaycashman.com" "innovation"
 
@@ -76,7 +76,7 @@ ssh root@${PROXY_IP} "ls -la /etc/nginx/sites-enabled/ | grep -v 'total\|^\.$\|^
 
 echo ""
 echo "=== Systemd Services on apps-lxc ==="
-ssh root@${APPS_IP} "systemctl list-units --type=service --state=running | grep -E '(ai-portal|agent-manager|doc-intel|innovation)'" || echo "Could not get service status"
+ssh root@${APPS_IP} "systemctl list-units --type=service --state=running | grep -E '(busibox-portal|busibox-agents|doc-intel|innovation)'" || echo "Could not get service status"
 
 echo ""
 echo "=== Service Logs (last 10 lines) ==="
@@ -85,8 +85,8 @@ echo "--- agent-server ---"
 ssh root@${AGENT_IP} "journalctl -u agent-server -n 10 --no-pager" 2>/dev/null || echo "No logs or service not found"
 
 echo ""
-echo "--- ai-portal ---"
-ssh root@${APPS_IP} "journalctl -u ai-portal -n 10 --no-pager" 2>/dev/null || echo "No logs or service not found"
+echo "--- busibox-portal ---"
+ssh root@${APPS_IP} "journalctl -u busibox-portal -n 10 --no-pager" 2>/dev/null || echo "No logs or service not found"
 
 echo ""
 echo "==================================="

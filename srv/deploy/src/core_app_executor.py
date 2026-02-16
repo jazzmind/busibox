@@ -2,7 +2,7 @@
 Core App Executor - Core Application Deployment
 ================================================
 
-This module handles deployment of CORE APPS (ai-portal, agent-manager, etc.)
+This module handles deployment of CORE APPS (busibox-portal, busibox-agents, etc.)
 using the runtime installation pattern (apps deployed at runtime, not baked in).
 
 This replaces the bridge_executor.py which used Makefile/Ansible to rebuild
@@ -19,7 +19,7 @@ Execution Methods:
 - LXC: Uses SSH to run commands in apps-lxc container
 
 Architecture matches Proxmox pattern:
-- Lightweight container with nginx + supervisord
+- Lightweight core-apps container with supervisord
 - Apps cloned and built at runtime
 - No container rebuild needed for app updates
 """
@@ -35,8 +35,11 @@ from .config import config
 logger = logging.getLogger(__name__)
 
 # Container names
-CONTAINER_PREFIX = os.environ.get("CONTAINER_PREFIX", "local")
+CONTAINER_PREFIX = os.environ.get("CONTAINER_PREFIX", "").strip()
+if not CONTAINER_PREFIX:
+    raise RuntimeError("CONTAINER_PREFIX must be set for deploy-api")
 CORE_APPS_CONTAINER = f"{CONTAINER_PREFIX}-core-apps"
+PROXY_CONTAINER = f"{CONTAINER_PREFIX}-proxy"
 
 # Docs content directory where docs-api reads from
 # In Docker: /app/docs (inside docs-api container)
@@ -46,14 +49,14 @@ DOCS_API_CONTAINER = f"{CONTAINER_PREFIX}-docs-api"
 
 # Core app definitions
 CORE_APPS = {
-    "ai-portal": {
-        "github_repo": "jazzmind/ai-portal",
+    "busibox-portal": {
+        "github_repo": "jazzmind/busibox-portal",
         "default_port": 3000,
         "base_path": "/portal",
         "health_endpoint": "/api/health",
     },
-    "agent-manager": {
-        "github_repo": "jazzmind/agent-manager",
+    "busibox-agents": {
+        "github_repo": "jazzmind/busibox-agents",
         "default_port": 3001,
         "base_path": "/agents",
         "health_endpoint": "/api/health",
@@ -69,7 +72,7 @@ def is_core_app(app_id: str) -> bool:
     Non-core apps are deployed via container_executor.py (user-apps container).
     """
     # Frontend core apps that run in core-apps container
-    FRONTEND_CORE_APPS = {"ai-portal", "agent-manager"}
+    FRONTEND_CORE_APPS = {"busibox-portal", "busibox-agents"}
     
     # Backend core apps (deployed differently, not via this executor)
     BACKEND_CORE_APPS = {
@@ -125,6 +128,31 @@ async def execute_docker_command(command: str, timeout: int = 600) -> Tuple[str,
         return stdout_str, stderr_str, returncode
     except asyncio.TimeoutError:
         logger.error(f"Command timed out after {timeout}s: {cmd_preview}")
+        proc.kill()
+        return "", f"Command timed out after {timeout}s", 1
+
+
+async def execute_docker_proxy_command(command: str, timeout: int = 600) -> Tuple[str, str, int]:
+    """Execute command in proxy container via docker exec."""
+    docker_command = [
+        'docker', 'exec', PROXY_CONTAINER,
+        '/bin/sh', '-c', command
+    ]
+
+    cmd_preview = command[:100] + "..." if len(command) > 100 else command
+    logger.debug(f"Executing in proxy: {cmd_preview}")
+
+    proc = await asyncio.create_subprocess_exec(
+        *docker_command,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        return stdout.decode(), stderr.decode(), proc.returncode or 0
+    except asyncio.TimeoutError:
+        logger.error(f"Proxy command timed out after {timeout}s: {cmd_preview}")
         proc.kill()
         return "", f"Command timed out after {timeout}s", 1
 
@@ -187,7 +215,7 @@ async def sync_app_docs(
     Proxmox (SSH to apps-lxc where docs content lives).
     
     Args:
-        app_id: App identifier (e.g., "agent-manager")
+        app_id: App identifier (e.g., "busibox-agents")
         logs: List to append log messages
         environment: Target environment
         
@@ -318,7 +346,7 @@ async def deploy_core_app(
     5. Starts the app via supervisorctl
     
     Args:
-        app_id: App identifier (e.g., "ai-portal", "agent-manager")
+        app_id: App identifier (e.g., "busibox-portal", "busibox-agents")
         github_ref: Git branch or tag to deploy
         logs: List to append log messages
         environment: Target environment (docker, staging, production)
@@ -655,7 +683,7 @@ async def get_core_app_status(
     )
     
     if is_docker_environment():
-        # Parse supervisorctl output: "ai-portal   RUNNING   pid 1234, uptime 0:01:23"
+        # Parse supervisorctl output: "busibox-portal   RUNNING   pid 1234, uptime 0:01:23"
         parts = stdout.strip().split()
         if len(parts) >= 2:
             return {
@@ -689,11 +717,17 @@ async def reload_nginx(
     
     # Test config first
     test_command = "nginx -t"
-    stdout, stderr, code = await execute_in_core_apps(
-        test_command,
-        environment=environment,
-        timeout=10
-    )
+    if is_docker_environment():
+        stdout, stderr, code = await execute_docker_proxy_command(
+            test_command,
+            timeout=10
+        )
+    else:
+        stdout, stderr, code = await execute_ssh_command(
+            config.nginx_host,
+            test_command,
+            timeout=10
+        )
     
     if code != 0:
         logs.append(f"❌ Nginx config test failed: {stderr}")
@@ -701,11 +735,17 @@ async def reload_nginx(
     
     # Reload nginx
     reload_command = "nginx -s reload"
-    stdout, stderr, code = await execute_in_core_apps(
-        reload_command,
-        environment=environment,
-        timeout=10
-    )
+    if is_docker_environment():
+        stdout, stderr, code = await execute_docker_proxy_command(
+            reload_command,
+            timeout=10
+        )
+    else:
+        stdout, stderr, code = await execute_ssh_command(
+            config.nginx_host,
+            reload_command,
+            timeout=10
+        )
     
     if code != 0:
         logs.append(f"❌ Nginx reload failed: {stderr}")

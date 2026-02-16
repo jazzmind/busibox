@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# Configure AI Portal and Agent Manager Applications
+# Configure Busibox Portal and Agent Manager Applications
 #
 # This script sets up:
 # 1. Admin user activation
 # 2. Built-in apps (Video Generator, AI Chat, Document Manager)
-# 3. AuthZ client registration for ai-portal and agent-manager
+# 3. AuthZ client registration (deprecated - no-op under Zero Trust)
 # 4. Environment variable configuration
 #
 # USAGE:
@@ -36,8 +36,8 @@ else
 fi
 
 # Configuration
-AI_PORTAL_DIR="${AI_PORTAL_DIR:-$(cd "${REPO_ROOT}/../ai-portal" 2>/dev/null && pwd || echo "")}"
-AGENT_MANAGER_DIR="${AGENT_MANAGER_DIR:-$(cd "${REPO_ROOT}/../agent-manager" 2>/dev/null && pwd || echo "")}"
+BUSIBOX_PORTAL_DIR="${BUSIBOX_PORTAL_DIR:-$(cd "${REPO_ROOT}/../busibox-portal" 2>/dev/null && pwd || echo "")}"
+BUSIBOX_AGENTS_DIR="${BUSIBOX_AGENTS_DIR:-$(cd "${REPO_ROOT}/../busibox-agents" 2>/dev/null && pwd || echo "")}"
 AUTHZ_BASE_URL="${AUTHZ_BASE_URL:-https://localhost/api/authz}"
 # DEPRECATED: Zero Trust model eliminates admin tokens. This is kept for backward
 # compatibility during migration. AuthZ client registration now uses user tokens
@@ -48,19 +48,19 @@ AUTHZ_ADMIN_TOKEN="${AUTHZ_ADMIN_TOKEN:-}"
 # Helper Functions
 # =============================================================================
 
-check_ai_portal() {
-    if [ -z "$AI_PORTAL_DIR" ] || [ ! -d "$AI_PORTAL_DIR" ]; then
-        error "ai-portal directory not found. Expected at: ${REPO_ROOT}/../ai-portal"
-        error "Set AI_PORTAL_DIR environment variable to override"
+check_busibox_portal() {
+    if [ -z "$BUSIBOX_PORTAL_DIR" ] || [ ! -d "$BUSIBOX_PORTAL_DIR" ]; then
+        error "busibox-portal directory not found. Expected at: ${REPO_ROOT}/../busibox-portal"
+        error "Set BUSIBOX_PORTAL_DIR environment variable to override"
         return 1
     fi
     return 0
 }
 
-check_agent_manager() {
-    if [ -z "$AGENT_MANAGER_DIR" ] || [ ! -d "$AGENT_MANAGER_DIR" ]; then
-        error "agent-manager directory not found. Expected at: ${REPO_ROOT}/../agent-manager"
-        error "Set AGENT_MANAGER_DIR environment variable to override"
+check_busibox_agents() {
+    if [ -z "$BUSIBOX_AGENTS_DIR" ] || [ ! -d "$BUSIBOX_AGENTS_DIR" ]; then
+        error "busibox-agents directory not found. Expected at: ${REPO_ROOT}/../busibox-agents"
+        error "Set BUSIBOX_AGENTS_DIR environment variable to override"
         return 1
     fi
     return 0
@@ -77,9 +77,9 @@ get_authz_admin_token() {
         return 0
     fi
     
-    # Try ai-portal .env
-    if [ -f "${AI_PORTAL_DIR}/.env" ]; then
-        local token=$(grep "^AUTHZ_ADMIN_TOKEN=" "${AI_PORTAL_DIR}/.env" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+    # Try busibox-portal .env
+    if [ -f "${BUSIBOX_PORTAL_DIR}/.env" ]; then
+        local token=$(grep "^AUTHZ_ADMIN_TOKEN=" "${BUSIBOX_PORTAL_DIR}/.env" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
         if [ -n "$token" ]; then
             echo "$token"
             return 0
@@ -110,11 +110,11 @@ generate_secret() {
 activate_admin_user() {
     header "Activating Admin User"
     
-    if ! check_ai_portal; then
+    if ! check_busibox_portal; then
         return 1
     fi
     
-    cd "$AI_PORTAL_DIR"
+    cd "$BUSIBOX_PORTAL_DIR"
     
     # Check if activate-user.ts exists
     if [ ! -f "scripts/activate-user.ts" ]; then
@@ -223,11 +223,11 @@ assign_admin_role_in_authz() {
 fix_builtin_apps() {
     header "Fixing Built-in Apps"
     
-    if ! check_ai_portal; then
+    if ! check_busibox_portal; then
         return 1
     fi
     
-    cd "$AI_PORTAL_DIR"
+    cd "$BUSIBOX_PORTAL_DIR"
     
     # Check if fix-builtin-apps.ts exists
     if [ ! -f "scripts/fix-builtin-apps.ts" ]; then
@@ -336,144 +336,18 @@ EOF
 }
 
 # =============================================================================
-# Step 3: Register AuthZ Clients
+# Step 3: Register AuthZ Clients (DEPRECATED - No-op)
 # =============================================================================
+# Zero Trust model: AuthZ issues session JWTs directly. Token exchange uses
+# session JWT as subject_token - no client credentials needed for portal/agents.
+# OAuth client registration is obsolete for these apps.
 
 register_authz_clients() {
     header "Registering AuthZ Clients"
-    
-    local admin_token=$(get_authz_admin_token)
-    
-    if [ -z "$admin_token" ]; then
-        error "AUTHZ_ADMIN_TOKEN not found"
-        error "Set it in environment or in ai-portal/.env"
-        return 1
-    fi
-    
-    # Generate secrets
-    local ai_portal_secret=$(generate_secret)
-    local agent_manager_secret=$(generate_secret)
-    
-    info "Generated secrets:"
-    echo "   ai-portal:      $ai_portal_secret"
-    echo "   agent-manager:  $agent_manager_secret"
-    echo ""
-    
-    # Define allowed scopes for clients
-    # These match the OAuth2 scopes defined in the architecture docs
-    # Note: POST to /admin/oauth-clients does upsert, so we can call it multiple times
-    local all_scopes='["data.read", "data.write", "data.delete", "search.read", "search.write", "search.delete", "agent.read", "agent.write", "agent.delete", "agent.execute", "agents:read", "agents:write"]'
-    
-    # Register/update ai-portal client
-    info "Registering ai-portal client..."
-    local response=$(curl -skL -w "\n%{http_code}" -X POST "${AUTHZ_BASE_URL}/admin/oauth-clients" \
-        -H "Content-Type: application/json" \
-        -H "Authorization: Bearer $admin_token" \
-        -d "{
-            \"client_id\": \"ai-portal\",
-            \"client_secret\": \"$ai_portal_secret\",
-            \"allowed_audiences\": [\"agent-api\", \"data-api\", \"search-api\"],
-            \"allowed_scopes\": $all_scopes
-        }" 2>&1)
-    
-    local http_code=$(echo "$response" | tail -n1)
-    local body=$(echo "$response" | sed '$d')
-    
-    if [ "$http_code" = "200" ] || [ "$http_code" = "201" ]; then
-        success "ai-portal client registered/updated"
-    else
-        error "Failed to register ai-portal client (HTTP $http_code)"
-        echo "Response: $body"
-        return 1
-    fi
-    
-    # Register/update agent-manager client
-    info "Registering agent-manager client..."
-    response=$(curl -skL -w "\n%{http_code}" -X POST "${AUTHZ_BASE_URL}/admin/oauth-clients" \
-        -H "Content-Type: application/json" \
-        -H "Authorization: Bearer $admin_token" \
-        -d "{
-            \"client_id\": \"agent-manager\",
-            \"client_secret\": \"$agent_manager_secret\",
-            \"allowed_audiences\": [\"agent-api\", \"data-api\", \"search-api\"],
-            \"allowed_scopes\": $all_scopes
-        }" 2>&1)
-    
-    http_code=$(echo "$response" | tail -n1)
-    body=$(echo "$response" | sed '$d')
-    
-    if [ "$http_code" = "200" ] || [ "$http_code" = "201" ]; then
-        success "agent-manager client registered/updated"
-    else
-        error "Failed to register agent-manager client (HTTP $http_code)"
-        echo "Response: $body"
-        return 1
-    fi
-    
-    # Update environment files
-    echo ""
-    info "Updating environment files..."
-    
-    # Update ai-portal .env
-    if check_ai_portal; then
-        local env_file="${AI_PORTAL_DIR}/.env"
-        if [ -f "$env_file" ]; then
-            # Remove existing entries
-            sed -i.bak '/^AUTHZ_CLIENT_ID=/d' "$env_file" 2>/dev/null || true
-            sed -i.bak '/^AUTHZ_CLIENT_SECRET=/d' "$env_file" 2>/dev/null || true
-            rm -f "${env_file}.bak"
-            
-            # Add new entries
-            echo "AUTHZ_CLIENT_ID=ai-portal" >> "$env_file"
-            echo "AUTHZ_CLIENT_SECRET=$ai_portal_secret" >> "$env_file"
-            success "Updated ${env_file}"
-        else
-            warn "ai-portal/.env not found, creating..."
-            echo "AUTHZ_CLIENT_ID=ai-portal" > "$env_file"
-            echo "AUTHZ_CLIENT_SECRET=$ai_portal_secret" >> "$env_file"
-        fi
-    fi
-    
-    # Update agent-manager .env.local
-    if check_agent_manager; then
-        local env_file="${AGENT_MANAGER_DIR}/.env.local"
-        if [ -f "$env_file" ]; then
-            # Remove existing entries
-            sed -i.bak '/^AUTHZ_CLIENT_ID=/d' "$env_file" 2>/dev/null || true
-            sed -i.bak '/^AUTHZ_CLIENT_SECRET=/d' "$env_file" 2>/dev/null || true
-            rm -f "${env_file}.bak"
-            
-            # Add new entries
-            echo "AUTHZ_CLIENT_ID=agent-manager" >> "$env_file"
-            echo "AUTHZ_CLIENT_SECRET=$agent_manager_secret" >> "$env_file"
-            success "Updated ${env_file}"
-        else
-            warn "agent-manager/.env.local not found, creating..."
-            cat > "$env_file" << EOF
-# AuthZ Client Credentials
-AUTHZ_CLIENT_ID=agent-manager
-AUTHZ_CLIENT_SECRET=$agent_manager_secret
-AUTHZ_BASE_URL=https://localhost/api/authz
-
-# AI Portal URL
-NEXT_PUBLIC_AI_PORTAL_URL=https://localhost
-
-# Base path for nginx proxy
-NEXT_PUBLIC_BASE_PATH=/agents
-EOF
-        fi
-    fi
-    
-    echo ""
-    success "AuthZ clients registered and environment files updated"
-    echo ""
-    echo "📋 Summary:"
-    echo "   ai-portal client_id:      ai-portal"
-    echo "   ai-portal client_secret:  $ai_portal_secret"
-    echo "   agent-manager client_id:  agent-manager"
-    echo "   agent-manager secret:     $agent_manager_secret"
-    echo ""
-    warn "Remember to restart ai-portal and agent-manager to apply changes"
+    warn "AuthZ client registration is deprecated (Zero Trust model)"
+    warn "busibox-portal and busibox-agents use session JWT token exchange - no client credentials needed"
+    info "Skipping - no action required"
+    return 0
 }
 
 # =============================================================================
@@ -521,10 +395,10 @@ case "${1:-}" in
         echo "  --authz   Only register authz clients"
         echo ""
         echo "Environment variables:"
-        echo "  AI_PORTAL_DIR       Path to ai-portal (default: ../ai-portal)"
-        echo "  AGENT_MANAGER_DIR   Path to agent-manager (default: ../agent-manager)"
+        echo "  BUSIBOX_PORTAL_DIR  Path to busibox-portal (default: ../busibox-portal)"
+        echo "  BUSIBOX_AGENTS_DIR  Path to busibox-agents (default: ../busibox-agents)"
         echo "  AUTHZ_BASE_URL      AuthZ service URL (default: https://localhost/api/authz)"
-        echo "  AUTHZ_ADMIN_TOKEN   Admin token for authz service"
+        echo "  AUTHZ_ADMIN_TOKEN   Admin token for authz service (admin/role assignment only)"
         ;;
     *)
         error "Unknown option: $1"

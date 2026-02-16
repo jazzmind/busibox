@@ -10,7 +10,7 @@
 #   execute.sh <command> [args...]
 #
 # Examples:
-#   execute.sh make deploy-ai-portal INV=inventory/staging
+#   execute.sh make deploy-busibox-portal INV=inventory/staging
 #   execute.sh make docker-deploy-frontend
 #   execute.sh make update ENV=staging
 #

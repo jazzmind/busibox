@@ -34,10 +34,10 @@
     MINIO_SECRET_KEY: "{{ secrets.minio.root_password | default('') }}"
     SSO_JWT_SECRET: "{{ secrets.jwt_secret | default('') }}"
     AUTHZ_MASTER_KEY: "{{ secrets.authz_master_key | default('') }}"
-    LITELLM_API_KEY: "{{ secrets.litellm_api_key | default('') }}"
-    LITELLM_MASTER_KEY: "{{ secrets.litellm_api_key | default('') }}"
+    LITELLM_API_KEY: "{{ secrets.litellm_master_key if (secrets.litellm_master_key | default('') | length > 0) else (secrets.litellm_api_key | default('')) }}"
+    LITELLM_MASTER_KEY: "{{ secrets.litellm_master_key if (secrets.litellm_master_key | default('') | length > 0) else (secrets.litellm_api_key | default('')) }}"
     GITHUB_AUTH_TOKEN: "{{ secrets.github.personal_access_token | default(github_token) | default('') }}"
-    ADMIN_EMAIL: "{{ secrets.admin_emails | default(secrets.admin_email) | default('') }}"
+    ADMIN_EMAIL: "{{ secrets.admin_emails | default(secrets.admin_email, true) | default('', true) }}"
     ALLOWED_EMAIL_DOMAINS: "{{ secrets.allowed_email_domains | default('*') }}"
   when: docker_build_first | default(false)
   register: build_result

@@ -1,7 +1,7 @@
 ---
 # Core Apps Docker Deployment Tasks
 #
-# Deploys AI Portal and Agent Manager via Docker Compose
+# Deploys Busibox Portal and Agent Manager via Docker Compose
 # Used when deploy_target == 'docker'
 
 - name: Build core-apps container
@@ -13,6 +13,23 @@
       - core-apps
     docker_build_no_cache: "{{ docker_force_rebuild | default(false) }}"
 
+- name: Start proxy container before core-apps
+  include_role:
+    name: docker_common
+    tasks_from: compose_up
+  vars:
+    docker_services_to_start:
+      - proxy
+    docker_wait_for_health: true
+
+- name: Wait for proxy to be ready
+  include_role:
+    name: docker_common
+    tasks_from: wait_healthy
+  vars:
+    docker_wait_service: proxy
+    docker_wait_timeout: 60
+
 - name: Start core-apps container
   include_role:
     name: docker_common
@@ -20,7 +37,9 @@
   vars:
     docker_services_to_start:
       - core-apps
-    docker_wait_for_health: true
+    # core-apps may need time to (re)install/build apps before HTTP health turns green.
+    # Do not fail early in compose_up; use explicit wait below with a longer timeout.
+    docker_wait_for_health: false
 
 - name: Wait for core-apps to be ready
   include_role:
@@ -28,15 +47,16 @@
     tasks_from: wait_healthy
   vars:
     docker_wait_service: core-apps
-    docker_wait_timeout: 120
+    # Allow enough time for first boot / Turbopack warmup / runtime app deployment.
+    docker_wait_timeout: 300
 
-- name: Run AI Portal database migrations
+- name: Run Busibox Portal database migrations
   include_role:
     name: docker_common
     tasks_from: compose_exec
   vars:
     docker_exec_service: core-apps
-    docker_exec_command: "sh -c 'cd /srv/ai-portal && npx prisma db push --accept-data-loss'"
+    docker_exec_command: "sh -c 'cd /srv/busibox-portal && npx prisma db push --accept-data-loss'"
     docker_exec_fail_on_error: false
 
 - name: Display migration result
@@ -44,13 +64,13 @@
     msg: "{{ exec_result.stdout | default('Migration completed') }}"
   when: exec_result is defined
 
-- name: Seed AI Portal database with built-in apps
+- name: Seed Busibox Portal database with built-in apps
   include_role:
     name: docker_common
     tasks_from: compose_exec
   vars:
     docker_exec_service: core-apps
-    docker_exec_command: "sh -c 'cd /srv/ai-portal && npm run db:seed'"
+    docker_exec_command: "sh -c 'cd /srv/busibox-portal && npm run db:seed'"
     docker_exec_fail_on_error: false
 
 - name: Display seed result
@@ -58,9 +78,9 @@
     msg: "{{ exec_result.stdout | default('Seed completed') }}"
   when: exec_result is defined
 
-- name: Verify AI Portal health endpoint
+- name: Verify Busibox Portal health endpoint
   ansible.builtin.uri:
-    # Use basePath-aware endpoint since AI Portal runs with NEXT_PUBLIC_BASE_PATH=/portal
+    # Use basePath-aware endpoint since Busibox Portal runs with NEXT_PUBLIC_BASE_PATH=/portal
     url: "http://localhost:{{ ai_portal_port }}/portal/api/health"
     method: GET
     status_code: [200]
@@ -75,5 +95,5 @@
   ansible.builtin.debug:
     msg: |
       Core apps are running and ready
-      AI Portal: http://localhost:{{ ai_portal_port }}
+      Busibox Portal: http://localhost:{{ ai_portal_port }}
       Agent Manager: http://localhost:{{ agent_manager_port }}

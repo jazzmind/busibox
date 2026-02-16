@@ -22,7 +22,7 @@
 #   Or: docker compose -f docker-compose.yml -f docker-compose.local-dev.yml up
 #
 # Architecture:
-#   - Both ai-portal and agent-manager run in single core-apps container
+#   - Both busibox-portal and busibox-agents run in single core-apps container
 #   - Uses concurrently to manage both Next.js processes
 #   - Mirrors production Proxmox pattern (core-apps-lxc hosts both)
 #
@@ -31,7 +31,7 @@
 # =============================================================================
 
 services:
-  # Core Apps - AI Portal + Agent Manager (Development Mode)
+  # Core Apps - Busibox Portal + Agent Manager (Development Mode)
   # Runs both Next.js apps in single container using concurrently
   core-apps:
     build:
@@ -56,7 +56,7 @@ services:
       NODE_TLS_REJECT_UNAUTHORIZED: "0"
       
       # =======================================================================
-      # AI Portal Environment (PORT 3000, /portal path)
+      # Busibox Portal Environment (PORT 3000, /portal path)
       # =======================================================================
       # Database
       DATABASE_URL: postgresql://${POSTGRES_USER:-busibox_user}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/ai_portal
@@ -74,7 +74,7 @@ services:
       # SSO
       SSO_JWT_SECRET: ${SSO_JWT_SECRET:-dev-sso-secret}
       # Service URLs (for SSO redirect via nginx proxy)
-      NEXT_PUBLIC_AGENT_MANAGER_URL: https://localhost/agents
+      NEXT_PUBLIC_BUSIBOX_AGENTS_URL: https://localhost/agents
       NEXT_PUBLIC_APP_URL: https://localhost/portal
       # NOTE: NEXT_PUBLIC_BASE_PATH is set per-app in core-apps-entrypoint.sh
       # because both apps run in the same container but need different values
@@ -96,7 +96,7 @@ services:
       # Host Agent (for MLX control on Apple Silicon)
       HOST_AGENT_URL: http://host.docker.internal:8089
       HOST_AGENT_TOKEN: ${HOST_AGENT_TOKEN:-}
-      # LLM Backend - passed from install.sh to tell AI Portal what hardware is available
+      # LLM Backend - passed from install.sh to tell Busibox Portal what hardware is available
       LLM_BACKEND: ${LLM_BACKEND:-}
       
       # =======================================================================
@@ -106,11 +106,11 @@ services:
       NEXT_PUBLIC_AGENT_API_URL: https://localhost/api/agent
       NEXT_PUBLIC_DATA_API_URL: https://localhost/api/data
       NEXT_PUBLIC_SEARCH_API_URL: https://localhost/api/search
-      # AI Portal (SSO) via nginx
-      NEXT_PUBLIC_AI_PORTAL_URL: https://localhost/portal
+      # Busibox Portal (SSO) via nginx
+      NEXT_PUBLIC_BUSIBOX_PORTAL_URL: https://localhost/portal
       # NOTE: NEXT_PUBLIC_BASE_PATH is set per-app in core-apps-entrypoint.sh
       # because both apps run in the same container but need different values
-      # (/portal for ai-portal, /agents for agent-manager)
+      # (/portal for busibox-portal, /agents for busibox-agents)
       
       # =======================================================================
       # Testing: Silent SSO Refresh (REMOVE AFTER TESTING)
@@ -123,45 +123,36 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"  # Access host's localhost from container
     ports:
-      # Nginx ports (main entry points)
-      - "80:80"
-      - "443:443"
       # Direct app ports (for debugging)
-      - "3000:3000"  # AI Portal
+      - "3000:3000"  # Busibox Portal
       - "3001:3001"  # Agent Manager
     volumes:
       # Mount both app directories
-      - ${AI_PORTAL_DIR:-../ai-portal}:/srv/ai-portal
-      - ${AGENT_MANAGER_DIR:-../agent-manager}:/srv/agent-manager
+      - ${BUSIBOX_PORTAL_DIR:-../busibox-portal}:/srv/busibox-portal
+      - ${BUSIBOX_AGENTS_DIR:-../busibox-agents}:/srv/busibox-agents
       # Preserve node_modules from container (installed during build)
-      - ai-portal-node-modules:/srv/ai-portal/node_modules
-      - agent-manager-node-modules:/srv/agent-manager/node_modules
+      - busibox-portal-node-modules:/srv/busibox-portal/node_modules
+      - busibox-agents-node-modules:/srv/busibox-agents/node_modules
       # Preserve .next build caches
-      - ai-portal-next-cache:/srv/ai-portal/.next
-      - agent-manager-next-cache:/srv/agent-manager/.next
-      # Mount nginx config (allows live editing of nginx config)
-      - ${BUSIBOX_DIR:-.}/config/nginx-local.conf:/etc/nginx/nginx.conf:ro
-      - ${BUSIBOX_DIR:-.}/config/nginx-sites:/etc/nginx/conf.d:ro
-      - ${BUSIBOX_DIR:-.}/config/nginx-sites/apps:/etc/nginx/conf.d/apps:rw
-      - ${BUSIBOX_DIR:-.}/ssl:/etc/nginx/ssl:ro
+      - busibox-portal-next-cache:/srv/busibox-portal/.next
+      - busibox-agents-next-cache:/srv/busibox-agents/.next
     depends_on:
       postgres:
         condition: service_healthy
       authz-api:
         condition: service_healthy
+      proxy:
+        condition: service_healthy
     # Resource limits - dev mode needs more memory for Turbopack compilation
     # prod mode (CORE_APPS_MODE=prod) uses standalone and needs much less
     deploy:
       resources:
-        limits:
-          memory: 4G
         reservations:
           memory: 512M
     healthcheck:
-      # Check nginx is responding (instant — returns "healthy" without hitting Next.js)
-      # Do NOT check /portal/api/health or /agents/api/health here — those trigger
-      # Turbopack compilation in dev mode and cause CPU spikes every 30s
-      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      # Portal runs with NEXT_PUBLIC_BASE_PATH=/portal, so root (/) returns 404.
+      # Use the basePath-aware health endpoint instead.
+      test: ["CMD", "curl", "-f", "http://localhost:3000/portal/api/health"]
       interval: 30s
       timeout: 5s
       start_period: 60s
@@ -170,9 +161,8 @@ services:
       busibox-net:
         aliases:
           - core-apps
-          - nginx          # nginx is now inside core-apps
-          - ai-portal      # For backward compatibility
-          - agent-manager  # For backward compatibility
+          - busibox-portal      # For backward compatibility
+          - busibox-agents  # For backward compatibility
 
   # User Apps - Development Mode
   # Mount dev-apps directory for local app development with hot-reload
@@ -199,10 +189,10 @@ services:
 # Named volumes for node_modules and .next cache
 # These preserve installed dependencies across container restarts
 volumes:
-  ai-portal-node-modules:
-  ai-portal-next-cache:
-  agent-manager-node-modules:
-  agent-manager-next-cache:
+  busibox-portal-node-modules:
+  busibox-portal-next-cache:
+  busibox-agents-node-modules:
+  busibox-agents-next-cache:
 
 # Use the same network as the base compose
 # Note: Don't use external:true - let docker compose manage the network lifecycle

@@ -743,33 +743,38 @@ class PostgresService:
         library_id: str,
         name: str,
         created_by: str,
+        trigger_type: str = "run_agent",
         agent_id: Optional[str] = None,
         prompt: Optional[str] = None,
         schema_document_id: Optional[str] = None,
+        notification_config: Optional[Dict] = None,
         description: Optional[str] = None,
         delegation_token: Optional[str] = None,
         delegation_scopes: Optional[List] = None,
     ) -> Dict:
         """Create a library trigger that fires when docs complete in a library."""
         trigger_id = uuid.uuid4()
+        import json
         async with self.acquire() as conn:
             await conn.execute("""
                 INSERT INTO library_triggers (
-                    id, library_id, name, description, agent_id, prompt,
-                    schema_document_id, is_active, created_by,
+                    id, library_id, name, description, trigger_type, agent_id, prompt,
+                    schema_document_id, notification_config, is_active, created_by,
                     delegation_token, delegation_scopes
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, true, $8, $9, $10)
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, $10, $11, $12)
             """,
                 trigger_id,
                 uuid.UUID(library_id),
                 name,
                 description,
+                trigger_type,
                 uuid.UUID(agent_id) if agent_id else None,
                 prompt,
                 uuid.UUID(schema_document_id) if schema_document_id else None,
+                json.dumps(notification_config) if notification_config is not None else None,
                 uuid.UUID(created_by),
                 delegation_token,
-                str(delegation_scopes or []),
+                json.dumps(delegation_scopes or []),
             )
             
             row = await conn.fetchrow(
@@ -813,18 +818,31 @@ class PostgresService:
         trigger_id: str,
         **kwargs,
     ) -> Optional[Dict]:
-        """Update a library trigger. Accepts is_active, name, description, prompt, schema_document_id."""
+        """Update a library trigger."""
         set_clauses = ["updated_at = NOW()"]
         params = []
         idx = 1
         
-        allowed = {"is_active", "name", "description", "prompt", "schema_document_id", "agent_id"}
+        allowed = {
+            "is_active",
+            "name",
+            "description",
+            "trigger_type",
+            "prompt",
+            "schema_document_id",
+            "agent_id",
+            "notification_config",
+        }
         for key, value in kwargs.items():
             if key in allowed and value is not None:
                 idx += 1
                 if key in ("schema_document_id", "agent_id"):
                     set_clauses.append(f"{key} = ${idx}")
                     params.append(uuid.UUID(value) if value else None)
+                elif key == "notification_config":
+                    import json
+                    set_clauses.append(f"{key} = ${idx}")
+                    params.append(json.dumps(value))
                 else:
                     set_clauses.append(f"{key} = ${idx}")
                     params.append(value)

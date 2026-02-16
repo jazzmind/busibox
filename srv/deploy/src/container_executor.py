@@ -5,7 +5,7 @@ Container Executor - User App Deployment (Sandboxed)
 This module handles deployment of USER APPS (untrusted/external applications).
 All operations are executed inside the user-apps container for security isolation.
 
-For CORE APPS (ai-portal, agent-manager, etc.), use bridge_executor.py instead,
+For CORE APPS (busibox-portal, busibox-agents, etc.), use bridge_executor.py instead,
 which delegates to Makefile/Ansible with full host access.
 
 Security Model:
@@ -843,13 +843,21 @@ async def install_dependencies(app_path: str, logs: List[str], github_token: Opt
         logs.append("⚠️ No package.json found, skipping npm install")
         return True
     
+    # Resolve token with fallbacks so npm auth works in dev/proxy deploy paths too.
+    resolved_token = (
+        github_token
+        or os.environ.get("GITHUB_AUTH_TOKEN", "")
+        or os.environ.get("GITHUB_TOKEN", "")
+        or os.environ.get("GH_TOKEN", "")
+    )
+
     # Set up npm authentication for GitHub Package Registry if token provided
     # This is needed for private packages like @jazzmind/busibox-app
-    if github_token:
+    if resolved_token:
         logs.append("🔐 Setting up npm authentication for GitHub Package Registry...")
         # Create .npmrc with GitHub token for authentication
         npmrc_setup = f"""
-echo "//npm.pkg.github.com/:_authToken={github_token}" > /root/.npmrc && \
+echo "//npm.pkg.github.com/:_authToken={resolved_token}" > /root/.npmrc && \
 echo "@jazzmind:registry=https://npm.pkg.github.com" >> /root/.npmrc
 """
         stdout, stderr, code = await execute_in_container(npmrc_setup)
@@ -860,7 +868,11 @@ echo "@jazzmind:registry=https://npm.pkg.github.com" >> /root/.npmrc
             logs.append("✅ npm auth configured")
     else:
         # Fall back to environment variable if no token passed
-        env_token = os.environ.get("GITHUB_AUTH_TOKEN", "")
+        env_token = (
+            os.environ.get("GITHUB_AUTH_TOKEN", "")
+            or os.environ.get("GITHUB_TOKEN", "")
+            or os.environ.get("GH_TOKEN", "")
+        )
         if env_token:
             logs.append("🔐 Using GITHUB_AUTH_TOKEN from environment for npm auth...")
             npmrc_setup = f"""
@@ -880,11 +892,20 @@ echo "@jazzmind:registry=https://npm.pkg.github.com" >> /root/.npmrc
     _, _, lock_exists = await execute_in_container(check_lock_cmd)
     
     # Determine which token to use for npm auth (project .npmrc uses ${GITHUB_AUTH_TOKEN} env var)
-    effective_token = github_token or os.environ.get("GITHUB_AUTH_TOKEN", "")
+    effective_token = (
+        resolved_token
+        or os.environ.get("GITHUB_AUTH_TOKEN", "")
+        or os.environ.get("GITHUB_TOKEN", "")
+        or os.environ.get("GH_TOKEN", "")
+    )
+    logs.append(f"🔑 npm token available: {'yes' if bool(effective_token) else 'no'}")
     
     # Build the npm command with GITHUB_AUTH_TOKEN env var
     # This is needed because project-level .npmrc files reference ${GITHUB_AUTH_TOKEN}
-    token_env = f'GITHUB_AUTH_TOKEN="{effective_token}" ' if effective_token else ''
+    token_env = (
+        f'GITHUB_AUTH_TOKEN="{effective_token}" GITHUB_TOKEN="{effective_token}" GH_TOKEN="{effective_token}" '
+        if effective_token else ''
+    )
     
     if lock_exists == 0:
         # Has package-lock.json, use npm ci for reproducible builds
@@ -934,8 +955,21 @@ exit $NPM_EXIT
 
     stdout, stderr, code = await _run_npm_install(1)
 
+    def _combine_command_output(cmd_stdout: str, cmd_stderr: str) -> str:
+        """
+        Combine stdout/stderr so we don't lose npm's real error lines.
+        Some wrappers emit only a short marker to stderr while full npm output
+        is in stdout (because of `2>&1`), so we must not prefer one stream.
+        """
+        pieces = []
+        if cmd_stdout and cmd_stdout.strip():
+            pieces.append(cmd_stdout.strip())
+        if cmd_stderr and cmd_stderr.strip():
+            pieces.append(cmd_stderr.strip())
+        return "\n".join(pieces).strip()
+
     if code != 0:
-        combined = (stderr or stdout or "").strip()
+        combined = _combine_command_output(stdout, stderr)
         
         # Check if the "error" is actually just deprecation warnings with no real failure.
         # npm sometimes exits 0 but the shell wrapper or docker exec layer can mangle the code.
@@ -969,15 +1003,25 @@ npm cache clean --force 2>/dev/null || true
 """
             await execute_in_container(retry_cleanup)
             stdout, stderr, code = await _run_npm_install(2, extra_flags="--force")
+            combined = _combine_command_output(stdout, stderr)
 
     if code != 0:
         # Filter out warning-only lines to show the actual error
-        combined = (stderr or stdout or "").strip()
+        combined = _combine_command_output(stdout, stderr)
         error_lines = [
             line for line in combined.split('\n')
             if line.strip() and 'npm warn' not in line.lower() and 'npm WARN' not in line
         ]
-        error_msg = '\n'.join(error_lines[-20:]) if error_lines else combined[-500:]
+        if error_lines:
+            if len(error_lines) > 40:
+                # Include both head and tail so we preserve the primary npm error code
+                # (often at the top) and the contextual usage/details (usually at tail).
+                selected = error_lines[:20] + ["... (truncated) ..."] + error_lines[-20:]
+            else:
+                selected = error_lines
+            error_msg = '\n'.join(selected)
+        else:
+            error_msg = combined[-2000:]
         logs.append(f"❌ npm install failed (exit code {code}): {error_msg}")
         return False
     
@@ -1214,6 +1258,15 @@ rm -f /tmp/{app_id}.pid 2>/dev/null || true
         
         # Give a moment for port to be released
         await asyncio.sleep(1)
+
+        # Ensure supervisor config directory exists in the container.
+        # Fresh containers may not have this path yet, which causes the first
+        # config write to fail even though supervisord is available.
+        ensure_supervisor_dir_cmd = f"mkdir -p {SUPERVISOR_CONF_DIR}"
+        _, stderr, code = await execute_in_container(ensure_supervisor_dir_cmd)
+        if code != 0:
+            logs.append(f"❌ Failed to create supervisord config directory: {stderr}")
+            return False
         
         # Generate supervisord config for this app
         conf_content = generate_supervisor_conf(app_id, app_path, start_command, env_vars or {})
@@ -1663,7 +1716,7 @@ async def deploy_app(
         return False
 
     # Portal URL for auth redirects (used both at build-time and runtime)
-    portal_url = os.environ.get("NEXT_PUBLIC_AI_PORTAL_URL", "")
+    portal_url = os.environ.get("NEXT_PUBLIC_BUSIBOX_PORTAL_URL", "")
     if not portal_url and is_docker_environment():
         # Docker dev default - goes through nginx at /portal
         portal_url = "https://localhost/portal"
@@ -1674,7 +1727,7 @@ async def deploy_app(
     if is_dev_mode and is_docker_environment():
         # Use the actual directory name for volumes (localDevDir), not the app ID
         # The app path is /srv/dev-apps/{localDevDir}, so extract the dir name
-        dev_app_dir = app_path.split('/')[-1]  # e.g., "app-template" from "/srv/dev-apps/app-template"
+        dev_app_dir = app_path.split('/')[-1]  # e.g., "busibox-template" from "/srv/dev-apps/busibox-template"
         
         logs.append(f"📦 Setting up app volumes for {dev_app_dir} (node_modules and .next cache)...")
         if not await ensure_app_volumes_mounted(dev_app_dir, logs):
@@ -1695,7 +1748,21 @@ async def deploy_app(
     # The Docker container is Linux, but the host may be macOS/Windows.
     # With dynamic volumes, npm install writes to the Docker volume, not the host.
     # Pass GitHub token for npm authentication with GitHub Package Registry
-    github_token = deploy_config.githubToken if deploy_config else None
+    github_token = None
+    if deploy_config:
+        github_token = (
+            deploy_config.githubToken
+            or deploy_config.envVars.get("GITHUB_AUTH_TOKEN")
+            or deploy_config.envVars.get("GITHUB_TOKEN")
+            or deploy_config.envVars.get("GH_TOKEN")
+        )
+    if not github_token:
+        github_token = (
+            os.environ.get("GITHUB_AUTH_TOKEN", "")
+            or os.environ.get("GITHUB_TOKEN", "")
+            or os.environ.get("GH_TOKEN", "")
+        )
+    logs.append(f"🔑 Deployment GitHub token source: {'resolved' if bool(github_token) else 'missing'}")
     if is_dev_mode and is_docker_environment():
         logs.append("📦 Installing dependencies to Docker volume (Linux-native binaries)...")
         if not await install_dependencies(app_path, logs, github_token=github_token):
@@ -1710,13 +1777,19 @@ async def deploy_app(
     if is_dev_mode:
         logs.append("⏭️ Skipping build (dev mode - will run dev server)")
     else:
+        path_audience = manifest.defaultPath.strip("/").lower() if manifest.defaultPath else ""
+        sso_audience_values = [manifest.id]
+        if path_audience and path_audience not in sso_audience_values:
+            sso_audience_values.append(path_audience)
+
         build_env = {
             # Ensure basePath/assetPrefix match the proxy path at build time
             "NEXT_PUBLIC_BASE_PATH": manifest.defaultPath,
             # Ensure auth redirect targets are consistent
-            "NEXT_PUBLIC_AI_PORTAL_URL": portal_url,
-            # Ensure audience claim validation stays consistent
-            "APP_NAME": manifest.name,
+            "NEXT_PUBLIC_BUSIBOX_PORTAL_URL": portal_url,
+            # Ensure audience claim validation stays consistent with portal token audience
+            "APP_NAME": manifest.id,
+            "SSO_AUDIENCE": ",".join(sso_audience_values),
         }
         if not await run_build(app_path, manifest.buildCommand, logs, env_vars=build_env):
             return False
@@ -1730,11 +1803,16 @@ async def deploy_app(
     env_vars = generate_env_vars(manifest, deploy_config, database_url)
     
     # Add portal URL for auth redirects (not in env_generator since it's deployment-specific)
-    env_vars["NEXT_PUBLIC_AI_PORTAL_URL"] = portal_url
+    env_vars["NEXT_PUBLIC_BUSIBOX_PORTAL_URL"] = portal_url
     
-    # APP_NAME must match the audience in SSO tokens issued by AI Portal
-    # AI Portal uses app.name as the audience when requesting tokens from authz
-    env_vars["APP_NAME"] = manifest.name
+    # APP_NAME/SSO_AUDIENCE must match SSO token audiences from busibox-portal.
+    # Canonical audience is manifest.id; include path segment for legacy compatibility.
+    path_audience = manifest.defaultPath.strip("/").lower() if manifest.defaultPath else ""
+    sso_audience_values = [manifest.id]
+    if path_audience and path_audience not in sso_audience_values:
+        sso_audience_values.append(path_audience)
+    env_vars["APP_NAME"] = manifest.id
+    env_vars["SSO_AUDIENCE"] = ",".join(sso_audience_values)
     
     # Determine start command
     if is_dev_mode:

@@ -1,4 +1,4 @@
-.PHONY: ping all files pg milvus nginx search search-api agent data data-api data-worker data-update-tests docs apps user-apps openwebui deploy-apps deploy-ai-portal deploy-agent-manager verify verify-health verify-smoke service-start service-stop service-restart service-status service-logs service-health test test-menu test-data test-data-all test-data-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-authz test-apps test-security test-security-auth test-security-injection test-security-fuzz test-all configure generate-token-keys bootstrap-test-creds bridge tailscale test-bridge check-embeddings migrate-embeddings migrate-embeddings-force staging production env core core-nginx core-storage core-database core-vectorstore llm llm-vllm llm-litellm llm-colpali apis apis-authz apis-data apis-search apis-agent apis-docs apis-bridge apps-frontend
+.PHONY: ping all files pg milvus nginx search search-api agent data data-api data-worker data-update-tests docs apps user-apps openwebui deploy-apps deploy-busibox-portal deploy-busibox-agents verify verify-health verify-smoke service-start service-stop service-restart service-status service-logs service-health test test-menu test-data test-data-all test-data-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-authz test-apps test-security test-security-auth test-security-injection test-security-fuzz test-all configure generate-token-keys bootstrap-test-creds bridge tailscale test-bridge check-embeddings migrate-embeddings migrate-embeddings-force staging production env core core-nginx core-storage core-database core-vectorstore llm llm-vllm llm-litellm llm-colpali apis apis-authz apis-data apis-search apis-agent apis-docs apis-bridge apps-frontend
 
 # ============================================================================
 # ENVIRONMENT SELECTION (persists between runs via .busibox-state)
@@ -169,7 +169,7 @@ all:
 # Group 1: CORE (nginx, minio, postgres, milvus) - infrastructure
 # Group 2: LLM (vllm, litellm, colpali) - AI/ML services  
 # Group 3: APIs (authz, data, search, agent, docs, bridge) - application services
-# Group 4: APPS (ai-portal, agent-manager, openwebui) - frontend applications
+# Group 4: APPS (busibox-portal, busibox-agents, openwebui) - frontend applications
 
 # ----------------------------------------------------------------------------
 # Group 1: Core Services (infrastructure)
@@ -258,12 +258,12 @@ apis-bridge:
 
 # ----------------------------------------------------------------------------
 # Group 4: Apps (frontend applications)
-# Frontend applications (ai-portal, agent-manager)
+# Frontend applications (busibox-portal, busibox-agents)
 # ----------------------------------------------------------------------------
 
 apps-frontend:
 	@echo "=============================================="
-	@echo "Deploying frontend apps (ai-portal, agent-manager)"
+	@echo "Deploying frontend apps (busibox-portal, busibox-agents)"
 	@echo "=============================================="
 	ansible-playbook -i $(INV) site.yml --tags apps $(VAULT_FLAGS)
 
@@ -383,11 +383,11 @@ deploy-apps:
 	ansible-playbook -i $(INV) -l agent,apps --tags app_deployer,secrets site.yml $(VAULT_FLAGS)
 
 # Deploy individual applications (apps container)
-deploy-ai-portal:
-	ansible-playbook -i $(INV) -l apps --tags app_deployer,secrets site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=ai-portal"
+deploy-busibox-portal:
+	ansible-playbook -i $(INV) -l apps --tags app_deployer,secrets site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=busibox-portal"
 
-deploy-agent-manager:
-	ansible-playbook -i $(INV) -l apps --tags app_deployer,secrets site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=agent-manager"
+deploy-busibox-agents:
+	ansible-playbook -i $(INV) -l apps --tags app_deployer,secrets site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=busibox-agents"
 
 # Deploy agent-server (internal API service)
 # Usage:
@@ -785,9 +785,9 @@ test-apps:
 	@echo "Running app tests..."
 	@echo "Container: core-apps-lxc ($(CORE_APPS_IP))"
 	@echo ""
-	@echo "=== AI Portal Tests ==="
-	@ssh root@$(CORE_APPS_IP) 'cd /srv/apps/ai-portal && npm test' || (echo "AI Portal tests FAILED" && exit 1)
-	@echo "✓ AI Portal tests passed"
+	@echo "=== Busibox Portal Tests ==="
+	@ssh root@$(CORE_APPS_IP) 'cd /srv/apps/busibox-portal && npm test' || (echo "Busibox Portal tests FAILED" && exit 1)
+	@echo "✓ Busibox Portal tests passed"
 	@echo ""
 
 test-search:
@@ -988,7 +988,7 @@ docker-llm:
 	ansible-playbook -i $(DOCKER_INV) docker.yml --tags llm $(DOCKER_VAULT_FLAGS) $(DOCKER_VARS) $(EXTRA_ARGS)
 
 docker-frontend:
-	@echo "Deploying Docker frontend (core-apps, nginx)..."
+	@echo "Deploying Docker frontend (proxy, core-apps)..."
 	ansible-playbook -i $(DOCKER_INV) docker.yml --tags frontend $(DOCKER_VAULT_FLAGS) $(DOCKER_VARS) $(EXTRA_ARGS)
 
 docker-status:
@@ -1015,11 +1015,11 @@ docker-clean:
 # Runtime app management for Docker containers without rebuild.
 # These commands use the Deploy API or docker exec to manage apps.
 #
-# For core apps (ai-portal, agent-manager):
-#   make install SERVICE=ai-portal            # Deploy/update via Deploy API
-#   make app-restart SERVICE=ai-portal        # Restart app via supervisorctl
+# For core apps (busibox-portal, busibox-agents):
+#   make install SERVICE=busibox-portal            # Deploy/update via Deploy API
+#   make app-restart SERVICE=busibox-portal        # Restart app via supervisorctl
 #   make app-status                           # Show all app status
-#   make app-logs SERVICE=ai-portal           # View app logs
+#   make app-logs SERVICE=busibox-portal           # View app logs
 #   make nginx-reload                         # Reload nginx config
 #
 # These mirror the Proxmox deployment pattern where apps are installed
@@ -1036,15 +1036,15 @@ ifndef SERVICE
 	@echo ""
 	@echo "Usage: make install SERVICE=<service> [REF=<git-ref>]"
 	@echo ""
-	@echo "Core apps: ai-portal, agent-manager"
+	@echo "Core apps: busibox-portal, busibox-agents"
 	@echo "User apps: Any app deployed via Deploy API"
 	@echo ""
 	@echo "REF: git branch or tag (default: main)"
 	@echo ""
 	@echo "Examples:"
-	@echo "  make install SERVICE=ai-portal"
-	@echo "  make install SERVICE=agent-manager REF=v1.2.3"
-	@echo "  make install SERVICE=ai-portal REF=feature/new-ui"
+	@echo "  make install SERVICE=busibox-portal"
+	@echo "  make install SERVICE=busibox-agents REF=v1.2.3"
+	@echo "  make install SERVICE=busibox-portal REF=feature/new-ui"
 else
 	@echo "🚀 Deploying $(SERVICE) via Deploy API..."
 	@REF=$${REF:-main}; \
@@ -1065,12 +1065,12 @@ nginx-reload:
 	@echo "🔄 Reloading nginx configuration..."
 	@if [ -f ../../docker-compose.yml ]; then \
 		docker compose -f ../../docker-compose.yml -f ../../docker-compose.github.yml \
-			exec core-apps nginx -t && \
+			exec proxy nginx -t && \
 		docker compose -f ../../docker-compose.yml -f ../../docker-compose.github.yml \
-			exec core-apps nginx -s reload; \
+			exec proxy nginx -s reload; \
 		echo "✅ Nginx reloaded"; \
 	else \
-		ssh root@$(CORE_APPS_IP) 'nginx -t && nginx -s reload'; \
+		ssh root@$(PROXY_IP) 'nginx -t && nginx -s reload'; \
 		echo "✅ Nginx reloaded"; \
 	fi
 
@@ -1098,7 +1098,7 @@ endif
 app-restart:
 ifndef SERVICE
 	@echo "Error: SERVICE is required"
-	@echo "Usage: make app-restart SERVICE=<ai-portal|agent-manager>"
+	@echo "Usage: make app-restart SERVICE=<busibox-portal|busibox-agents>"
 	@exit 1
 else
 	@echo "🔄 Restarting $(SERVICE)..."
@@ -1116,7 +1116,7 @@ endif
 app-stop:
 ifndef SERVICE
 	@echo "Error: SERVICE is required"
-	@echo "Usage: make app-stop SERVICE=<ai-portal|agent-manager>"
+	@echo "Usage: make app-stop SERVICE=<busibox-portal|busibox-agents>"
 	@exit 1
 else
 	@echo "🛑 Stopping $(SERVICE)..."
@@ -1134,7 +1134,7 @@ endif
 app-start:
 ifndef SERVICE
 	@echo "Error: SERVICE is required"
-	@echo "Usage: make app-start SERVICE=<ai-portal|agent-manager>"
+	@echo "Usage: make app-start SERVICE=<busibox-portal|busibox-agents>"
 	@exit 1
 else
 	@echo "🚀 Starting $(SERVICE)..."
@@ -1158,7 +1158,7 @@ app-status:
 		docker compose -f ../../docker-compose.yml -f ../../docker-compose.github.yml \
 			exec core-apps supervisorctl status; \
 	else \
-		ssh root@$(CORE_APPS_IP) 'systemctl status ai-portal agent-manager --no-pager'; \
+		ssh root@$(CORE_APPS_IP) 'systemctl status busibox-portal busibox-agents --no-pager'; \
 	fi
 
 # Open shell in core-apps container

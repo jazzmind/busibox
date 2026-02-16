@@ -718,7 +718,7 @@ structlog.configure(
 - **Deployment**: `docs/deployment/agent-server-deployment.md`
 - **Testing**: `docs/guides/agent-server-testing.md`
 - **API Reference**: `docs/reference/agent-server-api.md`
-- **Integration**: `docs/architecture/agent-manager-integration.md`
+- **Integration**: `docs/architecture/busibox-agents-integration.md`
 
 
 

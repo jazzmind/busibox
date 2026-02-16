@@ -11,9 +11,9 @@
 #   In container: bash /usr/local/bin/tail-app-logs.sh <app-name>
 # 
 # Examples:
-#   bash scripts/tail-app-logs.sh ai-portal production
-#   bash scripts/tail-app-logs.sh agent-manager test
-#   bash /usr/local/bin/tail-app-logs.sh ai-portal  # From inside container
+#   bash scripts/tail-app-logs.sh busibox-portal production
+#   bash scripts/tail-app-logs.sh busibox-agents test
+#   bash /usr/local/bin/tail-app-logs.sh busibox-portal  # From inside container
 
 set -euo pipefail
 
@@ -45,10 +45,10 @@ usage() {
     echo ""
     echo "Examples:"
     if [ "$RUNNING_IN_CONTAINER" = true ]; then
-        echo "  $0 ai-portal"
+        echo "  $0 busibox-portal"
     else
-        echo "  $0 ai-portal production"
-        echo "  $0 agent-manager test"
+        echo "  $0 busibox-portal production"
+        echo "  $0 busibox-agents test"
     fi
     exit 1
 }
@@ -69,7 +69,7 @@ if [ "$RUNNING_IN_CONTAINER" = true ]; then
         echo -e "${RED}Error: Service '${APP_NAME}' not found${NC}"
         echo ""
         echo -e "${YELLOW}Available services:${NC}"
-        systemctl list-units --type=service --state=running | grep -E '(ai-portal|agent-manager|doc-intel|innovation)'
+        systemctl list-units --type=service --state=running | grep -E '(busibox-portal|busibox-agents|doc-intel|innovation)'
         exit 1
     fi
     

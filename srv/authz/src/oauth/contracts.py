@@ -88,7 +88,7 @@ class SyncRole(BaseModel):
 
 class SyncUser(BaseModel):
     """
-    Minimal user+RBAC sync payload from ai-portal to authz.
+    Minimal user+RBAC sync payload from busibox-portal to authz.
 
     Authz becomes the RBAC authority over time; short-term this sync avoids duplicating
     RBAC logic in every downstream service.
@@ -97,6 +97,11 @@ class SyncUser(BaseModel):
     user_id: str
     email: str
     status: Optional[str] = None
+    display_name: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    favorite_color: Optional[str] = None
 
     # Role assignments
     roles: List[SyncRole] = Field(default_factory=list)

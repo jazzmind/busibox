@@ -46,7 +46,7 @@
   set_fact:
     subdomain_placeholders:
       - subdomain: "agents-{{ env_suffix }}"
-        app_name: "agent-manager"
+        app_name: "busibox-agents"
         placeholder_file: "agents.html"
       - subdomain: "docs-{{ env_suffix }}"
         app_name: "doc-intel"
@@ -60,7 +60,7 @@
   set_fact:
     subdomain_placeholders:
       - subdomain: "agents"
-        app_name: "agent-manager"
+        app_name: "busibox-agents"
         placeholder_file: "agents.html"
       - subdomain: "docs"
         app_name: "doc-intel"
@@ -115,7 +115,7 @@
         https://{{ proxy_ip }}
         http://{{ proxy_ip }} (redirects to HTTPS)
       
-      Main Domain (ai-portal):
+      Main Domain (busibox-portal):
         https://{{ full_domain }}
         https://{{ full_domain }}/agents
         https://{{ full_domain }}/docs

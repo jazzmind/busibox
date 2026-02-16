@@ -227,8 +227,8 @@ class HTMLRenderer:
             image_match = re.search(r'image_(\d+)\.\w+', image_path)
             if image_match:
                 image_index = image_match.group(1)
-                # Construct API URL - use /api/documents/ path for AI Portal compatibility
-                # AI Portal proxies /api/documents/{fileId}/images/{index} to data-api
+                # Construct API URL - use /api/documents/ path for Busibox Portal compatibility
+                # Busibox Portal proxies /api/documents/{fileId}/images/{index} to data-api
                 api_url = f"/api/documents/{file_id}/images/{image_index}"
                 return f'![{alt_text}]({api_url})'
             

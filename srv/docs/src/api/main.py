@@ -2,7 +2,7 @@
 Main FastAPI application for Docs API Service.
 
 A lightweight service that exposes busibox documentation and OpenAPI
-specifications via REST API, enabling ai-portal to fetch documentation
+specifications via REST API, enabling busibox-portal to fetch documentation
 from deployed environments where filesystem access is not available.
 """
 

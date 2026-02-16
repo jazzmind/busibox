@@ -1,50 +1,50 @@
 ---
-# Nginx Docker Deployment Tasks
+# Proxy Docker Deployment Tasks
 #
-# Deploys Nginx reverse proxy via Docker Compose
+# Deploys dedicated proxy (nginx) via Docker Compose
 # Used when deploy_target == 'docker'
 
-- name: Build Nginx container
+- name: Build proxy container
   include_role:
     name: docker_common
     tasks_from: compose_build
   vars:
     docker_services_to_build:
-      - nginx
+      - proxy
     docker_build_no_cache: "{{ docker_force_rebuild | default(false) }}"
 
-- name: Start Nginx container
+- name: Start proxy container
   include_role:
     name: docker_common
     tasks_from: compose_up
   vars:
     docker_services_to_start:
-      - nginx
+      - proxy
     docker_wait_for_health: true
 
-- name: Wait for Nginx to be ready
+- name: Wait for proxy to be ready
   include_role:
     name: docker_common
     tasks_from: wait_healthy
   vars:
-    docker_wait_service: nginx
+    docker_wait_service: proxy
     docker_wait_timeout: 30
 
-- name: Verify Nginx is responding
+- name: Verify proxy is responding
   ansible.builtin.uri:
     url: "http://localhost:80"
     method: GET
     status_code: [200, 301, 302, 404]  # Any response means nginx is working
     validate_certs: false
-  register: nginx_health
+  register: proxy_health
   retries: 3
   delay: 2
-  until: nginx_health.status is defined
+  until: proxy_health.status is defined
   failed_when: false
 
-- name: Display Nginx status
+- name: Display proxy status
   ansible.builtin.debug:
     msg: |
-      Nginx is running and ready
+      Proxy is running and ready
       HTTP: http://localhost:80
       HTTPS: https://localhost:443

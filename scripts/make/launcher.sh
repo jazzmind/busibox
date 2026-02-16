@@ -422,6 +422,13 @@ show_status_view() {
             fi
         fi
         
+        # MCP server status (independent of Busibox install)
+        if [[ -f "${REPO_ROOT}/tools/mcp-app-builder/dist/index.js" ]]; then
+            box_line "  ${CYAN}MCP server:${NC}   ${GREEN}installed${NC}"
+        else
+            box_line "  ${CYAN}MCP server:${NC}   ${DIM}uninstalled${NC}"
+        fi
+        
         box_empty
         box_footer
         echo ""
@@ -431,6 +438,11 @@ show_status_view() {
         box_empty
         box_line "  ${YELLOW}Status:${NC} Partial installation detected"
         box_line "  ${CYAN}Environment:${NC} $env_display"
+        if [[ -f "${REPO_ROOT}/tools/mcp-app-builder/dist/index.js" ]]; then
+            box_line "  ${CYAN}MCP server:${NC}   ${GREEN}installed${NC}"
+        else
+            box_line "  ${CYAN}MCP server:${NC}   ${DIM}uninstalled${NC}"
+        fi
         box_empty
         box_line "  ${DIM}Services may not be running. Use Install to complete setup.${NC}"
         box_empty
@@ -455,7 +467,8 @@ show_main_menu() {
         box_line "  ${BOLD}1)${NC} Install"
         box_line "  ${DIM}2) Manage (requires installation)${NC}"
         box_line "  ${DIM}3) Test (requires installation)${NC}"
-        box_line "  ${BOLD}4)${NC} Install MCP locally"
+        box_line "  ${BOLD}4)${NC} Build App"
+        box_line "  ${BOLD}5)${NC} Install MCP locally"
     else
         box_line "  ${BOLD}1)${NC} Uninstall / Reinstall"
         box_line "  ${BOLD}2)${NC} Manage"
@@ -474,9 +487,11 @@ show_main_menu() {
             else
                 box_line "  ${BOLD}4)${NC} Connect (start tunnel)"
             fi
-            box_line "  ${BOLD}5)${NC} Install MCP locally"
+            box_line "  ${BOLD}5)${NC} Build App"
+            box_line "  ${BOLD}6)${NC} Install MCP locally"
         else
-            box_line "  ${BOLD}4)${NC} Install MCP locally"
+            box_line "  ${BOLD}4)${NC} Build App"
+            box_line "  ${BOLD}5)${NC} Install MCP locally"
         fi
     fi
     
@@ -701,6 +716,9 @@ show_help() {
     box_line "    ${CYAN}make test${NC}     Testing system"
     box_line "                    Integration tests, health checks"
     box_empty
+    box_line "  ${BOLD}Build App${NC}"
+    box_line "    ${CYAN}Build App${NC}    Clone busibox-template, install MCP app-builder"
+    box_empty
     box_line "  ${BOLD}MCP (Cursor/Claude)${NC}"
     box_line "    ${CYAN}make mcp${NC}      Build MCP servers and write .cursor config"
     box_empty
@@ -915,6 +933,13 @@ handle_mcp_install() {
     read -n 1 -s -r -p "Press any key to continue..."
 }
 
+handle_build_app() {
+    echo ""
+    bash "${SCRIPT_DIR}/build-app.sh"
+    echo ""
+    read -n 1 -s -r -p "Press any key to continue..."
+}
+
 # ============================================================================
 # Main Loop
 # ============================================================================
@@ -1014,10 +1039,21 @@ main() {
                     fi
                     read -n 1 -s -r -p "Press any key to continue..."
                 else
-                    handle_mcp_install
+                    handle_build_app
                 fi
                 ;;
             5)
+                local active_backend=""
+                if [[ -n "$_active_profile" ]]; then
+                    active_backend=$(profile_get "$_active_profile" "backend")
+                fi
+                if [[ "$active_backend" == "k8s" ]]; then
+                    handle_build_app
+                else
+                    handle_mcp_install
+                fi
+                ;;
+            6)
                 # K8s only: Install MCP locally
                 local active_backend=""
                 if [[ -n "$_active_profile" ]]; then

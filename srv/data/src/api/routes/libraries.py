@@ -11,7 +11,7 @@ Handles:
 """
 
 import uuid
-from typing import Optional, List
+from typing import Optional, List, Dict, Any, Literal
 
 import structlog
 from fastapi import APIRouter, Depends, Request, Query
@@ -43,12 +43,12 @@ require_data_write = ScopeChecker("data.write")
 
 class CreateLibraryRequest(BaseModel):
     """Request body for creating a library."""
-    id: Optional[str] = Field(None, description="Optional explicit library ID (for syncing from AI Portal)")
+    id: Optional[str] = Field(None, description="Optional explicit library ID (for syncing from Busibox Portal)")
     name: str = Field(..., description="Library name")
     is_personal: bool = Field(default=False, alias="isPersonal", description="Whether this is a personal library")
-    user_id: Optional[str] = Field(None, alias="userId", description="User ID (for personal libraries from AI Portal sync)")
+    user_id: Optional[str] = Field(None, alias="userId", description="User ID (for personal libraries from Busibox Portal sync)")
     library_type: Optional[str] = Field(None, alias="libraryType", description="Personal library type (DOCS, RESEARCH, TASKS)")
-    created_by: Optional[str] = Field(None, alias="createdBy", description="Creator user ID (from AI Portal sync)")
+    created_by: Optional[str] = Field(None, alias="createdBy", description="Creator user ID (from Busibox Portal sync)")
     
     class Config:
         populate_by_name = True  # Allow both snake_case and camelCase
@@ -126,12 +126,12 @@ async def get_library_by_folder(
     This endpoint auto-creates personal libraries if they don't exist.
     
     Authentication: Accepts either Bearer token (from authenticated services) or
-    X-User-Id header (from AI Portal proxy).
+    X-User-Id header (from Busibox Portal proxy).
     """
     # Get user_id from either authenticated session or header
     user_id = getattr(request.state, "user_id", None)
     
-    # If no user_id from auth, check for header (from AI Portal proxy)
+    # If no user_id from auth, check for header (from Busibox Portal proxy)
     if not user_id:
         user_id = request.headers.get("X-User-Id")
     
@@ -233,10 +233,10 @@ async def create_library(
     
     For shared libraries (is_personal=false), only the name is required.
     
-    An explicit ID can be provided for syncing from AI Portal (id field).
+    An explicit ID can be provided for syncing from Busibox Portal (id field).
     When syncing, also provide userId, libraryType, and createdBy.
     """
-    # Check for internal service header (from AI Portal sync)
+    # Check for internal service header (from Busibox Portal sync)
     internal_service = request.headers.get("X-Internal-Service")
     header_user_id = request.headers.get("X-User-Id")
     
@@ -250,7 +250,7 @@ async def create_library(
         )
     
     # For internal sync requests with explicit ID, use provided values
-    is_sync_request = body.id is not None and internal_service == "ai-portal"
+    is_sync_request = body.id is not None and internal_service == "busibox-portal"
     
     # Validate personal library requirements (unless it's a sync request)
     if body.is_personal and not is_sync_request:
@@ -275,9 +275,9 @@ async def create_library(
         library_service = await get_library_service(request)
         
         if is_sync_request:
-            # Sync request from AI Portal - use all provided fields
+            # Sync request from Busibox Portal - use all provided fields
             logger.info(
-                "Syncing library from AI Portal",
+                "Syncing library from Busibox Portal",
                 library_id=body.id,
                 name=body.name,
                 is_personal=body.is_personal,
@@ -322,13 +322,13 @@ async def create_library(
 @router.get("/app-data")
 async def list_app_data_libraries(
     request: Request,
-    sourceApp: Optional[str] = Query(None, description="Filter by source app (e.g., 'status-report')"),
+    sourceApp: Optional[str] = Query(None, description="Filter by source app (e.g., 'busibox-projects')"),
     _: dict = Depends(require_data_read),
 ):
     """
     List app data libraries (data documents with sourceApp metadata).
     
-    App data libraries are structured data created by apps like status-report.
+    App data libraries are structured data created by apps like busibox-projects.
     They are exposed as "libraries" for browsing in the document manager.
     
     Each data document with a sourceApp becomes a browseable library entry.
@@ -644,7 +644,7 @@ async def get_library_documents(
     Returns files from data_files filtered by library_id.
     Requires JWT authentication for RLS enforcement.
     
-    Note: Internal services (AI Portal) must exchange tokens to get
+    Note: Internal services (Busibox Portal) must exchange tokens to get
     audience-bound JWT for data-api. Zero trust architecture.
     """
     user_id = getattr(request.state, "user_id", None)
@@ -718,9 +718,19 @@ class CreateTriggerRequest(BaseModel):
     """Request body for creating a library trigger."""
     name: str = Field(..., description="Trigger name")
     description: Optional[str] = Field(None, description="Trigger description")
+    trigger_type: Literal["run_agent", "apply_schema", "notify"] = Field(
+        "run_agent",
+        alias="triggerType",
+        description="Trigger action type",
+    )
     agent_id: Optional[str] = Field(None, alias="agentId", description="Agent ID to execute")
     prompt: Optional[str] = Field(None, description="Prompt for the agent")
     schema_document_id: Optional[str] = Field(None, alias="schemaDocumentId", description="Data document ID containing extraction schema")
+    notification_config: Optional[Dict[str, Any]] = Field(
+        None,
+        alias="notificationConfig",
+        description="Notification settings for notify triggers",
+    )
     delegation_token: Optional[str] = Field(None, alias="delegationToken", description="Pre-authorized token for agent execution")
     delegation_scopes: Optional[List[str]] = Field(None, alias="delegationScopes", description="Scopes for delegation token")
     
@@ -733,9 +743,19 @@ class UpdateTriggerRequest(BaseModel):
     name: Optional[str] = Field(None, description="New trigger name")
     description: Optional[str] = Field(None, description="New description")
     is_active: Optional[bool] = Field(None, alias="isActive", description="Enable/disable trigger")
+    trigger_type: Optional[Literal["run_agent", "apply_schema", "notify"]] = Field(
+        None,
+        alias="triggerType",
+        description="Trigger action type",
+    )
     prompt: Optional[str] = Field(None, description="New prompt")
     schema_document_id: Optional[str] = Field(None, alias="schemaDocumentId", description="New schema document ID")
     agent_id: Optional[str] = Field(None, alias="agentId", description="New agent ID")
+    notification_config: Optional[Dict[str, Any]] = Field(
+        None,
+        alias="notificationConfig",
+        description="Notification settings for notify triggers",
+    )
     
     class Config:
         populate_by_name = True
@@ -748,9 +768,11 @@ def trigger_to_response(trigger: dict) -> dict:
         "libraryId": str(trigger["library_id"]),
         "name": trigger["name"],
         "description": trigger.get("description"),
+        "triggerType": trigger.get("trigger_type", "run_agent"),
         "agentId": str(trigger["agent_id"]) if trigger.get("agent_id") else None,
         "prompt": trigger.get("prompt"),
         "schemaDocumentId": str(trigger["schema_document_id"]) if trigger.get("schema_document_id") else None,
+        "notificationConfig": trigger.get("notification_config"),
         "isActive": trigger.get("is_active", True),
         "createdBy": str(trigger["created_by"]),
         "executionCount": trigger.get("execution_count", 0),
@@ -821,11 +843,32 @@ async def create_library_trigger(
     if error_response:
         return error_response
     
-    if not body.agent_id:
+    if body.trigger_type == "run_agent" and not body.agent_id:
         return JSONResponse(
             status_code=http_status.HTTP_400_BAD_REQUEST,
-            content={"error": "agent_id is required"}
+            content={"error": "agentId is required for run_agent triggers"}
         )
+
+    if body.trigger_type == "apply_schema" and not body.schema_document_id:
+        return JSONResponse(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            content={"error": "schemaDocumentId is required for apply_schema triggers"}
+        )
+
+    if body.trigger_type == "notify":
+        notification_config = body.notification_config or {}
+        channel = notification_config.get("channel")
+        recipient = notification_config.get("recipient")
+        if channel not in {"email", "webhook"}:
+            return JSONResponse(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                content={"error": "notify trigger notificationConfig.channel must be 'email' or 'webhook'"}
+            )
+        if not recipient:
+            return JSONResponse(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                content={"error": "notify trigger notificationConfig.recipient is required"}
+            )
     
     try:
         from api.main import pg_service
@@ -833,9 +876,11 @@ async def create_library_trigger(
             library_id=library_id,
             name=body.name,
             created_by=user_id,
+            trigger_type=body.trigger_type,
             agent_id=body.agent_id,
             prompt=body.prompt,
             schema_document_id=body.schema_document_id,
+            notification_config=body.notification_config,
             description=body.description,
             delegation_token=body.delegation_token,
             delegation_scopes=body.delegation_scopes,
@@ -929,12 +974,46 @@ async def update_library_trigger(
             update_kwargs["description"] = body.description
         if body.is_active is not None:
             update_kwargs["is_active"] = body.is_active
+        if body.trigger_type is not None:
+            update_kwargs["trigger_type"] = body.trigger_type
         if body.prompt is not None:
             update_kwargs["prompt"] = body.prompt
         if body.schema_document_id is not None:
             update_kwargs["schema_document_id"] = body.schema_document_id
         if body.agent_id is not None:
             update_kwargs["agent_id"] = body.agent_id
+        if body.notification_config is not None:
+            update_kwargs["notification_config"] = body.notification_config
+
+        merged_type = update_kwargs.get("trigger_type", existing.get("trigger_type", "run_agent"))
+        merged_agent_id = update_kwargs.get("agent_id", str(existing["agent_id"]) if existing.get("agent_id") else None)
+        merged_schema_document_id = update_kwargs.get("schema_document_id", str(existing["schema_document_id"]) if existing.get("schema_document_id") else None)
+        merged_notification_config = update_kwargs.get("notification_config", existing.get("notification_config"))
+
+        if merged_type == "run_agent" and not merged_agent_id:
+            return JSONResponse(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                content={"error": "agentId is required for run_agent triggers"}
+            )
+        if merged_type == "apply_schema" and not merged_schema_document_id:
+            return JSONResponse(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                content={"error": "schemaDocumentId is required for apply_schema triggers"}
+            )
+        if merged_type == "notify":
+            cfg = merged_notification_config or {}
+            channel = cfg.get("channel")
+            recipient = cfg.get("recipient")
+            if channel not in {"email", "webhook"}:
+                return JSONResponse(
+                    status_code=http_status.HTTP_400_BAD_REQUEST,
+                    content={"error": "notify trigger notificationConfig.channel must be 'email' or 'webhook'"}
+                )
+            if not recipient:
+                return JSONResponse(
+                    status_code=http_status.HTTP_400_BAD_REQUEST,
+                    content={"error": "notify trigger notificationConfig.recipient is required"}
+                )
         
         trigger = await pg_service.update_library_trigger(trigger_id, **update_kwargs)
         return JSONResponse(

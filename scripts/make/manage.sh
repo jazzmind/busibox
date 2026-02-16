@@ -502,8 +502,8 @@ _rebuild_app_submenu() {
     box_empty
     box_line "  ${BOLD}Select app to rebuild:${NC}"
     box_empty
-    box_line "    ${BOLD}1)${NC} ai-portal"
-    box_line "    ${BOLD}2)${NC} agent-manager"
+    box_line "    ${BOLD}1)${NC} busibox-portal"
+    box_line "    ${BOLD}2)${NC} busibox-agents"
     box_line "    ${BOLD}3)${NC} both"
     box_empty
     box_line "  ${DIM}b = back${NC}"
@@ -517,43 +517,43 @@ _rebuild_app_submenu() {
     case "$app_choice" in
         1)
             echo ""
-            info "Rebuilding ai-portal from source..."
+            info "Rebuilding busibox-portal from source..."
             if [[ "$_CURRENT_BACKEND" == "docker" ]]; then
-                docker exec "${prefix}-core-apps" bash -c "cd /srv/ai-portal && npm install"
+                docker exec "${prefix}-core-apps" bash -c "cd /srv/busibox-portal && npm install"
                 docker restart "${prefix}-core-apps"
             else
                 cd "${REPO_ROOT}/provision/ansible"
-                make deploy-ai-portal INV="inventory/${env}"
+                make deploy-busibox-portal INV="inventory/${env}"
             fi
             read -n 1 -s -r -p "Press any key to continue..."
             ;;
         2)
             echo ""
-            info "Rebuilding agent-manager from source..."
+            info "Rebuilding busibox-agents from source..."
             if [[ "$_CURRENT_BACKEND" == "docker" ]]; then
-                docker exec "${prefix}-core-apps" bash -c "cd /srv/agent-manager && npm install"
+                docker exec "${prefix}-core-apps" bash -c "cd /srv/busibox-agents && npm install"
                 docker restart "${prefix}-core-apps"
             else
                 cd "${REPO_ROOT}/provision/ansible"
-                make deploy-agent-manager INV="inventory/${env}"
+                make deploy-busibox-agents INV="inventory/${env}"
             fi
             read -n 1 -s -r -p "Press any key to continue..."
             ;;
         3)
             echo ""
-            info "Rebuilding ai-portal from source..."
+            info "Rebuilding busibox-portal from source..."
             if [[ "$_CURRENT_BACKEND" == "docker" ]]; then
-                docker exec "${prefix}-core-apps" bash -c "cd /srv/ai-portal && npm install"
+                docker exec "${prefix}-core-apps" bash -c "cd /srv/busibox-portal && npm install"
                 echo ""
-                info "Rebuilding agent-manager from source..."
-                docker exec "${prefix}-core-apps" bash -c "cd /srv/agent-manager && npm install"
+                info "Rebuilding busibox-agents from source..."
+                docker exec "${prefix}-core-apps" bash -c "cd /srv/busibox-agents && npm install"
                 docker restart "${prefix}-core-apps"
             else
                 cd "${REPO_ROOT}/provision/ansible"
-                make deploy-ai-portal INV="inventory/${env}"
+                make deploy-busibox-portal INV="inventory/${env}"
                 echo ""
-                info "Rebuilding agent-manager from source..."
-                make deploy-agent-manager INV="inventory/${env}"
+                info "Rebuilding busibox-agents from source..."
+                make deploy-busibox-agents INV="inventory/${env}"
             fi
             read -n 1 -s -r -p "Press any key to continue..."
             ;;

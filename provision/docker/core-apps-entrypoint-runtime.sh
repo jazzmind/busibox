@@ -3,7 +3,7 @@
 # Core Apps Runtime Entrypoint Script
 # =============================================================================
 #
-# Starts nginx via supervisord, then deploys apps if not already present.
+# Starts supervisord, then deploys apps if not already present.
 # Apps are installed at runtime into persistent volumes, not baked into image.
 #
 # This mirrors the Proxmox pattern where:
@@ -14,22 +14,21 @@
 # Modes:
 #   start   - Normal startup (default)
 #   deploy  - Deploy a specific app: entrypoint.sh deploy <app> [ref]
-#   nginx-reload - Reload nginx configuration
 #   bash    - Start bash shell for debugging
 #
 # Environment variables:
 #   GITHUB_AUTH_TOKEN - Required for cloning private repos and npm packages
-#   AI_PORTAL_GITHUB_REF - Git ref for ai-portal (default: main)
-#   AGENT_MANAGER_GITHUB_REF - Git ref for agent-manager (default: main)
-#   DATABASE_URL - PostgreSQL connection string (required for ai-portal)
+#   BUSIBOX_PORTAL_GITHUB_REF - Git ref for busibox-portal (default: main)
+#   BUSIBOX_AGENTS_GITHUB_REF - Git ref for busibox-agents (default: main)
+#   DATABASE_URL - PostgreSQL connection string (required for busibox-portal)
 #
 # =============================================================================
 
 set -euo pipefail
 
 # Default GitHub refs
-AI_PORTAL_GITHUB_REF="${AI_PORTAL_GITHUB_REF:-main}"
-AGENT_MANAGER_GITHUB_REF="${AGENT_MANAGER_GITHUB_REF:-main}"
+BUSIBOX_PORTAL_GITHUB_REF="${BUSIBOX_PORTAL_GITHUB_REF:-main}"
+BUSIBOX_AGENTS_GITHUB_REF="${BUSIBOX_AGENTS_GITHUB_REF:-main}"
 
 # Logging functions
 log_info() {
@@ -42,32 +41,6 @@ log_error() {
 
 log_success() {
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] SUCCESS: $*"
-}
-
-# =============================================================================
-# SSL Certificate Generation
-# =============================================================================
-generate_ssl_cert() {
-    local ssl_dir="/etc/nginx/ssl"
-    # Must match nginx-bundled.conf which expects localhost.crt and localhost.key
-    local cert_file="$ssl_dir/localhost.crt"
-    local key_file="$ssl_dir/localhost.key"
-    
-    if [ ! -f "$cert_file" ] || [ ! -f "$key_file" ]; then
-        log_info "Generating self-signed SSL certificate (localhost.crt/localhost.key)..."
-        mkdir -p "$ssl_dir"
-        if ! openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-            -keyout "$key_file" \
-            -out "$cert_file" \
-            -subj "/CN=localhost/O=Busibox/C=US" \
-            -addext "subjectAltName=DNS:localhost,DNS:*.localhost,IP:127.0.0.1"; then
-            log_error "Failed to generate SSL certificate"
-            return 1
-        fi
-        log_success "SSL certificate generated"
-    else
-        log_info "SSL certificates already exist, skipping generation"
-    fi
 }
 
 # =============================================================================
@@ -161,14 +134,14 @@ deploy_app() {
     # Set build-time environment variables based on app
     log_info "Building application..."
     case "${app_name}" in
-        ai-portal)
+        busibox-portal)
             export NEXT_PUBLIC_BASE_PATH=/portal
             # DATABASE_URL needed for prisma at build time (use dummy if not set)
             export DATABASE_URL="${DATABASE_URL:-postgresql://dummy:dummy@localhost:5432/dummy}"
             ;;
-        agent-manager)
+        busibox-agents)
             export NEXT_PUBLIC_BASE_PATH=/agents
-            export NEXT_PUBLIC_AI_PORTAL_URL="${NEXT_PUBLIC_AI_PORTAL_URL:-https://localhost/portal}"
+            export NEXT_PUBLIC_BUSIBOX_PORTAL_URL="${NEXT_PUBLIC_BUSIBOX_PORTAL_URL:-https://localhost/portal}"
             ;;
     esac
     
@@ -192,8 +165,8 @@ deploy_app() {
     log_info "Pruning dev dependencies..."
     npm prune --omit=dev 2>&1 || true
     
-    # Run database migrations for ai-portal
-    if [ "${app_name}" = "ai-portal" ] && [ -d "prisma" ]; then
+    # Run database migrations for busibox-portal
+    if [ "${app_name}" = "busibox-portal" ] && [ -d "prisma" ]; then
         log_info "Running database migrations..."
         if [ -n "${DATABASE_URL:-}" ] && [ "${DATABASE_URL}" != "postgresql://dummy:dummy@localhost:5432/dummy" ]; then
             npx prisma db push --accept-data-loss 2>&1 || {
@@ -286,14 +259,10 @@ case "${1:-start}" in
     start)
         log_info "Starting Core Apps (runtime mode)..."
         
-        # Generate SSL certificates
-        generate_ssl_cert
-        
         # Setup npm authentication
         setup_npm_auth
         
         # Start supervisord in foreground
-        # This starts nginx immediately (autostart=true)
         # Apps are autostart=false, we start them after deployment check
         log_info "Starting supervisord..."
         supervisord -c /etc/supervisor/conf.d/supervisord.conf &
@@ -304,8 +273,8 @@ case "${1:-start}" in
         
         # Check and deploy apps if needed
         log_info "Checking app deployments..."
-        deploy_if_needed "ai-portal" "${AI_PORTAL_GITHUB_REF}"
-        deploy_if_needed "agent-manager" "${AGENT_MANAGER_GITHUB_REF}"
+        deploy_if_needed "busibox-portal" "${BUSIBOX_PORTAL_GITHUB_REF}"
+        deploy_if_needed "busibox-agents" "${BUSIBOX_AGENTS_GITHUB_REF}"
         
         log_success "Core apps started"
         
@@ -320,7 +289,7 @@ case "${1:-start}" in
         
         if [ -z "${APP_NAME}" ]; then
             log_error "Usage: entrypoint.sh deploy <app-name> [git-ref]"
-            log_error "  app-name: ai-portal, agent-manager"
+            log_error "  app-name: busibox-portal, busibox-agents"
             log_error "  git-ref: branch or tag (default: main)"
             exit 1
         fi
@@ -329,22 +298,6 @@ case "${1:-start}" in
         setup_npm_auth
         
         deploy_app "${APP_NAME}" "${GITHUB_REF}"
-        ;;
-        
-    nginx-reload)
-        log_info "Testing nginx configuration..."
-        if nginx -t; then
-            log_info "Reloading nginx..."
-            nginx -s reload
-            log_success "Nginx reloaded"
-        else
-            log_error "Nginx configuration test failed"
-            exit 1
-        fi
-        ;;
-        
-    nginx-test)
-        nginx -t
         ;;
         
     status)

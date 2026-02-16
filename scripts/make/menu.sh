@@ -1136,26 +1136,26 @@ services_group_menu() {
         else
             for svc in $services; do
                 local status_line
-                # Special handling for ai-portal and agent-manager (run in core-apps container)
+                # Special handling for busibox-portal and busibox-agents (run in core-apps container)
                 case "$svc" in
-                    ai-portal)
+                    busibox-portal)
                         # Check if core-apps is running and port 3000 is listening
                         local core_status
                         core_status=$(cd "$REPO_ROOT" && docker compose -f docker-compose.yml ps --format "table {{.Name}}\t{{.Status}}" "core-apps" 2>/dev/null | tail -n +2)
                         if [[ -n "$core_status" ]] && lsof -i :3000 -sTCP:LISTEN -t >/dev/null 2>&1; then
-                            echo "  ai-portal: running (in core-apps)"
+                            echo "  busibox-portal: running (in core-apps)"
                         else
-                            echo "  ai-portal: not running"
+                            echo "  busibox-portal: not running"
                         fi
                         ;;
-                    agent-manager)
+                    busibox-agents)
                         # Check if core-apps is running and port 3001 is listening
                         local core_status
                         core_status=$(cd "$REPO_ROOT" && docker compose -f docker-compose.yml ps --format "table {{.Name}}\t{{.Status}}" "core-apps" 2>/dev/null | tail -n +2)
                         if [[ -n "$core_status" ]] && lsof -i :3001 -sTCP:LISTEN -t >/dev/null 2>&1; then
-                            echo "  agent-manager: running (in core-apps)"
+                            echo "  busibox-agents: running (in core-apps)"
                         else
-                            echo "  agent-manager: not running"
+                            echo "  busibox-agents: not running"
                         fi
                         ;;
                     *)
@@ -1374,8 +1374,8 @@ services_restart_with_deps() {
 }
 
 # Translate logical service names to docker-compose service names
-# In local dev, ai-portal and agent-manager run in a single core-apps container
-# Usage: translate_service_names "ai-portal agent-manager nginx"
+# In local dev, busibox-portal and busibox-agents run in a single core-apps container
+# Usage: translate_service_names "busibox-portal busibox-agents nginx"
 # Returns: "core-apps nginx" (deduplicated)
 translate_service_names() {
     local services="$1"
@@ -1384,7 +1384,7 @@ translate_service_names() {
     
     for svc in $services; do
         case "$svc" in
-            ai-portal|agent-manager)
+            busibox-portal|busibox-agents)
                 # Both run in core-apps container in local dev
                 if [[ "$seen_core_apps" == "false" ]]; then
                     translated="$translated core-apps"
@@ -1515,8 +1515,8 @@ services_select_specific() {
             "search-api" \
             "agent-api" \
             "docs-api" \
-            "ai-portal" \
-            "agent-manager" \
+            "busibox-portal" \
+            "busibox-agents" \
             "host-agent (host)" \
             "Back"
         
@@ -1546,8 +1546,8 @@ services_select_specific() {
             13) services_group_menu "search-api" "search-api" ;;
             14) services_group_menu "agent-api" "agent-api" ;;
             15) services_group_menu "docs-api" "docs-api" ;;
-            16) services_group_menu "ai-portal" "ai-portal" ;;
-            17) services_group_menu "agent-manager" "agent-manager" ;;
+            16) services_group_menu "busibox-portal" "busibox-portal" ;;
+            17) services_group_menu "busibox-agents" "busibox-agents" ;;
             18) host_service_menu "host-agent" ;;
             19|b|B|"") return 0 ;;
         esac
@@ -1568,8 +1568,8 @@ services_select_specific() {
             "search-api" \
             "agent-api" \
             "docs-api" \
-            "ai-portal" \
-            "agent-manager" \
+            "busibox-portal" \
+            "busibox-agents" \
             "Back"
         
         local choice=""
@@ -1590,8 +1590,8 @@ services_select_specific() {
             12) services_group_menu "search-api" "search-api" ;;
             13) services_group_menu "agent-api" "agent-api" ;;
             14) services_group_menu "docs-api" "docs-api" ;;
-            15) services_group_menu "ai-portal" "ai-portal" ;;
-            16) services_group_menu "agent-manager" "agent-manager" ;;
+            15) services_group_menu "busibox-portal" "busibox-portal" ;;
+            16) services_group_menu "busibox-agents" "busibox-agents" ;;
             17|b|B|"") return 0 ;;
         esac
     fi
@@ -1642,7 +1642,7 @@ handle_services() {
                     "Core Services (authz, postgres, redis, milvus, minio)" \
                     "LLM Services ($llm_desc)" \
                     "API Services (deploy, data, search, agent, docs)" \
-                    "App Services (nginx, ai-portal, agent-manager)" \
+                    "App Services (nginx, busibox-portal, busibox-agents)" \
                     "Back to Main Menu"
                 echo -e "  ${DIM}Press 's' to refresh status and return to main menu${NC}"
                 
@@ -1681,7 +1681,7 @@ handle_services() {
                         [[ $? -eq $RETURN_TO_STATUS ]] && return $RETURN_TO_STATUS
                         ;;
                     6)
-                        services_group_menu "App Services" "nginx ai-portal agent-manager"
+                        services_group_menu "App Services" "nginx busibox-portal busibox-agents"
                         [[ $? -eq $RETURN_TO_STATUS ]] && return $RETURN_TO_STATUS
                         ;;
                     7|b|B)
@@ -2910,7 +2910,7 @@ show_test_main_menu() {
             echo -e "  Services: ${DIM}Not run${NC}"
         fi
         
-        # App tests status (ai-portal, agent-manager)
+        # App tests status (busibox-portal, busibox-agents)
         local failed_apps=($(get_failed_apps))
         local passed_apps=($(get_passed_apps))
         
@@ -2928,7 +2928,7 @@ show_test_main_menu() {
         menu "Select Test Category" \
             "PVT Tests (Post-Deployment Validation)" \
             "Service Tests (AuthZ, Data, Search, Agent)" \
-            "App Tests (AI Portal, Agent Manager)" \
+            "App Tests (Busibox Portal, Agent Manager)" \
             "Clear Test Results" \
             "Back to Main Menu"
         echo -e "  ${DIM}Press 's' to refresh status and return to main menu${NC}"
@@ -3621,7 +3621,7 @@ handle_test_apps() {
         
         menu "App Test Options" \
             "Run All App Tests" \
-            "Test AI Portal" \
+            "Test Busibox Portal" \
             "Test Agent Manager" \
             "Back to Test Menu"
         
@@ -3635,7 +3635,7 @@ handle_test_apps() {
                 ;;
             2)
                 echo ""
-                warn "AI Portal tests not yet implemented"
+                warn "Busibox Portal tests not yet implemented"
                 pause
                 ;;
             3)

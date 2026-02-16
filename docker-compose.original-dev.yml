@@ -25,15 +25,15 @@
 # =============================================================================
 
 services:
-  # AI Portal - Main Frontend (Development Mode)
-  ai-portal:
+  # Busibox Portal - Main Frontend (Development Mode)
+  busibox-portal:
     build:
-      context: ../ai-portal
+      context: ../busibox-portal
       dockerfile: Dockerfile.dev
       args:
         GITHUB_AUTH_TOKEN: ${GITHUB_AUTH_TOKEN:-}
-    container_name: local-ai-portal
-    hostname: ai-portal
+    container_name: local-busibox-portal
+    hostname: busibox-portal
     restart: unless-stopped
     environment:
       NODE_ENV: development
@@ -57,7 +57,7 @@ services:
       # SSO
       SSO_JWT_SECRET: ${SSO_JWT_SECRET:-dev-sso-secret}
       # Service URLs (for SSO redirect via nginx proxy)
-      NEXT_PUBLIC_AGENT_MANAGER_URL: https://localhost/agents
+      NEXT_PUBLIC_BUSIBOX_AGENTS_URL: https://localhost/agents
       NEXT_PUBLIC_APP_URL: https://localhost/portal
       # Base path for nginx subpath routing
       NEXT_PUBLIC_BASE_PATH: /portal
@@ -76,11 +76,11 @@ services:
       - "3000:3000"
     volumes:
       # Mount source code for live editing
-      - ../ai-portal:/app
+      - ../busibox-portal:/app
       # Preserve node_modules from container (installed during build)
-      - ai-portal-node-modules:/app/node_modules
+      - busibox-portal-node-modules:/app/node_modules
       # Preserve .next build cache
-      - ai-portal-next-cache:/app/.next
+      - busibox-portal-next-cache:/app/.next
       # Mount busibox-app INSIDE /app so outputFileTracingRoot works
       - ../busibox-app:/app/.busibox-app:ro
     depends_on:
@@ -101,14 +101,14 @@ services:
       - busibox-net
 
   # Agent Manager - Agent Management UI (Development Mode)
-  agent-manager:
+  busibox-agents:
     build:
-      context: ../agent-manager
+      context: ../busibox-agents
       dockerfile: Dockerfile.dev
       args:
         GITHUB_AUTH_TOKEN: ${GITHUB_AUTH_TOKEN:-}
-    container_name: local-agent-manager
-    hostname: agent-manager
+    container_name: local-busibox-agents
+    hostname: busibox-agents
     restart: unless-stopped
     environment:
       NODE_ENV: development
@@ -117,8 +117,8 @@ services:
       NEXT_PUBLIC_AGENT_API_URL: https://localhost/api/agent
       NEXT_PUBLIC_DATA_API_URL: https://localhost/api/data
       NEXT_PUBLIC_SEARCH_API_URL: https://localhost/api/search
-      # AI Portal (SSO) via nginx
-      NEXT_PUBLIC_AI_PORTAL_URL: https://localhost/portal
+      # Busibox Portal (SSO) via nginx
+      NEXT_PUBLIC_BUSIBOX_PORTAL_URL: https://localhost/portal
       # AuthZ - internal container URL
       AUTHZ_BASE_URL: http://authz-api:8010
       # Base path for nginx subpath routing
@@ -131,11 +131,11 @@ services:
       - "3001:3001"
     volumes:
       # Mount source code for live editing
-      - ../agent-manager:/app
+      - ../busibox-agents:/app
       # Preserve node_modules from container (installed during build)
-      - agent-manager-node-modules:/app/node_modules
+      - busibox-agents-node-modules:/app/node_modules
       # Preserve .next build cache
-      - agent-manager-next-cache:/app/.next
+      - busibox-agents-next-cache:/app/.next
       # Mount busibox-app INSIDE /app so outputFileTracingRoot works
       - ../busibox-app:/app/.busibox-app:ro
     depends_on:
@@ -154,10 +154,10 @@ services:
 # Named volumes for node_modules and .next cache
 # These preserve installed dependencies across container restarts
 volumes:
-  ai-portal-node-modules:
-  ai-portal-next-cache:
-  agent-manager-node-modules:
-  agent-manager-next-cache:
+  busibox-portal-node-modules:
+  busibox-portal-next-cache:
+  busibox-agents-node-modules:
+  busibox-agents-next-cache:
 
 # Use the same network as the base compose
 networks:

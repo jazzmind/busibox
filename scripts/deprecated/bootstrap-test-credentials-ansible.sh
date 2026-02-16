@@ -11,11 +11,11 @@ set -euo pipefail
 # DESCRIPTION:
 #   Manages test credentials for Busibox integration testing:
 #   - Creates/retrieves a single test user
-#   - Ensures OAuth clients exist (ai-portal, api-service)
+#   - Ensures OAuth clients exist (busibox-portal, api-service)
 #   - Updates ansible vault with credentials (Proxmox only)
 #
 #   OAuth Client Architecture:
-#   - ai-portal: Used by frontend apps to exchange user credentials for tokens
+#   - busibox-portal: Used by frontend apps to exchange user credentials for tokens
 #   - api-service: Used by backend services for service-to-service calls
 #
 #   Both clients share the same secret (jwt_secret) for simplicity, but have
@@ -34,7 +34,7 @@ set -euo pipefail
 #
 # OUTPUTS:
 #   - Test user in authz database (single user: test@busibox.local)
-#   - OAuth clients: ai-portal, api-service
+#   - OAuth clients: busibox-portal, api-service
 #   - Credentials saved to ansible vault (Proxmox only)
 #==============================================================================
 
@@ -79,7 +79,7 @@ if [ "$ENV" = "docker" ]; then
     PG_DB="busibox"
     PG_USER="busibox_user"
     ADMIN_TOKEN="local-admin-token"
-    CLIENT_SECRET="ai-portal-secret"
+    CLIENT_SECRET="busibox-portal-secret"
     USE_DOCKER=true
     echo -e "${GREEN}Environment: DOCKER (local development)${NC}"
 elif [ "$ENV" = "test" ]; then
@@ -180,13 +180,13 @@ echo ""
 
 echo -e "${BLUE}Checking OAuth clients...${NC}"
 
-# Check ai-portal client
-AI_PORTAL_EXISTS=$(run_db_query "SELECT client_id FROM authz_oauth_clients WHERE client_id = 'ai-portal';")
+# Check busibox-portal client
+BUSIBOX_PORTAL_EXISTS=$(run_db_query "SELECT client_id FROM authz_oauth_clients WHERE client_id = 'busibox-portal';")
 
-if [ -n "$AI_PORTAL_EXISTS" ]; then
-    echo -e "${GREEN}✓ ai-portal client exists${NC}"
+if [ -n "$BUSIBOX_PORTAL_EXISTS" ]; then
+    echo -e "${GREEN}✓ busibox-portal client exists${NC}"
 else
-    echo -e "${YELLOW}ai-portal client not found - will be created on first authz deploy${NC}"
+    echo -e "${YELLOW}busibox-portal client not found - will be created on first authz deploy${NC}"
 fi
 
 # Check api-service client
@@ -201,7 +201,7 @@ else
     if [ "$USE_DOCKER" = true ]; then
         # Docker: use the known local development values
         ADMIN_TOKEN_FOR_CLIENT="local-admin-token"
-        JWT_SECRET="ai-portal-secret"
+        JWT_SECRET="busibox-portal-secret"
    
     if [ -n "$ADMIN_TOKEN_FOR_CLIENT" ] && [ -n "$JWT_SECRET" ]; then
         # Create api-service client via admin API (proper hashing handled by authz)
@@ -258,12 +258,12 @@ echo -e "${BLUE}Verifying token exchange...${NC}"
 
 if [ "$USE_DOCKER" = true ]; then
     # Docker: use the known local development client secret
-    TOKEN_SECRET="ai-portal-secret"
+    TOKEN_SECRET="busibox-portal-secret"
 
 
 TOKEN_RESPONSE=$(curl -s -X POST "${AUTHZ_URL}/oauth/token" \
     -H "Content-Type: application/x-www-form-urlencoded" \
-    -d "grant_type=client_credentials&client_id=ai-portal&client_secret=${TOKEN_SECRET}&audience=data-api" 2>&1 || echo "")
+    -d "grant_type=client_credentials&client_id=busibox-portal&client_secret=${TOKEN_SECRET}&audience=data-api" 2>&1 || echo "")
 
 if echo "$TOKEN_RESPONSE" | grep -q "access_token"; then
     echo -e "${GREEN}✓ Token exchange verified${NC}"
@@ -286,7 +286,7 @@ echo "  User ID: ${TEST_USER_ID}"
 echo "  Email: ${TEST_USER_EMAIL}"
 echo ""
 echo -e "${BLUE}OAuth Clients:${NC}"
-echo "  ai-portal: For frontend user authentication"
+echo "  busibox-portal: For frontend user authentication"
 echo "  api-service: For backend service-to-service calls"
 echo "  (Both use jwt_secret as client_secret)"
 echo ""

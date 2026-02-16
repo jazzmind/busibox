@@ -84,7 +84,7 @@ async def _generate_insights_background(
 
 class ChatMessageRequest(BaseModel):
     """Request to send a chat message."""
-    message: str = Field(..., min_length=1, max_length=10000, description="User message")
+    message: str = Field(..., min_length=1, max_length=50000, description="User message")
     conversation_id: Optional[uuid.UUID] = Field(None, description="Conversation ID (creates new if not provided)")
     model: Optional[str] = Field("auto", description="Model selection: 'auto', 'chat', 'research', 'frontier'")
     attachments: Optional[List[Attachment]] = Field(default_factory=list, description="File attachments")
@@ -360,7 +360,8 @@ async def send_chat_message(
             model=selected_model,
             user_id=principal.sub,
             session=session,
-            conversation_history=history_dicts
+            conversation_history=history_dicts,
+            principal=principal
         )
         
         assistant_content = execution_result.content

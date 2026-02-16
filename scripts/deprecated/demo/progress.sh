@@ -168,7 +168,7 @@ show_dashboard() {
     echo "║                                                                      ║"
     echo "╠══════════════════════════════════════════════════════════════════════╣"
     echo "║                                                                      ║"
-    echo "║  AI Portal:      https://localhost/portal                            ║"
+    echo "║  Busibox Portal:      https://localhost/portal                            ║"
     echo "║  Agent Manager:  https://localhost/agents                            ║"
     echo "║  API Docs:       https://localhost/api/docs                          ║"
     echo "║                                                                      ║"

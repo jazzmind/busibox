@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 from api.middleware.jwt_auth import ScopeChecker
 from api.services.minio_service import MinIOService
 from api.services.encryption_client import EncryptionClient
+from api.routes.upload import _create_delegation_token_for_processing
 from services.milvus_service import MilvusService
 from services.processing_history_service import ProcessingHistoryService
 from shared.config import Config
@@ -419,6 +420,7 @@ async def get_file_metadata(fileId: str, request: Request):
                     f.extracted_keywords,
                     f.metadata,
                     f.permissions,
+                    f.library_id,
                     f.created_at,
                     f.updated_at
                 FROM data_files f
@@ -540,6 +542,7 @@ async def get_file_metadata(fileId: str, request: Request):
                     "sizeBytes": file_row["size_bytes"],
                     "contentHash": file_row["content_hash"],
                     "visibility": file_row.get("visibility", "personal"),
+                    "libraryId": str(file_row["library_id"]) if file_row.get("library_id") else None,
                     "documentType": file_row["document_type"],
                     "primaryLanguage": file_row["primary_language"],
                     "detectedLanguages": file_row["detected_languages"],
@@ -605,6 +608,7 @@ async def get_file_metadata(fileId: str, request: Request):
 class PatchFileMetadataBody(BaseModel):
     """Body for PATCH /files/{fileId} - update file metadata."""
     extractedKeywords: Optional[List[str]] = Field(None, description="Replace extracted keywords/tags")
+    metadata: Optional[dict] = Field(None, description="Merge custom metadata into data_files.metadata")
 
 
 @router.patch("/{fileId}", dependencies=[Depends(require_data_write)])
@@ -632,6 +636,8 @@ async def patch_file_metadata(fileId: str, request: Request, body: PatchFileMeta
                 status_code = status.HTTP_404_NOT_FOUND if error_msg == "File not found" else status.HTTP_403_FORBIDDEN
                 return JSONResponse(status_code=status_code, content={"error": error_msg})
             
+            updated_any = False
+
             if body.extractedKeywords is not None:
                 keywords = [k.strip() for k in body.extractedKeywords if k and k.strip()]
                 await conn.execute(
@@ -648,6 +654,32 @@ async def patch_file_metadata(fileId: str, request: Request, body: PatchFileMeta
                     file_id=fileId,
                     user_id=user_id,
                     count=len(keywords),
+                )
+                updated_any = True
+
+            if body.metadata is not None:
+                await conn.execute(
+                    """
+                    UPDATE data_files
+                    SET metadata = COALESCE(metadata, '{}'::jsonb) || $1::jsonb,
+                        updated_at = NOW()
+                    WHERE file_id = $2
+                    """,
+                    json.dumps(body.metadata),
+                    file_uuid,
+                )
+                logger.info(
+                    "Merged file metadata",
+                    file_id=fileId,
+                    user_id=user_id,
+                    metadata_keys=list(body.metadata.keys()) if isinstance(body.metadata, dict) else [],
+                )
+                updated_any = True
+
+            if not updated_any:
+                return JSONResponse(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    content={"error": "No metadata fields provided"},
                 )
             
             return JSONResponse(
@@ -1680,6 +1712,10 @@ async def reprocess_file(fileId: str, request: Request):
     """
     user_id = request.state.user_id
     
+    # Get user token for creating delegation token (needed for encrypted file decryption)
+    user_context = getattr(request.state, 'user_context', None)
+    user_token = user_context.token if user_context else None
+    
     # Parse optional processing config from request body
     processing_config = {}
     try:
@@ -1786,21 +1822,48 @@ async def reprocess_file(fileId: str, request: Request):
                     )
             
             # Reset data status to 'queued'
-            await conn.execute("""
-                UPDATE data_status
-                SET 
-                    stage = 'queued',
-                    progress = 0,
-                    chunks_processed = 0,
-                    total_chunks = 0,
-                    pages_processed = 0,
-                    total_pages = 0,
-                    error_message = NULL,
-                    updated_at = NOW()
-                WHERE file_id = $1
-            """, uuid.UUID(fileId))
+            # For entity_extraction, preserve existing chunk/page counts
+            if start_stage in ("entity_extraction",):
+                await conn.execute("""
+                    UPDATE data_status
+                    SET 
+                        stage = 'queued',
+                        progress = 0,
+                        error_message = NULL,
+                        updated_at = NOW()
+                    WHERE file_id = $1
+                """, uuid.UUID(fileId))
+            else:
+                await conn.execute("""
+                    UPDATE data_status
+                    SET 
+                        stage = 'queued',
+                        progress = 0,
+                        chunks_processed = 0,
+                        total_chunks = 0,
+                        pages_processed = 0,
+                        total_pages = 0,
+                        error_message = NULL,
+                        updated_at = NOW()
+                    WHERE file_id = $1
+                """, uuid.UUID(fileId))
             
-            logger.info("Reset data status", file_id=fileId)
+            logger.info("Reset data status", file_id=fileId, preserved_counts=start_stage == "entity_extraction")
+            
+            # Create delegation token so the worker can decrypt encrypted files
+            delegation_token = None
+            if user_token:
+                delegation_token = await _create_delegation_token_for_processing(
+                    user_token=user_token,
+                    file_id=fileId,
+                )
+            
+            if not delegation_token:
+                logger.warning(
+                    "No delegation token for reprocess - encrypted files may fail",
+                    file_id=fileId,
+                    has_user_token=user_token is not None,
+                )
             
             # Add job back to Redis queue
             redis_client = redis_async.Redis(
@@ -1821,6 +1884,10 @@ async def reprocess_file(fileId: str, request: Request):
                     "start_stage": start_stage,  # Stage to start processing from
                 }
                 
+                # Include delegation token for encrypted file decryption
+                if delegation_token:
+                    job_data["delegation_token"] = delegation_token
+                
                 # Include processing config if provided
                 if processing_config:
                     job_data["processing_config"] = json.dumps(processing_config)
@@ -1832,6 +1899,7 @@ async def reprocess_file(fileId: str, request: Request):
                     "Added reprocess job to queue",
                     file_id=fileId,
                     stream=stream_name,
+                    has_delegation_token=delegation_token is not None,
                 )
             finally:
                 await redis_client.aclose()

@@ -11,8 +11,8 @@
 #   In container: bash /usr/local/bin/init-app-database.sh <app-name>
 #
 # Examples:
-#   bash scripts/init-app-database.sh ai-portal production
-#   bash /usr/local/bin/init-app-database.sh ai-portal
+#   bash scripts/init-app-database.sh busibox-portal production
+#   bash /usr/local/bin/init-app-database.sh busibox-portal
 
 set -euo pipefail
 
@@ -47,11 +47,11 @@ usage() {
     echo ""
     echo "Examples:"
     if [ "$RUNNING_IN_CONTAINER" = true ]; then
-        echo "  $0 ai-portal"
-        echo "  $0 agent-manager"
+        echo "  $0 busibox-portal"
+        echo "  $0 busibox-agents"
     else
-        echo "  $0 ai-portal production"
-        echo "  $0 agent-manager test"
+        echo "  $0 busibox-portal production"
+        echo "  $0 busibox-agents test"
     fi
     exit 1
 }

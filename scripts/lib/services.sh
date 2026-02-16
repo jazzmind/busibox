@@ -19,7 +19,7 @@ _SERVICES_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # - container_id: Base container ID (200 for prod, 300 for staging)
 #   NOTE: Container IDs are only used as fallback when DNS is unavailable.
 #   Primary resolution uses hostnames (e.g., 'deploy-api') via /etc/hosts.
-# - repo: Git repository (busibox, ai-portal, agent-manager, etc.)
+# - repo: Git repository (busibox, busibox-portal, busibox-agents, etc.)
 # - path: Path within repo (srv/authz, etc.) - empty for external repos
 # - health_endpoint: Health check path
 # - port: Service port
@@ -56,8 +56,9 @@ _SERVICE_host_agent="0:busibox:scripts/host-agent:/health:8089"
 _SERVICE_embedding="208:busibox:srv/embedding:/health:8005"
 _SERVICE_embedding_api="208:busibox:srv/embedding:/health:8005"  # Alias for consistency
 _SERVICE_nginx="200:busibox:provision/ansible/roles/nginx:/:80"
-_SERVICE_ai_portal="201:ai-portal::/portal/api/health:3000"
-_SERVICE_agent_manager="201:agent-manager::/agents/api/health:3001"
+_SERVICE_proxy="200:busibox:provision/ansible/roles/nginx:/:80"
+_SERVICE_ai_portal="201:busibox-portal::/portal/api/health:3000"
+_SERVICE_agent_manager="201:busibox-agents::/agents/api/health:3001"
 # user-apps: TCP-only (no single HTTP health) - use tcp so manage.sh falls back to ping
 _SERVICE_user_apps="212:busibox::tcp:80"
 
@@ -79,7 +80,8 @@ _NAME_mlx="MLX"
 _NAME_host_agent="Host Agent"
 _NAME_embedding="Embedding API"
 _NAME_nginx="Nginx"
-_NAME_ai_portal="AI Portal"
+_NAME_proxy="Proxy (Nginx)"
+_NAME_ai_portal="Busibox Portal"
 _NAME_agent_manager="Agent Manager"
 _NAME_bridge="Bridge"
 _NAME_bridge_api="Bridge API"
@@ -92,7 +94,7 @@ _NAME_user_apps="User Apps"
 # Core: authz, postgres, redis, milvus, minio, neo4j
 # LLM: litellm, mlx/vllm (platform-dependent), embedding
 # API: deploy, data, search, agent, docs
-# App: nginx, ai-portal, agent-manager
+# App: proxy/nginx, busibox-portal, busibox-agents
 _CORE_SERVICES="authz postgres redis milvus minio neo4j"
 # LLM services - mlx or vllm depends on platform (detected at runtime)
 _LLM_SERVICES_BASE="litellm"
@@ -100,11 +102,11 @@ _LLM_SERVICES_GPU="vllm"     # For Linux with NVIDIA GPU
 _LLM_SERVICES_APPLE="mlx"    # For Apple Silicon
 _LLM_SERVICES_SUFFIX="embedding"
 _API_SERVICES="deploy-api data search-api agent-api docs-api bridge"
-_APP_SERVICES="nginx ai-portal agent-manager"
+_APP_SERVICES="proxy nginx busibox-portal busibox-agents"
 
 # All services combined (includes individual services for status checking)
 # Note: "data" is used for display, but we check "data-api" and "data-worker" individually
-ALL_SERVICES="authz postgres redis milvus minio neo4j nginx litellm vllm mlx embedding data-api data-worker search-api agent-api deploy-api bridge docs-api ai-portal agent-manager"
+ALL_SERVICES="authz postgres redis milvus minio neo4j proxy nginx litellm vllm mlx embedding data-api data-worker search-api agent-api deploy-api bridge docs-api busibox-portal busibox-agents"
 
 # ============================================================================
 # Service Metadata Functions
@@ -243,8 +245,8 @@ get_service_hostname() {
         litellm)             echo "litellm" ;;
         vllm)                echo "vllm" ;;
         mlx)                 echo "mlx" ;;
-        ai_portal)           echo "ai-portal" ;;
-        agent_manager)       echo "agent-manager" ;;
+        ai_portal)           echo "busibox-portal" ;;
+        agent_manager)       echo "busibox-agents" ;;
         user_apps)           echo "user-apps" ;;
         *)                   echo "$service" ;;
     esac

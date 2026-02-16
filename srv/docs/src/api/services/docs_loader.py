@@ -13,7 +13,7 @@ Supported categories:
 For backward compatibility, 'user' is accepted as an alias for 'platform'.
 
 App docs use additional frontmatter fields:
-  - app_id: Identifier for the app (e.g. 'agent-manager')
+  - app_id: Identifier for the app (e.g. 'busibox-agents')
   - app_name: Human-readable app name (e.g. 'Agent Manager')
 """
 

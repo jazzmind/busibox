@@ -132,13 +132,27 @@ def generate_litellm_config_from_registry(
             api_base = 'http://vllm:8000/v1'
         else:
             api_base = None  # Cloud models don't need api_base
+
+    def purpose_api_base(purpose: str) -> str | None:
+        """Get per-purpose API base for backends that use multiple local servers."""
+        if llm_backend == 'mlx':
+            if purpose == 'transcribe':
+                return 'http://host.docker.internal:8081/v1'
+            if purpose == 'voice':
+                return 'http://host.docker.internal:8082/v1'
+            if purpose == 'image':
+                return 'http://host.docker.internal:8083/v1'
+        return api_base
     
     purposes = get_model_purposes(registry, environment)
     available = registry.get('available_models', {})
     
     # Define which purposes map to LiteLLM model names
     # These are the model names that services request from LiteLLM
-    litellm_purposes = ['test', 'fast', 'agent', 'chat', 'frontier', 'default', 'tool_calling']
+    litellm_purposes = [
+        'test', 'fast', 'agent', 'chat', 'frontier', 'default', 'tool_calling',
+        'image', 'transcribe', 'voice'
+    ]
     
     model_list = []
     
@@ -157,8 +171,9 @@ def generate_litellm_config_from_registry(
             litellm_params['model'] = f"bedrock/{model_name}"
         elif provider in ('mlx', 'vllm'):
             litellm_params['model'] = f"openai/{model_name}"
-            if api_base:
-                litellm_params['api_base'] = api_base
+            resolved_api_base = purpose_api_base(purpose)
+            if resolved_api_base:
+                litellm_params['api_base'] = resolved_api_base
                 litellm_params['api_key'] = 'local'
         else:
             litellm_params['model'] = model_name
@@ -168,10 +183,15 @@ def generate_litellm_config_from_registry(
             'litellm_params': litellm_params,
         }
         
-        # Add model_info if we have a description
+        # Add model_info if we have metadata
         description = model_config.get('description')
-        if description:
-            model_entry['model_info'] = {'description': description}
+        mode = model_config.get('mode')
+        if description or mode:
+            model_entry['model_info'] = {}
+            if description:
+                model_entry['model_info']['description'] = description
+            if mode:
+                model_entry['model_info']['mode'] = mode
         
         model_list.append(model_entry)
     
@@ -488,8 +508,8 @@ async def check_service_health(
     # These are Next.js apps running in the core-apps container or separately
     # They don't have their own containers, so we check them via nginx BEFORE container check
     nginx_apps = {
-        'agent-manager': {'path': '/agents', 'health_endpoint': '/api/health'},
-        'ai-portal': {'path': '/portal', 'health_endpoint': '/api/health'},
+        'busibox-agents': {'path': '/agents', 'health_endpoint': '/api/health'},
+        'busibox-portal': {'path': '/portal', 'health_endpoint': '/api/health'},
     }
     
     # Check nginx apps first (they don't have their own containers)
@@ -505,7 +525,7 @@ async def check_service_health(
         
         # Determine nginx host based on environment
         # - NGINX_HOST env var (explicit override)
-        # - In Docker: nginx is bundled inside core-apps container (hostname: nginx)
+        # - In Docker: nginx runs in dedicated proxy container (hostname: nginx alias)
         # - In Proxmox: nginx runs in its own container
         # Default to 'nginx' which works for both Docker (via alias) and Proxmox
         nginx_host = os.getenv('NGINX_HOST', 'nginx')
@@ -808,7 +828,7 @@ async def get_platform_info_endpoint(
     """
     Get platform information (backend, tier, memory).
     
-    Used by AI Portal to determine which LLM runtime to use (MLX vs vLLM).
+    Used by Busibox Portal to determine which LLM runtime to use (MLX vs vLLM).
     """
     try:
         platform_info = get_platform_info()
@@ -1062,8 +1082,8 @@ async def start_service_sse(
                         'docs': ('docs-api', 'docs-api'),  # alias
                         'bridge-api': ('bridge-api', 'bridge'),  # bridge-lxc
                         'bridge': ('bridge-api', 'bridge'),  # alias
-                        'ai-portal': ('core-apps', 'ai-portal'),  # apps-lxc
-                        'agent-manager': ('core-apps', 'agent-manager'),  # apps-lxc
+                        'busibox-portal': ('core-apps', 'busibox-portal'),  # apps-lxc
+                        'busibox-agents': ('core-apps', 'busibox-agents'),  # apps-lxc
                     }
                     
                     if service not in proxmox_service_map:

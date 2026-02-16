@@ -42,7 +42,7 @@ info "Getting access token..."
 TOKEN_RESPONSE=$(curl -sk -X POST "https://localhost/api/authz/oauth/token" \
     -H "Content-Type: application/x-www-form-urlencoded" \
     -d "grant_type=client_credentials" \
-    -d "client_id=ai-portal" \
+    -d "client_id=busibox-portal" \
     -d "client_secret=demo-secret" \
     -d "scope=data.write data.read" \
     2>/dev/null || echo "")
@@ -99,8 +99,8 @@ done
 if [[ $UPLOADED -gt 0 ]]; then
     success "Uploaded $UPLOADED demo documents"
     info "Documents will be processed in the background"
-    info "Check status in the AI Portal document library"
+    info "Check status in the Busibox Portal document library"
 else
     warn "No documents were uploaded"
-    info "You can upload documents manually through the AI Portal"
+    info "You can upload documents manually through the Busibox Portal"
 fi

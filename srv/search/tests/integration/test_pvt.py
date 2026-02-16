@@ -26,7 +26,7 @@ SERVICE_PORT = os.getenv("SERVICE_PORT", "8003")
 SERVICE_URL = os.getenv("SEARCH_API_URL", f"http://localhost:{SERVICE_PORT}")
 
 # AuthZ configuration - REQUIRED for token exchange
-# Use bootstrap client (ai-portal) - the standard OAuth client for all services
+# Use bootstrap client (busibox-portal) - the standard OAuth client for all services
 AUTHZ_JWKS_URL = os.getenv("AUTHZ_JWKS_URL", "")
 
 # Test user - for token exchange to get a token with real user identity

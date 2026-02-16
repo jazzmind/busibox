@@ -2,7 +2,7 @@
 # Core Apps - Runtime Container (Proxmox-style)
 # =============================================================================
 #
-# Lightweight container with Node.js, nginx, and supervisord.
+# Lightweight container with Node.js and supervisord.
 # Apps are NOT baked in - they are installed at runtime via Deploy API.
 #
 # This mirrors the Proxmox pattern where:
@@ -13,7 +13,6 @@
 # Benefits:
 #   - Fast container rebuilds (no app code to clone/build)
 #   - App updates via Deploy API, not container rebuild
-#   - nginx config changes without container restart
 #   - Consistent with Proxmox LXC deployment pattern
 #
 # Usage (via docker-compose.github.yml):
@@ -30,8 +29,6 @@ FROM node:20-alpine
 RUN apk add --no-cache \
     curl \
     bash \
-    nginx \
-    openssl \
     git \
     python3 \
     make \
@@ -45,49 +42,32 @@ RUN npm install -g tsx
 # Create directory structure
 # Apps will be installed into these directories (persistent volumes)
 RUN mkdir -p \
-    /srv/ai-portal \
-    /srv/agent-manager \
-    /etc/nginx/ssl \
-    /etc/nginx/sites-available \
-    /etc/nginx/sites-enabled \
-    /etc/nginx/conf.d/apps \
-    /run/nginx \
-    /var/log/nginx \
+    /srv/busibox-portal \
+    /srv/busibox-agents \
     /var/log/supervisor
 
-# Copy nginx configuration for bundled mode
-# This config uses localhost for frontend apps, Docker DNS for backend APIs
-COPY config/nginx-bundled.conf /etc/nginx/nginx.conf
-
 # Copy supervisord configuration for process management
-# Manages nginx, ai-portal, and agent-manager processes
+# Manages busibox-portal and busibox-agents processes
 COPY provision/docker/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 # Copy runtime entrypoint script
 COPY provision/docker/core-apps-entrypoint-runtime.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# Create directory for SSL certificates (will be generated on first run)
-RUN mkdir -p /etc/nginx/ssl
-
 WORKDIR /srv
 
 # Expose ports:
-#   80  - HTTP (redirects to HTTPS)
-#   443 - HTTPS (nginx reverse proxy)
-#   3000 - AI Portal (direct access for debugging)
+#   3000 - Busibox Portal (direct access for debugging)
 #   3001 - Agent Manager (direct access for debugging)
-EXPOSE 80 443 3000 3001
+EXPOSE 3000 3001
 
 # Environment variables
 ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
 
-# Health check
-# On first start, apps may not be deployed yet - check nginx only
-# After apps are deployed, full health check includes app endpoints
+# Health check app port directly
 HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=3 \
-    CMD curl -f http://localhost:80/health || exit 1
+    CMD curl -f http://localhost:3000 || exit 1
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["start"]

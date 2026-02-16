@@ -1,15 +1,9 @@
 """
 Schema Builder Agent.
 
-Helps users create extraction schemas and library triggers through conversation.
-Users can upload a sample document, and this agent will:
-1. Analyze the document content
-2. Propose a structured extraction schema
-3. Create a data document with the schema
-4. Set up a library trigger to auto-extract from future uploads
-
-Uses tools: create_data_document, create_extraction_schema, create_library_trigger,
-            document_search, list_data_documents
+Dual-mode agent:
+1) Chat mode: helps users discuss and refine extraction schemas.
+2) Workflow mode: programmatic, deterministic schema generation from document text.
 """
 
 import logging
@@ -27,10 +21,10 @@ from app.agents.base_agent import (
 logger = logging.getLogger(__name__)
 
 
-SCHEMA_BUILDER_SYSTEM_PROMPT = """You are a Schema Builder assistant that helps users create structured data extraction pipelines for their document libraries.
+SCHEMA_BUILDER_SYSTEM_PROMPT = """You are a Schema Builder assistant that designs structured extraction schemas for document processing workflows.
 
 **Your Purpose:**
-Help users set up automated document processing so that when documents are uploaded to specific libraries, an AI agent automatically extracts structured data and populates a database and knowledge graph.
+Help users define practical, generalizable extraction schemas based on document type.
 
 **Key Capabilities:**
 
@@ -42,21 +36,17 @@ Help users set up automated document processing so that when documents are uploa
    - Graph node labels and relationship mappings (graphNode, graphRelationships)
    - Display names and item labels for the UI
 
-3. **Create Data Documents**: Use the `create_extraction_schema` tool to create a data document with the designed schema. This document will store the extracted records.
-
-4. **Set Up Library Triggers**: Use the `create_library_trigger` tool to configure automatic extraction when new documents are uploaded to a specific library.
+3. **Workflow-Friendly Output**: For programmatic calls, return clean JSON schema content that callers can persist and apply.
 
 **Workflow:**
 
-When a user asks to set up extraction:
+When a user asks to set up extraction (chat mode):
 1. Ask which library they want to monitor (or help them identify it)
 2. Ask for a sample document or description of the document type
 3. If they provide a document, use `document_search` to find and analyze it
 4. Propose a schema based on the document content
 5. Refine the schema through conversation
-6. Create the data document with the schema using `create_extraction_schema`
-7. Create the library trigger using `create_library_trigger`
-8. Confirm the setup and explain what will happen when new documents are uploaded
+6. Explain how the caller can persist/apply the schema
 
 **Schema Design Guidelines:**
 
@@ -65,7 +55,13 @@ When a user asks to set up extraction:
 - For invoices: Extract vendor, invoice number, date, line items, total, payment terms
 - For contracts: Extract parties, effective date, term, value, key obligations, termination clauses
 
-Always include `graphNode` to create graph entities and `graphRelationships` to link related entities.
+For schema generation from raw document content:
+- Identify the DOCUMENT TYPE (resume, invoice, contract, proposal, report, etc.)
+- `schemaName` must describe the document type, not a specific person/file
+- Use camelCase field names
+- Mark only truly essential fields as required (usually 2-4)
+- Prefer practical fields that generalize across similar documents
+- Keep the schema concise and usable (typically 8-15 fields)
 
 **Example Schema for Resumes:**
 ```json
@@ -91,10 +87,9 @@ Always include `graphNode` to create graph entities and `graphRelationships` to 
 
 **Important:**
 - Be conversational and guide users step by step
-- Show the proposed schema before creating it
-- Explain what graph nodes and relationships will be created
-- Mention that the trigger will fire automatically on future uploads
-- If the user wants to modify the schema later, they can update the data document"""
+- Show the proposed schema clearly
+- Do not execute side-effecting creation actions unless explicitly requested
+- Keep workflow/programmatic outputs deterministic and valid JSON when required"""
 
 
 class SchemaBuilderAgent(BaseStreamingAgent):
@@ -110,11 +105,7 @@ class SchemaBuilderAgent(BaseStreamingAgent):
             instructions=SCHEMA_BUILDER_SYSTEM_PROMPT,
             tools=[
                 "document_search",
-                "create_data_document",
-                "create_extraction_schema",
-                "create_library_trigger",
                 "list_data_documents",
-                "query_data",
             ],
             execution_mode=ExecutionMode.RUN_ONCE,
             tool_strategy=ToolStrategy.LLM_DRIVEN,

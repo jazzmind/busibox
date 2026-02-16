@@ -197,6 +197,30 @@ available_models:
     tool_calling: true
     tier: "pro"
 
+  "whisper-large-v3":
+    provider: "mlx"
+    model: "whisper-large-v3"
+    model_name: "mlx-community/whisper-large-v3-mlx"
+    description: "Speech-to-text transcription (Whisper Large v3)"
+    mode: "audio_transcription"
+    tier: "standard"
+
+  "kokoro-82m":
+    provider: "mlx"
+    model: "kokoro-82m"
+    model_name: "mlx-community/Kokoro-82M-bf16"
+    description: "Text-to-speech voice generation (Kokoro 82M)"
+    mode: "audio_speech"
+    tier: "micro"
+
+  "flux-schnell":
+    provider: "mlx"
+    model: "flux-schnell"
+    model_name: "flux-schnell"
+    description: "Fast local image generation model (FLUX Schnell)"
+    mode: "image_generation"
+    tier: "standard"
+
 # =============================================================================
 # Model Purposes - Staging/Production (vLLM + Bedrock)
 # =============================================================================
@@ -220,6 +244,9 @@ model_purposes:
 
   # Video generation (cloud API)
   video: "sora-2"   # Video generation model (OpenAI Sora-2)
+  image: "flux-schnell"   # Image generation model (local MLX FLUX)
+  transcribe: "whisper-large-v3"   # Speech-to-text (Whisper)
+  voice: "kokoro-82m"   # Text-to-speech (Kokoro)
 
   # Embeddings (dedicated services)
   embedding: "bge-large"   # Text embedding generation (1024-d)
@@ -252,6 +279,9 @@ model_purposes_dev:
 
   # Video generation (requires OpenAI API key even in dev)
   video: "sora-2"   # Video generation model (OpenAI Sora-2)
+  image: "flux-schnell"   # Image generation model (local MLX FLUX)
+  transcribe: "whisper-large-v3"   # Speech-to-text (Whisper)
+  voice: "kokoro-82m"   # Text-to-speech (Kokoro)
 
   # Embeddings (use smaller models for dev)
   embedding: "bge-small"   # Text embedding (384-d, cached by warmup)

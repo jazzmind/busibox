@@ -623,7 +623,8 @@ async def execute_chat(
     model: str,
     user_id: str,
     session: AsyncSession,
-    conversation_history: Optional[List[Dict[str, str]]] = None
+    conversation_history: Optional[List[Dict[str, str]]] = None,
+    principal: Optional["Principal"] = None
 ) -> ChatExecutionResult:
     """
     Execute chat with tools and agents based on routing decision.
@@ -635,6 +636,7 @@ async def execute_chat(
         user_id: User ID
         session: Database session
         conversation_history: Optional conversation history
+        principal: Optional authenticated principal for Zero Trust token exchange
         
     Returns:
         ChatExecutionResult with complete execution results
@@ -651,7 +653,7 @@ async def execute_chat(
     
     # Execute tools and agents in parallel
     tool_task = execute_tools(routing_decision.selected_tools, query, user_id)
-    agent_task = execute_agents(routing_decision.selected_agents, query, user_id, session)
+    agent_task = execute_agents(routing_decision.selected_agents, query, user_id, session, principal=principal)
     
     tool_results, agent_results = await asyncio.gather(tool_task, agent_task)
     

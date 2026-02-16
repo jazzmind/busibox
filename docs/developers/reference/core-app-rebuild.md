@@ -2,7 +2,7 @@
 title: "Core App Rebuild"
 category: "developer"
 order: 30
-description: "Rebuild core applications (ai-portal, agent-manager) via make manage menu without container restart"
+description: "Rebuild core applications (busibox-portal, busibox-agents) via make manage menu without container restart"
 published: true
 ---
 
@@ -10,7 +10,7 @@ published: true
 
 ## Overview
 
-The `make manage` interactive menu now includes an option to rebuild core applications (ai-portal and agent-manager) without restarting the Docker container. This is useful for quick deployments when you've made code changes but don't want to rebuild/restart the entire core-apps container.
+The `make manage` interactive menu now includes an option to rebuild core applications (busibox-portal and busibox-agents) without restarting the Docker container. This is useful for quick deployments when you've made code changes but don't want to rebuild/restart the entire core-apps container.
 
 ## How to Access
 
@@ -26,8 +26,8 @@ The `make manage` interactive menu now includes an option to rebuild core applic
 4. Choose **"Rebuild App"** (option 6)
 
 5. Select which app to rebuild:
-   - **ai-portal** - Only rebuild AI Portal
-   - **agent-manager** - Only rebuild Agent Manager
+   - **busibox-portal** - Only rebuild Busibox Portal
+   - **busibox-agents** - Only rebuild Busibox Agents
    - **both** - Rebuild both apps sequentially
 
 ## What It Does
@@ -79,12 +79,12 @@ This is much faster than:
 The rebuild option calls these Ansible make targets:
 
 ```bash
-# For ai-portal
+# For busibox-portal
 cd provision/ansible
-make deploy-ai-portal INV=inventory/staging  # or production
+make deploy-busibox-portal INV=inventory/staging  # or production
 
-# For agent-manager
-make deploy-agent-manager INV=inventory/staging
+# For busibox-agents
+make deploy-busibox-agents INV=inventory/staging
 ```
 
 ### Ansible Implementation
@@ -95,8 +95,8 @@ The Ansible playbook:
 2. Clones/pulls code from GitHub
 3. Runs `npm install` and `npm run build`
 4. Restarts the app via supervisor/systemd:
-   - Docker: `supervisorctl restart ai-portal`
-   - Proxmox: `systemctl restart ai-portal`
+   - Docker: `supervisorctl restart busibox-portal`
+   - Proxmox: `systemctl restart busibox-portal`
 
 ### Environment Detection
 
@@ -107,11 +107,11 @@ The script automatically detects your environment:
 
 ## Example Workflow
 
-### Scenario: Deploy AI Portal code changes
+### Scenario: Deploy Busibox Portal code changes
 
 ```bash
-# 1. Make code changes in ai-portal repo
-cd ~/Code/ai-portal
+# 1. Make code changes in busibox-portal repo
+cd ~/Code/busibox-portal
 # ... edit files ...
 git add .
 git commit -m "feat: new feature"
@@ -123,7 +123,7 @@ make manage
 # Select: 4 (Manage Service)
 # Select: core-apps
 # Select: 6 (Rebuild App)
-# Select: 1 (ai-portal)
+# Select: 1 (busibox-portal)
 
 # 3. Wait for rebuild (1-3 minutes)
 # 4. Test at https://your-domain.com
@@ -148,7 +148,7 @@ make manage
   docker exec -it prod-core-apps supervisorctl status
   
   # Proxmox
-  ssh root@apps-lxc systemctl status ai-portal
+  ssh root@apps-lxc systemctl status busibox-portal
   ```
 
 ### "Changes not visible"
@@ -169,16 +169,16 @@ make manage
 If you prefer command line over the menu:
 
 ```bash
-# Rebuild ai-portal
+# Rebuild busibox-portal
 cd provision/ansible
-make deploy-ai-portal INV=inventory/staging
+make deploy-busibox-portal INV=inventory/staging
 
-# Rebuild agent-manager
-make deploy-agent-manager INV=inventory/staging
+# Rebuild busibox-agents
+make deploy-busibox-agents INV=inventory/staging
 
 # Rebuild both (from repo root)
-make install SERVICE=ai-portal
-make install SERVICE=agent-manager
+make install SERVICE=busibox-portal
+make install SERVICE=busibox-agents
 ```
 
 ### Quick Restart (No Rebuild)
@@ -189,8 +189,8 @@ If code hasn't changed and you just want to restart the process:
 cd provision/ansible
 
 # Docker
-make app-restart SERVICE=ai-portal
-make app-restart SERVICE=agent-manager
+make app-restart SERVICE=busibox-portal
+make app-restart SERVICE=busibox-agents
 
 # Check status
 make app-status
@@ -214,6 +214,6 @@ make app-status
 
 ## See Also
 
-- `make install SERVICE=ai-portal` - Install from repo root
+- `make install SERVICE=busibox-portal` - Install from repo root
 - `make manage SERVICE=core-apps ACTION=restart` - Restart container
 - `make manage SERVICE=core-apps ACTION=logs` - View container logs

@@ -105,7 +105,7 @@ make install SERVICE=all
 | Container | CTID | IP | Services |
 |-----------|------|-----|----------|
 | proxy-lxc | 200 | 10.96.200.200 | nginx reverse proxy |
-| apps-lxc | 202 | 10.96.200.201 | AI Portal, Agent Manager, custom apps |
+| apps-lxc | 202 | 10.96.200.201 | Busibox Portal, Busibox Agents, custom apps |
 | pg-lxc | 203 | 10.96.200.203 | PostgreSQL |
 | milvus-lxc | 204 | 10.96.200.204 | Milvus vector database, Search API |
 | files-lxc | 205 | 10.96.200.205 | MinIO object storage |
@@ -192,7 +192,7 @@ Services have dependencies and should be deployed in order:
 2. **Security**: AuthZ service
 3. **LLM**: LiteLLM gateway, vLLM/MLX (if using local models)
 4. **APIs**: Data API, Search API, Embedding API, Agent API
-5. **Frontend**: nginx, AI Portal, Agent Manager
+5. **Frontend**: nginx, Busibox Portal, Busibox Agents
 
 When using `make install SERVICE=all`, this order is handled automatically.
 

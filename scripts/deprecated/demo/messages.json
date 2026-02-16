@@ -51,7 +51,7 @@
       "details": "Agents can search documents, call APIs, and execute multi-step workflows with full audit trails."
     },
     "frontends": {
-      "title": "Starting AI Portal & Agent Manager",
+      "title": "Starting Busibox Portal & Agent Manager",
       "message": "Beautiful UI. SSO integration. White-label ready.",
       "details": "Modern React interfaces with dark mode, accessibility, and complete customization support."
     },

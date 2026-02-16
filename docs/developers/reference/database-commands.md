@@ -17,7 +17,7 @@ Each service has its own dedicated PostgreSQL database:
 | Agent API | `agent` | `busibox_user` | Agent definitions, conversations, workflows |
 | AuthZ | `authz` | `busibox_user` | Users, roles, sessions, audit logs |
 | Data API | `data` | `busibox_user` | File metadata, chunks, processing history |
-| AI Portal | `ai_portal` | `busibox_user` | Portal-specific data (Prisma managed) |
+| Busibox Portal | `ai_portal` | `busibox_user` | Portal-specific data (Prisma managed) |
 | Legacy | `busibox` | `busibox_user` | Legacy shared database (being deprecated) |
 
 ### Test Databases
@@ -43,7 +43,7 @@ bash scripts/check-database.sh ai_portal production
 
 # Initialize app database
 bash scripts/init-app-database.sh <app-name> <environment>
-bash scripts/init-app-database.sh ai-portal production
+bash scripts/init-app-database.sh busibox-portal production
 ```
 
 ## Service Database Connections
@@ -102,8 +102,8 @@ See [09-databases](../architecture/09-databases.md) for database architecture an
 ### Missing Tables
 
 ```bash
-bash scripts/init-app-database.sh ai-portal production
-ssh root@10.96.200.201 'pm2 restart ai-portal'
+bash scripts/init-app-database.sh busibox-portal production
+ssh root@10.96.200.201 'pm2 restart busibox-portal'
 ```
 
 ### Check Tables

@@ -115,7 +115,7 @@ Comprehensive test coverage for markdown storage, image extraction, and HTML ren
 
 ## Phase 2: Frontend Tests (AI Portal)
 
-### 9. Document Detail Page Tests (`ai-portal/src/app/documents/[fileId]/__tests__/page.test.tsx`)
+### 9. Document Detail Page Tests (`busibox-portal/src/app/documents/[fileId]/__tests__/page.test.tsx`)
 
 **Test Cases:**
 - `test_overview_tab_default` - Overview tab shown by default
@@ -128,7 +128,7 @@ Comprehensive test coverage for markdown storage, image extraction, and HTML ren
 - `test_markdown_not_available_message` - Message when markdown_path is null
 - `test_reprocess_button_works` - Can trigger reprocessing
 
-### 10. Chunks Browsing Page Tests (`ai-portal/src/app/documents/[fileId]/chunks/__tests__/page.test.tsx`)
+### 10. Chunks Browsing Page Tests (`busibox-portal/src/app/documents/[fileId]/chunks/__tests__/page.test.tsx`)
 
 **Test Cases:**
 - `test_chunks_page_renders` - Page loads successfully
@@ -140,7 +140,7 @@ Comprehensive test coverage for markdown storage, image extraction, and HTML ren
 - `test_chunks_empty_state` - Message when no chunks exist
 - `test_chunks_highlight_search_terms` - Search terms highlighted
 
-### 11. API Proxy Tests (`ai-portal/src/app/api/documents/[fileId]/__tests__/`)
+### 11. API Proxy Tests (`busibox-portal/src/app/api/documents/[fileId]/__tests__/`)
 
 **Test Cases:**
 
@@ -197,7 +197,7 @@ pytest tests/integration/test_markdown_pipeline.py -v
 pytest tests/api/test_markdown_endpoints.py -v
 
 # Frontend tests
-cd ai-portal
+cd busibox-portal
 npm test -- document
 ```
 

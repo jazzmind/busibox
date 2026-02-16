@@ -121,7 +121,7 @@ ${BLUE}Quick Test:${NC}
 ${BLUE}Example Usage in Cursor:${NC}
   "Show me the architecture documentation"
   "Search docs for GPU passthrough"
-  "Tell me about deploy-ai-portal.sh"
+  "Tell me about deploy-busibox-portal.sh"
   "How do I deploy agent-lxc to test?"
 
 ${BLUE}Available Resources:${NC}

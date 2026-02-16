@@ -204,7 +204,7 @@ async def build_app_image(
     Build a Docker image on the build-server and push to in-cluster registry.
     
     Args:
-        app_id: Used as the image name (e.g., "ai-portal")
+        app_id: Used as the image name (e.g., "busibox-portal")
         dockerfile_path: Path to Dockerfile relative to build context
         build_context: Path to build context on the build-server
         tag: Image tag (default: "latest")
@@ -434,7 +434,7 @@ def patch_nginx_route(
     service_port: int,
 ) -> bool:
     """
-    Add or update a route in the nginx ConfigMap.
+    Add or update a route in the proxy ConfigMap.
     
     Reads the current nginx.conf from the ConfigMap, adds/updates a location
     block for the given path, then patches the ConfigMap.
@@ -443,9 +443,9 @@ def patch_nginx_route(
     v1 = client.CoreV1Api()
     
     try:
-        cm = v1.read_namespaced_config_map(name="nginx-config", namespace=NAMESPACE)
+        cm = v1.read_namespaced_config_map(name="proxy-config", namespace=NAMESPACE)
     except ApiException:
-        logger.error("nginx-config ConfigMap not found")
+        logger.error("proxy-config ConfigMap not found")
         return False
     
     nginx_conf = cm.data.get("nginx.conf", "")
@@ -510,7 +510,7 @@ def patch_nginx_route(
 """
     
     # Re-read and do the simpler replacement
-    cm = v1.read_namespaced_config_map(name="nginx-config", namespace=NAMESPACE)
+    cm = v1.read_namespaced_config_map(name="proxy-config", namespace=NAMESPACE)
     nginx_conf = cm.data.get("nginx.conf", "")
     
     marker = f"# {app_id} (managed by deploy-api)"
@@ -529,18 +529,18 @@ def patch_nginx_route(
     
     # Patch the ConfigMap
     cm.data["nginx.conf"] = nginx_conf
-    v1.replace_namespaced_config_map(name="nginx-config", namespace=NAMESPACE, body=cm)
-    logger.info(f"Patched nginx ConfigMap with route for {app_id}")
+    v1.replace_namespaced_config_map(name="proxy-config", namespace=NAMESPACE, body=cm)
+    logger.info(f"Patched proxy ConfigMap with route for {app_id}")
     return True
 
 
 def remove_nginx_route(app_id: str, path: str) -> bool:
-    """Remove an app's route from the nginx ConfigMap."""
+    """Remove an app's route from the proxy ConfigMap."""
     _load_k8s_config()
     v1 = client.CoreV1Api()
     
     try:
-        cm = v1.read_namespaced_config_map(name="nginx-config", namespace=NAMESPACE)
+        cm = v1.read_namespaced_config_map(name="proxy-config", namespace=NAMESPACE)
     except ApiException:
         return False
     
@@ -556,7 +556,7 @@ def remove_nginx_route(app_id: str, path: str) -> bool:
     nginx_conf = re.sub(pattern, "", nginx_conf, flags=re.DOTALL)
     
     cm.data["nginx.conf"] = nginx_conf
-    v1.replace_namespaced_config_map(name="nginx-config", namespace=NAMESPACE, body=cm)
+    v1.replace_namespaced_config_map(name="proxy-config", namespace=NAMESPACE, body=cm)
     logger.info(f"Removed nginx route for {app_id}")
     return True
 
@@ -567,7 +567,7 @@ async def reload_nginx(logs: Optional[List[str]] = None) -> bool:
         logs = []
     
     logs.append("🔄 Reloading nginx...")
-    stdout, stderr, code = await _exec_in_pod("app=nginx", "nginx -t && nginx -s reload")
+    stdout, stderr, code = await _exec_in_pod("app=proxy", "nginx -t && nginx -s reload")
     
     if code != 0:
         logs.append(f"❌ Nginx reload failed: {stderr}")
@@ -593,7 +593,7 @@ async def deploy_core_app(
     logs: Optional[List[str]] = None,
 ) -> Tuple[bool, str]:
     """
-    Deploy a core app (ai-portal, agent-manager) to K8s.
+    Deploy a core app (busibox-portal, busibox-agents) to K8s.
     
     Flow:
     1. Clone repo on build-server

@@ -4,7 +4,7 @@
 # =============================================================================
 #
 # Main orchestrator for the Busibox demo. Starts all services and opens
-# the browser to the AI Portal.
+# the browser to the Busibox Portal.
 #
 # Usage:
 #   ./demo.sh
@@ -134,7 +134,7 @@ wait_for_healthy local-agent-api 60
 # Start Frontends
 # =============================================================================
 
-show_stage 84 "Starting AI Portal & Agent Manager" \
+show_stage 84 "Starting Busibox Portal & Agent Manager" \
     "Beautiful UI. SSO integration. White-label ready."
 
 # Generate SSL if needed
@@ -142,7 +142,7 @@ if [[ ! -f "${REPO_ROOT}/ssl/localhost.crt" ]]; then
     bash "${REPO_ROOT}/scripts/setup/generate-local-ssl.sh" || warn "Could not generate SSL"
 fi
 
-docker compose -f docker-compose.yml --profile full up -d ai-portal agent-manager nginx
+docker compose -f docker-compose.yml --profile full up -d busibox-portal busibox-agents nginx
 wait_for_healthy local-nginx 60
 
 # =============================================================================

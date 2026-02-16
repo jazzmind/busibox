@@ -9,6 +9,7 @@ import asyncio
 import logging
 import os
 import shlex
+import subprocess
 from typing import Optional, Tuple
 from .models import BusiboxManifest
 from .config import config
@@ -17,23 +18,13 @@ from .core_app_executor import is_docker_environment
 
 logger = logging.getLogger(__name__)
 
-# Container prefix for Docker container names
-CONTAINER_PREFIX = os.environ.get("CONTAINER_PREFIX", "dev")
+# Container prefix for Docker container names.
+# This is required so deploy-api always targets the canonical proxy container.
+CONTAINER_PREFIX = os.environ.get("CONTAINER_PREFIX", "").strip()
+if not CONTAINER_PREFIX:
+    raise RuntimeError("CONTAINER_PREFIX must be set for deploy-api")
 
-# In modern Busibox Docker deployments, nginx is bundled inside the core-apps container.
-# The standalone nginx container only exists in "hybrid" profile.
-#
-# Allow override in case an installation runs nginx elsewhere.
-NGINX_CONTAINER_OVERRIDE = os.environ.get("BUSIBOX_NGINX_CONTAINER", "").strip()
-
-# Prefer core-apps (bundled nginx). Include a few sensible fallbacks for
-# installations that don't set CONTAINER_PREFIX or use the default names.
-DEFAULT_NGINX_CONTAINERS = [
-    f"{CONTAINER_PREFIX}-core-apps",  # nginx inside core-apps (default)
-    "core-apps",                     # fallback (no prefix)
-    f"{CONTAINER_PREFIX}-nginx",      # standalone nginx (hybrid profile)
-    "nginx",                         # fallback (no prefix)
-]
+PROXY_CONTAINER = f"{CONTAINER_PREFIX}-proxy"
 
 
 class NginxConfigurator:
@@ -81,7 +72,7 @@ class NginxConfigurator:
 # even if this app's backend service isn't running yet.
 #
 # Next.js apps run with basePath={path}, so we preserve the path prefix.
-# This matches the agent-manager nginx config pattern exactly.
+# This matches the busibox-agents nginx config pattern exactly.
 # proxy_pass WITHOUT trailing slash = preserve the request URI
 
 location ^~ {path} {{
@@ -228,80 +219,48 @@ ln -s {source} {target}
                 
                 logger.info(f"Wrote nginx config to {config_path}")
                 
-                # Reload nginx via docker exec.
-                # nginx lives inside core-apps in standard Busibox Docker mode.
-                import subprocess
-
-                containers_to_try = (
-                    [NGINX_CONTAINER_OVERRIDE]
-                    if NGINX_CONTAINER_OVERRIDE
-                    else list(DEFAULT_NGINX_CONTAINERS)
+                # Reload nginx via docker exec on canonical proxy container.
+                target_path = f"/etc/nginx/conf.d/apps/{manifest.id}.conf"
+                exists_result = subprocess.run(
+                    ['docker', 'exec', PROXY_CONTAINER, 'sh', '-c', f'test -f {shlex.quote(target_path)}'],
+                    capture_output=True,
+                    text=True,
                 )
-
-                last_error = ""
-                tried: list[str] = []
-                for container in containers_to_try:
-                    tried.append(container)
-                    # Ensure the config is present inside the nginx container.
-                    # In some environments, the host bind-mount path can differ from
-                    # what core-apps/nginx is mounting, so writing to the host path
-                    # alone is not sufficient.
-                    target_path = f"/etc/nginx/conf.d/apps/{manifest.id}.conf"
-                    exists_result = subprocess.run(
-                        ['docker', 'exec', container, 'sh', '-c', f'test -f {shlex.quote(target_path)}'],
+                if exists_result.returncode != 0:
+                    heredoc_cmd = (
+                        f"cat > {shlex.quote(target_path)} << 'NGINX_EOF'\n"
+                        f"{config_content}\n"
+                        f"NGINX_EOF\n"
+                    )
+                    write_result = subprocess.run(
+                        ['docker', 'exec', PROXY_CONTAINER, 'sh', '-c', heredoc_cmd],
                         capture_output=True,
                         text=True,
                     )
-                    if exists_result.returncode != 0:
-                        # If the container doesn't exist, skip quickly.
-                        exists_err = (exists_result.stderr or exists_result.stdout or "").strip()
-                        if "No such container" in exists_err:
-                            last_error = exists_err
-                            logger.warning(f"Nginx container not found ({container}): {exists_err}")
-                            continue
+                    if write_result.returncode != 0:
+                        error = (write_result.stderr or write_result.stdout or "").strip()
+                        return False, f"Failed to write app config into {PROXY_CONTAINER}: {error}"
 
-                        # Write config into the container directly.
-                        heredoc_cmd = (
-                            f"cat > {shlex.quote(target_path)} << 'NGINX_EOF'\n"
-                            f"{config_content}\n"
-                            f"NGINX_EOF\n"
-                        )
-                        write_result = subprocess.run(
-                            ['docker', 'exec', container, 'sh', '-c', heredoc_cmd],
-                            capture_output=True,
-                            text=True,
-                        )
-                        if write_result.returncode != 0:
-                            last_error = (write_result.stderr or write_result.stdout or "").strip()
-                            logger.warning(f"Failed to write app config into {container}: {last_error}")
-                            continue
+                test_result = subprocess.run(
+                    ['docker', 'exec', PROXY_CONTAINER, 'nginx', '-t'],
+                    capture_output=True,
+                    text=True
+                )
+                if test_result.returncode != 0:
+                    error = (test_result.stderr or test_result.stdout or "").strip()
+                    return False, f"Nginx config test failed in {PROXY_CONTAINER}: {error}"
 
-                    # First validate config so reload errors are actionable
-                    test_result = subprocess.run(
-                        ['docker', 'exec', container, 'nginx', '-t'],
-                        capture_output=True,
-                        text=True
-                    )
-                    if test_result.returncode != 0:
-                        last_error = (test_result.stderr or test_result.stdout or "").strip()
-                        logger.warning(f"Nginx config test failed in {container}: {last_error}")
-                        continue
+                reload_result = subprocess.run(
+                    ['docker', 'exec', PROXY_CONTAINER, 'nginx', '-s', 'reload'],
+                    capture_output=True,
+                    text=True
+                )
+                if reload_result.returncode != 0:
+                    error = (reload_result.stderr or reload_result.stdout or "").strip()
+                    return False, f"Nginx reload failed in {PROXY_CONTAINER}: {error}"
 
-                    reload_result = subprocess.run(
-                        ['docker', 'exec', container, 'nginx', '-s', 'reload'],
-                        capture_output=True,
-                        text=True
-                    )
-
-                    if reload_result.returncode == 0:
-                        logger.info(f"Nginx reloaded successfully in {container}")
-                        return True, f"App configured at {manifest.defaultPath}"
-
-                    last_error = (reload_result.stderr or reload_result.stdout or "").strip()
-                    logger.warning(f"Nginx reload failed in {container}: {last_error}")
-
-                tried_str = ", ".join(tried) if tried else "(none)"
-                return False, f"Config written but reload failed (tried: {tried_str}): {last_error or 'unknown error'}"
+                logger.info(f"Nginx reloaded successfully in {PROXY_CONTAINER}")
+                return True, f"App configured at {manifest.defaultPath}"
                     
             except Exception as e:
                 logger.error(f"Failed to write nginx config: {e}")

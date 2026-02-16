@@ -442,10 +442,10 @@ run_seeding() {
         set +a  # Turn off automatic export
     fi
     
-{% if app.name == 'ai-portal' %}
-    # ai-portal always runs seeding to ensure core apps and role bindings exist
+{% if app.name == 'busibox-portal' %}
+    # busibox-portal always runs seeding to ensure core apps and role bindings exist
     if [[ -f "package.json" ]] && grep -q '"db:seed"' package.json; then
-        log_info "Running database seeding (ai-portal)"
+        log_info "Running database seeding (busibox-portal)"
         if npm run db:seed 2>&1 | sed 's/^/[seed] /' >&2; then
             log_success "Database seeding completed successfully"
             return 0
@@ -653,7 +653,7 @@ main() {
         return 1
     fi
     
-    # Run seeding (for ai-portal to create core apps and role bindings)
+    # Run seeding (for busibox-portal to create core apps and role bindings)
     run_seeding
     
     # Build application

@@ -49,7 +49,7 @@ _proxmox_get_service_ip() {
         bridge|bridge-api) echo "${network_base}.211" ;;
         authz|authz-api|deploy|deploy-api|docs|docs-api) echo "${network_base}.210" ;;
         search|search-api|embedding|embedding-api) echo "${network_base}.204" ;;
-        core-apps|apps|ai-portal|agent-manager) echo "${network_base}.201" ;;
+        core-apps|apps|busibox-portal|busibox-agents) echo "${network_base}.201" ;;
         nginx|proxy) echo "${network_base}.200" ;;
         litellm) echo "${network_base}.207" ;;
         vllm) echo "${network_base}.208" ;;
@@ -72,8 +72,8 @@ _proxmox_get_systemd_name() {
         docs|docs-api) echo "docs-api" ;;
         embedding|embedding-api) echo "embedding-api" ;;
         nginx|proxy) echo "nginx" ;;
-        ai-portal) echo "ai-portal" ;;
-        agent-manager) echo "agent-manager" ;;
+        busibox-portal) echo "busibox-portal" ;;
+        busibox-agents) echo "busibox-agents" ;;
         postgres|pg) echo "postgresql" ;;
         minio|files) echo "minio" ;;
         milvus) echo "milvus" ;;

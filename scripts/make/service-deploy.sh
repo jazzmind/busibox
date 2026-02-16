@@ -213,8 +213,12 @@ deploy_service() {
     # Build ansible-playbook command
     local cmd="ansible-playbook -i ${inventory} ${playbook} --tags ${tag}"
     
-    # Add vault password file if exists
-    if [[ -f "$HOME/.vault_pass" ]]; then
+    # Add vault password file when available (prefer env-specific file)
+    if [[ -n "${ANSIBLE_VAULT_PASSWORD_FILE:-}" && -f "${ANSIBLE_VAULT_PASSWORD_FILE}" ]]; then
+        cmd="${cmd} --vault-password-file ${ANSIBLE_VAULT_PASSWORD_FILE}"
+    elif [[ -n "${VAULT_PASS_FILE:-}" && -f "${VAULT_PASS_FILE}" ]]; then
+        cmd="${cmd} --vault-password-file ${VAULT_PASS_FILE}"
+    elif [[ -f "$HOME/.vault_pass" ]]; then
         cmd="${cmd} --vault-password-file $HOME/.vault_pass"
     fi
     
@@ -339,7 +343,7 @@ main() {
         echo "  make install SERVICE=infrastructure  # postgres, redis, minio, milvus"
         echo ""
         echo "Services: postgres, redis, minio, milvus, neo4j, authz, agent, data,"
-        echo "          search, deploy, docs, embedding, litellm, core-apps, nginx"
+        echo "          search, deploy, docs, embedding, litellm, core-apps, proxy, nginx"
         echo ""
         echo "Groups: infrastructure, apis, llm, frontend, all"
         echo ""

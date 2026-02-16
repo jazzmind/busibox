@@ -271,7 +271,7 @@ class PostgresService:
             return [json.loads(dict(r)["public_jwk"]) if isinstance(dict(r)["public_jwk"], str) else dict(r)["public_jwk"] for r in rows]
 
     # ---------------------------------------------------------------------
-    # RBAC sync (initially driven by ai-portal)
+    # RBAC sync (initially driven by busibox-portal)
     # ---------------------------------------------------------------------
 
     async def upsert_roles(self, roles: List[dict]) -> dict[str, str]:
@@ -333,6 +333,11 @@ class PostgresService:
         user_id: str,
         email: str,
         status: str | None,
+        display_name: str | None,
+        first_name: str | None,
+        last_name: str | None,
+        avatar_url: str | None,
+        favorite_color: str | None,
         idp_provider: str | None,
         idp_tenant_id: str | None,
         idp_object_id: str | None,
@@ -344,11 +349,19 @@ class PostgresService:
         async with self.acquire(user_id, user_role_ids) as conn:
             await conn.execute(
                 """
-                INSERT INTO authz_users (user_id, email, status, idp_provider, idp_tenant_id, idp_object_id, idp_roles, idp_groups)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                INSERT INTO authz_users (
+                    user_id, email, status, display_name, first_name, last_name, avatar_url, favorite_color,
+                    idp_provider, idp_tenant_id, idp_object_id, idp_roles, idp_groups
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                 ON CONFLICT (user_id) DO UPDATE
                   SET email = EXCLUDED.email,
                       status = EXCLUDED.status,
+                      display_name = EXCLUDED.display_name,
+                      first_name = EXCLUDED.first_name,
+                      last_name = EXCLUDED.last_name,
+                      avatar_url = EXCLUDED.avatar_url,
+                      favorite_color = EXCLUDED.favorite_color,
                       idp_provider = EXCLUDED.idp_provider,
                       idp_tenant_id = EXCLUDED.idp_tenant_id,
                       idp_object_id = EXCLUDED.idp_object_id,
@@ -359,6 +372,11 @@ class PostgresService:
                 uid,
                 email,
                 status,
+                display_name,
+                first_name,
+                last_name,
+                avatar_url,
+                favorite_color,
                 idp_provider,
                 idp_tenant_id,
                 idp_object_id,
@@ -400,7 +418,7 @@ class PostgresService:
         async with self.acquire(None, None) as conn:
             row = await conn.fetchrow(
                 """
-                SELECT user_id, email, status, idp_provider, idp_tenant_id, 
+                SELECT user_id, email, status, display_name, first_name, last_name, avatar_url, favorite_color, idp_provider, idp_tenant_id,
                        idp_object_id, idp_roles, idp_groups, created_at, updated_at
                 FROM authz_users
                 WHERE user_id = $1
@@ -1006,6 +1024,11 @@ class PostgresService:
         *,
         email: str,
         status: str = "PENDING",
+        display_name: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        avatar_url: str | None = None,
+        favorite_color: str | None = None,
         role_ids: List[str] | None = None,
         assigned_by: str | None = None,
     ) -> dict:
@@ -1019,14 +1042,21 @@ class PostgresService:
         async with self.acquire(None, None) as conn:
             row = await conn.fetchrow(
                 """
-                INSERT INTO authz_users (user_id, email, status, pending_expires_at)
-                VALUES ($1, $2, $3, $4)
-                RETURNING user_id::text, email, status, email_verified_at, last_login_at, 
+                INSERT INTO authz_users (
+                    user_id, email, status, display_name, first_name, last_name, avatar_url, favorite_color, pending_expires_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                RETURNING user_id::text, email, status, display_name, first_name, last_name, avatar_url, favorite_color, email_verified_at, last_login_at,
                           pending_expires_at, created_at, updated_at
                 """,
                 user_id,
                 email.lower(),
                 status,
+                display_name,
+                first_name,
+                last_name,
+                avatar_url,
+                favorite_color,
                 pending_expires_at,
             )
             
@@ -1072,7 +1102,7 @@ class PostgresService:
                 param_idx += 1
             
             if search:
-                conditions.append(f"email ILIKE ${param_idx}")
+                conditions.append(f"(email ILIKE ${param_idx} OR COALESCE(display_name, '') ILIKE ${param_idx})")
                 params.append(f"%{search}%")
                 param_idx += 1
             
@@ -1085,7 +1115,7 @@ class PostgresService:
             # Get users
             params.extend([limit, offset])
             query = f"""
-                SELECT user_id::text, email, status, email_verified_at, last_login_at,
+                SELECT user_id::text, email, status, display_name, first_name, last_name, avatar_url, favorite_color, email_verified_at, last_login_at,
                        pending_expires_at, created_at, updated_at
                 FROM authz_users
                 {where_clause}
@@ -1124,6 +1154,11 @@ class PostgresService:
         *,
         email: str | None = None,
         status: str | None = None,
+        display_name: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        avatar_url: str | None = None,
+        favorite_color: str | None = None,
         email_verified_at: str | None = None,
         last_login_at: str | None = None,
         pending_expires_at: str | None = None,
@@ -1144,6 +1179,31 @@ class PostgresService:
             if status is not None:
                 updates.append(f"status = ${param_idx}")
                 params.append(status)
+                param_idx += 1
+
+            if display_name is not None:
+                updates.append(f"display_name = ${param_idx}")
+                params.append(display_name)
+                param_idx += 1
+
+            if first_name is not None:
+                updates.append(f"first_name = ${param_idx}")
+                params.append(first_name)
+                param_idx += 1
+
+            if last_name is not None:
+                updates.append(f"last_name = ${param_idx}")
+                params.append(last_name)
+                param_idx += 1
+
+            if avatar_url is not None:
+                updates.append(f"avatar_url = ${param_idx}")
+                params.append(avatar_url)
+                param_idx += 1
+
+            if favorite_color is not None:
+                updates.append(f"favorite_color = ${param_idx}")
+                params.append(favorite_color)
                 param_idx += 1
             
             if email_verified_at is not None:
@@ -1174,7 +1234,7 @@ class PostgresService:
                 UPDATE authz_users
                 SET {', '.join(updates)}
                 WHERE user_id = ${param_idx}
-                RETURNING user_id::text, email, status, email_verified_at, last_login_at,
+                RETURNING user_id::text, email, status, display_name, first_name, last_name, avatar_url, favorite_color, email_verified_at, last_login_at,
                           pending_expires_at, created_at, updated_at
             """
             
@@ -1218,7 +1278,7 @@ class PostgresService:
         async with self.acquire(None, None) as conn:
             row = await conn.fetchrow(
                 """
-                SELECT user_id::text, email, status, email_verified_at, last_login_at,
+                SELECT user_id::text, email, status, display_name, first_name, last_name, avatar_url, favorite_color, email_verified_at, last_login_at,
                        pending_expires_at, created_at, updated_at
                 FROM authz_users
                 WHERE email = $1
@@ -1276,7 +1336,7 @@ class PostgresService:
                 """
                 SELECT s.id::text as session_id, s.user_id::text, s.token, s.expires_at,
                        s.ip_address, s.user_agent, s.created_at,
-                       u.email, u.status
+                       u.email, u.status, u.display_name, u.first_name, u.last_name, u.avatar_url, u.favorite_color
                 FROM authz_sessions s
                 JOIN authz_users u ON s.user_id = u.user_id
                 WHERE s.token = $1 AND s.expires_at > now()
@@ -1290,6 +1350,11 @@ class PostgresService:
                 "user_id": session["user_id"],
                 "email": session.pop("email"),
                 "status": session.pop("status"),
+                "display_name": session.pop("display_name", None),
+                "first_name": session.pop("first_name", None),
+                "last_name": session.pop("last_name", None),
+                "avatar_url": session.pop("avatar_url", None),
+                "favorite_color": session.pop("favorite_color", None),
             }
             return session
 

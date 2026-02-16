@@ -32,7 +32,7 @@ async def test_chat_message_accepts_metadata(async_client: AsyncClient, auth_hea
             "metadata": {
                 "projectId": "test-project-123",
                 "projectName": "Test Project",
-                "appName": "status-report",
+                "appName": "busibox-projects",
             }
         },
         headers=auth_headers,
@@ -113,7 +113,7 @@ async def test_agentic_stream_accepts_metadata(async_client: AsyncClient, auth_h
             "model": "chat",
             "metadata": {
                 "projectId": "proj-456",
-                "appName": "status-report",
+                "appName": "busibox-projects",
             },
         },
         headers=auth_headers,
@@ -199,7 +199,7 @@ async def test_agentic_stream_metadata_with_selected_agent(
             "metadata": {
                 "projectId": "proj-789",
                 "projectName": "Auth Refactor",
-                "appName": "status-report",
+                "appName": "busibox-projects",
             },
         },
         headers=auth_headers,
@@ -249,7 +249,7 @@ async def test_metadata_with_conversation_continuity(
             "metadata": {
                 "projectId": "proj-continuity-test",
                 "projectName": "Login Feature",
-                "appName": "status-report",
+                "appName": "busibox-projects",
             },
         },
         headers=auth_headers,
@@ -268,7 +268,7 @@ async def test_metadata_with_conversation_continuity(
             "metadata": {
                 "projectId": "proj-continuity-test",
                 "projectName": "Login Feature",
-                "appName": "status-report",
+                "appName": "busibox-projects",
             },
         },
         headers=auth_headers,
@@ -309,7 +309,7 @@ async def test_metadata_accepts_arbitrary_keys(async_client: AsyncClient, auth_h
 @pytest.mark.asyncio
 @pytest.mark.integration
 async def test_metadata_with_doc_search_enabled(async_client: AsyncClient, auth_headers: dict):
-    """Test metadata works alongside doc search (common status-report pattern)."""
+    """Test metadata works alongside doc search (common busibox-projects pattern)."""
     response = await async_client.post(
         "/chat/message",
         json={
@@ -319,7 +319,7 @@ async def test_metadata_with_doc_search_enabled(async_client: AsyncClient, auth_
             "metadata": {
                 "projectId": "proj-doc-search",
                 "projectName": "Doc Search Project",
-                "appName": "status-report",
+                "appName": "busibox-projects",
             },
         },
         headers=auth_headers,
@@ -359,7 +359,7 @@ async def test_agentic_metadata_reaches_agent_prompt(
             "metadata": {
                 "projectId": "proj-prompt-test",
                 "projectName": unique_project_name,
-                "appName": "status-report",
+                "appName": "busibox-projects",
             },
         },
         headers=auth_headers,

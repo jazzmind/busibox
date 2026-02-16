@@ -7,7 +7,7 @@ Runs alongside the Signal bot polling loop as a co-process.
 Authentication:
   Bridge trusts requests from the internal container network (Option A from plan).
   All containers are isolated; bridge only listens on its internal IP and is not
-  exposed externally. This is the same trust boundary that allows AI Portal to
+  exposed externally. This is the same trust boundary that allows Busibox Portal to
   call AuthZ unauthenticated for the magic-link flow.
 """
 
@@ -103,7 +103,7 @@ def create_app(settings: Settings) -> FastAPI:
     async def send_magic_link(req: SendMagicLinkRequest):
         """
         Send a magic-link authentication email with TOTP code.
-        Called by AI Portal during the login flow.
+        Called by Busibox Portal during the login flow.
         """
         if not settings.email_enabled:
             raise HTTPException(status_code=503, detail="Email channel is not enabled on bridge")

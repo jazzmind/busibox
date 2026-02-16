@@ -4,7 +4,7 @@ Deployment Service Routes
 API endpoints for app deployment operations.
 
 Architecture:
-- Core apps (ai-portal, agent-manager) are deployed via docker exec into core-apps container
+- Core apps (busibox-portal, busibox-agents) are deployed via docker exec into core-apps container
 - User apps (external/untrusted) are deployed via docker exec into user-apps container
 - Both use runtime installation pattern (apps not baked into images)
 

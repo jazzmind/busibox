@@ -106,11 +106,11 @@ fi
 
 # Validate service
 case "$SERVICE" in
-    authz|data|ingest|search|agent|ai-portal|agent-manager|apps|all)
+    authz|data|ingest|search|agent|busibox-portal|busibox-agents|apps|all)
         ;;
     *)
         error "Unknown service: $SERVICE"
-        echo "Valid services: authz, data, data, search, agent, ai-portal, agent-manager, apps, all"
+        echo "Valid services: authz, data, data, search, agent, busibox-portal, busibox-agents, apps, all"
         exit 1
         ;;
 esac
@@ -568,7 +568,7 @@ run_docker_container_tests() {
     fi
 }
 
-# Run tests for Node.js apps (ai-portal, agent-manager) inside Docker containers
+# Run tests for Node.js apps (busibox-portal, busibox-agents) inside Docker containers
 run_nodejs_app_tests() {
     local app="$1"
     
@@ -576,13 +576,13 @@ run_nodejs_app_tests() {
     local container_name=""
     local app_dir=""
     case "$app" in
-        ai-portal)
-            container_name="${DOCKER_PREFIX}-ai-portal"
-            app_dir="${REPO_ROOT}/../ai-portal"
+        busibox-portal)
+            container_name="${DOCKER_PREFIX}-busibox-portal"
+            app_dir="${REPO_ROOT}/../busibox-portal"
             ;;
-        agent-manager)
-            container_name="${DOCKER_PREFIX}-agent-manager"
-            app_dir="${REPO_ROOT}/../agent-manager"
+        busibox-agents)
+            container_name="${DOCKER_PREFIX}-busibox-agents"
+            app_dir="${REPO_ROOT}/../busibox-agents"
             ;;
         *)
             error "Unknown Node.js app: $app"
@@ -662,7 +662,7 @@ if [[ "$SERVICE" == "all" ]]; then
         fi
     done
     # Run Node.js app tests
-    for app in ai-portal agent-manager; do
+    for app in busibox-portal busibox-agents; do
         echo ""
         separator 70
         if ! run_nodejs_app_tests "$app"; then
@@ -671,14 +671,14 @@ if [[ "$SERVICE" == "all" ]]; then
     done
 elif [[ "$SERVICE" == "apps" ]]; then
     # Run only Node.js app tests
-    for app in ai-portal agent-manager; do
+    for app in busibox-portal busibox-agents; do
         echo ""
         separator 70
         if ! run_nodejs_app_tests "$app"; then
             FAILED_SERVICES="$FAILED_SERVICES $app"
         fi
     done
-elif [[ "$SERVICE" == "ai-portal" ]] || [[ "$SERVICE" == "agent-manager" ]]; then
+elif [[ "$SERVICE" == "busibox-portal" ]] || [[ "$SERVICE" == "busibox-agents" ]]; then
     # Run specific Node.js app test
     if ! run_nodejs_app_tests "$SERVICE"; then
         FAILED_SERVICES="$SERVICE"

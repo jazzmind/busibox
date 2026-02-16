@@ -40,7 +40,7 @@ proxmox_host: "{{ lookup('env', 'PROXMOX_HOST') | default(lookup('pipe', 'hostna
 # Container IP Addresses (calculated from base)
 # Infrastructure containers: .200-.212
 proxy_ip: "{{ network_base_octets }}.200"
-core_apps_ip: "{{ network_base_octets }}.201"  # Core apps: ai-portal, agent-manager
+core_apps_ip: "{{ network_base_octets }}.201"  # Core apps: busibox-portal, busibox-agents
 agent_ip: "{{ network_base_octets }}.202"
 postgres_ip: "{{ network_base_octets }}.203"
 milvus_ip: "{{ network_base_octets }}.204"

@@ -83,7 +83,7 @@ curl http://<search-ip>:8003/health
 
 ## Step 6: Access the Portal
 
-Open your browser and navigate to the AI Portal URL (typically `https://your-domain.com` or `http://<apps-ip>:3000`).
+Open your browser and navigate to the Busibox Portal URL (typically `https://your-domain.com` or `http://<apps-ip>:3000`).
 
 Create the first admin user account and you're ready to go.
 

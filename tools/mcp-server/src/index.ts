@@ -128,9 +128,9 @@ const CONTAINERS: ContainerConfig[] = [
     name: 'apps-lxc',
     ip: '10.96.200.201',
     testIp: '10.96.201.201',
-    purpose: 'Next.js apps (AI Portal, Agent Manager, etc.)',
+    purpose: 'Next.js apps (Busibox Portal, Agent Manager, etc.)',
     ports: [{ port: 3000, service: 'Next.js apps (proxied via proxy-lxc)' }],
-    services: ['nginx', 'ai-portal', 'agent-manager', 'doc-intel', 'foundation', 'project-analysis', 'innovation'],
+    services: ['nginx', 'busibox-portal', 'busibox-agents', 'doc-intel', 'foundation', 'busibox-analysis', 'innovation'],
     notes: 'No direct access to data/search; proxies internal calls',
   },
   {
@@ -443,11 +443,11 @@ const MAKE_TARGETS: Record<string, { description: string; category: string; requ
   
   // App deployment
   'deploy-apps': { description: 'Deploy all applications', category: 'app-deployment', requiresEnv: true },
-  'deploy-ai-portal': { description: 'Deploy AI Portal app', category: 'app-deployment', requiresEnv: true },
-  'deploy-agent-manager': { description: 'Deploy Agent Manager app', category: 'app-deployment', requiresEnv: true },
+  'deploy-busibox-portal': { description: 'Deploy Busibox Portal app', category: 'app-deployment', requiresEnv: true },
+  'deploy-busibox-agents': { description: 'Deploy Agent Manager app', category: 'app-deployment', requiresEnv: true },
   'deploy-doc-intel': { description: 'Deploy Doc Intel app', category: 'app-deployment', requiresEnv: true },
   'deploy-foundation': { description: 'Deploy Foundation app', category: 'app-deployment', requiresEnv: true },
-  'deploy-project-analysis': { description: 'Deploy Project Analysis app', category: 'app-deployment', requiresEnv: true },
+  'deploy-busibox-analysis': { description: 'Deploy Project Analysis app', category: 'app-deployment', requiresEnv: true },
   'deploy-innovation': { description: 'Deploy Innovation app', category: 'app-deployment', requiresEnv: true },
   
   // Verification
@@ -1277,7 +1277,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {
             target: {
               type: 'string',
-              description: 'Make target to run (e.g., "all", "data", "test-data", "deploy-ai-portal")',
+              description: 'Make target to run (e.g., "all", "data", "test-data", "deploy-busibox-portal")',
               enum: Object.keys(MAKE_TARGETS),
             },
             environment: {
@@ -2734,7 +2734,7 @@ server.setRequestHandler(ListPromptsRequestSchema, async () => {
         arguments: [
           {
             name: 'service',
-            description: 'Service name (e.g., ai-portal, agent-lxc)',
+            description: 'Service name (e.g., busibox-portal, agent-lxc)',
             required: true,
           },
           {
@@ -2835,11 +2835,11 @@ server.setRequestHandler(ListPromptsRequestSchema, async () => {
       },
       {
         name: 'deploy_app',
-        description: 'Guide for deploying a specific application (ai-portal, agent-manager, etc.)',
+        description: 'Guide for deploying a specific application (busibox-portal, busibox-agents, etc.)',
         arguments: [
           {
             name: 'app_name',
-            description: 'Application name (ai-portal, agent-manager, doc-intel, foundation, project-analysis, innovation)',
+            description: 'Application name (busibox-portal, busibox-agents, doc-intel, foundation, busibox-analysis, innovation)',
             required: true,
           },
           {
@@ -3151,8 +3151,8 @@ Or use \`list_make_targets\` with category: "testing" to see all options.`,
 
 **Available App Deployment Targets**:
 - \`deploy-apps\`: All applications
-- \`deploy-ai-portal\`: AI Portal
-- \`deploy-agent-manager\`: Agent Manager
+- \`deploy-busibox-portal\`: Busibox Portal
+- \`deploy-busibox-agents\`: Agent Manager
 
 **Verify Deployment**:
 Use \`get_container_service_status\` with:

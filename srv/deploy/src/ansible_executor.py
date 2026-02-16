@@ -67,8 +67,8 @@ INFRASTRUCTURE_ANSIBLE_MAP = {
     
     # Apps (deploy via Deploy API, but can also use Ansible)
     'apps': ('apps', ['apps'], 'Frontend applications'),
-    'ai-portal': ('apps', ['app_deployer', 'secrets'], 'AI Portal'),
-    'agent-manager': ('apps', ['app_deployer', 'secrets'], 'Agent Manager'),
+    'busibox-portal': ('apps', ['app_deployer', 'secrets'], 'Busibox Portal'),
+    'busibox-agents': ('apps', ['app_deployer', 'secrets'], 'Agent Manager'),
 }
 
 
@@ -99,8 +99,8 @@ INSTALLATION_ORDER = [
     ['agent-api', 'docs-api', 'bridge'],  # Agent services + Bridge
     
     # Group 6: Apps (need all APIs)
-    ['ai-portal'],
-    ['agent-manager'],
+    ['busibox-portal'],
+    ['busibox-agents'],
 ]
 
 
@@ -251,8 +251,8 @@ class AnsibleExecutor:
             'bridge': 'bridge',
             'bridge-api': 'bridge',  # alias
             'apps': 'apps',
-            'ai-portal': 'deploy-ai-portal',
-            'agent-manager': 'deploy-agent-manager',
+            'busibox-portal': 'deploy-busibox-portal',
+            'busibox-agents': 'deploy-busibox-agents',
         }
         
         make_target = service_to_make_target.get(service, service)
@@ -368,7 +368,7 @@ class AnsibleExecutor:
         logs.append(f"Branch: {deploy_config.githubBranch}")
         
         # In Docker/local environment, skip actual Ansible deployment
-        # Apps in Docker share the apps container with AI Portal
+        # Apps in Docker share the apps container with Busibox Portal
         if is_docker_environment():
             logs.append("📦 Docker/local environment detected")
             logs.append("⏭️  Skipping Ansible deployment (production only)")

@@ -110,7 +110,7 @@ app_name: "My App"            # Human-readable name
 
 ### App Documentation
 
-Apps register their docs by including a `docs/portal/` directory in their repo. On deploy, the deploy-api copies these files into the docs-api content directory. See the app-template for a working example.
+Apps register their docs by including a `docs/portal/` directory in their repo. On deploy, the deploy-api copies these files into the docs-api content directory. See the busibox-template for a working example.
 
 ## File Conventions
 

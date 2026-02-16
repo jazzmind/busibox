@@ -193,7 +193,7 @@ async def create_data_document(
         schema: Optional schema definition for validation
         initial_records: Optional list of initial records to insert
         visibility: "personal" (default, user only) or "shared" (team access)
-        source_app: Optional app identifier (e.g. "status-report") for filtering
+        source_app: Optional app identifier (e.g. "busibox-projects") for filtering
     
     Returns:
         CreateDataDocumentOutput with document_id if successful

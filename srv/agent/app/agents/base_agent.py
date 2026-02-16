@@ -198,6 +198,9 @@ TOOL_SCOPES: Dict[str, List[str]] = {
     "rag_query": ["rag.read"],
     "create_task": ["task.write"],  # Create tasks
     "send_notification": [],  # No special auth needed (uses configured providers)
+    "generate_image": ["data.write"],
+    "transcribe_audio": ["data.read"],
+    "text_to_speech": ["data.write"],
 }
 
 
@@ -224,6 +227,11 @@ class AgentConfig:
     synthesis_prompt: Optional[str] = None  # Override default synthesis prompt
     max_tokens: Optional[int] = None  # Max tokens for synthesis (None = model default, no limit)
     allow_frontier_fallback: bool = False  # Allow LiteLLM to fall back to frontier model on context overflow
+    
+    # Structured output: when set, PydanticAI enforces response_format=json_schema
+    # so the LLM is forced to return valid JSON matching this Pydantic model.
+    # The agent's run() result will contain a serialised JSON string of this type.
+    output_type: Optional[Type[BaseModel]] = None
     
     # Context compression settings
     enable_history_compression: bool = True  # Whether to compress long conversation history
@@ -278,11 +286,17 @@ def _register_builtin_tools():
     from app.tools.web_search_tool import search_web, WebSearchOutput
     from app.tools.web_scraper_tool import scrape_webpage, WebScraperOutput
     from app.tools.weather_tool import get_weather, WeatherOutput
+    from app.tools.image_tool import generate_image, ImageOutput
+    from app.tools.transcription_tool import transcribe_audio, TranscriptionOutput
+    from app.tools.tts_tool import text_to_speech, TTSOutput
     
     ToolRegistry.register("document_search", search_documents, DocumentSearchOutput)
     ToolRegistry.register("web_search", search_web, WebSearchOutput)
     ToolRegistry.register("web_scraper", scrape_webpage, WebScraperOutput)
     ToolRegistry.register("get_weather", get_weather, WeatherOutput)
+    ToolRegistry.register("generate_image", generate_image, ImageOutput)
+    ToolRegistry.register("transcribe_audio", transcribe_audio, TranscriptionOutput)
+    ToolRegistry.register("text_to_speech", text_to_speech, TTSOutput)
     
     # Register task and notification tools
     try:
@@ -345,6 +359,11 @@ class AgentContext:
     relevant_insights: List[Dict[str, Any]] = field(default_factory=list)
     # Application context metadata (e.g. projectId, appName) from the chat request
     metadata: Dict[str, Any] = field(default_factory=dict)
+    # Optional runtime JSON Schema used for deterministic structured output.
+    # This is typically provided by programmatic workflow-style invocations.
+    response_schema: Optional[Dict[str, Any]] = None
+    # Optional per-run token budget override.
+    max_tokens: Optional[int] = None
 
 
 class BaseStreamingAgent(StreamingAgent):
@@ -591,6 +610,8 @@ class BaseStreamingAgent(StreamingAgent):
             agent_context.agent_id = context.get("agent_id")
             agent_context.conversation_history = context.get("conversation_history", [])
             agent_context.metadata = context.get("metadata") or {}
+            agent_context.response_schema = context.get("response_schema")
+            agent_context.max_tokens = context.get("max_tokens")
         
         # Check what scopes this agent's tools require
         scopes = self.config.get_required_scopes()
@@ -902,13 +923,18 @@ class BaseStreamingAgent(StreamingAgent):
         from pydantic_ai import Agent
         from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, UserPromptPart, TextPart
         
+        # For deterministic workflow/programmatic calls, disable tool usage and
+        # force structured output via response_schema.
+        force_structured_output = context.response_schema is not None
+
         # Get tool functions for this agent, wrapped with result truncation
         # to prevent large tool outputs from exceeding the LLM context window
         tools = []
-        for tool_name in self.config.tools:
-            tool_func = ToolRegistry.get(tool_name)
-            if tool_func:
-                tools.append(_wrap_tool_with_truncation(tool_func))
+        if not force_structured_output:
+            for tool_name in self.config.tools:
+                tool_func = ToolRegistry.get(tool_name)
+                if tool_func:
+                    tools.append(_wrap_tool_with_truncation(tool_func))
         
         if not tools:
             # No tools configured - run as conversational agent without tool capabilities
@@ -916,19 +942,31 @@ class BaseStreamingAgent(StreamingAgent):
             
             # Build model settings - only include max_tokens if explicitly set
             model_settings = {}
-            if self.config.max_tokens is not None:
-                model_settings["max_tokens"] = self.config.max_tokens
+            runtime_max_tokens = context.max_tokens if context.max_tokens is not None else self.config.max_tokens
+            if runtime_max_tokens is not None:
+                model_settings["max_tokens"] = runtime_max_tokens
             
             # Disable LiteLLM context_window_fallbacks unless agent opts in
             if not self.config.allow_frontier_fallback:
                 model_settings.setdefault("extra_body", {})["disable_fallbacks"] = True
+
+            # If a response schema is provided, pass it through to LiteLLM so
+            # the model returns deterministic JSON that matches the schema.
+            if context.response_schema:
+                model_settings.setdefault("extra_body", {})["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": context.response_schema,
+                }
             
             # Create agent without tools for pure conversation
-            agent = Agent(
-                model=self.synthesis_model,
-                system_prompt=self.config.instructions,
-                model_settings=model_settings if model_settings else None,
-            )
+            agent_kwargs: Dict[str, Any] = {
+                "model": self.synthesis_model,
+                "system_prompt": self.config.instructions,
+                "model_settings": model_settings if model_settings else None,
+            }
+            if self.config.output_type is not None and not context.response_schema:
+                agent_kwargs["output_type"] = self.config.output_type
+            agent = Agent(**agent_kwargs)
             
             # Build the prompt with conversation history context
             prompt_with_context = self._build_llm_driven_prompt(query, context)
@@ -937,8 +975,15 @@ class BaseStreamingAgent(StreamingAgent):
             try:
                 result = await agent.run(prompt_with_context, deps=context.deps)
                 
-                # Store result for synthesis
-                context.tool_results["llm_response"] = result.output
+                # Store result for synthesis. Keep JSON deterministic for
+                # programmatic callers by serializing structured objects.
+                output = result.output
+                if hasattr(output, "model_dump"):
+                    context.tool_results["llm_response"] = json.dumps(output.model_dump())
+                elif isinstance(output, (dict, list)):
+                    context.tool_results["llm_response"] = json.dumps(output)
+                else:
+                    context.tool_results["llm_response"] = output
                 
             except Exception as e:
                 logger.error(f"Conversational agent error: {e}", exc_info=True)
@@ -950,20 +995,30 @@ class BaseStreamingAgent(StreamingAgent):
         
         # Build model settings - only include max_tokens if explicitly set
         model_settings = {}
-        if self.config.max_tokens is not None:
-            model_settings["max_tokens"] = self.config.max_tokens
+        runtime_max_tokens = context.max_tokens if context.max_tokens is not None else self.config.max_tokens
+        if runtime_max_tokens is not None:
+            model_settings["max_tokens"] = runtime_max_tokens
         
         # Disable LiteLLM context_window_fallbacks unless agent opts in
         if not self.config.allow_frontier_fallback:
             model_settings.setdefault("extra_body", {})["disable_fallbacks"] = True
+
+        if context.response_schema:
+            model_settings.setdefault("extra_body", {})["response_format"] = {
+                "type": "json_schema",
+                "json_schema": context.response_schema,
+            }
         
         # Create agent with tools
-        agent = Agent(
-            model=self.synthesis_model,
-            tools=tools,
-            system_prompt=self.config.instructions,
-            model_settings=model_settings if model_settings else None,
-        )
+        agent_kwargs: Dict[str, Any] = {
+            "model": self.synthesis_model,
+            "tools": tools,
+            "system_prompt": self.config.instructions,
+            "model_settings": model_settings if model_settings else None,
+        }
+        if self.config.output_type is not None and not context.response_schema:
+            agent_kwargs["output_type"] = self.config.output_type
+        agent = Agent(**agent_kwargs)
         
         # Build the prompt with conversation history context
         prompt_with_context = self._build_llm_driven_prompt(query, context)
@@ -981,8 +1036,13 @@ class BaseStreamingAgent(StreamingAgent):
         try:
             result = await agent.run(prompt_with_context, deps=context.deps)
             
-            # Store result for synthesis
-            context.tool_results["llm_response"] = result.output
+            output = result.output
+            if hasattr(output, "model_dump"):
+                context.tool_results["llm_response"] = json.dumps(output.model_dump())
+            elif isinstance(output, (dict, list)):
+                context.tool_results["llm_response"] = json.dumps(output)
+            else:
+                context.tool_results["llm_response"] = output
             
         except Exception as e:
             logger.error(f"LLM-driven execution error: {e}", exc_info=True)

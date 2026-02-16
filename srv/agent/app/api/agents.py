@@ -23,10 +23,12 @@ from app.schemas.definitions import (
     WorkflowDefinitionRead,
 )
 from app.services.agent_registry import agent_registry
+from app.services.builtin_agents import BUILTIN_AGENT_METADATA
 
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/agents", tags=["agents"])
+BUILTIN_AGENT_RESERVED_NAMES = {meta["name"] for meta in BUILTIN_AGENT_METADATA.values()}
 
 
 class WeatherRequest(BaseModel):
@@ -171,8 +173,69 @@ async def create_agent_definition(
     
     If is_builtin=True is requested, the agent will be visible to all users.
     Otherwise it is a personal agent visible only to the creator.
+    
+    If an agent with the same name already exists for this user (or as a
+    built-in), the existing definition is updated instead of creating a
+    duplicate.
     """
+    from sqlalchemy import select as sa_select
+
+    if payload.name in BUILTIN_AGENT_RESERVED_NAMES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"'{payload.name}' is a reserved built-in agent name and cannot be created or modified via API",
+        )
+
     is_builtin = payload.is_builtin
+
+    # Check for existing agent with same name (upsert semantics)
+    existing_query = sa_select(AgentDefinition).where(
+        AgentDefinition.name == payload.name,
+        AgentDefinition.is_active == True,  # noqa: E712
+    )
+    result = await session.execute(existing_query)
+    existing = result.scalar_one_or_none()
+
+    if existing:
+        is_owner = existing.created_by == principal.sub
+
+        if existing.is_builtin and not is_owner:
+            # Built-in agent created by someone else — return as-is (idempotent)
+            logger.info(
+                "agent_create_skipped_builtin_exists",
+                agent_id=str(existing.id),
+                agent_name=existing.name,
+                user_id=principal.sub,
+            )
+            return AgentDefinitionRead.model_validate(existing)
+
+        if not existing.is_builtin and not is_owner:
+            raise HTTPException(
+                status_code=409,
+                detail=f"An agent named '{payload.name}' already exists (owned by another user)",
+            )
+
+        # Owner of the agent (built-in or personal) — update in place
+        update_fields = payload.model_dump(exclude_unset=True)
+        update_fields.pop("is_builtin", None)  # don't change builtin status
+        for key, value in update_fields.items():
+            if hasattr(existing, key):
+                setattr(existing, key, value)
+        await session.commit()
+        await session.refresh(existing)
+
+        # Reload into registry
+        await agent_registry.refresh(session)
+
+        logger.info(
+            "agent_updated_via_create",
+            agent_id=str(existing.id),
+            agent_name=existing.name,
+            user_id=principal.sub,
+            is_builtin=existing.is_builtin,
+        )
+        return AgentDefinitionRead.model_validate(existing)
+
     try:
         agent_id = await agent_registry.add(session, payload, created_by=principal.sub, is_builtin=is_builtin)
     except ValueError as e:
@@ -213,28 +276,19 @@ async def update_agent_definition(
     update_data = payload.model_dump(exclude_unset=True)
 
     if definition.is_builtin:
-        # Built-in agents: owner can update all fields, others can only update tools
-        if definition.created_by == principal.sub:
-            # Owner of a built-in agent can update all fields
-            if "tools" in update_data and update_data["tools"] is not None:
-                validate_tool_references(update_data["tools"].get("names", []))
-            for key, value in update_data.items():
-                setattr(definition, key, value)
-        else:
-            # Non-owner: only tools may be updated
-            if update_data.keys() - {"tools"}:
-                raise HTTPException(
-                    status_code=403,
-                    detail="Built-in agents only allow updating tools (unless you are the owner)",
-                )
-            if "tools" in update_data:
-                tool_names = (update_data["tools"] or {}).get("names", [])
-                validate_tool_references(tool_names)
-                definition.tools = {"names": tool_names}
+        raise HTTPException(
+            status_code=403,
+            detail="Built-in agents are code-defined and cannot be updated via API",
+        )
     else:
         # Personal: must be owner
         if definition.created_by != principal.sub:
             raise HTTPException(status_code=404, detail="Agent not found")
+        if "name" in update_data and update_data["name"] in BUILTIN_AGENT_RESERVED_NAMES:
+            raise HTTPException(
+                status_code=409,
+                detail=f"'{update_data['name']}' is a reserved built-in agent name and cannot be used",
+            )
         if "tools" in update_data and update_data["tools"] is not None:
             validate_tool_references(update_data["tools"].get("names", []))
         for key, value in update_data.items():

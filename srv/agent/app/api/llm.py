@@ -10,11 +10,11 @@ Provides:
 - Purpose-to-model mapping (read/update)
 """
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.auth.dependencies import get_principal
@@ -237,6 +237,7 @@ BEDROCK_CURATED_MODELS = [
 # Purposes that can be overridden via the UI
 CONFIGURABLE_PURPOSES = [
     "fast", "agent", "chat", "frontier", "tool_calling", "test", "default", "video",
+    "image", "transcribe", "voice",
 ]
 
 
@@ -258,6 +259,126 @@ def _get_litellm_headers() -> Dict[str, str]:
     if settings.litellm_api_key:
         headers["Authorization"] = f"Bearer {settings.litellm_api_key}"
     return headers
+
+
+async def _litellm_generate_image(
+    model: str,
+    prompt: str,
+    size: str = "1024x1024",
+    n: int = 1,
+    response_format: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Proxy an image generation request to LiteLLM /v1/images/generations.
+    
+    Args:
+        model: LiteLLM model name/purpose (e.g. "image")
+        prompt: Text prompt for image generation
+        size: Output image dimensions (e.g. "1024x1024")
+        n: Number of images to generate
+        response_format: Optional format hint ("url" or "b64_json").
+            Not all models support this (gpt-image-1 ignores it).
+            If None, the parameter is omitted and the model returns
+            its default format.
+    """
+    base_url = _get_litellm_base_url()
+    headers = _get_litellm_headers()
+    body: Dict[str, Any] = {
+        "model": model,
+        "prompt": prompt,
+        "size": size,
+        "n": n,
+    }
+    
+    # Only include response_format if explicitly requested.
+    # gpt-image-1 doesn't support it and LiteLLM may return empty data if passed.
+    if response_format is not None:
+        body["response_format"] = response_format
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        resp = await client.post(
+            f"{base_url}/v1/images/generations",
+            headers=headers,
+            json=body,
+        )
+        if not resp.is_success:
+            error_text = resp.text[:1000]
+            logger.error(f"LiteLLM /images/generations failed {resp.status_code}: {error_text}")
+            raise HTTPException(
+                status_code=resp.status_code,
+                detail=f"Image generation failed: {error_text}",
+            )
+        return resp.json()
+
+
+async def _litellm_transcribe_audio(
+    file_bytes: bytes,
+    filename: str,
+    content_type: str,
+    model: str = "transcribe",
+    language: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Proxy an audio transcription request to LiteLLM /v1/audio/transcriptions."""
+    base_url = _get_litellm_base_url()
+    headers = _get_litellm_headers()
+    mp_headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
+
+    files = {
+        "file": (filename, file_bytes, content_type or "application/octet-stream"),
+    }
+    data: Dict[str, Any] = {"model": model}
+    if language:
+        data["language"] = language
+
+    async with httpx.AsyncClient(timeout=180.0) as client:
+        resp = await client.post(
+            f"{base_url}/v1/audio/transcriptions",
+            headers=mp_headers,
+            data=data,
+            files=files,
+        )
+        if not resp.is_success:
+            error_text = resp.text[:1000]
+            logger.error(f"LiteLLM /audio/transcriptions failed {resp.status_code}: {error_text}")
+            raise HTTPException(
+                status_code=resp.status_code,
+                detail=f"Audio transcription failed: {error_text}",
+            )
+        return resp.json()
+
+
+async def _litellm_text_to_speech(
+    model: str,
+    input_text: str,
+    voice: str = "alloy",
+    response_format: str = "mp3",
+    speed: float = 1.0,
+) -> Tuple[bytes, str]:
+    """Proxy a TTS request to LiteLLM /v1/audio/speech and return bytes + MIME."""
+    base_url = _get_litellm_base_url()
+    headers = _get_litellm_headers()
+    body = {
+        "model": model,
+        "input": input_text,
+        "voice": voice,
+        "response_format": response_format,
+        "speed": speed,
+    }
+
+    async with httpx.AsyncClient(timeout=180.0) as client:
+        resp = await client.post(
+            f"{base_url}/v1/audio/speech",
+            headers=headers,
+            json=body,
+        )
+        if not resp.is_success:
+            error_text = resp.text[:1000]
+            logger.error(f"LiteLLM /audio/speech failed {resp.status_code}: {error_text}")
+            raise HTTPException(
+                status_code=resp.status_code,
+                detail=f"Text-to-speech failed: {error_text}",
+            )
+        content_type = resp.headers.get("content-type", "audio/mpeg")
+        return resp.content, content_type
 
 
 def _require_admin(principal: Principal) -> None:
@@ -1122,7 +1243,7 @@ async def list_provider_keys(
 
 
 # =============================================================================
-# Video Generation Proxy  (AI Portal -> Agent API -> LiteLLM -> OpenAI)
+# Video Generation Proxy  (Busibox Portal -> Agent API -> LiteLLM -> OpenAI)
 # =============================================================================
 
 class VideoCreateRequest(BaseModel):
@@ -1308,6 +1429,139 @@ async def get_video_content(
         )
     except Exception as e:
         logger.error(f"Video content proxy failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        )
+
+
+# =============================================================================
+# Media Proxy Endpoints
+# =============================================================================
+
+class ImageCreateRequest(BaseModel):
+    """Request to create an image via LiteLLM."""
+    model: str = Field("image", description="Image model purpose name (resolved via model registry)")
+    prompt: str = Field(..., description="Text prompt for image generation")
+    size: str = Field("1024x1024", description="Output image size")
+    n: int = Field(1, ge=1, le=4, description="Number of images to generate")
+    response_format: Optional[str] = Field(
+        None,
+        description="Response format (url or b64_json). "
+        "Omit for gpt-image-1 models which only support b64_json."
+    )
+
+
+class TTSRequest(BaseModel):
+    """Request to generate speech audio from text."""
+    model: str = Field("voice", description="Voice model purpose name (resolved via model registry)")
+    input: str = Field(..., description="Text to convert to speech")
+    voice: str = Field("alloy", description="Voice preset")
+    response_format: str = Field("mp3", description="Audio format (mp3, wav, etc.)")
+    speed: float = Field(1.0, ge=0.25, le=4.0, description="Speech speed")
+
+
+@router.post("/images/create")
+async def create_image(
+    request: ImageCreateRequest,
+    principal: Principal = Depends(get_principal),
+) -> Dict[str, Any]:
+    """
+    Create image(s) via LiteLLM image generation endpoint.
+
+    Any authenticated user can call this.
+    """
+    try:
+        return await _litellm_generate_image(
+            model=request.model,
+            prompt=request.prompt,
+            size=request.size,
+            n=request.n,
+            response_format=request.response_format,
+        )
+    except HTTPException:
+        raise
+    except httpx.ConnectError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Cannot connect to LiteLLM service for image generation",
+        )
+    except Exception as e:
+        logger.error(f"Image generation proxy failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        )
+
+
+@router.post("/audio/transcribe")
+async def transcribe_audio(
+    file: UploadFile = File(...),
+    model: str = Form("transcribe"),
+    language: Optional[str] = Form(None),
+    principal: Principal = Depends(get_principal),
+) -> Dict[str, Any]:
+    """
+    Transcribe uploaded audio via LiteLLM transcription endpoint.
+
+    Any authenticated user can call this.
+    """
+    try:
+        file_bytes = await file.read()
+        return await _litellm_transcribe_audio(
+            file_bytes=file_bytes,
+            filename=file.filename or "audio-input.wav",
+            content_type=file.content_type or "application/octet-stream",
+            model=model,
+            language=language,
+        )
+    except HTTPException:
+        raise
+    except httpx.ConnectError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Cannot connect to LiteLLM service for audio transcription",
+        )
+    except Exception as e:
+        logger.error(f"Audio transcription proxy failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        )
+
+
+@router.post("/audio/speech")
+async def create_speech(
+    request: TTSRequest,
+    principal: Principal = Depends(get_principal),
+) -> Response:
+    """
+    Convert text to speech via LiteLLM audio speech endpoint.
+
+    Any authenticated user can call this.
+    """
+    try:
+        audio_bytes, content_type = await _litellm_text_to_speech(
+            model=request.model,
+            input_text=request.input,
+            voice=request.voice,
+            response_format=request.response_format,
+            speed=request.speed,
+        )
+        return Response(
+            content=audio_bytes,
+            media_type=content_type,
+            headers={"Content-Disposition": f'inline; filename="speech.{request.response_format}"'},
+        )
+    except HTTPException:
+        raise
+    except httpx.ConnectError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Cannot connect to LiteLLM service for text-to-speech",
+        )
+    except Exception as e:
+        logger.error(f"Text-to-speech proxy failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e),

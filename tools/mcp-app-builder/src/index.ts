@@ -4,7 +4,7 @@
  * Busibox MCP App Builder Server
  *
  * For developers building Next.js apps that deploy on busibox
- * Tools: busibox-app exports, auth patterns, app-template reference, service endpoints
+ * Tools: busibox-app exports, auth patterns, busibox-template reference, service endpoints
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -33,7 +33,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const PROJECT_ROOT = join(__dirname, '..', '..', '..');
 const BUSIBOX_APP_PATH = process.env.BUSIBOX_APP_PATH || join(PROJECT_ROOT, '..', 'busibox-app');
-const APP_TEMPLATE_PATH = process.env.APP_TEMPLATE_PATH || join(PROJECT_ROOT, '..', 'app-template');
+const APP_TEMPLATE_PATH = process.env.APP_TEMPLATE_PATH || join(PROJECT_ROOT, '..', 'busibox-template');
 
 const server = new Server(
   { name: 'busibox-mcp-app-builder', version: '1.0.0' },
@@ -95,7 +95,7 @@ const APP_BUILDER_TOOLS = [
   { name: 'get_doc', description: 'Get doc content', inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } },
   { name: 'get_busibox_app_exports', description: 'Get @jazzmind/busibox-app library exports', inputSchema: { type: 'object', properties: {} } },
   { name: 'get_auth_patterns', description: 'Get auth patterns (SSO, token exchange)', inputSchema: { type: 'object', properties: {} } },
-  { name: 'get_app_template_files', description: 'Read app-template reference files', inputSchema: { type: 'object', properties: { path: { type: 'string', description: 'Path relative to app-template root (e.g. lib/auth-middleware.ts)' } } } },
+  { name: 'get_app_template_files', description: 'Read busibox-template reference files', inputSchema: { type: 'object', properties: { path: { type: 'string', description: 'Path relative to busibox-template root (e.g. lib/auth-middleware.ts)' } } } },
   { name: 'get_service_endpoints', description: 'Get backend service IPs/ports', inputSchema: { type: 'object', properties: { environment: { type: 'string', enum: ['production', 'staging'] } } } },
   { name: 'validate_app_config', description: 'Check busibox.json structure', inputSchema: { type: 'object', properties: { config_path: { type: 'string' } } } },
   { name: 'get_component_docs', description: 'Get docs for busibox-app component', inputSchema: { type: 'object', properties: { component: { type: 'string', description: 'Component name (e.g. SimpleChatInterface, DocumentUpload)' } } } },
@@ -193,7 +193,7 @@ server.setRequestHandler(GetPromptRequestSchema, async (request) => {
 
   switch (name) {
     case 'create_app':
-      return msg(`Create app ${a.app_name}`, `Use app-template. Set APP_MODE=frontend or prisma. Add busibox.json with id and name. Use get_auth_patterns for SSO.`);
+      return msg(`Create app ${a.app_name}`, `Use busibox-template. Set APP_MODE=frontend or prisma. Add busibox.json with id and name. Use get_auth_patterns for SSO.`);
     case 'add_auth':
       return msg('Add auth', 'Use requireAuthWithTokenExchange in API routes. Add app/api/sso/route.ts with createSSOGetHandler and createSSOPostHandler from @jazzmind/busibox-app/lib/auth.');
     case 'add_chat':

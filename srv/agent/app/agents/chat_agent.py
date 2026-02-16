@@ -63,7 +63,16 @@ class ChatAgent(BaseStreamingAgent):
             name="chat-agent",
             display_name="Chat Agent",
             instructions=CHAT_SYSTEM_PROMPT,
-            tools=["web_search", "get_weather", "document_search", "create_task", "send_notification"],
+            tools=[
+                "web_search",
+                "get_weather",
+                "document_search",
+                "create_task",
+                "send_notification",
+                "generate_image",
+                "transcribe_audio",
+                "text_to_speech",
+            ],
             execution_mode=ExecutionMode.RUN_ONCE,
             tool_strategy=ToolStrategy.LLM_DRIVEN,  # Let LLM decide which tools to use
         )

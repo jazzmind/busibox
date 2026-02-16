@@ -203,7 +203,7 @@ async def startup_event():
         logger.warning("Neo4j connection failed (graph features disabled)", error=str(e))
         app.state.graph_service = None
     
-    # Run library migration from AI Portal if configured
+    # Run library migration from Busibox Portal if configured
     from api.services.library_migration import run_migration_if_needed
     await run_migration_if_needed(pg_service.pool)
 

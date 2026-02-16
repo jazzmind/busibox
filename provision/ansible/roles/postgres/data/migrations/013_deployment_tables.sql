@@ -2,7 +2,7 @@
 -- Created: 2026-02-10
 -- Description: Add tables for deployment configuration, GitHub connections,
 --              deployment history, app secrets, and GitHub releases.
---              These tables are owned by deploy-api and replace the ai-portal
+--              These tables are owned by deploy-api and replace the busibox-portal
 --              Prisma-managed deployment models.
 
 -- Enable UUID extension (idempotent)

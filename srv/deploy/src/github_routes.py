@@ -50,8 +50,8 @@ def _get_github_client_secret() -> str:
 
 
 def _get_app_url() -> str:
-    """Get the AI Portal URL for OAuth redirects."""
-    return os.getenv("AI_PORTAL_URL", os.getenv("APP_URL", "http://localhost:3000"))
+    """Get the Busibox Portal URL for OAuth redirects."""
+    return os.getenv("BUSIBOX_PORTAL_URL", os.getenv("APP_URL", "http://localhost:3000"))
 
 
 # ============================================================================

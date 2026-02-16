@@ -634,7 +634,7 @@ update_proxmox() {
         }
     fi
     
-    show_stage 85 "Deploying Frontend Apps" "Updating AI Portal and Agent Manager."
+    show_stage 85 "Deploying Frontend Apps" "Updating Busibox Portal and Agent Manager."
     
     info "Running: make apps-frontend INV=${inventory}"
     if [[ "$VERBOSE" == true ]]; then
@@ -792,33 +792,33 @@ pull_latest_code() {
     fi
     
     # Get app directories from state
-    local ai_portal_dir
-    local agent_manager_dir
+    local busibox_portal_dir
+    local busibox_agents_dir
     local busibox_app_dir
     
-    ai_portal_dir=$(get_state "AI_PORTAL_DIR" "")
-    agent_manager_dir=$(get_state "AGENT_MANAGER_DIR" "")
+    busibox_portal_dir=$(get_state "BUSIBOX_PORTAL_DIR" "")
+    busibox_agents_dir=$(get_state "BUSIBOX_AGENTS_DIR" "")
     busibox_app_dir=$(get_state "BUSIBOX_APP_DIR" "")
     
-    # Pull ai-portal if exists
-    if [[ -n "$ai_portal_dir" && -d "$ai_portal_dir/.git" ]]; then
-        info "Pulling ai-portal repository..."
-        cd "$ai_portal_dir"
+    # Pull busibox-portal if exists
+    if [[ -n "$busibox_portal_dir" && -d "$busibox_portal_dir/.git" ]]; then
+        info "Pulling busibox-portal repository..."
+        cd "$busibox_portal_dir"
         if git pull --ff-only 2>/dev/null; then
-            success "ai-portal repository updated"
+            success "busibox-portal repository updated"
         else
-            warn "Could not fast-forward ai-portal - you may have local changes"
+            warn "Could not fast-forward busibox-portal - you may have local changes"
         fi
     fi
     
-    # Pull agent-manager if exists
-    if [[ -n "$agent_manager_dir" && -d "$agent_manager_dir/.git" ]]; then
-        info "Pulling agent-manager repository..."
-        cd "$agent_manager_dir"
+    # Pull busibox-agents if exists
+    if [[ -n "$busibox_agents_dir" && -d "$busibox_agents_dir/.git" ]]; then
+        info "Pulling busibox-agents repository..."
+        cd "$busibox_agents_dir"
         if git pull --ff-only 2>/dev/null; then
-            success "agent-manager repository updated"
+            success "busibox-agents repository updated"
         else
-            warn "Could not fast-forward agent-manager - you may have local changes"
+            warn "Could not fast-forward busibox-agents - you may have local changes"
         fi
     fi
     
@@ -903,8 +903,8 @@ rebuild_containers() {
     export GITHUB_AUTH_TOKEN="$github_token"
     
     # Load app directories from state for volume mounts
-    export AI_PORTAL_DIR=$(get_state "AI_PORTAL_DIR" "")
-    export AGENT_MANAGER_DIR=$(get_state "AGENT_MANAGER_DIR" "")
+    export BUSIBOX_PORTAL_DIR=$(get_state "BUSIBOX_PORTAL_DIR" "")
+    export BUSIBOX_AGENTS_DIR=$(get_state "BUSIBOX_AGENTS_DIR" "")
     export BUSIBOX_APP_DIR=$(get_state "BUSIBOX_APP_DIR" "")
     export APPS_BASE_DIR=$(get_state "APPS_BASE_DIR" "")
     export DEV_APPS_DIR=$(get_state "DEV_APPS_DIR" "$APPS_BASE_DIR")
@@ -1020,8 +1020,8 @@ start_api_services() {
     export BUSIBOX_HOST_PATH="$REPO_ROOT"
     
     # Load app directories for volume mounts
-    export AI_PORTAL_DIR=$(get_state "AI_PORTAL_DIR" "")
-    export AGENT_MANAGER_DIR=$(get_state "AGENT_MANAGER_DIR" "")
+    export BUSIBOX_PORTAL_DIR=$(get_state "BUSIBOX_PORTAL_DIR" "")
+    export BUSIBOX_AGENTS_DIR=$(get_state "BUSIBOX_AGENTS_DIR" "")
     export BUSIBOX_APP_DIR=$(get_state "BUSIBOX_APP_DIR" "")
     export APPS_BASE_DIR=$(get_state "APPS_BASE_DIR" "")
     export DEV_APPS_DIR=$(get_state "DEV_APPS_DIR" "$APPS_BASE_DIR")
@@ -1064,7 +1064,7 @@ start_api_services() {
 }
 
 start_frontend_services() {
-    show_stage 85 "Starting Frontend Services" "Starting AI Portal, Nginx, and other frontend services."
+    show_stage 85 "Starting Frontend Services" "Starting Busibox Portal, Nginx, and other frontend services."
     
     local container_prefix
     container_prefix=$(get_container_prefix)
@@ -1076,8 +1076,8 @@ start_frontend_services() {
     export BUSIBOX_HOST_PATH="$REPO_ROOT"
     
     # Load app directories
-    export AI_PORTAL_DIR=$(get_state "AI_PORTAL_DIR" "")
-    export AGENT_MANAGER_DIR=$(get_state "AGENT_MANAGER_DIR" "")
+    export BUSIBOX_PORTAL_DIR=$(get_state "BUSIBOX_PORTAL_DIR" "")
+    export BUSIBOX_AGENTS_DIR=$(get_state "BUSIBOX_AGENTS_DIR" "")
     export BUSIBOX_APP_DIR=$(get_state "BUSIBOX_APP_DIR" "")
     export APPS_BASE_DIR=$(get_state "APPS_BASE_DIR" "")
     export DEV_APPS_DIR=$(get_state "DEV_APPS_DIR" "$APPS_BASE_DIR")
@@ -1093,7 +1093,7 @@ start_frontend_services() {
     
     cd "$REPO_ROOT"
     
-    # Start core-apps (contains ai-portal + agent-manager)
+    # Start core-apps (contains busibox-portal + busibox-agents)
     info "Starting core-apps..."
     if [[ "$VERBOSE" == true ]]; then
         docker compose $compose_files --env-file "$env_file" up -d --no-deps core-apps
@@ -1101,16 +1101,16 @@ start_frontend_services() {
         docker compose $compose_files --env-file "$env_file" up -d --no-deps core-apps 2>&1 | grep -v "^$" || true
     fi
     
-    # Start nginx
-    info "Starting nginx..."
+    # Start proxy
+    info "Starting proxy..."
     if [[ "$VERBOSE" == true ]]; then
-        docker compose $compose_files --env-file "$env_file" up -d --no-deps nginx
+        docker compose $compose_files --env-file "$env_file" up -d --no-deps proxy
     else
-        docker compose $compose_files --env-file "$env_file" up -d --no-deps nginx 2>&1 | grep -v "^$" || true
+        docker compose $compose_files --env-file "$env_file" up -d --no-deps proxy 2>&1 | grep -v "^$" || true
     fi
     
-    # Wait for AI Portal
-    info "Waiting for AI Portal to be healthy..."
+    # Wait for Busibox Portal
+    info "Waiting for Busibox Portal to be healthy..."
     local max_attempts=60
     local attempt=0
     while [[ $attempt -lt $max_attempts ]]; do
@@ -1126,9 +1126,9 @@ start_frontend_services() {
     echo ""
     
     if [[ $attempt -ge $max_attempts ]]; then
-        warn "AI Portal health check timed out - it may still be starting"
+        warn "Busibox Portal health check timed out - it may still be starting"
     else
-        success "AI Portal is ready"
+        success "Busibox Portal is ready"
     fi
     
     success "Frontend services started"
@@ -1141,11 +1141,11 @@ run_migrations() {
     container_prefix=$(get_container_prefix)
     
     # Wait for core-apps to have node_modules
-    info "Checking AI Portal dependencies..."
+    info "Checking Busibox Portal dependencies..."
     local max_attempts=30
     local attempt=0
     while [[ $attempt -lt $max_attempts ]]; do
-        if docker exec "${container_prefix}-core-apps" sh -c "test -f /srv/ai-portal/node_modules/.package-lock.json" 2>/dev/null; then
+        if docker exec "${container_prefix}-core-apps" sh -c "test -f /srv/busibox-portal/node_modules/.package-lock.json" 2>/dev/null; then
             break
         fi
         sleep 2
@@ -1153,14 +1153,14 @@ run_migrations() {
     done
     
     if [[ $attempt -lt $max_attempts ]]; then
-        info "Running Prisma migrations for AI Portal..."
-        if docker exec "${container_prefix}-core-apps" sh -c "cd /srv/ai-portal && npx prisma db push --accept-data-loss" 2>&1; then
+        info "Running Prisma migrations for Busibox Portal..."
+        if docker exec "${container_prefix}-core-apps" sh -c "cd /srv/busibox-portal && npx prisma db push --accept-data-loss" 2>&1; then
             success "Database schema synchronized"
         else
             warn "Database migration may have failed - check logs if issues persist"
         fi
     else
-        warn "Could not verify AI Portal dependencies - skipping migrations"
+        warn "Could not verify Busibox Portal dependencies - skipping migrations"
     fi
 }
 
@@ -1231,14 +1231,14 @@ update_docker_ansible() {
         ANSIBLE_STDOUT_CALLBACK=default ANSIBLE_FORCE_COLOR=1 $playbook_cmd 2>&1 | tail -30 || true
     fi
     
-    # Wait for AI Portal
+    # Wait for Busibox Portal
     show_stage 95 "Verifying Services" "Checking service health..."
-    info "Waiting for AI Portal to be healthy..."
+    info "Waiting for Busibox Portal to be healthy..."
     local max_attempts=60
     local attempt=0
     while [[ $attempt -lt $max_attempts ]]; do
         if curl -sf http://localhost:3000/portal/api/health &>/dev/null; then
-            success "AI Portal is ready"
+            success "Busibox Portal is ready"
             break
         fi
         sleep 2
@@ -1246,7 +1246,7 @@ update_docker_ansible() {
     done
     
     if [[ $attempt -ge $max_attempts ]]; then
-        warn "AI Portal health check timed out, but it may still be starting"
+        warn "Busibox Portal health check timed out, but it may still be starting"
     fi
     
     cd "${REPO_ROOT}"
@@ -1343,37 +1343,37 @@ save_all_deployed_versions() {
         fi
     fi
     
-    # Save ai-portal version
-    local ai_portal_dir
-    ai_portal_dir=$(get_state "AI_PORTAL_DIR" "")
-    if [[ -n "$ai_portal_dir" ]] && [[ -d "$ai_portal_dir/.git" ]]; then
-        cd "$ai_portal_dir"
+    # Save busibox-portal version
+    local busibox_portal_dir
+    busibox_portal_dir=$(get_state "BUSIBOX_PORTAL_DIR" "")
+    if [[ -n "$busibox_portal_dir" ]] && [[ -d "$busibox_portal_dir/.git" ]]; then
+        cd "$busibox_portal_dir"
         local ap_commit ap_branch ap_tag
         ap_commit=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
         ap_tag=$(git describe --tags --exact-match 2>/dev/null || true)
         
         if [[ -n "$ap_tag" ]]; then
-            save_deployed_version "ai-portal" "release" "$ap_tag" "$ap_commit"
+            save_deployed_version "busibox-portal" "release" "$ap_tag" "$ap_commit"
         else
             ap_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
-            save_deployed_version "ai-portal" "branch" "$ap_branch" "$ap_commit"
+            save_deployed_version "busibox-portal" "branch" "$ap_branch" "$ap_commit"
         fi
     fi
     
-    # Save agent-manager version
-    local agent_manager_dir
-    agent_manager_dir=$(get_state "AGENT_MANAGER_DIR" "")
-    if [[ -n "$agent_manager_dir" ]] && [[ -d "$agent_manager_dir/.git" ]]; then
-        cd "$agent_manager_dir"
+    # Save busibox-agents version
+    local busibox_agents_dir
+    busibox_agents_dir=$(get_state "BUSIBOX_AGENTS_DIR" "")
+    if [[ -n "$busibox_agents_dir" ]] && [[ -d "$busibox_agents_dir/.git" ]]; then
+        cd "$busibox_agents_dir"
         local am_commit am_branch am_tag
         am_commit=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
         am_tag=$(git describe --tags --exact-match 2>/dev/null || true)
         
         if [[ -n "$am_tag" ]]; then
-            save_deployed_version "agent-manager" "release" "$am_tag" "$am_commit"
+            save_deployed_version "busibox-agents" "release" "$am_tag" "$am_commit"
         else
             am_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
-            save_deployed_version "agent-manager" "branch" "$am_branch" "$am_commit"
+            save_deployed_version "busibox-agents" "branch" "$am_branch" "$am_commit"
         fi
     fi
     
@@ -1429,7 +1429,7 @@ show_completion() {
         # Check SITE_DOMAIN first, fall back to BASE_DOMAIN for backwards compatibility
         site_domain=$(get_state "SITE_DOMAIN" "")
         [[ -z "$site_domain" ]] && site_domain=$(get_state "BASE_DOMAIN" "localhost")
-        box_line "Open the AI Portal:" "left" "$_GREEN" 2
+        box_line "Open the Busibox Portal:" "left" "$_GREEN" 2
         box_line "https://${site_domain}/portal/" "left" "$_GREEN" 4
     fi
     
@@ -1777,7 +1777,7 @@ select_update_targets() {
             ;;
         1)
             # Quick mode - use current track (branch or release)
-            for repo_key in busibox ai-portal agent-manager busibox-app; do
+            for repo_key in busibox busibox-portal busibox-agents busibox-app; do
                 local deployed
                 deployed=$(get_deployed_version "$repo_key")
                 
@@ -1795,7 +1795,7 @@ select_update_targets() {
             ;;
         2)
             # Detailed selection for each repo
-            for repo_key in busibox ai-portal agent-manager busibox-app; do
+            for repo_key in busibox busibox-portal busibox-agents busibox-app; do
                 if select_repo_version "$repo_key"; then
                     if [[ "$SELECTED_VERSION_TYPE" != "skip" ]]; then
                         UPDATE_TARGETS["$repo_key"]="${SELECTED_VERSION_TYPE}:${SELECTED_VERSION_REF}"
@@ -1887,7 +1887,7 @@ main() {
             simple_line "• Core services (nginx, storage, database)" 4
             simple_line "• API services (authz, data, search, agent)" 4
             simple_line "• LLM services (if configured)" 4
-            simple_line "• Frontend apps (ai-portal, agent-manager)" 4
+            simple_line "• Frontend apps (busibox-portal, busibox-agents)" 4
             simple_empty
             simple_line "Your data will be preserved." 2
             simple_border "bottom"

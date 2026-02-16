@@ -103,7 +103,7 @@ class DataService:
             role_ids: Role IDs for shared documents
             library_id: Optional library to place document in
             enable_cache: Whether to enable Redis caching
-            source_app: Optional app identifier (e.g., "status-report") for app data libraries
+            source_app: Optional app identifier (e.g., "busibox-projects") for app data libraries
             
         Returns:
             Created document record
@@ -130,6 +130,8 @@ class DataService:
         if source_app:
             doc_metadata["sourceApp"] = source_app
         
+        effective_visibility = visibility or "personal"
+
         async with self.acquire_with_rls(request) as conn:
             async with conn.transaction():
                 # Create the data document
@@ -783,6 +785,7 @@ class DataService:
         library_id: Optional[str] = None,
         visibility: Optional[str] = None,
         source_app: Optional[str] = None,
+        metadata_type: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
     ) -> List[Dict]:
@@ -793,7 +796,8 @@ class DataService:
             request: FastAPI Request for RLS context
             library_id: Optional filter by library
             visibility: Optional filter by visibility
-            source_app: Optional filter by source app (e.g., "status-report")
+            source_app: Optional filter by source app (e.g., "busibox-projects")
+            metadata_type: Optional filter by metadata.type (e.g., "extraction_schema")
             limit: Max results (default 50)
             offset: Pagination offset
             
@@ -836,6 +840,12 @@ class DataService:
                 query += f" AND metadata->>'sourceApp' = ${param_idx}"
                 params.append(source_app)
                 param_idx += 1
+
+            if metadata_type:
+                # Filter by metadata.type for specialized data docs (e.g., extraction schemas)
+                query += f" AND metadata->>'type' = ${param_idx}"
+                params.append(metadata_type)
+                param_idx += 1
             
             query += f" ORDER BY updated_at DESC LIMIT ${param_idx} OFFSET ${param_idx + 1}"
             params.extend([limit, offset])
@@ -843,6 +853,130 @@ class DataService:
             rows = await conn.fetch(query, *params)
             
             return [self._row_to_document(row, include_records=False) for row in rows]
+
+    # ========================================================================
+    # Role Management
+    # ========================================================================
+
+    async def get_document_roles(
+        self,
+        request,
+        document_id: str,
+    ) -> List[Dict]:
+        """
+        Get all role assignments for a document the requester can access.
+        """
+        async with self.acquire_with_rls(request) as conn:
+            exists = await conn.fetchval(
+                "SELECT 1 FROM data_files WHERE file_id = $1 AND doc_type = 'data'",
+                uuid.UUID(document_id),
+            )
+            if not exists:
+                raise ValueError(f"Document {document_id} not found")
+
+            rows = await conn.fetch(
+                """
+                SELECT
+                    role_id::text AS role_id,
+                    role_name,
+                    added_at,
+                    added_by::text AS added_by
+                FROM document_roles
+                WHERE file_id = $1
+                ORDER BY added_at
+                """,
+                uuid.UUID(document_id),
+            )
+            return [dict(row) for row in rows]
+
+    async def set_document_roles(
+        self,
+        request,
+        document_id: str,
+        role_ids: List[str],
+        visibility: Optional[str] = None,
+    ) -> Dict:
+        """
+        Replace role assignments for a document and optionally update visibility.
+
+        Safety: prevents the requesting user from removing their own access when
+        the resulting visibility is "shared".
+        """
+        request_role_ids = {str(role_id) for role_id in (getattr(request.state, "role_ids", []) or [])}
+        request_user_id = getattr(request.state, "user_id", None)
+        normalized_role_ids = list(dict.fromkeys([str(role_id) for role_id in role_ids]))
+
+        if visibility is not None and visibility not in ("personal", "shared"):
+            raise ValueError("visibility must be either 'personal' or 'shared'")
+
+        async with self.acquire_with_rls(request) as conn:
+            async with conn.transaction():
+                document_row = await conn.fetchrow(
+                    """
+                    SELECT visibility
+                    FROM data_files
+                    WHERE file_id = $1 AND doc_type = 'data'
+                    FOR UPDATE
+                    """,
+                    uuid.UUID(document_id),
+                )
+
+                if not document_row:
+                    raise ValueError(f"Document {document_id} not found")
+
+                effective_visibility = visibility or document_row["visibility"]
+
+                if effective_visibility == "shared":
+                    if len(normalized_role_ids) == 0:
+                        raise ValueError("Shared visibility requires at least one role ID")
+
+                    # Prevent removing all of the caller's roles from this document.
+                    if request_role_ids and request_role_ids.isdisjoint(set(normalized_role_ids)):
+                        raise PermissionError(
+                            "Role update would remove your own access to this document"
+                        )
+
+                await conn.execute(
+                    """
+                    UPDATE data_files
+                    SET visibility = $2,
+                        updated_at = NOW()
+                    WHERE file_id = $1 AND doc_type = 'data'
+                    """,
+                    uuid.UUID(document_id),
+                    effective_visibility,
+                )
+
+                await conn.execute(
+                    "DELETE FROM document_roles WHERE file_id = $1",
+                    uuid.UUID(document_id),
+                )
+
+                if effective_visibility == "shared":
+                    for role_id in normalized_role_ids:
+                        await conn.execute(
+                            """
+                            INSERT INTO document_roles (
+                                file_id, role_id, role_name, added_by
+                            ) VALUES ($1, $2, $3, $4)
+                            ON CONFLICT (file_id, role_id) DO NOTHING
+                            """,
+                            uuid.UUID(document_id),
+                            uuid.UUID(role_id),
+                            f"Role-{role_id[:8]}",
+                            uuid.UUID(request_user_id) if request_user_id else None,
+                        )
+
+        if self.cache_manager:
+            await self.cache_manager.invalidate_document(document_id)
+
+        roles = await self.get_document_roles(request, document_id)
+        return {
+            "documentId": document_id,
+            "visibility": effective_visibility,
+            "roleIds": [role["role_id"] for role in roles],
+            "roles": roles,
+        }
     
     # ========================================================================
     # Helper Methods

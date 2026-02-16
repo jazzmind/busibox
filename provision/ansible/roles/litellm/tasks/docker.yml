@@ -23,7 +23,9 @@
 
 - name: Verify LiteLLM health endpoint
   ansible.builtin.uri:
-    url: "http://localhost:{{ litellm_port }}/health"
+    # /health requires auth when master_key is enabled.
+    # Use liveness endpoint for unauthenticated readiness checks.
+    url: "http://localhost:{{ litellm_port }}/health/liveliness"
     method: GET
     status_code: [200]
   register: litellm_health
@@ -36,5 +38,5 @@
   ansible.builtin.debug:
     msg: |
       LiteLLM is running and ready
-      Health: http://localhost:{{ litellm_port }}/health
+      Health: http://localhost:{{ litellm_port }}/health/liveliness
       API: http://localhost:{{ litellm_port }}

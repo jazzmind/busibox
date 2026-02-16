@@ -80,8 +80,8 @@ curl http://10.96.201.208:4000/v1/chat/completions \
   }'
 ```
 
-#### From AI Portal (already configured)
-The AI Portal automatically uses the master key from environment variables:
+#### From Busibox Portal (already configured)
+The Busibox Portal automatically uses the master key from environment variables:
 ```env
 LITELLM_API_KEY=sk-litellm-master-key-change-me
 LITELLM_BASE_URL=http://10.96.201.208:4000/v1
@@ -142,8 +142,8 @@ python3 -c "import secrets; print(f'sk-{secrets.token_hex(32)}')"
 1. Generate new key
 2. Update in vault/inventory
 3. Redeploy LiteLLM
-4. Update AI Portal environment variables
-5. Restart AI Portal
+4. Update Busibox Portal environment variables
+5. Restart Busibox Portal
 
 ## Troubleshooting
 

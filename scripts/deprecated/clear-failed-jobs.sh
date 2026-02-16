@@ -109,7 +109,7 @@ echo "Queue cleanup complete!"
 echo ""
 echo "Next steps:"
 echo "1. Check worker logs: ssh root@${DATA_IP} 'journalctl -u data-worker -f'"
-echo "2. Re-upload failed documents from AI Portal"
+echo "2. Re-upload failed documents from Busibox Portal"
 echo "3. Or manually reset document status in database if needed"
 echo "================================"
 

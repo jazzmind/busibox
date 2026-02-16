@@ -30,8 +30,8 @@
         "WebSocket support for real-time features"
       ]
     },
-    "ai-portal": {
-      "title": "AI Portal",
+    "busibox-portal": {
+      "title": "Busibox Portal",
       "tagline": "Your command center",
       "description": "Manage documents, libraries, and AI agents from a single interface. Deploy and configure services with clicks, not code.",
       "features": [

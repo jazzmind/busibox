@@ -155,7 +155,7 @@ const ADMIN_TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        target: { type: 'string', description: 'Make target (e.g. all, authz, deploy-ai-portal, verify-health)' },
+        target: { type: 'string', description: 'Make target (e.g. all, authz, deploy-busibox-portal, verify-health)' },
         environment: { type: 'string', enum: ['production', 'staging'] },
         extra_args: { type: 'string' },
         timeout: { type: 'number' },

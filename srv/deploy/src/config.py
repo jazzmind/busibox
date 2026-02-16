@@ -71,15 +71,15 @@ class Config:
     config_database: str = os.getenv('DEPLOY_CONFIG_DB', 'busibox')
     
     # Container hosts (use DNS hostnames, resolved via /etc/hosts on Proxmox)
-    # Core apps container (ai-portal, agent-manager)
-    core_apps_container_ip: str = os.getenv('CORE_APPS_CONTAINER_IP', 'ai-portal')
-    core_apps_container_ip_staging: str = os.getenv('CORE_APPS_CONTAINER_IP_STAGING', 'ai-portal')
-    # User apps container (external apps deployed via AI Portal)
+    # Core apps container (busibox-portal, busibox-agents)
+    core_apps_container_ip: str = os.getenv('CORE_APPS_CONTAINER_IP', 'busibox-portal')
+    core_apps_container_ip_staging: str = os.getenv('CORE_APPS_CONTAINER_IP_STAGING', 'busibox-portal')
+    # User apps container (external apps deployed via Busibox Portal)
     user_apps_container_ip: str = os.getenv('USER_APPS_CONTAINER_IP', 'user-apps')
     user_apps_container_ip_staging: str = os.getenv('USER_APPS_CONTAINER_IP_STAGING', 'user-apps')
     # Legacy alias for backwards compatibility
-    apps_container_ip: str = os.getenv('APPS_CONTAINER_IP', 'ai-portal')
-    apps_container_ip_staging: str = os.getenv('APPS_CONTAINER_IP_STAGING', 'ai-portal')
+    apps_container_ip: str = os.getenv('APPS_CONTAINER_IP', 'busibox-portal')
+    apps_container_ip_staging: str = os.getenv('APPS_CONTAINER_IP_STAGING', 'busibox-portal')
     
     # SSH
     ssh_key_path: str = os.getenv('SSH_KEY_PATH', '/root/.ssh/id_rsa')

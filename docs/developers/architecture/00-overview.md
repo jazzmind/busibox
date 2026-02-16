@@ -105,7 +105,7 @@ graph TB
 2. **Upload** goes to the Data API (CT 206): file is stored in MinIO, metadata + visibility recorded in PostgreSQL, job queued in Redis.
 3. **Processing** worker (same CT 206) extracts text (Marker/pdfplumber/ColPali), chunks, embeds (FastEmbed + optional ColPali visual), and indexes to Milvus; RLS metadata is kept in PostgreSQL.
 4. **Search** service (CT 204) receives JWT, builds allowed partitions (personal + role-based), performs hybrid search (Milvus vectors + BM25), optional rerank via liteLLM.
-5. **Apps** (CT 201, 212) present UI (AI Portal, Agent Manager, custom apps) and proxy internal calls; they never expose data/search directly.
+5. **Apps** (CT 201, 212) present UI (Busibox Portal, Busibox Agents, custom apps) and proxy internal calls; they never expose data/search directly.
 6. **Agent API** (CT 202) orchestrates agent requests: routes to specialized sub-agents, calls Search API for RAG retrieval, calls liteLLM for synthesis, streams responses via SSE.
 
 ## Data Plane
@@ -132,7 +132,7 @@ graph TB
 | Container | CTID | Services | Port(s) |
 |-----------|------|----------|---------|
 | proxy-lxc | 200 | nginx | 80, 443 |
-| core-apps-lxc | 201 | AI Portal, Agent Manager, core apps | 3000+ |
+| core-apps-lxc | 201 | Busibox Portal, Busibox Agents, core apps | 3000+ |
 | agent-lxc | 202 | Agent API, Docs API | 8000, 8004 |
 | pg-lxc | 203 | PostgreSQL | 5432 |
 | milvus-lxc | 204 | Milvus, Search API | 19530, 8003 |

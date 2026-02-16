@@ -56,10 +56,10 @@ minio_use_ssl: false
 # Application Definitions
 # ============================================================================
 applications:
-  - name: ai-portal
-    github_repo: sonnenreich/ai-portal
+  - name: busibox-portal
+    github_repo: sonnenreich/busibox-portal
     port: 3000
-    deploy_path: /srv/apps/ai-portal
+    deploy_path: /srv/apps/busibox-portal
     build_command: npm run build
     health_endpoint: /api/health
     env:

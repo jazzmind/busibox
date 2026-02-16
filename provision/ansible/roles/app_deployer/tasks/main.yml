@@ -101,7 +101,7 @@
     - always  # Always run for any app deployment
 
 # NOTE: Log viewing is handled by deploy-api, which uses SSH to fetch logs from containers.
-# AI Portal calls deploy-api's /system/services/{service}/logs endpoint.
+# Busibox Portal calls deploy-api's /system/services/{service}/logs endpoint.
 # Core-apps does NOT need direct SSH access to other containers.
 
 - name: Deploy application environment files (.env)

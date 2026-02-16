@@ -89,7 +89,7 @@ load_backend "$CURRENT_BACKEND"
 #
 # Notes:
 #   - session_secret: Legacy from better-auth era. Auth is now handled by AuthZ
-#     service with RS256 JWTs. Only agent-manager receives it; rotating is harmless
+#     service with RS256 JWTs. Only busibox-agents receives it; rotating is harmless
 #     (worst case: users re-login). Consider removing entirely.
 #   - litellm_master_key + litellm_api_key: Consolidated into one entry. Most services
 #     use litellm_master_key for both server and client auth. litellm_api_key is only

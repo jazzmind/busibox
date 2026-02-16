@@ -27,9 +27,9 @@ deploy_api_postgres_admin_password: "{{ secrets.postgresql.password | default(''
 
 # Container hosts (prefer DNS hostnames from internal_dns role)
 # Note: Use core_apps group (not apps) - staging/production inventories use this group name
-# DNS hostnames like 'ai-portal' are resolved via /etc/hosts on each container
-deploy_api_apps_container_ip: ai-portal
-deploy_api_apps_container_ip_staging: ai-portal
+# DNS hostnames like 'busibox-portal' are resolved via /etc/hosts on each container
+deploy_api_apps_container_ip: busibox-portal
+deploy_api_apps_container_ip_staging: busibox-portal
 
 # User apps container (for external/untrusted app deployments)
 # Uses 'user-apps' DNS hostname on Proxmox, resolved via /etc/hosts (internal_dns role)

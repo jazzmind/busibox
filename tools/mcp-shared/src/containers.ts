@@ -26,9 +26,9 @@ export const CONTAINERS: ContainerConfig[] = [
     name: 'apps-lxc',
     ip: '10.96.200.201',
     testIp: '10.96.201.201',
-    purpose: 'Next.js apps (AI Portal, Agent Manager, etc.)',
+    purpose: 'Next.js apps (Busibox Portal, Agent Manager, etc.)',
     ports: [{ port: 3000, service: 'Next.js apps (proxied via proxy-lxc)' }],
-    services: ['nginx', 'ai-portal', 'agent-manager', 'doc-intel', 'foundation', 'project-analysis', 'innovation'],
+    services: ['nginx', 'busibox-portal', 'busibox-agents', 'doc-intel', 'foundation', 'busibox-analysis', 'innovation'],
     notes: 'No direct access to data/search; proxies internal calls',
   },
   {

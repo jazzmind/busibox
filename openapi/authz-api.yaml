@@ -405,7 +405,7 @@ paths:
       tags: [Internal]
       summary: Sync user and roles
       description: |
-        Upserts user, roles, and user-role assignments. Called by ai-portal for RBAC synchronization.
+        Upserts user, roles, and user-role assignments. Called by busibox-portal for RBAC synchronization.
         Requires OAuth client credentials in request body.
       operationId: syncUser
       requestBody:

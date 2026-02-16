@@ -50,7 +50,7 @@ ALTER ROLE busibox_test_user CREATEDB;
 SELECT 'CREATE DATABASE busibox OWNER busibox_user'
 WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'busibox')\gexec
 
--- Create ai_portal database (for ai-portal Next.js app)
+-- Create ai_portal database (for busibox-portal Next.js app)
 SELECT 'CREATE DATABASE ai_portal OWNER busibox_user'
 WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'ai_portal')\gexec
 
@@ -155,7 +155,7 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO busibox_user
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO busibox_user;
 
 -- =============================================================================
--- AI_PORTAL DATABASE SETUP (production)
+-- BUSIBOX PORTAL DATABASE SETUP (production)
 -- =============================================================================
 \c ai_portal
 

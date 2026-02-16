@@ -68,7 +68,7 @@ spec:
                   name: busibox-secrets
                   key: ANTHROPIC_API_KEY
                   optional: true
-            # AWS Bedrock - bearer token (or IAM keys set at runtime via AI Portal)
+            # AWS Bedrock - bearer token (or IAM keys set at runtime via Busibox Portal)
             - name: AWS_BEARER_TOKEN_BEDROCK
               valueFrom:
                 secretKeyRef:
@@ -117,7 +117,7 @@ metadata:
     app: litellm
 data:
   litellm-config.yaml: |
-    # Bootstrap config only - models are managed at runtime via AI Portal
+    # Bootstrap config only - models are managed at runtime via Busibox Portal
     # (Settings -> AI Models). With STORE_MODEL_IN_DB=True, models added
     # via the UI are persisted in PostgreSQL and override this config.
     #

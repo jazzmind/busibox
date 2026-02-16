@@ -2,19 +2,19 @@
 """
 Library Data Migration Script
 
-Migrates library data from AI Portal database to data-api database.
+Migrates library data from Busibox Portal database to data-api database.
 This is part of the library consolidation effort to move library management
-from AI Portal to data-api (future files-api).
+from Busibox Portal to data-api (future files-api).
 
 Usage:
     python migrate_libraries_to_data.py [--dry-run] [--verbose]
 
 Environment variables:
-    AI_PORTAL_DB_URL: AI Portal database connection URL
+    BUSIBOX_PORTAL_DB_URL: Busibox Portal database connection URL
     DATA_DB_URL: Data service database connection URL
 
     Or individual components:
-    AI_PORTAL_DB_HOST, AI_PORTAL_DB_PORT, AI_PORTAL_DB_NAME, AI_PORTAL_DB_USER, AI_PORTAL_DB_PASSWORD
+    BUSIBOX_PORTAL_DB_HOST, BUSIBOX_PORTAL_DB_PORT, BUSIBOX_PORTAL_DB_NAME, BUSIBOX_PORTAL_DB_USER, BUSIBOX_PORTAL_DB_PASSWORD
     DATA_DB_HOST, DATA_DB_PORT, DATA_DB_NAME, DATA_DB_USER, DATA_DB_PASSWORD
 """
 
@@ -29,15 +29,15 @@ import asyncpg
 
 
 def get_ai_portal_db_url() -> str:
-    """Get AI Portal database connection URL."""
-    if url := os.environ.get("AI_PORTAL_DB_URL"):
+    """Get Busibox Portal database connection URL."""
+    if url := os.environ.get("BUSIBOX_PORTAL_DB_URL"):
         return url
     
-    host = os.environ.get("AI_PORTAL_DB_HOST", "localhost")
-    port = os.environ.get("AI_PORTAL_DB_PORT", "5432")
-    dbname = os.environ.get("AI_PORTAL_DB_NAME", "ai_portal")
-    user = os.environ.get("AI_PORTAL_DB_USER", "ai_portal")
-    password = os.environ.get("AI_PORTAL_DB_PASSWORD", "ai_portal")
+    host = os.environ.get("BUSIBOX_PORTAL_DB_HOST", "localhost")
+    port = os.environ.get("BUSIBOX_PORTAL_DB_PORT", "5432")
+    dbname = os.environ.get("BUSIBOX_PORTAL_DB_NAME", "ai_portal")
+    user = os.environ.get("BUSIBOX_PORTAL_DB_USER", "ai_portal")
+    password = os.environ.get("BUSIBOX_PORTAL_DB_PASSWORD", "ai_portal")
     
     return f"postgresql://{user}:{password}@{host}:{port}/{dbname}"
 
@@ -57,7 +57,7 @@ def get_data_db_url() -> str:
 
 
 async def fetch_ai_portal_libraries(conn: asyncpg.Connection, verbose: bool = False) -> List[Dict]:
-    """Fetch all libraries from AI Portal database."""
+    """Fetch all libraries from Busibox Portal database."""
     # Note: Prisma uses quoted column names for camelCase
     query = """
         SELECT 
@@ -78,7 +78,7 @@ async def fetch_ai_portal_libraries(conn: asyncpg.Connection, verbose: bool = Fa
     libraries = [dict(row) for row in rows]
     
     if verbose:
-        print(f"  Fetched {len(libraries)} libraries from AI Portal")
+        print(f"  Fetched {len(libraries)} libraries from Busibox Portal")
         for lib in libraries:
             print(f"    - {lib['name']} (id={lib['id']}, type={lib['library_type']}, personal={lib['is_personal']})")
     
@@ -86,7 +86,7 @@ async def fetch_ai_portal_libraries(conn: asyncpg.Connection, verbose: bool = Fa
 
 
 async def fetch_ai_portal_tag_caches(conn: asyncpg.Connection, verbose: bool = False) -> List[Dict]:
-    """Fetch all library tag caches from AI Portal database."""
+    """Fetch all library tag caches from Busibox Portal database."""
     query = """
         SELECT 
             id,
@@ -101,7 +101,7 @@ async def fetch_ai_portal_tag_caches(conn: asyncpg.Connection, verbose: bool = F
     caches = [dict(row) for row in rows]
     
     if verbose:
-        print(f"  Fetched {len(caches)} tag caches from AI Portal")
+        print(f"  Fetched {len(caches)} tag caches from Busibox Portal")
     
     return caches
 
@@ -224,12 +224,12 @@ async def update_data_files_library_ids(
     verbose: bool = False
 ) -> int:
     """
-    Update library_id column in data_files based on AI Portal Document records.
+    Update library_id column in data_files based on Busibox Portal Document records.
     
-    AI Portal's Document table has libraryId which maps file IDs to libraries.
+    Busibox Portal's Document table has libraryId which maps file IDs to libraries.
     We need to propagate this to data_files.library_id.
     """
-    # Get document-library mappings from AI Portal
+    # Get document-library mappings from Busibox Portal
     query = """
         SELECT id, "libraryId" as library_id
         FROM "Document"
@@ -280,7 +280,7 @@ async def run_migration(dry_run: bool = False, verbose: bool = False) -> Tuple[i
         Tuple of (libraries_migrated, caches_migrated, files_updated)
     """
     print("=" * 60)
-    print("Library Migration: AI Portal -> Data Service")
+    print("Library Migration: Busibox Portal -> Data Service")
     print("=" * 60)
     
     if dry_run:
@@ -292,7 +292,7 @@ async def run_migration(dry_run: bool = False, verbose: bool = False) -> Tuple[i
     ai_portal_url = get_ai_portal_db_url()
     data_url = get_data_db_url()
     
-    print(f"AI Portal DB: {ai_portal_url.split('@')[1] if '@' in ai_portal_url else ai_portal_url}")
+    print(f"Busibox Portal DB: {ai_portal_url.split('@')[1] if '@' in ai_portal_url else ai_portal_url}")
     print(f"Data DB: {data_url.split('@')[1] if '@' in data_url else data_url}")
     print()
     
@@ -341,7 +341,7 @@ async def run_migration(dry_run: bool = False, verbose: bool = False) -> Tuple[i
 
 async def main():
     parser = argparse.ArgumentParser(
-        description="Migrate library data from AI Portal to data service"
+        description="Migrate library data from Busibox Portal to data service"
     )
     parser.add_argument(
         "--dry-run",

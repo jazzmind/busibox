@@ -135,7 +135,7 @@ async def list_conversations(
     order_by: str = Query("created_at", description="Field to order by"),
     order: str = Query("desc", pattern="^(asc|desc)$", description="Sort order"),
     agent_id: Optional[str] = Query(None, description="Filter by agent ID (conversations where agent was used)"),
-    source: Optional[str] = Query(None, description="Filter by source app (e.g., 'ai-portal', 'agent-manager')"),
+    source: Optional[str] = Query(None, description="Filter by source app (e.g., 'busibox-portal', 'busibox-agents')"),
 ) -> ConversationListResponse:
     """
     List user's conversations with pagination and ordering.

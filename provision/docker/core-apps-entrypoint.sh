@@ -3,8 +3,8 @@
 # Core Apps Entrypoint Script
 # =============================================================================
 #
-# Starts nginx, ai-portal, and agent-manager in the same container.
-# Uses concurrently to manage all processes.
+# Starts busibox-portal and busibox-agents in the same container.
+# Uses concurrently to manage both processes.
 # Mirrors the Proxmox apps-lxc architecture.
 #
 # Modes:
@@ -17,48 +17,6 @@ set -e
 
 MODE="${1:-dev}"
 
-# Generate self-signed SSL certificate if not present
-generate_ssl_cert() {
-    local ssl_dir="/etc/nginx/ssl"
-    # Must match nginx-bundled.conf which expects localhost.crt and localhost.key
-    local cert_file="$ssl_dir/localhost.crt"
-    local key_file="$ssl_dir/localhost.key"
-    
-    if [ ! -f "$cert_file" ] || [ ! -f "$key_file" ]; then
-        echo "Generating self-signed SSL certificate (localhost.crt/localhost.key)..."
-        mkdir -p "$ssl_dir"
-        if ! openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-            -keyout "$key_file" \
-            -out "$cert_file" \
-            -subj "/CN=localhost/O=Busibox/C=US" \
-            -addext "subjectAltName=DNS:localhost,DNS:*.localhost,IP:127.0.0.1"; then
-            echo "ERROR: Failed to generate SSL certificate"
-            return 1
-        fi
-        echo "SSL certificate generated."
-    else
-        echo "SSL certificates already exist, skipping generation."
-    fi
-}
-
-# Start nginx in background
-start_nginx() {
-    echo "Starting nginx..."
-    
-    # Ensure SSL certificates exist
-    generate_ssl_cert
-    
-    # Test nginx configuration
-    if nginx -t 2>/dev/null; then
-        nginx -g 'daemon off;' &
-        NGINX_PID=$!
-        echo "Nginx started (PID: $NGINX_PID)"
-    else
-        echo "WARNING: Nginx configuration test failed, skipping nginx"
-        nginx -t
-    fi
-}
-
 # Setup npm authentication for GitHub Packages
 setup_npm_auth() {
     if [ -n "${GITHUB_AUTH_TOKEN:-}" ]; then
@@ -70,7 +28,7 @@ setup_npm_auth() {
         
         # Create project-level .npmrc files if they don't exist
         # These are gitignored and created from .npmrc.example pattern
-        for app_dir in /srv/ai-portal /srv/agent-manager; do
+        for app_dir in /srv/busibox-portal /srv/busibox-agents; do
             if [ -d "$app_dir" ] && [ ! -f "$app_dir/.npmrc" ]; then
                 echo "Creating $app_dir/.npmrc with GitHub token..."
                 echo "@jazzmind:registry=https://npm.pkg.github.com" > "$app_dir/.npmrc"
@@ -155,30 +113,30 @@ watch_package_changes() {
     
     # Store initial checksums
     local portal_checksum agent_checksum
-    portal_checksum=$(compute_deps_checksum "/srv/ai-portal")
-    agent_checksum=$(compute_deps_checksum "/srv/agent-manager")
+    portal_checksum=$(compute_deps_checksum "/srv/busibox-portal")
+    agent_checksum=$(compute_deps_checksum "/srv/busibox-agents")
     
     while true; do
         sleep 5  # Check every 5 seconds
         
-        # Check ai-portal
-        if [ -f "/srv/ai-portal/package.json" ]; then
+        # Check busibox-portal
+        if [ -f "/srv/busibox-portal/package.json" ]; then
             local new_portal_checksum
-            new_portal_checksum=$(compute_deps_checksum "/srv/ai-portal")
+            new_portal_checksum=$(compute_deps_checksum "/srv/busibox-portal")
             if [ "$new_portal_checksum" != "$portal_checksum" ]; then
-                echo "[dep-watcher] ai-portal package.json changed! Running npm install..."
-                (cd /srv/ai-portal && npm install && echo "$new_portal_checksum" > node_modules/.deps-checksum) &
+                echo "[dep-watcher] busibox-portal package.json changed! Running npm install..."
+                (cd /srv/busibox-portal && npm install && echo "$new_portal_checksum" > node_modules/.deps-checksum) &
                 portal_checksum="$new_portal_checksum"
             fi
         fi
         
-        # Check agent-manager
-        if [ -f "/srv/agent-manager/package.json" ]; then
+        # Check busibox-agents
+        if [ -f "/srv/busibox-agents/package.json" ]; then
             local new_agent_checksum
-            new_agent_checksum=$(compute_deps_checksum "/srv/agent-manager")
+            new_agent_checksum=$(compute_deps_checksum "/srv/busibox-agents")
             if [ "$new_agent_checksum" != "$agent_checksum" ]; then
-                echo "[dep-watcher] agent-manager package.json changed! Running npm install..."
-                (cd /srv/agent-manager && npm install && echo "$new_agent_checksum" > node_modules/.deps-checksum) &
+                echo "[dep-watcher] busibox-agents package.json changed! Running npm install..."
+                (cd /srv/busibox-agents && npm install && echo "$new_agent_checksum" > node_modules/.deps-checksum) &
                 agent_checksum="$new_agent_checksum"
             fi
         fi
@@ -189,17 +147,14 @@ case "$MODE" in
     dev)
         echo "Starting Core Apps in development mode (Turbopack hot-reload)..."
         
-        # Start nginx first (handles routing)
-        start_nginx
-        
         # Setup npm authentication (required for @jazzmind/busibox-app from GitHub Packages)
         setup_npm_auth
         
         # Setup dependencies for both apps
         # Note: busibox-app is mounted directly into node_modules/@jazzmind/busibox-app
         # via Docker volume overlay (no symlink needed)
-        ensure_deps "/srv/ai-portal" "ai-portal"
-        ensure_deps "/srv/agent-manager" "agent-manager"
+        ensure_deps "/srv/busibox-portal" "busibox-portal"
+        ensure_deps "/srv/busibox-agents" "busibox-agents"
         
         # Start background watcher for package.json changes (hot-reinstall)
         watch_package_changes &
@@ -214,8 +169,8 @@ case "$MODE" in
             --names "portal,agents" \
             --prefix-colors "blue,green" \
             --kill-others-on-fail \
-            "cd /srv/ai-portal && PORT=3000 NEXT_PUBLIC_BASE_PATH=/portal npm run dev" \
-            "cd /srv/agent-manager && PORT=3001 NEXT_PUBLIC_BASE_PATH=/agents npm run dev"
+            "cd /srv/busibox-portal && PORT=3000 NEXT_PUBLIC_BASE_PATH=/portal npm run dev" \
+            "cd /srv/busibox-agents && PORT=3001 NEXT_PUBLIC_BASE_PATH=/agents npm run dev"
         ;;
 
     prod)
@@ -226,32 +181,29 @@ case "$MODE" in
         # Override NODE_ENV for production build and serve
         export NODE_ENV=production
         
-        # Start nginx first (handles routing)
-        start_nginx
-        
         # Setup npm authentication (required for @jazzmind/busibox-app from GitHub Packages)
         setup_npm_auth
         
         # Install deps in dev mode first (so devDependencies are available for build)
-        NODE_ENV=development ensure_deps "/srv/ai-portal" "ai-portal"
-        NODE_ENV=development ensure_deps "/srv/agent-manager" "agent-manager"
+        NODE_ENV=development ensure_deps "/srv/busibox-portal" "busibox-portal"
+        NODE_ENV=development ensure_deps "/srv/busibox-agents" "busibox-agents"
         
         # Build both apps (NEXT_PUBLIC_* env vars are baked in at build time)
-        echo "Building ai-portal..."
-        (cd /srv/ai-portal && NEXT_PUBLIC_BASE_PATH=/portal NODE_ENV=production npm run build) || {
-            echo "ERROR: ai-portal build failed"
+        echo "Building busibox-portal..."
+        (cd /srv/busibox-portal && NEXT_PUBLIC_BASE_PATH=/portal NODE_ENV=production npm run build) || {
+            echo "ERROR: busibox-portal build failed"
             exit 1
         }
         
-        echo "Building agent-manager..."
-        (cd /srv/agent-manager && NEXT_PUBLIC_BASE_PATH=/agents NODE_ENV=production npm run build) || {
-            echo "ERROR: agent-manager build failed"
+        echo "Building busibox-agents..."
+        (cd /srv/busibox-agents && NEXT_PUBLIC_BASE_PATH=/agents NODE_ENV=production npm run build) || {
+            echo "ERROR: busibox-agents build failed"
             exit 1
         }
         
         # Copy static assets into standalone directories
         # Standalone mode doesn't include public/ or .next/static/ automatically
-        for app_dir in /srv/ai-portal /srv/agent-manager; do
+        for app_dir in /srv/busibox-portal /srv/busibox-agents; do
             if [ -d "$app_dir/.next/standalone" ]; then
                 echo "Copying static assets for $(basename $app_dir)..."
                 cp -r "$app_dir/public" "$app_dir/.next/standalone/public" 2>/dev/null || true
@@ -262,13 +214,13 @@ case "$MODE" in
         
         # Prune dev dependencies to reduce memory footprint
         echo "Pruning dev dependencies..."
-        (cd /srv/ai-portal && npm prune --omit=dev 2>/dev/null) || true
-        (cd /srv/agent-manager && npm prune --omit=dev 2>/dev/null) || true
+        (cd /srv/busibox-portal && npm prune --omit=dev 2>/dev/null) || true
+        (cd /srv/busibox-agents && npm prune --omit=dev 2>/dev/null) || true
         
         # Sync database schema (if prisma is configured)
-        if [ -d "/srv/ai-portal/prisma" ] && [ -f "/srv/ai-portal/prisma.config.ts" ]; then
+        if [ -d "/srv/busibox-portal/prisma" ] && [ -f "/srv/busibox-portal/prisma.config.ts" ]; then
             echo "Syncing database schema..."
-            cd /srv/ai-portal
+            cd /srv/busibox-portal
             npx prisma db push 2>/dev/null || {
                 echo "Warning: prisma db push failed, continuing..."
             }
@@ -284,21 +236,18 @@ case "$MODE" in
             --names "portal,agents" \
             --prefix-colors "blue,green" \
             --kill-others-on-fail \
-            "cd /srv/ai-portal && PORT=3000 HOSTNAME=0.0.0.0 NODE_OPTIONS='--max-old-space-size=512' node .next/standalone/server.js" \
-            "cd /srv/agent-manager && PORT=3001 HOSTNAME=0.0.0.0 NODE_OPTIONS='--max-old-space-size=512' node .next/standalone/server.js"
+            "cd /srv/busibox-portal && PORT=3000 HOSTNAME=0.0.0.0 NODE_OPTIONS='--max-old-space-size=512' node .next/standalone/server.js" \
+            "cd /srv/busibox-agents && PORT=3001 HOSTNAME=0.0.0.0 NODE_OPTIONS='--max-old-space-size=512' node .next/standalone/server.js"
         ;;
         
     start)
         echo "Starting Core Apps in production mode (pre-built, standalone)..."
         
-        # Start nginx first (handles routing)
-        start_nginx
-        
         # Run prisma db push to sync schema (uses prisma.config.ts for DATABASE_URL)
         # This is safe because it only creates/modifies tables without data loss
-        if [ -d "/srv/ai-portal/prisma" ] && [ -f "/srv/ai-portal/prisma.config.ts" ]; then
+        if [ -d "/srv/busibox-portal/prisma" ] && [ -f "/srv/busibox-portal/prisma.config.ts" ]; then
             echo "Syncing database schema..."
-            cd /srv/ai-portal
+            cd /srv/busibox-portal
             npx prisma db push --accept-data-loss 2>/dev/null || {
                 echo "Warning: prisma db push failed, trying migrate deploy..."
                 npx prisma migrate deploy 2>/dev/null || true
@@ -313,8 +262,8 @@ case "$MODE" in
             --names "portal,agents" \
             --prefix-colors "blue,green" \
             --kill-others-on-fail \
-            "cd /srv/ai-portal && PORT=3000 HOSTNAME=0.0.0.0 NODE_OPTIONS='--max-old-space-size=512' node .next/standalone/server.js" \
-            "cd /srv/agent-manager && PORT=3001 HOSTNAME=0.0.0.0 NODE_OPTIONS='--max-old-space-size=512' node .next/standalone/server.js"
+            "cd /srv/busibox-portal && PORT=3000 HOSTNAME=0.0.0.0 NODE_OPTIONS='--max-old-space-size=512' node .next/standalone/server.js" \
+            "cd /srv/busibox-agents && PORT=3001 HOSTNAME=0.0.0.0 NODE_OPTIONS='--max-old-space-size=512' node .next/standalone/server.js"
         ;;
         
     *)

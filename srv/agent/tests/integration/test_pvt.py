@@ -28,7 +28,7 @@ SERVICE_PORT = os.getenv("PORT", "8000")
 SERVICE_URL = os.getenv("AGENT_API_URL", f"http://localhost:{SERVICE_PORT}")
 
 # AuthZ configuration - REQUIRED for token exchange
-# Use bootstrap client (ai-portal) - the standard OAuth client for all services
+# Use bootstrap client (busibox-portal) - the standard OAuth client for all services
 AUTH_JWKS_URL = os.getenv("AUTH_JWKS_URL", "")
 
 # Dependencies - REQUIRED

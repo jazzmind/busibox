@@ -35,16 +35,16 @@ _V_NC="${NC:-\033[0m}"
 # Repositories we track
 declare -A TRACKED_REPOS=(
     ["busibox"]="jazzmind/busibox"
-    ["ai-portal"]="jazzmind/ai-portal"
-    ["agent-manager"]="jazzmind/agent-manager"
+    ["busibox-portal"]="jazzmind/busibox-portal"
+    ["busibox-agents"]="jazzmind/busibox-agents"
     ["busibox-app"]="jazzmind/busibox-app"
 )
 
 # Default branches for each repo
 declare -A DEFAULT_BRANCHES=(
     ["busibox"]="main"
-    ["ai-portal"]="main"
-    ["agent-manager"]="main"
+    ["busibox-portal"]="main"
+    ["busibox-agents"]="main"
     ["busibox-app"]="main"
 )
 
@@ -249,7 +249,7 @@ get_release_info() {
 
 # Save deployed version for a repository
 # Usage: save_deployed_version "busibox" "branch" "main" "abc1234"
-# Usage: save_deployed_version "ai-portal" "release" "v1.2.3" "def5678"
+# Usage: save_deployed_version "busibox-portal" "release" "v1.2.3" "def5678"
 save_deployed_version() {
     local repo_key="$1"
     local version_type="$2"  # "branch" or "release"

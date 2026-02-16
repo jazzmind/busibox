@@ -137,8 +137,6 @@ try:
     print(f"MINIO_SECRET_KEY='{minio.get('minio_secret_key', '') or minio.get('secret_key', '')}'")
     
     # Test credentials
-    print(f"AUTHZ_TEST_CLIENT_ID='{test_creds.get('authz_test_client_id', '')}'")
-    print(f"AUTHZ_TEST_CLIENT_SECRET='{test_creds.get('authz_test_client_secret', '')}'")
     print(f"TEST_USER_ID='{test_creds.get('test_user_id', '')}'")
     
     # JWT secret (used as bootstrap client secret)

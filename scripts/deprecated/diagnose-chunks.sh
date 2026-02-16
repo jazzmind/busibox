@@ -9,7 +9,7 @@ FILE_ID="${1:-}"
 if [ -z "$FILE_ID" ]; then
     echo "Usage: $0 <file_id>"
     echo ""
-    echo "Get file_id from AI Portal or run:"
+    echo "Get file_id from Busibox Portal or run:"
     echo "  ssh root@10.96.200.205 'sudo -u postgres psql busibox -c \"SELECT file_id, original_filename, chunk_count FROM files ORDER BY created_at DESC LIMIT 5;\"'"
     exit 1
 fi

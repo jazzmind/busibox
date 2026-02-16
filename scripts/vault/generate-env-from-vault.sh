@@ -188,9 +188,9 @@ try:
     lines.append('AUTHZ_ACCESS_TOKEN_TTL=900')
     lines.append('')
     
-    # AI PORTAL CONFIGURATION
+    # Busibox Portal CONFIGURATION
     lines.append('# =============================================================================')
-    lines.append('# AI PORTAL CONFIGURATION')
+    lines.append('# Busibox Portal CONFIGURATION')
     lines.append('# =============================================================================')
     lines.append('')
     lines.append(f'SSO_JWT_SECRET={secrets.get(\"jwt_secret\", \"dev-sso-secret\")}')
@@ -242,25 +242,7 @@ try:
     # Portal URL for notification links
     lines.append('PORTAL_BASE_URL=https://localhost')
     lines.append('')
-    
-    # AGENT CONFIGURATION
-    lines.append('# =============================================================================')
-    lines.append('# AGENT CONFIGURATION')
-    lines.append('# =============================================================================')
-    lines.append('')
-    lines.append('AGENT_API_CLIENT_ID=agent-api')
-    lines.append('AGENT_API_CLIENT_SECRET=agent-api-secret')
-    lines.append('')
-    
-    if 'agent-manager' in secrets:
-        am = secrets['agent-manager']
-        lines.append(f'AGENT_MANAGER_CLIENT_ID={am.get(\"admin_client_id\", \"agent-manager\")}')
-        lines.append(f'AGENT_MANAGER_CLIENT_SECRET={am.get(\"admin_client_secret\", \"agent-manager-secret\")}')
-    else:
-        lines.append('AGENT_MANAGER_CLIENT_ID=agent-manager')
-        lines.append('AGENT_MANAGER_CLIENT_SECRET=agent-manager-secret')
-    lines.append('')
-    
+        
     # PROCESSING OPTIONS
     lines.append('# =============================================================================')
     lines.append('# PROCESSING OPTIONS')

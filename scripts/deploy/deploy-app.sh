@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Deploy Application from Branch
 # Usage: deploy-app.sh <app_name> [environment] [branch]
-# Example: deploy-app.sh ai-portal production main
+# Example: deploy-app.sh busibox-portal production main
 #
 # Execution Context: Admin workstation
 # Purpose: Deploy an application directly from a GitHub branch without creating a release
@@ -29,13 +29,13 @@ if [ -z "$APP_NAME" ]; then
     echo "Usage: $0 <app_name> [environment] [branch]"
     echo ""
     echo "Examples:"
-    echo "  $0 ai-portal production main"
+    echo "  $0 busibox-portal production main"
     echo "  $0 doc-intel test dev"
-    echo "  $0 agent-manager production feature/new-ui"
+    echo "  $0 busibox-agents production feature/new-ui"
     echo ""
     echo "Available apps:"
-    echo "  - ai-portal        (port 3000) - Main AI portal"
-    echo "  - agent-manager     (port 3001) - Agent management interface"
+    echo "  - busibox-portal        (port 3000) - Main Busibox Portal"
+    echo "  - busibox-agents     (port 3001) - Agent management interface"
     echo ""
     echo "Note: agent-server (port 8000) is deployed separately via 'make agent'"
     exit 1

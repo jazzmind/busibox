@@ -85,7 +85,7 @@ class CreateDataDocumentRequest(BaseModel):
     roleIds: Optional[List[str]] = Field(None, description="Role IDs for shared documents")
     libraryId: Optional[str] = Field(None, description="Library to place document in")
     enableCache: bool = Field(default=False, description="Enable Redis caching")
-    sourceApp: Optional[str] = Field(None, description="Source app identifier (e.g., 'status-report') for app data libraries")
+    sourceApp: Optional[str] = Field(None, description="Source app identifier (e.g., 'busibox-projects') for app data libraries")
     
     class Config:
         populate_by_name = True
@@ -189,6 +189,12 @@ class RecordOperationResponse(BaseModel):
     count: int
     recordIds: Optional[List[str]] = None
     message: Optional[str] = None
+
+
+class UpdateDocumentRolesRequest(BaseModel):
+    """Request to replace role assignments for a data document."""
+    roleIds: List[str] = Field(default_factory=list, description="Role IDs assigned to the document")
+    visibility: Optional[str] = Field(None, description="Optional visibility override: personal or shared")
 
 
 # =============================================================================
@@ -330,7 +336,8 @@ async def list_data_documents(
     request: Request,
     libraryId: Optional[str] = Query(None, description="Filter by library"),
     visibility: Optional[str] = Query(None, description="Filter by visibility"),
-    sourceApp: Optional[str] = Query(None, description="Filter by source app (e.g., 'status-report')"),
+    sourceApp: Optional[str] = Query(None, description="Filter by source app (e.g., 'busibox-projects')"),
+    metadataType: Optional[str] = Query(None, alias="type", description="Filter by metadata type (e.g., 'extraction_schema')"),
     limit: int = Query(50, ge=1, le=100, description="Max documents to return"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
     data_service: DataService = Depends(get_data_service),
@@ -346,6 +353,7 @@ async def list_data_documents(
         library_id=libraryId,
         visibility_filter=visibility,
         source_app=sourceApp,
+        metadata_type=metadataType,
     )
     
     try:
@@ -354,6 +362,7 @@ async def list_data_documents(
             library_id=libraryId,
             visibility=visibility,
             source_app=sourceApp,
+            metadata_type=metadataType,
             limit=limit,
             offset=offset,
         )
@@ -548,6 +557,70 @@ async def delete_data_document(
         raise
     except Exception as e:
         logger.error("Failed to delete data document", document_id=document_id, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/{document_id}/roles",
+    summary="Get document role assignments",
+    dependencies=[Depends(require_data_read)],
+)
+async def get_data_document_roles(
+    request: Request,
+    document_id: str,
+    data_service: DataService = Depends(get_data_service),
+):
+    """Get role assignments for a data document."""
+    validate_uuid(document_id, "document_id")
+
+    try:
+        roles = await data_service.get_document_roles(request, document_id)
+        document = await data_service.get_document(request, document_id, include_records=False)
+        if not document:
+            raise HTTPException(status_code=404, detail="Document not found")
+        return {
+            "documentId": document_id,
+            "visibility": document.get("visibility", "personal"),
+            "roles": roles,
+            "roleIds": [role["role_id"] for role in roles],
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to get document roles", document_id=document_id, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put(
+    "/{document_id}/roles",
+    summary="Replace document role assignments",
+    dependencies=[Depends(require_data_write)],
+)
+async def update_data_document_roles(
+    request: Request,
+    document_id: str,
+    body: UpdateDocumentRolesRequest,
+    data_service: DataService = Depends(get_data_service),
+):
+    """Replace role assignments for a data document and optionally update visibility."""
+    validate_uuid(document_id, "document_id")
+
+    try:
+        result = await data_service.set_document_roles(
+            request,
+            document_id=document_id,
+            role_ids=body.roleIds,
+            visibility=body.visibility,
+        )
+        return result
+    except PermissionError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Failed to update document roles", document_id=document_id, error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 

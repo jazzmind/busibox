@@ -71,7 +71,7 @@ if [[ ! -f "$VAULT_FILE" ]]; then
 secrets:
   github_token: ghp_your_github_token_here
   
-  ai-portal:
+  busibox-portal:
     database_url: "postgresql://postgres:devpassword@172.20.0.10:5432/cashman"
     better_auth_secret: "local-dev-secret-change-me"
     better_auth_url: "http://local.ai.localhost:3000"
@@ -108,7 +108,7 @@ echo "     make local-up"
 echo "     make local-deploy"
 echo ""
 echo "  3. Access services:"
-echo "     AI Portal:      http://localhost:3000"
+echo "     Busibox Portal:      http://localhost:3000"
 echo "     MinIO Console:  http://localhost:9001"
 echo ""
 echo "See docs/LOCAL_DEVELOPMENT.md for more details."

@@ -17,8 +17,11 @@ class DockerManager:
     """Manages Docker containers and compose services."""
     
     def __init__(self):
+        self.container_prefix = os.environ.get("CONTAINER_PREFIX", "").strip()
+        if not self.container_prefix:
+            raise RuntimeError("CONTAINER_PREFIX must be set for deploy-api")
         self.project_name = os.environ.get("COMPOSE_PROJECT_NAME", "local-busibox")
-        self.repo_root = os.environ.get("BUSIBOX_REPO_ROOT", "/app/busibox")
+        self.repo_root = os.environ.get("BUSIBOX_REPO_ROOT", "/busibox")
     
     async def list_services(self) -> List[Dict[str, Any]]:
         """
@@ -263,7 +266,7 @@ class DockerManager:
         services = await self.list_services()
         
         # Core bootstrap services
-        bootstrap_services = ["postgres", "authz-api", "deploy-api", "ai-portal", "nginx"]
+        bootstrap_services = ["postgres", "authz-api", "deploy-api", "busibox-portal", "nginx"]
         
         # Check each service
         service_status = {}
@@ -292,9 +295,9 @@ class DockerManager:
         
         The container name is {prefix}-{service} based on compose project.
         """
-        # Extract prefix from project name (e.g., "local-busibox" -> "local")
-        prefix = self.project_name.replace("-busibox", "")
-        return f"{prefix}-{service}"
+        # Docker now uses a dedicated proxy container; keep nginx alias compatibility.
+        resolved_service = "proxy" if service == "nginx" else service
+        return f"{self.container_prefix}-{resolved_service}"
     
     async def _run_docker_command(
         self,

@@ -115,7 +115,7 @@ This generates:
 See `guides/bootstrap-test-credentials.md` for details.
 
 ## Apps
-- App-specific tests live in their repos (AI Portal, Agent Client). Run `npm test`/`npm run test:watch` per repo after wiring env vars to container endpoints.
+- App-specific tests live in their repos (Busibox Portal, Busibox Agents). Run `npm test`/`npm run test:watch` per repo after wiring env vars to container endpoints.
 
 ## What to Verify After Deployment
 - Ingest `/health` and Search `/health` return 200.

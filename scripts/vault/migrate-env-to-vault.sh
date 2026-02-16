@@ -194,7 +194,7 @@ try:
     if jwt_secret:
         vault['secrets']['jwt_secret'] = jwt_secret
     
-    # AI Portal specific
+    # Busibox Portal specific
     admin_email = get_env_value('ADMIN_EMAIL')
     allowed_domains = get_env_value('ALLOWED_EMAIL_DOMAINS')
     resend_key = get_env_value('RESEND_API_KEY')
@@ -209,10 +209,10 @@ try:
     
     # Agent Manager
     if agent_manager_client or agent_manager_secret:
-        if 'agent-manager' not in vault['secrets']:
-            vault['secrets']['agent-manager'] = {}
+        if 'busibox-agents' not in vault['secrets']:
+            vault['secrets']['busibox-agents'] = {}
         if litellm_key:
-            vault['secrets']['agent-manager']['litellm_api_key'] = litellm_key
+            vault['secrets']['busibox-agents']['litellm_api_key'] = litellm_key
     
     # GitHub
     github_token = get_env_value('GITHUB_AUTH_TOKEN')

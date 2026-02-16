@@ -307,11 +307,14 @@ async def compute_similarities(
             "pairs_above_threshold": 0,
         }
 
-    user_id = getattr(request.state, "user_id", None)
+    # NOTE: Similarity computation is a global operation - we don't filter
+    # by owner_id here because we want to find similarities across all
+    # projects of the same label. Owner filtering happens at read/visualize
+    # time, not at similarity computation time.
 
     try:
         result = await graph_service.compute_project_similarities(
-            owner_id=user_id,
+            owner_id=None,
             label=label,
             threshold=threshold,
         )

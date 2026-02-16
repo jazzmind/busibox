@@ -8,7 +8,7 @@
       - git
       - jq
       - build-essential
-      - ffmpeg  # For video poster frame extraction in ai-portal
+      - ffmpeg  # For video poster frame extraction in busibox-portal
     state: present
     update_cache: yes
 

@@ -46,6 +46,28 @@ class ImageExtractor:
             Each image_data is bytes in target_format
         """
         try:
+            # Validate the file exists and has content before opening with PyMuPDF
+            if not os.path.isfile(pdf_path):
+                logger.warning("PDF file not found, skipping image extraction", pdf_path=pdf_path)
+                return [], []
+
+            file_size = os.path.getsize(pdf_path)
+            if file_size == 0:
+                logger.warning("PDF file is empty, skipping image extraction", pdf_path=pdf_path)
+                return [], []
+
+            # Quick header check: valid PDFs start with %PDF
+            with open(pdf_path, "rb") as f:
+                header = f.read(8)
+            if not header.startswith(b"%PDF"):
+                logger.warning(
+                    "File does not appear to be a valid PDF, skipping image extraction",
+                    pdf_path=pdf_path,
+                    header_bytes=header[:8].hex(),
+                    file_size=file_size,
+                )
+                return [], []
+
             doc = fitz.open(pdf_path)
             images_metadata = []
             images_data = []
@@ -123,8 +145,12 @@ class ImageExtractor:
             return images_metadata, images_data
 
         except Exception as e:
-            logger.error("Failed to extract images from PDF", pdf_path=pdf_path, error=str(e), exc_info=True)
-            raise
+            logger.warning(
+                "Failed to extract images from PDF (non-fatal)",
+                pdf_path=pdf_path,
+                error=str(e),
+            )
+            return [], []
 
     def extract_from_docx(self, docx_path: str) -> Tuple[List[dict], List[bytes]]:
         """

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Check Deployed Application Version
 # Usage: check-app-version.sh <app_name> [environment]
-# Example: check-app-version.sh ai-portal production
+# Example: check-app-version.sh busibox-portal production
 #
 # Execution Context: Admin workstation
 # Purpose: Display the currently deployed version of an application
@@ -28,25 +28,25 @@ if [ -z "$APP_NAME" ]; then
     echo "Usage: $0 <app_name> [environment]"
     echo ""
     echo "Examples:"
-    echo "  $0 ai-portal production"
+    echo "  $0 busibox-portal production"
     echo "  $0 doc-intel test"
-    echo "  $0 agent-manager"
+    echo "  $0 busibox-agents"
     echo ""
     echo "Available apps:"
-    echo "  - ai-portal"
-    echo "  - agent-manager"
+    echo "  - busibox-portal"
+    echo "  - busibox-agents"
     echo "  - doc-intel"
     exit 1
 fi
 
 # Determine deploy path based on app name
 case "$APP_NAME" in
-    ai-portal)
-        DEPLOY_PATH="/srv/apps/ai-portal"
+    busibox-portal)
+        DEPLOY_PATH="/srv/apps/busibox-portal"
         CONTAINER_IP="10.96.200.201"  # apps-lxc
         ;;
-    agent-manager)
-        DEPLOY_PATH="/srv/apps/agent-manager"
+    busibox-agents)
+        DEPLOY_PATH="/srv/apps/busibox-agents"
         CONTAINER_IP="10.96.200.201"  # apps-lxc
         ;;
     doc-intel)

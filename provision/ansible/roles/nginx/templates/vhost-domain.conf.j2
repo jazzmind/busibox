@@ -85,7 +85,7 @@ server {
 {% endfor %}
 
     # Dynamically deployed apps (managed by deploy-api at runtime)
-    # Location snippets are written here when apps are deployed via AI Portal
+    # Location snippets are written here when apps are deployed via Busibox Portal
     include /etc/nginx/app-locations/*.conf;
 
     # Health check endpoint (for deploy-api / admin system status)
@@ -97,7 +97,7 @@ server {
     # Next.js font files - served at root level by next/font
     # next/font/google doesn't prepend basePath to font URLs,
     # so requests come in as /__nextjs_font/* at the root level.
-    # Proxy to AI Portal (core-apps container) to serve these files.
+    # Proxy to Busibox Portal (core-apps container) to serve these files.
     location /__nextjs_font {
         proxy_pass http://{{ core_apps_ip }}:3000;
         proxy_set_header Host $host;

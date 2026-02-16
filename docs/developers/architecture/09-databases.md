@@ -29,7 +29,7 @@ Busibox uses PostgreSQL as its primary relational database, hosted in the `pg-lx
 | `agent` | `busibox_user` | Agent API | Agent definitions, conversations, workflows, tools |
 | `authz` | `busibox_user` | AuthZ | Users, roles, sessions, OAuth clients, audit logs |
 | `data` | `busibox_user` | Data API | File metadata, chunks, processing history |
-| `ai_portal` | `busibox_user` | AI Portal | Portal-specific data (Prisma managed) |
+| `ai_portal` | `busibox_user` | Busibox Portal | Portal-specific data (Prisma managed) |
 | `busibox` | `busibox_user` | Legacy | Deprecated shared database |
 
 ### Test Databases
@@ -57,7 +57,7 @@ This architecture ensures:
 | Agent API | Alembic migrations | `srv/agent/alembic/` |
 | AuthZ | SchemaManager | `srv/authz/src/schema.py` |
 | Data API | SchemaManager | `srv/data/src/schema.py` |
-| AI Portal | Prisma | `prisma/schema.prisma` |
+| Busibox Portal | Prisma | `prisma/schema.prisma` |
 
 ### SchemaManager (AuthZ, Ingest)
 

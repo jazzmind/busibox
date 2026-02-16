@@ -2,7 +2,7 @@
 # Core Apps - Development Dockerfile
 # =============================================================================
 #
-# Runs both ai-portal and agent-manager in a single container for development.
+# Runs both busibox-portal and busibox-agents in a single container for development.
 # This mirrors the Proxmox pattern where core-apps-lxc hosts multiple Next.js apps.
 #
 # Features:
@@ -23,23 +23,17 @@ FROM node:20-bookworm-slim
 # Set working directory
 WORKDIR /srv
 
-# Install dependencies for node-gyp, development tools, and nginx
+# Install dependencies for node-gyp and development tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 make g++ curl bash \
-    nginx openssl \
     && rm -rf /var/lib/apt/lists/*
 
 # Install concurrently globally for running multiple processes
 RUN npm install -g concurrently
 
-# Create directories for apps and nginx
-RUN mkdir -p /srv/ai-portal /srv/agent-manager \
-    /etc/nginx/ssl \
-    /etc/nginx/sites-available \
-    /etc/nginx/sites-enabled \
-    /etc/nginx/conf.d/apps \
-    /run/nginx \
-    /var/log/nginx
+# Create directories for apps
+RUN mkdir -p /srv/busibox-portal /srv/busibox-agents \
+    /var/log
 
 # Set up npm authentication for private GitHub packages
 ARG GITHUB_AUTH_TOKEN
@@ -51,27 +45,21 @@ RUN if [ -n "$GITHUB_AUTH_TOKEN" ]; then \
         echo "WARNING: GITHUB_AUTH_TOKEN not set - npm install may fail for @jazzmind packages"; \
     fi
 
-# Copy nginx configuration for bundled mode (nginx in same container as apps)
-# In dev mode, this can be overridden via volume mount
-COPY config/nginx-bundled.conf /etc/nginx/nginx.conf
-
 # Copy entrypoint script
 COPY provision/docker/core-apps-entrypoint.sh /usr/local/bin/core-apps-entrypoint.sh
 RUN chmod +x /usr/local/bin/core-apps-entrypoint.sh
 
-# Expose ports - nginx (80, 443) + apps (3000, 3001)
-EXPOSE 80 443 3000 3001
+# Expose app ports
+EXPOSE 3000 3001
 
 # Environment
 ENV NODE_ENV=development
 ENV HOSTNAME=0.0.0.0
 
-# Health check - only check nginx (instant, no Next.js compilation)
-# Do NOT check /api/health on ports 3000/3001 — in dev mode those trigger
-# Turbopack compilation and cause CPU spikes every 30s
+# Health check app port directly.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
-    CMD curl -f http://localhost:80/health || exit 1
+    CMD curl -f http://localhost:3000 || exit 1
 
-# Use entrypoint script to start nginx and both apps
+# Use entrypoint script to start both apps
 ENTRYPOINT ["/usr/local/bin/core-apps-entrypoint.sh"]
 CMD ["dev"]

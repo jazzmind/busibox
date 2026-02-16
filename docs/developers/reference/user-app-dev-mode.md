@@ -12,9 +12,9 @@ This guide explains how to develop and test user apps locally with hot-reload su
 
 ## Overview
 
-When developing user apps (external apps deployed via AI Portal), you have two options:
+When developing user apps (external apps deployed via Busibox Portal), you have two options:
 
-1. **Full Deployment**: AI Portal clones from GitHub, builds, and runs via systemd
+1. **Full Deployment**: Busibox Portal clones from GitHub, builds, and runs via systemd
 2. **Dev Mode**: Mount local source for hot-reload development
 
 Dev mode is recommended for active development as it provides:
@@ -33,7 +33,7 @@ cd /path/to/busibox/dev-apps
 
 # Symlink your app (use your app's ID from busibox.json)
 ln -s ~/Code/my-app ./my-app
-ln -s ~/Code/project-analysis ./project-analysis
+ln -s ~/Code/busibox-analysis ./busibox-analysis
 ```
 
 ### 2. Start Docker Services
@@ -43,9 +43,9 @@ cd /path/to/busibox
 make docker-up  # Uses dev mode by default
 ```
 
-### 3. Register App in AI Portal
+### 3. Register App in Busibox Portal
 
-1. Go to AI Portal Admin -> Apps
+1. Go to Busibox Portal Admin -> Apps
 2. Click "Add App"
 3. Enter your GitHub repo URL
 4. The manifest will be validated
@@ -53,7 +53,7 @@ make docker-up  # Uses dev mode by default
 
 ### 4. Deploy (or Skip for Pure Dev)
 
-If you deploy via AI Portal:
+If you deploy via Busibox Portal:
 - Deploy-api detects `/srv/dev-apps/{app-id}` exists
 - Skips git clone, uses your local source
 - Runs npm install, build, and creates systemd service
@@ -75,7 +75,7 @@ busibox/
     .gitkeep
     README.md
     my-app/          -> symlink to ~/Code/my-app
-    project-analysis/ -> symlink to ~/Code/project-analysis
+    busibox-analysis/ -> symlink to ~/Code/busibox-analysis
 ```
 
 Inside the container:
@@ -87,7 +87,7 @@ Inside the container:
     deployed-app-2/
   dev-apps/          # Development apps (mounted from host)
     my-app/
-    project-analysis/
+    busibox-analysis/
 ```
 
 ## How It Works
@@ -125,7 +125,7 @@ Changes to source files on your host are immediately reflected in the container.
 
 To test with production build and systemd:
 
-1. Deploy via AI Portal (triggers build + systemd service)
+1. Deploy via Busibox Portal (triggers build + systemd service)
 2. App runs via systemd, logs to journalctl
 3. Check logs: `docker exec local-user-apps journalctl -u my-app -f`
 

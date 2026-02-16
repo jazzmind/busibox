@@ -14,7 +14,7 @@
 #
 # Containers Created:
 #   - proxy-lxc      - nginx reverse proxy (main entry point)
-#   - core-apps-lxc  - Core Next.js applications (ai-portal, agent-manager)
+#   - core-apps-lxc  - Core Next.js applications (busibox-portal, busibox-agents)
 #   - user-apps-lxc  - External/user-deployed applications
 #   - agent-lxc      - Agent API server
 #   - authz-lxc      - Authorization service (RLS token issuer)
@@ -81,7 +81,7 @@ cleanup_on_error() {
 create_ct "$CT_PROXY" "$IP_PROXY" "${PREFIX}proxy-lxc" unpriv || cleanup_on_error
 CREATED_CONTAINERS+=("$CT_PROXY")
 
-# Create core-apps container (ai-portal, agent-manager)
+# Create core-apps container (busibox-portal, busibox-agents)
 create_ct "$CT_CORE_APPS" "$IP_CORE_APPS" "${PREFIX}core-apps-lxc" unpriv || cleanup_on_error
 CREATED_CONTAINERS+=("$CT_CORE_APPS")
 

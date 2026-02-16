@@ -80,7 +80,7 @@ make manage SERVICE=<service> ACTION=redeploy
 ### Users Can't Log In
 
 **Check**:
-- Is the AI Portal running? `make manage SERVICE=ai-portal ACTION=status`
+- Is the Busibox Portal running? `make manage SERVICE=busibox-portal ACTION=status`
 - Is AuthZ running? `make manage SERVICE=authz ACTION=status`
 - Can the portal reach AuthZ? Check portal logs for connection errors
 - Is the JWKS endpoint accessible? `curl http://<authz-ip>:8010/.well-known/jwks.json`
@@ -113,7 +113,7 @@ make manage SERVICE=<app-name> ACTION=redeploy
 ### Extraction Quality Issues
 
 **Try**:
-- Switch extraction strategy in AI Portal admin (Simple → Marker → ColPali)
+- Switch extraction strategy in Busibox Portal admin (Simple → Marker → ColPali)
 - Enable LLM cleanup for OCR artifacts
 - For scanned documents, enable ColPali (requires GPU)
 

@@ -53,8 +53,8 @@ def is_core_app(app_id: str) -> bool:
     User apps are deployed via docker exec into user-apps container.
     """
     CORE_APPS = {
-        "ai-portal",
-        "agent-manager",
+        "busibox-portal",
+        "busibox-agents",
         "authz-api",
         "data-api",
         "search-api",
@@ -78,7 +78,7 @@ async def execute_via_bridge(
     Execute a command via the bridge script.
     
     Args:
-        command: The make command to execute (e.g., "make deploy-ai-portal")
+        command: The make command to execute (e.g., "make deploy-busibox-portal")
         args: Additional arguments to pass
         env: Additional environment variables
         timeout: Command timeout in seconds
@@ -249,7 +249,7 @@ async def deploy_core_app(
     Deploy a core application via Makefile/Ansible.
     
     Args:
-        app_name: Name of the app (e.g., "ai-portal", "agent-manager")
+        app_name: Name of the app (e.g., "busibox-portal", "busibox-agents")
         environment: Target environment (docker, staging, production)
         branch: Branch to deploy from (optional)
         force_rebuild: Force rebuild even if up to date

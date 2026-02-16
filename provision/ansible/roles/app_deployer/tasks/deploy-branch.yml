@@ -285,7 +285,7 @@
     # Clean ALL build artifacts and caches
     rm -rf .next
     rm -rf .turbo
-    rm -rf ai-portal-deploy
+    rm -rf busibox-portal-deploy
     rm -rf node_modules/.cache
     # Clear environment variables that might affect build
     unset TURBOPACK_CACHE_DIR

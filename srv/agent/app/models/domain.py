@@ -326,7 +326,7 @@ class Conversation(Base):
     user_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     source: Mapped[Optional[str]] = mapped_column(
         String(50), nullable=True, index=True,
-        comment="App/client that created this conversation (e.g., 'ai-portal', 'agent-manager')"
+        comment="App/client that created this conversation (e.g., 'busibox-portal', 'busibox-agents')"
     )
     model: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     is_private: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

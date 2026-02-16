@@ -166,13 +166,13 @@ deploy_environment: docker
 github_token: "{{ secrets.github.personal_access_token | default(lookup('env', 'GITHUB_AUTH_TOKEN')) | default('') }}"
 
 # Application repository URLs
-ai_portal_repo: "https://github.com/jazzmind/ai-portal.git"
-agent_manager_repo: "https://github.com/jazzmind/agent-manager.git"
+ai_portal_repo: "https://github.com/jazzmind/busibox-portal.git"
+agent_manager_repo: "https://github.com/jazzmind/busibox-agents.git"
 busibox_app_repo: "https://github.com/jazzmind/busibox-app.git"
 
 # Local paths for development mode
-ai_portal_dir: "{{ lookup('env', 'AI_PORTAL_DIR') | default('') }}"
-agent_manager_dir: "{{ lookup('env', 'AGENT_MANAGER_DIR') | default('') }}"
+ai_portal_dir: "{{ lookup('env', 'BUSIBOX_PORTAL_DIR') | default('') }}"
+agent_manager_dir: "{{ lookup('env', 'BUSIBOX_AGENTS_DIR') | default('') }}"
 busibox_app_dir: "{{ lookup('env', 'BUSIBOX_APP_DIR') | default('') }}"
 
 # ============================================================================
@@ -200,7 +200,7 @@ docker_services:
     - litellm
   frontend:
     - core-apps
-    - nginx
+    - proxy
   user:
     - user-apps
 
@@ -211,4 +211,4 @@ docker_health_endpoints:
   data-api: "http://localhost:{{ data_port }}/health"
   search-api: "http://localhost:{{ search_port }}/health"
   agent-api: "http://localhost:{{ agent_port }}/health"
-  ai-portal: "http://localhost:{{ ai_portal_port }}/portal/api/health"
+  busibox-portal: "http://localhost:{{ ai_portal_port }}/portal/api/health"

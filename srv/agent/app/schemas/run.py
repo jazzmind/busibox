@@ -20,6 +20,35 @@ class RunCreate(BaseModel):
     )
 
 
+class RunInvoke(BaseModel):
+    """Schema for synchronous/programmatic agent invocation."""
+
+    agent_id: Optional[uuid.UUID] = Field(None, description="Agent UUID to execute")
+    agent_name: Optional[str] = Field(None, description="Agent name to execute (e.g. built-in name)")
+    input: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Input payload with required 'prompt' and optional execution context",
+    )
+    response_schema: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Optional JSON Schema used to force deterministic structured output",
+    )
+    agent_tier: str = Field(
+        "simple",
+        description="Execution tier: simple (30s/512MB), complex (5min/2GB), batch (30min/4GB)",
+        pattern="^(simple|complex|batch)$",
+    )
+
+
+class RunInvokeResponse(BaseModel):
+    """Response for synchronous/programmatic invocation."""
+
+    run_id: uuid.UUID
+    status: str
+    output: Optional[Any] = None
+    error: Optional[str] = None
+
+
 class RunRead(BaseModel):
     id: uuid.UUID
     agent_id: uuid.UUID

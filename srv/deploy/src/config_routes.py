@@ -519,7 +519,7 @@ async def _apply_bridge_config_docker() -> dict:
 
     # Compose files and project name come from the deploy-api container env
     compose_files = os.environ.get("COMPOSE_FILES", "-f docker-compose.yml")
-    repo_root = os.environ.get("BUSIBOX_HOST_PATH") or os.environ.get("BUSIBOX_REPO_ROOT", "/app/busibox")
+    repo_root = os.environ.get("BUSIBOX_HOST_PATH") or os.environ.get("BUSIBOX_REPO_ROOT", "/busibox")
 
     cmd = f"docker compose {compose_files} up -d bridge-api"
     logger.info(f"[APPLY] Running: {cmd}  (cwd={repo_root})")

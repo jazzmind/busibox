@@ -456,10 +456,10 @@ class TestContextCompression:
 # =============================================================================
 
 class TestAgentConfigWithDataTools:
-    """Test AgentConfig behavior with data tool configurations matching status-report agents."""
+    """Test AgentConfig behavior with data tool configurations matching busibox-projects agents."""
 
     def test_status_report_agent_config(self):
-        """An agent configured like the status-report agents should resolve all tools and scopes."""
+        """An agent configured like the busibox-projects agents should resolve all tools and scopes."""
         config = AgentConfig(
             name="status-assistant",
             display_name="Project Status Assistant",

@@ -3,12 +3,12 @@
 # =============================================================================
 #
 # Base compose file with infrastructure and Python API services.
-# Next.js apps (ai-portal, agent-manager) are defined in overlay files.
+# Next.js apps (busibox-portal, busibox-agents) are defined in overlay files.
 #
 # MODES:
 #   DEV MODE (default) - For active development:
 #     docker compose -f docker-compose.yml -f docker-compose.local-dev.yml up
-#     - Core apps (ai-portal + agent-manager) in single container
+#     - Core apps (busibox-portal + busibox-agents) in single container
 #     - Volume-mounted source for live editing
 #     - busibox-app npm-linked for live editing
 #     - Turbopack hot-reload
@@ -422,7 +422,7 @@ services:
       AUTHZ_SIGNING_ALG: RS256
       AUTHZ_RSA_KEY_SIZE: 2048
       AUTHZ_MASTER_KEY: ${AUTHZ_MASTER_KEY:-local-master-key-change-in-production}
-      # Bootstrap client (ai-portal)
+      # Bootstrap client (busibox-portal)
       AUTHZ_BOOTSTRAP_ALLOWED_AUDIENCES: data-api,search-api,agent-api,authz-api
       AUTHZ_BOOTSTRAP_ALLOWED_SCOPES: read,write,search.read,data.write,data.read,agent.execute
       # Admin users to bootstrap on startup (comma-separated)
@@ -496,17 +496,17 @@ services:
       # Milvus
       MILVUS_HOST: milvus
       MILVUS_COLLECTION: documents
-      # AI Portal (for library resolution and migration)
-      # Note: In Docker dev, AI Portal typically runs on host, use host.docker.internal
-      # Include /portal base path if AI Portal is configured with basePath
-      AI_PORTAL_URL: ${AI_PORTAL_URL:-http://host.docker.internal:3000/portal}
-      # AI Portal database (for automatic library migration from AI Portal to data-api)
+      # Busibox Portal (for library resolution and migration)
+      # Note: In Docker dev, portal typically runs on host, use host.docker.internal
+      # Include /portal base path if portal is configured with basePath
+      BUSIBOX_PORTAL_URL: ${BUSIBOX_PORTAL_URL:-http://host.docker.internal:3000/portal}
+      # Busibox Portal database (for automatic library migration from portal to data-api)
       # If not set, migration is skipped (libraries created on-demand instead)
-      AI_PORTAL_DB_HOST: ${AI_PORTAL_DB_HOST:-postgres}
-      AI_PORTAL_DB_PORT: ${AI_PORTAL_DB_PORT:-5432}
-      AI_PORTAL_DB_NAME: ${AI_PORTAL_DB_NAME:-ai_portal}
-      AI_PORTAL_DB_USER: ${AI_PORTAL_DB_USER:-busibox_user}
-      AI_PORTAL_DB_PASSWORD: ${AI_PORTAL_DB_PASSWORD:-${POSTGRES_PASSWORD:-devpassword}}
+      BUSIBOX_PORTAL_DB_HOST: ${BUSIBOX_PORTAL_DB_HOST:-postgres}
+      BUSIBOX_PORTAL_DB_PORT: ${BUSIBOX_PORTAL_DB_PORT:-5432}
+      BUSIBOX_PORTAL_DB_NAME: ${BUSIBOX_PORTAL_DB_NAME:-ai_portal}
+      BUSIBOX_PORTAL_DB_USER: ${BUSIBOX_PORTAL_DB_USER:-busibox_user}
+      BUSIBOX_PORTAL_DB_PASSWORD: ${BUSIBOX_PORTAL_DB_PASSWORD:-${POSTGRES_PASSWORD:-devpassword}}
       # LiteLLM
       LITELLM_BASE_URL: http://litellm:4000
       LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-local-dev-key}
@@ -515,7 +515,8 @@ services:
       AUTHZ_JWKS_URL: http://authz-api:8010/.well-known/jwks.json
       AUTHZ_ISSUER: busibox-authz
       AUTHZ_AUDIENCE: data-api
-      # Processing defaults (overridden per-job by AI Portal data settings)
+      AUTHZ_TOKEN_URL: http://authz-api:8010/oauth/token
+      # Processing defaults (overridden per-job by Busibox Portal data settings)
       MARKER_ENABLED: ${MARKER_ENABLED:-false}
       MARKER_USE_GPU: ${MARKER_USE_GPU:-false}
       COLPALI_ENABLED: ${COLPALI_ENABLED:-false}
@@ -594,7 +595,7 @@ services:
       # LiteLLM
       LITELLM_BASE_URL: http://litellm:4000
       LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-local-dev-key}
-      # Processing defaults (overridden per-job by AI Portal data settings)
+      # Processing defaults (overridden per-job by Busibox Portal data settings)
       MARKER_ENABLED: ${MARKER_ENABLED:-false}
       MARKER_USE_GPU: ${MARKER_USE_GPU:-false}
       COLPALI_ENABLED: ${COLPALI_ENABLED:-false}
@@ -609,10 +610,14 @@ services:
       AUTHZ_JWKS_URL: http://authz-api:8010/.well-known/jwks.json
       AUTHZ_ISSUER: busibox-authz
       AUTHZ_AUDIENCE: data-api
+      AUTHZ_TOKEN_URL: http://authz-api:8010/oauth/token
       # Neo4j (optional graph database)
       NEO4J_URI: bolt://neo4j:7687
       NEO4J_USER: ${NEO4J_USER:-neo4j}
       NEO4J_PASSWORD: ${NEO4J_PASSWORD:-devpassword}
+      # Agent API (for library triggers - fires agent when document processing completes)
+      AGENT_API_HOST: agent-api
+      AGENT_API_PORT: "8000"
       # Worker ID (for debugging)
       WORKER_ID: local-worker-1
     depends_on:
@@ -918,7 +923,7 @@ services:
       - ~/.ssh:/root/.ssh:ro  # SSH keys for remote operations
       - /var/run/docker.sock:/var/run/docker.sock  # Docker socket for docker exec
       # DEV_APPS_DIR should point to a directory containing your app source folders
-      # e.g., /Users/you/Code which contains estimator/, project-analysis/, etc.
+      # e.g., /Users/you/Code which contains estimator/, busibox-analysis/, etc.
       # This is mounted directly - no symlinks needed
       - ${DEV_APPS_DIR:-./dev-apps}:/srv/dev-apps:ro
       # Mount busibox root at its HOST path so docker compose paths work for both builds and volumes
@@ -957,12 +962,12 @@ services:
       COMPOSE_PROJECT_NAME: ${CONTAINER_PREFIX:-dev}-busibox
       COMPOSE_FILES: "-f docker-compose.yml -f docker-compose.local-dev.yml"
       # Host path to busibox directory (for volume mounts in spawned containers)
-      # This MUST be set by the Makefile to the actual host path when running via deploy-api
-      # Without this, deploy-api cannot correctly start other services with volume mounts
-      BUSIBOX_HOST_PATH: ${BUSIBOX_HOST_PATH:-}
+      # When set by the Makefile (BUSIBOX_HOST_PATH=$(PWD)), the repo is mounted at
+      # the same path on host and in container so docker compose volume paths work.
+      # When not set, the repo is mounted at /busibox (see volumes above).
+      BUSIBOX_HOST_PATH: ${BUSIBOX_HOST_PATH:-/busibox}
       # State file path - must match the mounted busibox path inside container
-      # The busibox directory is mounted at BUSIBOX_HOST_PATH (same path as host)
-      BUSIBOX_STATE_FILE: ${BUSIBOX_HOST_PATH:-.}/.busibox-state-dev
+      BUSIBOX_STATE_FILE: ${BUSIBOX_HOST_PATH:-/busibox}/.busibox-state-dev
       # Nginx
       NGINX_HOST: nginx
       NGINX_CONFIG_DIR: /etc/nginx/sites-available/apps
@@ -984,6 +989,9 @@ services:
       # LLM Services (for LLM chain validation)
       LITELLM_URL: http://litellm:4000
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-local-dev-key}
+      # Pass through the same effective key used by LiteLLM so deploy-api
+      # starts agent-api with the correct token on first install.
+      LITELLM_API_KEY: ${LITELLM_MASTER_KEY:-sk-local-dev-key}
       AGENT_API_URL: http://agent-api:8000
       # MLX server runs on host (not in docker) on port 8080
       MLX_SERVER_URL: http://host.docker.internal:8080
@@ -1008,7 +1016,7 @@ services:
   # USER APPS CONTAINER
   # ===========================================================================
   # Container for deploying external/user applications via deploy-api.
-  # This is separate from core apps (ai-portal, agent-manager) for isolation.
+  # This is separate from core apps (busibox-portal, busibox-agents) for isolation.
   # Apps are deployed via git clone + npm install + systemd.
   #
   # For local development:
@@ -1046,7 +1054,9 @@ services:
       - user_apps_logs:/var/log/user-apps
     environment:
       NODE_ENV: production
-    restart: unless-stopped
+    # Keep this container stopped when the stack is intentionally stopped.
+    # User apps are started explicitly by make/install flows and deploy-api.
+    restart: "no"
     networks:
       - busibox-net
     # Resource limits to prevent runaway apps from affecting host
@@ -1073,7 +1083,7 @@ services:
 # ===========================================================================
   # NEXT.JS APPLICATIONS (Core Apps)
   # ===========================================================================
-  # Core Next.js apps (ai-portal + agent-manager) run in a single container
+  # Core Next.js apps (busibox-portal + busibox-agents) run in a single container
   # defined in overlay files:
   #   - docker-compose.local-dev.yml - Development mode with volume mounts
   #   - docker-compose.github.yml    - GitHub mode built from source
@@ -1083,20 +1093,17 @@ services:
   # ===========================================================================
 
 # ===========================================================================
-  # NGINX REVERSE PROXY (Standalone - for hybrid mode only)
+  # PROXY CONTAINER (Nginx Reverse Proxy)
   # ===========================================================================
-  # 
-  # NOTE: When using core-apps container (dev or production mode), nginx is
-  # bundled inside core-apps. This standalone nginx is only used for hybrid
-  # mode where Next.js apps run directly on the host machine.
   #
-  # To use standalone nginx: docker compose --profile hybrid up nginx
+  # Docker now matches Proxmox/K8s architecture: nginx runs in a dedicated
+  # proxy container and core-apps only runs Next.js applications.
   #
-  nginx:
-    profiles: ["hybrid"]  # Only starts with --profile hybrid
+  proxy:
     image: nginx:alpine
-    container_name: ${CONTAINER_PREFIX:-dev}-nginx
-    hostname: nginx-standalone
+    container_name: ${CONTAINER_PREFIX:-dev}-proxy
+    hostname: proxy
+    entrypoint: ["/bin/sh", "/usr/local/bin/proxy-entrypoint.sh"]
     labels:
       - "config_version=${GIT_COMMIT:-unknown}"
     ports:
@@ -1106,7 +1113,8 @@ services:
       - ./config/nginx-local.conf:/etc/nginx/nginx.conf:ro
       - ./config/nginx-sites:/etc/nginx/conf.d:ro
       - ./config/nginx-sites/apps:/etc/nginx/conf.d/apps:rw  # Dynamic app configs (writable)
-      - ./ssl:/etc/nginx/ssl:ro
+      - ./ssl:/etc/nginx/ssl:rw
+      - ./provision/docker/proxy-entrypoint.sh:/usr/local/bin/proxy-entrypoint.sh:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"  # Access host's localhost from container
     # Nginx can start with just authz-api for bootstrap
@@ -1122,7 +1130,10 @@ services:
       retries: 3
     restart: unless-stopped
     networks:
-      - busibox-net
+      busibox-net:
+        aliases:
+          - proxy
+          - nginx
 
 # ===========================================================================
   # LOCAL LLM INFERENCE (Demo Mode)

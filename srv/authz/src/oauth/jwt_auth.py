@@ -7,7 +7,7 @@ static admin tokens, callers authenticate with JWTs that have specific scopes.
 
 Supported authentication methods (in order of precedence):
 1. Access token with required scopes (audience: authz-api)
-2. Session JWT for self-service operations (audience: ai-portal, typ: session)
+2. Session JWT for self-service operations (audience: busibox-portal, typ: session)
 3. Service account (client_credentials) with allowed_scopes
 
 Note: Legacy admin token support has been removed for security.
@@ -227,13 +227,13 @@ async def verify_session_token(
             )
         
         # Verify the signature and claims
-        # Session tokens have audience "ai-portal"
+        # Session tokens have audience "busibox-portal"
         claims = jwt.decode(
             token,
             public_key,
             algorithms=[alg],
             issuer=config.issuer,
-            audience="ai-portal",
+            audience="busibox-portal",
             options={"require": ["exp", "iat", "sub", "jti", "typ"]}
         )
         

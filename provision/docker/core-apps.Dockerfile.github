@@ -2,7 +2,7 @@
 # Core Apps - GitHub Build Dockerfile
 # =============================================================================
 #
-# Builds both ai-portal and agent-manager from GitHub in a single container.
+# Builds both busibox-portal and busibox-agents from GitHub in a single container.
 # This mirrors the Proxmox pattern where core-apps-lxc hosts multiple Next.js apps.
 #
 # Features:
@@ -31,17 +31,17 @@ RUN if [ -n "$GITHUB_AUTH_TOKEN" ]; then \
     fi
 
 # =============================================================================
-# Build AI Portal
+# Build Busibox Portal
 # =============================================================================
-FROM base AS build-ai-portal
+FROM base AS build-busibox-portal
 
-ARG AI_PORTAL_GITHUB_REF=main
+ARG BUSIBOX_PORTAL_GITHUB_REF=main
 
-WORKDIR /build/ai-portal
+WORKDIR /build/busibox-portal
 
 # Clone the repository
-RUN git clone --depth 1 --branch ${AI_PORTAL_GITHUB_REF} \
-    https://${GITHUB_AUTH_TOKEN}@github.com/jazzmind/ai-portal.git .
+RUN git clone --depth 1 --branch ${BUSIBOX_PORTAL_GITHUB_REF} \
+    https://${GITHUB_AUTH_TOKEN}@github.com/jazzmind/busibox-portal.git .
 
 # Copy npmrc for package installs (to /root for global fallback)
 COPY --from=base /root/.npmrc /root/.npmrc
@@ -64,15 +64,15 @@ RUN npm run build
 # =============================================================================
 # Build Agent Manager
 # =============================================================================
-FROM base AS build-agent-manager
+FROM base AS build-busibox-agents
 
-ARG AGENT_MANAGER_GITHUB_REF=main
+ARG BUSIBOX_AGENTS_GITHUB_REF=main
 
-WORKDIR /build/agent-manager
+WORKDIR /build/busibox-agents
 
 # Clone the repository
-RUN git clone --depth 1 --branch ${AGENT_MANAGER_GITHUB_REF} \
-    https://${GITHUB_AUTH_TOKEN}@github.com/jazzmind/agent-manager.git .
+RUN git clone --depth 1 --branch ${BUSIBOX_AGENTS_GITHUB_REF} \
+    https://${GITHUB_AUTH_TOKEN}@github.com/jazzmind/busibox-agents.git .
 
 # Copy npmrc for package installs (to /root for global fallback)
 COPY --from=base /root/.npmrc /root/.npmrc
@@ -87,9 +87,9 @@ RUN npm ci
 
 # Build the application with correct base path
 # NEXT_PUBLIC_BASE_PATH must be set at build time for Next.js
-# NEXT_PUBLIC_AI_PORTAL_URL is used for auth redirects back to portal
+# NEXT_PUBLIC_BUSIBOX_PORTAL_URL is used for auth redirects back to portal
 ENV NEXT_PUBLIC_BASE_PATH=/agents
-ENV NEXT_PUBLIC_AI_PORTAL_URL=https://localhost/portal
+ENV NEXT_PUBLIC_BUSIBOX_PORTAL_URL=https://localhost/portal
 RUN npm run build
 
 # =============================================================================
@@ -104,7 +104,7 @@ RUN apk add --no-cache curl bash nginx openssl
 RUN npm install -g concurrently
 
 # Create directories
-RUN mkdir -p /srv/ai-portal /srv/agent-manager \
+RUN mkdir -p /srv/busibox-portal /srv/busibox-agents \
     /etc/nginx/ssl \
     /etc/nginx/sites-available \
     /etc/nginx/sites-enabled \
@@ -113,7 +113,7 @@ RUN mkdir -p /srv/ai-portal /srv/agent-manager \
     /var/log/nginx
 
 # =============================================================================
-# Copy AI Portal (standard build mode)
+# Copy Busibox Portal (standard build mode)
 # =============================================================================
 # Standard Next.js build output structure:
 #   .next/         - Contains all build artifacts
@@ -122,30 +122,30 @@ RUN mkdir -p /srv/ai-portal /srv/agent-manager \
 # 
 # Run with: npm start (which runs next start)
 # =============================================================================
-WORKDIR /srv/ai-portal
+WORKDIR /srv/busibox-portal
 
 # Copy the full build output and dependencies
-COPY --from=build-ai-portal /build/ai-portal/.next ./.next
-COPY --from=build-ai-portal /build/ai-portal/node_modules ./node_modules
-COPY --from=build-ai-portal /build/ai-portal/public ./public
-COPY --from=build-ai-portal /build/ai-portal/package.json ./package.json
-COPY --from=build-ai-portal /build/ai-portal/next.config.ts ./next.config.ts
+COPY --from=build-busibox-portal /build/busibox-portal/.next ./.next
+COPY --from=build-busibox-portal /build/busibox-portal/node_modules ./node_modules
+COPY --from=build-busibox-portal /build/busibox-portal/public ./public
+COPY --from=build-busibox-portal /build/busibox-portal/package.json ./package.json
+COPY --from=build-busibox-portal /build/busibox-portal/next.config.ts ./next.config.ts
 
 # Copy prisma files for database migrations
-COPY --from=build-ai-portal /build/ai-portal/prisma ./prisma
-COPY --from=build-ai-portal /build/ai-portal/prisma.config.ts ./prisma.config.ts
+COPY --from=build-busibox-portal /build/busibox-portal/prisma ./prisma
+COPY --from=build-busibox-portal /build/busibox-portal/prisma.config.ts ./prisma.config.ts
 
 # =============================================================================
 # Copy Agent Manager (standard build mode)
 # =============================================================================
-WORKDIR /srv/agent-manager
+WORKDIR /srv/busibox-agents
 
 # Copy the full build output and dependencies
-COPY --from=build-agent-manager /build/agent-manager/.next ./.next
-COPY --from=build-agent-manager /build/agent-manager/node_modules ./node_modules
-COPY --from=build-agent-manager /build/agent-manager/public ./public
-COPY --from=build-agent-manager /build/agent-manager/package.json ./package.json
-COPY --from=build-agent-manager /build/agent-manager/next.config.ts ./next.config.ts
+COPY --from=build-busibox-agents /build/busibox-agents/.next ./.next
+COPY --from=build-busibox-agents /build/busibox-agents/node_modules ./node_modules
+COPY --from=build-busibox-agents /build/busibox-agents/public ./public
+COPY --from=build-busibox-agents /build/busibox-agents/package.json ./package.json
+COPY --from=build-busibox-agents /build/busibox-agents/next.config.ts ./next.config.ts
 
 # Copy nginx configuration for bundled mode (nginx in same container as apps)
 # This config uses localhost for frontend apps, Docker DNS for backend APIs

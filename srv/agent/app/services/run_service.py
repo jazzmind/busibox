@@ -290,6 +290,8 @@ async def create_run(
                         "session": session,
                         "user_id": principal.sub,
                         "agent_id": str(agent_id),
+                        "response_schema": payload.get("response_schema"),
+                        "max_tokens": payload.get("max_tokens"),
                     }
                     logger.info(
                         f"Calling BaseStreamingAgent.run() with context: "

@@ -9,8 +9,8 @@ Auto-generated from all feature plans. Last updated: 2025-10-14
 - PostgreSQL 15+ (metadata, status), Milvus 2.6+ (vectors with BM25), MinIO (S3-compatible file storage), Redis 7.0+ (Streams for job queue) (004-updated-data-service)
 - Python 3.11+ + FastAPI 0.115+, Pydantic AI 0.0.20+, SQLAlchemy 2.0+ (async), asyncpg, APScheduler 3.10+, python-jose (JWT), httpx, OpenTelemetry SDK, sse-starlette (005-i-want-to)
 - PostgreSQL 15+ (agent definitions, runs, tokens, workflows, scorers) (005-i-want-to)
-- Python 3.11+ (existing agent-server stack) + FastAPI, SQLAlchemy, Pydantic, LiteLLM, APScheduler (all already integrated) (006-agent-manager-specs)
-- PostgreSQL 15+ with existing schema (agent_definitions, tool_definitions, workflow_definitions, eval_definitions, scheduled_runs, run_records) (006-agent-manager-specs)
+- Python 3.11+ (existing agent-server stack) + FastAPI, SQLAlchemy, Pydantic, LiteLLM, APScheduler (all already integrated) (006-busibox-agents-specs)
+- PostgreSQL 15+ with existing schema (agent_definitions, tool_definitions, workflow_definitions, eval_definitions, scheduled_runs, run_records) (006-busibox-agents-specs)
 
 ## Project Structure
 ```
@@ -25,7 +25,7 @@ tests/
 : Follow standard conventions
 
 ## Recent Changes
-- 006-agent-manager-specs: Added Python 3.11+ (existing agent-server stack) + FastAPI, SQLAlchemy, Pydantic, LiteLLM, APScheduler (all already integrated)
+- 006-busibox-agents-specs: Added Python 3.11+ (existing agent-server stack) + FastAPI, SQLAlchemy, Pydantic, LiteLLM, APScheduler (all already integrated)
 - 005-i-want-to: Added Python 3.11+ + FastAPI 0.115+, Pydantic AI 0.0.20+, SQLAlchemy 2.0+ (async), asyncpg, APScheduler 3.10+, python-jose (JWT), httpx, OpenTelemetry SDK, sse-starlette
 - 004-updated-data-service: Added Python 3.11+ + FastAPI 0.104+, pymilvus 2.6+ (BM25 function support), redis-py 5.0+, boto3 (MinIO S3), psycopg 3.1+ (PostgreSQL async)
 

@@ -144,6 +144,39 @@ print(desc)
 " 2>/dev/null || echo ""
 }
 
+# Get mode for a model key (for non-chat endpoints)
+get_model_mode() {
+    local model_key="$1"
+
+    python3 -c "
+import yaml
+with open('$MODEL_REGISTRY', 'r') as f:
+    data = yaml.safe_load(f)
+available = data.get('available_models', {})
+model = available.get('$model_key', {})
+print(model.get('mode', ''))
+" 2>/dev/null || echo ""
+}
+
+# Get api_base for a purpose and backend
+get_api_base_for_purpose() {
+    local backend="$1"
+    local purpose="$2"
+
+    if [[ "$backend" == "mlx" ]]; then
+        case "$purpose" in
+            transcribe) echo "http://host.docker.internal:8081/v1" ;;
+            voice) echo "http://host.docker.internal:8082/v1" ;;
+            image) echo "http://host.docker.internal:8083/v1" ;;
+            *) echo "http://host.docker.internal:8080/v1" ;;
+        esac
+    elif [[ "$backend" == "vllm" ]]; then
+        echo "http://vllm:8000/v1"
+    else
+        echo ""
+    fi
+}
+
 generate_config_from_registry() {
     local backend="$1"
     
@@ -151,16 +184,6 @@ generate_config_from_registry() {
     if [[ ! -f "$MODEL_REGISTRY" ]]; then
         error "Model registry not found: $MODEL_REGISTRY"
         exit 1
-    fi
-    
-    # Determine API base
-    local api_base
-    if [[ "$backend" == "mlx" ]]; then
-        api_base="http://host.docker.internal:8080/v1"
-    elif [[ "$backend" == "vllm" ]]; then
-        api_base="http://vllm:8000/v1"
-    else
-        api_base=""  # Cloud models don't need api_base
     fi
     
     # Start building config
@@ -175,7 +198,7 @@ model_list:
 EOF
 
     # Define purposes to include (order matters for readability)
-    local purposes=("default" "test" "fast" "agent" "chat" "frontier" "tool_calling")
+    local purposes=("default" "test" "fast" "agent" "chat" "frontier" "tool_calling" "image" "transcribe" "voice")
     
     for purpose in "${purposes[@]}"; do
         local model_key=$(get_model_for_purpose "$purpose")
@@ -187,6 +210,9 @@ EOF
         local model_name=$(get_model_name "$model_key")
         local provider=$(get_model_provider "$model_key")
         local description=$(get_model_description "$model_key")
+        local mode=$(get_model_mode "$model_key")
+        local purpose_api_base
+        purpose_api_base=$(get_api_base_for_purpose "$backend" "$purpose")
         
         # Build model entry based on provider
         if [[ "$provider" == "bedrock" ]]; then
@@ -196,13 +222,22 @@ EOF
       model: bedrock/${model_name}
 EOF
         elif [[ "$provider" == "mlx" || "$provider" == "vllm" ]]; then
-            cat >> "$OUTPUT_FILE" << EOF
+            if [[ -n "$purpose_api_base" ]]; then
+                cat >> "$OUTPUT_FILE" << EOF
   - model_name: ${purpose}
     litellm_params:
       model: openai/${model_name}
-      api_base: ${api_base}
+      api_base: ${purpose_api_base}
       api_key: local
 EOF
+            else
+                cat >> "$OUTPUT_FILE" << EOF
+  - model_name: ${purpose}
+    litellm_params:
+      model: openai/${model_name}
+      api_key: local
+EOF
+            fi
         else
             cat >> "$OUTPUT_FILE" << EOF
   - model_name: ${purpose}
@@ -211,12 +246,21 @@ EOF
 EOF
         fi
         
-        # Add description if available
-        if [[ -n "$description" ]]; then
+        # Add model metadata if available
+        if [[ -n "$description" || -n "$mode" ]]; then
             cat >> "$OUTPUT_FILE" << EOF
     model_info:
+EOF
+            if [[ -n "$description" ]]; then
+                cat >> "$OUTPUT_FILE" << EOF
       description: "${description}"
 EOF
+            fi
+            if [[ -n "$mode" ]]; then
+                cat >> "$OUTPUT_FILE" << EOF
+      mode: "${mode}"
+EOF
+            fi
         fi
         
         echo "" >> "$OUTPUT_FILE"

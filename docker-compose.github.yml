@@ -14,14 +14,14 @@
 #
 # Configuration:
 #   Set these in .env.local to control which version to deploy:
-#     AI_PORTAL_GITHUB_REF=main          # Branch name
-#     AI_PORTAL_GITHUB_REF=v1.2.3        # Release tag
-#     AGENT_MANAGER_GITHUB_REF=main      # Branch name
+#     BUSIBOX_PORTAL_GITHUB_REF=main          # Branch name
+#     BUSIBOX_PORTAL_GITHUB_REF=v1.2.3        # Release tag
+#     BUSIBOX_AGENTS_GITHUB_REF=main      # Branch name
 #
 # Core Apps Architecture:
-#   - Lightweight container with nginx and supervisord
+#   - Lightweight container with supervisord
 #   - Apps deployed at runtime via Deploy API or on first start
-#   - Supervisord manages nginx + app processes
+#   - Supervisord manages app processes
 #   - Mirrors Proxmox pattern where apps-lxc hosts multiple Next.js apps
 #
 # First Start:
@@ -31,14 +31,14 @@
 #
 # Updating Apps:
 #   - Use Deploy API: POST /api/v1/deployment/deploy
-#   - Or: docker compose exec core-apps /usr/local/bin/entrypoint.sh deploy ai-portal main
+#   - Or: docker compose exec core-apps /usr/local/bin/entrypoint.sh deploy busibox-portal main
 #   - No container rebuild needed!
 #
 # =============================================================================
 
 services:
-  # Core Apps - Nginx + AI Portal + Agent Manager (Runtime Installation Mode)
-  # Lightweight container with nginx + supervisord, apps deployed at runtime
+  # Core Apps - Busibox Portal + Agent Manager (Runtime Installation Mode)
+  # Lightweight container with supervisord, apps deployed at runtime
   core-apps:
     build:
       context: .
@@ -53,10 +53,10 @@ services:
       # GitHub authentication for cloning repos and npm packages
       GITHUB_AUTH_TOKEN: ${GITHUB_AUTH_TOKEN:-}
       # Git refs for app deployment (used on first start)
-      AI_PORTAL_GITHUB_REF: ${AI_PORTAL_GITHUB_REF:-main}
-      AGENT_MANAGER_GITHUB_REF: ${AGENT_MANAGER_GITHUB_REF:-main}
+      BUSIBOX_PORTAL_GITHUB_REF: ${BUSIBOX_PORTAL_GITHUB_REF:-main}
+      BUSIBOX_AGENTS_GITHUB_REF: ${BUSIBOX_AGENTS_GITHUB_REF:-main}
       # =========================================================================
-      # AI Portal Environment (PORT 3000)
+      # Busibox Portal Environment (PORT 3000)
       # =========================================================================
       # Database
       DATABASE_URL: postgresql://${POSTGRES_USER:-busibox_user}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/ai_portal
@@ -77,12 +77,12 @@ services:
       # SSO
       SSO_JWT_SECRET: ${SSO_JWT_SECRET:-dev-sso-secret}
       # Service URLs (for SSO redirect via nginx proxy)
-      NEXT_PUBLIC_AGENT_MANAGER_URL: https://localhost/agents
+      NEXT_PUBLIC_BUSIBOX_AGENTS_URL: https://localhost/agents
       NEXT_PUBLIC_APP_URL: https://localhost/portal
       # Base paths for nginx subpath routing
       NEXT_PUBLIC_BASE_PATH: /portal
-      AI_PORTAL_BASE_PATH: /portal
-      AGENT_MANAGER_BASE_PATH: /agents
+      BUSIBOX_PORTAL_BASE_PATH: /portal
+      BUSIBOX_AGENTS_BASE_PATH: /agents
       # Backend service URLs (for server-side API calls)
       DATA_API_URL: http://data-api:8002
       SEARCH_API_URL: http://search-api:8003
@@ -100,29 +100,25 @@ services:
       NEXT_PUBLIC_AGENT_API_URL: https://localhost/api/agent
       NEXT_PUBLIC_DATA_API_URL: https://localhost/api/data
       NEXT_PUBLIC_SEARCH_API_URL: https://localhost/api/search
-      # AI Portal (SSO) via nginx
-      NEXT_PUBLIC_AI_PORTAL_URL: https://localhost/portal
+      # Busibox Portal (SSO) via nginx
+      NEXT_PUBLIC_BUSIBOX_PORTAL_URL: https://localhost/portal
     ports:
-      # Nginx ports (main entry points)
-      - "80:80"
-      - "443:443"
       # Direct app ports (optional, for debugging)
       - "3000:3000"
       - "3001:3001"
     volumes:
       # Persistent app directories - apps survive container restarts
-      - core-apps-portal:/srv/ai-portal
-      - core-apps-agent:/srv/agent-manager
+      - core-apps-portal:/srv/busibox-portal
+      - core-apps-agent:/srv/busibox-agents
       # Supervisor logs (optional, for debugging)
       - core-apps-logs:/var/log/supervisor
-      # Dynamic app configs for nginx (deploy-api manages these)
-      - ./config/nginx-sites/apps:/etc/nginx/conf.d/apps:rw
-      # SSL certificates (self-signed generated on first run)
-      - ./ssl:/etc/nginx/ssl:rw
+      # Dynamic app configs are managed by deploy-api in the proxy container.
     depends_on:
       postgres:
         condition: service_healthy
       authz-api:
+        condition: service_healthy
+      proxy:
         condition: service_healthy
     # Resource limits - standalone mode keeps each app under 512MB
     deploy:
@@ -134,9 +130,9 @@ services:
           cpus: '0.5'
           memory: 512M
     healthcheck:
-      # Check nginx health first (apps may not be deployed yet on first start)
-      # Full health check includes apps once deployed
-      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      # Portal runs with NEXT_PUBLIC_BASE_PATH=/portal, so root (/) returns 404.
+      # Use the basePath-aware health endpoint instead.
+      test: ["CMD", "curl", "-f", "http://localhost:3000/portal/api/health"]
       interval: 30s
       timeout: 10s
       # Longer start_period for first-time app deployment (clone + build)
@@ -146,9 +142,8 @@ services:
       busibox-net:
         aliases:
           - core-apps
-          - nginx          # nginx is now inside core-apps
-          - ai-portal      # Backward compatibility alias
-          - agent-manager  # Backward compatibility alias
+          - busibox-portal      # Backward compatibility alias
+          - busibox-agents  # Backward compatibility alias
 
 # Use the same network as the base compose
 # Note: Don't use external:true - let docker compose manage the network lifecycle

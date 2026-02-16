@@ -85,8 +85,8 @@ class Config:
         self.litellm_base_url = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
         self.litellm_api_key = os.getenv("LITELLM_API_KEY", "")
         
-        # AI Portal configuration (for library resolution)
-        self.ai_portal_url = os.getenv("AI_PORTAL_URL", "http://ai-portal:3000")
+        # Busibox Portal configuration (for library resolution)
+        self.busibox_portal_url = os.getenv("BUSIBOX_PORTAL_URL", "http://busibox-portal:3000")
         
         # AuthZ configuration (for Zero Trust token exchange and delegation tokens)
         self.authz_base_url = os.getenv("AUTHZ_BASE_URL", "")
@@ -154,7 +154,7 @@ class Config:
             "chunk_size_max": self.chunk_size_max,
             "chunk_overlap_pct": self.chunk_overlap_pct,
             "temp_dir": "/tmp/data",
-            "ai_portal_url": self.ai_portal_url,
+            "busibox_portal_url": self.busibox_portal_url,
             "authz_base_url": self.authz_base_url,
             "authz_token_url": self.authz_token_url,
         }

@@ -17,7 +17,7 @@ This directory is a placeholder. For local development, you should configure
    ```
    /Users/yourname/Code/
      estimator/           <- Your app with busibox.json
-     project-analysis/    <- Another app with busibox.json
+     busibox-analysis/    <- Another app with busibox.json
      my-custom-app/       <- etc.
    ```
 
@@ -26,7 +26,7 @@ This directory is a placeholder. For local development, you should configure
    make docker-down && make docker-up
    ```
 
-4. **Register apps in AI Portal** with "Development Mode" enabled
+4. **Register apps in Busibox Portal** with "Development Mode" enabled
    - Toggle "Development Mode" ON
    - Enter the directory name (e.g., `estimator`)
    - The system validates the directory contains a valid `busibox.json`

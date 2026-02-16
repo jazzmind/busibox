@@ -40,10 +40,10 @@ INTENT_QUERY = "query"
 INTENT_UPDATE = "update"
 INTENT_CHAT = "chat"
 
-# Well-known data document names for the status-report app
-STATUS_DOC_PROJECTS = "status-report-projects"
-STATUS_DOC_TASKS = "status-report-tasks"
-STATUS_DOC_UPDATES = "status-report-updates"
+# Well-known data document names for the busibox-projects app
+STATUS_DOC_PROJECTS = "busibox-projects-projects"
+STATUS_DOC_TASKS = "busibox-projects-tasks"
+STATUS_DOC_UPDATES = "busibox-projects-updates"
 
 # Synthesis prompt -- the LLM only needs to produce a nice response from tool results
 STATUS_SYNTHESIS_PROMPT = """You are a project status assistant. Given tool results and user context, create a clear, well-organized response.
@@ -485,7 +485,7 @@ class StatusAssistantAgent(BaseStreamingAgent):
         logger.info(f"Found documents: {self._doc_ids}")
 
         if not self._doc_ids:
-            logger.info("No data documents found -- bootstrapping status-report documents")
+            logger.info("No data documents found -- bootstrapping busibox-projects documents")
             return self._build_bootstrap_pipeline()
 
         original_query = self._get_original_query(context)
@@ -508,10 +508,10 @@ class StatusAssistantAgent(BaseStreamingAgent):
         """
         Create the three required data documents when none exist.
 
-        The status-report app uses three well-known documents:
-        - status-report-projects
-        - status-report-tasks
-        - status-report-updates
+        The busibox-projects app uses three well-known documents:
+        - busibox-projects-projects
+        - busibox-projects-tasks
+        - busibox-projects-updates
 
         After all three are created, the pipeline continues with intent handling.
         """
@@ -536,7 +536,7 @@ class StatusAssistantAgent(BaseStreamingAgent):
                         }
                     },
                     "visibility": "personal",
-                    "source_app": "status-report",
+                    "source_app": "busibox-projects",
                 },
             ),
             PipelineStep(
@@ -556,7 +556,7 @@ class StatusAssistantAgent(BaseStreamingAgent):
                         }
                     },
                     "visibility": "personal",
-                    "source_app": "status-report",
+                    "source_app": "busibox-projects",
                 },
             ),
             PipelineStep(
@@ -575,7 +575,7 @@ class StatusAssistantAgent(BaseStreamingAgent):
                         }
                     },
                     "visibility": "personal",
-                    "source_app": "status-report",
+                    "source_app": "busibox-projects",
                 },
             ),
         ]

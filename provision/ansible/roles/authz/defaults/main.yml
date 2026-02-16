@@ -20,7 +20,7 @@ authz_postgres_password: "{{ secrets.postgresql.password }}"
 # Token settings
 authz_issuer: "busibox-authz"
 # Access token TTL in seconds (6 hours)
-# This affects all app-scoped tokens (SSO tokens for agent-manager, etc.)
+# This affects all app-scoped tokens (SSO tokens for busibox-agents, etc.)
 authz_access_token_ttl: 21600
 
 # Signing configuration
@@ -30,7 +30,7 @@ authz_rsa_key_size: 2048
 # Encrypt private keys at rest (recommended)
 authz_key_encryption_passphrase: "{{ secrets.jwt_secret | default(secrets.sso.jwt_secret | default('change-me')) }}"
 
-# Bootstrap OAuth client for ai-portal
+# Bootstrap OAuth client for busibox-portal
 authz_bootstrap_allowed_audiences: "data-api,search-api,agent-api,authz-api,deploy-api"
 authz_bootstrap_allowed_scopes: ""
 

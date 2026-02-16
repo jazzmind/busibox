@@ -13,7 +13,7 @@ from typing import Dict, Any, Optional
 logger = logging.getLogger(__name__)
 
 # Default state file path
-DEFAULT_STATE_FILE = os.environ.get("BUSIBOX_STATE_FILE", "/app/busibox/.busibox-state-dev")
+DEFAULT_STATE_FILE = os.environ.get("BUSIBOX_STATE_FILE", "/busibox/.busibox-state-dev")
 
 
 async def read_state(state_file: Optional[str] = None) -> Dict[str, str]:

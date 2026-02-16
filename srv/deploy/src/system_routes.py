@@ -46,8 +46,8 @@ PROXMOX_SERVICE_MAP = {
     'docs-api': ('docs-api', 'docs-api'),  # milvus-lxc
     'docs': ('docs-api', 'docs-api'),  # alias
     'nginx': ('nginx', 'nginx'),  # proxy-lxc
-    'ai-portal': ('ai-portal', 'ai-portal'),  # core-apps-lxc
-    'agent-manager': ('ai-portal', 'agent-manager'),  # core-apps-lxc (same host)
+    'busibox-portal': ('busibox-portal', 'busibox-portal'),  # core-apps-lxc
+    'busibox-agents': ('busibox-portal', 'busibox-agents'),  # core-apps-lxc (same host)
 }
 
 router = APIRouter(prefix="/system", tags=["system"])

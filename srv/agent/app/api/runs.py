@@ -9,23 +9,66 @@ Provides:
 """
 
 import logging
+import json
+import re
 import uuid
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_principal
 from app.db.session import SessionLocal, get_session
+from app.models.domain import AgentDefinition
 from app.schemas.auth import Principal
-from app.schemas.run import RunCreate, RunRead, ScheduleCreate, ScheduleRead
+from app.schemas.run import RunCreate, RunInvoke, RunInvokeResponse, RunRead, ScheduleCreate, ScheduleRead
 from app.services.run_service import create_run, get_run_by_id, list_runs
+from app.services.builtin_agents import BUILTIN_AGENT_METADATA
 from app.services.scheduler import run_scheduler
 from app.workflows.engine import execute_workflow
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/runs", tags=["runs"])
+
+
+def _parse_structured_output(raw: Any) -> Any:
+    """Best-effort normalization for workflow output to structured JSON."""
+    if isinstance(raw, (dict, list)):
+        return raw
+    if not isinstance(raw, str):
+        return raw
+
+    text = raw.strip()
+    if not text:
+        return raw
+
+    # 1) Direct JSON
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+
+    # 2) JSON fenced code blocks
+    fenced_matches = re.findall(r"```(?:json)?\s*([\s\S]*?)\s*```", text, flags=re.IGNORECASE)
+    for block in fenced_matches:
+        try:
+            return json.loads(block.strip())
+        except Exception:
+            continue
+
+    # 3) First balanced-looking object slice (best effort)
+    first = text.find("{")
+    last = text.rfind("}")
+    if first != -1 and last > first:
+        candidate = text[first : last + 1]
+        try:
+            return json.loads(candidate)
+        except Exception:
+            return raw
+
+    return raw
 
 
 @router.post("", response_model=RunRead, status_code=status.HTTP_202_ACCEPTED)
@@ -83,6 +126,115 @@ async def run_agent(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create run",
+        )
+
+
+async def _resolve_agent_id(
+    *,
+    session: AsyncSession,
+    principal: Principal,
+    agent_id: Optional[uuid.UUID],
+    agent_name: Optional[str],
+) -> uuid.UUID:
+    """Resolve agent by id or name with user visibility checks."""
+    if agent_id:
+        return agent_id
+
+    if not agent_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Either agent_id or agent_name is required",
+        )
+
+    # Built-in code agents are reserved and resolved deterministically by name.
+    for metadata in BUILTIN_AGENT_METADATA.values():
+        if metadata["name"] == agent_name:
+            return uuid.uuid5(uuid.NAMESPACE_DNS, f"busibox.builtin.{agent_name}")
+
+    # Fallback to DB agent by name: owner or DB-level built-in.
+    stmt = select(AgentDefinition).where(
+        AgentDefinition.name == agent_name,
+        AgentDefinition.is_active.is_(True),
+    )
+    result = await session.execute(stmt)
+    definition = result.scalar_one_or_none()
+
+    if not definition:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+
+    if not definition.is_builtin and definition.created_by != principal.sub:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+
+    return definition.id
+
+
+@router.post("/invoke", response_model=RunInvokeResponse, status_code=status.HTTP_200_OK)
+async def invoke_agent(
+    payload: RunInvoke,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+) -> RunInvokeResponse:
+    """
+    Invoke an agent synchronously for deterministic workflow/programmatic calls.
+
+    This endpoint waits for completion and returns output directly.
+    """
+    try:
+        resolved_agent_id = await _resolve_agent_id(
+            session=session,
+            principal=principal,
+            agent_id=payload.agent_id,
+            agent_name=payload.agent_name,
+        )
+
+        run_payload = dict(payload.input or {})
+        if payload.response_schema is not None:
+            run_payload["response_schema"] = payload.response_schema
+
+        run_record = await create_run(
+            session=session,
+            principal=principal,
+            agent_id=resolved_agent_id,
+            payload=run_payload,
+            # Keep scope list minimal; specific tools can still perform exchange.
+            scopes=[],
+            purpose="agent-invoke",
+            agent_tier=payload.agent_tier,
+        )
+
+        output_data = None
+        error_message = None
+        if run_record.output:
+            if "result" in run_record.output:
+                output_data = run_record.output.get("result")
+            elif "data" in run_record.output:
+                output_data = run_record.output.get("data")
+            elif "error" in run_record.output:
+                error_message = str(run_record.output.get("error"))
+            else:
+                output_data = run_record.output
+
+        if payload.response_schema is not None:
+            output_data = _parse_structured_output(output_data)
+
+        if run_record.status in {"failed", "timeout"} and not error_message:
+            error_message = str((run_record.output or {}).get("error", "Invocation failed"))
+
+        return RunInvokeResponse(
+            run_id=run_record.id,
+            status=run_record.status,
+            output=output_data,
+            error=error_message,
+        )
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to invoke run: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to invoke run",
         )
 
 

@@ -4,7 +4,7 @@ Revision ID: chat_extensions_002
 Revises: collapsed_001
 Create Date: 2026-02-10 00:00:00
 
-Adds columns and tables needed for AI Portal chat migration from Prisma to agent-api.
+Adds columns and tables needed for Busibox Portal chat migration from Prisma to agent-api.
 """
 from typing import Sequence, Union
 

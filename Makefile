@@ -5,7 +5,7 @@
         install update manage recover-admin rotate-secrets profile demo warmup demo-clean demo-status \
         docker-deploy docker-deploy-infra docker-deploy-apis docker-deploy-llm docker-deploy-frontend \
         deploy-user-app undeploy-user-app list-user-apps user-app-logs user-app-status \
-        mlx-status mlx-start mlx-stop mlx-restart host-agent-status host-agent-start host-agent-stop host-agent-restart \
+        mlx-status mlx-start mlx-stop mlx-restart mlx-media-status mlx-media-start mlx-media-stop mlx-media-restart host-agent-status host-agent-start host-agent-stop host-agent-restart \
         k8s-deploy k8s-sync k8s-build k8s-apply k8s-status k8s-delete k8s-secrets k8s-logs \
         k8s-gpu-up k8s-gpu-down k8s-gpu-status k8s-gpu-window \
         spot-check spot-swap spot-price \
@@ -132,7 +132,7 @@ help:
 	@echo "  make test                    # Testing menu"
 	@echo ""
 	@echo "  Services: postgres, redis, minio, milvus, authz, agent, data,"
-	@echo "            search, deploy, bridge, docs, embedding, litellm, core-apps, nginx"
+	@echo "            search, deploy, bridge, docs, embedding, litellm, core-apps, proxy, nginx"
 	@echo "  Actions:  start, stop, restart, logs, redeploy, status"
 	@echo ""
 	@echo "═══════════════════════════════════════════════════════════════════════"
@@ -153,7 +153,7 @@ help:
 	@echo "    make docker-up                         # Start (default: development)"
 	@echo "    make docker-up ENV=development         # Dev mode (volume mounts, npm link)"
 	@echo "    make docker-up ENV=demo                # Demo mode (prod-like, from GitHub)"
-	@echo "    make docker-up SERVICE=ai-portal       # Start specific service"
+	@echo "    make docker-up SERVICE=busibox-portal       # Start specific service"
 	@echo ""
 	@echo "  Core Apps mode (CORE_APPS_MODE variable, development ENV only):"
 	@echo "    make docker-up                         # Default: Turbopack hot-reload"
@@ -190,7 +190,7 @@ help:
 	@echo "  Docker (local development):"
 	@echo "    make test-docker SERVICE=authz         # Run authz tests"
 	@echo "    make test-docker SERVICE=agent         # Run agent tests"
-	@echo "    make test-docker SERVICE=ai-portal     # Run ai-portal tests"
+	@echo "    make test-docker SERVICE=busibox-portal     # Run busibox-portal tests"
 	@echo "    make test-docker SERVICE=apps          # Run all Node.js app tests"
 	@echo "    make test-docker SERVICE=all           # Run all tests"
 	@echo "    make test-docker SERVICE=agent ARGS='-k test_weather'"
@@ -216,6 +216,10 @@ help:
 	@echo "    make mlx-start                 # Start MLX server"
 	@echo "    make mlx-stop                  # Stop MLX server"
 	@echo "    make mlx-restart               # Restart MLX server"
+	@echo "    make mlx-media-status          # Check MLX media server status (image/transcribe/voice)"
+	@echo "    make mlx-media-start           # Start MLX media servers (ports 8081-8083)"
+	@echo "    make mlx-media-stop            # Stop MLX media servers"
+	@echo "    make mlx-media-restart         # Restart MLX media servers"
 	@echo ""
 	@echo "  Host Agent (controls MLX from Docker):"
 	@echo "    make host-agent-status         # Check host-agent status"
@@ -342,13 +346,13 @@ ifndef SERVICE
 	@echo ""
 	@echo "Services:"
 	@echo "  Python APIs: authz, data, search, agent"
-	@echo "  Node.js apps: ai-portal, agent-manager, apps (both)"
+	@echo "  Node.js apps: busibox-portal, busibox-agents, apps (both)"
 	@echo "  All: all"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make test-docker SERVICE=authz"
 	@echo "  make test-docker SERVICE=agent"
-	@echo "  make test-docker SERVICE=ai-portal"
+	@echo "  make test-docker SERVICE=busibox-portal"
 	@echo "  make test-docker SERVICE=apps          # Both Node.js apps"
 	@echo "  make test-docker SERVICE=all           # Everything"
 	@echo "  make test-docker SERVICE=agent ARGS='-k test_weather'"
@@ -605,7 +609,7 @@ docker-clean-all:
 # INSTALLATION
 # ============================================================================
 # Unified install with interactive wizard or demo mode.
-# All management after install is via web UI (AI Portal).
+# All management after install is via web UI (Busibox Portal).
 #
 # Usage:
 #   make install         # Full wizard
@@ -908,6 +912,23 @@ mlx-restart: mlx-stop
 	@sleep 2
 	@$(MAKE) mlx-start
 
+# Check MLX media servers status
+mlx-media-status:
+	@bash scripts/llm/start-mlx-media-servers.sh status
+
+# Start MLX media servers (transcribe, voice, image)
+mlx-media-start:
+	@bash scripts/llm/start-mlx-media-servers.sh start
+
+# Stop MLX media servers
+mlx-media-stop:
+	@bash scripts/llm/start-mlx-media-servers.sh stop
+
+# Restart MLX media servers
+mlx-media-restart: mlx-media-stop
+	@sleep 2
+	@$(MAKE) mlx-media-start
+
 # Check host-agent status
 host-agent-status:
 	@echo "=== Host Agent Status ==="
@@ -1022,7 +1043,7 @@ ifndef SERVICE
 	@echo ""
 	@echo "Services: postgres, redis, minio, milvus, etcd, authz-api, data-api,"
 	@echo "          data-worker, search-api, agent-api, bridge-api, docs-api,"
-	@echo "          embedding-api, litellm, nginx"
+	@echo "          embedding-api, litellm, proxy"
 	@echo ""
 	@exit 1
 endif

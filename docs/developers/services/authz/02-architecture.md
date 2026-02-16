@@ -86,7 +86,7 @@ The internal access token contract was already defined in `busibox/srv/authz/src
 
 **Files**:
 - `routes/admin.py`: RBAC management endpoints
-- `routes/internal.py`: User sync endpoint for ai-portal
+- `routes/internal.py`: User sync endpoint for busibox-portal
 
 ### Phase 2: Downstream Service Validation
 
@@ -115,11 +115,11 @@ The internal access token contract was already defined in `busibox/srv/authz/src
 - Token exchange client for downstream calls
 - Configurable via `auth_jwks_url`, `auth_issuer`, `auth_audience`
 
-### Phase 3: AI Portal Integration
+### Phase 3: Busibox Portal Integration
 
 #### AuthZ Client ✅
 
-**Location**: `ai-portal/src/lib/authz-client.ts`
+**Location**: `busibox-portal/src/lib/authz-client.ts`
 
 **Functions**:
 - `syncUserToAuthz(userId)`: Sync user + roles to authz
@@ -130,7 +130,7 @@ The internal access token contract was already defined in `busibox/srv/authz/src
 
 #### Service Client Utilities ✅
 
-**Location**: `ai-portal/src/lib/service-client.ts`
+**Location**: `busibox-portal/src/lib/service-client.ts`
 
 **Functions**:
 - `getServiceBaseUrl(service)`: Get service URL from env
@@ -139,7 +139,7 @@ The internal access token contract was already defined in `busibox/srv/authz/src
 
 **Migration**: Example migration in `api/documents/search/route.ts`
 
-**Documentation**: Complete migration guide in `ai-portal/docs/AUTHZ_MIGRATION_GUIDE.md`
+**Documentation**: Complete migration guide in `busibox-portal/docs/AUTHZ_MIGRATION_GUIDE.md`
 
 ### Phase 4: Busibox-App Token Manager
 
@@ -248,7 +248,7 @@ sequenceDiagram
 - [x] OAuth client registry
 - [x] RBAC admin endpoints
 - [x] Downstream service JWKS validation (ingest, search, agent)
-- [x] AI Portal authz client
+- [x] Busibox Portal authz client
 - [x] Service client utilities
 - [x] Busibox-app token manager
 - [x] Integration tests
@@ -278,9 +278,9 @@ sequenceDiagram
 - `busibox/srv/authz/tests/test_admin_endpoints.py`
 - `busibox/srv/authz/tests/test_integration_token_flow.py`
 
-**AI Portal**:
-- `ai-portal/src/lib/service-client.ts`
-- `ai-portal/docs/AUTHZ_MIGRATION_GUIDE.md`
+**Busibox Portal**:
+- `busibox-portal/src/lib/service-client.ts`
+- `busibox-portal/docs/AUTHZ_MIGRATION_GUIDE.md`
 
 **Busibox-App**:
 - `busibox-app/src/lib/authz/token-manager.ts`
@@ -296,8 +296,8 @@ sequenceDiagram
 - `busibox/srv/authz/src/main.py`: Added admin router
 - `busibox/srv/authz/src/services/postgres.py`: Added RBAC methods
 
-**AI Portal**:
-- `ai-portal/src/app/api/documents/search/route.ts`: Example migration
+**Busibox Portal**:
+- `busibox-portal/src/app/api/documents/search/route.ts`: Example migration
 - `busibox-app/src/index.ts`: Export authz utilities
 
 ## Next Steps
@@ -325,7 +325,7 @@ sequenceDiagram
 
 ### Short-term (Week 2-3)
 
-4. **Migrate high-traffic ai-portal routes**:
+4. **Migrate high-traffic busibox-portal routes**:
    - Document upload/download
    - Search endpoints
    - Chat/agent endpoints
@@ -359,7 +359,6 @@ sequenceDiagram
 ### Common Issues
 
 **Token exchange fails with 401**:
-- Check `AUTHZ_CLIENT_SECRET` matches vault
 - Ensure user synced to authz first
 
 **Service rejects token**:
@@ -395,7 +394,7 @@ echo $TOKEN | cut -d. -f2 | base64 -d | jq
 
 - **Plan**: `evolve_authz_to_oauth2_token-exchange_f02bec2c.plan.md`
 - **Deployment**: `docs/deployment/authz-deployment-config.md`
-- **Migration**: `ai-portal/docs/AUTHZ_MIGRATION_GUIDE.md`
+- **Migration**: `busibox-portal/docs/AUTHZ_MIGRATION_GUIDE.md`
 - **AuthZ Service**: `srv/authz/README.md`
 - **Token Manager**: `busibox-app/src/lib/authz/token-manager.ts`
 
@@ -415,13 +414,13 @@ The OAuth2 token exchange implementation is **complete and ready for deployment*
 
 ✅ AuthZ service with OAuth2 endpoints
 ✅ JWKS-based validation in all services  
-✅ AI Portal integration with authz client
+✅ Busibox Portal integration with authz client
 ✅ Busibox-app token manager utilities
 ✅ Comprehensive tests and documentation
 
 The system is now ready for:
 1. Test environment deployment
-2. Gradual migration of ai-portal routes
+2. Gradual migration of busibox-portal routes
 3. Production rollout
 
 This implementation provides a **secure, scalable, and maintainable** foundation for Busibox authentication and authorization.

@@ -6,7 +6,7 @@ Protected by (in order of precedence):
 - OAuth client credentials (service account) with allowed_scopes
 - Admin token (deprecated)
 
-These endpoints allow ai-portal (or other admin tools) to manage:
+These endpoints allow busibox-portal (or other admin tools) to manage:
 - Roles (CRUD)
 - User-role bindings
 - External identity mappings (future)

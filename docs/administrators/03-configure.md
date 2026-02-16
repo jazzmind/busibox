@@ -2,17 +2,17 @@
 title: "Configuration"
 category: "administrator"
 order: 3
-description: "Configure Busibox settings through the AI Portal and environment"
+description: "Configure Busibox settings through the Busibox Portal and environment"
 published: true
 ---
 
 # Configuration
 
-Busibox is configured through a combination of the AI Portal admin interface and environment variables managed by Ansible. Most day-to-day settings are accessible through the portal.
+Busibox is configured through a combination of the Busibox Portal admin interface and environment variables managed by Ansible. Most day-to-day settings are accessible through the portal.
 
-## AI Portal Admin Settings
+## Busibox Portal Admin Settings
 
-The AI Portal provides a web-based admin interface for common configuration tasks. Access it at **Admin** in the portal navigation (requires admin role).
+The Busibox Portal provides a web-based admin interface for common configuration tasks. Access it at **Admin** in the portal navigation (requires admin role).
 
 ### User Management
 
@@ -147,8 +147,8 @@ The nginx reverse proxy routes all traffic and provides unified API access:
 
 | Path | Backend Service |
 |------|----------------|
-| `/` | AI Portal |
-| `/agents/` | Agent Manager |
+| `/` | Busibox Portal |
+| `/agents/` | Busibox Agents |
 | `/api/authz/` | AuthZ Service |
 | `/api/ingest/` | Data API |
 | `/api/search/` | Search API |
@@ -180,7 +180,7 @@ make install SERVICE=authz,data,agent
 
 ## Reference
 
-- [AI Portal Environment Variables](../developers/reference/ai-portal-environment-variables.md) — Full env var reference
+- [Busibox Portal Environment Variables](../developers/reference/busibox-portal-environment-variables.md) — Full env var reference
 - [Config API](../developers/reference/config-api.md) — Runtime config via database
 - [LiteLLM Master Key](../developers/reference/litellm-master-key.md) — LLM gateway auth
 - [Optional Secrets](../developers/reference/optional-secrets.md) — Required vs optional vault keys

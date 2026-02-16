@@ -13,10 +13,10 @@
 #   1. Collects environment/platform/LLM configuration via wizard (or uses demo defaults)
 #   2. Generates all secrets automatically
 #   3. Creates vault with auto-generated password (~/.vault-pass)
-#   4. Bootstraps core services (PostgreSQL, AuthZ, Nginx, AI Portal)
+#   4. Bootstraps core services (PostgreSQL, AuthZ, Nginx, Busibox Portal)
 #   5. Generates admin magic link for first login
 #
-# After install, all management is via the AI Portal web UI.
+# After install, all management is via the Busibox Portal web UI.
 #
 
 set -euo pipefail
@@ -251,6 +251,13 @@ ucfirst() {
 # Usage: uppercase "hello" -> "HELLO"
 uppercase() {
     echo "$1" | tr '[:lower:]' '[:upper:]'
+}
+
+# Treat empty / placeholder values as unset.
+_is_nullish_value() {
+    local value
+    value=$(echo "${1:-}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+    [[ -z "$value" || "$value" == "null" || "$value" == "none" || "$value" == "undefined" || "$value" == "\"\"" || "$value" == "''" ]]
 }
 
 # =============================================================================
@@ -1155,7 +1162,7 @@ wizard_domain() {
     SITE_DOMAIN="${SITE_DOMAIN:-${saved_domain}}"
     
     echo ""
-    echo -e "  ${DIM}AI Portal will be available at:${NC} ${CYAN}https://${SITE_DOMAIN}/portal${NC}"
+    echo -e "  ${DIM}Busibox Portal will be available at:${NC} ${CYAN}https://${SITE_DOMAIN}/portal${NC}"
 }
 
 wizard_admin() {
@@ -1286,38 +1293,38 @@ wizard_github_token() {
 # =============================================================================
 
 # Detect where the app repositories are located
-# This finds ai-portal, agent-manager, and busibox-app relative to busibox
+# This finds busibox-portal, busibox-agents, and busibox-app relative to busibox
 detect_app_directories() {
-    show_stage 35 "Detecting App Directories" "Looking for ai-portal, agent-manager, and busibox-app repositories."
+    show_stage 35 "Detecting App Directories" "Looking for busibox-portal, busibox-agents, and busibox-app repositories."
     
     # Get the parent directory of busibox
     local parent_dir
     parent_dir=$(dirname "$REPO_ROOT")
     
-    # Look for ai-portal
-    if [[ -d "${parent_dir}/ai-portal" ]]; then
-        export AI_PORTAL_DIR="${parent_dir}/ai-portal"
-        info "Found ai-portal at: ${AI_PORTAL_DIR}"
+    # Look for busibox-portal
+    if [[ -d "${parent_dir}/busibox-portal" ]]; then
+        export BUSIBOX_PORTAL_DIR="${parent_dir}/busibox-portal"
+        info "Found busibox-portal at: ${BUSIBOX_PORTAL_DIR}"
     else
         # Search in common locations
         for search_dir in "$HOME/Code" "$HOME/code" "$HOME/src" "$HOME/projects" "$HOME/dev"; do
-            if [[ -d "${search_dir}/ai-portal" ]]; then
-                export AI_PORTAL_DIR="${search_dir}/ai-portal"
-                info "Found ai-portal at: ${AI_PORTAL_DIR}"
+            if [[ -d "${search_dir}/busibox-portal" ]]; then
+                export BUSIBOX_PORTAL_DIR="${search_dir}/busibox-portal"
+                info "Found busibox-portal at: ${BUSIBOX_PORTAL_DIR}"
                 break
             fi
         done
     fi
     
-    # Look for agent-manager
-    if [[ -d "${parent_dir}/agent-manager" ]]; then
-        export AGENT_MANAGER_DIR="${parent_dir}/agent-manager"
-        info "Found agent-manager at: ${AGENT_MANAGER_DIR}"
+    # Look for busibox-agents
+    if [[ -d "${parent_dir}/busibox-agents" ]]; then
+        export BUSIBOX_AGENTS_DIR="${parent_dir}/busibox-agents"
+        info "Found busibox-agents at: ${BUSIBOX_AGENTS_DIR}"
     else
         for search_dir in "$HOME/Code" "$HOME/code" "$HOME/src" "$HOME/projects" "$HOME/dev"; do
-            if [[ -d "${search_dir}/agent-manager" ]]; then
-                export AGENT_MANAGER_DIR="${search_dir}/agent-manager"
-                info "Found agent-manager at: ${AGENT_MANAGER_DIR}"
+            if [[ -d "${search_dir}/busibox-agents" ]]; then
+                export BUSIBOX_AGENTS_DIR="${search_dir}/busibox-agents"
+                info "Found busibox-agents at: ${BUSIBOX_AGENTS_DIR}"
                 break
             fi
         done
@@ -1338,19 +1345,19 @@ detect_app_directories() {
     fi
     
     # Determine the apps base directory (common parent of all app repos)
-    if [[ -n "${AI_PORTAL_DIR:-}" ]]; then
-        export APPS_BASE_DIR=$(dirname "$AI_PORTAL_DIR")
+    if [[ -n "${BUSIBOX_PORTAL_DIR:-}" ]]; then
+        export APPS_BASE_DIR=$(dirname "$BUSIBOX_PORTAL_DIR")
     else
         export APPS_BASE_DIR="$parent_dir"
     fi
     
     # Validate required directories
     local missing=()
-    if [[ -z "${AI_PORTAL_DIR:-}" ]]; then
-        missing+=("ai-portal")
+    if [[ -z "${BUSIBOX_PORTAL_DIR:-}" ]]; then
+        missing+=("busibox-portal")
     fi
-    if [[ -z "${AGENT_MANAGER_DIR:-}" ]]; then
-        missing+=("agent-manager")
+    if [[ -z "${BUSIBOX_AGENTS_DIR:-}" ]]; then
+        missing+=("busibox-agents")
     fi
     if [[ -z "${BUSIBOX_APP_DIR:-}" ]]; then
         missing+=("busibox-app")
@@ -1371,8 +1378,8 @@ detect_app_directories() {
         box_line "    $parent_dir" "single"
         box_line "" "single"
         box_line "  Or set these environment variables before running install:" "single"
-        box_line "    export AI_PORTAL_DIR=/path/to/ai-portal" "single"
-        box_line "    export AGENT_MANAGER_DIR=/path/to/agent-manager" "single"
+        box_line "    export BUSIBOX_PORTAL_DIR=/path/to/busibox-portal" "single"
+        box_line "    export BUSIBOX_AGENTS_DIR=/path/to/busibox-agents" "single"
         box_line "    export BUSIBOX_APP_DIR=/path/to/busibox-app" "single"
         echo -e "└──────────────────────────────────────────────────────────────────────────────┘"
         return 1
@@ -1533,8 +1540,8 @@ EOF
         cat >> "$env_file" << EOF
 
 # App Directories (for volume mounts in docker-compose.local-dev.yml)
-AI_PORTAL_DIR=${AI_PORTAL_DIR}
-AGENT_MANAGER_DIR=${AGENT_MANAGER_DIR}
+BUSIBOX_PORTAL_DIR=${BUSIBOX_PORTAL_DIR}
+BUSIBOX_AGENTS_DIR=${BUSIBOX_AGENTS_DIR}
 BUSIBOX_APP_DIR=${BUSIBOX_APP_DIR}
 APPS_BASE_DIR=${APPS_BASE_DIR}
 
@@ -1547,12 +1554,12 @@ EOF
         cat >> "$env_file" << EOF
 
 # GitHub Release Configuration (for docker-compose.github.yml)
-AI_PORTAL_GITHUB_REF=${AI_PORTAL_GITHUB_REF:-main}
-AGENT_MANAGER_GITHUB_REF=${AGENT_MANAGER_GITHUB_REF:-main}
+BUSIBOX_PORTAL_GITHUB_REF=${BUSIBOX_PORTAL_GITHUB_REF:-main}
+BUSIBOX_AGENTS_GITHUB_REF=${BUSIBOX_AGENTS_GITHUB_REF:-main}
 
 # Empty local paths (not used in github mode)
-AI_PORTAL_DIR=
-AGENT_MANAGER_DIR=
+BUSIBOX_PORTAL_DIR=
+BUSIBOX_AGENTS_DIR=
 BUSIBOX_APP_DIR=
 APPS_BASE_DIR=
 DEV_APPS_DIR=
@@ -1711,20 +1718,24 @@ _load_admin_config_from_vault() {
         fi
     fi
     
-    # Load admin_emails from vault if ADMIN_EMAIL is not set or is "null"
-    if [[ -z "${ADMIN_EMAIL:-}" ]] || [[ "${ADMIN_EMAIL}" == "null" ]]; then
+    # Load admin emails from vault if ADMIN_EMAIL is missing/null-like.
+    if _is_nullish_value "${ADMIN_EMAIL:-}"; then
         local vault_admin_emails
         vault_admin_emails=$(get_vault_secret "secrets.admin_emails" 2>/dev/null || echo "")
-        if [[ -n "$vault_admin_emails" ]] && [[ "$vault_admin_emails" != "null" ]] && [[ "$vault_admin_emails" != "CHANGE_ME"* ]]; then
+        if _is_nullish_value "$vault_admin_emails"; then
+            # Legacy fallback key.
+            vault_admin_emails=$(get_vault_secret "secrets.admin_email" 2>/dev/null || echo "")
+        fi
+        if ! _is_nullish_value "$vault_admin_emails" && [[ "$vault_admin_emails" != "CHANGE_ME"* ]]; then
             ADMIN_EMAIL="$vault_admin_emails"
         fi
     fi
     
-    # Load allowed_email_domains from vault if ALLOWED_DOMAINS is not set or is "null"  
-    if [[ -z "${ALLOWED_DOMAINS:-}" ]] || [[ "${ALLOWED_DOMAINS}" == "null" ]]; then
+    # Load allowed_email_domains from vault if ALLOWED_DOMAINS is missing/null-like.
+    if _is_nullish_value "${ALLOWED_DOMAINS:-}"; then
         local vault_allowed_domains
         vault_allowed_domains=$(get_vault_secret "secrets.allowed_email_domains" 2>/dev/null || echo "")
-        if [[ -n "$vault_allowed_domains" ]] && [[ "$vault_allowed_domains" != "null" ]] && [[ "$vault_allowed_domains" != "CHANGE_ME"* ]]; then
+        if ! _is_nullish_value "$vault_allowed_domains" && [[ "$vault_allowed_domains" != "CHANGE_ME"* ]]; then
             ALLOWED_DOMAINS="$vault_allowed_domains"
         fi
     fi
@@ -1778,7 +1789,7 @@ bootstrap_k8s() {
         return 1
     fi
     
-    # Phase 4: Deploy core apps (ai-portal, agent-manager) via build server
+    # Phase 4: Deploy core apps (busibox-portal, busibox-agents) via build server
     show_stage 85 "K8s Core Apps" "Building and deploying core applications..."
     # Core apps are deployed via deploy-api's K8s executor once deploy-api is running
     # For now, just verify the deployment is healthy
@@ -1786,11 +1797,11 @@ bootstrap_k8s() {
     show_stage 95 "K8s Deployment Complete" "All services deployed to Kubernetes cluster"
     success "K8s bootstrap complete"
     echo ""
-    info "To access the AI Portal you need an HTTPS tunnel to the K8s cluster."
+    info "To access the Busibox Portal you need an HTTPS tunnel to the K8s cluster."
     info "This sets up SSL certificates, /etc/hosts, and kubectl port-forward."
     info "Default: https://busibox.local/portal"
     echo ""
-    read -p "Run 'make connect' now to access the AI Portal? [Y/n]: " connect_choice
+    read -p "Run 'make connect' now to access the Busibox Portal? [Y/n]: " connect_choice
     if [[ "$connect_choice" != "n" && "$connect_choice" != "N" ]]; then
         cd "$REPO_ROOT"
         make connect
@@ -1924,9 +1935,9 @@ bootstrap_docker_ansible() {
     }
     
     # ==========================================================================
-    # MINIMAL BOOTSTRAP: Deploy only services needed for AI Portal to work
+    # MINIMAL BOOTSTRAP: Deploy only services needed for Busibox Portal to work
     # The rest (MinIO, Milvus, Data-API, Search-API, Agent-API, LiteLLM, etc.)
-    # will be deployed via AI Portal setup wizard using deploy-api
+    # will be deployed via Busibox Portal setup wizard using deploy-api
     # ==========================================================================
     
     # Phase 1: PostgreSQL (database)
@@ -1986,24 +1997,23 @@ bootstrap_docker_ansible() {
         ((attempt++))
     done
     
-    # Phase 5: Core Apps (Nginx + AI Portal + Agent Manager)
-    # In Docker mode, nginx is bundled inside the core-apps container
+    # Phase 5: Core Apps (Busibox Portal + Agent Manager)
     # This mirrors the Proxmox apps-lxc architecture
-    show_stage 80 "Deploying Core Apps" "Nginx, AI Portal, and Agent Manager."
+    show_stage 80 "Deploying Core Apps" "Busibox Portal and Agent Manager."
     info "Running: ansible-playbook ... --tags core-apps"
     if ! run_ansible "core-apps"; then
         error "Core apps deployment failed"
         return 1
     fi
     
-    # Phase 7: Wait for AI Portal to be ready
-    show_stage 95 "Waiting for AI Portal" "Verifying services are healthy..."
-    info "Waiting for AI Portal to be healthy (this may take a minute on first run)..."
+    # Phase 7: Wait for Busibox Portal to be ready
+    show_stage 95 "Waiting for Busibox Portal" "Verifying services are healthy..."
+    info "Waiting for Busibox Portal to be healthy (this may take a minute on first run)..."
     max_attempts=90
     attempt=0
     while [[ $attempt -lt $max_attempts ]]; do
         if curl -sf http://localhost:3000/portal/api/health &>/dev/null; then
-            success "AI Portal is ready"
+            success "Busibox Portal is ready"
             break
         fi
         sleep 2
@@ -2015,11 +2025,11 @@ bootstrap_docker_ansible() {
     echo ""
     
     if [[ $attempt -ge $max_attempts ]]; then
-        warn "AI Portal health check timed out, but it may still be starting"
+        warn "Busibox Portal health check timed out, but it may still be starting"
     fi
     
     # Note: Additional services (MinIO, Milvus, Data-API, Search-API, Agent-API, 
-    # Docs-API, LiteLLM, etc.) will be deployed via AI Portal setup wizard
+    # Docs-API, LiteLLM, etc.) will be deployed via Busibox Portal setup wizard
     
     cd "${REPO_ROOT}"
 }
@@ -2085,8 +2095,8 @@ ${network_base}.206       embedding-api embedding
 ${network_base}.211       bridge-api bridge bridge-lxc
 
 # Application Services
-${network_base}.201       ai-portal
-${network_base}.201       agent-manager
+${network_base}.201       busibox-portal
+${network_base}.201       busibox-agents
 ${network_base}.212       user-apps
 $marker_end
 EOF
@@ -2381,9 +2391,9 @@ bootstrap_proxmox_ansible() {
     }
     
     # ==========================================================================
-    # MINIMAL BOOTSTRAP: Deploy only services needed for AI Portal to work
+    # MINIMAL BOOTSTRAP: Deploy only services needed for Busibox Portal to work
     # The rest (MinIO, Milvus, Data-API, Search-API, Agent-API, LiteLLM, etc.)
-    # will be deployed via AI Portal setup wizard using deploy-api
+    # will be deployed via Busibox Portal setup wizard using deploy-api
     # This matches the Docker bootstrap pattern.
     # ==========================================================================
     
@@ -2509,26 +2519,26 @@ bootstrap_proxmox_ansible() {
         fi
     fi
     
-    # Phase 6: Core Apps (AI Portal + Agent Manager)
+    # Phase 6: Core Apps (Busibox Portal + Agent Manager)
     if is_service_healthy "ai_portal"; then
-        info "AI Portal is already healthy - skipping deployment"
+        info "Busibox Portal is already healthy - skipping deployment"
     else
-        show_stage 85 "Deploying Core Apps" "AI Portal and Agent Manager."
+        show_stage 85 "Deploying Core Apps" "Busibox Portal and Agent Manager."
         if ! run_ansible_proxmox "apps"; then
             error "Core apps deployment failed"
             return 1
         fi
         
-        # Phase 7: Wait for AI Portal to be ready
-        show_stage 95 "Waiting for AI Portal" "Verifying services are healthy..."
+        # Phase 7: Wait for Busibox Portal to be ready
+        show_stage 95 "Waiting for Busibox Portal" "Verifying services are healthy..."
         local portal_health_url
         portal_health_url=$(get_service_health_url "ai_portal" "$ENVIRONMENT" "proxmox")
-        info "Waiting for AI Portal to be healthy at ${portal_ip}..."
+        info "Waiting for Busibox Portal to be healthy at ${portal_ip}..."
         max_attempts=90
         attempt=0
         while [[ $attempt -lt $max_attempts ]]; do
             if curl -sf "$portal_health_url" &>/dev/null; then
-                success "AI Portal is ready"
+                success "Busibox Portal is ready"
                 break
             fi
             sleep 2
@@ -2540,12 +2550,12 @@ bootstrap_proxmox_ansible() {
         echo ""
         
         if [[ $attempt -ge $max_attempts ]]; then
-            warn "AI Portal health check timed out, but it may still be starting"
+            warn "Busibox Portal health check timed out, but it may still be starting"
         fi
     fi
     
     # Note: Additional services (MinIO, Milvus, Data-API, Search-API, Agent-API, 
-    # Docs-API, LiteLLM, vLLM, etc.) will be deployed via AI Portal setup wizard
+    # Docs-API, LiteLLM, vLLM, etc.) will be deployed via Busibox Portal setup wizard
     
     cd "${REPO_ROOT}"
 }
@@ -2693,9 +2703,9 @@ bootstrap_docker() {
     fi
     
     # ==========================================================================
-    # PHASE 5: AI Portal (Setup Wizard)
+    # PHASE 5: Busibox Portal (Setup Wizard)
     # ==========================================================================
-    show_stage 75 "Building AI Portal" "Building core-apps container with GitHub credentials."
+    show_stage 75 "Building Busibox Portal" "Building core-apps container with GitHub credentials."
     
     # Build core-apps first to ensure GITHUB_AUTH_TOKEN is baked into the image
     # This is required for npm to install @jazzmind/busibox-app from GitHub Packages
@@ -2706,9 +2716,9 @@ bootstrap_docker() {
         GITHUB_AUTH_TOKEN="${GITHUB_AUTH_TOKEN}" docker compose $compose_files build core-apps 2>&1 | tail -20 || true
     fi
     
-    show_stage 80 "Starting AI Portal" "Your command center for managing Busibox."
+    show_stage 80 "Starting Busibox Portal" "Your command center for managing Busibox."
     
-    # Start core-apps (contains ai-portal + agent-manager) without waiting for docs-api
+    # Start core-apps (contains busibox-portal + busibox-agents) without waiting for docs-api
     # We use --no-deps to skip the docs-api dependency for bootstrap
     if [[ "$VERBOSE" == true ]]; then
         GITHUB_AUTH_TOKEN="${GITHUB_AUTH_TOKEN}" docker compose $compose_files up -d --no-deps core-apps
@@ -2717,7 +2727,7 @@ bootstrap_docker() {
     fi
     
     # Wait for core-apps container to exist
-    info "Waiting for AI Portal container to start..."
+    info "Waiting for Busibox Portal container to start..."
     attempt=0
     while [[ $attempt -lt 30 ]]; do
         if docker ps --format '{{.Names}}' | grep -q "${container_prefix}-core-apps"; then
@@ -2727,15 +2737,15 @@ bootstrap_docker() {
         ((attempt++))
     done
     
-    # Run database migrations for AI Portal
-    show_stage 85 "Running database migrations" "Setting up AI Portal schema..."
+    # Run database migrations for Busibox Portal
+    show_stage 85 "Running database migrations" "Setting up Busibox Portal schema..."
     
-    info "Waiting for AI Portal dependencies to install..."
+    info "Waiting for Busibox Portal dependencies to install..."
     # Wait for node_modules to be populated (entrypoint runs npm install)
     attempt=0
     max_attempts=60  # 2 minutes
     while [[ $attempt -lt $max_attempts ]]; do
-        if docker exec "${container_prefix}-core-apps" sh -c "test -f /srv/ai-portal/node_modules/.package-lock.json" 2>/dev/null; then
+        if docker exec "${container_prefix}-core-apps" sh -c "test -f /srv/busibox-portal/node_modules/.package-lock.json" 2>/dev/null; then
             success "Dependencies installed"
             break
         fi
@@ -2746,9 +2756,9 @@ bootstrap_docker() {
     if [[ $attempt -ge $max_attempts ]]; then
         warn "Dependencies installation timed out - check container logs"
     else
-        info "Running Prisma migrations for AI Portal..."
+        info "Running Prisma migrations for Busibox Portal..."
         # Run prisma db push to sync schema
-        if docker exec "${container_prefix}-core-apps" sh -c "cd /srv/ai-portal && npx prisma db push --accept-data-loss" 2>&1; then
+        if docker exec "${container_prefix}-core-apps" sh -c "cd /srv/busibox-portal && npx prisma db push --accept-data-loss" 2>&1; then
             success "Database schema synchronized"
         else
             warn "Database migration may have failed - check logs if issues persist"
@@ -2756,23 +2766,23 @@ bootstrap_docker() {
     fi
     
     # ==========================================================================
-    # PHASE 6: Nginx (Reverse Proxy)
+    # PHASE 6: Proxy (Reverse Proxy)
     # ==========================================================================
-    show_stage 90 "Starting Nginx" "Reverse proxy with SSL termination."
+    show_stage 90 "Starting Proxy" "Reverse proxy with SSL termination."
     
-    # Start nginx without waiting for all API dependencies
+    # Start proxy without waiting for all API dependencies
     if [[ "$VERBOSE" == true ]]; then
-        docker compose $compose_files up -d --no-deps nginx
+        docker compose $compose_files up -d --no-deps proxy
     else
-        docker compose $compose_files up -d --no-deps nginx 2>&1 | grep -v "^$" || true
+        docker compose $compose_files up -d --no-deps proxy 2>&1 | grep -v "^$" || true
     fi
     
     # ==========================================================================
-    # PHASE 7: Wait for AI Portal to be ready
+    # PHASE 7: Wait for Busibox Portal to be ready
     # ==========================================================================
     show_stage 95 "Waiting for services" "Bootstrap services starting up..."
     
-    info "Waiting for AI Portal to be healthy (this may take a minute on first run)..."
+    info "Waiting for Busibox Portal to be healthy (this may take a minute on first run)..."
     max_attempts=90
     attempt=0
     while [[ $attempt -lt $max_attempts ]]; do
@@ -2788,9 +2798,9 @@ bootstrap_docker() {
     echo ""
     
     if [[ $attempt -ge $max_attempts ]]; then
-        warn "AI Portal health check timed out, but it may still be starting"
+        warn "Busibox Portal health check timed out, but it may still be starting"
     else
-        success "AI Portal is ready"
+        success "Busibox Portal is ready"
     fi
 }
 
@@ -2870,8 +2880,29 @@ create_admin_user() {
     local email="$1"
     local max_attempts=30
     local attempt=0
+    local raw_email=""
     
     info "Creating admin user via direct PostgreSQL (Zero Trust bootstrap)..."
+    
+    # Normalize user input:
+    # - If multiple emails are provided, use the first for magic link bootstrap.
+    # - Never create a user when email is null-like.
+    raw_email=$(echo "${email%%,*}" | xargs)
+    if _is_nullish_value "$raw_email"; then
+        local existing_admin
+        existing_admin=$(_run_pg_sql "SELECT u.user_id::text || '|' || u.email FROM authz_users u JOIN authz_user_roles ur ON ur.user_id = u.user_id JOIN authz_roles r ON r.id = ur.role_id WHERE r.name = 'Admin' ORDER BY u.created_at ASC LIMIT 1;" authz 2>/dev/null || echo "")
+        existing_admin=$(echo "$existing_admin" | grep -v "^$" | head -1)
+        if [[ -n "$existing_admin" ]] && [[ "$existing_admin" == *"|"* ]]; then
+            local existing_user_id
+            existing_user_id=$(echo "$existing_admin" | cut -d'|' -f1 | tr -d '[:space:]')
+            set_state "ADMIN_USER_ID" "$existing_user_id"
+            info "Admin email not set; using existing Admin user from database"
+            return 0
+        fi
+        warn "Admin email is not configured (vault/state/env). Skipping admin bootstrap user creation."
+        return 1
+    fi
+    email="$raw_email"
     
     # Wait for postgres to be ready
     while [[ $attempt -lt $max_attempts ]]; do
@@ -3065,7 +3096,7 @@ show_completion() {
     box_line "                         ${BOLD}BOOTSTRAP COMPLETE${NC}" "double" "${GREEN}"
     echo -e "${GREEN}╠══════════════════════════════════════════════════════════════════════════════╣${NC}"
     box_line "" "double" "${GREEN}"
-    box_line "  Core services are running! Open the AI Portal in your browser:" "double" "${GREEN}"
+    box_line "  Core services are running! Open the Busibox Portal in your browser:" "double" "${GREEN}"
     box_line "" "double" "${GREEN}"
     echo -e "${GREEN}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
     echo ""
@@ -3078,12 +3109,12 @@ show_completion() {
     box_line "" "double" "${GREEN}"
     box_line "  • PostgreSQL     - Database with row-level security" "double" "${GREEN}"
     box_line "  • AuthZ API      - OAuth 2.0 authentication" "double" "${GREEN}"
-    box_line "  • AI Portal      - Web dashboard for managing Busibox" "double" "${GREEN}"
+    box_line "  • Busibox Portal      - Web dashboard for managing Busibox" "double" "${GREEN}"
     box_line "  • Nginx          - Reverse proxy with SSL" "double" "${GREEN}"
     if [[ "${LLM_BACKEND:-}" == "mlx" ]]; then
         box_line "  • Host Agent     - MLX control service (localhost:8089)" "double" "${GREEN}"
         box_line "" "double" "${GREEN}"
-        box_line "  ${BOLD}MLX:${NC} Test model downloaded. Start via AI Portal or run:" "double" "${GREEN}"
+        box_line "  ${BOLD}MLX:${NC} Test model downloaded. Start via Busibox Portal or run:" "double" "${GREEN}"
         box_line "       scripts/llm/start-mlx-server.sh" "double" "${GREEN}"
     fi
     box_line "" "double" "${GREEN}"
@@ -3530,7 +3561,7 @@ setup_mlx() {
     fi
     
     # Download small test model (Qwen3-0.6B-4bit ~400MB)
-    # Larger models are managed by deploy-api and can be downloaded via AI Portal
+    # Larger models are managed by deploy-api and can be downloaded via Busibox Portal
     local test_model="mlx-community/Qwen3-0.6B-4bit"
     
     # Check if model is already cached (may have been downloaded in background)
@@ -3543,7 +3574,7 @@ setup_mlx() {
     else
         info "Downloading test model: ${test_model}"
         info "This is a small model (~400MB) to verify MLX works."
-        info "Larger models can be downloaded via the AI Portal later."
+        info "Larger models can be downloaded via the Busibox Portal later."
         
         "$mlx_python" -c "
 from huggingface_hub import snapshot_download
@@ -3558,7 +3589,7 @@ except Exception as e:
     print(f'Download failed: {e}')
     exit(1)
 " || {
-            warn "Failed to download test model - you can download it later via the AI Portal"
+            warn "Failed to download test model - you can download it later via the Busibox Portal"
             return 0  # Don't fail the installation
         }
         
@@ -3651,14 +3682,14 @@ setup_host_agent() {
     return 0
 }
 
-# Ensure MLX server is running before AI Portal setup
+# Ensure MLX server is running before Busibox Portal setup
 # This is called after all MLX setup is complete and models are downloaded
 ensure_mlx_running() {
     if [[ "$LLM_BACKEND" != "mlx" ]]; then
         return 0
     fi
     
-    show_stage 96 "Starting MLX Server" "Ensuring MLX is ready for AI Portal setup wizard."
+    show_stage 96 "Starting MLX Server" "Ensuring MLX is ready for Busibox Portal setup wizard."
     
     # Check if MLX is already running
     if curl -sf http://localhost:8080/v1/models &>/dev/null; then
@@ -3755,7 +3786,7 @@ ensure_mlx_running() {
     else
         warn "MLX server could not be started automatically"
         info "You can start it manually with: make mlx-start"
-        info "The AI Portal setup wizard will also try to start it"
+        info "The Busibox Portal setup wizard will also try to start it"
         return 0  # Don't fail installation, just warn
     fi
 }
@@ -3948,7 +3979,7 @@ INSTALL_SERVICES_ORDER=(
     "postgres:5432:infrastructure"
     "authz-api:8010:apis"
     "deploy-api:8011:apis"
-    "core-apps:443:frontend"  # Includes nginx, ai-portal, agent-manager
+    "proxy:443:frontend"
 )
 
 # Proxmox services installation order
@@ -3959,7 +3990,7 @@ PROXMOX_SERVICES_INSTALL_ORDER=(
     "postgres|infrastructure|postgres"
     "authz|apis|authz"
     "deploy_api|apis|deploy"
-    "nginx|frontend|nginx"
+    "proxy|frontend|nginx"
     "ai_portal|frontend|apps"
 )
 
@@ -4003,7 +4034,7 @@ validate_install_health() {
         # Skip if service uses different container name
         case "$service_name" in
             core-apps)
-                # Check nginx port on core-apps
+                # Check core-apps container
                 if ! echo "$running_containers" | grep -q "${env_prefix}-core-apps"; then
                     FIRST_UNHEALTHY_SERVICE="$service_name"
                     FIRST_UNHEALTHY_PHASE="$phase"
@@ -4237,7 +4268,7 @@ check_existing_install() {
         local magic_link
         magic_link=$(generate_admin_link true)  # Force regenerate for existing installations
         
-        echo -e "  Your Busibox instance is ready. Open the AI Portal:"
+        echo -e "  Your Busibox instance is ready. Open the Busibox Portal:"
         echo ""
         echo -e "  ${CYAN}${magic_link}${NC}"
         echo ""
@@ -4245,7 +4276,7 @@ check_existing_install() {
         if [[ "$NO_PROMPT" != true ]]; then
             echo -e "┌──────────────────────────────────────────────────────────────────────────────┐"
             box_line "" "single"
-            box_line "  ${CYAN}1)${NC} Open browser       Launch AI Portal in your default browser" "single"
+            box_line "  ${CYAN}1)${NC} Open browser       Launch Busibox Portal in your default browser" "single"
             box_line "  ${CYAN}2)${NC} Fresh install      Delete existing stack and start over" "single"
             box_line "  ${CYAN}3)${NC} Exit               Do nothing" "single"
             box_line "" "single"
@@ -4464,6 +4495,8 @@ main() {
             SITE_DOMAIN=$(get_state "SITE_DOMAIN" "")
             [[ -z "$SITE_DOMAIN" ]] && SITE_DOMAIN=$(get_state "BASE_DOMAIN" "localhost")
             ALLOWED_DOMAINS=$(get_state "ALLOWED_DOMAINS" "*")
+            _is_nullish_value "$ADMIN_EMAIL" && ADMIN_EMAIL=""
+            _is_nullish_value "$ALLOWED_DOMAINS" && ALLOWED_DOMAINS="*"
             # Load secrets from vault (secrets are now in vault, not state)
             # These may not exist yet - that's OK, we'll prompt later
             _load_github_token_from_vault || true
@@ -4569,14 +4602,14 @@ main() {
         
         if [[ "$current_phase" == "secrets_generated" || "$current_phase" == "bootstrap_started" || "$current_phase" == "bootstrap_complete" ]]; then
             # Load saved paths from state
-            AI_PORTAL_DIR=$(get_state "AI_PORTAL_DIR" "")
-            AGENT_MANAGER_DIR=$(get_state "AGENT_MANAGER_DIR" "")
+            BUSIBOX_PORTAL_DIR=$(get_state "BUSIBOX_PORTAL_DIR" "")
+            BUSIBOX_AGENTS_DIR=$(get_state "BUSIBOX_AGENTS_DIR" "")
             BUSIBOX_APP_DIR=$(get_state "BUSIBOX_APP_DIR" "")
             APPS_BASE_DIR=$(get_state "APPS_BASE_DIR" "")
             DEV_APPS_DIR=$(get_dev_apps_dir)
             
             # If not in state, detect them
-            if [[ -z "$AI_PORTAL_DIR" || -z "$BUSIBOX_APP_DIR" ]]; then
+            if [[ -z "$BUSIBOX_PORTAL_DIR" || -z "$BUSIBOX_APP_DIR" ]]; then
                 if ! detect_app_directories; then
                     error "Cannot proceed without app directories"
                     exit 1
@@ -4590,8 +4623,8 @@ main() {
                 exit 1
             fi
             # Save paths to state
-            set_state "AI_PORTAL_DIR" "$AI_PORTAL_DIR"
-            set_state "AGENT_MANAGER_DIR" "$AGENT_MANAGER_DIR"
+            set_state "BUSIBOX_PORTAL_DIR" "$BUSIBOX_PORTAL_DIR"
+            set_state "BUSIBOX_AGENTS_DIR" "$BUSIBOX_AGENTS_DIR"
             set_state "BUSIBOX_APP_DIR" "$BUSIBOX_APP_DIR"
             set_state "APPS_BASE_DIR" "$APPS_BASE_DIR"
             # Set DEV_APPS_DIR (defaults to APPS_BASE_DIR if not set by wizard)
@@ -4605,8 +4638,8 @@ main() {
         info "Using GitHub mode - apps will be deployed from latest releases"
         
         # Set empty values to prevent docker-compose from complaining about missing vars
-        AI_PORTAL_DIR=""
-        AGENT_MANAGER_DIR=""
+        BUSIBOX_PORTAL_DIR=""
+        BUSIBOX_AGENTS_DIR=""
         BUSIBOX_APP_DIR=""
         APPS_BASE_DIR=""
         DEV_APPS_DIR=""
@@ -4760,13 +4793,16 @@ main() {
             export LITELLM_API_KEY="${LITELLM_MASTER_KEY}"  # Same as master key for authentication
             
             # Restore protected config (admin settings from vault for integrity)
-            local vault_admin_email=$(get_vault_secret "secrets.admin_email" || echo "")
+            local vault_admin_email=$(get_vault_secret "secrets.admin_emails" || echo "")
+            if _is_nullish_value "$vault_admin_email"; then
+                vault_admin_email=$(get_vault_secret "secrets.admin_email" || echo "")
+            fi
             local vault_allowed_domains=$(get_vault_secret "secrets.allowed_email_domains" || echo "")
             
-            if [[ -n "$vault_admin_email" ]] && [[ "$vault_admin_email" != "CHANGE_ME"* ]]; then
+            if ! _is_nullish_value "$vault_admin_email" && [[ "$vault_admin_email" != "CHANGE_ME"* ]]; then
                 export ADMIN_EMAIL="$vault_admin_email"
             fi
-            if [[ -n "$vault_allowed_domains" ]] && [[ "$vault_allowed_domains" != "CHANGE_ME"* ]]; then
+            if ! _is_nullish_value "$vault_allowed_domains" && [[ "$vault_allowed_domains" != "CHANGE_ME"* ]]; then
                 export ALLOWED_DOMAINS="$vault_allowed_domains"
             fi
         fi
@@ -4828,7 +4864,7 @@ main() {
         setup_host_agent
         # Wait for background model download if still running
         wait_for_model_download
-        # Ensure MLX server is running for AI Portal setup
+        # Ensure MLX server is running for Busibox Portal setup
         ensure_mlx_running
     elif [[ "$PLATFORM" != "proxmox" && "$PLATFORM" != "k8s" ]]; then
         # For Docker non-MLX backends, download the embedding model
@@ -4846,7 +4882,7 @@ main() {
     set_install_phase "complete"
     set_install_status "installed"
     
-    # Note: SETUP_COMPLETE will be set by AI Portal after admin completes setup wizard
+    # Note: SETUP_COMPLETE will be set by Busibox Portal after admin completes setup wizard
     set_state "SETUP_COMPLETE" "false"
     
     # Generate admin magic link - always regenerate to ensure a fresh token

@@ -294,9 +294,11 @@ def get_data_schema() -> SchemaManager:
             library_id UUID NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
             name VARCHAR(255) NOT NULL,
             description TEXT,
+            trigger_type VARCHAR(50) DEFAULT 'run_agent',
             agent_id UUID,
             prompt TEXT,
             schema_document_id UUID,
+            notification_config JSONB,
             is_active BOOLEAN DEFAULT true,
             created_by UUID NOT NULL,
             delegation_token TEXT,
@@ -485,6 +487,28 @@ def get_data_schema() -> SchemaManager:
                 WHERE table_name = 'data_files' AND column_name = 'group_id'
             ) THEN
                 ALTER TABLE data_files ADD COLUMN group_id UUID REFERENCES groups(id) ON DELETE SET NULL;
+            END IF;
+        END $$;
+    """)
+
+    # library_triggers trigger_type + notification_config migrations
+    schema.add_migration("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'library_triggers' AND column_name = 'trigger_type'
+            ) THEN
+                ALTER TABLE library_triggers
+                ADD COLUMN trigger_type VARCHAR(50) DEFAULT 'run_agent';
+            END IF;
+
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'library_triggers' AND column_name = 'notification_config'
+            ) THEN
+                ALTER TABLE library_triggers
+                ADD COLUMN notification_config JSONB;
             END IF;
         END $$;
     """)

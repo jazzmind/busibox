@@ -22,7 +22,7 @@ published: true
 
 ## Service Placement
 
-- **Core Apps Container**: `core-apps-lxc` (CT 201) -- hosts AI Portal, Agent Manager, and other core apps
+- **Core Apps Container**: `core-apps-lxc` (CT 201) -- hosts Busibox Portal, Busibox Agents, and other core apps
 - **User Apps Container**: `user-apps-lxc` (CT 212) -- hosts user-deployed applications
 - **Reverse Proxy**: `proxy-lxc` (CT 200) -- nginx fronts all apps
 - **Ports**: Next.js internal `3000`+ ; exposed via proxy `80/443`.
@@ -47,7 +47,7 @@ published: true
 | Type | Description | Authentication |
 |------|-------------|----------------|
 | **BUILT_IN** | Core portal features (Video, Chat, Document Manager) | Uses session JWT directly |
-| **LIBRARY** | Deployed alongside portal (Agent Manager, Doc Intel) | SSO via app-scoped token |
+| **LIBRARY** | Deployed alongside portal (Busibox Agents, Doc Intel) | SSO via app-scoped token |
 | **EXTERNAL** | User-deployed apps | SSO via app-scoped token |
 
 ---
@@ -56,7 +56,7 @@ published: true
 
 ### SSO Flow for External/Library Apps
 
-When a user clicks on an external app (e.g., Agent Manager), ai-portal:
+When a user clicks on an external app (e.g., Busibox Agents), busibox-portal:
 
 1. Exchanges the user's session JWT for an app-scoped access token via authz
 2. AuthZ verifies user has access to the app via RBAC bindings
@@ -112,11 +112,11 @@ App access is controlled via RBAC bindings in authz:
 
 | Role | App Binding | Result |
 |------|-------------|--------|
-| Admin | Agent Manager | Admin users can access Agent Manager |
-| Finance | Agent Manager | Finance users can access Agent Manager |
-| Guest | (none) | Guest users cannot access Agent Manager |
+| Admin | Busibox Agents | Admin users can access Busibox Agents |
+| Finance | Busibox Agents | Finance users can access Busibox Agents |
+| Guest | (none) | Guest users cannot access Busibox Agents |
 
-Bindings are created via ai-portal admin UI or authz API:
+Bindings are created via busibox-portal admin UI or authz API:
 
 ```http
 POST /admin/bindings
@@ -187,9 +187,9 @@ See `busibox-app/src/lib/authz/zero-trust.ts` for implementation.
 
 | App | Port | Base Path | Description |
 |-----|------|-----------|-------------|
-| AI Portal | 3000 | / | Main dashboard, admin, document manager |
-| Agent Manager | 3001 | /agents | Agent management and chat |
-| Status Report | 3003 | /status | Project tracking with AI agents |
+| Busibox Portal | 3000 | / | Main dashboard, admin, document manager |
+| Busibox Agents | 3001 | /agents | Agent management and chat |
+| Busibox Projects | 3003 | /status | Project tracking with AI agents |
 | Estimator | 3004 | /estimator | Cost estimation tool |
 
 ---
@@ -200,7 +200,7 @@ The Deploy API (co-located with AuthZ, port 8011) provides deployment orchestrat
 
 ### Trusted Path (Core Apps)
 
-Core apps (ai-portal, agent-manager, authz-api, data-api, search-api, agent-api, docs-api, deploy-api) are system infrastructure. Deployment flow:
+Core apps (busibox-portal, busibox-agents, authz-api, data-api, search-api, agent-api, docs-api, deploy-api) are system infrastructure. Deployment flow:
 
 1. Deploy API receives request → identifies as core app
 2. Calls bridge script with `make deploy-{app} INV=inventory/{env}`
@@ -239,7 +239,7 @@ Deployment: Deploy API uses `docker exec` to run commands in user-apps container
 
 ## Deployment Notes
 
-- Deploy core apps: `make install SERVICE=ai-portal` or `make install SERVICE=core-apps`
-- Deploy user apps: via Deploy API or AI Portal admin UI
+- Deploy core apps: `make install SERVICE=busibox-portal` or `make install SERVICE=core-apps`
+- Deploy user apps: via Deploy API or Busibox Portal admin UI
 - Environment variables for app endpoints should match container IPs in `provision/pct/vars.env`.
 - Keep proxy rules aligned so only apps are internet-facing; backend containers remain internal.

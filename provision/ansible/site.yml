@@ -6,7 +6,7 @@
 #   1. CORE: nginx, minio, postgres, milvus, neo4j (infrastructure)
 #   2. LLM: vllm, litellm, colpali, embedding (AI/ML services)
 #   3. APIs: authz, data, search, agent, docs (application services)
-#   4. APPS: ai-portal, agent-manager (frontend applications)
+#   4. APPS: busibox-portal, busibox-agents (frontend applications)
 #
 # Web installs start with nginx first so the install UI can drive the rest.
 #
@@ -337,7 +337,7 @@
 # Frontend applications
 # =============================================================================
 
-# 4.1 Next.js Applications (ai-portal, agent-manager)
+# 4.1 Next.js Applications (busibox-portal, busibox-agents)
 - hosts: apps
   tags: [apps, apps_frontend]
   roles:

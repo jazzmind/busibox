@@ -492,7 +492,7 @@ get_failed_apps() {
     init_state
     grep "^TEST_RESULT_.*=failed" "$BUSIBOX_STATE_FILE" 2>/dev/null | \
         sed 's/^TEST_RESULT_//; s/=failed$//' | \
-        grep -E "^(ai-portal|agent-manager)$" | tr '\n' ' ' || true
+        grep -E "^(busibox-portal|busibox-agents)$" | tr '\n' ' ' || true
 }
 
 # Get list of passed app tests
@@ -501,7 +501,7 @@ get_passed_apps() {
     init_state
     grep "^TEST_RESULT_.*=passed" "$BUSIBOX_STATE_FILE" 2>/dev/null | \
         sed 's/^TEST_RESULT_//; s/=passed$//' | \
-        grep -E "^(ai-portal|agent-manager)$" | tr '\n' ' ' || true
+        grep -E "^(busibox-portal|busibox-agents)$" | tr '\n' ' ' || true
 }
 
 # Clear all test results
@@ -561,11 +561,11 @@ show_state() {
 #   DEPLOYED_<REPO>_TIME = ISO timestamp of deployment
 
 # List of tracked repositories
-TRACKED_REPO_KEYS="busibox ai-portal agent-manager busibox-app"
+TRACKED_REPO_KEYS="busibox busibox-portal busibox-agents busibox-app"
 
 # Save deployed version for a repository
 # Usage: save_deployed_version "busibox" "branch" "main" "abc1234"
-# Usage: save_deployed_version "ai-portal" "release" "v1.2.3" "def5678"
+# Usage: save_deployed_version "busibox-portal" "release" "v1.2.3" "def5678"
 save_deployed_version() {
     local repo_key="$1"
     local version_type="$2"  # "branch" or "release"

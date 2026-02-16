@@ -67,7 +67,7 @@ make manage SERVICE=authz ACTION=redeploy
 - **Infrastructure**: `postgres`, `redis`, `minio`, `milvus`
 - **APIs**: `authz`, `agent`, `ingest`, `search`, `deploy`, `docs`, `embedding`
 - **LLM**: `litellm`, `ollama`, `vllm`
-- **Frontend**: `core-apps`, `nginx`
+- **Frontend**: `proxy`, `core-apps` (with `nginx` alias support)
 - **Groups**: `infrastructure`, `apis`, `llm`, `frontend`, `all`
 
 **Interactive Menus**:
@@ -99,15 +99,15 @@ bash create_lxc_base.sh production  # or: staging
 **Core App Runtime Operations** (from `provision/ansible/`):
 ```bash
 # Deploy/update core app at runtime (no container rebuild)
-make install SERVICE=ai-portal              # Deploy latest from main
-make install SERVICE=ai-portal REF=v1.2.3   # Deploy specific version
+make install SERVICE=busibox-portal              # Deploy latest from main
+make install SERVICE=busibox-portal REF=v1.2.3   # Deploy specific version
 
 # Manage core app processes
 make app-status                             # Show all app status
-make app-restart SERVICE=ai-portal          # Restart app
-make app-stop SERVICE=agent-manager         # Stop app
-make app-start SERVICE=agent-manager        # Start app
-make app-logs SERVICE=ai-portal             # View logs
+make app-restart SERVICE=busibox-portal          # Restart app
+make app-stop SERVICE=busibox-agents         # Stop app
+make app-start SERVICE=busibox-agents        # Start app
+make app-logs SERVICE=busibox-portal             # View logs
 
 # Nginx operations
 make nginx-reload                           # Reload nginx config
@@ -137,7 +137,7 @@ make mcp
 
 **What each provides:**
 - **Core Dev**: Docs, scripts, testing (Docker/remote/container), container logs, make help
-- **App Builder**: busibox-app exports, auth patterns, app-template reference, service endpoints
+- **App Builder**: busibox-app exports, auth patterns, busibox-template reference, service endpoints
 - **Admin**: Deployment (make targets), SSH/Proxmox, git, container management. Destructive ops require `confirm: true`
 
 **Environments:** All servers support `staging` (10.96.201.x) and `production` (10.96.200.x).
@@ -231,7 +231,7 @@ Each service runs in an isolated LXC container:
 - **milvus-lxc** (204): Milvus vector database
 - **agent-lxc** (207): Agent API and liteLLM
 - **data-lxc** (206): Data API, Worker, and Redis
-- **apps-lxc** (202): nginx and Next.js apps
+- **apps-lxc** (202): Next.js apps
 - **proxy-lxc** (200): Main reverse proxy
 - **LLM containers** (210-219): Ollama, vLLM, etc.
 
@@ -254,7 +254,7 @@ Each service runs in an isolated LXC container:
 
 ```
 ┌─────────────────┐     ┌──────────────┐     ┌──────────────────┐
-│   AI Portal     │────▶│  Deploy API  │────▶│  core-apps       │
+│ Busibox Portal  │────▶│  Deploy API  │────▶│  core-apps       │
 │  Admin UI       │     │  (Python)    │     │  (supervisord)   │
 └─────────────────┘     └──────────────┘     └──────────────────┘
                               │
@@ -271,14 +271,14 @@ Each service runs in an isolated LXC container:
 - App updates don't require container rebuilds
 - Consistent approach for Docker and Proxmox environments
 
-**Core Apps (ai-portal, agent-manager)**:
+**Core Apps (busibox-portal, busibox-agents)**:
 - Run in `core-apps` container
 - Managed by supervisord (Docker) or systemd (Proxmox)
-- Deployed via `make install SERVICE=ai-portal`
+- Deployed via `make install SERVICE=busibox-portal`
 
 **User Apps**:
 - Run in `user-apps` container
-- Deployed via Deploy API or AI Portal Admin UI
+- Deployed via Deploy API or Busibox Portal Admin UI
 - Sandboxed for security
 
 ## Development Workflow

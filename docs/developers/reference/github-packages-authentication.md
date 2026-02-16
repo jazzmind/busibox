@@ -39,7 +39,7 @@ The `.npmrc` file tells npm how to authenticate:
 
 ### The Problem
 
-The `.npmrc` file was **gitignored** in the ai-portal repository, so it wasn't included when GitHub created the deployment tarball. Without this file, npm had no way to know it should use the GITHUB_TOKEN for authentication, even when the token was available.
+The `.npmrc` file was **gitignored** in the busibox-portal repository, so it wasn't included when GitHub created the deployment tarball. Without this file, npm had no way to know it should use the GITHUB_TOKEN for authentication, even when the token was available.
 
 ## Solution
 
@@ -126,8 +126,8 @@ secrets:
 Then redeploy to update the token on containers:
 
 ```bash
-make deploy-ai-portal INV=staging  # Or whichever app needs it
-make deploy-ai-portal  # Production
+make deploy-busibox-portal INV=staging  # Or whichever app needs it
+make deploy-busibox-portal  # Production
 ```
 
 ### Updating Token Scopes (403 Errors)
@@ -158,7 +158,7 @@ After deployment, verify the `.npmrc` file was created:
 
 ```bash
 ssh root@<container-ip>
-cat /srv/apps/ai-portal/.npmrc
+cat /srv/apps/busibox-portal/.npmrc
 # Should show:
 # @jazzmind:registry=https://npm.pkg.github.com
 # //npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
@@ -169,7 +169,7 @@ cat /srv/apps/ai-portal/.npmrc
 On the container, test if npm can authenticate:
 
 ```bash
-cd /srv/apps/ai-portal
+cd /srv/apps/busibox-portal
 export GITHUB_TOKEN=$(cat ~/.github_token)
 npm install --dry-run
 ```
@@ -182,7 +182,7 @@ Deploy the application:
 
 ```bash
 cd /path/to/busibox/provision/ansible
-make deploy-ai-portal INV=staging
+make deploy-busibox-portal INV=staging
 ```
 
 Watch for the "Install dependencies" task - it should complete without 401 errors.
@@ -219,7 +219,7 @@ The deployment scripts should automatically create the `.npmrc` file. If it's no
 **Solution**: Redeploy the app (deploys token via app_deployer role):
 ```bash
 cd provision/ansible
-make deploy-ai-portal INV=staging
+make deploy-busibox-portal INV=staging
 ```
 
 ### GITHUB_TOKEN Not Set

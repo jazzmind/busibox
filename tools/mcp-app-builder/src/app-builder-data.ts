@@ -1,6 +1,6 @@
 /**
  * Static reference data for app builders
- * Based on @jazzmind/busibox-app and app-template patterns
+ * Based on @jazzmind/busibox-app and busibox-template patterns
  */
 
 export const BUSIBOX_APP_EXPORTS = `# @jazzmind/busibox-app Exports
@@ -41,8 +41,8 @@ export const AUTH_PATTERNS = `# Busibox App Authentication Patterns
 
 ## Token Flow (Zero Trust)
 
-1. User clicks app in AI Portal
-2. AI Portal exchanges session JWT for app-scoped token via authz
+1. User clicks app in Busibox Portal
+2. Busibox Portal exchanges session JWT for app-scoped token via authz
 3. authz verifies RBAC and issues RS256 token with app_id claim
 4. App validates token via authz JWKS
 5. App exchanges session JWT for backend API tokens (agent-api, data-api, search-api)

@@ -1,12 +1,12 @@
 ---
-# Nginx Ingress - Reverse proxy for all services
+# Proxy Ingress - Reverse proxy for all services
 # Uses NodePort for external access on Rackspace Spot
 apiVersion: v1
 kind: Service
 metadata:
-  name: nginx
+  name: proxy
   labels:
-    app: nginx
+    app: proxy
     tier: frontend
 spec:
   type: NodePort
@@ -20,37 +20,37 @@ spec:
       targetPort: 443
       nodePort: 30443
   selector:
-    app: nginx
+    app: proxy
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: nginx
+  name: proxy
   labels:
-    app: nginx
+    app: proxy
     tier: frontend
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: nginx
+      app: proxy
   template:
     metadata:
       labels:
-        app: nginx
+        app: proxy
         tier: frontend
     spec:
       containers:
-        - name: nginx
+        - name: proxy
           image: nginx:alpine
           ports:
             - containerPort: 80
             - containerPort: 443
           volumeMounts:
-            - name: nginx-config
+            - name: proxy-config
               mountPath: /etc/nginx/nginx.conf
               subPath: nginx.conf
-            - name: nginx-tls
+            - name: proxy-tls
               mountPath: /etc/nginx/tls
               readOnly: true
           livenessProbe:
@@ -73,20 +73,20 @@ spec:
               cpu: 250m
               memory: 256Mi
       volumes:
-        - name: nginx-config
+        - name: proxy-config
           configMap:
-            name: nginx-config
-        - name: nginx-tls
+            name: proxy-config
+        - name: proxy-tls
           secret:
-            secretName: nginx-tls
+            secretName: proxy-tls
             optional: true
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: nginx-config
+  name: proxy-config
   labels:
-    app: nginx
+    app: proxy
 data:
   nginx.conf: |
     worker_processes auto;
@@ -192,9 +192,9 @@ data:
                 proxy_read_timeout 120;
             }
 
-            # AI Portal (core app - may not be deployed yet)
+            # Busibox Portal (core app - may not be deployed yet)
             location /portal/ {
-                set $backend_portal "ai-portal.busibox.svc.cluster.local:3000";
+                set $backend_portal "busibox-portal.busibox.svc.cluster.local:3000";
                 proxy_pass http://$backend_portal/portal/;
                 proxy_set_header Host $host;
                 proxy_set_header X-Real-IP $remote_addr;
@@ -204,7 +204,7 @@ data:
 
             # Agent Manager (core app - may not be deployed yet)
             location /agents/ {
-                set $backend_agents "agent-manager.busibox.svc.cluster.local:3001";
+                set $backend_agents "busibox-agents.busibox.svc.cluster.local:3001";
                 proxy_pass http://$backend_agents/agents/;
                 proxy_set_header Host $host;
                 proxy_set_header X-Real-IP $remote_addr;

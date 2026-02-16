@@ -67,9 +67,9 @@ make manage SERVICE=authz ACTION=redeploy
 | Service | Description |
 |---------|-------------|
 | `nginx` | Reverse proxy |
-| `ai-portal` | AI Portal application |
-| `agent-manager` | Agent Manager application |
-| `core-apps` | Both AI Portal and Agent Manager |
+| `busibox-portal` | Busibox Portal application |
+| `busibox-agents` | Busibox Agents application |
+| `core-apps` | Both Busibox Portal and Busibox Agents |
 
 ### Service Groups
 
@@ -99,7 +99,7 @@ make install SERVICE=apis
 make install SERVICE=all
 
 # Specific version/branch for apps
-make install SERVICE=ai-portal REF=v1.2.3
+make install SERVICE=busibox-portal REF=v1.2.3
 ```
 
 `make install` performs a full deployment: pulls code, installs dependencies, injects secrets from vault, builds, and starts the service.

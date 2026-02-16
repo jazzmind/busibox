@@ -56,24 +56,24 @@ success "GitHub authenticated"
 # 2. Clone Private Repositories
 # =============================================================================
 
-show_stage 12 "Cloning ai-portal" \
+show_stage 12 "Cloning busibox-portal" \
     "Next.js frontend with SSO and document management"
 
-if [[ -d "${REPO_ROOT}/../ai-portal" ]]; then
-    info "ai-portal exists, pulling latest..."
-    (cd "${REPO_ROOT}/../ai-portal" && git pull --quiet) || warn "Could not pull ai-portal"
+if [[ -d "${REPO_ROOT}/../busibox-portal" ]]; then
+    info "busibox-portal exists, pulling latest..."
+    (cd "${REPO_ROOT}/../busibox-portal" && git pull --quiet) || warn "Could not pull busibox-portal"
 else
-    git clone --depth 1 git@github.com:jazzmind/ai-portal.git "${REPO_ROOT}/../ai-portal"
+    git clone --depth 1 git@github.com:jazzmind/busibox-portal.git "${REPO_ROOT}/../busibox-portal"
 fi
 
-show_stage 20 "Cloning agent-manager" \
+show_stage 20 "Cloning busibox-agents" \
     "Agent configuration and workflow management UI"
 
-if [[ -d "${REPO_ROOT}/../agent-manager" ]]; then
-    info "agent-manager exists, pulling latest..."
-    (cd "${REPO_ROOT}/../agent-manager" && git pull --quiet) || warn "Could not pull agent-manager"
+if [[ -d "${REPO_ROOT}/../busibox-agents" ]]; then
+    info "busibox-agents exists, pulling latest..."
+    (cd "${REPO_ROOT}/../busibox-agents" && git pull --quiet) || warn "Could not pull busibox-agents"
 else
-    git clone --depth 1 git@github.com:jazzmind/agent-manager.git "${REPO_ROOT}/../agent-manager"
+    git clone --depth 1 git@github.com:jazzmind/busibox-agents.git "${REPO_ROOT}/../busibox-agents"
 fi
 
 show_stage 28 "Cloning busibox-testdocs" \

@@ -25,7 +25,7 @@ rules:
     - apiGroups: [""]
       resources: ["services"]
       verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-    # Read and patch ConfigMaps (nginx-config for routing)
+    # Read and patch ConfigMaps (proxy-config for routing)
     - apiGroups: [""]
       resources: ["configmaps"]
       verbs: ["get", "list", "watch", "update", "patch"]

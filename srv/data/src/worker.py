@@ -657,8 +657,8 @@ class IngestWorker:
             try:
                 with conn.cursor() as cur:
                     cur.execute("""
-                        SELECT id, agent_id, prompt, schema_document_id,
-                               delegation_token, name
+                        SELECT id, trigger_type, agent_id, prompt, schema_document_id,
+                               notification_config, delegation_token, name
                         FROM library_triggers
                         WHERE library_id = %s AND is_active = true
                     """, (library_id,))
@@ -698,15 +698,44 @@ class IngestWorker:
             # Get schema content for each trigger that references a schema document
             for trigger in triggers:
                 trigger_id = str(trigger[0])
-                agent_id = str(trigger[1]) if trigger[1] else None
-                trigger_prompt = trigger[2]
-                schema_document_id = str(trigger[3]) if trigger[3] else None
-                trigger_delegation_token = trigger[4]
-                trigger_name = trigger[5]
-                
-                if not agent_id:
+                trigger_type = str(trigger[1] or "run_agent")
+                agent_id = str(trigger[2]) if trigger[2] else None
+                trigger_prompt = trigger[3]
+                schema_document_id = str(trigger[4]) if trigger[4] else None
+                notification_config = trigger[5]
+                trigger_delegation_token = trigger[6]
+                trigger_name = trigger[7]
+
+                if isinstance(notification_config, str):
+                    try:
+                        notification_config = json.loads(notification_config)
+                    except Exception:
+                        notification_config = None
+
+                if trigger_type == "notify":
+                    self._fire_notification_trigger(
+                        trigger_id=trigger_id,
+                        trigger_name=trigger_name,
+                        file_id=file_id,
+                        filename=filename,
+                        extracted_title=extracted_title,
+                        library_id=library_id,
+                        user_id=user_id,
+                        mime_type=mime_type,
+                        notification_config=notification_config or {},
+                    )
+                    continue
+
+                if trigger_type == "apply_schema" and not schema_document_id:
                     logger.warning(
-                        "Library trigger has no agent_id, skipping",
+                        "Apply-schema trigger has no schema_document_id, skipping",
+                        trigger_id=trigger_id,
+                    )
+                    continue
+
+                if trigger_type == "run_agent" and not agent_id:
+                    logger.warning(
+                        "Run-agent trigger has no agent_id, skipping",
                         trigger_id=trigger_id,
                     )
                     continue
@@ -739,6 +768,7 @@ class IngestWorker:
                 self._fire_library_trigger(
                     trigger_id=trigger_id,
                     trigger_name=trigger_name,
+                    trigger_type=trigger_type,
                     agent_id=agent_id,
                     prompt=trigger_prompt,
                     file_id=file_id,
@@ -764,7 +794,8 @@ class IngestWorker:
         self,
         trigger_id: str,
         trigger_name: str,
-        agent_id: str,
+        trigger_type: str,
+        agent_id: Optional[str],
         prompt: Optional[str],
         file_id: str,
         filename: str,
@@ -795,97 +826,102 @@ class IngestWorker:
                 return
         
         try:
-            # Build the prompt for the agent
-            effective_prompt = prompt or "Extract structured data from this document."
-            
-            full_prompt = f"""## Library Trigger: {trigger_name}
-
-{effective_prompt}
-
-### Document Information
-- **File ID**: {file_id}
-- **Filename**: {filename}
-- **Title**: {extracted_title or filename}
-- **Library ID**: {library_id}
-"""
-            
-            if schema_content:
-                full_prompt += f"""
-### Extraction Schema
-Use this schema to structure the extracted data. Insert the results as records into the data document with ID `{schema_document_id}`.
-
-```json
-{json.dumps(schema_content, indent=2)}
-```
-"""
-            
-            if markdown_content:
-                # Truncate if very long to avoid overwhelming the agent
-                max_content_len = 50000
-                content = markdown_content[:max_content_len]
-                if len(markdown_content) > max_content_len:
-                    content += f"\n\n... (truncated, {len(markdown_content)} total characters)"
-                full_prompt += f"""
-### Document Content (Markdown)
-{content}
-"""
-            
-            # Call Agent API POST /webhooks/library-trigger
-            payload = json.dumps({
-                "trigger_id": trigger_id,
-                "agent_id": agent_id,
-                "prompt": full_prompt,
-                "file_id": file_id,
-                "user_id": user_id,
-                "library_id": library_id,
-                "schema_document_id": schema_document_id,
-                "delegation_token": delegation_token,
-            }).encode('utf-8')
-            
-            url = f"{agent_api_url}/webhooks/library-trigger"
-            req = urllib.request.Request(
-                url,
-                data=payload,
-                headers={
-                    "Content-Type": "application/json",
-                },
-                method="POST",
+            default_prompt = (
+                f"Process the completed document '{filename}'. "
+                f"file_id={file_id}, library_id={library_id}."
             )
-            
-            # Add delegation token as auth if available
-            if delegation_token:
-                req.add_header("Authorization", f"Bearer {delegation_token}")
-            
-            response = urllib.request.urlopen(req, timeout=30)
-            response_data = json.loads(response.read().decode('utf-8'))
-            
+            effective_prompt = prompt or default_prompt
+
+            # For normal run triggers, include source markdown context.
+            if trigger_type == "run_agent" and markdown_content:
+                effective_prompt = (
+                    f"{effective_prompt}\n\n"
+                    f"Document title: {extracted_title or filename}\n"
+                    f"Document content:\n{markdown_content[:20000]}"
+                )
+
+            if trigger_type == "apply_schema" or (trigger_type == "run_agent" and schema_document_id):
+                extract_payload = {
+                    "file_id": file_id,
+                    "schema_document_id": schema_document_id,
+                    "prompt_override": effective_prompt,
+                    "store_results": True,
+                    "user_id": user_id,
+                    "delegation_token": delegation_token,
+                }
+                if agent_id:
+                    extract_payload["agent_id"] = agent_id
+
+                req = urllib.request.Request(
+                    f"{agent_api_url}/extract",
+                    data=json.dumps(extract_payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                if delegation_token:
+                    req.add_header("Authorization", f"Bearer {delegation_token}")
+
+                response = urllib.request.urlopen(req, timeout=30)
+                response_data = json.loads(response.read().decode("utf-8"))
+            else:
+                # Attempt workflow execution first; if not a workflow ID, fallback to agent webhook.
+                response_data = None
+                if agent_id:
+                    workflow_payload = {
+                        "input_data": {
+                            "prompt": effective_prompt,
+                            "file_id": file_id,
+                            "filename": filename,
+                            "title": extracted_title,
+                            "library_id": library_id,
+                            "trigger_id": trigger_id,
+                        }
+                    }
+                    workflow_req = urllib.request.Request(
+                        f"{agent_api_url}/agents/workflows/{agent_id}/execute",
+                        data=json.dumps(workflow_payload).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    )
+                    if delegation_token:
+                        workflow_req.add_header("Authorization", f"Bearer {delegation_token}")
+                    try:
+                        workflow_response = urllib.request.urlopen(workflow_req, timeout=30)
+                        response_data = json.loads(workflow_response.read().decode("utf-8"))
+                    except urllib.error.HTTPError as workflow_err:
+                        if workflow_err.code not in (400, 401, 403, 404, 422):
+                            raise
+
+                if response_data is None:
+                    webhook_payload = {
+                        "trigger_id": trigger_id,
+                        "agent_id": agent_id,
+                        "prompt": effective_prompt,
+                        "file_id": file_id,
+                        "user_id": user_id,
+                        "library_id": library_id,
+                        "schema_document_id": schema_document_id,
+                        "delegation_token": delegation_token,
+                    }
+                    webhook_req = urllib.request.Request(
+                        f"{agent_api_url}/webhooks/library-trigger",
+                        data=json.dumps(webhook_payload).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    )
+                    webhook_response = urllib.request.urlopen(webhook_req, timeout=30)
+                    response_data = json.loads(webhook_response.read().decode("utf-8"))
+
             logger.info(
                 "Library trigger fired successfully",
                 trigger_id=trigger_id,
                 trigger_name=trigger_name,
+                trigger_type=trigger_type,
                 file_id=file_id,
                 agent_id=agent_id,
                 response=response_data,
             )
-            
-            # Record successful execution
-            try:
-                conn = self.postgres_service._get_connection(self._current_rls_context)
-                try:
-                    with conn.cursor() as cur:
-                        cur.execute("""
-                            UPDATE library_triggers
-                            SET execution_count = execution_count + 1,
-                                last_execution_at = NOW(),
-                                last_error = NULL,
-                                updated_at = NOW()
-                            WHERE id = %s
-                        """, (trigger_id,))
-                        conn.commit()
-                finally:
-                    self.postgres_service._return_connection(conn)
-            except Exception:
-                pass  # Non-fatal
+            self._record_trigger_execution(trigger_id=trigger_id, error=None)
         
         except (urllib.error.URLError, urllib.error.HTTPError) as e:
             error_msg = str(e)
@@ -893,28 +929,11 @@ Use this schema to structure the extracted data. Insert the results as records i
                 "Failed to fire library trigger",
                 trigger_id=trigger_id,
                 trigger_name=trigger_name,
+                trigger_type=trigger_type,
                 file_id=file_id,
                 error=error_msg,
             )
-            
-            # Record failed execution
-            try:
-                conn = self.postgres_service._get_connection(self._current_rls_context)
-                try:
-                    with conn.cursor() as cur:
-                        cur.execute("""
-                            UPDATE library_triggers
-                            SET execution_count = execution_count + 1,
-                                last_execution_at = NOW(),
-                                last_error = %s,
-                                updated_at = NOW()
-                            WHERE id = %s
-                        """, (error_msg, trigger_id))
-                        conn.commit()
-                finally:
-                    self.postgres_service._return_connection(conn)
-            except Exception:
-                pass  # Non-fatal
+            self._record_trigger_execution(trigger_id=trigger_id, error=error_msg)
         
         except Exception as e:
             logger.error(
@@ -924,6 +943,172 @@ Use this schema to structure the extracted data. Insert the results as records i
                 error=str(e),
                 exc_info=True,
             )
+            self._record_trigger_execution(trigger_id=trigger_id, error=str(e))
+
+    def _render_trigger_template(self, template: Optional[str], values: dict, default: str) -> str:
+        if not template:
+            return default
+        rendered = template
+        for key, value in values.items():
+            rendered = rendered.replace(f"{{{{{key}}}}}", "" if value is None else str(value))
+        return rendered
+
+    def _record_trigger_execution(self, trigger_id: str, error: Optional[str] = None):
+        """Update trigger execution metadata in Postgres (non-fatal on failure)."""
+        try:
+            conn = self.postgres_service._get_connection(self._current_rls_context)
+            try:
+                with conn.cursor() as cur:
+                    if error:
+                        cur.execute("""
+                            UPDATE library_triggers
+                            SET execution_count = execution_count + 1,
+                                last_execution_at = NOW(),
+                                last_error = %s,
+                                updated_at = NOW()
+                            WHERE id = %s
+                        """, (error, trigger_id))
+                    else:
+                        cur.execute("""
+                            UPDATE library_triggers
+                            SET execution_count = execution_count + 1,
+                                last_execution_at = NOW(),
+                                last_error = NULL,
+                                updated_at = NOW()
+                            WHERE id = %s
+                        """, (trigger_id,))
+                    conn.commit()
+            finally:
+                self.postgres_service._return_connection(conn)
+        except Exception:
+            pass
+
+    def _fire_notification_trigger(
+        self,
+        trigger_id: str,
+        trigger_name: str,
+        file_id: str,
+        filename: str,
+        extracted_title: Optional[str],
+        library_id: str,
+        user_id: str,
+        mime_type: Optional[str],
+        notification_config: dict,
+    ):
+        """Send a post-processing notification via bridge email or webhook."""
+        import urllib.request
+        import urllib.error
+
+        channel = str(notification_config.get("channel", "email")).lower()
+        recipient = notification_config.get("recipient")
+        if not recipient:
+            self._record_trigger_execution(trigger_id=trigger_id, error="Missing notification recipient")
+            return
+
+        template_values = {
+            "fileId": file_id,
+            "file_id": file_id,
+            "filename": filename,
+            "title": extracted_title or filename,
+            "libraryId": library_id,
+            "library_id": library_id,
+            "userId": user_id,
+            "user_id": user_id,
+            "status": "completed",
+            "mimeType": mime_type or "",
+            "mime_type": mime_type or "",
+        }
+
+        subject = self._render_trigger_template(
+            notification_config.get("subjectTemplate"),
+            template_values,
+            f"Document processed: {filename}",
+        )
+        body = self._render_trigger_template(
+            notification_config.get("bodyTemplate"),
+            template_values,
+            (
+                f"Document processing completed.\n"
+                f"Filename: {filename}\n"
+                f"Title: {extracted_title or filename}\n"
+                f"File ID: {file_id}\n"
+                f"Library ID: {library_id}\n"
+                f"User ID: {user_id}\n"
+            ),
+        )
+
+        try:
+            if channel == "webhook":
+                payload = json.dumps(
+                    {
+                        "event": "ingestion.completed",
+                        "trigger_id": trigger_id,
+                        "trigger_name": trigger_name,
+                        "subject": subject,
+                        "message": body,
+                        "file": {
+                            "id": file_id,
+                            "filename": filename,
+                            "title": extracted_title or filename,
+                            "mime_type": mime_type,
+                            "library_id": library_id,
+                            "user_id": user_id,
+                            "status": "completed",
+                        },
+                    }
+                ).encode("utf-8")
+                req = urllib.request.Request(
+                    str(recipient),
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                response = urllib.request.urlopen(req, timeout=15)
+                response.read()
+            else:
+                bridge_api_url = (
+                    notification_config.get("bridgeApiUrl")
+                    or self.config.get("bridge_api_url")
+                    or os.environ.get("BRIDGE_API_URL")
+                )
+                if not bridge_api_url:
+                    raise ValueError("BRIDGE_API_URL is not configured for email notifications")
+                payload = json.dumps(
+                    {
+                        "to": recipient,
+                        "subject": subject,
+                        "html": body,
+                        "text": body,
+                    }
+                ).encode("utf-8")
+                req = urllib.request.Request(
+                    f"{str(bridge_api_url).rstrip('/')}/api/v1/email/send",
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                response = urllib.request.urlopen(req, timeout=15)
+                response.read()
+
+            logger.info(
+                "Library notification trigger fired successfully",
+                trigger_id=trigger_id,
+                trigger_name=trigger_name,
+                channel=channel,
+                recipient=recipient,
+                file_id=file_id,
+            )
+            self._record_trigger_execution(trigger_id=trigger_id, error=None)
+        except (urllib.error.URLError, urllib.error.HTTPError, ValueError) as e:
+            logger.error(
+                "Library notification trigger failed",
+                trigger_id=trigger_id,
+                trigger_name=trigger_name,
+                channel=channel,
+                recipient=recipient,
+                error=str(e),
+            )
+            self._record_trigger_execution(trigger_id=trigger_id, error=str(e))
     
     def process_job(self, job_id: str, job_data: dict, trace_id: str):
         """
@@ -1027,13 +1212,6 @@ Use this schema to structure the extracted data. Insert the results as records i
                 has_user_token=user_token is not None,
             )
             
-            # Update status to parsing (first processing stage)
-            self.postgres_service.update_status(
-                file_id=file_id,
-                stage="parsing",
-                progress=5,
-            )
-            
             # Get content_hash from database (with RLS context)
             conn = self.postgres_service._get_connection(self._current_rls_context)
             try:
@@ -1065,13 +1243,22 @@ Use this schema to structure the extracted data. Insert the results as records i
                     file_id=file_id,
                 )
             
-            # For partial reprocessing, load existing data if starting from later stage
+            # For partial reprocessing, load existing data if starting from later stage.
+            # These early-return paths must NOT reset the document status/counts.
             existing_chunks = None
             if start_stage == "entity_extraction":
                 # Entity extraction only: load chunks for text, run entity extraction
                 # User explicitly selected this reprocess option - always run extraction
                 existing_chunks = self._load_chunks_from_db(file_id)
                 if existing_chunks:
+                    # Set status to entity_extraction (preserving existing counts)
+                    self.postgres_service.update_status(
+                        file_id=file_id,
+                        stage="entity_extraction",
+                        progress=50,
+                        chunks_processed=len(existing_chunks),
+                        total_chunks=len(existing_chunks),
+                    )
                     try:
                         from processors.entity_extractor import EntityExtractor
                         from services.graph_service import GraphService
@@ -1123,6 +1310,14 @@ Use this schema to structure the extracted data. Insert the results as records i
                             file_id=file_id,
                             error=str(e),
                         )
+                    # Restore status to completed with original chunk counts
+                    self.postgres_service.update_status(
+                        file_id=file_id,
+                        stage="completed",
+                        progress=100,
+                        chunks_processed=len(existing_chunks),
+                        total_chunks=len(existing_chunks),
+                    )
                     logger.info(
                         "Entity extraction reprocess complete",
                         file_id=file_id,
@@ -1492,8 +1687,8 @@ Use this schema to structure the extracted data. Insert the results as records i
             
             # Stage 4.55: Entity Extraction for Knowledge Graph (optional)
             entity_extraction_enabled = (
-                processing_config.get("entity_extraction_enabled", False)
-                if processing_config else False
+                processing_config.get("entity_extraction_enabled", True)
+                if processing_config else True
             )
             if entity_extraction_enabled:
                 try:

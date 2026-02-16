@@ -233,9 +233,11 @@ async def _ensure_bootstrap_admin_users() -> None:
     
     admin_role_id = admin_role["id"]
     
+    invalid_admin_email_values = {"null", "none", "undefined", "change_me_admin_emails"}
+
     for email in config.admin_emails:
         email_lower = email.lower().strip()
-        if not email_lower:
+        if not email_lower or email_lower in invalid_admin_email_values or email_lower.startswith("change_me"):
             continue
             
         # Check if user exists by email
@@ -556,7 +558,7 @@ async def _sign_delegation_token(user_id: str, email: str, jti: str, scopes: Lis
     claims = {
         "iss": config.issuer,
         "sub": user_id,
-        "aud": "ai-portal",  # Delegation tokens are for ai-portal to present
+        "aud": "busibox-portal",  # Delegation tokens are for busibox-portal to present
         "exp": expires_at,
         "iat": now,
         "nbf": now,
@@ -691,11 +693,17 @@ async def token(request: Request):
         user_info = await db.get_user(user_id)
         if user_info and not email:
             email = user_info.get("email", "")
+        display_name = user_info.get("display_name") if user_info else None
+        first_name = user_info.get("first_name") if user_info else None
+        last_name = user_info.get("last_name") if user_info else None
+        avatar_url = user_info.get("avatar_url") if user_info else None
+        favorite_color = user_info.get("favorite_color") if user_info else None
+        resolved_name = display_name or " ".join(part for part in [first_name, last_name] if part) or None
         
         roles = await db.get_user_roles(user_id)
         
         # App-scoped token exchange: verify user has access to the app via bindings
-        # resource_id is the app UUID from ai-portal's App table
+        # resource_id is the app UUID from busibox-portal's App table
         app_roles = None
         if token_req.resource_id:
             logger.info(
@@ -765,6 +773,11 @@ async def token(request: Request):
             scope=aggregated_scope,
             roles=role_claims,
             email=email or None,  # Include email for downstream apps to display
+            name=resolved_name,
+            given_name=first_name,
+            family_name=last_name,
+            picture=avatar_url,
+            favorite_color=favorite_color,
         ).model_dump()
         
         # Add extra claims

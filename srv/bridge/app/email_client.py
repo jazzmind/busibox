@@ -4,7 +4,7 @@ Email Client
 Handles sending emails via SMTP (primary) or Resend (fallback).
 Provides magic-link, welcome, deactivation, reactivation, and generic email templates.
 
-All email sending logic that previously lived in AI Portal's email.ts is now here.
+All email sending logic that previously lived in Busibox Portal's email.ts is now here.
 """
 
 import logging
@@ -126,21 +126,21 @@ class EmailClient:
 
     async def send_magic_link(self, to: str, magic_link_url: str, totp_code: str) -> dict:
         """Send a magic-link + TOTP code authentication email."""
-        subject = f"Sign in to AI Portal - Your code: {totp_code}"
+        subject = f"Sign in to Busibox Portal - Your code: {totp_code}"
         html = _magic_link_with_code_html(magic_link_url, totp_code)
         text = _magic_link_with_code_text(magic_link_url, totp_code)
         return await self.send(to, subject, html, text)
 
     async def send_magic_link_simple(self, to: str, magic_link_url: str) -> dict:
         """Send a simple magic-link email (no TOTP code)."""
-        subject = "Sign in to AI Portal"
+        subject = "Sign in to Busibox Portal"
         html = _magic_link_html(magic_link_url)
         text = _magic_link_text(magic_link_url)
         return await self.send(to, subject, html, text)
 
     async def send_welcome(self, to: str, user_name: Optional[str] = None, portal_url: str = "") -> dict:
         """Send a welcome email."""
-        subject = "Welcome to AI Portal"
+        subject = "Welcome to Busibox Portal"
         html = _welcome_html(user_name, portal_url)
         text = _welcome_text(user_name, portal_url)
         return await self.send(to, subject, html, text)
@@ -150,9 +150,9 @@ class EmailClient:
         return await self.send(
             to,
             "Your Portal account has been deactivated",
-            "<p>Your AI Portal account has been deactivated.</p>"
+            "<p>Your Busibox Portal account has been deactivated.</p>"
             "<p>If you believe this is an error, please contact your system administrator.</p>",
-            "Your AI Portal account has been deactivated.\n\n"
+            "Your Busibox Portal account has been deactivated.\n\n"
             "If you believe this is an error, please contact your system administrator.",
         )
 
@@ -161,9 +161,9 @@ class EmailClient:
         return await self.send(
             to,
             "Your Portal account has been reactivated",
-            f'<p>Good news! Your AI Portal account has been reactivated.</p>'
+            f'<p>Good news! Your Busibox Portal account has been reactivated.</p>'
             f'<p><a href="{portal_url}">Sign in to the Portal</a></p>',
-            f"Good news! Your AI Portal account has been reactivated.\n\n"
+            f"Good news! Your Busibox Portal account has been reactivated.\n\n"
             f"Sign in to the Portal: {portal_url}",
         )
 
@@ -175,14 +175,14 @@ class EmailClient:
         now = datetime.utcnow().isoformat() + "Z"
         return await self.send(
             to,
-            "AI Portal - Test Email",
+            "Busibox Portal - Test Email",
             f'<div style="font-family: sans-serif; padding: 20px;">'
             f'<h2 style="color: #1f2937;">Email Configuration Test</h2>'
-            f'<p style="color: #4b5563;">This is a test email from your AI Portal instance.</p>'
+            f'<p style="color: #4b5563;">This is a test email from your Busibox Portal instance.</p>'
             f'<p style="color: #4b5563;">If you received this message, your email configuration is working correctly.</p>'
             f'<p style="color: #9ca3af; font-size: 12px; margin-top: 20px;">'
             f'Provider: <strong>{provider}</strong> &bull; Sent at: {now}</p></div>',
-            f"Email Configuration Test\n\nThis is a test email from your AI Portal instance.\n"
+            f"Email Configuration Test\n\nThis is a test email from your Busibox Portal instance.\n"
             f"If you received this message, your email configuration is working correctly.\n\n"
             f"Provider: {provider}\nSent at: {now}",
         )
@@ -206,7 +206,7 @@ def _magic_link_with_code_html(magic_link_url: str, totp_code: str) -> str:
 </head>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
   <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; border-radius: 10px 10px 0 0; text-align: center;">
-    <h1 style="color: white; margin: 0; font-size: 28px;">AI Portal</h1>
+    <h1 style="color: white; margin: 0; font-size: 28px;">Busibox Portal</h1>
   </div>
   <div style="background: #ffffff; padding: 30px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 10px 10px;">
     <h2 style="color: #1f2937; margin-top: 0;">Sign in to your account</h2>
@@ -235,14 +235,14 @@ def _magic_link_with_code_html(magic_link_url: str, totp_code: str) -> str:
     </p>
   </div>
   <div style="text-align: center; margin-top: 20px; color: #9ca3af; font-size: 12px;">
-    <p>&copy; {_year()} AI Portal. All rights reserved.</p>
+    <p>&copy; {_year()} Busibox Portal. All rights reserved.</p>
   </div>
 </body>
 </html>"""
 
 
 def _magic_link_with_code_text(magic_link_url: str, totp_code: str) -> str:
-    return f"""Sign in to AI Portal
+    return f"""Sign in to Busibox Portal
 
 You can sign in using EITHER the link below OR by entering your verification code.
 
@@ -257,7 +257,7 @@ Both the link and code expire in 15 minutes and can only be used once.
 If you didn't request this email, you can safely ignore it.
 
 ---
-(c) {_year()} AI Portal. All rights reserved."""
+(c) {_year()} Busibox Portal. All rights reserved."""
 
 
 def _magic_link_html(magic_link_url: str) -> str:
@@ -270,12 +270,12 @@ def _magic_link_html(magic_link_url: str) -> str:
 </head>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
   <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; border-radius: 10px 10px 0 0; text-align: center;">
-    <h1 style="color: white; margin: 0; font-size: 28px;">AI Portal</h1>
+    <h1 style="color: white; margin: 0; font-size: 28px;">Busibox Portal</h1>
   </div>
   <div style="background: #ffffff; padding: 30px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 10px 10px;">
     <h2 style="color: #1f2937; margin-top: 0;">Sign in to your account</h2>
     <p style="color: #4b5563; margin-bottom: 25px;">
-      Click the button below to securely sign in to the AI Portal. This link will expire in <strong>15 minutes</strong>.
+      Click the button below to securely sign in to the Busibox Portal. This link will expire in <strong>15 minutes</strong>.
     </p>
     <div style="text-align: center; margin: 30px 0;">
       <a href="{magic_link_url}" style="display: inline-block; background: #3b82f6; color: white; padding: 14px 32px; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 16px;">Sign In to Portal</a>
@@ -289,14 +289,14 @@ def _magic_link_html(magic_link_url: str) -> str:
     </p>
   </div>
   <div style="text-align: center; margin-top: 20px; color: #9ca3af; font-size: 12px;">
-    <p>&copy; {_year()} AI Portal. All rights reserved.</p>
+    <p>&copy; {_year()} Busibox Portal. All rights reserved.</p>
   </div>
 </body>
 </html>"""
 
 
 def _magic_link_text(magic_link_url: str) -> str:
-    return f"""Sign in to AI Portal
+    return f"""Sign in to Busibox Portal
 
 Click the link below to securely sign in to your account. This link will expire in 15 minutes.
 
@@ -306,7 +306,7 @@ SECURITY NOTICE:
 If you didn't request this email, you can safely ignore it. This link will only work once and expires in 15 minutes.
 
 ---
-(c) {_year()} AI Portal. All rights reserved."""
+(c) {_year()} Busibox Portal. All rights reserved."""
 
 
 def _welcome_html(user_name: Optional[str], portal_url: str) -> str:
@@ -320,11 +320,11 @@ def _welcome_html(user_name: Optional[str], portal_url: str) -> str:
 </head>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
   <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; border-radius: 10px 10px 0 0; text-align: center;">
-    <h1 style="color: white; margin: 0; font-size: 28px;">AI Portal</h1>
+    <h1 style="color: white; margin: 0; font-size: 28px;">Busibox Portal</h1>
   </div>
   <div style="background: #ffffff; padding: 30px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 10px 10px;">
     <h2 style="color: #1f2937; margin-top: 0;">{greeting}!</h2>
-    <p style="color: #4b5563;">Your account has been created and you now have access to the AI Portal.</p>
+    <p style="color: #4b5563;">Your account has been created and you now have access to the Busibox Portal.</p>
     <p style="color: #4b5563;">The Portal provides secure access to all your internal tools and applications in one centralized location.</p>
     <div style="text-align: center; margin: 30px 0;">
       <a href="{portal_url}" style="display: inline-block; background: #3b82f6; color: white; padding: 14px 32px; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 16px;">Access Portal</a>
@@ -334,7 +334,7 @@ def _welcome_html(user_name: Optional[str], portal_url: str) -> str:
     </p>
   </div>
   <div style="text-align: center; margin-top: 20px; color: #9ca3af; font-size: 12px;">
-    <p>&copy; {_year()} AI Portal. All rights reserved.</p>
+    <p>&copy; {_year()} Busibox Portal. All rights reserved.</p>
   </div>
 </body>
 </html>"""
@@ -344,7 +344,7 @@ def _welcome_text(user_name: Optional[str], portal_url: str) -> str:
     greeting = f"Hi {user_name}" if user_name else "Welcome"
     return f"""{greeting}!
 
-Your account has been created and you now have access to the AI Portal.
+Your account has been created and you now have access to the Busibox Portal.
 
 The Portal provides secure access to all your internal tools and applications in one centralized location.
 
@@ -353,4 +353,4 @@ Access the Portal: {portal_url}
 If you have any questions or need assistance, please contact your system administrator.
 
 ---
-(c) {_year()} AI Portal. All rights reserved."""
+(c) {_year()} Busibox Portal. All rights reserved."""
