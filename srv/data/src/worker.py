@@ -35,7 +35,7 @@ import signal
 import socket
 import uuid
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 import structlog
 import redis as redis_sync
@@ -642,7 +642,17 @@ class IngestWorker:
                 self.postgres_service._return_connection(conn)
             
             if not row or not row[0]:
-                # No library_id -- nothing to trigger
+                # No library_id -- clear any queued trigger status to avoid stale UI.
+                self._set_file_trigger_status(
+                    file_id=file_id,
+                    status={
+                        "state": "completed",
+                        "completedAt": datetime.utcnow().isoformat(),
+                        "triggerCount": 0,
+                        "completedCount": 0,
+                        "failedCount": 0,
+                    },
+                )
                 return
             
             library_id = str(row[0])
@@ -667,6 +677,19 @@ class IngestWorker:
                 self.postgres_service._return_connection(conn)
             
             if not triggers:
+                # Upload may have pre-marked the file as trigger pending, but active
+                # triggers may have been removed/disabled before this check runs.
+                # Clear queued state so the UI can exit trigger-poll mode.
+                self._set_file_trigger_status(
+                    file_id=file_id,
+                    status={
+                        "state": "completed",
+                        "completedAt": datetime.utcnow().isoformat(),
+                        "triggerCount": 0,
+                        "completedCount": 0,
+                        "failedCount": 0,
+                    },
+                )
                 return
             
             logger.info(
@@ -674,6 +697,18 @@ class IngestWorker:
                 file_id=file_id,
                 library_id=library_id,
                 trigger_count=len(triggers),
+            )
+
+            # Mark per-file trigger status so UI can show "running" and poll until complete
+            self._set_file_trigger_status(
+                file_id=file_id,
+                status={
+                    "state": "running",
+                    "startedAt": datetime.utcnow().isoformat(),
+                    "triggerCount": len(triggers),
+                    "completedCount": 0,
+                    "failedCount": 0,
+                },
             )
             
             # Get markdown content if available
@@ -696,6 +731,8 @@ class IngestWorker:
                     )
             
             # Get schema content for each trigger that references a schema document
+            completed_count = 0
+            failed_count = 0
             for trigger in triggers:
                 trigger_id = str(trigger[0])
                 trigger_type = str(trigger[1] or "run_agent")
@@ -713,7 +750,7 @@ class IngestWorker:
                         notification_config = None
 
                 if trigger_type == "notify":
-                    self._fire_notification_trigger(
+                    success = self._fire_notification_trigger(
                         trigger_id=trigger_id,
                         trigger_name=trigger_name,
                         file_id=file_id,
@@ -724,6 +761,9 @@ class IngestWorker:
                         mime_type=mime_type,
                         notification_config=notification_config or {},
                     )
+                    completed_count += 1
+                    if not success:
+                        failed_count += 1
                     continue
 
                 if trigger_type == "apply_schema" and not schema_document_id:
@@ -731,6 +771,8 @@ class IngestWorker:
                         "Apply-schema trigger has no schema_document_id, skipping",
                         trigger_id=trigger_id,
                     )
+                    failed_count += 1
+                    completed_count += 1
                     continue
 
                 if trigger_type == "run_agent" and not agent_id:
@@ -738,6 +780,8 @@ class IngestWorker:
                         "Run-agent trigger has no agent_id, skipping",
                         trigger_id=trigger_id,
                     )
+                    failed_count += 1
+                    completed_count += 1
                     continue
                 
                 # Get schema if referenced
@@ -765,7 +809,7 @@ class IngestWorker:
                         )
                 
                 # Fire the trigger via Agent API
-                self._fire_library_trigger(
+                success = self._fire_library_trigger(
                     trigger_id=trigger_id,
                     trigger_name=trigger_name,
                     trigger_type=trigger_type,
@@ -779,8 +823,24 @@ class IngestWorker:
                     schema_document_id=schema_document_id,
                     user_id=user_id,
                     library_id=library_id,
-                    delegation_token=trigger_delegation_token or delegation_token,
+                    # Prefer per-job delegation token first (fresh token from upload/reprocess).
+                    # Trigger-level token is a fallback and may be stale.
+                    delegation_token=delegation_token or trigger_delegation_token,
                 )
+                completed_count += 1
+                if not success:
+                    failed_count += 1
+
+            self._set_file_trigger_status(
+                file_id=file_id,
+                status={
+                    "state": "failed" if failed_count > 0 else "completed",
+                    "completedAt": datetime.utcnow().isoformat(),
+                    "triggerCount": len(triggers),
+                    "completedCount": completed_count,
+                    "failedCount": failed_count,
+                },
+            )
         
         except Exception as e:
             logger.error(
@@ -788,6 +848,14 @@ class IngestWorker:
                 file_id=file_id,
                 error=str(e),
                 exc_info=True,
+            )
+            self._set_file_trigger_status(
+                file_id=file_id,
+                status={
+                    "state": "failed",
+                    "completedAt": datetime.utcnow().isoformat(),
+                    "error": str(e),
+                },
             )
     
     def _fire_library_trigger(
@@ -806,12 +874,12 @@ class IngestWorker:
         user_id: str,
         library_id: str,
         delegation_token: Optional[str],
-    ):
+    ) -> bool:
         """Fire a single library trigger by calling the Agent API."""
         import urllib.request
         import urllib.error
         
-        agent_api_url = self.config.get("agent_api_url", "")
+        agent_api_url = self.config.get("agent_api_url") or os.environ.get("AGENT_API_URL", "")
         if not agent_api_url:
             # Try to construct from environment
             agent_host = os.environ.get("AGENT_API_HOST", "")
@@ -819,11 +887,14 @@ class IngestWorker:
             if agent_host:
                 agent_api_url = f"http://{agent_host}:{agent_port}"
             else:
+                error_msg = "No agent_api_url configured (AGENT_API_URL/AGENT_API_HOST missing)"
                 logger.warning(
-                    "No agent_api_url configured, cannot fire library trigger",
+                    "Cannot fire library trigger",
                     trigger_id=trigger_id,
+                    error=error_msg,
                 )
-                return
+                self._record_trigger_execution(trigger_id=trigger_id, error=error_msg)
+                return False
         
         try:
             default_prompt = (
@@ -922,6 +993,7 @@ class IngestWorker:
                 response=response_data,
             )
             self._record_trigger_execution(trigger_id=trigger_id, error=None)
+            return True
         
         except (urllib.error.URLError, urllib.error.HTTPError) as e:
             error_msg = str(e)
@@ -934,6 +1006,7 @@ class IngestWorker:
                 error=error_msg,
             )
             self._record_trigger_execution(trigger_id=trigger_id, error=error_msg)
+            return False
         
         except Exception as e:
             logger.error(
@@ -944,6 +1017,7 @@ class IngestWorker:
                 exc_info=True,
             )
             self._record_trigger_execution(trigger_id=trigger_id, error=str(e))
+            return False
 
     def _render_trigger_template(self, template: Optional[str], values: dict, default: str) -> str:
         if not template:
@@ -983,6 +1057,28 @@ class IngestWorker:
         except Exception:
             pass
 
+    def _set_file_trigger_status(self, file_id: str, status: Dict[str, Any]):
+        """Persist per-file trigger status inside data_files.metadata."""
+        try:
+            conn = self.postgres_service._get_connection(self._current_rls_context)
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE data_files
+                        SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('triggerStatus', %s::jsonb),
+                            updated_at = NOW()
+                        WHERE file_id = %s
+                        """,
+                        (json.dumps(status), file_id),
+                    )
+                    conn.commit()
+            finally:
+                self.postgres_service._return_connection(conn)
+        except Exception:
+            # Non-fatal; trigger execution should continue
+            pass
+
     def _fire_notification_trigger(
         self,
         trigger_id: str,
@@ -994,7 +1090,7 @@ class IngestWorker:
         user_id: str,
         mime_type: Optional[str],
         notification_config: dict,
-    ):
+    ) -> bool:
         """Send a post-processing notification via bridge email or webhook."""
         import urllib.request
         import urllib.error
@@ -1003,7 +1099,7 @@ class IngestWorker:
         recipient = notification_config.get("recipient")
         if not recipient:
             self._record_trigger_execution(trigger_id=trigger_id, error="Missing notification recipient")
-            return
+            return False
 
         template_values = {
             "fileId": file_id,
@@ -1099,6 +1195,7 @@ class IngestWorker:
                 file_id=file_id,
             )
             self._record_trigger_execution(trigger_id=trigger_id, error=None)
+            return True
         except (urllib.error.URLError, urllib.error.HTTPError, ValueError) as e:
             logger.error(
                 "Library notification trigger failed",
@@ -1109,6 +1206,7 @@ class IngestWorker:
                 error=str(e),
             )
             self._record_trigger_execution(trigger_id=trigger_id, error=str(e))
+            return False
     
     def process_job(self, job_id: str, job_data: dict, trace_id: str):
         """

@@ -46,6 +46,15 @@ require_data_write = ScopeChecker("data.write")
 require_data_delete = ScopeChecker("data.delete")
 
 
+def _extract_bearer_token_from_request(request: Request) -> Optional[str]:
+    """Return bearer token from Authorization header if available."""
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+        return token or None
+    return None
+
+
 def validate_uuid(file_id_str: str) -> tuple[Optional[uuid.UUID], Optional[JSONResponse]]:
     """
     Validate a string as a UUID.
@@ -1715,6 +1724,8 @@ async def reprocess_file(fileId: str, request: Request):
     # Get user token for creating delegation token (needed for encrypted file decryption)
     user_context = getattr(request.state, 'user_context', None)
     user_token = user_context.token if user_context else None
+    if not user_token:
+        user_token = _extract_bearer_token_from_request(request)
     
     # Parse optional processing config from request body
     processing_config = {}

@@ -33,6 +33,15 @@ router = APIRouter()
 require_data_write = ScopeChecker("data.write")
 
 
+def _extract_bearer_token_from_request(request: Request) -> Optional[str]:
+    """Return bearer token from Authorization header if available."""
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+        return token or None
+    return None
+
+
 class ContentDataRequest(BaseModel):
     """Request body for content data."""
     content: str = Field(..., description="Text or markdown content to data")
@@ -154,6 +163,8 @@ async def data_content(
             # Get user's JWT token from request context for keystore API calls
             user_ctx = getattr(request.state, 'user_context', None)
             user_token = user_ctx.token if user_ctx else None
+            if not user_token:
+                user_token = _extract_bearer_token_from_request(request)
             
             content_to_store = await encryption_client.encrypt_for_upload(
                 file_id=file_id,
@@ -215,6 +226,8 @@ async def data_content(
         # token exchanges on behalf of this user during processing
         user_ctx = getattr(request.state, 'user_context', None)
         content_user_token = user_ctx.token if user_ctx else None
+        if not content_user_token:
+            content_user_token = _extract_bearer_token_from_request(request)
         delegation_token = await _create_delegation_token_for_processing(
             user_token=content_user_token,
             file_id=file_id,

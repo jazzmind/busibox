@@ -13,6 +13,7 @@ Handles:
 import json
 import os
 import uuid
+from datetime import datetime
 from typing import List, Optional
 
 import httpx
@@ -122,6 +123,40 @@ SUPPORTED_MIME_TYPES = {
 }
 
 
+def _extract_bearer_token_from_request(request: Request) -> Optional[str]:
+    """Return bearer token from Authorization header if available."""
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+        return token or None
+    return None
+
+
+async def _get_active_library_trigger_count(
+    pg_service: PostgresService,
+    library_id: Optional[str],
+) -> int:
+    """Count active post-processing triggers for a library."""
+    if not library_id:
+        return 0
+
+    try:
+        library_uuid = uuid.UUID(library_id)
+    except ValueError:
+        return 0
+
+    async with pg_service.pool.acquire() as conn:
+        count = await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM library_triggers
+            WHERE library_id = $1 AND is_active = true
+            """,
+            library_uuid,
+        )
+        return int(count or 0)
+
+
 def validate_mime_type(mime_type: str) -> bool:
     """Validate that MIME type is supported."""
     return mime_type in SUPPORTED_MIME_TYPES
@@ -137,6 +172,7 @@ async def upload_file(
     role_ids: Optional[str] = Form(None),
     force_reprocess: Optional[str] = Form(None),
     library_id: Optional[str] = Form(None),
+    library_id_camel: Optional[str] = Form(None, alias="libraryId"),
 ):
     """
     Upload a document for processing with role-based access control.
@@ -239,9 +275,11 @@ async def upload_file(
     
     try:
         # Resolve library_id (auto-create personal library if needed for personal files)
-        resolved_library_id = library_id
+        # Support both snake_case (library_id) and camelCase (libraryId) form fields.
+        requested_library_id = library_id or library_id_camel
+        resolved_library_id = requested_library_id
         resolved_library_type = None  # Track library type for processing decisions
-        if visibility == "personal" and not library_id:
+        if visibility == "personal" and not requested_library_id:
             # Ensure user has all personal libraries (DOCS, RESEARCH, TASKS, MEDIA)
             await library_service.ensure_all_personal_libraries(user_id)
             personal_libs = await library_service.list_user_libraries(user_id, include_shared=False)
@@ -258,9 +296,9 @@ async def upload_file(
                     file_id=file_id,
                     library_id=resolved_library_id,
                 )
-        elif library_id:
+        elif requested_library_id:
             # Explicit library_id provided - look up the library type
-            target_lib = await library_service.get_library_by_id(library_id)
+            target_lib = await library_service.get_library_by_id(requested_library_id)
             if target_lib:
                 resolved_library_type = target_lib.get("library_type")
         # Determine storage path based on visibility
@@ -303,8 +341,10 @@ async def upload_file(
             encrypt_user_id = user_id if visibility == "personal" else None
             
             # Get user's JWT token from request context for keystore API calls
-            user_token = getattr(request.state, 'user_context', None)
-            user_token = user_token.token if user_token else None
+            user_ctx = getattr(request.state, 'user_context', None)
+            user_token = user_ctx.token if user_ctx else None
+            if not user_token:
+                user_token = _extract_bearer_token_from_request(request)
             
             content_to_store = await encryption_client.encrypt_for_upload(
                 file_id=file_id,
@@ -326,8 +366,10 @@ async def upload_file(
                 )
         else:
             # Encryption disabled or media file - still need user_token for delegation token
-            user_token = getattr(request.state, 'user_context', None)
-            user_token = user_token.token if user_token else None
+            user_ctx = getattr(request.state, 'user_context', None)
+            user_token = user_ctx.token if user_ctx else None
+            if not user_token:
+                user_token = _extract_bearer_token_from_request(request)
             if is_media_file:
                 logger.info(
                     "Skipping encryption for media file",
@@ -400,6 +442,28 @@ async def upload_file(
                     error=str(e),
                 )
                 parsed_metadata = {}
+
+        # Mark documents that will run post-processing triggers so UI can show this
+        # immediately in list/detail views, before worker execution starts.
+        is_video_upload = bool(file.content_type and file.content_type.startswith("video/"))
+        is_image_upload = bool(file.content_type and file.content_type.startswith("image/"))
+        is_media_library_upload = resolved_library_type == "MEDIA"
+        will_run_processing_pipeline = not (
+            is_video_upload or is_image_upload or is_media_library_upload
+        )
+
+        active_trigger_count = await _get_active_library_trigger_count(
+            pg_service=pg_service,
+            library_id=resolved_library_id,
+        )
+        if active_trigger_count > 0 and will_run_processing_pipeline:
+            parsed_metadata["triggerStatus"] = {
+                "state": "pending",
+                "queuedAt": datetime.utcnow().isoformat(),
+                "triggerCount": active_trigger_count,
+                "completedCount": 0,
+                "failedCount": 0,
+            }
         
         # Parse processing config if provided
         parsed_processing_config = {}

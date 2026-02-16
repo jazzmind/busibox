@@ -430,7 +430,7 @@ services:
       # Email / Bridge integration
       # Authz calls bridge-api directly to send magic-link emails so that
       # tokens never leave the backend.
-      APP_URL: "http://localhost:3000/portal"
+      APP_URL: "${APP_URL:-https://localhost/portal}"
       BRIDGE_API_URL: "http://bridge-api:8081"
       DEV_MODE: "true"
     ports:

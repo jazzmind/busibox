@@ -12,7 +12,7 @@ import asyncio
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, Field
@@ -208,6 +208,197 @@ def _extract_records(output: Dict[str, Any]) -> List[Dict[str, Any]]:
             return [parsed]
 
     return []
+
+
+def _normalize_for_matching(text: str) -> Tuple[str, List[int]]:
+    """
+    Normalize text for resilient matching and keep a map back to original indices.
+    - lowercases
+    - treats punctuation/whitespace as separators
+    - collapses repeated separators
+    """
+    normalized_chars: List[str] = []
+    index_map: List[int] = []
+    last_was_sep = False
+
+    for idx, ch in enumerate(text):
+        if ch.isalnum():
+            normalized_chars.append(ch.lower())
+            index_map.append(idx)
+            last_was_sep = False
+            continue
+
+        if not last_was_sep and normalized_chars:
+            normalized_chars.append(" ")
+            index_map.append(idx)
+            last_was_sep = True
+
+    # Trim trailing separator from normalized view
+    if normalized_chars and normalized_chars[-1] == " ":
+        normalized_chars.pop()
+        index_map.pop()
+
+    return "".join(normalized_chars), index_map
+
+
+def _find_provenance_candidates(markdown: str, value: Any, max_matches: int = 5) -> List[Dict[str, Any]]:
+    if value is None:
+        return []
+    needle_raw = str(value).strip()
+    if len(needle_raw) < 2:
+        return []
+
+    candidates: List[Dict[str, Any]] = []
+    haystack_lower = markdown.lower()
+    needle_lower = needle_raw.lower()
+
+    # Pass 1: direct case-insensitive substring match.
+    start = 0
+    while len(candidates) < max_matches:
+        idx = haystack_lower.find(needle_lower, start)
+        if idx == -1:
+            break
+        snippet = markdown[idx : idx + len(needle_raw)]
+        candidates.append(
+            {
+                "text": snippet,
+                "charOffset": idx,
+                "charLength": len(snippet),
+            }
+        )
+        start = idx + max(1, len(needle_raw))
+
+    if candidates:
+        return candidates
+
+    # Pass 2: normalized matching (ignores punctuation/spacing differences).
+    normalized_haystack, haystack_map = _normalize_for_matching(markdown)
+    normalized_needle, _ = _normalize_for_matching(needle_raw)
+    if len(normalized_needle) < 2:
+        return []
+
+    norm_start = 0
+    while len(candidates) < max_matches:
+        norm_idx = normalized_haystack.find(normalized_needle, norm_start)
+        if norm_idx == -1:
+            break
+
+        if norm_idx >= len(haystack_map):
+            break
+        norm_end = norm_idx + len(normalized_needle) - 1
+        if norm_end >= len(haystack_map):
+            break
+
+        orig_start = haystack_map[norm_idx]
+        orig_end = haystack_map[norm_end]
+        if orig_end < orig_start:
+            norm_start = norm_idx + 1
+            continue
+
+        snippet = markdown[orig_start : orig_end + 1]
+        candidates.append(
+            {
+                "text": snippet,
+                "charOffset": orig_start,
+                "charLength": max(1, len(snippet)),
+            }
+        )
+        norm_start = norm_idx + max(1, len(normalized_needle))
+
+    # Deduplicate by offset/length.
+    deduped: List[Dict[str, Any]] = []
+    seen = set()
+    for cand in candidates:
+        key = (cand.get("charOffset"), cand.get("charLength"))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(cand)
+    return deduped
+
+
+def _build_value_provenance(value: Any, markdown: str) -> Any:
+    """
+    Build provenance in a shape that mirrors the record value:
+    - scalar -> provenance node or {"candidates": [...]}
+    - list -> list of per-item provenance
+    - object -> dict of per-key provenance
+    """
+    if value is None:
+        return None
+
+    if isinstance(value, (str, int, float, bool)):
+        candidates = _find_provenance_candidates(markdown, value)
+        if not candidates:
+            return None
+        if len(candidates) == 1:
+            return candidates[0]
+        return {"candidates": candidates}
+
+    if isinstance(value, list):
+        items = [_build_value_provenance(item, markdown) for item in value]
+        return items if any(item is not None for item in items) else None
+
+    if isinstance(value, dict):
+        obj: Dict[str, Any] = {}
+        for key, child in value.items():
+            child_prov = _build_value_provenance(child, markdown)
+            if child_prov is not None:
+                obj[str(key)] = child_prov
+        return obj or None
+
+    # Fallback for uncommon types
+    candidates = _find_provenance_candidates(markdown, str(value))
+    if not candidates:
+        return None
+    return candidates[0] if len(candidates) == 1 else {"candidates": candidates}
+
+
+def _populate_provenance_from_markdown(
+    records: List[Dict[str, Any]],
+    markdown: str,
+    schema: Dict[str, Any],
+) -> None:
+    fields = schema.get("fields", {}) if isinstance(schema, dict) else {}
+    field_names = list(fields.keys()) if isinstance(fields, dict) else []
+
+    for row in records:
+        existing = row.get("_provenance")
+        provenance: Dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}
+        for field_name in field_names:
+            if field_name not in row:
+                continue
+            existing_field = provenance.get(field_name)
+            if existing_field not in (None, {}, []):
+                continue
+            generated = _build_value_provenance(row.get(field_name), markdown)
+            if generated is not None:
+                provenance[field_name] = generated
+        row["_provenance"] = provenance
+
+
+def _merge_provenance(existing: Any, incoming: Any) -> Any:
+    if incoming in (None, {}, []):
+        return existing
+    if existing in (None, {}, []):
+        return incoming
+
+    if isinstance(existing, dict) and isinstance(incoming, dict):
+        merged = dict(existing)
+        for key, value in incoming.items():
+            merged[key] = _merge_provenance(merged.get(key), value)
+        return merged
+
+    if isinstance(existing, list) and isinstance(incoming, list):
+        max_len = max(len(existing), len(incoming))
+        merged_list: List[Any] = []
+        for i in range(max_len):
+            ex = existing[i] if i < len(existing) else None
+            inc = incoming[i] if i < len(incoming) else None
+            merged_list.append(_merge_provenance(ex, inc))
+        return merged_list
+
+    return existing
 
 
 def _map_field_type_to_json_schema(field_def: Dict[str, Any]) -> Dict[str, Any]:
@@ -420,6 +611,7 @@ def _merge_partial_records(
     for record in partial_records:
         for key, value in record.items():
             if key == "_provenance":
+                merged["_provenance"] = _merge_provenance(merged.get("_provenance"), value)
                 continue
             if value is None:
                 continue
@@ -840,6 +1032,11 @@ async def extract_document(
     run_id = str(run.id) if run is not None else "unknown"
 
     try:
+        _populate_provenance_from_markdown(
+            records=records,
+            markdown=markdown,
+            schema=schema_obj if isinstance(schema_obj, dict) else {},
+        )
         enriched_records = _validate_and_enrich_records(
             records=records,
             schema=schema_obj if isinstance(schema_obj, dict) else {},
