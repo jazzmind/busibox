@@ -47,8 +47,8 @@ class AgentRegistry:
     def get(self, agent_id: uuid.UUID) -> AgentInstance:
         """
         Get agent by ID. Checks in order:
-        1. In-memory registry (database agents loaded at startup)
-        2. Built-in code agents (always use latest from code)
+        1. Built-in code agents (always use latest from code)
+        2. In-memory registry (database agents loaded at startup)
         
         Returns:
             Agent instance (PydanticAI Agent or BaseStreamingAgent)
@@ -56,15 +56,15 @@ class AgentRegistry:
         Raises:
             KeyError: If agent not found
         """
-        # Check in-memory registry first
-        if agent_id in self._agents:
-            return self._agents[agent_id]
-        
         # Check built-in code agents
         from app.services.builtin_agents import get_builtin_agent_by_id
         agent = get_builtin_agent_by_id(agent_id)
         if agent:
             return agent
+
+        # Check in-memory registry
+        if agent_id in self._agents:
+            return self._agents[agent_id]
         
         raise KeyError(f"agent {agent_id} not loaded")
     
@@ -77,8 +77,8 @@ class AgentRegistry:
         Get agent by ID with on-demand loading from database if not in registry.
         
         Checks in order:
-        1. In-memory registry (database agents loaded at startup)
-        2. Built-in code agents (always use latest from code)
+        1. Built-in code agents (always use latest from code)
+        2. In-memory registry (database agents loaded at startup)
         3. Database (on-demand loading for personal/custom agents)
         
         Args:

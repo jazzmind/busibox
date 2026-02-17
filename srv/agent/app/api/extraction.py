@@ -428,25 +428,39 @@ def _map_field_type_to_json_schema(field_def: Dict[str, Any]) -> Dict[str, Any]:
     if field_type == "array":
         items_def = field_def.get("items")
         if isinstance(items_def, dict):
-            item_type = str(items_def.get("type", "string"))
-            if item_type == "integer":
-                return {"type": "array", "maxItems": 25, "items": {"type": "integer"}}
-            if item_type == "number":
-                return {"type": "array", "maxItems": 25, "items": {"type": "number"}}
-            if item_type == "boolean":
-                return {"type": "array", "maxItems": 25, "items": {"type": "boolean"}}
+            item_schema = _map_field_type_to_json_schema(items_def)
+            item_type = str(item_schema.get("type", "string"))
+            if item_type in ("integer", "number", "boolean"):
+                return {"type": "array", "maxItems": 25, "items": item_schema}
             if item_type == "object":
-                return {
-                    "type": "array",
-                    "maxItems": 10,
-                    "items": {"type": "object", "additionalProperties": True},
-                }
+                return {"type": "array", "maxItems": 10, "items": item_schema}
             return {
                 "type": "array",
                 "maxItems": 20,
-                "items": {"type": "string", "maxLength": 200},
+                "items": item_schema,
             }
         return {"type": "array", "maxItems": 20, "items": {"type": "string", "maxLength": 200}}
+    if field_type == "object":
+        properties_def = field_def.get("properties")
+        if isinstance(properties_def, dict) and properties_def:
+            properties: Dict[str, Any] = {}
+            required: List[str] = []
+            for prop_name, prop_def in properties_def.items():
+                if not isinstance(prop_name, str) or not isinstance(prop_def, dict):
+                    continue
+                properties[prop_name] = _map_field_type_to_json_schema(prop_def)
+                if bool(prop_def.get("required")):
+                    required.append(prop_name)
+
+            object_schema: Dict[str, Any] = {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": properties,
+            }
+            if required:
+                object_schema["required"] = required
+            return object_schema
+        return {"type": "object", "additionalProperties": True}
     # default/string
     return {"type": "string", "maxLength": 500}
 
@@ -669,7 +683,6 @@ def _build_extraction_prompt(
         f"{mode_instructions}\n\n"
         f"Schema document ID: {schema_document_id}\n"
         f"Source file ID: {file_id}\n\n"
-        f"Schema JSON:\n```json\n{json.dumps(schema_obj, indent=2)}\n```\n\n"
         f"Document markdown:\n{markdown}"
     )
 
@@ -752,11 +765,7 @@ def _validate_and_enrich_records(
                     if isinstance(parsed, dict):
                         return parsed
                 except Exception:
-                    # If model returned plain text for an object field, preserve it
-                    # in a stable envelope instead of failing extraction.
-                    return {"value": value}
-            if isinstance(value, (int, float, bool)):
-                return {"value": value}
+                    raise ValueError(f"Field '{field_name}' must be an object")
             raise ValueError(f"Field '{field_name}' must be an object")
 
         if field_type == "enum":
