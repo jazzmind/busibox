@@ -296,8 +296,28 @@ class AnsibleExecutor:
                 stderr=asyncio.subprocess.STDOUT,  # Merge stderr into stdout
             )
             
-            # Stream output line by line
-            async for line_bytes in proc.stdout:
+            # Stream output with keepalive heartbeats.
+            # Some installs (e.g., DB migrations) can be silent for >60s, which causes
+            # intermediate proxies/EventSource clients to drop idle SSE connections.
+            heartbeat_seconds = 15
+            while True:
+                try:
+                    line_bytes = await asyncio.wait_for(
+                        proc.stdout.readline(),
+                        timeout=heartbeat_seconds
+                    )
+                except asyncio.TimeoutError:
+                    if proc.returncode is None:
+                        yield {
+                            'type': 'info',
+                            'message': f'Still installing {description}...'
+                        }
+                        continue
+                    break
+
+                if not line_bytes:
+                    break
+
                 line = line_bytes.decode('utf-8', errors='replace').rstrip()
                 if line:
                     # Determine message type based on content

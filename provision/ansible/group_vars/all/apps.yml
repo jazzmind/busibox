@@ -44,6 +44,7 @@ applications:
         domain: "{{ full_domain }}"
         path: /portal
         strip_path: false  # Keep /portal path - busibox-portal will use basePath
+        sse: true  # Admin setup uses long-lived SSE streams (service installs/deploy progress)
     secrets:
       - database_url
       - sso_jwt_secret
