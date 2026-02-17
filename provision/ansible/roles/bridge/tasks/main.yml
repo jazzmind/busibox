@@ -111,10 +111,21 @@
     mode: "0644"
   register: bridge_requirements_file
 
+- name: Check if venv pip exists
+  ansible.builtin.stat:
+    path: "{{ bridge_venv }}/bin/pip"
+  register: bridge_venv_pip
+
+- name: Remove broken venv (missing pip)
+  ansible.builtin.file:
+    path: "{{ bridge_venv }}"
+    state: absent
+  when: not bridge_venv_pip.stat.exists
+
 - name: Create Python virtual environment
   ansible.builtin.command:
     cmd: python3 -m venv {{ bridge_venv }}
-    creates: "{{ bridge_venv }}/bin/python"
+    creates: "{{ bridge_venv }}/bin/pip"
 
 - name: Install Python dependencies in venv
   ansible.builtin.command:
