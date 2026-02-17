@@ -1,4 +1,4 @@
-.PHONY: ping all files pg milvus nginx search search-api agent data data-api data-worker data-update-tests docs apps user-apps openwebui deploy-apps deploy-busibox-portal deploy-busibox-agents verify verify-health verify-smoke service-start service-stop service-restart service-status service-logs service-health test test-menu test-data test-data-all test-data-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-authz test-apps test-security test-security-auth test-security-injection test-security-fuzz test-all configure generate-token-keys bootstrap-test-creds bridge tailscale test-bridge check-embeddings migrate-embeddings migrate-embeddings-force staging production env core core-nginx core-storage core-database core-vectorstore llm llm-vllm llm-litellm llm-colpali apis apis-authz apis-data apis-search apis-agent apis-docs apis-bridge apps-frontend
+.PHONY: ping all files pg milvus nginx search search-api agent data data-api data-worker data-update-tests docs apps user-apps openwebui deploy-apps deploy-busibox-portal deploy-busibox-agents deploy-app-ref verify verify-health verify-smoke service-start service-stop service-restart service-status service-logs service-health test test-menu test-data test-data-all test-data-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-authz test-apps test-security test-security-auth test-security-injection test-security-fuzz test-all configure generate-token-keys bootstrap-test-creds bridge tailscale test-bridge check-embeddings migrate-embeddings migrate-embeddings-force staging production env core core-nginx core-storage core-database core-vectorstore llm llm-vllm llm-litellm llm-colpali apis apis-authz apis-data apis-search apis-agent apis-docs apis-bridge apps-frontend
 
 # ============================================================================
 # ENVIRONMENT SELECTION (persists between runs via .busibox-state)
@@ -388,6 +388,24 @@ deploy-busibox-portal:
 
 deploy-busibox-agents:
 	ansible-playbook -i $(INV) -l apps --tags app_deployer,secrets site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=busibox-agents"
+
+# Deploy a specific app from an explicit ref (branch or tag) in Proxmox/LXC environments.
+# Uses app_deployer legacy branch flow, which supports arbitrary Git refs via GitHub tarball API.
+# Usage:
+#   make deploy-app-ref APP=busibox-portal REF=main INV=inventory/staging
+#   make deploy-app-ref APP=busibox-agents REF=v1.2.3 INV=inventory/production
+deploy-app-ref:
+ifndef APP
+	@echo "Error: APP is required"
+	@echo "Usage: make deploy-app-ref APP=<busibox-portal|busibox-agents> REF=<branch-or-tag> [INV=inventory/staging]"
+	@exit 1
+endif
+ifndef REF
+	@echo "Error: REF is required"
+	@echo "Usage: make deploy-app-ref APP=<busibox-portal|busibox-agents> REF=<branch-or-tag> [INV=inventory/staging]"
+	@exit 1
+endif
+	ansible-playbook -i $(INV) -l apps --tags app_deployer,secrets site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=$(APP) deploy_from_branch=true deploy_branch=$(REF) use_deploy_api=false"
 
 # Deploy agent-server (internal API service)
 # Usage:

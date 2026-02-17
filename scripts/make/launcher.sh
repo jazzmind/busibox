@@ -467,12 +467,14 @@ show_main_menu() {
         box_line "  ${BOLD}1)${NC} Install"
         box_line "  ${DIM}2) Manage (requires installation)${NC}"
         box_line "  ${DIM}3) Test (requires installation)${NC}"
-        box_line "  ${BOLD}4)${NC} Build App"
-        box_line "  ${BOLD}5)${NC} Install MCP locally"
+        box_line "  ${DIM}4) Update (requires installation)${NC}"
+        box_line "  ${BOLD}5)${NC} Build App"
+        box_line "  ${BOLD}6)${NC} Install MCP locally"
     else
         box_line "  ${BOLD}1)${NC} Uninstall / Reinstall"
         box_line "  ${BOLD}2)${NC} Manage"
         box_line "  ${BOLD}3)${NC} Test"
+        box_line "  ${BOLD}4)${NC} Update"
         
         # K8s: Show Connect option when installed
         local active_backend=""
@@ -483,15 +485,15 @@ show_main_menu() {
             box_empty
             local pid_file="${REPO_ROOT}/.k8s-connect.pid"
             if [[ -f "$pid_file" ]] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
-                box_line "  ${BOLD}4)${NC} Disconnect (tunnel active)"
+                box_line "  ${BOLD}5)${NC} Disconnect (tunnel active)"
             else
-                box_line "  ${BOLD}4)${NC} Connect (start tunnel)"
+                box_line "  ${BOLD}5)${NC} Connect (start tunnel)"
             fi
+            box_line "  ${BOLD}6)${NC} Build App"
+            box_line "  ${BOLD}7)${NC} Install MCP locally"
+        else
             box_line "  ${BOLD}5)${NC} Build App"
             box_line "  ${BOLD}6)${NC} Install MCP locally"
-        else
-            box_line "  ${BOLD}4)${NC} Build App"
-            box_line "  ${BOLD}5)${NC} Install MCP locally"
         fi
     fi
     
@@ -711,6 +713,10 @@ show_help() {
     box_line "  ${BOLD}Manage${NC}"
     box_line "    ${CYAN}make manage${NC}   Service management"
     box_line "                    Start/stop, logs, rotate secrets, redeploy"
+    box_empty
+    box_line "  ${BOLD}Update${NC}"
+    box_line "    ${CYAN}make update${NC}   Update APIs + selected core apps"
+    box_line "                    Skips core infrastructure by default"
     box_empty
     box_line "  ${BOLD}Test${NC}"
     box_line "    ${CYAN}make test${NC}     Testing system"
@@ -1022,6 +1028,17 @@ main() {
                 handle_test
                 ;;
             4)
+                if [[ "$install_status" == "not_installed" ]] || [[ "$install_status" == "partial" ]]; then
+                    echo ""
+                    printf "${YELLOW}Installation required. Please run Install first.${NC}\n"
+                    sleep 2
+                else
+                    cd "$REPO_ROOT"
+                    make update
+                    read -n 1 -s -r -p "Press any key to continue..."
+                fi
+                ;;
+            5)
                 local active_backend=""
                 if [[ -n "$_active_profile" ]]; then
                     active_backend=$(profile_get "$_active_profile" "backend")
@@ -1042,7 +1059,8 @@ main() {
                     handle_build_app
                 fi
                 ;;
-            5)
+            6)
+                # Build app on K8s profile, MCP install otherwise
                 local active_backend=""
                 if [[ -n "$_active_profile" ]]; then
                     active_backend=$(profile_get "$_active_profile" "backend")
@@ -1053,7 +1071,7 @@ main() {
                     handle_mcp_install
                 fi
                 ;;
-            6)
+            7)
                 # K8s only: Install MCP locally
                 local active_backend=""
                 if [[ -n "$_active_profile" ]]; then

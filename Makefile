@@ -636,14 +636,7 @@ endif
 # DEPRECATED: Use 'make manage' for service management or 'make install SERVICE=x' to redeploy.
 # Kept for backward compatibility - redirects to manage menu.
 update:
-	@echo ""
-	@echo "  'make update' has been merged into 'make manage' and 'make install'."
-	@echo ""
-	@echo "  Use instead:"
-	@echo "    make manage                    # Interactive service management"
-	@echo "    make install SERVICE=authz     # Redeploy a specific service"
-	@echo "    make manage SERVICE=x ACTION=redeploy  # Rebuild and restart"
-	@echo ""
+	@bash scripts/make/update-services.sh
 
 # Service management menu OR direct service action
 # Interactive menu for stopping/starting/redeploying services
