@@ -41,14 +41,11 @@
 
 - name: Check whether new Milvus data layout already has content
   shell: |
-    shopt -s nullglob dotglob
-    entries=(/srv/milvus/data/*)
-    if [ ${#entries[@]} -gt 0 ]; then
+    if find /srv/milvus/data -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
       echo "has_data"
     else
       echo "empty"
     fi
-  args: { executable: /bin/bash }
   register: milvus_data_layout_state
   changed_when: false
 
