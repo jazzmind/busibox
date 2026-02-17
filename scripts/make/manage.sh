@@ -30,13 +30,43 @@ source "${REPO_ROOT}/scripts/lib/backends/common.sh"
 profile_init
 
 # ============================================================================
-# Backend Detection (profile-aware)
+# Argument Parsing
+# ============================================================================
+# launcher.sh passes: --env <env> --backend <backend>
+# These override profile-based detection when provided.
+
+_ARG_ENV=""
+_ARG_BACKEND=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --env)
+            _ARG_ENV="$2"
+            shift 2
+            ;;
+        --backend)
+            _ARG_BACKEND="$2"
+            shift 2
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
+# ============================================================================
+# Backend Detection (profile-aware, with argument overrides)
 # ============================================================================
 
 # Active profile info
 _active_profile=$(profile_get_active)
 
 get_current_env() {
+    # Prefer explicit argument from launcher
+    if [[ -n "$_ARG_ENV" ]]; then
+        echo "$_ARG_ENV"
+        return
+    fi
     if [[ -n "$_active_profile" ]]; then
         profile_get "$_active_profile" "environment"
         return
@@ -50,6 +80,11 @@ get_current_env() {
 }
 
 get_backend_type() {
+    # Prefer explicit argument from launcher
+    if [[ -n "$_ARG_BACKEND" ]]; then
+        echo "$_ARG_BACKEND"
+        return
+    fi
     if [[ -n "$_active_profile" ]]; then
         profile_get "$_active_profile" "backend"
         return

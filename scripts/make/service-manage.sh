@@ -26,98 +26,71 @@ set -eo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-# Auto-detect deployed environment BEFORE sourcing state library
-_auto_detect_env() {
-    if [[ -n "${BUSIBOX_ENV:-}" ]]; then
-        echo "$BUSIBOX_ENV"
-        return
-    fi
-
-    # Look for state files in order of likelihood
-    if [[ -f "${REPO_ROOT}/.busibox-state-prod" ]]; then
-        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^prod-"; then
-            echo "production"
-            return
-        fi
-    fi
-
-    if [[ -f "${REPO_ROOT}/.busibox-state-staging" ]]; then
-        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^staging-"; then
-            echo "staging"
-            return
-        fi
-    fi
-
-    if [[ -f "${REPO_ROOT}/.busibox-state-demo" ]]; then
-        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^demo-"; then
-            echo "demo"
-            return
-        fi
-    fi
-
-    if [[ -f "${REPO_ROOT}/.busibox-state-dev" ]]; then
-        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^dev-"; then
-            echo "development"
-            return
-        fi
-    fi
-
-    # Fallback: check which containers are actually running
-    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^prod-"; then
-        echo "production"
-    elif docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^staging-"; then
-        echo "staging"
-    elif docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^demo-"; then
-        echo "demo"
-    else
-        echo "development"
-    fi
-}
-
-# Set environment before sourcing state library
-export BUSIBOX_ENV="${BUSIBOX_ENV:-$(_auto_detect_env)}"
-
-# Source libraries
+# Source libraries (profiles first, then state which depends on it)
 source "${REPO_ROOT}/scripts/lib/ui.sh"
+source "${REPO_ROOT}/scripts/lib/profiles.sh"
 source "${REPO_ROOT}/scripts/lib/state.sh"
 
 # Source backend libraries
 source "${REPO_ROOT}/scripts/lib/backends/common.sh"
 
+# Initialize profiles
+profile_init
+
+# Active profile info
+_active_profile=$(profile_get_active)
+
+# Set BUSIBOX_ENV from active profile so state.sh and backends pick it up
+if [[ -n "$_active_profile" ]]; then
+    export BUSIBOX_ENV=$(profile_get "$_active_profile" "environment")
+fi
+
 # ============================================================================
 # Functions
 # ============================================================================
 
-# Get the current environment from state
+# Get the current environment (profile-aware)
 get_current_env() {
+    # Prefer active profile
+    if [[ -n "$_active_profile" ]]; then
+        profile_get "$_active_profile" "environment"
+        return
+    fi
+
+    # Fallback to BUSIBOX_ENV
+    if [[ -n "${BUSIBOX_ENV:-}" ]]; then
+        echo "$BUSIBOX_ENV"
+        return
+    fi
+
+    # Fallback to state file
     local env
     env=$(get_state "ENVIRONMENT" 2>/dev/null || echo "")
 
     if [[ -z "$env" ]]; then
-        if [[ -f "${REPO_ROOT}/.busibox-state-prod" ]]; then
-            env="production"
-        elif [[ -f "${REPO_ROOT}/.busibox-state-staging" ]]; then
-            env="staging"
-        elif [[ -f "${REPO_ROOT}/.busibox-state-demo" ]]; then
-            env="demo"
-        else
-            env="development"
-        fi
+        env="development"
     fi
 
     echo "$env"
 }
 
-# Get the backend type for the environment
+# Get the backend type for the environment (profile-aware)
 get_backend_type() {
     local env="$1"
+
+    # Prefer active profile
+    if [[ -n "$_active_profile" ]]; then
+        profile_get "$_active_profile" "backend"
+        return
+    fi
+
+    # Fallback to state file
     local backend
     backend=$(get_backend "$env" 2>/dev/null || echo "")
 
     if [[ -z "$backend" ]]; then
         case "$env" in
             development|demo) backend="docker" ;;
-            staging|production) backend="docker" ;;
             *) backend="docker" ;;
         esac
     fi
