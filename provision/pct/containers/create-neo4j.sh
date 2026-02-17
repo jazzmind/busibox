@@ -49,6 +49,26 @@ source "${PCT_DIR}/lib/functions.sh"
 # Validate environment
 validate_env || exit 1
 
+# Track created containers for cleanup on error (same pattern as other create-* scripts)
+CREATED_CONTAINERS=()
+
+cleanup_on_error() {
+  echo ""
+  echo "=========================================="
+  echo "Error occurred - cleaning up created containers"
+  echo "=========================================="
+  for ctid in "${CREATED_CONTAINERS[@]}"; do
+    if pct status "$ctid" &>/dev/null; then
+      echo "Removing container $ctid..."
+      pct stop "$ctid" 2>/dev/null || true
+      sleep 2
+      pct destroy "$ctid" --purge 2>/dev/null || true
+    fi
+  done
+  echo "Cleanup complete"
+  exit 1
+}
+
 # Environment-specific data directory base
 if [[ "$MODE" == "staging" ]]; then
   DATA_BASE="/var/lib/data-staging"
@@ -56,9 +76,21 @@ else
   DATA_BASE="/var/lib/data"
 fi
 
+# Ensure host data directory exists for idempotent reruns.
+# This avoids failing when setup-proxmox-host.sh was run before neo4j support existed.
+mkdir -p "${DATA_BASE}/neo4j"
+
 # Create Neo4j container
-create_ct "${CT_NEO4J}" "${IP_NEO4J}" "${PREFIX}neo4j-lxc" unpriv
-add_data_mount "${CT_NEO4J}" "${DATA_BASE}/neo4j" "/srv/neo4j/data" "0"
+CT_EXISTED_BEFORE=false
+if pct status "${CT_NEO4J}" &>/dev/null; then
+  CT_EXISTED_BEFORE=true
+fi
+
+create_ct "${CT_NEO4J}" "${IP_NEO4J}" "${PREFIX}neo4j-lxc" unpriv || cleanup_on_error
+if [[ "${CT_EXISTED_BEFORE}" == "false" ]]; then
+  CREATED_CONTAINERS+=("${CT_NEO4J}")
+fi
+add_data_mount "${CT_NEO4J}" "${DATA_BASE}/neo4j" "/srv/neo4j/data" "0" || cleanup_on_error
 
 echo ""
 echo "=========================================="
