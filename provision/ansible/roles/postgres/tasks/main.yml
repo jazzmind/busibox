@@ -100,6 +100,17 @@
     state: present
   tags: [postgres, postgres_configure]
 
+# Explicitly sync password via ALTER USER to handle cases where the Ansible
+# postgresql_user module doesn't detect a password change (e.g., md5 vs scram-sha-256
+# hash comparison issues, or after vault password regeneration)
+- name: Force-sync busibox database user password
+  become_user: postgres
+  postgresql_query:
+    db: postgres
+    query: "ALTER USER {{ postgres_user }} WITH PASSWORD '{{ secrets.postgresql.password | default(postgres_password) | default('busibox_password_change_me') }}';"
+  changed_when: false
+  tags: [postgres, postgres_configure]
+
 - name: Create service-specific databases
   become_user: postgres
   postgresql_db:
