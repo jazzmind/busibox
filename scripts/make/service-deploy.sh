@@ -42,41 +42,81 @@ fi
 # ============================================================================
 
 # Map service names to Ansible tags
+# Tags differ between docker.yml (simple names) and site.yml (prefixed names).
+# Pass optional second arg "proxmox" to get site.yml tags; defaults to docker tags.
 get_ansible_tag() {
     local service="$1"
-    case "$service" in
-        # Infrastructure
-        postgres|pg) echo "postgres" ;;
-        redis) echo "redis" ;;
-        minio|files) echo "minio" ;;
-        milvus|etcd) echo "milvus" ;;
-        neo4j|graph) echo "neo4j" ;;
-        
-        # APIs
-        authz|authz-api) echo "authz" ;;
-        agent|agent-api) echo "agent" ;;
-        ingest|data-api) echo "data" ;;
-        search|search-api) echo "search" ;;
-        deploy|deploy-api) echo "deploy" ;;
-        bridge|bridge-api) echo "bridge" ;;
-        docs|docs-api) echo "docs" ;;
-        embedding|embedding-api) echo "embedding" ;;
-        
-        # LLM
-        litellm) echo "litellm" ;;
-        vllm) echo "vllm" ;;
-        # NOTE: ollama is deprecated - use vLLM instead
-        
-        # Frontend
-        core-apps|apps) echo "core-apps" ;;
-        nginx|proxy) echo "nginx" ;;
-        
-        # User apps
-        user-apps) echo "user-apps" ;;
-        
-        # Unknown
-        *) echo "" ;;
-    esac
+    local backend="${2:-docker}"
+
+    if [[ "$backend" == "proxmox" ]]; then
+        # site.yml uses prefixed/underscored tags
+        case "$service" in
+            # Infrastructure
+            postgres|pg) echo "postgres" ;;
+            redis) echo "redis" ;;
+            minio|files) echo "minio" ;;
+            milvus|etcd) echo "milvus" ;;
+            neo4j|graph) echo "neo4j" ;;
+
+            # APIs  (site.yml removed broad 'agent','docs','search' tags)
+            authz|authz-api) echo "authz" ;;
+            agent|agent-api) echo "apis_agent" ;;
+            data|ingest|data-api|data-worker) echo "data" ;;
+            search|search-api) echo "search_api" ;;
+            deploy|deploy-api) echo "deploy_api" ;;
+            bridge|bridge-api) echo "bridge" ;;
+            docs|docs-api) echo "docs_api" ;;
+            embedding|embedding-api) echo "embedding" ;;
+
+            # LLM
+            litellm) echo "litellm" ;;
+            vllm) echo "vllm" ;;
+
+            # Frontend  (site.yml uses 'apps_frontend', not 'core-apps')
+            core-apps|apps) echo "apps_frontend" ;;
+            nginx|proxy) echo "nginx" ;;
+
+            # User apps  (site.yml uses underscore)
+            user-apps) echo "user_apps" ;;
+
+            # Unknown
+            *) echo "" ;;
+        esac
+    else
+        # docker.yml uses simple tag names
+        case "$service" in
+            # Infrastructure
+            postgres|pg) echo "postgres" ;;
+            redis) echo "redis" ;;
+            minio|files) echo "minio" ;;
+            milvus|etcd) echo "milvus" ;;
+            neo4j|graph) echo "neo4j" ;;
+
+            # APIs
+            authz|authz-api) echo "authz" ;;
+            agent|agent-api) echo "agent" ;;
+            data|ingest|data-api|data-worker) echo "data" ;;
+            search|search-api) echo "search" ;;
+            deploy|deploy-api) echo "deploy" ;;
+            bridge|bridge-api) echo "bridge" ;;
+            docs|docs-api) echo "docs" ;;
+            embedding|embedding-api) echo "embedding" ;;
+
+            # LLM
+            litellm) echo "litellm" ;;
+            vllm) echo "vllm" ;;
+
+            # Frontend
+            core-apps|apps) echo "core-apps" ;;
+            nginx|proxy) echo "nginx" ;;
+
+            # User apps
+            user-apps) echo "user-apps" ;;
+
+            # Unknown
+            *) echo "" ;;
+        esac
+    fi
 }
 
 # Check if service is valid
@@ -217,7 +257,7 @@ deploy_service() {
     local prefix="$5"
     
     local tag
-    tag=$(get_ansible_tag "$service")
+    tag=$(get_ansible_tag "$service" "$backend")
     
     info "Deploying ${BOLD}${service}${NC} (tag: ${tag})..."
     
