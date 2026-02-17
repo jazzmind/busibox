@@ -2323,9 +2323,19 @@ bootstrap_proxmox_ansible() {
         sleep 3
     fi
     
-    # Check for vault password file
+    # Check for vault password file (environment-specific, then legacy fallbacks)
     local vault_args=""
-    if [[ -f "${HOME}/.vault_pass" ]]; then
+    local vault_prefix
+    case "$ENVIRONMENT" in
+        production) vault_prefix="prod" ;;
+        staging) vault_prefix="staging" ;;
+        development) vault_prefix="dev" ;;
+        demo) vault_prefix="demo" ;;
+        *) vault_prefix="dev" ;;
+    esac
+    if [[ -f "${HOME}/.busibox-vault-pass-${vault_prefix}" ]]; then
+        vault_args="--vault-password-file=${HOME}/.busibox-vault-pass-${vault_prefix}"
+    elif [[ -f "${HOME}/.vault_pass" ]]; then
         vault_args="--vault-password-file=${HOME}/.vault_pass"
     elif [[ -f "${HOME}/.busibox-vault-pass" ]]; then
         vault_args="--vault-password-file=${HOME}/.busibox-vault-pass"

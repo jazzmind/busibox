@@ -12,6 +12,7 @@
 # ============================================================================
 busibox_env: production
 deployment_environment: prod  # Used to load vault.prod.yml
+enable_pytest_databases: true  # Create test databases for PVT tests during deployment
 node_env: production  # For Node.js applications
 
 # ============================================================================
