@@ -495,8 +495,11 @@ NPMRC_EOF
             echo "npm config list:"
             npm config list 2>&1 | head -20 || echo "  (failed to get config)"
             echo ""
-            echo "Running: npm install"
-            npm install
+            # IMPORTANT: Install ALL dependencies (including devDependencies like typescript)
+            # NODE_ENV may already be set to 'production' from env_vars, which causes npm
+            # to skip devDependencies. We need devDeps for the build step (typescript, etc.)
+            echo "Running: npm install (with devDependencies for build)"
+            NODE_ENV=development npm install
             echo "=== NPM INSTALL END ==="
             
             # Regenerate Prisma client if prisma is present (ensures fresh client after schema changes)
