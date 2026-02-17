@@ -159,7 +159,6 @@
     - applications is defined
     - applications | length > 0
     - deploy_apps is not defined or deploy_apps | bool
-    - deploy_from_branch is not defined or not (deploy_from_branch | bool)
     - deploy_app is not defined or deploy_app == item.name
     # Only deploy apps with auto_deploy: true (default) unless explicitly targeting via deploy_app
     - item.auto_deploy | default(true) or (deploy_app is defined and deploy_app == item.name)

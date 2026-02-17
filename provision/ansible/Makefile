@@ -396,8 +396,8 @@ deploy-busibox-portal:
 deploy-busibox-agents:
 	ansible-playbook -i $(INV) -l apps --tags app_deployer,secrets site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=busibox-agents"
 
-# Deploy a specific app from an explicit ref (branch or tag) in Proxmox/LXC environments.
-# Uses app_deployer legacy branch flow, which supports arbitrary Git refs via GitHub tarball API.
+# Deploy a specific app from an explicit ref (branch or tag).
+# Uses the Deploy API with the specified git ref (branch or tag).
 # Usage:
 #   make deploy-app-ref APP=busibox-portal REF=main INV=inventory/staging
 #   make deploy-app-ref APP=busibox-agents REF=v1.2.3 INV=inventory/production
@@ -412,7 +412,7 @@ ifndef REF
 	@echo "Usage: make deploy-app-ref APP=<busibox-portal|busibox-agents> REF=<branch-or-tag> [INV=inventory/staging]"
 	@exit 1
 endif
-	ansible-playbook -i $(INV) -l apps --tags app_deployer,secrets site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=$(APP) deploy_from_branch=true deploy_branch=$(REF) use_deploy_api=false"
+	ansible-playbook -i $(INV) -l apps --tags app_deployer,secrets site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=$(APP) deploy_branch=$(REF)"
 
 # Deploy agent-server (internal API service)
 # Usage:
