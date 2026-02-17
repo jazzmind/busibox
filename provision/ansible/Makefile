@@ -1,4 +1,4 @@
-.PHONY: ping all files pg milvus nginx search search-api agent data data-api data-worker data-update-tests docs apps user-apps openwebui deploy-apps deploy-busibox-portal deploy-busibox-agents deploy-app-ref verify verify-health verify-smoke service-start service-stop service-restart service-status service-logs service-health test test-menu test-data test-data-all test-data-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-authz test-apps test-security test-security-auth test-security-injection test-security-fuzz test-all configure generate-token-keys bootstrap-test-creds bridge tailscale test-bridge check-embeddings migrate-embeddings migrate-embeddings-force staging production env core core-nginx core-storage core-database core-vectorstore llm llm-vllm llm-litellm llm-colpali apis apis-authz apis-data apis-search apis-agent apis-docs apis-bridge apps-frontend
+.PHONY: ping all files pg milvus neo4j nginx search search-api agent data data-api data-worker data-update-tests docs apps user-apps openwebui deploy-apps deploy-busibox-portal deploy-busibox-agents deploy-app-ref verify verify-health verify-smoke service-start service-stop service-restart service-status service-logs service-health test test-menu test-data test-data-all test-data-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-authz test-apps test-security test-security-auth test-security-injection test-security-fuzz test-all configure generate-token-keys bootstrap-test-creds bridge tailscale test-bridge check-embeddings migrate-embeddings migrate-embeddings-force staging production env core core-nginx core-storage core-database core-vectorstore core-graph llm llm-vllm llm-litellm llm-colpali apis apis-authz apis-data apis-search apis-agent apis-docs apis-bridge apps-frontend
 
 # ============================================================================
 # ENVIRONMENT SELECTION (persists between runs via .busibox-state)
@@ -198,6 +198,10 @@ core-vectorstore:
 	@echo "Deploying Milvus (vector database)..."
 	ansible-playbook -i $(INV) -l milvus site.yml --tags core_vectorstore $(VAULT_FLAGS)
 
+core-graph:
+	@echo "Deploying Neo4j (graph database)..."
+	ansible-playbook -i $(INV) -l neo4j site.yml --tags core_graph $(VAULT_FLAGS)
+
 # ----------------------------------------------------------------------------
 # Group 2: LLM Services (AI/ML)
 # GPU inference, embedding, and LLM gateway
@@ -298,6 +302,9 @@ colpali:
 
 milvus:
 	ansible-playbook -i $(INV) -l milvus site.yml --tags core_vectorstore $(VAULT_FLAGS)
+
+neo4j:
+	ansible-playbook -i $(INV) -l neo4j site.yml --tags core_graph $(VAULT_FLAGS)
 
 nginx:
 	ansible-playbook -i $(INV) -l proxy site.yml --tags core_nginx $(VAULT_FLAGS)

@@ -44,6 +44,7 @@ _proxmox_get_service_ip() {
         postgres|pg) echo "${network_base}.203" ;;
         minio|files) echo "${network_base}.205" ;;
         milvus) echo "${network_base}.204" ;;
+        neo4j|graph) echo "${network_base}.213" ;;
         agent|agent-api) echo "${network_base}.202" ;;
         ingest|data-api|data-worker|redis) echo "${network_base}.206" ;;
         bridge|bridge-api) echo "${network_base}.211" ;;
@@ -77,6 +78,7 @@ _proxmox_get_systemd_name() {
         postgres|pg) echo "postgresql" ;;
         minio|files) echo "minio" ;;
         milvus) echo "milvus" ;;
+        neo4j|graph) echo "neo4j" ;;
         litellm) echo "litellm" ;;
         vllm) echo "vllm" ;;
         redis) echo "redis" ;;
@@ -251,10 +253,16 @@ backend_service_action() {
             fi
 
             if [[ -f "$vault_pass_file" ]]; then
-                make "$make_target" INV="$inventory" || error "Failed to redeploy"
+                if ! make "$make_target" INV="$inventory"; then
+                    error "Failed to redeploy"
+                    return 1
+                fi
             else
                 warn "No vault password file found"
-                make "$make_target" INV="$inventory" || error "Failed to redeploy"
+                if ! make "$make_target" INV="$inventory"; then
+                    error "Failed to redeploy"
+                    return 1
+                fi
             fi
             success "Service redeployed"
             ;;
