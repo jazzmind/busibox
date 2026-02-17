@@ -22,8 +22,20 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 # Source libraries
 source "${REPO_ROOT}/scripts/lib/ui.sh"
+source "${REPO_ROOT}/scripts/lib/profiles.sh"
 source "${REPO_ROOT}/scripts/lib/state.sh"
 source "${REPO_ROOT}/scripts/lib/vault.sh"
+
+# Initialize profiles
+profile_init
+
+# Active profile info
+_active_profile=$(profile_get_active)
+
+# Set BUSIBOX_ENV from active profile so state.sh and backends pick it up
+if [[ -n "$_active_profile" ]]; then
+    export BUSIBOX_ENV=$(profile_get "$_active_profile" "environment")
+fi
 
 # ============================================================================
 # Configuration
@@ -119,38 +131,48 @@ expand_services() {
 # Functions
 # ============================================================================
 
-# Get the current environment from state
+# Get the current environment (profile-aware)
 get_current_env() {
+    # Prefer active profile
+    if [[ -n "$_active_profile" ]]; then
+        profile_get "$_active_profile" "environment"
+        return
+    fi
+
+    # Fallback to BUSIBOX_ENV
+    if [[ -n "${BUSIBOX_ENV:-}" ]]; then
+        echo "$BUSIBOX_ENV"
+        return
+    fi
+
+    # Fallback to state file
     local env
     env=$(get_state "ENVIRONMENT" 2>/dev/null || echo "")
     
     if [[ -z "$env" ]]; then
-        # Try to detect from state file existence
-        if [[ -f "${REPO_ROOT}/.busibox-state-prod" ]]; then
-            env="production"
-        elif [[ -f "${REPO_ROOT}/.busibox-state-staging" ]]; then
-            env="staging"
-        elif [[ -f "${REPO_ROOT}/.busibox-state-demo" ]]; then
-            env="demo"
-        else
-            env="development"
-        fi
+        env="development"
     fi
     
     echo "$env"
 }
 
-# Get the backend type for the environment
+# Get the backend type for the environment (profile-aware)
 get_backend_type() {
     local env="$1"
+
+    # Prefer active profile
+    if [[ -n "$_active_profile" ]]; then
+        profile_get "$_active_profile" "backend"
+        return
+    fi
+
+    # Fallback to state file
     local backend
     backend=$(get_backend "$env" 2>/dev/null || echo "")
     
     if [[ -z "$backend" ]]; then
-        # Default based on environment
         case "$env" in
             development|demo) backend="docker" ;;
-            staging|production) backend="docker" ;;
             *) backend="docker" ;;
         esac
     fi
