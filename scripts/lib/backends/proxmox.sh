@@ -247,22 +247,11 @@ backend_service_action() {
             local make_target
             make_target=$(get_proxmox_make_target "$service")
 
-            local vault_pass_file="$HOME/.busibox-vault-pass-${env}"
-            if [[ ! -f "$vault_pass_file" ]]; then
-                vault_pass_file="$HOME/.vault_pass"
-            fi
-
-            if [[ -f "$vault_pass_file" ]]; then
-                if ! make "$make_target" INV="$inventory"; then
-                    error "Failed to redeploy"
-                    return 1
-                fi
-            else
-                warn "No vault password file found"
-                if ! make "$make_target" INV="$inventory"; then
-                    error "Failed to redeploy"
-                    return 1
-                fi
+            # The Makefile handles vault password detection automatically via VAULT_FLAGS
+            # Just call make with the inventory - no need to check vault files here
+            if ! make "$make_target" INV="$inventory"; then
+                error "Failed to redeploy"
+                return 1
             fi
             success "Service redeployed"
             ;;
