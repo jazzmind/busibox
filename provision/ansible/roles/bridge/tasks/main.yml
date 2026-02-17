@@ -117,10 +117,10 @@
     creates: "{{ bridge_venv }}/bin/python"
 
 - name: Install Python dependencies in venv
-  ansible.builtin.pip:
-    requirements: "{{ bridge_dir }}/requirements.txt"
-    virtualenv: "{{ bridge_venv }}"
-    state: present
+  ansible.builtin.command:
+    cmd: "{{ bridge_venv }}/bin/pip install -r {{ bridge_dir }}/requirements.txt"
+  register: bridge_pip_install
+  changed_when: "'Successfully installed' in bridge_pip_install.stdout"
   notify: restart bridge
 
 - name: Upgrade dependencies when requirements.txt changes
