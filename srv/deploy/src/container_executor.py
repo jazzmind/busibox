@@ -1720,6 +1720,11 @@ async def deploy_app(
     if not portal_url and is_docker_environment():
         # Docker dev default - goes through nginx at /portal
         portal_url = "https://localhost/portal"
+    if not portal_url:
+        # Proxmox fallback: derive portal URL from public nginx domain when available.
+        nginx_public_url = os.environ.get("NGINX_PUBLIC_URL", "").rstrip("/")
+        if nginx_public_url:
+            portal_url = f"{nginx_public_url}/portal"
     
     # Step 1.5: For Docker dev mode, set up dynamic volumes for node_modules and .next
     # This solves the platform mismatch (macOS host vs Linux container) by keeping
