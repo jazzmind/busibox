@@ -34,7 +34,8 @@ postgres_user: busibox_user
 postgres_password: "{{ vault_postgres_password }}"
 
 # Test database
-test_mode_enabled: true
+# Only enable test mode when pytest databases are actually created
+test_mode_enabled: "{{ enable_pytest_databases | default(false) }}"
 test_db_name: test_voice_agent
 test_db_user: busibox_test_user
 test_db_password: "{{ vault_test_db_password | default('testpassword') }}"

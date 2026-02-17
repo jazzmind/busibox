@@ -4579,6 +4579,11 @@ main() {
     local current_phase=""
     if [[ "$resuming" == true && "$FULL_INSTALL" != true ]]; then
         current_phase=$(get_install_phase)
+    elif [[ "$resuming" == true && "$FULL_INSTALL" == true ]]; then
+        # Full Install with keep-config: secrets already exist in vault.
+        # Set current_phase so we restore from vault instead of regenerating.
+        # Regenerating would create new passwords that don't match existing databases.
+        current_phase="secrets_generated"
     fi
     
     # GitHub token is always required (for both demo and regular install)
