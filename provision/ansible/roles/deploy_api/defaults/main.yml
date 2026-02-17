@@ -70,6 +70,11 @@ deploy_api_rate_limit_minutes: 5
 # Debug mode
 deploy_api_debug: false
 
+# Container prefix required by deploy-api runtime modules.
+# Even on Proxmox (where Docker executors are not used), these modules are imported
+# and validate this variable at import time.
+deploy_api_container_prefix: "{{ {'production': 'prod', 'staging': 'staging', 'development': 'dev', 'demo': 'demo'}.get((busibox_env | default(deployment_environment | default('staging'))), 'staging') }}"
+
 # Bootstrap token for Ansible provisioning
 # This allows initial app deployment without a real user JWT
 # Derived from jwt_secret for determinism (same value each run)
