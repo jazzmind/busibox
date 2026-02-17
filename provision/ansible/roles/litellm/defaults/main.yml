@@ -24,6 +24,9 @@ litellm_port: 4000
 
 # Master Key (from base secrets)
 litellm_master_key: "{{ secrets.litellm_master_key | default('sk-litellm-master-key-change-me') }}"
+# Salt key for encrypting/decrypting stored provider keys.
+# Defaults to master key so it remains stable across restarts unless explicitly overridden.
+litellm_salt_key: "{{ secrets.litellm_salt_key | default(litellm_master_key) }}"
 
 # Backend Configuration
 # Note: Backends are now dynamically configured via litellm_models

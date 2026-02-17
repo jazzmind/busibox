@@ -60,7 +60,8 @@ general_settings:
 {% if litellm_enable_database %}
   # Database configuration - full functionality enabled
   database_url: "{{ litellm_database_url }}"
-  store_model_in_db: false  # Store models in config, not DB
+  # Keep provider keys/models in DB so runtime key management persists correctly.
+  store_model_in_db: true
   database_connection_pool_limit: 10
   database_connection_timeout: 10
 {% endif %}

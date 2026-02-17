@@ -684,14 +684,115 @@ def _validate_and_enrich_records(
     now_iso = datetime.now(timezone.utc).isoformat()
     validated: List[Dict[str, Any]] = []
 
+    def _coerce_bool(value: Any) -> Any:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            v = value.strip().lower()
+            if v in {"true", "1", "yes", "y", "on"}:
+                return True
+            if v in {"false", "0", "no", "n", "off"}:
+                return False
+        return value
+
+    def _coerce_to_field_type(field_name: str, value: Any, field_def: Dict[str, Any]) -> Any:
+        if value is None:
+            return None
+
+        field_type = field_def.get("type", "string")
+
+        if field_type == "string":
+            if isinstance(value, (str, int, float, bool)):
+                return str(value)
+            raise ValueError(f"Field '{field_name}' must be a string")
+
+        if field_type == "integer":
+            if isinstance(value, bool):
+                raise ValueError(f"Field '{field_name}' must be an integer")
+            if isinstance(value, int):
+                return value
+            if isinstance(value, float) and value.is_integer():
+                return int(value)
+            if isinstance(value, str):
+                try:
+                    return int(value.strip())
+                except Exception as exc:
+                    raise ValueError(f"Field '{field_name}' must be an integer") from exc
+            raise ValueError(f"Field '{field_name}' must be an integer")
+
+        if field_type == "number":
+            if isinstance(value, bool):
+                raise ValueError(f"Field '{field_name}' must be a number")
+            if isinstance(value, (int, float)):
+                return value
+            if isinstance(value, str):
+                try:
+                    return float(value.strip())
+                except Exception as exc:
+                    raise ValueError(f"Field '{field_name}' must be a number") from exc
+            raise ValueError(f"Field '{field_name}' must be a number")
+
+        if field_type == "boolean":
+            coerced = _coerce_bool(value)
+            if isinstance(coerced, bool):
+                return coerced
+            raise ValueError(f"Field '{field_name}' must be a boolean")
+
+        if field_type == "array":
+            if isinstance(value, list):
+                return value
+            raise ValueError(f"Field '{field_name}' must be an array")
+
+        if field_type == "object":
+            if isinstance(value, dict):
+                return value
+            if isinstance(value, str):
+                try:
+                    parsed = json.loads(value)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except Exception:
+                    pass
+            raise ValueError(f"Field '{field_name}' must be an object")
+
+        if field_type == "enum":
+            allowed = field_def.get("values", [])
+            if value in allowed:
+                return value
+            # Best-effort string match (common LLM output variation).
+            if isinstance(value, str):
+                for candidate in allowed:
+                    if isinstance(candidate, str) and candidate.lower() == value.lower():
+                        return candidate
+            raise ValueError(f"Field '{field_name}' must be one of: {allowed}")
+
+        # Unknown/custom field types pass through as-is.
+        return value
+
     for record in records:
         row = dict(record)
         for field_name, field_def in fields.items():
             if not isinstance(field_def, dict):
                 continue
-            required = bool(field_def.get("required"))
-            if required and row.get(field_name) is None:
+            required = bool(field_def.get("required", False))
+            current_value = row.get(field_name)
+
+            if required and current_value is None:
                 raise ValueError(f"Missing required field: {field_name}")
+
+            if current_value is not None:
+                row[field_name] = _coerce_to_field_type(field_name, current_value, field_def)
+
+                # Numeric range checks (keep parity with data-api validation)
+                field_type = field_def.get("type", "string")
+                if field_type in ("integer", "number"):
+                    min_val = field_def.get("min")
+                    max_val = field_def.get("max")
+                    value = row[field_name]
+                    if min_val is not None and value < min_val:
+                        raise ValueError(f"Field '{field_name}' must be >= {min_val}")
+                    if max_val is not None and value > max_val:
+                        raise ValueError(f"Field '{field_name}' must be <= {max_val}")
 
         if "_provenance" not in row or not isinstance(row.get("_provenance"), dict):
             row["_provenance"] = {}
@@ -1085,6 +1186,21 @@ async def extract_document(
                 "recordIds": result.get("recordIds", []),
             }
         except Exception as exc:
+            response = getattr(exc, "response", None)
+            if response is not None:
+                detail_text: Any = None
+                try:
+                    detail_payload = response.json()
+                    detail_text = detail_payload.get("detail", detail_payload)
+                except Exception:
+                    detail_text = response.text or str(exc)
+
+                status_code = 422 if response.status_code in (400, 422) else 502
+                raise HTTPException(
+                    status_code=status_code,
+                    detail=f"Failed to store extracted records: {detail_text}",
+                ) from exc
+
             raise HTTPException(status_code=502, detail=f"Failed to store extracted records: {exc}") from exc
 
     # Persist extraction results summary + records in source doc metadata.
