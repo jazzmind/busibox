@@ -32,14 +32,15 @@
 # =============================================================================
 # Configure /etc/hosts on all containers for service discovery via canonical hostnames
 # Runs with: postgres (first infrastructure service), core, or internal_dns tags
+# Also runs with deploy/deploy_api since deploy-api needs DNS to SSH to other containers
 # NOTE: Removed 'always' tag - was causing DNS tasks to run on ALL hosts for every deploy
 # Instead, runs once when deploying infrastructure (postgres is typically first)
 
 - hosts: all
-  tags: [core, internal_dns, postgres]
+  tags: [core, internal_dns, postgres, deploy, deploy_api]
   roles:
     - role: internal_dns
-      tags: [core, internal_dns, postgres]
+      tags: [core, internal_dns, postgres, deploy, deploy_api]
 
 # =============================================================================
 # GROUP 1: CORE SERVICES (tag: core)

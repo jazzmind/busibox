@@ -2440,7 +2440,7 @@ bootstrap_proxmox_ansible() {
     local attempt=0
     
     # Phase 1: PostgreSQL (database)
-    if is_service_healthy "postgres" "tcp"; then
+    if [[ "$FULL_INSTALL" != true ]] && is_service_healthy "postgres" "tcp"; then
         info "PostgreSQL is already healthy - skipping deployment"
     else
         show_stage 40 "Deploying PostgreSQL" "Enterprise-grade database with row-level security."
@@ -2451,7 +2451,7 @@ bootstrap_proxmox_ansible() {
     fi
     
     # Phase 2: AuthZ API (needed for admin user creation and authentication)
-    if is_service_healthy "authz"; then
+    if [[ "$FULL_INSTALL" != true ]] && is_service_healthy "authz"; then
         info "AuthZ API is already healthy - skipping deployment"
     else
         show_stage 55 "Deploying AuthZ API" "Zero-trust authentication with OAuth 2.0."
@@ -2485,7 +2485,7 @@ bootstrap_proxmox_ansible() {
     fi
     
     # Phase 4: Deploy API (service orchestration - needed to deploy remaining services)
-    if is_service_healthy "deploy_api"; then
+    if [[ "$FULL_INSTALL" != true ]] && is_service_healthy "deploy_api"; then
         info "Deploy API is already healthy - skipping deployment"
     else
         show_stage 70 "Deploying Deploy API" "Service orchestration and deployment automation."
@@ -2510,7 +2510,7 @@ bootstrap_proxmox_ansible() {
     fi
     
     # Phase 5: Nginx (reverse proxy - needed before apps can be accessed)
-    if is_service_healthy "nginx"; then
+    if [[ "$FULL_INSTALL" != true ]] && is_service_healthy "nginx"; then
         info "Nginx is already healthy - skipping deployment"
     else
         show_stage 75 "Deploying Nginx" "Reverse proxy for secure access."
@@ -2521,7 +2521,7 @@ bootstrap_proxmox_ansible() {
     fi
     
     # Phase 6: Core Apps (Busibox Portal + Agent Manager)
-    if is_service_healthy "ai_portal"; then
+    if [[ "$FULL_INSTALL" != true ]] && is_service_healthy "ai_portal"; then
         info "Busibox Portal is already healthy - skipping deployment"
     else
         show_stage 85 "Deploying Core Apps" "Busibox Portal and Agent Manager."
