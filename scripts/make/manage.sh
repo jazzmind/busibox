@@ -412,6 +412,11 @@ manage_service() {
             fi
         fi
 
+        # Proxmox core-apps: deploy individual app with release/branch selection
+        if [[ "$_CURRENT_BACKEND" == "proxmox" && "$service" == "core-apps" ]]; then
+            box_line "  ${BOLD}6)${NC} Deploy App (select app + release/branch)"
+        fi
+
         # Add dev mode note for Docker Python API services
         if [[ "$_CURRENT_BACKEND" == "docker" ]]; then
             case "$service" in
@@ -482,18 +487,22 @@ manage_service() {
                 fi
                 read -n 1 -s -r -p "Press any key to continue..."
                 ;;
-            6) # Rebuild Container (Docker core-apps only)
-                if [[ "$service" != "core-apps" ]] || [[ "$_CURRENT_BACKEND" != "docker" ]]; then
+            6) # Rebuild Container (Docker) or Deploy App (Proxmox) - core-apps only
+                if [[ "$service" != "core-apps" ]]; then
                     continue
                 fi
-                echo ""
-                info "Rebuilding core-apps container (full Docker rebuild)..."
-                cd "$REPO_ROOT"
-                make docker-build SERVICE=core-apps ENV="$env" && make docker-up SERVICE=core-apps ENV="$env"
-                read -n 1 -s -r -p "Press any key to continue..."
+                if [[ "$_CURRENT_BACKEND" == "docker" ]]; then
+                    echo ""
+                    info "Rebuilding core-apps container (full Docker rebuild)..."
+                    cd "$REPO_ROOT"
+                    make docker-build SERVICE=core-apps ENV="$env" && make docker-up SERVICE=core-apps ENV="$env"
+                    read -n 1 -s -r -p "Press any key to continue..."
+                elif [[ "$_CURRENT_BACKEND" == "proxmox" ]]; then
+                    _deploy_core_app_submenu "$env"
+                fi
                 ;;
-            7) # Rebuild App (core-apps only)
-                if [[ "$service" != "core-apps" ]]; then
+            7) # Rebuild App (Docker core-apps only)
+                if [[ "$service" != "core-apps" ]] || [[ "$_CURRENT_BACKEND" != "docker" ]]; then
                     continue
                 fi
                 _rebuild_app_submenu "$env" "$prefix"
@@ -595,6 +604,70 @@ _rebuild_app_submenu() {
             ;;
         b|B) ;;
     esac
+}
+
+# Deploy core app submenu (Proxmox only - select app + release/branch)
+_deploy_core_app_submenu() {
+    local env="$1"
+
+    # Core app repo mapping
+    local -A CORE_APP_REPOS=(
+        ["busibox-portal"]="jazzmind/busibox-portal"
+        ["busibox-agents"]="jazzmind/busibox-agents"
+    )
+
+    clear
+    box_start 70 double "$CYAN"
+    box_header "DEPLOY CORE APP"
+    box_empty
+    box_line "  ${BOLD}Select app to deploy:${NC}"
+    box_empty
+    box_line "    ${BOLD}1)${NC} busibox-portal"
+    box_line "    ${BOLD}2)${NC} busibox-agents"
+    box_line "    ${BOLD}3)${NC} both (same ref)"
+    box_empty
+    box_line "  ${DIM}b = back${NC}"
+    box_empty
+    box_footer
+    echo ""
+
+    read -n 1 -s -r -p "Select app: " app_choice
+    echo ""
+
+    local apps_to_deploy=()
+
+    case "$app_choice" in
+        1) apps_to_deploy=("busibox-portal") ;;
+        2) apps_to_deploy=("busibox-agents") ;;
+        3) apps_to_deploy=("busibox-portal" "busibox-agents") ;;
+        b|B) return ;;
+        *) return ;;
+    esac
+
+    # Use the first app's repo for ref selection (or the shared one for "both")
+    local repo="${CORE_APP_REPOS[${apps_to_deploy[0]}]}"
+    local selected_ref
+    selected_ref=$(select_github_ref "$repo" "main")
+
+    if [[ -z "$selected_ref" ]]; then
+        warn "No ref selected, aborting"
+        read -n 1 -s -r -p "Press any key to continue..."
+        return
+    fi
+
+    echo ""
+    info "Deploying with ref: ${BOLD}${selected_ref}${NC}"
+    echo ""
+
+    for app in "${apps_to_deploy[@]}"; do
+        info "Deploying ${BOLD}${app}${NC} at ${BOLD}${selected_ref}${NC}..."
+        export DEPLOY_REF="$selected_ref"
+        backend_service_action "$app" "redeploy" "$env"
+        unset DEPLOY_REF
+        echo ""
+    done
+
+    read -n 1 -s -r -p "Press any key to continue..."
 }
 
 # ============================================================================

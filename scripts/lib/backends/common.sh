@@ -230,6 +230,8 @@ get_proxmox_make_target() {
         litellm) echo "litellm" ;;
         vllm) echo "vllm" ;;
         core-apps|apps) echo "apps" ;;
+        busibox-portal) echo "deploy-busibox-portal" ;;
+        busibox-agents) echo "deploy-busibox-agents" ;;
         nginx|proxy) echo "nginx" ;;
         *) echo "$service" ;;
     esac

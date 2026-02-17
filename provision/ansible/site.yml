@@ -286,10 +286,10 @@
 # NOTE: data_api/data_worker are on play tags to allow the play to run,
 # but task-level tags filter which specific tasks execute
 - hosts: data
-  tags: [apis, apis_data, data, data_api, data_worker]
+  tags: [apis, apis_data, data, data_api, data_worker, redis]
   roles:
     - role: data
-      tags: [apis, apis_data, data, data_api, data_worker]
+      tags: [apis, apis_data, data, data_api, data_worker, redis]
 
 # 3.2.1 Embedding API (separate play to avoid running data role GPU tasks)
 # Uses FastEmbed for CPU-based embeddings - does NOT need GPU
@@ -303,7 +303,7 @@
 # 3.3 Search API
 # Note: Removed 'search' from role tags to avoid confusion with milvus core service
 - hosts: milvus
-  tags: [apis, apis_search]
+  tags: [apis, apis_search, search_api]
   roles:
     - role: search_api
       tags: [apis, apis_search, search_api, search-api]
@@ -316,7 +316,7 @@
 #   - docs_api: runs only docs_api role
 # Note: Removed 'agent' and 'docs' broad tags from role level to prevent confusion
 - hosts: agent
-  tags: [apis, apis_agent]
+  tags: [apis, apis_agent, agent_api, docs_api]
   roles:
     - role: agent_api
       tags: [apis, apis_agent, agent_api]
@@ -325,7 +325,7 @@
 
 # 3.6 Bridge Service (optional - multi-channel communication)
 - hosts: bridge
-  tags: [apis, apis_bridge]
+  tags: [apis, apis_bridge, bridge]
   roles:
     - role: bridge
       tags: [apis, apis_bridge, bridge]

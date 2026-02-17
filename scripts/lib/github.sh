@@ -354,25 +354,25 @@ except: pass
 
 # Interactive release/branch selector for a GitHub repo
 # Usage: selected_ref=$(select_github_ref <repo> [default_ref])
-# Returns the selected ref string (tag or branch name)
+# Returns the selected ref string (tag or branch name) on stdout.
+# All interactive display goes to /dev/tty so it works inside $().
 select_github_ref() {
     local repo="$1"
     local default_ref="${2:-main}"
 
-    echo ""
-    info "Fetching releases and branches for ${BOLD}${repo}${NC}..."
+    echo "" >/dev/tty
+    echo -e "${CYAN}[INFO]${NC} Fetching releases and branches for ${BOLD}${repo}${NC}..." >/dev/tty
 
     local refs=()
-    local ref_names=()
 
     while IFS= read -r line; do
         refs+=("$line")
     done < <(fetch_github_refs "$repo" 10 2>/dev/null)
 
     if [[ ${#refs[@]} -eq 0 ]]; then
-        warn "Could not fetch refs from GitHub (no token or API error)"
-        echo ""
-        read -p "  Enter branch or tag to deploy [${default_ref}]: " manual_ref
+        echo -e "${YELLOW}[WARN]${NC} Could not fetch refs from GitHub (no token or API error)" >/dev/tty
+        echo "" >/dev/tty
+        read -p "  Enter branch or tag to deploy [${default_ref}]: " manual_ref </dev/tty
         echo "${manual_ref:-$default_ref}"
         return
     fi
@@ -382,29 +382,29 @@ select_github_ref() {
     local idx=1
     local display_entries=()
 
-    echo ""
-    printf "  ${BOLD}Releases:${NC}\n"
+    echo "" >/dev/tty
+    printf "  ${BOLD}Releases:${NC}\n" >/dev/tty
     for ref in "${refs[@]}"; do
         IFS='|' read -r type name date desc <<< "$ref"
         if [[ "$type" == "release" ]]; then
             has_releases=true
             display_entries+=("$name")
             if [[ -n "$desc" && "$desc" != "$name" ]]; then
-                printf "    ${BOLD}%2d)${NC} %-20s ${DIM}%s - %s${NC}\n" "$idx" "$name" "$date" "$desc"
+                printf "    ${BOLD}%2d)${NC} %-20s ${DIM}%s - %s${NC}\n" "$idx" "$name" "$date" "$desc" >/dev/tty
             else
-                printf "    ${BOLD}%2d)${NC} %-20s ${DIM}%s${NC}\n" "$idx" "$name" "$date"
+                printf "    ${BOLD}%2d)${NC} %-20s ${DIM}%s${NC}\n" "$idx" "$name" "$date" >/dev/tty
             fi
             ((idx++))
         fi
     done
 
     if ! $has_releases; then
-        printf "    ${DIM}(no releases found)${NC}\n"
+        printf "    ${DIM}(no releases found)${NC}\n" >/dev/tty
     fi
 
     # Display branches
-    echo ""
-    printf "  ${BOLD}Branches:${NC}\n"
+    echo "" >/dev/tty
+    printf "  ${BOLD}Branches:${NC}\n" >/dev/tty
     for ref in "${refs[@]}"; do
         IFS='|' read -r type name date desc <<< "$ref"
         if [[ "$type" == "branch" ]]; then
@@ -413,16 +413,16 @@ select_github_ref() {
             if [[ "$name" == "main" || "$name" == "master" ]]; then
                 main_marker=" ${DIM}(default)${NC}"
             fi
-            printf "    ${BOLD}%2d)${NC} %s%s\n" "$idx" "$name" "$main_marker"
+            printf "    ${BOLD}%2d)${NC} %s%s\n" "$idx" "$name" "$main_marker" >/dev/tty
             ((idx++))
         fi
     done
 
-    echo ""
-    printf "  ${BOLD} c)${NC} Custom (enter manually)\n"
-    echo ""
+    echo "" >/dev/tty
+    printf "  ${BOLD} c)${NC} Custom (enter manually)\n" >/dev/tty
+    echo "" >/dev/tty
 
-    read -p "  Select ref [default: ${default_ref}]: " choice
+    read -p "  Select ref [default: ${default_ref}]: " choice </dev/tty
 
     if [[ -z "$choice" ]]; then
         echo "$default_ref"
@@ -430,7 +430,7 @@ select_github_ref() {
     fi
 
     if [[ "$choice" == "c" || "$choice" == "C" ]]; then
-        read -p "  Enter branch or tag: " manual_ref
+        read -p "  Enter branch or tag: " manual_ref </dev/tty
         echo "${manual_ref:-$default_ref}"
         return
     fi

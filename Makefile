@@ -653,9 +653,11 @@ update:
 #        CORE_APPS_MODE=dev  make manage SERVICE=core-apps ACTION=restart  # Dev mode
 #
 # Actions: start, stop, restart, logs, redeploy, status
+# For core-app redeploy, pass REF= to select a specific branch/tag:
+#   make manage SERVICE=busibox-portal ACTION=redeploy REF=v1.0.0
 manage:
 ifdef SERVICE
-	@bash scripts/make/service-manage.sh "$(SERVICE)" "$(ACTION)"
+	@DEPLOY_REF="$(REF)" bash scripts/make/service-manage.sh "$(SERVICE)" "$(ACTION)"
 else
 	@bash scripts/make/manage.sh
 endif

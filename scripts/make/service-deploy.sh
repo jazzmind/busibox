@@ -49,34 +49,35 @@ get_ansible_tag() {
     local backend="${2:-docker}"
 
     if [[ "$backend" == "proxmox" ]]; then
-        # site.yml uses prefixed/underscored tags
+        # site.yml tags - MUST match PLAY-level tags (not just role tags)
+        # because Ansible skips the entire play if the play tag doesn't match.
         case "$service" in
-            # Infrastructure
-            postgres|pg) echo "postgres" ;;
+            # Infrastructure (play tags are core_* prefixed)
+            postgres|pg) echo "core_database" ;;
             redis) echo "redis" ;;
-            minio|files) echo "minio" ;;
-            milvus|etcd) echo "milvus" ;;
-            neo4j|graph) echo "neo4j" ;;
+            minio|files) echo "core_storage" ;;
+            milvus|etcd) echo "core_vectorstore" ;;
+            neo4j|graph) echo "core_graph" ;;
 
-            # APIs  (site.yml removed broad 'agent','docs','search' tags)
+            # APIs
             authz|authz-api) echo "authz" ;;
             agent|agent-api) echo "apis_agent" ;;
             data|ingest|data-api|data-worker) echo "data" ;;
-            search|search-api) echo "search_api" ;;
+            search|search-api) echo "apis_search" ;;
             deploy|deploy-api) echo "deploy_api" ;;
             bridge|bridge-api) echo "bridge" ;;
             docs|docs-api) echo "docs_api" ;;
             embedding|embedding-api) echo "embedding" ;;
 
-            # LLM
-            litellm) echo "litellm" ;;
-            vllm) echo "vllm" ;;
+            # LLM (play tags are llm_* prefixed)
+            litellm) echo "llm_litellm" ;;
+            vllm) echo "llm_vllm" ;;
 
-            # Frontend  (site.yml uses 'apps_frontend', not 'core-apps')
+            # Frontend
             core-apps|apps) echo "apps_frontend" ;;
-            nginx|proxy) echo "nginx" ;;
+            nginx|proxy) echo "core_nginx" ;;
 
-            # User apps  (site.yml uses underscore)
+            # User apps
             user-apps) echo "user_apps" ;;
 
             # Unknown

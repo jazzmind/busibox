@@ -109,6 +109,7 @@
     owner: "{{ bridge_user }}"
     group: "{{ bridge_group }}"
     mode: "0644"
+  register: bridge_requirements_file
 
 - name: Create Python virtual environment
   ansible.builtin.command:
@@ -120,6 +121,13 @@
     requirements: "{{ bridge_dir }}/requirements.txt"
     virtualenv: "{{ bridge_venv }}"
     state: present
+  notify: restart bridge
+
+- name: Upgrade dependencies when requirements.txt changes
+  ansible.builtin.command:
+    cmd: "{{ bridge_venv }}/bin/pip install --upgrade -r {{ bridge_dir }}/requirements.txt"
+  when: bridge_requirements_file.changed
+  notify: restart bridge
 
 - name: Set venv ownership
   ansible.builtin.file:
