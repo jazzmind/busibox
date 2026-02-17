@@ -752,7 +752,11 @@ def _validate_and_enrich_records(
                     if isinstance(parsed, dict):
                         return parsed
                 except Exception:
-                    pass
+                    # If model returned plain text for an object field, preserve it
+                    # in a stable envelope instead of failing extraction.
+                    return {"value": value}
+            if isinstance(value, (int, float, bool)):
+                return {"value": value}
             raise ValueError(f"Field '{field_name}' must be an object")
 
         if field_type == "enum":
