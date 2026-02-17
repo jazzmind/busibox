@@ -244,15 +244,57 @@ backend_service_action() {
         redeploy)
             info "Redeploying ${service}..."
             cd "${REPO_ROOT}/provision/ansible"
-            local make_target
-            make_target=$(get_proxmox_make_target "$service")
 
-            # The Makefile handles vault password detection automatically via VAULT_FLAGS
-            # Just call make with the inventory - no need to check vault files here
-            if ! make "$make_target" INV="$inventory"; then
-                error "Failed to redeploy"
-                return 1
-            fi
+            # Core apps support deploying a specific ref (branch/tag)
+            local deploy_ref="${DEPLOY_REF:-}"
+            case "$service" in
+                busibox-portal|busibox-agents)
+                    if [[ -n "$deploy_ref" ]]; then
+                        info "Deploying ${service} at ref: ${BOLD}${deploy_ref}${NC}"
+                        if ! make deploy-app-ref APP="$service" REF="$deploy_ref" INV="$inventory"; then
+                            error "Failed to redeploy"
+                            return 1
+                        fi
+                    else
+                        if ! make "deploy-${service}" INV="$inventory"; then
+                            error "Failed to redeploy"
+                            return 1
+                        fi
+                    fi
+                    ;;
+                core-apps|apps)
+                    # For the "core-apps" group, deploy both apps
+                    # If a ref is provided, use deploy-app-ref for each
+                    if [[ -n "$deploy_ref" ]]; then
+                        info "Deploying busibox-portal at ref: ${BOLD}${deploy_ref}${NC}"
+                        if ! make deploy-app-ref APP="busibox-portal" REF="$deploy_ref" INV="$inventory"; then
+                            error "Failed to redeploy busibox-portal"
+                            return 1
+                        fi
+                        echo ""
+                        info "Deploying busibox-agents at ref: ${BOLD}${deploy_ref}${NC}"
+                        if ! make deploy-app-ref APP="busibox-agents" REF="$deploy_ref" INV="$inventory"; then
+                            error "Failed to redeploy busibox-agents"
+                            return 1
+                        fi
+                    else
+                        local make_target
+                        make_target=$(get_proxmox_make_target "$service")
+                        if ! make "$make_target" INV="$inventory"; then
+                            error "Failed to redeploy"
+                            return 1
+                        fi
+                    fi
+                    ;;
+                *)
+                    local make_target
+                    make_target=$(get_proxmox_make_target "$service")
+                    if ! make "$make_target" INV="$inventory"; then
+                        error "Failed to redeploy"
+                        return 1
+                    fi
+                    ;;
+            esac
             success "Service redeployed"
             ;;
     esac

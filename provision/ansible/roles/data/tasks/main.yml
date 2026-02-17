@@ -288,6 +288,19 @@
       tags: [data, data_configure, model_registry]
   tags: [data, data_configure, model_registry]
 
+# Ensure the postgres user password matches the vault before rendering env file.
+# This makes the data role self-sufficient (can be deployed standalone without
+# first deploying the postgres role). Mirrors the pattern used by the authz role.
+- name: Ensure database user password is synced
+  postgresql_user:
+    name: "{{ postgres_user }}"
+    password: "{{ secrets.postgresql.password }}"
+    role_attr_flags: "LOGIN,CREATEDB"
+    state: present
+  become_user: postgres
+  delegate_to: "{{ groups['pg'][0] }}"
+  tags: [data, data_configure, data_api, data_worker]
+
 - name: Create data service environment file
   template:
     src: data.env.j2
@@ -297,6 +310,67 @@
     - Restart data API
     - Restart data worker
   tags: [data, data_configure, data_api, data_worker]
+
+# ============================================================================
+# Cleanup: Remove stale ingest-api service (renamed to data-api)
+# The ingest-api service was renamed to data-api but the old service file
+# may still exist and be enabled on containers from earlier deployments.
+# Both bind to port 8002, so the stale service must be removed.
+# ============================================================================
+- name: Check for stale ingest-api service
+  stat:
+    path: /etc/systemd/system/ingest-api.service
+  register: stale_ingest_service
+  tags: [data, data_api, data_configure]
+
+- name: Stop and disable stale ingest-api service
+  systemd:
+    name: ingest-api
+    state: stopped
+    enabled: no
+    daemon_reload: no
+  when: stale_ingest_service.stat.exists
+  ignore_errors: yes
+  tags: [data, data_api, data_configure]
+
+- name: Remove stale ingest-api service file
+  file:
+    path: /etc/systemd/system/ingest-api.service
+    state: absent
+  when: stale_ingest_service.stat.exists
+  notify: Restart data API
+  tags: [data, data_api, data_configure]
+
+- name: Reload systemd after removing stale service
+  systemd:
+    daemon_reload: yes
+  when: stale_ingest_service.stat.exists
+  tags: [data, data_api, data_configure]
+
+# Also check for stale ingest-worker service
+- name: Check for stale ingest-worker service
+  stat:
+    path: /etc/systemd/system/ingest-worker.service
+  register: stale_ingest_worker_service
+  tags: [data, data_worker, data_configure]
+
+- name: Stop and disable stale ingest-worker service
+  systemd:
+    name: ingest-worker
+    state: stopped
+    enabled: no
+    daemon_reload: no
+  when: stale_ingest_worker_service.stat.exists
+  ignore_errors: yes
+  tags: [data, data_worker, data_configure]
+
+- name: Remove stale ingest-worker service file
+  file:
+    path: /etc/systemd/system/ingest-worker.service
+    state: absent
+  when: stale_ingest_worker_service.stat.exists
+  notify: Restart data worker
+  tags: [data, data_worker, data_configure]
 
 # ============================================================================
 # API Service (FastAPI on port 8000)

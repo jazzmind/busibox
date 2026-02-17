@@ -102,12 +102,13 @@
 
 # Explicitly sync password via ALTER USER to handle cases where the Ansible
 # postgresql_user module doesn't detect a password change (e.g., md5 vs scram-sha-256
-# hash comparison issues, or after vault password regeneration)
+# hash comparison issues, or after vault password regeneration).
+# Single quotes in password are escaped for SQL safety.
 - name: Force-sync busibox database user password
   become_user: postgres
   postgresql_query:
     db: postgres
-    query: "ALTER USER {{ postgres_user }} WITH PASSWORD '{{ secrets.postgresql.password | default(postgres_password) | default('busibox_password_change_me') }}';"
+    query: "ALTER USER {{ postgres_user }} WITH PASSWORD '{{ secrets.postgresql.password | default(postgres_password) | default('busibox_password_change_me') | replace(\"'\", \"''\") }}';"
   changed_when: false
   tags: [postgres, postgres_configure]
 

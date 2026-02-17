@@ -22,6 +22,7 @@ source "${REPO_ROOT}/scripts/lib/profiles.sh"
 source "${REPO_ROOT}/scripts/lib/state.sh"
 source "${REPO_ROOT}/scripts/lib/status.sh"
 source "${REPO_ROOT}/scripts/lib/services.sh"
+source "${REPO_ROOT}/scripts/lib/github.sh"
 
 # Source backend libraries
 source "${REPO_ROOT}/scripts/lib/backends/common.sh"

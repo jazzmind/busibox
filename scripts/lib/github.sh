@@ -278,6 +278,173 @@ ensure_github_token() {
 }
 
 # =============================================================================
+# Release/Tag Fetching
+# =============================================================================
+
+# Fetch recent releases and branches for a GitHub repo
+# Usage: fetch_github_refs <repo> [max_results]
+# Output: One ref per line in format "TYPE|NAME|DATE|DESCRIPTION"
+#   TYPE = release, tag, or branch
+# Returns: 0 if successful, 1 if failed
+fetch_github_refs() {
+    local repo="$1"
+    local max="${2:-10}"
+    local token
+    token=$(get_github_token 2>/dev/null || echo "")
+
+    local auth_header=""
+    if [[ -n "$token" ]]; then
+        auth_header="-H \"Authorization: token ${token}\""
+    fi
+
+    local refs=()
+
+    # Fetch releases (includes tag name, date, title)
+    local releases_json
+    releases_json=$(eval curl -s \
+        $auth_header \
+        -H '"Accept: application/vnd.github.v3+json"' \
+        "\"https://api.github.com/repos/${repo}/releases?per_page=${max}\"" 2>/dev/null)
+
+    if [[ -n "$releases_json" ]] && echo "$releases_json" | grep -q '"tag_name"'; then
+        while IFS= read -r line; do
+            refs+=("$line")
+        done < <(echo "$releases_json" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    for r in data:
+        tag = r.get('tag_name', '')
+        name = r.get('name', tag)
+        date = r.get('published_at', '')[:10]
+        pre = ' (pre-release)' if r.get('prerelease') else ''
+        print(f'release|{tag}|{date}|{name}{pre}')
+except: pass
+" 2>/dev/null)
+    fi
+
+    # Fetch recent branches (just main + a few recent ones)
+    local branches_json
+    branches_json=$(eval curl -s \
+        $auth_header \
+        -H '"Accept: application/vnd.github.v3+json"' \
+        "\"https://api.github.com/repos/${repo}/branches?per_page=10\"" 2>/dev/null)
+
+    if [[ -n "$branches_json" ]] && echo "$branches_json" | grep -q '"name"'; then
+        while IFS= read -r line; do
+            refs+=("$line")
+        done < <(echo "$branches_json" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    for b in data:
+        name = b.get('name', '')
+        print(f'branch|{name}||')
+except: pass
+" 2>/dev/null)
+    fi
+
+    # Output results
+    for ref in "${refs[@]}"; do
+        echo "$ref"
+    done
+
+    [[ ${#refs[@]} -gt 0 ]]
+}
+
+# Interactive release/branch selector for a GitHub repo
+# Usage: selected_ref=$(select_github_ref <repo> [default_ref])
+# Returns the selected ref string (tag or branch name)
+select_github_ref() {
+    local repo="$1"
+    local default_ref="${2:-main}"
+
+    echo ""
+    info "Fetching releases and branches for ${BOLD}${repo}${NC}..."
+
+    local refs=()
+    local ref_names=()
+
+    while IFS= read -r line; do
+        refs+=("$line")
+    done < <(fetch_github_refs "$repo" 10 2>/dev/null)
+
+    if [[ ${#refs[@]} -eq 0 ]]; then
+        warn "Could not fetch refs from GitHub (no token or API error)"
+        echo ""
+        read -p "  Enter branch or tag to deploy [${default_ref}]: " manual_ref
+        echo "${manual_ref:-$default_ref}"
+        return
+    fi
+
+    # Display releases
+    local has_releases=false
+    local idx=1
+    local display_entries=()
+
+    echo ""
+    printf "  ${BOLD}Releases:${NC}\n"
+    for ref in "${refs[@]}"; do
+        IFS='|' read -r type name date desc <<< "$ref"
+        if [[ "$type" == "release" ]]; then
+            has_releases=true
+            display_entries+=("$name")
+            if [[ -n "$desc" && "$desc" != "$name" ]]; then
+                printf "    ${BOLD}%2d)${NC} %-20s ${DIM}%s - %s${NC}\n" "$idx" "$name" "$date" "$desc"
+            else
+                printf "    ${BOLD}%2d)${NC} %-20s ${DIM}%s${NC}\n" "$idx" "$name" "$date"
+            fi
+            ((idx++))
+        fi
+    done
+
+    if ! $has_releases; then
+        printf "    ${DIM}(no releases found)${NC}\n"
+    fi
+
+    # Display branches
+    echo ""
+    printf "  ${BOLD}Branches:${NC}\n"
+    for ref in "${refs[@]}"; do
+        IFS='|' read -r type name date desc <<< "$ref"
+        if [[ "$type" == "branch" ]]; then
+            display_entries+=("$name")
+            local main_marker=""
+            if [[ "$name" == "main" || "$name" == "master" ]]; then
+                main_marker=" ${DIM}(default)${NC}"
+            fi
+            printf "    ${BOLD}%2d)${NC} %s%s\n" "$idx" "$name" "$main_marker"
+            ((idx++))
+        fi
+    done
+
+    echo ""
+    printf "  ${BOLD} c)${NC} Custom (enter manually)\n"
+    echo ""
+
+    read -p "  Select ref [default: ${default_ref}]: " choice
+
+    if [[ -z "$choice" ]]; then
+        echo "$default_ref"
+        return
+    fi
+
+    if [[ "$choice" == "c" || "$choice" == "C" ]]; then
+        read -p "  Enter branch or tag: " manual_ref
+        echo "${manual_ref:-$default_ref}"
+        return
+    fi
+
+    if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#display_entries[@]} )); then
+        echo "${display_entries[$((choice-1))]}"
+        return
+    fi
+
+    # If they typed a ref name directly, use it
+    echo "${choice}"
+}
+
+# =============================================================================
 # Quick Check (for Makefile)
 # =============================================================================
 
