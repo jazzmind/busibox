@@ -127,6 +127,7 @@ help:
 	@echo "  make install                 # Fresh installation wizard"
 	@echo "  make install SERVICE=authz   # Deploy specific service (via Ansible)"
 	@echo "  make manage                  # Service management (interactive)"
+	@echo "  make login                   # Generate admin magic link + open browser"
 	@echo "  make manage SERVICE=authz ACTION=restart  # Direct service action"
 	@echo "  CORE_APPS_MODE=prod make manage SERVICE=core-apps ACTION=restart  # Prod mode"
 	@echo "  make test                    # Testing menu"
