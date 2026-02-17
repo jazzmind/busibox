@@ -36,7 +36,7 @@
     mode: "0755"
     owner: root
     group: root
-  when: use_deploy_api is defined and not use_deploy_api
+  when: use_deploy_api is defined and not (use_deploy_api | bool)
   tags:
     - always
 
@@ -54,7 +54,7 @@
   vars:
     app: "{{ item }}"
   when: 
-    - use_deploy_api is defined and not use_deploy_api
+    - use_deploy_api is defined and not (use_deploy_api | bool)
     - applications | length > 0
     - item.local_src is not defined
   tags:
@@ -68,7 +68,7 @@
     mode: "0755"
     owner: root
     group: root
-  when: use_deploy_api is defined and not use_deploy_api
+  when: use_deploy_api is defined and not (use_deploy_api | bool)
   tags:
     - always
 
@@ -129,7 +129,7 @@
     msg: |
       ✅ App deployer configuration complete
       - Applications configured: {{ applications | length }}
-      - Deployment mode: {{ 'Deploy API' if (use_deploy_api | default(true)) else 'Legacy deploywatch' }}
+      - Deployment mode: {{ 'Deploy API' if (use_deploy_api | default(true) | bool) else 'Legacy deploywatch' }}
       - Environment files deployed: {{ applications | length }}
   when: applications | length > 0
 
@@ -141,7 +141,7 @@
 - name: Get bootstrap token for Deploy API
   include_tasks: get_bootstrap_token.yml
   when:
-    - use_deploy_api | default(true)
+    - use_deploy_api | default(true) | bool
     - deploy_api_admin_token is not defined or deploy_api_admin_token | length == 0
   tags:
     - always
@@ -155,7 +155,7 @@
   vars:
     app: "{{ item }}"
   when:
-    - use_deploy_api | default(true)
+    - use_deploy_api | default(true) | bool
     - applications is defined
     - applications | length > 0
     - deploy_apps is not defined or deploy_apps | bool
@@ -178,13 +178,13 @@
   loop_control:
     label: "{{ item.name }}"
   when:
-    - use_deploy_api is defined and not use_deploy_api
+    - use_deploy_api is defined and not (use_deploy_api | bool)
     - applications | length > 0
 
 - name: Deploy application from branch (legacy - when requested)
   include_tasks: deploy-branch.yml
   when: 
-    - use_deploy_api is defined and not use_deploy_api
+    - use_deploy_api is defined and not (use_deploy_api | bool)
     - deploy_from_branch is defined
     - deploy_from_branch | bool
     - deploy_app is defined
@@ -194,7 +194,7 @@
 - name: Deploy applications (legacy - deploywatch)
   include_tasks: deploy.yml
   when: 
-    - use_deploy_api is defined and not use_deploy_api
+    - use_deploy_api is defined and not (use_deploy_api | bool)
     - applications is defined
     - applications | length > 0
     - deploy_apps is not defined or deploy_apps | bool
