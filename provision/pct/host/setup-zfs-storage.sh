@@ -53,8 +53,11 @@ echo ""
 # Confirm action
 log_warning "This script will create ZFS datasets for persistent data:"
 echo "  - rpool/data/postgres  -> /var/lib/data/postgres"
+echo "  - rpool/data/redis     -> /var/lib/data/redis"
 echo "  - rpool/data/minio     -> /var/lib/data/minio"
 echo "  - rpool/data/milvus    -> /var/lib/data/milvus"
+echo "  - rpool/data/neo4j     -> /var/lib/data/neo4j"
+echo "  - rpool/data/staging-* -> /var/lib/data-staging/*"
 echo ""
 read -p "Continue? (y/N): " -n 1 -r
 echo
@@ -118,6 +121,14 @@ setup_dataset \
     "latency" \
     ""
 
+# Setup Redis dataset (optimized for small write-heavy workload)
+setup_dataset \
+    "redis" \
+    "/var/lib/data/redis" \
+    "4K" \
+    "latency" \
+    ""
+
 # Setup MinIO dataset (optimized for large files)
 setup_dataset \
     "minio" \
@@ -134,9 +145,54 @@ setup_dataset \
     "latency" \
     "primarycache=metadata"
 
+# Setup Neo4j dataset (optimized for graph database workload)
+setup_dataset \
+    "neo4j" \
+    "/var/lib/data/neo4j" \
+    "8K" \
+    "latency" \
+    ""
+
+# Setup staging datasets (separate from production)
+setup_dataset \
+    "staging-postgres" \
+    "/var/lib/data-staging/postgres" \
+    "8K" \
+    "latency" \
+    ""
+
+setup_dataset \
+    "staging-redis" \
+    "/var/lib/data-staging/redis" \
+    "4K" \
+    "latency" \
+    ""
+
+setup_dataset \
+    "staging-minio" \
+    "/var/lib/data-staging/minio" \
+    "1M" \
+    "throughput" \
+    ""
+
+setup_dataset \
+    "staging-milvus" \
+    "/var/lib/data-staging/milvus" \
+    "128K" \
+    "latency" \
+    "primarycache=metadata"
+
+setup_dataset \
+    "staging-neo4j" \
+    "/var/lib/data-staging/neo4j" \
+    "8K" \
+    "latency" \
+    ""
+
 # Optional: Set quotas (commented out by default)
 log_info "Quotas not set. To set quotas, run:"
 echo "  zfs set quota=100G rpool/data/postgres"
+echo "  zfs set quota=20G rpool/data/redis"
 echo "  zfs set quota=500G rpool/data/minio"
 echo "  zfs set quota=200G rpool/data/milvus"
 echo ""

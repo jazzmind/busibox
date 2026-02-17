@@ -24,11 +24,12 @@ MODE="${1:-production}"
 PCT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 if [[ "$MODE" == "staging" ]]; then
     source "${PCT_DIR}/stage-vars.env"
-    CT_PG="$CT_PG_TEST"
-    CT_FILES="$CT_FILES_TEST"
-    CT_MILVUS="$CT_MILVUS_TEST"
-    CT_VLLM="$CT_VLLM_TEST"
-    CT_OLLAMA="$CT_OLLAMA_TEST"
+    CT_PG="$CT_PG_STAGING"
+    CT_FILES="$CT_FILES_STAGING"
+    CT_MILVUS="$CT_MILVUS_STAGING"
+    CT_DATA="$CT_DATA_STAGING"
+    CT_VLLM="$CT_VLLM_STAGING"
+    CT_OLLAMA="$CT_OLLAMA_STAGING"
 else
     source "${PCT_DIR}/vars.env"
 fi
@@ -95,6 +96,11 @@ echo "Milvus Container (${CT_MILVUS}):"
 add_mount "$CT_MILVUS" "${DATA_BASE}/milvus" "/srv/milvus/data" "0"
 echo ""
 
+# Add mount for Redis data in data-lxc container
+echo "Data Container (${CT_DATA}) Redis:"
+add_mount "$CT_DATA" "${DATA_BASE}/redis" "/var/lib/redis" "1"
+echo ""
+
 # Add mount for vLLM container (HuggingFace model cache)
 echo "vLLM Container (${CT_VLLM}):"
 add_mount "$CT_VLLM" "/var/lib/llm-models/huggingface" "/var/lib/llm-models/huggingface" "0"
@@ -116,19 +122,21 @@ if [[ "$MODE" == "staging" ]]; then
     echo "  pct stop ${CT_PG} && pct start ${CT_PG}"
     echo "  pct stop ${CT_FILES} && pct start ${CT_FILES}"
     echo "  pct stop ${CT_MILVUS} && pct start ${CT_MILVUS}"
+    echo "  pct stop ${CT_DATA} && pct start ${CT_DATA}"
     echo "  pct stop ${CT_VLLM} && pct start ${CT_VLLM}"
 else
     echo "  pct stop ${CT_PG} && pct start ${CT_PG}"
     echo "  pct stop ${CT_FILES} && pct start ${CT_FILES}"
     echo "  pct stop ${CT_MILVUS} && pct start ${CT_MILVUS}"
+    echo "  pct stop ${CT_DATA} && pct start ${CT_DATA}"
     echo "  pct stop ${CT_VLLM} && pct start ${CT_VLLM}"
 fi
 echo ""
 echo "Or restart all containers:"
 if [[ "$MODE" == "staging" ]]; then
-    echo "  for ct in ${CT_PG} ${CT_FILES} ${CT_MILVUS} ${CT_VLLM}; do pct stop \$ct; pct start \$ct; done"
+    echo "  for ct in ${CT_PG} ${CT_FILES} ${CT_MILVUS} ${CT_DATA} ${CT_VLLM}; do pct stop \$ct; pct start \$ct; done"
 else
-    echo "  for ct in ${CT_PG} ${CT_FILES} ${CT_MILVUS} ${CT_VLLM}; do pct stop \$ct; pct start \$ct; done"
+    echo "  for ct in ${CT_PG} ${CT_FILES} ${CT_MILVUS} ${CT_DATA} ${CT_VLLM}; do pct stop \$ct; pct start \$ct; done"
 fi
 echo ""
 

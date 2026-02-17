@@ -48,6 +48,13 @@ source "${PCT_DIR}/lib/functions.sh"
 # Validate environment
 validate_env || exit 1
 
+# Use environment-specific data directories to isolate staging from production.
+if [[ "$MODE" == "staging" ]]; then
+  DATA_BASE="/var/lib/data-staging"
+else
+  DATA_BASE="/var/lib/data"
+fi
+
 # Track created containers for cleanup on error
 CREATED_CONTAINERS=()
 
@@ -104,6 +111,13 @@ pct start "$CT_DATA" || {
 echo "==> Mounting embedding model cache"
 add_data_mount "$CT_DATA" "/var/lib/embedding-models/fastembed" "/var/lib/embedding-models/fastembed" "0" || {
   echo "WARNING: Failed to mount embedding model cache"
+  echo "  Mount can be configured manually later"
+}
+
+# Mount Redis data directory from host for persistence across LXC rebuilds
+echo "==> Mounting Redis data directory"
+add_data_mount "$CT_DATA" "${DATA_BASE}/redis" "/var/lib/redis" "1" || {
+  echo "WARNING: Failed to mount Redis data directory"
   echo "  Mount can be configured manually later"
 }
 

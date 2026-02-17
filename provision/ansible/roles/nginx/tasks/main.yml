@@ -10,6 +10,19 @@
   tags:
     - always
 
+- name: Validate full_domain for non-docker environments
+  assert:
+    that:
+      - full_domain is defined
+      - (full_domain | trim | length) > 0
+      - full_domain != "localhost"
+    fail_msg: >-
+      full_domain is '{{ full_domain | default('') }}', which is invalid for staging/production.
+      Set site_domain in your environment vault (vault.staging.yml / vault.prod.yml)
+      or set SITE_DOMAIN before running make.
+  when: deployment_environment is defined and deployment_environment in ['staging', 'prod', 'production']
+  tags: [nginx, nginx_configure, nginx_ssl, apps]
+
 - name: Install NGINX
   apt:
     name:

@@ -30,6 +30,36 @@
   loop:
     - /srv/milvus
     - /srv/milvus/data
+    - /srv/milvus/data/etcd
+    - /srv/milvus/data/minio
+    - /srv/milvus/data/milvus
+
+- name: Check whether legacy Milvus volume layout exists
+  stat:
+    path: /srv/milvus/volumes
+  register: legacy_milvus_volumes
+
+- name: Check whether new Milvus data layout already has content
+  shell: |
+    shopt -s nullglob dotglob
+    entries=(/srv/milvus/data/*)
+    if [ ${#entries[@]} -gt 0 ]; then
+      echo "has_data"
+    else
+      echo "empty"
+    fi
+  args: { executable: /bin/bash }
+  register: milvus_data_layout_state
+  changed_when: false
+
+- name: Migrate legacy Milvus volume layout into persistent data mount
+  shell: |
+    mkdir -p /srv/milvus/data
+    cp -a /srv/milvus/volumes/. /srv/milvus/data/
+  args: { executable: /bin/bash }
+  when:
+    - legacy_milvus_volumes.stat.exists
+    - milvus_data_layout_state.stdout == "empty"
 
 - name: Check current Milvus version
   shell: |
@@ -50,7 +80,7 @@
       Target version: 2.6.5
       
       Milvus 2.6 has breaking changes. Your options:
-      1. Clear data directory (DATA LOSS): rm -rf /srv/milvus/data/* 
+      1. Clear data directory (DATA LOSS): rm -rf /srv/milvus/data/milvus/*
       2. Back up and manually migrate data
       3. Abort this deployment
       
@@ -76,7 +106,7 @@
             - ETCD_QUOTA_BACKEND_BYTES=4294967296
             - ETCD_SNAPSHOT_COUNT=50000
           volumes:
-            - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/etcd:/etcd
+            - /srv/milvus/data/etcd:/etcd
           command: etcd -advertise-client-urls=http://etcd:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
           healthcheck:
             test: ["CMD", "etcdctl", "endpoint", "health"]
@@ -93,7 +123,7 @@
             - "9001:9001"
             - "9000:9000"
           volumes:
-            - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/minio:/minio_data
+            - /srv/milvus/data/minio:/minio_data
           command: minio server /minio_data --console-address ":9001"
           healthcheck:
             test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
@@ -112,7 +142,7 @@
             MINIO_ADDRESS: minio:9000
             MQ_TYPE: woodpecker
           volumes:
-            - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/milvus:/var/lib/milvus
+            - /srv/milvus/data/milvus:/var/lib/milvus
           healthcheck:
             test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
             interval: 30s
@@ -150,9 +180,9 @@
 
 - name: Check for RocksDB MANIFEST files indicating corruption
   shell: >
-    if [ -d /srv/milvus/data/rdb_data_meta_kv ]; then
-      manifest_count=$(find /srv/milvus/data/rdb_data_meta_kv -name "MANIFEST-*" 2>/dev/null | wc -l);
-      ldb_count=$(find /srv/milvus/data/rdb_data_meta_kv -name "*.ldb" 2>/dev/null | wc -l);
+    if [ -d /srv/milvus/data/milvus/rdb_data_meta_kv ]; then
+      manifest_count=$(find /srv/milvus/data/milvus/rdb_data_meta_kv -name "MANIFEST-*" 2>/dev/null | wc -l);
+      ldb_count=$(find /srv/milvus/data/milvus/rdb_data_meta_kv -name "*.ldb" 2>/dev/null | wc -l);
       if [ "$manifest_count" -gt 0 ] && [ "$ldb_count" -lt 2 ]; then
         echo "corrupted";
       else
@@ -169,7 +199,7 @@
   shell: |
     echo "WARNING: RocksDB corruption detected, cleaning up corrupted data..."
     # Remove corrupted RocksDB directories
-    rm -rf /srv/milvus/data/rdb_data*
+    rm -rf /srv/milvus/data/milvus/rdb_data*
     echo "Corrupted RocksDB data removed. Milvus will rebuild on restart."
   when: >
     (rocksdb_check_before.stdout is defined and "corrupted" in rocksdb_check_before.stdout) or
@@ -178,7 +208,7 @@
 
 - name: Remove stale RocksDB lock files
   shell: |
-    find /srv/milvus/data -type f -name "LOCK" -delete
+    find /srv/milvus/data/milvus -type f -name "LOCK" -delete
   ignore_errors: yes
 
 - name: Stop and remove any existing Milvus containers

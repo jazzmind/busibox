@@ -236,6 +236,7 @@ if command -v zfs &>/dev/null && zfs list rpool &>/dev/null 2>&1; then
     echo ""
     echo "  Setting up datasets for services:"
     setup_zfs_dataset "postgres" "/var/lib/data/postgres" "8K" "latency"
+    setup_zfs_dataset "redis" "/var/lib/data/redis" "4K" "latency"
     setup_zfs_dataset "minio" "/var/lib/data/minio" "1M" "throughput"
     setup_zfs_dataset "milvus" "/var/lib/data/milvus" "128K" "latency"
     setup_zfs_dataset "neo4j" "/var/lib/data/neo4j" "8K" "latency"
@@ -245,6 +246,7 @@ if command -v zfs &>/dev/null && zfs list rpool &>/dev/null 2>&1; then
     echo ""
     echo "  Setting up staging datasets:"
     setup_zfs_dataset "staging-postgres" "/var/lib/data-staging/postgres" "8K" "latency"
+    setup_zfs_dataset "staging-redis" "/var/lib/data-staging/redis" "4K" "latency"
     setup_zfs_dataset "staging-minio" "/var/lib/data-staging/minio" "1M" "throughput"
     setup_zfs_dataset "staging-milvus" "/var/lib/data-staging/milvus" "128K" "latency"
     setup_zfs_dataset "staging-neo4j" "/var/lib/data-staging/neo4j" "8K" "latency"
@@ -288,11 +290,13 @@ else
     # Fallback to regular directories
     echo "  Creating directories for persistent data..."
     mkdir -p /var/lib/data/postgres
+    mkdir -p /var/lib/data/redis
     mkdir -p /var/lib/data/minio
     mkdir -p /var/lib/data/milvus
     mkdir -p /var/lib/data/neo4j
     # Staging directories (separate from production)
     mkdir -p /var/lib/data-staging/postgres
+    mkdir -p /var/lib/data-staging/redis
     mkdir -p /var/lib/data-staging/minio
     mkdir -p /var/lib/data-staging/milvus
     mkdir -p /var/lib/data-staging/neo4j
