@@ -62,17 +62,26 @@
     - /srv/neo4j/data
     - /srv/neo4j/logs
 
-- name: Configure Neo4j server settings
+- name: Remove legacy Neo4j managed block (prevents duplicate keys)
   ansible.builtin.blockinfile:
     path: /etc/neo4j/neo4j.conf
     marker: "# {mark} ANSIBLE MANAGED NEO4J SETTINGS"
-    block: |
-      server.default_listen_address=0.0.0.0
-      server.bolt.listen_address=:{{ neo4j_bolt_port | default(7687) }}
-      server.http.listen_address=:{{ neo4j_http_port | default(7474) }}
-      dbms.security.auth_enabled=true
-      server.directories.data=/srv/neo4j/data
-      server.directories.logs=/srv/neo4j/logs
+    state: absent
+  notify: Restart Neo4j
+
+- name: Configure Neo4j server settings
+  ansible.builtin.lineinfile:
+    path: /etc/neo4j/neo4j.conf
+    regexp: "^#?\\s*{{ item.key | regex_escape() }}\\s*=.*$"
+    line: "{{ item.key }}={{ item.value }}"
+    state: present
+  loop:
+    - { key: "server.default_listen_address", value: "0.0.0.0" }
+    - { key: "server.bolt.listen_address", value: ":{{ neo4j_bolt_port | default(7687) }}" }
+    - { key: "server.http.listen_address", value: ":{{ neo4j_http_port | default(7474) }}" }
+    - { key: "dbms.security.auth_enabled", value: "true" }
+    - { key: "server.directories.data", value: "/srv/neo4j/data" }
+    - { key: "server.directories.logs", value: "/srv/neo4j/logs" }
   notify: Restart Neo4j
 
 - name: Stop Neo4j before initial password setup
