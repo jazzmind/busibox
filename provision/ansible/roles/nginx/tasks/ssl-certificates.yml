@@ -24,6 +24,55 @@
   set_fact:
     ssl_source_dir: "{{ ssl_dir_resolved.stdout }}"
 
+- name: Ensure SSL source directory exists on controller
+  file:
+    path: "{{ ssl_source_dir }}"
+    state: directory
+    mode: "0755"
+  delegate_to: localhost
+  become: false
+
+- name: Materialize certificate from vault to SSL source dir
+  copy:
+    content: "{{ secrets.ssl_certificates.certificate }}"
+    dest: "{{ ssl_source_dir }}/{{ full_domain }}.crt"
+    mode: "0644"
+  delegate_to: localhost
+  become: false
+  when:
+    - secrets is defined
+    - secrets.ssl_certificates is defined
+    - secrets.ssl_certificates.certificate is defined
+    - (secrets.ssl_certificates.certificate | trim | length) > 0
+
+- name: Materialize private key from vault to SSL source dir
+  copy:
+    content: "{{ secrets.ssl_certificates.private_key }}"
+    dest: "{{ ssl_source_dir }}/{{ full_domain }}.key"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  when:
+    - secrets is defined
+    - secrets.ssl_certificates is defined
+    - secrets.ssl_certificates.private_key is defined
+    - (secrets.ssl_certificates.private_key | trim | length) > 0
+
+- name: Materialize fullchain cert from vault to SSL source dir
+  copy:
+    content: "{{ secrets.ssl_certificates.certificate }}\n{{ secrets.ssl_certificates.chain }}"
+    dest: "{{ ssl_source_dir }}/{{ full_domain }}.fullchain.crt"
+    mode: "0644"
+  delegate_to: localhost
+  become: false
+  when:
+    - secrets is defined
+    - secrets.ssl_certificates is defined
+    - secrets.ssl_certificates.certificate is defined
+    - secrets.ssl_certificates.chain is defined
+    - (secrets.ssl_certificates.certificate | trim | length) > 0
+    - (secrets.ssl_certificates.chain | trim | length) > 0
+
 - name: Extract parent domain for wildcard lookup
   set_fact:
     parent_domain: "{{ full_domain.split('.', 1)[1] if full_domain.split('.')|length > 2 else full_domain }}"
