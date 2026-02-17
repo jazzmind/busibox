@@ -1,69 +1,115 @@
 ---
 # Neo4j LXC/Proxmox Deployment Tasks
 #
-# Deploys Neo4j graph database in an LXC container
-# Used when deploy_target != 'docker' (Proxmox)
+# Deploys Neo4j natively inside dedicated neo4j-lxc.
+# Used when deploy_target != 'docker' (Proxmox/LXC path).
 
-- name: Install Docker on Neo4j container
+- name: Install prerequisites for Neo4j apt repo
   ansible.builtin.apt:
     name:
-      - docker.io
-      - docker-compose-plugin
+      - ca-certificates
+      - curl
+      - gnupg
     state: present
     update_cache: true
 
-- name: Create Neo4j directories
+- name: Ensure apt keyring directory exists
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
+- name: Add Neo4j apt repository key
+  ansible.builtin.get_url:
+    url: https://debian.neo4j.com/neotechnology.gpg.key
+    dest: /tmp/neo4j-archive-keyring.asc
+    mode: "0644"
+
+- name: Convert Neo4j apt key to keyring format
+  ansible.builtin.command: >
+    gpg --dearmor --yes --output /etc/apt/keyrings/neo4j.gpg /tmp/neo4j-archive-keyring.asc
+  args:
+    creates: /etc/apt/keyrings/neo4j.gpg
+
+- name: Add Neo4j apt repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/neo4j.list
+    mode: "0644"
+    content: |
+      deb [signed-by=/etc/apt/keyrings/neo4j.gpg] https://debian.neo4j.com stable 5
+
+- name: Remove temporary Neo4j apt key file
+  ansible.builtin.file:
+    path: /tmp/neo4j-archive-keyring.asc
+    state: absent
+
+- name: Install Neo4j package
+  ansible.builtin.apt:
+    name: neo4j
+    state: present
+    update_cache: true
+    policy_rc_d: 101
+
+- name: Ensure Neo4j data and log directories exist
   ansible.builtin.file:
     path: "{{ item }}"
     state: directory
+    owner: neo4j
+    group: neo4j
     mode: "0755"
   loop:
     - /srv/neo4j
     - /srv/neo4j/data
     - /srv/neo4j/logs
 
-- name: Deploy Neo4j docker-compose file
-  ansible.builtin.copy:
-    dest: /srv/neo4j/docker-compose.yml
-    mode: "0644"
-    content: |
-      version: '3.8'
-      services:
-        neo4j:
-          image: neo4j:5-community
-          container_name: neo4j
-          hostname: neo4j
-          environment:
-            NEO4J_AUTH: "{{ neo4j_user | default('neo4j') }}/{{ neo4j_password | default('devpassword') }}"
-            NEO4J_PLUGINS: '["apoc"]'
-            NEO4J_server_memory_heap_initial__size: 256m
-            NEO4J_server_memory_heap_max__size: 512m
-          ports:
-            - "7474:7474"
-            - "7687:7687"
-          volumes:
-            - /srv/neo4j/data:/data
-            - /srv/neo4j/logs:/logs
-          healthcheck:
-            test: ["CMD-SHELL", "wget -q --spider http://localhost:7474 || exit 1"]
-            interval: 10s
-            timeout: 5s
-            start_period: 30s
-            retries: 5
-          restart: unless-stopped
+- name: Configure Neo4j server settings
+  ansible.builtin.blockinfile:
+    path: /etc/neo4j/neo4j.conf
+    marker: "# {mark} ANSIBLE MANAGED NEO4J SETTINGS"
+    block: |
+      server.default_listen_address=0.0.0.0
+      server.bolt.listen_address=:{{ neo4j_bolt_port | default(7687) }}
+      server.http.listen_address=:{{ neo4j_http_port | default(7474) }}
+      dbms.security.auth_enabled=true
+      server.directories.data=/srv/neo4j/data
+      server.directories.logs=/srv/neo4j/logs
+  notify: Restart Neo4j
 
-- name: Start Neo4j
-  ansible.builtin.command:
-    cmd: docker compose up -d
-    chdir: /srv/neo4j
+- name: Stop Neo4j before initial password setup
+  ansible.builtin.systemd:
+    name: neo4j
+    state: stopped
+  failed_when: false
 
-- name: Wait for Neo4j to be healthy
+- name: Set initial Neo4j password if auth db not initialized
+  ansible.builtin.command: >
+    neo4j-admin dbms set-initial-password {{ neo4j_password | default('changeme') }}
+  args:
+    creates: /srv/neo4j/data/dbms/auth
+
+- name: Ensure Neo4j service is enabled and running
+  ansible.builtin.systemd:
+    name: neo4j
+    state: started
+    enabled: true
+    daemon_reload: true
+
+- name: Wait for Neo4j HTTP port to be available
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ neo4j_http_port | default(7474) }}"
+    state: started
+    timeout: 120
+
+- name: Wait for Neo4j health endpoint
   ansible.builtin.uri:
-    url: "http://localhost:7474"
+    url: "http://localhost:{{ neo4j_http_port | default(7474) }}"
     method: GET
-    status_code: 200
+    status_code:
+      - 200
+      - 401
   register: neo4j_health
-  until: neo4j_health.status == 200
+  until: neo4j_health.status in [200, 401]
   retries: 30
   delay: 2
 
@@ -71,5 +117,5 @@
   ansible.builtin.debug:
     msg: |
       Neo4j is running and ready
-      Browser: http://{{ ansible_host }}:7474
-      Bolt: bolt://{{ ansible_host }}:7687
+      Browser: http://{{ ansible_host }}:{{ neo4j_http_port | default(7474) }}
+      Bolt: bolt://{{ ansible_host }}:{{ neo4j_bolt_port | default(7687) }}

@@ -311,6 +311,11 @@ services:
       - "config_version=${GIT_COMMIT:-unknown}"
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-local-dev-key}
+      # MLX auto-start hook context
+      LLM_BACKEND: ${LLM_BACKEND:-}
+      DEPLOY_API_URL: http://deploy-api:8011
+      # Use the same key for deploy-api authenticated ensure calls.
+      LITELLM_API_KEY: ${LITELLM_MASTER_KEY:-sk-local-dev-key}
       # PostgreSQL database for caching, usage tracking, and team management
       DATABASE_URL: postgresql://${POSTGRES_USER:-busibox_user}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/litellm
       # Enable runtime model/config management via API (requires DATABASE_URL)
@@ -324,6 +329,7 @@ services:
       - "4000:4000"
     volumes:
       - ./config/litellm-config.yaml:/app/config.yaml:ro
+      - ./config/litellm-hooks:/app/litellm_hooks:ro
     command: --config /app/config.yaml --port 4000 --detailed_debug
     depends_on:
       postgres:

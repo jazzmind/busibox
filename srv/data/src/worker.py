@@ -243,6 +243,29 @@ class IngestWorker:
             self.redis_client.close()
         
         logger.info("All services disconnected")
+
+    def _reconnect_redis(self):
+        """Reconnect Redis client after transport-level failures."""
+        try:
+            if self.redis_client:
+                try:
+                    self.redis_client.close()
+                except Exception:
+                    pass
+
+            self.redis_client = redis_sync.Redis(
+                host=self.config["redis_host"],
+                port=self.config["redis_port"],
+                decode_responses=True,
+            )
+            self.redis_client.ping()
+            logger.info("Reconnected to Redis")
+        except Exception as reconnect_error:
+            logger.error(
+                "Failed to reconnect Redis",
+                error=str(reconnect_error),
+                exc_info=True,
+            )
     
     # Removed _log_step - now using self.history.log_step() directly
     # Removed _is_transient_error - now using self.error_handler.is_transient_error()
@@ -2777,6 +2800,21 @@ class IngestWorker:
             for msg_info in pending_messages:
                 message_id = msg_info['message_id']
                 idle_time_ms = msg_info['time_since_delivered']
+                times_delivered = int(msg_info.get("times_delivered", 0))
+
+                # Dead-letter poison-pill jobs that have failed too many times.
+                if times_delivered > 5:
+                    logger.warning(
+                        "Dead-lettering pending message after too many deliveries",
+                        message_id=message_id,
+                        times_delivered=times_delivered,
+                    )
+                    self.redis_client.xack(
+                        self.stream_name,
+                        self.consumer_group,
+                        message_id,
+                    )
+                    continue
                 
                 # Only claim messages idle for > 60 seconds (60000ms)
                 if idle_time_ms > 60000:
@@ -2970,11 +3008,29 @@ class IngestWorker:
                                 error=str(e),
                                 exc_info=True,
                             )
-                            # Don't ack - message will be retried by Redis
+                            # process_job requeues transient errors internally.
+                            # If we reached this block, the job is permanently failed.
+                            try:
+                                self.redis_client.xack(
+                                    self.stream_name,
+                                    self.consumer_group,
+                                    message_id,
+                                )
+                            except Exception as ack_error:
+                                logger.warning(
+                                    "Failed to acknowledge permanently failed message",
+                                    message_id=message_id,
+                                    error=str(ack_error),
+                                )
                 
             except RedisError as e:
                 logger.error("Redis error", error=str(e), exc_info=True)
                 time.sleep(5)  # Backoff before retry
+                try:
+                    self.redis_client.ping()
+                except Exception:
+                    logger.warning("Redis ping failed after error, reconnecting")
+                    self._reconnect_redis()
             
             except KeyboardInterrupt:
                 logger.info("Received interrupt signal")
