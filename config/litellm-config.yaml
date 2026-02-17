@@ -103,3 +103,4 @@ litellm_settings:
   drop_params: true
   request_timeout: 120
   set_verbose: true
+  callbacks: litellm_hooks.mlx_ensure_hook.mlx_ensure_hook_instance

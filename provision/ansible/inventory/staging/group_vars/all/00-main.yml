@@ -38,7 +38,7 @@ internal_gateway: "{{ network_base_octets }}.1"
 proxmox_host: "{{ lookup('env', 'PROXMOX_HOST') | default(lookup('pipe', 'hostname -I | cut -d\" \" -f1'), true) }}"
 
 # Container IP Addresses (calculated from base)
-# Infrastructure containers: .200-.212
+# Infrastructure containers: .200-.213
 proxy_ip: "{{ network_base_octets }}.200"
 core_apps_ip: "{{ network_base_octets }}.201"  # Core apps: busibox-portal, busibox-agents
 agent_ip: "{{ network_base_octets }}.202"
@@ -48,6 +48,7 @@ search_api_ip: "{{ milvus_ip }}"  # Search API runs on milvus-lxc container (por
 minio_ip: "{{ network_base_octets }}.205"
 data_ip: "{{ network_base_octets }}.206"
 user_apps_ip: "{{ network_base_octets }}.212"  # User/external apps
+neo4j_ip: "{{ network_base_octets }}.213"
 
 # LLM Service IPs: .207-.208 (to allow room for more infrastructure)
 # NOTE: .209 was previously ollama (now deprecated)
@@ -101,8 +102,8 @@ files_password: "{{ secrets.postgresql.password }}"
 milvus_host: "{{ milvus_ip }}"
 milvus_port: 19530
 
-# Neo4j Graph Database (runs as Docker container on milvus-lxc)
-neo4j_host: "{{ milvus_ip }}"  # Shares milvus container
+# Neo4j Graph Database (runs natively on neo4j-lxc)
+neo4j_host: "{{ neo4j_ip }}"
 neo4j_bolt_port: 7687
 neo4j_http_port: 7474
 neo4j_user: neo4j

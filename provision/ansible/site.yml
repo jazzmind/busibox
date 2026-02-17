@@ -76,8 +76,8 @@
     - role: milvus
       tags: [core, core_vectorstore, milvus]
 
-# 1.5 Neo4j (graph database - runs as Docker container on milvus-lxc)
-- hosts: milvus
+# 1.5 Neo4j (graph database - runs natively on neo4j-lxc)
+- hosts: neo4j
   tags: [core, core_graph]
   roles:
     - role: neo4j

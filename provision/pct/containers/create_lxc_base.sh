@@ -23,9 +23,10 @@
 # Containers Created (in order):
 #   1. Core Services:    proxy, apps, agent, authz, user-apps
 #   2. Data Services:    postgres, milvus, minio
-#   3. Worker Services:  data, litellm
-#   4. Bridge Service:   bridge (multi-channel communication)
-#   5. LLM Services:     vllm (ollama optional with --with-ollama)
+#   3. Graph Service:    neo4j
+#   4. Worker Services:  data, litellm
+#   5. Bridge Service:   bridge (multi-channel communication)
+#   6. LLM Services:     vllm (ollama optional with --with-ollama)
 #
 # Notes:
 #   - Requires Proxmox host setup completed (setup-proxmox-host.sh)
@@ -79,9 +80,9 @@ echo "=========================================="
 echo ""
 
 # Track overall progress
-TOTAL_STEPS=5
+TOTAL_STEPS=6
 if $CREATE_OLLAMA; then
-  TOTAL_STEPS=6
+  TOTAL_STEPS=7
 fi
 CURRENT_STEP=0
 
@@ -107,28 +108,35 @@ bash "${SCRIPT_DIR}/create-data-services.sh" "$MODE" || {
   exit 1
 }
 
-# Step 3: Create worker services
+# Step 3: Create neo4j service
+print_step "Creating Graph Service (neo4j)"
+bash "${SCRIPT_DIR}/create-neo4j.sh" "$MODE" || {
+  echo "ERROR: Failed to create neo4j service"
+  exit 1
+}
+
+# Step 4: Create worker services
 print_step "Creating Worker Services (data, litellm)"
 bash "${SCRIPT_DIR}/create-worker-services.sh" "$MODE" || {
   echo "ERROR: Failed to create worker services"
   exit 1
 }
 
-# Step 4: Create bridge service
+# Step 5: Create bridge service
 print_step "Creating Bridge Service (multi-channel communication)"
 bash "${SCRIPT_DIR}/create-bridge.sh" "$MODE" || {
   echo "ERROR: Failed to create bridge container"
   exit 1
 }
 
-# Step 5: Create vLLM (with all GPUs)
+# Step 6: Create vLLM (with all GPUs)
 print_step "Creating vLLM Service (all GPUs)"
 bash "${SCRIPT_DIR}/create-vllm.sh" "$MODE" || {
   echo "ERROR: Failed to create vLLM container"
   exit 1
 }
 
-# Step 6 (optional): Create Ollama
+# Step 7 (optional): Create Ollama
 if $CREATE_OLLAMA; then
   print_step "Creating Ollama Service (optional, single GPU)"
   bash "${SCRIPT_DIR}/create-ollama.sh" "$MODE" 0 || {
@@ -160,6 +168,7 @@ if [[ "$MODE" == "staging" ]]; then
   echo "    - STAGE-pg-lxc     ($CT_PG_STAGING @ $IP_PG_STAGING)"
   echo "    - STAGE-milvus-lxc ($CT_MILVUS_STAGING @ $IP_MILVUS_STAGING)"
   echo "    - STAGE-files-lxc  ($CT_FILES_STAGING @ $IP_FILES_STAGING)"
+  echo "    - STAGE-neo4j-lxc  ($CT_NEO4J_STAGING @ $IP_NEO4J_STAGING)"
   echo ""
   echo "  Worker Services:"
   echo "    - STAGE-data-lxc  ($CT_DATA_STAGING @ $IP_DATA_STAGING) [All GPUs, defaults to GPU 0]"
@@ -182,6 +191,7 @@ else
   echo "    - pg-lxc     ($CT_PG @ $IP_PG)"
   echo "    - milvus-lxc ($CT_MILVUS @ $IP_MILVUS)"
   echo "    - files-lxc  ($CT_FILES @ $IP_FILES)"
+  echo "    - neo4j-lxc  ($CT_NEO4J @ $IP_NEO4J)"
   echo ""
   echo "  Worker Services:"
   echo "    - data-lxc ($CT_DATA @ $IP_DATA) [All GPUs, defaults to GPU 0]"
