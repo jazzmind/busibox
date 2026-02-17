@@ -393,6 +393,9 @@ main() {
         box_line "  ${BOLD}1)${NC} Continue Install - pick up from where we last failed"
         box_line "  ${BOLD}2)${NC} Full Install - redeploy all services, keep config & data"
         box_line "  ${BOLD}3)${NC} Clean Install - clear everything and start fresh"
+        if [[ "$backend" == "proxmox" ]]; then
+        box_line "  ${BOLD}4)${NC} Rebuild Containers - recreate LXCs, ${GREEN}preserve data${NC}"
+        fi
         box_empty
         box_line "  ${BOLD}e)${NC} New Environment - install to a different environment/backend"
         box_empty
@@ -468,6 +471,104 @@ main() {
                 else
                     echo "Cancelled."
                     exit 0
+                fi
+                ;;
+            4)
+                # Rebuild Containers (Proxmox only) - recreate LXCs, preserve data
+                if [[ "$backend" != "proxmox" ]]; then
+                    echo "Option only available for Proxmox backends."
+                    sleep 1
+                else
+                    echo ""
+                    local rebuild_script="${REPO_ROOT}/provision/pct/containers/rebuild-staging.sh"
+                    local rebuild_single="${REPO_ROOT}/provision/pct/containers/rebuild-container.sh"
+                    local rebuild_mode="staging"
+                    if [[ "$env" == "production" ]]; then
+                        rebuild_mode="production"
+                    fi
+
+                    box_start 70 double "$CYAN"
+                    box_header "REBUILD CONTAINERS (PRESERVE DATA)"
+                    box_empty
+                    box_line "  ${CYAN}Environment:${NC} ${env} (${rebuild_mode})"
+                    box_empty
+                    box_line "  Stateful data on host bind mounts is ${GREEN}preserved${NC}:"
+                    box_line "    PostgreSQL, Milvus, MinIO, Neo4j, Redis"
+                    box_empty
+                    box_separator
+                    box_empty
+                    box_line "  ${BOLD}a)${NC} Rebuild ALL containers"
+                    box_line "  ${BOLD}s)${NC} Rebuild a single container"
+                    box_empty
+                    box_line "  ${DIM}b = back${NC}"
+                    box_empty
+                    box_footer
+                    echo ""
+
+                    read -n 1 -s -r -p "Select option: " rebuild_choice
+                    echo ""
+
+                    case "$rebuild_choice" in
+                        a|A)
+                            if [[ "$env" == "staging" && -f "$rebuild_script" ]]; then
+                                echo ""
+                                info "Running staging rebuild dry-run..."
+                                echo ""
+                                bash "$rebuild_script"
+                                echo ""
+                                printf "${YELLOW}Proceed with rebuild? This will destroy and recreate all staging LXCs.${NC}\n"
+                                printf "${GREEN}Stateful data on host mounts will be preserved.${NC}\n"
+                                read -p "Type 'REBUILD' to confirm: " confirm_rebuild
+                                if [[ "$confirm_rebuild" == "REBUILD" ]]; then
+                                    echo ""
+                                    bash "$rebuild_script" --confirm
+                                    echo ""
+                                    info "Now redeploy services:"
+                                    echo "  make install SERVICE=all INV=inventory/staging"
+                                    echo ""
+                                    read -n 1 -s -r -p "Press any key to continue..."
+                                else
+                                    echo "Cancelled."
+                                fi
+                            elif [[ "$env" == "production" ]]; then
+                                echo ""
+                                warn "Production full rebuild is not automated."
+                                echo "Use the single-container rebuild option instead."
+                                read -n 1 -s -r -p "Press any key to continue..."
+                            else
+                                echo ""
+                                error "Rebuild script not found: ${rebuild_script}"
+                                read -n 1 -s -r -p "Press any key to continue..."
+                            fi
+                            ;;
+                        s|S)
+                            echo ""
+                            echo "Available containers:"
+                            echo "  proxy-lxc, core-apps-lxc, user-apps-lxc, agent-lxc, authz-lxc"
+                            echo "  pg-lxc, milvus-lxc, files-lxc, neo4j-lxc"
+                            echo "  data-lxc, litellm-lxc, bridge-lxc, vllm-lxc, ollama-lxc"
+                            echo ""
+                            read -p "Container name: " container_name
+                            if [[ -n "$container_name" ]]; then
+                                echo ""
+                                info "Running rebuild dry-run for ${container_name}..."
+                                echo ""
+                                bash "$rebuild_single" "$container_name" "$rebuild_mode"
+                                echo ""
+                                printf "${YELLOW}Proceed with rebuild?${NC}\n"
+                                printf "${GREEN}Stateful data on host mounts will be preserved.${NC}\n"
+                                read -p "Type 'REBUILD' to confirm: " confirm_rebuild
+                                if [[ "$confirm_rebuild" == "REBUILD" ]]; then
+                                    echo ""
+                                    bash "$rebuild_single" "$container_name" "$rebuild_mode" --confirm
+                                    read -n 1 -s -r -p "Press any key to continue..."
+                                else
+                                    echo "Cancelled."
+                                fi
+                            fi
+                            ;;
+                        b|B) ;;
+                    esac
                 fi
                 ;;
             e|E)

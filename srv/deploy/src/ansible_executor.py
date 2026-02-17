@@ -37,6 +37,7 @@ INFRASTRUCTURE_ANSIBLE_MAP = {
     'postgres': ('pg', ['core_database'], 'PostgreSQL (database)'),
     'minio': ('files', ['core_storage'], 'MinIO (object storage)'),
     'milvus': ('milvus', ['core_vectorstore'], 'Milvus (vector database)'),
+    'neo4j': ('neo4j', ['core_graph'], 'Neo4j (graph database)'),
     
     # LLM Services
     'litellm': ('litellm', ['llm_litellm'], 'LiteLLM (LLM gateway)'),
@@ -86,7 +87,7 @@ INSTALLATION_ORDER = [
     ['redis', 'minio'],
     
     # Group 3: Vector database (needs minio for storage)
-    ['milvus'],
+    ['milvus', 'neo4j'],
     
     # Group 4: LLM services (optional GPU support)
     ['vllm', 'litellm'],
@@ -231,6 +232,7 @@ class AnsibleExecutor:
             'postgres': 'pg',
             'minio': 'files',
             'milvus': 'milvus',
+            'neo4j': 'neo4j',
             'litellm': 'litellm',
             'vllm': 'vllm',
             'embedding-api': 'embedding-api',

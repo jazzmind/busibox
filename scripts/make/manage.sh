@@ -679,6 +679,9 @@ show_manage_menu() {
     if [[ "$_CURRENT_BACKEND" != "k8s" ]]; then
         printf "    ${BOLD}d)${NC} Update Internal DNS (/etc/hosts on all containers)\n"
     fi
+    if [[ "$_CURRENT_BACKEND" == "proxmox" ]]; then
+        printf "    ${BOLD}c)${NC} Rebuild Containers (recreate LXCs, ${GREEN}preserve data${NC})\n"
+    fi
     echo ""
     printf "  ${DIM}b = back to main menu    q = quit${NC}\n"
     echo ""
@@ -773,6 +776,95 @@ main() {
                     make internal-dns INV="inventory/${env}"
                     success "Internal DNS updated"
                     read -n 1 -s -r -p "Press any key to continue..."
+                fi
+                ;;
+            c|C)
+                if [[ "$_CURRENT_BACKEND" == "proxmox" ]]; then
+                    local env
+                    env=$(get_current_env)
+                    local rebuild_mode="staging"
+                    if [[ "$env" == "production" ]]; then
+                        rebuild_mode="production"
+                    fi
+                    local rebuild_script="${REPO_ROOT}/provision/pct/containers/rebuild-staging.sh"
+                    local rebuild_single="${REPO_ROOT}/provision/pct/containers/rebuild-container.sh"
+
+                    clear
+                    box_start 70 double "$CYAN"
+                    box_header "REBUILD CONTAINERS (PRESERVE DATA)"
+                    box_empty
+                    box_line "  ${CYAN}Environment:${NC} ${env} (${rebuild_mode})"
+                    box_empty
+                    box_line "  Stateful data on host bind mounts is ${GREEN}preserved${NC}:"
+                    box_line "    PostgreSQL, Milvus, MinIO, Neo4j, Redis"
+                    box_empty
+                    box_separator
+                    box_empty
+                    if [[ "$env" == "staging" ]]; then
+                    box_line "  ${BOLD}a)${NC} Rebuild ALL staging containers"
+                    fi
+                    box_line "  ${BOLD}s)${NC} Rebuild a single container"
+                    box_empty
+                    box_line "  ${DIM}b = back${NC}"
+                    box_empty
+                    box_footer
+                    echo ""
+
+                    read -n 1 -s -r -p "Select option: " rebuild_choice
+                    echo ""
+
+                    case "$rebuild_choice" in
+                        a|A)
+                            if [[ "$env" == "staging" && -f "$rebuild_script" ]]; then
+                                echo ""
+                                info "Running staging rebuild dry-run..."
+                                echo ""
+                                bash "$rebuild_script"
+                                echo ""
+                                printf "${YELLOW}Proceed with rebuild? This will destroy and recreate all staging LXCs.${NC}\n"
+                                printf "${GREEN}Stateful data on host mounts will be preserved.${NC}\n"
+                                read -p "Type 'REBUILD' to confirm: " confirm_rebuild
+                                if [[ "$confirm_rebuild" == "REBUILD" ]]; then
+                                    echo ""
+                                    bash "$rebuild_script" --confirm
+                                    echo ""
+                                    success "Staging containers rebuilt. Now redeploy services:"
+                                    echo "  make install SERVICE=all INV=inventory/staging"
+                                    echo ""
+                                fi
+                            else
+                                echo ""
+                                warn "Full rebuild only available for staging."
+                                echo "Use single-container rebuild for production."
+                            fi
+                            read -n 1 -s -r -p "Press any key to continue..."
+                            ;;
+                        s|S)
+                            echo ""
+                            echo "Available containers:"
+                            echo "  proxy-lxc, core-apps-lxc, user-apps-lxc, agent-lxc, authz-lxc"
+                            echo "  pg-lxc, milvus-lxc, files-lxc, neo4j-lxc"
+                            echo "  data-lxc, litellm-lxc, bridge-lxc, vllm-lxc, ollama-lxc"
+                            echo ""
+                            read -p "Container name: " container_name
+                            if [[ -n "$container_name" ]]; then
+                                echo ""
+                                info "Running rebuild dry-run for ${container_name}..."
+                                echo ""
+                                bash "$rebuild_single" "$container_name" "$rebuild_mode"
+                                echo ""
+                                printf "${YELLOW}Proceed with rebuild?${NC}\n"
+                                printf "${GREEN}Stateful data on host mounts will be preserved.${NC}\n"
+                                read -p "Type 'REBUILD' to confirm: " confirm_rebuild
+                                if [[ "$confirm_rebuild" == "REBUILD" ]]; then
+                                    echo ""
+                                    bash "$rebuild_single" "$container_name" "$rebuild_mode" --confirm
+                                fi
+                            fi
+                            read -n 1 -s -r -p "Press any key to continue..."
+                            ;;
+                        b|B) ;;
+                    esac
                 fi
                 ;;
             b|B)

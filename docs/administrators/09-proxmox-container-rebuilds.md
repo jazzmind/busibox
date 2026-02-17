@@ -81,6 +81,34 @@ After recreation, the script verifies expected mount points were restored.
 
 For staging, `STAGE-` prefix is optional in script input.
 
+## Clean Staging Reinstall
+
+To rebuild the entire staging environment while preserving stateful data and then re-run configuration:
+
+```bash
+# 1) Dry run safety checks
+bash provision/pct/containers/rebuild-staging.sh
+
+# 2) Perform clean reinstall (destroy + recreate staging LXCs)
+bash provision/pct/containers/rebuild-staging.sh --confirm
+
+# Optional: include Ollama in staging rebuild
+bash provision/pct/containers/rebuild-staging.sh --with-ollama --confirm
+
+# 3) Re-apply service configuration
+make install SERVICE=all INV=inventory/staging
+```
+
+`rebuild-staging.sh` verifies that required staging data directories exist and are non-empty before any destructive step:
+
+- `/var/lib/data-staging/postgres`
+- `/var/lib/data-staging/redis`
+- `/var/lib/data-staging/milvus`
+- `/var/lib/data-staging/minio`
+- `/var/lib/data-staging/neo4j`
+
+It also verifies expected bind mounts after recreation for postgres, milvus, minio, neo4j, and redis.
+
 ## Post-Rebuild Step
 
 After container rebuild, re-apply service configuration from the repository root:
