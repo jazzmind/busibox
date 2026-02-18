@@ -2,7 +2,7 @@
 title: "Bootstrap Test Credentials for Local Integration Testing"
 category: "developer"
 order: 50
-description: "Automated creation of test users, OAuth clients, and admin credentials for local testing"
+description: "Automated creation of test users and Zero Trust test credentials for local testing"
 published: true
 ---
 
@@ -10,7 +10,7 @@ published: true
 
 ## Overview
 
-When developing and testing busibox-app libraries locally, you need valid JWT tokens from the authz service. The `bootstrap-test-credentials.sh` script automates the creation of test users, OAuth clients, and admin credentials.
+When developing and testing busibox-app libraries locally, you need valid JWT tokens from the authz service. The `bootstrap-test-credentials.sh` script automates creation of a test user and the values needed for Zero Trust subject-token exchange.
 
 ## Quick Start
 
@@ -44,9 +44,8 @@ The script:
 
 1. **Checks authz service** - Verifies the authz service is running
 2. **Generates credentials** - Creates:
-   - Test OAuth client ID and secret
-   - Admin token for RBAC operations
    - Test user with admin and user roles
+   - Environment values for Zero Trust token exchange
 3. **Outputs .env variables** - Prints ready-to-copy environment variables
 
 ## Example Output
@@ -128,9 +127,10 @@ npm test
 ```
 
 The test helper (`tests/helpers/auth.ts`) will:
-- Use the test client credentials to get real JWT tokens from authz
+- Perform login initiate + magic-link use in test mode
+- Exchange session JWT to service-scoped access tokens
 - Cache tokens to avoid repeated requests
-- Use tokens for all service calls
+- Use exchanged JWTs for all service calls
 
 ### 3. Expected Results
 
@@ -154,32 +154,14 @@ Tests:       81 passed, 81 total
 7. **Test uses token** → Includes in `Authorization: Bearer <token>` header
 8. **Service validates token** → Verifies signature via authz JWKS
 
-### Client Credentials Grant
+### Zero Trust Exchange
 
-The script creates an OAuth client with:
+Tests use RFC 8693 subject-token exchange:
 
-```json
-{
-  "client_id": "test-client-<timestamp>",
-  "client_secret": "<random-32-byte-hex>",
-  "allowed_audiences": [
-    "data-api",
-    "agent-api", 
-    "search-api",
-    "authz"
-  ],
-  "allowed_scopes": [
-    "ingest.read",
-    "ingest.write",
-    "agent.execute",
-    "search.read",
-    "audit.write",
-    "rbac.read"
-  ]
-}
-```
-
-This allows the test client to request tokens for any service with appropriate scopes.
+1. Initiate login for a test user
+2. Consume magic link to obtain session JWT
+3. Exchange that JWT at `/oauth/token` with `grant_type=urn:ietf:params:oauth:grant-type:token-exchange`
+4. Use returned audience-scoped access token for API calls
 
 ## Troubleshooting
 
@@ -193,31 +175,17 @@ cd provision/ansible
 make authz INV=inventory/staging
 ```
 
-### Client Creation Failed
+### Token Exchange Failed
 
-**Error**: `Could not create client via API`
+**Error**: `Token exchange failed`
 
-**Cause**: Admin token not accepted or authz admin endpoint not accessible
-
-**Solution**: The script will still output credentials. You can:
-
-1. Create the client manually via authz admin API
-2. Use the bootstrap client credentials (get secret from ansible vault)
-
-### Bootstrap Secret Not Available
-
-**Warning**: `Bootstrap client secret needed from ansible vault`
+**Cause**: Test user not active or missing required roles/scopes.
 
 **Solution**:
-```bash
-cd provision/ansible
-ansible-vault view roles/secrets/vars/vault.yml | grep authz_bootstrap
-```
 
-Copy the bootstrap secret to your `.env`:
-```bash
-AUTHZ_BOOTSTRAP_CLIENT_SECRET=<secret-from-vault>
-```
+1. Ensure test user exists and is ACTIVE
+2. Ensure test user has required role bindings
+3. Re-run bootstrap test credentials for the environment
 
 ### Tests Still Failing with 401
 
@@ -226,22 +194,20 @@ AUTHZ_BOOTSTRAP_CLIENT_SECRET=<secret-from-vault>
 1. **Credentials not in .env** - Verify `.env` file exists and has correct values
 2. **Wrong environment** - Test environment uses different IPs than production
 3. **Token expired** - Clear token cache and try again
-4. **Client not created** - Manually create via authz admin API
+4. **User lacks required roles** - Ensure role bindings are present
 
 **Debug steps**:
 ```bash
 # Check .env file
 cat /path/to/busibox-app/.env | grep AUTHZ
 
-# Test token acquisition manually
+# Test token exchange manually
 curl -X POST http://10.96.201.210:8010/oauth/token \
   -H "Content-Type: application/json" \
   -d '{
-    "grant_type": "client_credentials",
-    "client_id": "test-client-xxx",
-    "client_secret": "xxx",
-    "audience": "data-api",
-    "scope": "ingest.read"
+    "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+    "subject_token": "<session-jwt>",
+    "audience": "data-api"
   }'
 ```
 
@@ -265,20 +231,7 @@ make bootstrap-test-creds INV=inventory/staging
 
 ### Revoking Credentials
 
-To revoke test credentials:
-
-```bash
-# Via authz admin API
-curl -X DELETE http://10.96.201.210:8010/admin/oauth/clients/test-client-xxx \
-  -H "Authorization: Bearer <admin-token>"
-```
-
-Or delete from database:
-
-```bash
-psql -h 10.96.201.203 -U busibox_user -d busibox
-DELETE FROM authz_oauth_clients WHERE client_id = 'test-client-xxx';
-```
+To revoke test access, remove the test user's role bindings or deactivate the user.
 
 ## Integration with CI/CD
 

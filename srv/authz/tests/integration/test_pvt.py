@@ -20,9 +20,15 @@ Zero Trust mode - no client credentials. Token exchange uses subject_token
 (user's JWT) to exchange for service-specific tokens.
 """
 
+import base64
 import os
+import uuid
+import asyncio
+
 import pytest
 import httpx
+import jwt
+import asyncpg
 
 # Read from environment (set by .env file)
 # For container testing: SERVICE_URL defaults to localhost:8010
@@ -36,6 +42,9 @@ POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
 POSTGRES_DB = os.getenv("POSTGRES_DB", "busibox")
 POSTGRES_USER = os.getenv("POSTGRES_USER", "")
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
+TEST_USER_EMAIL = os.getenv("TEST_USER_EMAIL", "test@busibox.local")
+TEST_USER_ID = os.getenv("TEST_USER_ID", "00000000-0000-0000-0000-000000000001")
+TEST_MODE_HEADERS = {"X-Test-Mode": "true"}
 
 
 def require_env(var_name: str, value: str) -> str:
@@ -43,6 +52,121 @@ def require_env(var_name: str, value: str) -> str:
     if not value:
         pytest.fail(f"Required environment variable {var_name} is not set. Check .env file.")
     return value
+
+
+async def _exchange_token(subject_token: str, audience: str) -> dict:
+    """Exchange session JWT for an audience-scoped access token."""
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"{SERVICE_URL}/oauth/token",
+            headers=TEST_MODE_HEADERS,
+            data={
+                "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                "subject_token": subject_token,
+                "audience": audience,
+            },
+            timeout=10.0,
+        )
+        assert resp.status_code == 200, f"Token exchange failed: {resp.status_code} {resp.text}"
+        data = resp.json()
+        assert "access_token" in data, "Missing access_token in token exchange response"
+        return data
+
+
+@pytest.fixture
+async def pvt_db_conn():
+    """Open a direct DB connection for test bootstrap helpers."""
+    host = require_env("POSTGRES_HOST", POSTGRES_HOST)
+    password = require_env("POSTGRES_PASSWORD", POSTGRES_PASSWORD)
+    user = require_env("POSTGRES_USER", POSTGRES_USER)
+    conn = await asyncpg.connect(
+        host=host,
+        port=int(POSTGRES_PORT),
+        database=POSTGRES_DB,
+        user=user,
+        password=password,
+        timeout=10.0,
+    )
+    try:
+        yield conn
+    finally:
+        await conn.close()
+
+
+@pytest.fixture
+async def pvt_session_jwt(pvt_db_conn):
+    """
+    Mint a valid session JWT for the well-known test user.
+
+    Uses login initiation, then fetches the latest magic-link token from DB if
+    test-mode token echo is unavailable, then consumes the link.
+    """
+    async with httpx.AsyncClient() as client:
+        # Try the preferred test email first, then known bootstrapped fallback.
+        candidate_emails = [TEST_USER_EMAIL.lower(), "test@test.example.com"]
+        seen = set()
+        candidate_emails = [e for e in candidate_emails if not (e in seen or seen.add(e))]
+        magic_link_token = None
+
+        for test_email in candidate_emails:
+            init_resp = None
+            for attempt in range(3):
+                try:
+                    init_resp = await client.post(
+                        f"{SERVICE_URL}/auth/login/initiate",
+                        json={"email": test_email},
+                        headers=TEST_MODE_HEADERS,
+                        timeout=30.0,
+                    )
+                    break
+                except httpx.ReadTimeout:
+                    if attempt == 2:
+                        raise
+                    await asyncio.sleep(1.0)
+            assert init_resp.status_code == 200, f"Login initiation failed: {init_resp.text}"
+            init_data = init_resp.json()
+
+            magic_link_token = init_data.get("magic_link_token")
+            if magic_link_token:
+                break
+
+            row = await pvt_db_conn.fetchrow(
+                """
+                SELECT token
+                FROM authz_magic_links
+                WHERE email = $1
+                  AND used_at IS NULL
+                  AND expires_at > now()
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                test_email,
+            )
+            if row:
+                magic_link_token = row["token"]
+                break
+
+        assert magic_link_token is not None, "No fresh magic link token found for test user"
+
+        use_resp = await client.post(
+            f"{SERVICE_URL}/auth/magic-links/{magic_link_token}/use",
+            headers=TEST_MODE_HEADERS,
+            timeout=10.0,
+        )
+        assert use_resp.status_code == 200, f"Magic link use failed: {use_resp.text}"
+        use_data = use_resp.json()
+        session_jwt = use_data.get("session", {}).get("token")
+        assert session_jwt, "Missing session token after magic-link use"
+        return session_jwt
+
+
+@pytest.fixture
+async def pvt_admin_token(pvt_session_jwt):
+    """
+    Return an admin token for admin-only PVT operations.
+    """
+    token_data = await _exchange_token(pvt_session_jwt, "authz-api")
+    return token_data["access_token"]
 
 
 @pytest.mark.pvt
@@ -263,6 +387,240 @@ class TestPVTTokenExchange:
             )
             # Should get 400 (bad request) for missing subject_token
             assert resp.status_code in [400, 401], f"Expected 400/401, got {resp.status_code}"
+
+
+@pytest.mark.pvt
+class TestPVTTokenExchangeHappyPath:
+    """Happy-path token exchange coverage for Zero Trust flow."""
+
+    @pytest.mark.asyncio
+    async def test_full_token_exchange_flow(self, pvt_session_jwt):
+        token_data = await _exchange_token(pvt_session_jwt, "data-api")
+        assert token_data.get("token_type") == "Bearer"
+        assert token_data.get("issued_token_type") == "urn:ietf:params:oauth:token-type:access_token"
+
+    @pytest.mark.asyncio
+    async def test_token_exchange_returns_valid_jwt(self, pvt_session_jwt):
+        token_data = await _exchange_token(pvt_session_jwt, "data-api")
+        claims = jwt.decode(
+            token_data["access_token"],
+            options={"verify_signature": False, "verify_aud": False},
+        )
+        assert claims.get("aud") == "data-api"
+        assert claims.get("sub") == TEST_USER_ID
+        assert claims.get("sub"), "Expected subject claim in exchanged token"
+        assert claims.get("iss"), "Expected issuer claim in exchanged token"
+        assert "jti" in claims
+        assert "roles" in claims
+
+    @pytest.mark.asyncio
+    async def test_token_exchange_with_different_audiences(self, pvt_session_jwt):
+        for aud in ("agent-api", "search-api"):
+            token_data = await _exchange_token(pvt_session_jwt, aud)
+            claims = jwt.decode(
+                token_data["access_token"],
+                options={"verify_signature": False, "verify_aud": False},
+            )
+            assert claims.get("aud") == aud
+
+
+@pytest.mark.pvt
+class TestPVTSessionLifecycle:
+    """Session lifecycle checks using real session JWTs."""
+
+    @pytest.mark.asyncio
+    async def test_session_create_validate_delete(self, pvt_session_jwt, pvt_admin_token):
+        async with httpx.AsyncClient() as client:
+            validate_resp = await client.get(
+                f"{SERVICE_URL}/auth/sessions/{pvt_session_jwt}",
+                headers={"Authorization": f"Bearer {pvt_admin_token}", **TEST_MODE_HEADERS},
+                timeout=10.0,
+            )
+            assert validate_resp.status_code == 200, f"Session validate failed: {validate_resp.text}"
+
+            delete_resp = await client.delete(
+                f"{SERVICE_URL}/auth/sessions/{pvt_session_jwt}",
+                headers={"Authorization": f"Bearer {pvt_session_jwt}", **TEST_MODE_HEADERS},
+                timeout=10.0,
+            )
+            assert delete_resp.status_code in [200, 204], f"Session delete failed: {delete_resp.text}"
+
+            validate_again_resp = await client.get(
+                f"{SERVICE_URL}/auth/sessions/{pvt_session_jwt}",
+                headers={"Authorization": f"Bearer {pvt_admin_token}", **TEST_MODE_HEADERS},
+                timeout=10.0,
+            )
+            assert validate_again_resp.status_code in [401, 404], (
+                f"Expected invalid/deleted session, got {validate_again_resp.status_code}: {validate_again_resp.text}"
+            )
+
+
+@pytest.mark.pvt
+class TestPVTDelegationTokens:
+    """Delegation token lifecycle coverage."""
+
+    @pytest.mark.asyncio
+    async def test_delegation_create_list_revoke(self, pvt_session_jwt):
+        delegation_name = f"pvt-delegation-{uuid.uuid4().hex[:8]}"
+
+        async with httpx.AsyncClient() as client:
+            create_resp = await client.post(
+                f"{SERVICE_URL}/oauth/delegation",
+                headers=TEST_MODE_HEADERS,
+                json={
+                    "subject_token": pvt_session_jwt,
+                    "name": delegation_name,
+                    "scopes": [],
+                    "expires_in_seconds": 3600,
+                },
+                timeout=10.0,
+            )
+            assert create_resp.status_code == 200, f"Delegation create failed: {create_resp.text}"
+            create_data = create_resp.json()
+            delegation_jti = create_data["jti"]
+
+            list_resp = await client.get(
+                f"{SERVICE_URL}/oauth/delegations",
+                headers={"Authorization": f"Bearer {pvt_session_jwt}", **TEST_MODE_HEADERS},
+                timeout=10.0,
+            )
+            assert list_resp.status_code == 200, f"Delegation list failed: {list_resp.text}"
+            listed = list_resp.json().get("delegations", [])
+            assert any(d.get("jti") == delegation_jti for d in listed), "Created delegation not listed"
+
+            revoke_resp = await client.delete(
+                f"{SERVICE_URL}/oauth/delegations/{delegation_jti}",
+                headers={"Authorization": f"Bearer {pvt_session_jwt}", **TEST_MODE_HEADERS},
+                timeout=10.0,
+            )
+            assert revoke_resp.status_code in [200, 204], f"Delegation revoke failed: {revoke_resp.text}"
+
+
+@pytest.mark.pvt
+class TestPVTAdminOperations:
+    """Admin API happy-path smoke coverage."""
+
+    @pytest.mark.asyncio
+    async def test_role_crud(self, pvt_admin_token):
+        role_name = f"pvt-role-{uuid.uuid4().hex[:8]}"
+        headers = {"Authorization": f"Bearer {pvt_admin_token}", **TEST_MODE_HEADERS}
+
+        async with httpx.AsyncClient() as client:
+            create_resp = await client.post(
+                f"{SERVICE_URL}/admin/roles",
+                headers=headers,
+                json={
+                    "name": role_name,
+                    "description": "PVT role CRUD test",
+                    "scopes": ["data.read"],
+                },
+                timeout=10.0,
+            )
+            assert create_resp.status_code == 200, f"Role create failed: {create_resp.text}"
+            role = create_resp.json()
+            role_id = role["id"]
+
+            get_resp = await client.get(
+                f"{SERVICE_URL}/admin/roles/{role_id}",
+                headers=headers,
+                timeout=10.0,
+            )
+            assert get_resp.status_code == 200, f"Role get failed: {get_resp.text}"
+
+            list_resp = await client.get(
+                f"{SERVICE_URL}/admin/roles",
+                headers=headers,
+                timeout=10.0,
+            )
+            assert list_resp.status_code == 200, f"Role list failed: {list_resp.text}"
+            listed_roles = list_resp.json()
+            assert any(r.get("id") == role_id for r in listed_roles), "Created role missing from list"
+
+            update_resp = await client.put(
+                f"{SERVICE_URL}/admin/roles/{role_id}",
+                headers=headers,
+                json={
+                    "description": "Updated by PVT",
+                    "scopes": ["data.read", "search.read"],
+                },
+                timeout=10.0,
+            )
+            assert update_resp.status_code == 200, f"Role update failed: {update_resp.text}"
+
+            delete_resp = await client.delete(
+                f"{SERVICE_URL}/admin/roles/{role_id}",
+                headers=headers,
+                timeout=10.0,
+            )
+            assert delete_resp.status_code in [200, 204], f"Role delete failed: {delete_resp.text}"
+
+    @pytest.mark.asyncio
+    async def test_user_list(self, pvt_admin_token):
+        headers = {"Authorization": f"Bearer {pvt_admin_token}", **TEST_MODE_HEADERS}
+
+        async with httpx.AsyncClient() as client:
+            list_resp = await client.get(
+                f"{SERVICE_URL}/admin/users?limit=5",
+                headers=headers,
+                timeout=10.0,
+            )
+            assert list_resp.status_code == 200, f"User list failed: {list_resp.text}"
+            data = list_resp.json()
+            assert "users" in data and isinstance(data["users"], list)
+
+
+@pytest.mark.pvt
+class TestPVTKeystoreRoundtrip:
+    """Keystore envelope encryption smoke test."""
+
+    @pytest.mark.asyncio
+    async def test_encrypt_decrypt_roundtrip(self, pvt_admin_token):
+        if not os.getenv("AUTHZ_MASTER_KEY"):
+            pytest.skip("AUTHZ_MASTER_KEY not configured; skipping keystore roundtrip test")
+
+        role_id = str(uuid.uuid4())
+        file_id = str(uuid.uuid4())
+        original_content = b"pvt-keystore-roundtrip-content"
+        content_b64 = base64.b64encode(original_content).decode()
+        headers = {"Authorization": f"Bearer {pvt_admin_token}", **TEST_MODE_HEADERS}
+
+        async with httpx.AsyncClient() as client:
+            ensure_resp = await client.post(
+                f"{SERVICE_URL}/keystore/kek/ensure-for-role/{role_id}",
+                headers=headers,
+                timeout=20.0,
+            )
+            assert ensure_resp.status_code == 200, f"KEK ensure failed: {ensure_resp.text}"
+
+            encrypt_resp = await client.post(
+                f"{SERVICE_URL}/keystore/encrypt",
+                headers=headers,
+                json={
+                    "file_id": file_id,
+                    "content": content_b64,
+                    "role_ids": [role_id],
+                },
+                timeout=20.0,
+            )
+            assert encrypt_resp.status_code == 200, f"Encrypt failed: {encrypt_resp.text}"
+            encrypted_content = encrypt_resp.json()["encrypted_content"]
+
+            decrypt_resp = await client.post(
+                f"{SERVICE_URL}/keystore/decrypt",
+                headers={
+                    "Authorization": f"Bearer {pvt_admin_token}",
+                    **TEST_MODE_HEADERS,
+                    "X-User-Role-Ids": role_id,
+                },
+                json={
+                    "file_id": file_id,
+                    "encrypted_content": encrypted_content,
+                },
+                timeout=20.0,
+            )
+            assert decrypt_resp.status_code == 200, f"Decrypt failed: {decrypt_resp.text}"
+            decrypted_b64 = decrypt_resp.json()["content"]
+            assert base64.b64decode(decrypted_b64) == original_content
 
 
 @pytest.mark.pvt

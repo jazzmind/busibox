@@ -3,8 +3,6 @@ Admin User Management endpoints.
 
 Protected by (in order of precedence):
 - Access token (JWT) with authz.users.* scopes (audience: authz-api)
-- OAuth client credentials (service account) with allowed_scopes
-- Admin token (deprecated)
 
 These endpoints allow busibox-portal (or other admin tools) to manage users:
 - Create, list, get, update, delete users
@@ -31,6 +29,7 @@ from pydantic import BaseModel, Field, EmailStr
 
 from config import Config
 from oauth.jwt_auth import require_auth, authenticate_self_service, AuthContext
+from services.encryption import EnvelopeEncryptionService
 
 router = APIRouter()
 config = Config()
@@ -99,6 +98,8 @@ class MeUpdate(BaseModel):
     last_name: Optional[str] = None
     avatar_url: Optional[str] = None
     favorite_color: Optional[str] = None
+    github_pat: Optional[str] = None
+    clear_github_pat: Optional[bool] = False
 
 
 class RoleResponse(BaseModel):
@@ -119,6 +120,7 @@ class UserResponse(BaseModel):
     last_name: Optional[str] = None
     avatar_url: Optional[str] = None
     favorite_color: Optional[str] = None
+    has_github_pat: bool = False
     email_verified_at: Optional[str] = None
     last_login_at: Optional[str] = None
     pending_expires_at: Optional[str] = None
@@ -154,8 +156,6 @@ async def _require_admin_auth(request: Request, scopes: Optional[List[str]] = No
     
     Supports:
     - Access token (JWT) with audience=authz-api and required scopes
-    - OAuth client credentials (service account) with allowed_scopes
-    - Admin token (deprecated)
     
     Args:
         request: FastAPI request
@@ -194,6 +194,7 @@ def _format_user(user: dict) -> dict:
         "last_name": user.get("last_name"),
         "avatar_url": user.get("avatar_url"),
         "favorite_color": user.get("favorite_color"),
+        "has_github_pat": bool(user.get("has_github_pat", False)),
         "email_verified_at": user.get("email_verified_at").isoformat() if user.get("email_verified_at") else None,
         "last_login_at": user.get("last_login_at").isoformat() if user.get("last_login_at") else None,
         "pending_expires_at": user.get("pending_expires_at").isoformat() if user.get("pending_expires_at") else None,
@@ -214,8 +215,6 @@ async def create_user(request: Request):
     Create a new user.
 
     Body:
-    - client_id, client_secret (OAuth client auth), OR
-    - Authorization: Bearer <admin_token>
     - email: string (required)
     - role_ids: array of role UUIDs (optional)
     - status: PENDING | ACTIVE | DEACTIVATED (default: PENDING)
@@ -374,14 +373,40 @@ async def get_user(request: Request, user_id: str):
     return _format_user(user)
 
 
+@router.get("/internal/users/{user_id}/github-pat")
+async def get_user_github_pat_internal(request: Request, user_id: str):
+    """
+    Internal endpoint: return decrypted GitHub PAT for a specific user.
+    Requires authz.users.read scope.
+    """
+    await _require_admin_auth(request, scopes=["authz.users.read"])
+
+    try:
+        UUID(user_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user ID format") from e
+
+    db = _get_pg(request)
+    await db.connect()
+    encrypted = await db.get_user_github_pat_encrypted(user_id)
+    if not encrypted:
+        return {"github_pat": None}
+
+    encryption = EnvelopeEncryptionService()
+    try:
+        github_pat = encryption.decrypt_kek(encrypted).decode("utf-8")
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to decrypt GitHub PAT: {e}") from e
+
+    return {"github_pat": github_pat}
+
+
 @router.patch("/admin/users/{user_id}")
 async def update_user(request: Request, user_id: str):
     """
     Update a user.
 
     Body:
-    - client_id, client_secret (OAuth client auth), OR
-    - Authorization: Bearer <admin_token>
     - email: string (optional)
     - status: PENDING | ACTIVE | DEACTIVATED (optional)
     - email_verified_at: ISO timestamp (optional)
@@ -498,7 +523,41 @@ async def patch_me(request: Request):
     )
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    # Update encrypted GitHub PAT if provided.
+    if me_data.clear_github_pat:
+        await db.set_user_github_pat(auth.actor_id, None)
+    elif me_data.github_pat:
+        encryption = EnvelopeEncryptionService()
+        encrypted = encryption.encrypt_kek(me_data.github_pat.encode("utf-8"))
+        await db.set_user_github_pat(auth.actor_id, encrypted)
+
+    user = await db.get_user_with_roles(auth.actor_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     return _format_user(user)
+
+
+@router.get("/me/github-pat")
+async def get_me_github_pat(request: Request):
+    """
+    Return the authenticated user's decrypted GitHub PAT.
+    Intended for trusted internal app workflows.
+    """
+    db = _get_pg(request)
+    await db.connect()
+    auth = await authenticate_self_service(request, db)
+    encrypted = await db.get_user_github_pat_encrypted(auth.actor_id)
+    if not encrypted:
+        return {"github_pat": None}
+
+    encryption = EnvelopeEncryptionService()
+    try:
+        github_pat = encryption.decrypt_kek(encrypted).decode("utf-8")
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to decrypt GitHub PAT: {e}") from e
+
+    return {"github_pat": github_pat}
 
 
 @router.post("/me/refresh-session")

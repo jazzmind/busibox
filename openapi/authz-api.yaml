@@ -5,12 +5,12 @@ info:
     Authorization and authentication service for Busibox platform.
     
     Provides:
-    - OAuth2 token issuance (client_credentials and token-exchange grants)
+    - OAuth2 token issuance (token-exchange grant)
     - RBAC management (roles, users, permissions)
     - Audit logging
     - JWKS endpoint for token validation
     
-    **Authentication**: OAuth client credentials or admin token required for most endpoints.
+    **Authentication**: Zero Trust JWT access tokens.
   version: 1.0.0
   contact:
     name: Busibox Team
@@ -63,7 +63,6 @@ paths:
         Issue access tokens using OAuth2 grants.
         
         Supported grant types:
-        - `client_credentials`: Service-to-service authentication
         - `urn:ietf:params:oauth:grant-type:token-exchange`: On-behalf-of user tokens (RFC 8693)
         
         Accepts both `application/x-www-form-urlencoded` and `application/json` content types.
@@ -91,7 +90,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '401':
-          description: Invalid client credentials
+          description: Invalid subject token
           content:
             application/json:
               schema:
@@ -137,9 +136,7 @@ paths:
         content:
           application/json:
             schema:
-              allOf:
-                - $ref: '#/components/schemas/RoleCreate'
-                - $ref: '#/components/schemas/OAuthClientAuth'
+              $ref: '#/components/schemas/RoleCreate'
       responses:
         '200':
           description: Role created successfully
@@ -202,9 +199,7 @@ paths:
         content:
           application/json:
             schema:
-              allOf:
-                - $ref: '#/components/schemas/RoleUpdate'
-                - $ref: '#/components/schemas/OAuthClientAuth'
+              $ref: '#/components/schemas/RoleUpdate'
       responses:
         '200':
           description: Role updated successfully
@@ -269,9 +264,7 @@ paths:
         content:
           application/json:
             schema:
-              allOf:
-                - $ref: '#/components/schemas/UserRoleBinding'
-                - $ref: '#/components/schemas/OAuthClientAuth'
+              $ref: '#/components/schemas/UserRoleBinding'
       responses:
         '200':
           description: User-role binding created
@@ -297,9 +290,7 @@ paths:
         content:
           application/json:
             schema:
-              allOf:
-                - $ref: '#/components/schemas/UserRoleBinding'
-                - $ref: '#/components/schemas/OAuthClientAuth'
+              $ref: '#/components/schemas/UserRoleBinding'
       responses:
         '200':
           description: User-role binding removed
@@ -346,90 +337,6 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/RoleResponse'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-
-  /admin/oauth-clients:
-    get:
-      tags: [Admin]
-      summary: List OAuth clients
-      description: Returns all OAuth clients. Requires admin authentication.
-      operationId: listOAuthClients
-      security:
-        - AdminToken: []
-        - OAuthClient: []
-      responses:
-        '200':
-          description: List of OAuth clients
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/OAuthClientResponse'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-
-    post:
-      tags: [Admin]
-      summary: Create OAuth client
-      description: Creates a new OAuth client. Requires admin authentication.
-      operationId: createOAuthClient
-      security:
-        - AdminToken: []
-        - OAuthClient: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/OAuthClientCreate'
-      responses:
-        '201':
-          description: OAuth client created
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/OAuthClientResponse'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '500':
-          $ref: '#/components/responses/InternalError'
-
-  /internal/sync/user:
-    post:
-      tags: [Internal]
-      summary: Sync user and roles
-      description: |
-        Upserts user, roles, and user-role assignments. Called by busibox-portal for RBAC synchronization.
-        Requires OAuth client credentials in request body.
-      operationId: syncUser
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              allOf:
-                - type: object
-                  properties:
-                    user:
-                      $ref: '#/components/schemas/SyncUser'
-                - $ref: '#/components/schemas/OAuthClientAuth'
-      responses:
-        '200':
-          description: User synced successfully
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    example: ok
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -821,15 +728,20 @@ components:
     AdminToken:
       type: http
       scheme: bearer
-      description: Admin token for RBAC operations (AUTHZ_ADMIN_TOKEN)
+      bearerFormat: JWT
+      description: JWT access token issued by authz
 
     OAuthClient:
-      type: oauth2
-      description: OAuth client credentials flow
-      flows:
-        clientCredentials:
-          tokenUrl: /oauth/token
-          scopes: {}
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT access token issued by authz
+
+    BearerJWT:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT access token issued by authz
 
   schemas:
     JWK:
@@ -859,21 +771,14 @@ components:
       type: object
       required:
         - grant_type
-        - client_id
-        - client_secret
+        - subject_token
+        - audience
       properties:
         grant_type:
           type: string
           enum:
-            - client_credentials
             - urn:ietf:params:oauth:grant-type:token-exchange
           description: OAuth2 grant type
-        client_id:
-          type: string
-          description: OAuth client ID
-        client_secret:
-          type: string
-          description: OAuth client secret
         audience:
           type: string
           description: Target service (e.g., data-api, search-api, agent-api)
@@ -882,10 +787,6 @@ components:
           type: string
           description: Space-delimited OAuth2 scopes
           example: data.write data.read
-        requested_subject:
-          type: string
-          format: uuid
-          description: User ID for token-exchange grant
         requested_purpose:
           type: string
           description: Purpose label for audit logging
@@ -946,7 +847,7 @@ components:
           example: busibox-authz
         sub:
           type: string
-          description: Subject (user ID or client ID for client_credentials grant)
+          description: Subject (user ID)
           example: user-123
         aud:
           type: string
@@ -974,13 +875,11 @@ components:
           description: |
             Aggregated OAuth2 scopes (space-delimited). 
             For token-exchange, this is the union of scopes from all user roles.
-            For client_credentials, this is the requested scope (validated against client's allowed_scopes).
           example: data.read data.write search.read
         roles:
           type: array
           description: |
             User roles (for data access filtering). Contains only id and name.
-            Empty array for client_credentials tokens.
           items:
             type: object
             properties:
@@ -1080,54 +979,6 @@ components:
           type: string
           format: date-time
 
-    OAuthClientCreate:
-      type: object
-      required:
-        - client_id
-        - client_secret
-      properties:
-        client_id:
-          type: string
-          description: Client ID for the new OAuth client
-        client_secret:
-          type: string
-          description: Client secret (will be hashed)
-        allowed_audiences:
-          type: array
-          items:
-            type: string
-          example: [data-api, search-api, agent-api]
-        allowed_scopes:
-          type: array
-          items:
-            type: string
-          example: [data.read, data.write, search.read]
-        auth_client_id:
-          type: string
-          description: Client ID for authentication (if not using admin token)
-        auth_client_secret:
-          type: string
-          description: Client secret for authentication (if not using admin token)
-
-    OAuthClientResponse:
-      type: object
-      properties:
-        client_id:
-          type: string
-        allowed_audiences:
-          type: array
-          items:
-            type: string
-        allowed_scopes:
-          type: array
-          items:
-            type: string
-        is_active:
-          type: boolean
-        created_at:
-          type: string
-          format: date-time
-
     SyncRole:
       type: object
       required:
@@ -1207,15 +1058,6 @@ components:
           type: object
           description: Additional event details
           additionalProperties: true
-
-    OAuthClientAuth:
-      type: object
-      description: OAuth client credentials for authentication (alternative to admin token)
-      properties:
-        client_id:
-          type: string
-        client_secret:
-          type: string
 
     Error:
       type: object

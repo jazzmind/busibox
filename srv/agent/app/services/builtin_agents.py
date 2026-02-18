@@ -122,6 +122,22 @@ BUILTIN_AGENT_METADATA = {
         "version": 1,
         "tools": ["text_to_speech"],
     },
+    "builder_agent": {
+        "name": "builder",
+        "display_name": "Builder Agent",
+        "description": "Builds and iterates Busibox applications using Claude Agent SDK coding tools.",
+        "model": "agent",
+        "version": 1,
+        "tools": [],
+    },
+    "builder_local_agent": {
+        "name": "builder-local",
+        "display_name": "Builder Local Agent",
+        "description": "Builds and iterates Busibox applications using local-model fallback via Aider.",
+        "model": "fast",
+        "version": 1,
+        "tools": [],
+    },
 }
 
 

@@ -25,6 +25,8 @@ from app.agents.weather_agent import weather_agent, WeatherAgent
 from app.agents.chat_agent import chat_agent, ChatAgent
 from app.agents.status_agent import status_assistant_agent, status_update_agent
 from app.agents.image_agent import image_agent
+from app.agents.builder_agent import builder_agent
+from app.agents.builder_local_agent import builder_local_agent
 from app.agents.base_agent import create_agent_from_definition, BaseStreamingAgent
 from app.config.settings import get_settings
 from app.core.logging import get_logger
@@ -62,6 +64,13 @@ STREAMING_AGENTS: Dict[str, StreamingAgent] = {
     "image": image_agent,
     "image_agent": image_agent,  # Alias
     "image-agent": image_agent,  # Alias with hyphen
+    # Builder agent (Claude SDK coding agent)
+    "builder": builder_agent,
+    "builder_agent": builder_agent,
+    "builder-agent": builder_agent,
+    "builder_local": builder_local_agent,
+    "builder-local": builder_local_agent,
+    "builder_local_agent": builder_local_agent,
 }
 
 # Map agent names/types to streaming agent keys
@@ -96,6 +105,16 @@ AGENT_TYPE_MAPPING = {
     "image_agent": "image",
     "image-agent": "image",
     "image agent": "image",
+    # Builder mappings
+    "builder": "builder",
+    "builder_agent": "builder",
+    "builder-agent": "builder",
+    "app_builder": "builder",
+    "app-builder": "builder",
+    "app builder": "builder",
+    "builder_local": "builder_local",
+    "builder-local": "builder_local",
+    "builder_local_agent": "builder_local",
     # Status agent mappings
     "status_assistant": "status_assistant",
     "status-assistant": "status_assistant",
@@ -114,6 +133,8 @@ AGENT_DESCRIPTIONS = {
     "weather": "Get current weather information for a location",
     "chat": "General conversation and questions",
     "image": "Generate images from text prompts",
+    "builder": "Build and iterate Busibox applications from conversational instructions",
+    "builder_local": "Build and iterate Busibox applications with local-model fallback via Aider",
     "status_assistant": "Manage project status, create/query/update projects and tasks",
     "status_update": "Record quick status updates for projects and tasks",
 }
@@ -742,6 +763,8 @@ Choose the most appropriate single agent for the query.""",
             "weather": "Weather Agent",
             "chat": "Chat Assistant",
             "image": "Image Agent",
+            "builder": "Builder Agent",
+            "builder_local": "Builder Local Agent",
             "status_assistant": "Project Status Assistant",
             "status_update": "Status Update Assistant",
         }

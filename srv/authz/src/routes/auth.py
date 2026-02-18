@@ -15,7 +15,6 @@ Session tokens are RS256-signed JWTs that can be:
 
 Authentication is required via one of:
 - Access token (JWT) with appropriate authz.* scopes
-- OAuth client credentials (client_id/client_secret for service accounts)
 - Session JWT (for self-service operations like logout, passkey management)
 
 Public endpoints (authentication mechanism itself):
@@ -40,7 +39,6 @@ from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from config import Config
-from oauth.client_auth import verify_client_secret
 from oauth.keys import load_private_key
 from oauth.jwt_auth import require_auth, require_auth_or_self_service, authenticate_self_service, verify_session_token, AuthContext
 
@@ -286,8 +284,6 @@ async def _require_client_auth(request: Request, scopes: Optional[List[str]] = N
     
     Supports:
     - Access token (JWT) with audience=authz-api and required scopes
-    - OAuth client credentials (service account) with allowed_scopes
-    - Admin token (deprecated)
     
     Args:
         request: FastAPI request
@@ -326,7 +322,6 @@ async def create_session(request: Request):
     Used by busibox-portal to sync better-auth sessions to authz.
     
     Body:
-    - client_id, client_secret (OAuth client auth)
     - user_id: string (required)
     - token: string (session token, required)
     - expires_at: ISO timestamp (required)
@@ -476,7 +471,12 @@ async def delete_session(request: Request, token: str):
         pass  # Token is not a JWT, use as-is
     
     # Get session to check ownership
-    session = await db.get_session_by_id(session_id)
+    try:
+        session = await db.get_session_by_id(session_id)
+    except ValueError:
+        # token was not a UUID session_id (e.g. opaque legacy token),
+        # fall back to direct token lookup below
+        session = None
     if not session:
         # Try as legacy token
         session = await db.get_session(token)

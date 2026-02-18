@@ -5,8 +5,7 @@ OAuth2 endpoints for authz.
 - POST /oauth/token
 
 Token Exchange Modes:
-1. Client Credentials + requested_subject (legacy) - requires client_id/client_secret
-2. Subject Token (Zero Trust) - validates JWT signature, no client credentials needed
+1. Subject Token (Zero Trust) - validates JWT signature, no client credentials needed
 """
 
 from __future__ import annotations
@@ -17,6 +16,7 @@ from typing import List, Optional, Tuple
 
 import jwt
 import structlog
+from cachetools import TTLCache
 from cryptography.hazmat.primitives import serialization
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import JSONResponse
@@ -24,7 +24,6 @@ from pydantic import BaseModel, Field
 
 from config import Config
 from oauth.claims import AccessTokenClaims
-from oauth.client_auth import verify_client_secret
 from oauth.contracts import OAuthTokenRequest, OAuthTokenResponse, TOKEN_EXCHANGE_GRANT
 from oauth.keys import generate_rsa_signing_key, load_private_key
 
@@ -41,8 +40,33 @@ SUBJECT_TOKEN_TYPE_JWT = "urn:ietf:params:oauth:token-type:jwt"
 _pg = None
 _pg_test = None
 
+_key_object_cache: TTLCache = TTLCache(maxsize=2, ttl=300)
+_token_revocation_cache: TTLCache = TTLCache(maxsize=2000, ttl=30)
+
 # Header name for test mode
 TEST_MODE_HEADER = "X-Test-Mode"
+
+
+def _invalidate_key_object_cache() -> None:
+    _key_object_cache.clear()
+
+
+async def _get_signing_key_objects(db) -> Tuple[str, str, object, object]:
+    """Get active signing key metadata and crypto objects with TTL caching."""
+    cache_key = "active_signing_key_objects"
+    cached = _key_object_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    row = await db.get_active_signing_key()
+    if not row:
+        raise RuntimeError("no active signing key configured")
+
+    private_key = load_private_key(row["private_key_pem"], config.key_encryption_passphrase)
+    public_key = private_key.public_key()
+    result = (row["kid"], row["alg"], private_key, public_key)
+    _key_object_cache[cache_key] = result
+    return result
 
 
 def set_pg_service(pg_service, pg_test_service=None):
@@ -333,6 +357,8 @@ async def _ensure_bootstrap(force: bool = False) -> None:
                     "DELETE FROM authz_signing_keys WHERE kid = $1",
                     active_key["kid"],
                 )
+            _pg.invalidate_signing_key_cache()
+            _invalidate_key_object_cache()
             logger.info("Deleted unusable signing key", kid=active_key["kid"])
             need_new_key = True
     else:
@@ -353,6 +379,7 @@ async def _ensure_bootstrap(force: bool = False) -> None:
             public_jwk=sk.public_jwk,
             is_active=True,
         )
+        _invalidate_key_object_cache()
         logger.info("Generated new authz signing key", kid=sk.kid, alg=sk.alg)
 
 
@@ -365,18 +392,28 @@ async def _ensure_bootstrap(force: bool = False) -> None:
     # 6) bootstrap admin users from ADMIN_EMAILS config
     await _ensure_bootstrap_admin_users()
 
+    # 7) ensure test database has a signing key in test mode
+    if _pg_test:
+        test_active_key = await _pg_test.get_active_signing_key()
+        if not test_active_key:
+            if config.signing_alg != "RS256":
+                raise RuntimeError(f"Unsupported signing alg for bootstrap: {config.signing_alg}")
+            sk_test = generate_rsa_signing_key(
+                key_size=config.rsa_key_size,
+                alg=config.signing_alg,
+                passphrase=config.key_encryption_passphrase,
+            )
+            await _pg_test.insert_signing_key(
+                kid=sk_test.kid,
+                alg=sk_test.alg,
+                private_key_pem=sk_test.private_key_pem,
+                public_jwk=sk_test.public_jwk,
+                is_active=True,
+            )
+            logger.info("Generated test DB authz signing key", kid=sk_test.kid, alg=sk_test.alg)
+
     _bootstrap_done = True
     logger.info("Bootstrap complete")
-
-
-async def _require_client(client_id: str, client_secret: str) -> dict:
-    await _pg.connect()
-    client = await _pg.get_oauth_client(client_id)
-    if not client or not client.get("is_active"):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_client")
-    if not verify_client_secret(client_secret, client["client_secret_hash"]):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_client")
-    return client
 
 
 async def _verify_subject_token(subject_token: str, request: Request = None) -> Tuple[str, str, str]:
@@ -390,25 +427,13 @@ async def _verify_subject_token(subject_token: str, request: Request = None) -> 
         subject_token: The JWT to verify
         request: Optional request object for test-mode DB routing
     """
-    await _pg.connect()
-    
-    # Get the active signing key's public key for verification
-    row = await _pg.get_active_signing_key()
-    if not row:
+    try:
+        kid, alg, _, public_key = await _get_signing_key_objects(_pg)
+    except RuntimeError:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="no_signing_key_configured"
         )
-    
-    # Get public key from the stored JWK
-    public_jwk = row.get("public_jwk", {})
-    kid = row["kid"]
-    alg = row["alg"]
-    
-    # Also load private key to extract public key (more reliable)
-    private_pem = row["private_key_pem"]
-    private_key = load_private_key(private_pem, config.key_encryption_passphrase)
-    public_key = private_key.public_key()
     
     try:
         # Decode and verify the JWT
@@ -470,18 +495,27 @@ async def _verify_subject_token(subject_token: str, request: Request = None) -> 
         # Access tokens are short-lived and don't need revocation tracking
         # Use request-aware DB routing so test-mode sessions are found in the test DB
         revocation_db = _get_pg(request)
-        await revocation_db.connect()
         if token_type == "session" and jti:
-            session = await revocation_db.get_session_by_id(jti)
-            if not session:
+            cache_key = (id(revocation_db), "session", jti)
+            session_valid = _token_revocation_cache.get(cache_key)
+            if session_valid is None:
+                session = await revocation_db.get_session_by_id(jti)
+                session_valid = session is not None
+                _token_revocation_cache[cache_key] = session_valid
+            if not session_valid:
                 logger.warning("Session revoked or not found", jti=jti)
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="session_revoked"
                 )
         elif token_type == "delegation" and jti:
-            delegation = await revocation_db.get_delegation_token(jti)
-            if not delegation:
+            cache_key = (id(revocation_db), "delegation", jti)
+            delegation_valid = _token_revocation_cache.get(cache_key)
+            if delegation_valid is None:
+                delegation = await revocation_db.get_delegation_token(jti)
+                delegation_valid = delegation is not None
+                _token_revocation_cache[cache_key] = delegation_valid
+            if not delegation_valid:
                 logger.warning("Delegation token revoked or not found", jti=jti)
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -518,35 +552,8 @@ async def _verify_subject_token(subject_token: str, request: Request = None) -> 
         )
 
 
-def _enforce_audience(client: dict, audience: str) -> None:
-    allowed = client.get("allowed_audiences") or []
-    if audience not in allowed:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="unauthorized_client_audience")
-
-
-def _enforce_scopes(client: dict, scope_str: str) -> str:
-    requested = [s for s in scope_str.split(" ") if s]
-    allowed = client.get("allowed_scopes") or []
-    if not requested:
-        return ""
-    if not allowed:
-        # no scopes allowed
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="unauthorized_client_scope")
-    out: List[str] = [s for s in requested if s in allowed]
-    if len(out) != len(requested):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="unauthorized_client_scope")
-    return " ".join(out)
-
-
 async def _sign_access_token(claims: dict) -> str:
-    await _pg.connect()
-    row = await _pg.get_active_signing_key()
-    if not row:
-        raise RuntimeError("no active signing key configured")
-    kid = row["kid"]
-    alg = row["alg"]
-    private_pem = row["private_key_pem"]
-    key_obj = load_private_key(private_pem, config.key_encryption_passphrase)
+    kid, alg, key_obj, _ = await _get_signing_key_objects(_pg)
     # PyJWT supports cryptography key objects directly.
     token = jwt.encode(claims, key_obj, algorithm=alg, headers={"kid": kid, "typ": "JWT"})
     return token
@@ -556,15 +563,7 @@ async def _sign_delegation_token(user_id: str, email: str, jti: str, scopes: Lis
     """
     Sign a delegation token JWT for background tasks.
     """
-    await _pg.connect()
-    row = await _pg.get_active_signing_key()
-    if not row:
-        raise RuntimeError("no active signing key configured")
-    
-    kid = row["kid"]
-    alg = row["alg"]
-    private_pem = row["private_key_pem"]
-    key_obj = load_private_key(private_pem, config.key_encryption_passphrase)
+    kid, alg, key_obj, _ = await _get_signing_key_objects(_pg)
     
     now = int(time.time())
     
@@ -589,7 +588,6 @@ async def _sign_delegation_token(user_id: str, email: str, jti: str, scopes: Lis
 async def jwks(request: Request):
     await _ensure_bootstrap()
     db = _get_pg(request)
-    await db.connect()
     keys = await db.list_public_jwks()
     return {"keys": keys}
 
@@ -600,10 +598,8 @@ async def token(request: Request):
     OAuth2 token endpoint.
 
     Supports:
-    - grant_type=client_credentials (requires client_id/client_secret)
     - grant_type=urn:ietf:params:oauth:grant-type:token-exchange
       - With subject_token: Zero Trust mode - no client credentials needed
-      - With client credentials + requested_subject: Legacy mode
 
     Accepts both application/x-www-form-urlencoded and JSON bodies.
     """
@@ -621,44 +617,11 @@ async def token(request: Request):
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_request") from e
 
-    # Client credentials grant always requires client authentication
-    if token_req.grant_type == "client_credentials":
-        if not token_req.client_id or not token_req.client_secret:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="client_credentials_required")
-        
-        client = await _require_client(token_req.client_id, token_req.client_secret)
-        
-        if not token_req.audience:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="audience_required")
-        _enforce_audience(client, token_req.audience)
-        scope = _enforce_scopes(client, token_req.scope)
-
-        now = int(time.time())
-        exp = now + config.access_token_ttl
-        claims = AccessTokenClaims(
-            iss=config.issuer,
-            sub=token_req.client_id,
-            aud=token_req.audience,
-            iat=now,
-            nbf=now,
-            exp=exp,
-            jti=str(uuid.uuid4()),
-            scope=scope,
-            roles=[],
-        ).model_dump()
-        access_token = await _sign_access_token(claims)
-        return OAuthTokenResponse(
-            access_token=access_token,
-            expires_in=config.access_token_ttl,
-            scope=scope,
-            issued_token_type="urn:ietf:params:oauth:token-type:access_token",
-        ).model_dump()
-
     if token_req.grant_type == TOKEN_EXCHANGE_GRANT:
         if not token_req.audience:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="audience_required")
         
-        # Determine authentication mode: subject_token (Zero Trust) or client credentials (legacy)
+        # Zero Trust mode: a valid subject token is required.
         user_id: str
         email: str = ""
         purpose: str = token_req.requested_purpose or "token-exchange"
@@ -670,35 +633,14 @@ async def token(request: Request):
             
             user_id, email, jti = await _verify_subject_token(token_req.subject_token, request)
             purpose = f"subject_token:{jti[:8]}"
-            
-        elif token_req.client_id and token_req.client_secret and token_req.requested_subject:
-            # Legacy mode: Client credentials + requested_subject
-            logger.info("Token exchange with client credentials (legacy mode)")
-            
-            client = await _require_client(token_req.client_id, token_req.client_secret)
-            _enforce_audience(client, token_req.audience)
-            
-            # Validate requested_subject is a valid UUID format
-            try:
-                uuid.UUID(token_req.requested_subject)
-            except (ValueError, AttributeError, TypeError):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST, 
-                    detail="invalid_subject_format"
-                )
-            
-            user_id = token_req.requested_subject
-            # Email will be fetched from DB below
-            
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="subject_token_or_client_credentials_required"
+                detail="subject_token_required"
             )
 
         # Pull RBAC from authz DB
         db = _get_pg(request)
-        await db.connect()
         if not await db.user_exists(user_id):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unknown_subject")
         
@@ -809,7 +751,7 @@ async def token(request: Request):
                 "audience": token_req.audience,
                 "resource_id": token_req.resource_id,
                 "purpose": purpose,
-                "mode": "subject_token" if token_req.subject_token else "client_credentials",
+                "mode": "subject_token",
                 "app_scoped": token_req.resource_id is not None,
             },
             user_id=user_id,
@@ -873,7 +815,6 @@ async def create_delegation_token(request: Request):
     
     # Get user's roles to validate requested scopes
     db = _get_pg(request)
-    await db.connect()
     user = await db.get_user_with_roles(user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user_not_found")
@@ -975,7 +916,6 @@ async def list_delegation_tokens(request: Request):
     user_id, email, session_jti = await _verify_subject_token(subject_token, request)
     
     db = _get_pg(request)
-    await db.connect()
     delegations = await db.list_user_delegation_tokens(user_id)
     
     return {
@@ -1012,7 +952,6 @@ async def revoke_delegation_token(request: Request, jti: str):
     user_id, email, session_jti = await _verify_subject_token(subject_token, request)
     
     db = _get_pg(request)
-    await db.connect()
     
     # Verify the delegation token belongs to this user
     delegation = await db.get_delegation_token(jti)

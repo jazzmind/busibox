@@ -8,7 +8,6 @@ from oauth.jwt_auth import (
     require_auth,
     verify_access_token,
 )
-from oauth.client_auth import hash_client_secret, verify_client_secret
 from oauth.keys import load_private_key, load_public_key
 
 __all__ = [
@@ -16,8 +15,6 @@ __all__ = [
     "authenticate_request",
     "require_auth",
     "verify_access_token",
-    "hash_client_secret",
-    "verify_client_secret",
     "load_private_key",
     "load_public_key",
 ]

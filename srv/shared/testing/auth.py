@@ -51,7 +51,6 @@ class AuthTestClient:
     def __init__(
         self,
         authz_url: Optional[str] = None,
-        admin_token: Optional[str] = None,
         test_user_id: Optional[str] = None,
         test_user_email: Optional[str] = None,
     ):
@@ -60,7 +59,6 @@ class AuthTestClient:
         
         Args:
             authz_url: Base URL for authz service (default from AUTHZ_JWKS_URL or AUTH_JWKS_URL)
-            admin_token: Admin token for role management (optional)
             test_user_id: Test user ID (default from TEST_USER_ID)
             test_user_email: Test user email (default: test@test.example.com)
         """
@@ -73,9 +71,6 @@ class AuthTestClient:
         # This ID is created by _ensure_bootstrap_test_user() in authz
         self.test_user_id = test_user_id or os.getenv("TEST_USER_ID", "00000000-0000-0000-0000-000000000001")
         self.test_user_email = test_user_email or os.getenv("TEST_USER_EMAIL", TEST_USER_EMAIL)
-        
-        # Admin token for role management (optional)
-        self.admin_token = admin_token or os.getenv("AUTHZ_ADMIN_TOKEN", "")
         
         # Track changes for cleanup
         self._added_roles: Set[str] = set()
@@ -93,7 +88,7 @@ class AuthTestClient:
         Verify required configuration is present.
         
         Args:
-            require_admin: If True, also require AUTHZ_ADMIN_TOKEN (for user management operations)
+            require_admin: Deprecated. Admin operations now use exchanged JWTs.
         """
         if not self.authz_url:
             pytest.fail("AUTHZ_JWKS_URL not configured")
@@ -101,9 +96,10 @@ class AuthTestClient:
             pytest.fail("TEST_USER_ID not configured")
     
     def _admin_headers(self) -> Dict[str, str]:
-        """Get headers for admin API calls. Includes X-Test-Mode header."""
+        """Get headers for admin API calls using an exchanged authz-api JWT."""
+        token = self.get_token(audience="authz-api")
         return {
-            "Authorization": f"Bearer {self.admin_token}",
+            "Authorization": f"Bearer {token}",
             TEST_MODE_HEADER: TEST_MODE_VALUE,
         }
     
@@ -119,7 +115,6 @@ class AuthTestClient:
         by authz on startup (_ensure_bootstrap_test_user). This method verifies
         the user can be logged in by attempting a magic link login.
         
-        If admin token is available, also checks via admin API as fallback.
         """
         self._require_config()
         
@@ -137,33 +132,15 @@ class AuthTestClient:
                 # Login initiated successfully - user exists (or was created)
                 return
         
-        # Fallback: If admin token is available, try admin API
-        if self.admin_token:
-            with httpx.Client() as client:
-                resp = client.get(
-                    f"{self.authz_url}/admin/users/{self.test_user_id}",
-                    headers=self._admin_headers(),
-                    timeout=10.0,
-                )
-                
-                if resp.status_code == 200:
-                    return
-                
-                # Try to create user via admin API
-                resp = client.post(
-                    f"{self.authz_url}/admin/users",
-                    headers=self._admin_headers(),
-                    json={
-                        "email": self.test_user_email,
-                        "status": "ACTIVE",
-                    },
-                    timeout=10.0,
-                )
-                
-                if resp.status_code in [200, 201, 409]:
-                    return
-                
-                pytest.fail(f"Failed to create test user: {resp.status_code} - {resp.text}")
+        # Fallback: check via admin API using exchanged JWT
+        with httpx.Client() as client:
+            resp = client.get(
+                f"{self.authz_url}/admin/users/{self.test_user_id}",
+                headers=self._admin_headers(),
+                timeout=10.0,
+            )
+            if resp.status_code == 200:
+                return
     
     # =========================================================================
     # Token Management (Zero Trust)

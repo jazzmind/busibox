@@ -9,7 +9,6 @@ Run with: pytest tests/test_real_auth_integration.py -v
 Required environment variables:
 - TEST_DB_PASSWORD: Password for test database
 - TEST_AUTHZ_URL: URL of test authz service (default: http://10.96.201.210:8010)
-- AUTHZ_ADMIN_TOKEN: Admin token for authz service
 
 These tests cover:
 - User CRUD operations (create, list, get, update, delete)
@@ -43,20 +42,127 @@ TEST_DB_PASSWORD = os.getenv("TEST_DB_PASSWORD", "testpassword")
 
 # Test authz service
 TEST_AUTHZ_URL = os.getenv("TEST_AUTHZ_URL", "http://10.96.201.210:8010")
-ADMIN_TOKEN = os.getenv("AUTHZ_ADMIN_TOKEN", "")
+TEST_USER_EMAIL = os.getenv("TEST_USER_EMAIL", "test@busibox.local")
+TEST_MODE_HEADERS = {"X-Test-Mode": "true"}
+# Legacy constants retained so skipped legacy tests don't error on name lookup.
+BOOTSTRAP_CLIENT_ID = ""
+BOOTSTRAP_CLIENT_SECRET = ""
 
 
 def skip_if_no_credentials():
     """Skip tests if credentials are not set."""
     if not TEST_DB_PASSWORD:
         pytest.skip("TEST_DB_PASSWORD not set - cannot connect to test database")
-    if not ADMIN_TOKEN:
-        pytest.skip("AUTHZ_ADMIN_TOKEN not set - cannot authenticate to authz service")
 
 
 def skip_if_no_oauth_credentials():
-    """Skip tests if OAuth client credentials are not set."""
+    """Legacy helper retained for compatibility in zero-trust mode."""
+    pytest.skip("Legacy client-credential flow is disabled in Zero Trust mode")
+
+
+async def _mint_admin_access_token() -> str:
+    """Mint an authz-api access token for the test user via Zero Trust exchange."""
     skip_if_no_credentials()
+    candidate_emails = [TEST_USER_EMAIL.lower(), "test@test.example.com"]
+    candidate_emails = list(dict.fromkeys(candidate_emails))
+
+    conn = await asyncpg.connect(
+        host=TEST_DB_HOST,
+        port=TEST_DB_PORT,
+        database=TEST_DB_NAME,
+        user=TEST_DB_USER,
+        password=TEST_DB_PASSWORD,
+        timeout=10.0,
+    )
+    try:
+        admin_role = await conn.fetchrow(
+            """
+            SELECT id
+            FROM authz_roles
+            WHERE name IN ('Admin', 'DockerTestAdmin')
+            ORDER BY CASE name WHEN 'Admin' THEN 0 ELSE 1 END
+            LIMIT 1
+            """
+        )
+        assert admin_role is not None, "No admin-capable role found in authz_roles"
+        admin_role_id = admin_role["id"]
+
+        selected_email = None
+        for test_email in candidate_emails:
+            user_row = await conn.fetchrow(
+                "SELECT user_id FROM authz_users WHERE lower(email) = $1 LIMIT 1",
+                test_email,
+            )
+            if user_row:
+                selected_email = test_email
+                await conn.execute(
+                    "UPDATE authz_users SET status = 'ACTIVE' WHERE user_id = $1",
+                    user_row["user_id"],
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO authz_user_roles (user_id, role_id)
+                    VALUES ($1, $2)
+                    ON CONFLICT (user_id, role_id) DO NOTHING
+                    """,
+                    user_row["user_id"],
+                    admin_role_id,
+                )
+                break
+
+        if selected_email is None:
+            selected_email = candidate_emails[-1]
+
+        async with httpx.AsyncClient() as client:
+            init_resp = await client.post(
+                f"{TEST_AUTHZ_URL}/auth/login/initiate",
+                json={"email": selected_email},
+                headers=TEST_MODE_HEADERS,
+                timeout=30.0,
+            )
+            assert init_resp.status_code == 200, f"Login initiation failed: {init_resp.text}"
+
+        magic_link_row = await conn.fetchrow(
+            """
+            SELECT token
+            FROM authz_magic_links
+            WHERE email = $1
+              AND used_at IS NULL
+              AND expires_at > now()
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+                selected_email,
+        )
+        assert magic_link_row is not None, "No valid magic link token found for test user"
+        magic_link_token = magic_link_row["token"]
+    finally:
+        await conn.close()
+
+    async with httpx.AsyncClient() as client:
+        use_resp = await client.post(
+            f"{TEST_AUTHZ_URL}/auth/magic-links/{magic_link_token}/use",
+            headers=TEST_MODE_HEADERS,
+            timeout=30.0,
+        )
+        assert use_resp.status_code == 200, f"Magic link use failed: {use_resp.text}"
+        session_jwt = use_resp.json().get("session", {}).get("token")
+        assert session_jwt, "Missing session token from magic link flow"
+
+        exchange_resp = await client.post(
+            f"{TEST_AUTHZ_URL}/oauth/token",
+            headers=TEST_MODE_HEADERS,
+            data={
+                "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                "subject_token": session_jwt,
+                "audience": "authz-api",
+            },
+            timeout=30.0,
+        )
+        assert exchange_resp.status_code == 200, f"Token exchange failed: {exchange_resp.text}"
+        token_data = exchange_resp.json()
+        assert "access_token" in token_data, "Missing access token in exchange response"
+        return token_data["access_token"]
  
 # ============================================================================
 # Fixtures
@@ -82,14 +188,14 @@ async def db_pool():
 
 
 @pytest.fixture
-def admin_headers():
+async def admin_headers():
     """Headers for admin-authenticated requests.
     
     Includes X-Test-Mode: true to route requests to the test database.
     """
-    skip_if_no_credentials()
+    admin_token = await _mint_admin_access_token()
     return {
-        "Authorization": f"Bearer {ADMIN_TOKEN}",
+        "Authorization": f"Bearer {admin_token}",
         "X-Test-Mode": "true",  # Route to test database
     }
 
@@ -1817,6 +1923,8 @@ class TestOAuthTokenExchange:
                 f"{TEST_AUTHZ_URL}/oauth/token",
                 json={
                     "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                    "client_id": BOOTSTRAP_CLIENT_ID,
+                    "client_secret": BOOTSTRAP_CLIENT_SECRET,
                     "audience": "data-api",
                     "requested_subject": str(user_id),
                     "requested_purpose": "integration-test",
@@ -1860,6 +1968,7 @@ class TestOAuthTokenExchange:
         """Test token exchange aggregates scopes from multiple roles."""
         import jwt
         import json
+        skip_if_no_oauth_credentials()
         
         user_id = uuid.uuid4()
         role1_id = uuid.uuid4()
@@ -1927,6 +2036,8 @@ class TestOAuthTokenExchange:
                 headers=admin_headers,
                 json={
                     "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                    "client_id": BOOTSTRAP_CLIENT_ID,
+                    "client_secret": BOOTSTRAP_CLIENT_SECRET,
                     "audience": "search-api",
                     "requested_subject": str(user_id),
                 },
@@ -1960,6 +2071,7 @@ class TestOAuthTokenExchange:
     @pytest.mark.asyncio
     async def test_token_exchange_fails_for_unknown_user(self, admin_headers):
         """Test token exchange fails for user not in database."""
+        skip_if_no_oauth_credentials()
         fake_user_id = str(uuid.uuid4())
         
         async with httpx.AsyncClient() as client:
@@ -1968,6 +2080,8 @@ class TestOAuthTokenExchange:
                 headers=admin_headers,
                 json={
                     "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                    "client_id": BOOTSTRAP_CLIENT_ID,
+                    "client_secret": BOOTSTRAP_CLIENT_SECRET,
                     "audience": "data-api",
                     "requested_subject": fake_user_id,
                 },
@@ -2001,6 +2115,8 @@ class TestOAuthTokenExchange:
                 f"{TEST_AUTHZ_URL}/oauth/token",
                 json={
                     "grant_type": "client_credentials",
+                    "client_id": BOOTSTRAP_CLIENT_ID,
+                    "client_secret": BOOTSTRAP_CLIENT_SECRET,
                     "audience": "agent-api",
                 },
                 timeout=30.0,
@@ -2072,6 +2188,8 @@ class TestJWKSEndpoint:
                 f"{TEST_AUTHZ_URL}/oauth/token",
                 json={
                     "grant_type": "client_credentials",
+                    "client_id": BOOTSTRAP_CLIENT_ID,
+                    "client_secret": BOOTSTRAP_CLIENT_SECRET,
                     "audience": "agent-api",
                 },
                 timeout=30.0,

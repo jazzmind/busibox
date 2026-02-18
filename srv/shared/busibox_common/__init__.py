@@ -22,8 +22,6 @@ from .auth import (
     extract_user_context,
     create_jwks_client,
     # Token exchange
-    TokenExchangeClient,
-    TokenExchangeService,  # Legacy alias
     TOKEN_EXCHANGE_GRANT,
     clear_token_cache,
     clear_zero_trust_cache,
@@ -129,8 +127,6 @@ __all__ = [
     "extract_user_context",
     "create_jwks_client",
     # Auth - Token exchange
-    "TokenExchangeClient",
-    "TokenExchangeService",
     "TOKEN_EXCHANGE_GRANT",
     "clear_token_cache",
     "clear_zero_trust_cache",
