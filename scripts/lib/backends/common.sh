@@ -73,7 +73,7 @@ backend_get_services_for_group() {
             if [[ "$backend" == "docker" ]]; then
                 echo "core-apps user-apps"
             elif [[ "$backend" == "k8s" ]]; then
-                echo "proxy busibox-portal busibox-agents"
+                echo "proxy"
             else
                 echo "core-apps user-apps"
             fi
@@ -137,7 +137,7 @@ get_container_for_service() {
         host-agent) echo "host-agent" ;;
 
         # Frontend
-        core-apps|apps|busibox-portal|busibox-agents) echo "core-apps" ;;
+        core-apps|apps|busibox-portal|busibox-agents|busibox-appbuilder) echo "core-apps" ;;
         nginx|proxy) echo "proxy" ;;
 
         # User apps
@@ -203,7 +203,7 @@ get_ansible_tag() {
         minio|files) echo "minio" ;;
         milvus) echo "milvus" ;;
         neo4j|graph) echo "neo4j" ;;
-        core-apps|apps) echo "core-apps" ;;
+        core-apps|apps|busibox-portal|busibox-agents|busibox-appbuilder) echo "core-apps" ;;
         nginx|proxy) echo "nginx" ;;
         *) echo "$service" ;;
     esac
@@ -232,6 +232,7 @@ get_proxmox_make_target() {
         core-apps|apps) echo "apps" ;;
         busibox-portal) echo "deploy-busibox-portal" ;;
         busibox-agents) echo "deploy-busibox-agents" ;;
+        busibox-appbuilder) echo "deploy-busibox-appbuilder" ;;
         nginx|proxy) echo "nginx" ;;
         *) echo "$service" ;;
     esac

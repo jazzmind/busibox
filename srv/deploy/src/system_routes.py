@@ -48,6 +48,7 @@ PROXMOX_SERVICE_MAP = {
     'nginx': ('nginx', 'nginx'),  # proxy-lxc
     'busibox-portal': ('busibox-portal', 'busibox-portal'),  # core-apps-lxc
     'busibox-agents': ('busibox-portal', 'busibox-agents'),  # core-apps-lxc (same host)
+    'busibox-appbuilder': ('busibox-portal', 'busibox-appbuilder'),  # core-apps-lxc (same host)
 }
 
 router = APIRouter(prefix="/system", tags=["system"])

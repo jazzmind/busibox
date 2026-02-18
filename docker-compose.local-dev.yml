@@ -31,8 +31,8 @@
 # =============================================================================
 
 services:
-  # Core Apps - Busibox Portal + Agent Manager (Development Mode)
-  # Runs both Next.js apps in single container using concurrently
+  # Core Apps - Busibox Portal + Agent Manager + App Builder (Development Mode)
+  # Runs all core Next.js apps in a single container using concurrently
   core-apps:
     build:
       context: ${BUSIBOX_DIR:-.}
@@ -111,6 +111,14 @@ services:
       # NOTE: NEXT_PUBLIC_BASE_PATH is set per-app in core-apps-entrypoint.sh
       # because both apps run in the same container but need different values
       # (/portal for busibox-portal, /agents for busibox-agents)
+
+      # =======================================================================
+      # App Builder Environment (PORT 3004, /builder path)
+      # =======================================================================
+      BUILDER_PROJECT_ROOT: /srv/projects
+      BUILDER_TEMPLATE_SOURCE: /srv/projects/templates/busibox-template
+      BUILDER_LIBRARY_OWNER: ${BUILDER_LIBRARY_OWNER:-jazzmind}
+      BUILDER_LIBRARY_REPO: ${BUILDER_LIBRARY_REPO:-busibox-app-library}
       
       # =======================================================================
       # Testing: Silent SSO Refresh (REMOVE AFTER TESTING)
@@ -126,16 +134,20 @@ services:
       # Direct app ports (for debugging)
       - "3000:3000"  # Busibox Portal
       - "3001:3001"  # Agent Manager
+      - "3004:3004"  # App Builder
     volumes:
-      # Mount both app directories
+      # Mount core app directories
       - ${BUSIBOX_PORTAL_DIR:-../busibox-portal}:/srv/busibox-portal
       - ${BUSIBOX_AGENTS_DIR:-../busibox-agents}:/srv/busibox-agents
+      - ${BUSIBOX_APPBUILDER_DIR:-../busibox-appbuilder}:/srv/busibox-appbuilder
       # Preserve node_modules from container (installed during build)
       - busibox-portal-node-modules:/srv/busibox-portal/node_modules
       - busibox-agents-node-modules:/srv/busibox-agents/node_modules
+      - busibox-appbuilder-node-modules:/srv/busibox-appbuilder/node_modules
       # Preserve .next build caches
       - busibox-portal-next-cache:/srv/busibox-portal/.next
       - busibox-agents-next-cache:/srv/busibox-agents/.next
+      - busibox-appbuilder-next-cache:/srv/busibox-appbuilder/.next
     depends_on:
       postgres:
         condition: service_healthy
@@ -163,6 +175,7 @@ services:
           - core-apps
           - busibox-portal      # For backward compatibility
           - busibox-agents  # For backward compatibility
+          - busibox-appbuilder  # For backward compatibility
 
   # User Apps - Development Mode
   # Mount dev-apps directory for local app development with hot-reload
@@ -193,6 +206,8 @@ volumes:
   busibox-portal-next-cache:
   busibox-agents-node-modules:
   busibox-agents-next-cache:
+  busibox-appbuilder-node-modules:
+  busibox-appbuilder-next-cache:
 
 # Use the same network as the base compose
 # Note: Don't use external:true - let docker compose manage the network lifecycle

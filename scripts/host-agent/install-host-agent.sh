@@ -120,8 +120,10 @@ install() {
     for env_name in "dev" "demo" "staging" "prod"; do
         env_file="${REPO_ROOT}/.env.${env_name}"
         if [[ -f "$env_file" ]]; then
-            HOST_AGENT_TOKEN=$(grep "^HOST_AGENT_TOKEN=" "$env_file" 2>/dev/null | cut -d'=' -f2 || echo "")
-            HOST_AGENT_PORT=$(grep "^HOST_AGENT_PORT=" "$env_file" 2>/dev/null | cut -d'=' -f2 || echo "8089")
+            # Use the LAST definition if duplicated and strip line breaks.
+            HOST_AGENT_TOKEN=$(awk -F= '/^HOST_AGENT_TOKEN=/{val=substr($0, index($0,$2))} END{print val}' "$env_file" | tr -d '\r\n')
+            HOST_AGENT_PORT=$(awk -F= '/^HOST_AGENT_PORT=/{val=$2} END{print val}' "$env_file" | tr -d '\r\n')
+            HOST_AGENT_PORT="${HOST_AGENT_PORT:-8089}"
             if [[ -n "$HOST_AGENT_TOKEN" ]]; then
                 break
             fi

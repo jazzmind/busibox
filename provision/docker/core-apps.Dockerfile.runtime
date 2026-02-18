@@ -44,6 +44,7 @@ RUN npm install -g tsx
 RUN mkdir -p \
     /srv/busibox-portal \
     /srv/busibox-agents \
+    /srv/busibox-appbuilder \
     /var/log/supervisor
 
 # Copy supervisord configuration for process management
@@ -59,15 +60,16 @@ WORKDIR /srv
 # Expose ports:
 #   3000 - Busibox Portal (direct access for debugging)
 #   3001 - Agent Manager (direct access for debugging)
-EXPOSE 3000 3001
+#   3004 - App Builder (direct access for debugging)
+EXPOSE 3000 3001 3004
 
 # Environment variables
 ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
 
-# Health check app port directly
+# Health check all core app endpoints
 HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=3 \
-    CMD curl -f http://localhost:3000 || exit 1
+    CMD curl -f http://localhost:3000/portal/api/health && curl -f http://localhost:3001/agents/api/health && curl -f http://localhost:3004/builder/api/health || exit 1
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["start"]

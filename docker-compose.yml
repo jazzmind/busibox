@@ -703,6 +703,8 @@ services:
       CHANNEL_USER_BINDINGS: "${BRIDGE_CHANNEL_USER_BINDINGS:-}"
       # Agent API
       AGENT_API_URL: http://agent-api:8000
+      DEFAULT_AGENT_ID: "${BRIDGE_DEFAULT_AGENT_ID:-}"
+      AUTHZ_BASE_URL: http://authz-api:8010
       AUTH_TOKEN_URL: http://authz-api:8010/oauth/token
       DELEGATION_TOKEN: ""
       # Email channel (disabled by default, configured via admin UI)
@@ -866,7 +868,6 @@ services:
       LITELLM_DATABASE_URL: postgresql://${POSTGRES_USER:-busibox_user}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/litellm
       # Cloud provider API keys (for direct model listing from providers)
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       # AuthZ
       AUTH_JWKS_URL: http://authz-api:8010/.well-known/jwks.json
       AUTH_ISSUER: busibox-authz

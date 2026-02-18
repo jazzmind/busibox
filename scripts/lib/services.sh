@@ -59,6 +59,8 @@ _SERVICE_nginx="200:busibox:provision/ansible/roles/nginx:/:80"
 _SERVICE_proxy="200:busibox:provision/ansible/roles/nginx:/:80"
 _SERVICE_ai_portal="201:busibox-portal::/portal/api/health:3000"
 _SERVICE_agent_manager="201:busibox-agents::/agents/api/health:3001"
+_SERVICE_app_builder="201:busibox-appbuilder::/builder/api/health:3004"
+_SERVICE_busibox_appbuilder="201:busibox-appbuilder::/builder/api/health:3004"  # Alias for direct service name
 # user-apps: TCP-only (no single HTTP health) - use tcp so manage.sh falls back to ping
 _SERVICE_user_apps="212:busibox::tcp:80"
 
@@ -83,6 +85,8 @@ _NAME_nginx="Nginx"
 _NAME_proxy="Proxy (Nginx)"
 _NAME_ai_portal="Busibox Portal"
 _NAME_agent_manager="Agent Manager"
+_NAME_app_builder="App Builder"
+_NAME_busibox_appbuilder="App Builder"
 _NAME_bridge="Bridge"
 _NAME_bridge_api="Bridge API"
 _NAME_docs_api="Docs API"
@@ -102,11 +106,11 @@ _LLM_SERVICES_GPU="vllm"     # For Linux with NVIDIA GPU
 _LLM_SERVICES_APPLE="mlx"    # For Apple Silicon
 _LLM_SERVICES_SUFFIX="embedding"
 _API_SERVICES="deploy-api data search-api agent-api docs-api bridge"
-_APP_SERVICES="proxy nginx busibox-portal busibox-agents"
+_APP_SERVICES="proxy nginx busibox-portal busibox-agents busibox-appbuilder"
 
 # All services combined (includes individual services for status checking)
 # Note: "data" is used for display, but we check "data-api" and "data-worker" individually
-ALL_SERVICES="authz postgres redis milvus minio neo4j proxy nginx litellm vllm mlx embedding data-api data-worker search-api agent-api deploy-api bridge docs-api busibox-portal busibox-agents"
+ALL_SERVICES="authz postgres redis milvus minio neo4j proxy nginx litellm vllm mlx embedding data-api data-worker search-api agent-api deploy-api bridge docs-api busibox-portal busibox-agents busibox-appbuilder"
 
 # ============================================================================
 # Service Metadata Functions
@@ -247,6 +251,8 @@ get_service_hostname() {
         mlx)                 echo "mlx" ;;
         ai_portal)           echo "busibox-portal" ;;
         agent_manager)       echo "busibox-agents" ;;
+        app_builder)         echo "busibox-appbuilder" ;;
+        busibox_appbuilder)  echo "busibox-appbuilder" ;;
         user_apps)           echo "user-apps" ;;
         *)                   echo "$service" ;;
     esac

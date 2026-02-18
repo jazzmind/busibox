@@ -102,6 +102,25 @@ class MeUpdate(BaseModel):
     clear_github_pat: Optional[bool] = False
 
 
+class ChannelBindingCreate(BaseModel):
+    channel_type: str = Field(..., min_length=2, max_length=64)
+    delegation_token: str = Field(..., min_length=20)
+    delegation_token_jti: Optional[str] = None
+
+
+class InternalChannelBindingInitiate(BaseModel):
+    user_id: str
+    channel_type: str = Field(..., min_length=2, max_length=64)
+    delegation_token: str = Field(..., min_length=20)
+    delegation_token_jti: Optional[str] = None
+
+
+class InternalChannelBindingVerify(BaseModel):
+    channel_type: str = Field(..., min_length=2, max_length=64)
+    external_id: str = Field(..., min_length=1, max_length=256)
+    link_code: str = Field(..., min_length=4, max_length=64)
+
+
 class RoleResponse(BaseModel):
     id: str
     name: str
@@ -619,6 +638,119 @@ async def refresh_session_jwt(request: Request):
     )
 
     return {"session_jwt": new_jwt, "expires_at": exp}
+
+
+@router.get("/me/channel-bindings")
+async def list_my_channel_bindings(request: Request):
+    """List authenticated user's linked/pending channel bindings."""
+    db = _get_pg(request)
+    await db.connect()
+    auth = await authenticate_self_service(request, db)
+    bindings = await db.list_user_channel_bindings(auth.actor_id)
+    return {"bindings": bindings}
+
+
+@router.post("/me/channel-bindings")
+async def create_my_channel_binding(request: Request):
+    """Create or refresh a pending self-service channel binding."""
+    body = await request.json()
+    try:
+        data = ChannelBindingCreate.model_validate(body)
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+
+    db = _get_pg(request)
+    await db.connect()
+    auth = await authenticate_self_service(request, db)
+
+    binding = await db.create_user_channel_binding(
+        user_id=auth.actor_id,
+        channel_type=data.channel_type,
+        delegation_token=data.delegation_token,
+        delegation_token_jti=data.delegation_token_jti,
+    )
+    return {"binding": binding}
+
+
+@router.delete("/me/channel-bindings/{binding_id}")
+async def delete_my_channel_binding(request: Request, binding_id: str):
+    """Delete one of the authenticated user's channel bindings."""
+    db = _get_pg(request)
+    await db.connect()
+    auth = await authenticate_self_service(request, db)
+    deleted = await db.delete_user_channel_binding(auth.actor_id, binding_id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Binding not found")
+    return {"status": "ok", "deleted": True}
+
+
+@router.post("/internal/channel-bindings/initiate")
+async def internal_initiate_channel_binding(request: Request):
+    """
+    Internal endpoint used by bridge-api to create pending link records.
+    Intentionally restricted to trusted internal network.
+    """
+    body = await request.json()
+    try:
+        data = InternalChannelBindingInitiate.model_validate(body)
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+
+    db = _get_pg(request)
+    await db.connect()
+    binding = await db.create_user_channel_binding(
+        user_id=data.user_id,
+        channel_type=data.channel_type,
+        delegation_token=data.delegation_token,
+        delegation_token_jti=data.delegation_token_jti,
+    )
+    return {"binding": binding}
+
+
+@router.put("/internal/channel-bindings/verify")
+async def internal_verify_channel_binding(request: Request):
+    """
+    Internal endpoint used by bridge-api when it receives /link <code>.
+    Intentionally restricted to trusted internal network.
+    """
+    body = await request.json()
+    try:
+        data = InternalChannelBindingVerify.model_validate(body)
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+
+    db = _get_pg(request)
+    await db.connect()
+    binding = await db.verify_user_channel_binding(
+        channel_type=data.channel_type,
+        external_id=data.external_id,
+        link_code=data.link_code,
+    )
+    if not binding:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invalid or expired link code")
+    return {"binding": binding}
+
+
+@router.get("/internal/channel-bindings/lookup")
+async def internal_lookup_channel_binding(request: Request):
+    """
+    Internal endpoint used by bridge-api to map external user identity to busibox user.
+    Intentionally restricted to trusted internal network.
+    """
+    channel_type = (request.query_params.get("channel_type") or "").strip()
+    external_id = (request.query_params.get("external_id") or "").strip()
+    if not channel_type or not external_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="channel_type and external_id are required")
+
+    db = _get_pg(request)
+    await db.connect()
+    binding = await db.lookup_user_channel_binding(
+        channel_type=channel_type,
+        external_id=external_id,
+    )
+    if not binding:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Binding not found")
+    return {"binding": binding}
 
 
 # ============================================================================

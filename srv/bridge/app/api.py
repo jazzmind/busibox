@@ -12,12 +12,15 @@ Authentication:
 """
 
 import logging
+import time
 from typing import Awaitable, Callable, Optional
 
+import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, EmailStr
 
 from .config import Settings
+from .agent_client import AgentClient
 from .whatsapp_client import WhatsAppClient
 from .email_client import EmailClient
 
@@ -67,6 +70,20 @@ class EmailResponse(BaseModel):
     message: str = ""
 
 
+class AgentRoundtripRequest(BaseModel):
+    message: str = "ping"
+    sender: str = "bridge-health-check"
+    agent_id: Optional[str] = None
+    delegation_token: Optional[str] = None
+
+
+class LinkInitiateRequest(BaseModel):
+    user_id: str
+    channel_type: str
+    delegation_token: str
+    delegation_token_jti: Optional[str] = None
+
+
 # ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
@@ -100,7 +117,76 @@ def create_app(
             "telegram_enabled": settings.telegram_enabled,
             "discord_enabled": settings.discord_enabled,
             "whatsapp_enabled": settings.whatsapp_enabled,
+            "default_agent_id": settings.default_agent_id or None,
         }
+
+    @app.post("/api/v1/test/agent-roundtrip")
+    async def test_agent_roundtrip(req: AgentRoundtripRequest):
+        """Verify bridge can exchange token and call agent API."""
+        effective_delegation_token = (req.delegation_token or "").strip() or settings.delegation_token
+        if not effective_delegation_token:
+            raise HTTPException(status_code=400, detail="DELEGATION_TOKEN is not configured")
+
+        started = time.perf_counter()
+        try:
+            async with AgentClient(
+                base_url=str(settings.agent_api_url),
+                auth_token_url=str(settings.auth_token_url),
+                delegation_token=effective_delegation_token,
+                default_agent_id=settings.default_agent_id or None,
+            ) as agent_client:
+                response = await agent_client.chat_message(
+                    message=req.message.strip() or "ping",
+                    sender=req.sender.strip() or "bridge-health-check",
+                    enable_web_search=False,
+                    enable_doc_search=False,
+                    model=settings.default_model,
+                    agent_id=req.agent_id or None,
+                    delegation_token_override=effective_delegation_token,
+                )
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            return {
+                "ok": True,
+                "latency_ms": latency_ms,
+                "conversation_id": response.conversation_id,
+                "message_id": response.message_id,
+                "response_preview": (response.content or "")[:200],
+            }
+        except Exception as exc:
+            logger.error("[API] agent roundtrip test failed: %s", exc, exc_info=True)
+            raise HTTPException(status_code=502, detail=str(exc))
+
+    @app.post("/api/v1/link/initiate")
+    async def initiate_link(req: LinkInitiateRequest):
+        """
+        Create or refresh a pending channel-link code for a user.
+        Called by busibox-portal account linking UI.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    f"{str(settings.authz_base_url).rstrip('/')}/internal/channel-bindings/initiate",
+                    json={
+                        "user_id": req.user_id,
+                        "channel_type": req.channel_type,
+                        "delegation_token": req.delegation_token,
+                        "delegation_token_jti": req.delegation_token_jti,
+                    },
+                )
+            resp.raise_for_status()
+            binding = (resp.json() or {}).get("binding") or {}
+            return {
+                "ok": True,
+                "channel_type": req.channel_type,
+                "link_code": binding.get("link_code"),
+                "link_expires_at": binding.get("link_expires_at"),
+            }
+        except httpx.HTTPStatusError as exc:
+            detail = exc.response.text if exc.response is not None else str(exc)
+            raise HTTPException(status_code=502, detail=detail)
+        except Exception as exc:
+            logger.error("[API] link initiate failed: %s", exc, exc_info=True)
+            raise HTTPException(status_code=500, detail=str(exc))
 
     # ------------------------------------------------------------------
     # WhatsApp webhook endpoints (Cloud API)

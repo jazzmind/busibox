@@ -37,7 +37,7 @@
 # =============================================================================
 
 services:
-  # Core Apps - Busibox Portal + Agent Manager (Runtime Installation Mode)
+  # Core Apps - Busibox Portal + Agent Manager + App Builder (Runtime Installation Mode)
   # Lightweight container with supervisord, apps deployed at runtime
   core-apps:
     build:
@@ -55,6 +55,7 @@ services:
       # Git refs for app deployment (used on first start)
       BUSIBOX_PORTAL_GITHUB_REF: ${BUSIBOX_PORTAL_GITHUB_REF:-main}
       BUSIBOX_AGENTS_GITHUB_REF: ${BUSIBOX_AGENTS_GITHUB_REF:-main}
+      BUSIBOX_APPBUILDER_GITHUB_REF: ${BUSIBOX_APPBUILDER_GITHUB_REF:-main}
       # =========================================================================
       # Busibox Portal Environment (PORT 3000)
       # =========================================================================
@@ -83,6 +84,7 @@ services:
       NEXT_PUBLIC_BASE_PATH: /portal
       BUSIBOX_PORTAL_BASE_PATH: /portal
       BUSIBOX_AGENTS_BASE_PATH: /agents
+      BUSIBOX_APPBUILDER_BASE_PATH: /builder
       # Backend service URLs (for server-side API calls)
       DATA_API_URL: http://data-api:8002
       SEARCH_API_URL: http://search-api:8003
@@ -102,14 +104,20 @@ services:
       NEXT_PUBLIC_SEARCH_API_URL: https://localhost/api/search
       # Busibox Portal (SSO) via nginx
       NEXT_PUBLIC_BUSIBOX_PORTAL_URL: https://localhost/portal
+      BUILDER_PROJECT_ROOT: /srv/projects
+      BUILDER_TEMPLATE_SOURCE: /srv/projects/templates/busibox-template
+      BUILDER_LIBRARY_OWNER: ${BUILDER_LIBRARY_OWNER:-jazzmind}
+      BUILDER_LIBRARY_REPO: ${BUILDER_LIBRARY_REPO:-busibox-app-library}
     ports:
       # Direct app ports (optional, for debugging)
       - "3000:3000"
       - "3001:3001"
+      - "3004:3004"
     volumes:
       # Persistent app directories - apps survive container restarts
       - core-apps-portal:/srv/busibox-portal
       - core-apps-agent:/srv/busibox-agents
+      - core-apps-appbuilder:/srv/busibox-appbuilder
       # Supervisor logs (optional, for debugging)
       - core-apps-logs:/var/log/supervisor
       # Dynamic app configs are managed by deploy-api in the proxy container.
@@ -144,6 +152,7 @@ services:
           - core-apps
           - busibox-portal      # Backward compatibility alias
           - busibox-agents  # Backward compatibility alias
+          - busibox-appbuilder  # Backward compatibility alias
 
 # Use the same network as the base compose
 # Note: Don't use external:true - let docker compose manage the network lifecycle
@@ -159,5 +168,7 @@ volumes:
     name: ${CONTAINER_PREFIX:-local}-core-apps-portal
   core-apps-agent:
     name: ${CONTAINER_PREFIX:-local}-core-apps-agent
+  core-apps-appbuilder:
+    name: ${CONTAINER_PREFIX:-local}-core-apps-appbuilder
   core-apps-logs:
     name: ${CONTAINER_PREFIX:-local}-core-apps-logs

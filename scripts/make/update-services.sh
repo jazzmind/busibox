@@ -109,7 +109,7 @@ main() {
     echo ""
 
     read -r -p "Proceed with update? [y/N]: " proceed
-    if [[ "${proceed,,}" != "y" ]]; then
+    if [[ "$proceed" != "y" && "$proceed" != "Y" ]]; then
         info "Update cancelled."
         exit 0
     fi
@@ -134,7 +134,7 @@ main() {
     for app in "busibox-portal" "busibox-agents"; do
         echo ""
         read -r -p "Update ${app}? [y/N]: " update_app
-        if [[ "${update_app,,}" != "y" ]]; then
+        if [[ "$update_app" != "y" && "$update_app" != "Y" ]]; then
             info "Skipping ${app}"
             continue
         fi

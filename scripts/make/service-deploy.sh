@@ -74,7 +74,7 @@ get_ansible_tag() {
             vllm) echo "llm_vllm" ;;
 
             # Frontend
-            core-apps|apps) echo "apps_frontend" ;;
+            core-apps|apps|busibox-portal|busibox-agents|busibox-appbuilder) echo "apps_frontend" ;;
             nginx|proxy) echo "core_nginx" ;;
 
             # User apps
@@ -108,7 +108,7 @@ get_ansible_tag() {
             vllm) echo "vllm" ;;
 
             # Frontend
-            core-apps|apps) echo "core-apps" ;;
+            core-apps|apps|busibox-portal|busibox-agents|busibox-appbuilder) echo "core-apps" ;;
             nginx|proxy) echo "nginx" ;;
 
             # User apps
@@ -406,7 +406,8 @@ main() {
         echo "  make install SERVICE=infrastructure  # postgres, redis, minio, milvus"
         echo ""
         echo "Services: postgres, redis, minio, milvus, neo4j, authz, agent, data,"
-        echo "          search, deploy, docs, embedding, litellm, core-apps, proxy, nginx"
+        echo "          search, deploy, docs, embedding, litellm, core-apps,"
+        echo "          busibox-portal, busibox-agents, busibox-appbuilder, proxy, nginx"
         echo ""
         echo "Groups: infrastructure, apis, llm, frontend, all"
         echo ""

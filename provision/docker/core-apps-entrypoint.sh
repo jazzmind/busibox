@@ -3,8 +3,8 @@
 # Core Apps Entrypoint Script
 # =============================================================================
 #
-# Starts busibox-portal and busibox-agents in the same container.
-# Uses concurrently to manage both processes.
+# Starts busibox-portal, busibox-agents, and busibox-appbuilder in the same container.
+# Uses concurrently to manage all core app processes.
 # Mirrors the Proxmox apps-lxc architecture.
 #
 # Modes:
@@ -28,7 +28,7 @@ setup_npm_auth() {
         
         # Create project-level .npmrc files if they don't exist
         # These are gitignored and created from .npmrc.example pattern
-        for app_dir in /srv/busibox-portal /srv/busibox-agents; do
+        for app_dir in /srv/busibox-portal /srv/busibox-agents /srv/busibox-appbuilder; do
             if [ -d "$app_dir" ] && [ ! -f "$app_dir/.npmrc" ]; then
                 echo "Creating $app_dir/.npmrc with GitHub token..."
                 echo "@jazzmind:registry=https://npm.pkg.github.com" > "$app_dir/.npmrc"
@@ -112,9 +112,10 @@ watch_package_changes() {
     echo "[dep-watcher] Starting package.json watcher for hot-reinstall..."
     
     # Store initial checksums
-    local portal_checksum agent_checksum
+    local portal_checksum agent_checksum appbuilder_checksum
     portal_checksum=$(compute_deps_checksum "/srv/busibox-portal")
     agent_checksum=$(compute_deps_checksum "/srv/busibox-agents")
+    appbuilder_checksum=$(compute_deps_checksum "/srv/busibox-appbuilder")
     
     while true; do
         sleep 5  # Check every 5 seconds
@@ -140,6 +141,17 @@ watch_package_changes() {
                 agent_checksum="$new_agent_checksum"
             fi
         fi
+
+        # Check busibox-appbuilder
+        if [ -f "/srv/busibox-appbuilder/package.json" ]; then
+            local new_appbuilder_checksum
+            new_appbuilder_checksum=$(compute_deps_checksum "/srv/busibox-appbuilder")
+            if [ "$new_appbuilder_checksum" != "$appbuilder_checksum" ]; then
+                echo "[dep-watcher] busibox-appbuilder package.json changed! Running npm install..."
+                (cd /srv/busibox-appbuilder && npm install && echo "$new_appbuilder_checksum" > node_modules/.deps-checksum) &
+                appbuilder_checksum="$new_appbuilder_checksum"
+            fi
+        fi
     done
 }
 
@@ -150,27 +162,29 @@ case "$MODE" in
         # Setup npm authentication (required for @jazzmind/busibox-app from GitHub Packages)
         setup_npm_auth
         
-        # Setup dependencies for both apps
+        # Setup dependencies for all core apps
         # Note: busibox-app is mounted directly into node_modules/@jazzmind/busibox-app
         # via Docker volume overlay (no symlink needed)
         ensure_deps "/srv/busibox-portal" "busibox-portal"
         ensure_deps "/srv/busibox-agents" "busibox-agents"
+        ensure_deps "/srv/busibox-appbuilder" "busibox-appbuilder"
         
         # Start background watcher for package.json changes (hot-reinstall)
         watch_package_changes &
         WATCHER_PID=$!
         echo "Package watcher started (PID: $WATCHER_PID)"
         
-        # Start both apps with concurrently
+        # Start all core apps with concurrently
         # Names are prefixed with app name for log clarity
         # IMPORTANT: Set NEXT_PUBLIC_BASE_PATH per-app since they need different values
         # This overrides the container-wide environment variable
         exec concurrently \
-            --names "portal,agents" \
-            --prefix-colors "blue,green" \
+            --names "portal,agents,appbuilder" \
+            --prefix-colors "blue,green,magenta" \
             --kill-others-on-fail \
             "cd /srv/busibox-portal && PORT=3000 NEXT_PUBLIC_BASE_PATH=/portal npm run dev" \
-            "cd /srv/busibox-agents && PORT=3001 NEXT_PUBLIC_BASE_PATH=/agents npm run dev"
+            "cd /srv/busibox-agents && PORT=3001 NEXT_PUBLIC_BASE_PATH=/agents npm run dev" \
+            "cd /srv/busibox-appbuilder && PORT=3004 NEXT_PUBLIC_BASE_PATH=/builder NEXT_PUBLIC_APP_URL=https://localhost/builder NEXT_PUBLIC_BUSIBOX_PORTAL_URL=https://localhost/portal APP_NAME=busibox-appbuilder npm run dev"
         ;;
 
     prod)
@@ -187,6 +201,7 @@ case "$MODE" in
         # Install deps in dev mode first (so devDependencies are available for build)
         NODE_ENV=development ensure_deps "/srv/busibox-portal" "busibox-portal"
         NODE_ENV=development ensure_deps "/srv/busibox-agents" "busibox-agents"
+        NODE_ENV=development ensure_deps "/srv/busibox-appbuilder" "busibox-appbuilder"
         
         # Build both apps (NEXT_PUBLIC_* env vars are baked in at build time)
         echo "Building busibox-portal..."
@@ -201,9 +216,15 @@ case "$MODE" in
             exit 1
         }
         
+        echo "Building busibox-appbuilder..."
+        (cd /srv/busibox-appbuilder && NEXT_PUBLIC_BASE_PATH=/builder APP_NAME=busibox-appbuilder NEXT_PUBLIC_APP_URL=https://localhost/builder NEXT_PUBLIC_BUSIBOX_PORTAL_URL=https://localhost/portal NODE_ENV=production npm run build) || {
+            echo "ERROR: busibox-appbuilder build failed"
+            exit 1
+        }
+        
         # Copy static assets into standalone directories
         # Standalone mode doesn't include public/ or .next/static/ automatically
-        for app_dir in /srv/busibox-portal /srv/busibox-agents; do
+        for app_dir in /srv/busibox-portal /srv/busibox-agents /srv/busibox-appbuilder; do
             if [ -d "$app_dir/.next/standalone" ]; then
                 echo "Copying static assets for $(basename $app_dir)..."
                 cp -r "$app_dir/public" "$app_dir/.next/standalone/public" 2>/dev/null || true
@@ -216,6 +237,7 @@ case "$MODE" in
         echo "Pruning dev dependencies..."
         (cd /srv/busibox-portal && npm prune --omit=dev 2>/dev/null) || true
         (cd /srv/busibox-agents && npm prune --omit=dev 2>/dev/null) || true
+        (cd /srv/busibox-appbuilder && npm prune --omit=dev 2>/dev/null) || true
         
         # Sync database schema (if prisma is configured)
         if [ -d "/srv/busibox-portal/prisma" ] && [ -f "/srv/busibox-portal/prisma.config.ts" ]; then
@@ -230,14 +252,15 @@ case "$MODE" in
         echo "Build complete. Starting standalone production servers..."
         echo ""
         
-        # Start both apps with standalone server (much lower memory than npm start)
+        # Start all core apps with standalone server (much lower memory than npm start)
         # NODE_OPTIONS caps V8 heap to prevent unbounded growth
         exec concurrently \
-            --names "portal,agents" \
-            --prefix-colors "blue,green" \
+            --names "portal,agents,appbuilder" \
+            --prefix-colors "blue,green,magenta" \
             --kill-others-on-fail \
             "cd /srv/busibox-portal && PORT=3000 HOSTNAME=0.0.0.0 NODE_OPTIONS='--max-old-space-size=512' node .next/standalone/server.js" \
-            "cd /srv/busibox-agents && PORT=3001 HOSTNAME=0.0.0.0 NODE_OPTIONS='--max-old-space-size=512' node .next/standalone/server.js"
+            "cd /srv/busibox-agents && PORT=3001 HOSTNAME=0.0.0.0 NODE_OPTIONS='--max-old-space-size=512' node .next/standalone/server.js" \
+            "cd /srv/busibox-appbuilder && PORT=3004 HOSTNAME=0.0.0.0 NODE_OPTIONS='--max-old-space-size=512' node .next/standalone/server.js"
         ;;
         
     start)
@@ -254,16 +277,17 @@ case "$MODE" in
             }
         fi
         
-        # Start both apps with standalone server (much lower memory than npm start)
+        # Start all core apps with standalone server (much lower memory than npm start)
         # NEXT_PUBLIC_BASE_PATH was set at build time and is baked into the bundle
         # PORT and HOSTNAME must be set at runtime
         # NODE_OPTIONS caps V8 heap to prevent unbounded growth
         exec concurrently \
-            --names "portal,agents" \
-            --prefix-colors "blue,green" \
+            --names "portal,agents,appbuilder" \
+            --prefix-colors "blue,green,magenta" \
             --kill-others-on-fail \
             "cd /srv/busibox-portal && PORT=3000 HOSTNAME=0.0.0.0 NODE_OPTIONS='--max-old-space-size=512' node .next/standalone/server.js" \
-            "cd /srv/busibox-agents && PORT=3001 HOSTNAME=0.0.0.0 NODE_OPTIONS='--max-old-space-size=512' node .next/standalone/server.js"
+            "cd /srv/busibox-agents && PORT=3001 HOSTNAME=0.0.0.0 NODE_OPTIONS='--max-old-space-size=512' node .next/standalone/server.js" \
+            "cd /srv/busibox-appbuilder && PORT=3004 HOSTNAME=0.0.0.0 NODE_OPTIONS='--max-old-space-size=512' node .next/standalone/server.js"
         ;;
         
     *)

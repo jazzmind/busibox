@@ -9,6 +9,7 @@ Runs FastAPI + optional channel workers:
 """
 
 import asyncio
+import httpx
 import logging
 import sys
 from collections import defaultdict
@@ -61,6 +62,73 @@ class MessageProcessor:
             max_messages=settings.rate_limit_messages,
             window_seconds=settings.rate_limit_window,
         )
+        self._binding_cache: Dict[str, Dict[str, str]] = {}
+        self.authz_base_url = str(settings.authz_base_url).rstrip("/")
+
+    async def _resolve_sender_binding(self, channel: str, external_sender: str) -> Dict[str, str] | None:
+        cache_key = f"{channel}:{external_sender}".strip().lower()
+        cached = self._binding_cache.get(cache_key)
+        if cached:
+            return cached
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"{self.authz_base_url}/internal/channel-bindings/lookup",
+                    params={
+                        "channel_type": channel,
+                        "external_id": external_sender,
+                    },
+                )
+            if resp.status_code == 404:
+                return None
+            resp.raise_for_status()
+            binding = (resp.json() or {}).get("binding")
+            if isinstance(binding, dict):
+                normalized = {
+                    "user_id": str(binding.get("user_id") or ""),
+                    "delegation_token": str(binding.get("delegation_token") or ""),
+                }
+                if normalized["user_id"] and normalized["delegation_token"]:
+                    self._binding_cache[cache_key] = normalized
+                    return normalized
+        except Exception as exc:
+            logger.warning("Failed to resolve channel binding: %s", exc)
+        return None
+
+    async def _verify_link_code(
+        self,
+        *,
+        channel: str,
+        external_sender: str,
+        code: str,
+    ) -> Dict[str, str] | None:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.put(
+                    f"{self.authz_base_url}/internal/channel-bindings/verify",
+                    json={
+                        "channel_type": channel,
+                        "external_id": external_sender,
+                        "link_code": code,
+                    },
+                )
+            if resp.status_code == 404:
+                return None
+            resp.raise_for_status()
+            binding = (resp.json() or {}).get("binding")
+            if isinstance(binding, dict):
+                normalized = {
+                    "user_id": str(binding.get("user_id") or ""),
+                    "delegation_token": str(binding.get("delegation_token") or ""),
+                }
+                if normalized["user_id"] and normalized["delegation_token"]:
+                    cache_key = f"{channel}:{external_sender}".strip().lower()
+                    self._binding_cache[cache_key] = normalized
+                    return normalized
+        except Exception as exc:
+            logger.warning("Failed to verify link code: %s", exc)
+        return None
 
     async def process(
         self,
@@ -77,7 +145,36 @@ class MessageProcessor:
         if not text:
             return
 
+        if text.lower().startswith("/link "):
+            code = text.split(maxsplit=1)[1].strip()
+            if not code:
+                await send_message("Please provide a link code, e.g. /link ABC123")
+                return
+            verified = await self._verify_link_code(
+                channel=channel,
+                external_sender=external_sender,
+                code=code,
+            )
+            if verified:
+                await send_message("Your channel is now linked to your Busibox account.")
+            else:
+                await send_message("Link code is invalid or expired. Please generate a new link code in Account settings.")
+            return
+
         sender_key = self.identity.resolve(channel, external_sender)
+        delegation_token_override = None
+        binding = await self._resolve_sender_binding(channel, external_sender)
+        if binding:
+            sender_key = binding["user_id"]
+            delegation_token_override = binding["delegation_token"]
+        elif not self.settings.delegation_token:
+            # When no global service delegation token exists, channels can still
+            # run to support self-service /link flows. Non-linked chat requests
+            # must be blocked until the user links their channel.
+            await send_message(
+                "This channel is not linked yet. Generate a link code in your Account settings and send /link <code>."
+            )
+            return
 
         if not self.rate_limiter.is_allowed(sender_key):
             await send_message("⏳ You're sending messages too quickly. Please wait a moment.")
@@ -98,7 +195,12 @@ class MessageProcessor:
             await send_typing_start()
 
         try:
-            response = await self._process_simple(text=text, sender=sender_key, agent_client=agent_client)
+            response = await self._process_simple(
+                text=text,
+                sender=sender_key,
+                agent_client=agent_client,
+                delegation_token_override=delegation_token_override,
+            )
             for chunk in self._split_response(response):
                 await send_message(chunk)
         except Exception as e:
@@ -114,6 +216,7 @@ class MessageProcessor:
         text: str,
         sender: str,
         agent_client: AgentClient,
+        delegation_token_override: str | None = None,
     ) -> str:
         if self.settings.debug:
             parts: List[str] = []
@@ -123,6 +226,8 @@ class MessageProcessor:
                 enable_web_search=self.settings.enable_web_search,
                 enable_doc_search=self.settings.enable_doc_search,
                 model=self.settings.default_model,
+                agent_id=self.settings.default_agent_id or None,
+                delegation_token_override=delegation_token_override,
             ):
                 if event.get("_event_type") == "content":
                     parts.append(event.get("message", ""))
@@ -136,6 +241,8 @@ class MessageProcessor:
             enable_web_search=self.settings.enable_web_search,
             enable_doc_search=self.settings.enable_doc_search,
             model=self.settings.default_model,
+            agent_id=self.settings.default_agent_id or None,
+            delegation_token_override=delegation_token_override,
         )
         return response.content
 
@@ -249,6 +356,7 @@ class SignalBot:
                 base_url=str(settings.agent_api_url),
                 auth_token_url=str(settings.auth_token_url),
                 delegation_token=settings.delegation_token,
+                default_agent_id=settings.default_agent_id or None,
             ) as agent_client:
                 if not await signal_client.is_registered():
                     logger.error("Signal phone number is not registered")
@@ -283,6 +391,7 @@ class TelegramBot:
                 base_url=str(self.settings.agent_api_url),
                 auth_token_url=str(self.settings.auth_token_url),
                 delegation_token=self.settings.delegation_token,
+                default_agent_id=self.settings.default_agent_id or None,
             ) as agent_client:
                 async for msg in telegram_client.poll_messages(
                     interval=self.settings.telegram_poll_interval,
@@ -338,6 +447,7 @@ class DiscordBot:
                 base_url=str(self.settings.agent_api_url),
                 auth_token_url=str(self.settings.auth_token_url),
                 delegation_token=self.settings.delegation_token,
+                default_agent_id=self.settings.default_agent_id or None,
             ) as agent_client:
                 tasks = [
                     asyncio.create_task(
@@ -390,6 +500,7 @@ class WhatsAppWebhookBot:
             base_url=str(self.settings.agent_api_url),
             auth_token_url=str(self.settings.auth_token_url),
             delegation_token=self.settings.delegation_token,
+            default_agent_id=self.settings.default_agent_id or None,
         ) as agent_client:
             async with WhatsAppClient(
                 access_token=self.settings.whatsapp_access_token,
@@ -436,6 +547,7 @@ class EmailInboundBot:
             base_url=str(self.settings.agent_api_url),
             auth_token_url=str(self.settings.auth_token_url),
             delegation_token=self.settings.delegation_token,
+            default_agent_id=self.settings.default_agent_id or None,
         ) as agent_client:
             async for inbound_msg in inbound.poll_messages(interval=self.settings.email_inbound_poll_interval):
                 if not self._running:
@@ -513,8 +625,9 @@ async def run_telegram_bot(settings: Settings, processor: MessageProcessor):
         logger.warning("Telegram enabled but TELEGRAM_BOT_TOKEN not set")
         return
     if not settings.delegation_token:
-        logger.warning("Telegram enabled but DELEGATION_TOKEN not set")
-        return
+        logger.warning(
+            "Telegram enabled without DELEGATION_TOKEN; /link works, but non-linked chats will be blocked until linked."
+        )
     await TelegramBot(settings, processor).run()
 
 

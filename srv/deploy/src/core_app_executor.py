@@ -61,6 +61,12 @@ CORE_APPS = {
         "base_path": "/agents",
         "health_endpoint": "/api/health",
     },
+    "busibox-appbuilder": {
+        "github_repo": "jazzmind/busibox-appbuilder",
+        "default_port": 3004,
+        "base_path": "/builder",
+        "health_endpoint": "/api/health",
+    },
 }
 
 
@@ -72,7 +78,7 @@ def is_core_app(app_id: str) -> bool:
     Non-core apps are deployed via container_executor.py (user-apps container).
     """
     # Frontend core apps that run in core-apps container
-    FRONTEND_CORE_APPS = {"busibox-portal", "busibox-agents"}
+    FRONTEND_CORE_APPS = {"busibox-portal", "busibox-agents", "busibox-appbuilder"}
     
     # Backend core apps (deployed differently, not via this executor)
     BACKEND_CORE_APPS = {

@@ -1293,9 +1293,9 @@ wizard_github_token() {
 # =============================================================================
 
 # Detect where the app repositories are located
-# This finds busibox-portal, busibox-agents, and busibox-app relative to busibox
+# This finds busibox-portal, busibox-agents, busibox-appbuilder, and busibox-app relative to busibox
 detect_app_directories() {
-    show_stage 35 "Detecting App Directories" "Looking for busibox-portal, busibox-agents, and busibox-app repositories."
+    show_stage 35 "Detecting App Directories" "Looking for busibox-portal, busibox-agents, busibox-appbuilder, and busibox-app repositories."
     
     # Get the parent directory of busibox
     local parent_dir
@@ -1343,6 +1343,20 @@ detect_app_directories() {
             fi
         done
     fi
+
+    # Look for busibox-appbuilder
+    if [[ -d "${parent_dir}/busibox-appbuilder" ]]; then
+        export BUSIBOX_APPBUILDER_DIR="${parent_dir}/busibox-appbuilder"
+        info "Found busibox-appbuilder at: ${BUSIBOX_APPBUILDER_DIR}"
+    else
+        for search_dir in "$HOME/Code" "$HOME/code" "$HOME/src" "$HOME/projects" "$HOME/dev"; do
+            if [[ -d "${search_dir}/busibox-appbuilder" ]]; then
+                export BUSIBOX_APPBUILDER_DIR="${search_dir}/busibox-appbuilder"
+                info "Found busibox-appbuilder at: ${BUSIBOX_APPBUILDER_DIR}"
+                break
+            fi
+        done
+    fi
     
     # Determine the apps base directory (common parent of all app repos)
     if [[ -n "${BUSIBOX_PORTAL_DIR:-}" ]]; then
@@ -1362,6 +1376,9 @@ detect_app_directories() {
     if [[ -z "${BUSIBOX_APP_DIR:-}" ]]; then
         missing+=("busibox-app")
     fi
+    if [[ -z "${BUSIBOX_APPBUILDER_DIR:-}" ]]; then
+        missing+=("busibox-appbuilder")
+    fi
     
     if [[ ${#missing[@]} -gt 0 ]]; then
         warn "Could not find: ${missing[*]}"
@@ -1380,6 +1397,7 @@ detect_app_directories() {
         box_line "  Or set these environment variables before running install:" "single"
         box_line "    export BUSIBOX_PORTAL_DIR=/path/to/busibox-portal" "single"
         box_line "    export BUSIBOX_AGENTS_DIR=/path/to/busibox-agents" "single"
+        box_line "    export BUSIBOX_APPBUILDER_DIR=/path/to/busibox-appbuilder" "single"
         box_line "    export BUSIBOX_APP_DIR=/path/to/busibox-app" "single"
         echo -e "└──────────────────────────────────────────────────────────────────────────────┘"
         return 1
@@ -1542,8 +1560,13 @@ EOF
 # App Directories (for volume mounts in docker-compose.local-dev.yml)
 BUSIBOX_PORTAL_DIR=${BUSIBOX_PORTAL_DIR}
 BUSIBOX_AGENTS_DIR=${BUSIBOX_AGENTS_DIR}
+BUSIBOX_APPBUILDER_DIR=${BUSIBOX_APPBUILDER_DIR}
 BUSIBOX_APP_DIR=${BUSIBOX_APP_DIR}
 APPS_BASE_DIR=${APPS_BASE_DIR}
+
+# Core apps mode for docker-compose.local-dev.yml
+# dev = hot-reload (default behavior for developer deployments)
+CORE_APPS_MODE=dev
 
 # Local Development Apps Directory
 DEV_APPS_DIR=${DEV_APPS_DIR:-${APPS_BASE_DIR}}
@@ -1560,6 +1583,7 @@ BUSIBOX_AGENTS_GITHUB_REF=${BUSIBOX_AGENTS_GITHUB_REF:-main}
 # Empty local paths (not used in github mode)
 BUSIBOX_PORTAL_DIR=
 BUSIBOX_AGENTS_DIR=
+BUSIBOX_APPBUILDER_DIR=
 BUSIBOX_APP_DIR=
 APPS_BASE_DIR=
 DEV_APPS_DIR=
@@ -3086,11 +3110,11 @@ generate_admin_link() {
         set_state "MAGIC_LINK_TOKEN" "$token"
     fi
     
-    # Return proper setup URL with magic link token
+    # Return setup URL — goes directly to the setup page with magic link token
     if [[ "$SITE_DOMAIN" == "localhost" ]]; then
-        echo "https://localhost/portal/verify?token=${token}"
+        echo "https://localhost/portal/setup?token=${token}"
     else
-        echo "https://${SITE_DOMAIN}/portal/verify?token=${token}"
+        echo "https://${SITE_DOMAIN}/portal/setup?token=${token}"
     fi
 }
 
@@ -3650,13 +3674,30 @@ setup_host_agent() {
     local host_agent_token
     host_agent_token=$(openssl rand -hex 32)
     
-    # Save to env file
+    # Save to env file (idempotent; replace existing values if present)
     local env_file
     env_file=$(get_env_file)
-    echo "" >> "$env_file"
-    echo "# Host Agent (for MLX control)" >> "$env_file"
-    echo "HOST_AGENT_TOKEN=${host_agent_token}" >> "$env_file"
-    echo "HOST_AGENT_PORT=8089" >> "$env_file"
+    if [[ ! -f "$env_file" ]]; then
+        touch "$env_file"
+    fi
+
+    if grep -q '^HOST_AGENT_TOKEN=' "$env_file"; then
+        sed -i.bak "s|^HOST_AGENT_TOKEN=.*|HOST_AGENT_TOKEN=${host_agent_token}|" "$env_file"
+    else
+        {
+            echo ""
+            echo "# Host Agent (for MLX control)"
+            echo "HOST_AGENT_TOKEN=${host_agent_token}"
+        } >> "$env_file"
+    fi
+
+    if grep -q '^HOST_AGENT_PORT=' "$env_file"; then
+        sed -i.bak "s|^HOST_AGENT_PORT=.*|HOST_AGENT_PORT=8089|" "$env_file"
+    else
+        echo "HOST_AGENT_PORT=8089" >> "$env_file"
+    fi
+
+    rm -f "${env_file}.bak"
     
     # Save to state
     set_state "HOST_AGENT_TOKEN" "$host_agent_token"
@@ -4620,12 +4661,13 @@ main() {
             # Load saved paths from state
             BUSIBOX_PORTAL_DIR=$(get_state "BUSIBOX_PORTAL_DIR" "")
             BUSIBOX_AGENTS_DIR=$(get_state "BUSIBOX_AGENTS_DIR" "")
+            BUSIBOX_APPBUILDER_DIR=$(get_state "BUSIBOX_APPBUILDER_DIR" "")
             BUSIBOX_APP_DIR=$(get_state "BUSIBOX_APP_DIR" "")
             APPS_BASE_DIR=$(get_state "APPS_BASE_DIR" "")
             DEV_APPS_DIR=$(get_dev_apps_dir)
             
             # If not in state, detect them
-            if [[ -z "$BUSIBOX_PORTAL_DIR" || -z "$BUSIBOX_APP_DIR" ]]; then
+            if [[ -z "$BUSIBOX_PORTAL_DIR" || -z "$BUSIBOX_APPBUILDER_DIR" || -z "$BUSIBOX_APP_DIR" ]]; then
                 if ! detect_app_directories; then
                     error "Cannot proceed without app directories"
                     exit 1
@@ -4641,6 +4683,7 @@ main() {
             # Save paths to state
             set_state "BUSIBOX_PORTAL_DIR" "$BUSIBOX_PORTAL_DIR"
             set_state "BUSIBOX_AGENTS_DIR" "$BUSIBOX_AGENTS_DIR"
+            set_state "BUSIBOX_APPBUILDER_DIR" "$BUSIBOX_APPBUILDER_DIR"
             set_state "BUSIBOX_APP_DIR" "$BUSIBOX_APP_DIR"
             set_state "APPS_BASE_DIR" "$APPS_BASE_DIR"
             # Set DEV_APPS_DIR (defaults to APPS_BASE_DIR if not set by wizard)
@@ -4656,6 +4699,7 @@ main() {
         # Set empty values to prevent docker-compose from complaining about missing vars
         BUSIBOX_PORTAL_DIR=""
         BUSIBOX_AGENTS_DIR=""
+        BUSIBOX_APPBUILDER_DIR=""
         BUSIBOX_APP_DIR=""
         APPS_BASE_DIR=""
         DEV_APPS_DIR=""
