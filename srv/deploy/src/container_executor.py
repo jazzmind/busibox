@@ -745,6 +745,85 @@ async def execute_in_container(
         return await execute_ssh_command(target_host, command, timeout)
 
 
+async def ensure_container_prerequisites(logs: List[str]) -> bool:
+    """Ensure the target LXC container has required tools for app deployment.
+    
+    On Docker, the Dockerfile pre-installs everything. On LXC, the container
+    may have been created but not yet provisioned with Ansible (node_common role).
+    This function checks for required tools and installs them if missing, so
+    deployments don't fail with 'git: command not found' etc.
+    
+    Installs are idempotent — if tools are already present, this is a fast no-op.
+    """
+    if is_docker_environment():
+        return True  # Docker image has everything pre-installed
+    
+    # Quick check: if git and node are both present, skip the rest
+    check_cmd = "command -v git >/dev/null 2>&1 && command -v node >/dev/null 2>&1 && echo OK"
+    stdout, stderr, code = await execute_in_container(check_cmd)
+    if code == 0 and "OK" in stdout:
+        return True
+    
+    logs.append("🔧 Installing prerequisites on user-apps container...")
+    
+    # Install Node.js via NodeSource (matches node_common Ansible role)
+    # and git, curl, jq, build-essential for building native modules
+    install_cmd = """
+set -e
+
+# Track what we install
+INSTALLED=""
+
+# --- git, curl, jq, build-essential ---
+NEED_APT=""
+for cmd_pkg in git:git curl:curl jq:jq make:build-essential; do
+    cmd="${cmd_pkg%%:*}"
+    pkg="${cmd_pkg##*:}"
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        NEED_APT="$NEED_APT $pkg"
+    fi
+done
+
+if [ -n "$NEED_APT" ]; then
+    echo "Installing apt packages:$NEED_APT"
+    apt-get update -qq
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates gnupg $NEED_APT
+    INSTALLED="$INSTALLED$NEED_APT"
+fi
+
+# --- Node.js (via NodeSource if missing) ---
+if ! command -v node >/dev/null 2>&1; then
+    echo "Installing Node.js 20..."
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    apt-get install -y nodejs
+    INSTALLED="$INSTALLED nodejs"
+fi
+
+# --- Create app directories ---
+mkdir -p /srv/apps /var/log/user-apps
+
+if [ -z "$INSTALLED" ]; then
+    echo "All prerequisites already present"
+else
+    echo "Installed:$INSTALLED"
+fi
+"""
+    stdout, stderr, code = await execute_in_container(install_cmd, timeout=300)
+    
+    if code != 0:
+        logs.append(f"❌ Failed to install prerequisites: {stderr or stdout}")
+        return False
+    
+    # Log what happened
+    for line in (stdout or "").strip().split('\n'):
+        if line.strip():
+            logs.append(f"   {line.strip()}")
+    
+    logs.append("✅ Prerequisites ready")
+    return True
+
+
 async def check_dev_app_exists(app_id: str) -> bool:
     """Check if app exists in dev-apps directory (takes precedence over git clone)"""
     command = f"test -d /srv/dev-apps/{app_id}"
@@ -1709,6 +1788,11 @@ async def deploy_app(
             logs.append(f"🎯 Deploying {manifest.name} to user-apps container")
     else:
         logs.append(f"🎯 Deploying {manifest.name} to {deploy_config.environment}")
+        
+        # Ensure LXC container has git, node, npm, etc. before we try to deploy.
+        # This is a no-op if tools are already installed.
+        if not await ensure_container_prerequisites(logs):
+            return False
     
     # Step 1: Clone/update repo (or get dev-apps path)
     success, app_path = await clone_or_update_repo(manifest, deploy_config, logs)
