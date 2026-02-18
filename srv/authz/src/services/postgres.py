@@ -6,6 +6,7 @@ from typing import Any, Optional, List
 
 import asyncpg
 import structlog
+from cachetools import TTLCache
 
 from busibox_common import AsyncPGPoolManager
 from middleware.rls import set_rls_session_vars
@@ -70,6 +71,8 @@ class PostgresService:
     def __init__(self, config: dict):
         self._pool_manager = AsyncPGPoolManager.from_config(config)
         self._issuer = config.get("issuer", "busibox-authz")
+        self._signing_key_cache = TTLCache(maxsize=1, ttl=300)
+        self._jwks_cache = TTLCache(maxsize=1, ttl=300)
 
     @property
     def pool(self) -> Optional[asyncpg.Pool]:
@@ -148,78 +151,6 @@ class PostgresService:
             )
 
     # ---------------------------------------------------------------------
-    # OAuth client registry
-    # ---------------------------------------------------------------------
-
-    async def upsert_oauth_client(
-        self,
-        *,
-        client_id: str,
-        client_secret_hash: str,
-        allowed_audiences: List[str],
-        allowed_scopes: List[str],
-        is_active: bool = True,
-    ) -> None:
-        async with self.acquire(None, None) as conn:
-            await conn.execute(
-                """
-                INSERT INTO authz_oauth_clients (client_id, client_secret_hash, allowed_audiences, allowed_scopes, is_active)
-                VALUES ($1, $2, $3, $4, $5)
-                ON CONFLICT (client_id) DO UPDATE
-                  SET client_secret_hash = EXCLUDED.client_secret_hash,
-                      allowed_audiences = EXCLUDED.allowed_audiences,
-                      allowed_scopes = EXCLUDED.allowed_scopes,
-                      is_active = EXCLUDED.is_active
-                """,
-                client_id,
-                client_secret_hash,
-                allowed_audiences,
-                allowed_scopes,
-                is_active,
-            )
-
-    async def get_oauth_client(self, client_id: str) -> Optional[dict]:
-        async with self.acquire(None, None) as conn:
-            row = await conn.fetchrow(
-                """
-                SELECT client_id, client_secret_hash, allowed_audiences, allowed_scopes, is_active, created_at
-                FROM authz_oauth_clients
-                WHERE client_id = $1
-                """,
-                client_id,
-            )
-            return dict(row) if row else None
-
-    async def create_oauth_client(
-        self,
-        *,
-        client_id: str,
-        client_secret_hash: str,
-        allowed_audiences: List[str],
-        allowed_scopes: List[str],
-        is_active: bool = True,
-    ) -> None:
-        """Create a new OAuth client (alias for upsert for clarity in admin endpoints)."""
-        await self.upsert_oauth_client(
-            client_id=client_id,
-            client_secret_hash=client_secret_hash,
-            allowed_audiences=allowed_audiences,
-            allowed_scopes=allowed_scopes,
-            is_active=is_active,
-        )
-
-    async def list_oauth_clients(self) -> List[dict]:
-        async with self.acquire(None, None) as conn:
-            rows = await conn.fetch(
-                """
-                SELECT client_id, allowed_audiences, allowed_scopes, is_active, created_at
-                FROM authz_oauth_clients
-                ORDER BY created_at DESC
-                """
-            )
-            return [dict(r) for r in rows]
-
-    # ---------------------------------------------------------------------
     # Signing keys / JWKS
     # ---------------------------------------------------------------------
 
@@ -242,8 +173,12 @@ class PostgresService:
                 json.dumps(public_jwk),  # JSONB columns need JSON string input
                 is_active,
             )
+        self.invalidate_signing_key_cache()
 
     async def get_active_signing_key(self) -> Optional[dict]:
+        cached = self._signing_key_cache.get("active")
+        if cached is not None:
+            return cached
         async with self.acquire(None, None) as conn:
             row = await conn.fetchrow(
                 """
@@ -254,10 +189,15 @@ class PostgresService:
                 LIMIT 1
                 """
             )
-            return dict(row) if row else None
+            result = dict(row) if row else None
+            self._signing_key_cache["active"] = result
+            return result
 
     async def list_public_jwks(self) -> List[dict]:
         import json
+        cached = self._jwks_cache.get("jwks")
+        if cached is not None:
+            return cached
         async with self.acquire(None, None) as conn:
             rows = await conn.fetch(
                 """
@@ -268,7 +208,13 @@ class PostgresService:
                 """
             )
             # JSONB columns are returned as strings, need to parse them
-            return [json.loads(dict(r)["public_jwk"]) if isinstance(dict(r)["public_jwk"], str) else dict(r)["public_jwk"] for r in rows]
+            result = [json.loads(dict(r)["public_jwk"]) if isinstance(dict(r)["public_jwk"], str) else dict(r)["public_jwk"] for r in rows]
+            self._jwks_cache["jwks"] = result
+            return result
+
+    def invalidate_signing_key_cache(self) -> None:
+        self._signing_key_cache.clear()
+        self._jwks_cache.clear()
 
     # ---------------------------------------------------------------------
     # RBAC sync (initially driven by busibox-portal)
@@ -418,7 +364,8 @@ class PostgresService:
         async with self.acquire(None, None) as conn:
             row = await conn.fetchrow(
                 """
-                SELECT user_id, email, status, display_name, first_name, last_name, avatar_url, favorite_color, idp_provider, idp_tenant_id,
+                SELECT user_id, email, status, display_name, first_name, last_name, avatar_url, favorite_color,
+                       (github_pat_encrypted IS NOT NULL) AS has_github_pat, idp_provider, idp_tenant_id,
                        idp_object_id, idp_roles, idp_groups, created_at, updated_at
                 FROM authz_users
                 WHERE user_id = $1
@@ -446,6 +393,41 @@ class PostgresService:
                 uid,
             )
             return [dict(r) for r in rows]
+
+    async def get_user_roles_batch(self, user_ids: List[str]) -> dict[str, List[dict]]:
+        if not user_ids:
+            return {}
+
+        valid_ids: list[uuid.UUID] = []
+        for user_id in user_ids:
+            try:
+                uid = uuid.UUID(user_id)
+                valid_ids.append(uid)
+            except (ValueError, AttributeError, TypeError):
+                continue
+
+        result: dict[str, List[dict]] = {user_id: [] for user_id in user_ids}
+        if not valid_ids:
+            return result
+
+        async with self.acquire(None, None) as conn:
+            rows = await conn.fetch(
+                """
+                SELECT ur.user_id::text AS user_id, r.id::text AS id, r.name AS name, r.description, r.scopes, r.created_at, r.updated_at
+                FROM authz_user_roles ur
+                JOIN authz_roles r ON r.id = ur.role_id
+                WHERE ur.user_id = ANY($1::uuid[])
+                ORDER BY r.name
+                """,
+                valid_ids,
+            )
+
+        for row in rows:
+            role = dict(row)
+            user_id = role.pop("user_id")
+            result.setdefault(user_id, []).append(role)
+
+        return result
 
     # ---------------------------------------------------------------------
     # RBAC admin operations
@@ -496,7 +478,7 @@ class PostgresService:
         async with self.acquire(None, None) as conn:
             row = await conn.fetchrow(
                 """
-                SELECT id::text, name, description, created_at, updated_at
+                SELECT id::text, name, description, scopes, created_at, updated_at
                 FROM authz_roles
                 WHERE name = $1
                 """,
@@ -1046,7 +1028,8 @@ class PostgresService:
                     user_id, email, status, display_name, first_name, last_name, avatar_url, favorite_color, pending_expires_at
                 )
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                RETURNING user_id::text, email, status, display_name, first_name, last_name, avatar_url, favorite_color, email_verified_at, last_login_at,
+                RETURNING user_id::text, email, status, display_name, first_name, last_name, avatar_url, favorite_color,
+                          (github_pat_encrypted IS NOT NULL) AS has_github_pat, email_verified_at, last_login_at,
                           pending_expires_at, created_at, updated_at
                 """,
                 user_id,
@@ -1076,7 +1059,17 @@ class PostgresService:
                     )
             
             user = dict(row)
-            user["roles"] = await self.get_user_roles(str(user_id))
+            roles = await conn.fetch(
+                """
+                SELECT r.id::text AS id, r.name AS name, r.description, r.scopes, r.created_at, r.updated_at
+                FROM authz_user_roles ur
+                JOIN authz_roles r ON r.id = ur.role_id
+                WHERE ur.user_id = $1
+                ORDER BY r.name
+                """,
+                user_id,
+            )
+            user["roles"] = [dict(r) for r in roles]
             return user
 
     async def list_users(
@@ -1112,23 +1105,67 @@ class PostgresService:
             count_query = f"SELECT COUNT(*) FROM authz_users {where_clause}"
             total_count = await conn.fetchval(count_query, *params)
             
-            # Get users
+            # Get users with role data in a single query (no N+1)
             params.extend([limit, offset])
             query = f"""
-                SELECT user_id::text, email, status, display_name, first_name, last_name, avatar_url, favorite_color, email_verified_at, last_login_at,
-                       pending_expires_at, created_at, updated_at
-                FROM authz_users
-                {where_clause}
-                ORDER BY created_at DESC
-                LIMIT ${param_idx} OFFSET ${param_idx + 1}
+                WITH selected_users AS (
+                    SELECT user_id, email, status, display_name, first_name, last_name, avatar_url, favorite_color,
+                           (github_pat_encrypted IS NOT NULL) AS has_github_pat, email_verified_at, last_login_at,
+                           pending_expires_at, created_at, updated_at
+                    FROM authz_users
+                    {where_clause}
+                    ORDER BY created_at DESC
+                    LIMIT ${param_idx} OFFSET ${param_idx + 1}
+                )
+                SELECT su.user_id::text AS user_id, su.email, su.status, su.display_name, su.first_name, su.last_name, su.avatar_url, su.favorite_color,
+                       su.has_github_pat,
+                       su.email_verified_at, su.last_login_at, su.pending_expires_at, su.created_at, su.updated_at,
+                       r.id::text AS role_id, r.name AS role_name, r.description AS role_description, r.scopes AS role_scopes,
+                       r.created_at AS role_created_at, r.updated_at AS role_updated_at
+                FROM selected_users su
+                LEFT JOIN authz_user_roles ur ON ur.user_id = su.user_id
+                LEFT JOIN authz_roles r ON r.id = ur.role_id
+                ORDER BY su.created_at DESC, r.name
             """
             rows = await conn.fetch(query, *params)
-            
-            users = []
+
+            users_by_id: dict[str, dict] = {}
+            user_order: list[str] = []
             for row in rows:
-                user = dict(row)
-                user["roles"] = await self.get_user_roles(user["user_id"])
-                users.append(user)
+                user_id = row["user_id"]
+                if user_id not in users_by_id:
+                    users_by_id[user_id] = {
+                        "user_id": user_id,
+                        "email": row["email"],
+                        "status": row["status"],
+                        "display_name": row["display_name"],
+                        "first_name": row["first_name"],
+                        "last_name": row["last_name"],
+                        "avatar_url": row["avatar_url"],
+                        "favorite_color": row["favorite_color"],
+                        "has_github_pat": row["has_github_pat"],
+                        "email_verified_at": row["email_verified_at"],
+                        "last_login_at": row["last_login_at"],
+                        "pending_expires_at": row["pending_expires_at"],
+                        "created_at": row["created_at"],
+                        "updated_at": row["updated_at"],
+                        "roles": [],
+                    }
+                    user_order.append(user_id)
+
+                if row["role_id"] is not None:
+                    users_by_id[user_id]["roles"].append(
+                        {
+                            "id": row["role_id"],
+                            "name": row["role_name"],
+                            "description": row["role_description"],
+                            "scopes": row["role_scopes"],
+                            "created_at": row["role_created_at"],
+                            "updated_at": row["role_updated_at"],
+                        }
+                    )
+
+            users = [users_by_id[user_id] for user_id in user_order]
             
             return {
                 "users": users,
@@ -1234,7 +1271,8 @@ class PostgresService:
                 UPDATE authz_users
                 SET {', '.join(updates)}
                 WHERE user_id = ${param_idx}
-                RETURNING user_id::text, email, status, display_name, first_name, last_name, avatar_url, favorite_color, email_verified_at, last_login_at,
+                RETURNING user_id::text, email, status, display_name, first_name, last_name, avatar_url, favorite_color,
+                          (github_pat_encrypted IS NOT NULL) AS has_github_pat, email_verified_at, last_login_at,
                           pending_expires_at, created_at, updated_at
             """
             
@@ -1243,7 +1281,17 @@ class PostgresService:
                 return None
             
             user = dict(row)
-            user["roles"] = await self.get_user_roles(user_id)
+            roles = await conn.fetch(
+                """
+                SELECT r.id::text AS id, r.name AS name, r.description, r.scopes, r.created_at, r.updated_at
+                FROM authz_user_roles ur
+                JOIN authz_roles r ON r.id = ur.role_id
+                WHERE ur.user_id = $1
+                ORDER BY r.name
+                """,
+                uid,
+            )
+            user["roles"] = [dict(r) for r in roles]
             return user
 
     async def delete_user(self, user_id: str) -> bool:
@@ -1279,7 +1327,7 @@ class PostgresService:
             row = await conn.fetchrow(
                 """
                 SELECT user_id::text, email, status, display_name, first_name, last_name, avatar_url, favorite_color, email_verified_at, last_login_at,
-                       pending_expires_at, created_at, updated_at
+                       (github_pat_encrypted IS NOT NULL) AS has_github_pat, pending_expires_at, created_at, updated_at
                 FROM authz_users
                 WHERE email = $1
                 """,
@@ -1288,8 +1336,43 @@ class PostgresService:
             if not row:
                 return None
             user = dict(row)
-            user["roles"] = await self.get_user_roles(user["user_id"])
+            roles = await conn.fetch(
+                """
+                SELECT r.id::text AS id, r.name AS name, r.description, r.scopes, r.created_at, r.updated_at
+                FROM authz_user_roles ur
+                JOIN authz_roles r ON r.id = ur.role_id
+                WHERE ur.user_id = $1
+                ORDER BY r.name
+                """,
+                uuid.UUID(user["user_id"]),
+            )
+            user["roles"] = [dict(r) for r in roles]
             return user
+
+    async def set_user_github_pat(self, user_id: str, github_pat_encrypted: bytes | None) -> bool:
+        """Set or clear encrypted GitHub PAT for a user."""
+        uid = validate_uuid(user_id, "user_id")
+        async with self.acquire(None, None) as conn:
+            result = await conn.execute(
+                """
+                UPDATE authz_users
+                SET github_pat_encrypted = $1,
+                    updated_at = now()
+                WHERE user_id = $2
+                """,
+                github_pat_encrypted,
+                uid,
+            )
+            return result != "UPDATE 0"
+
+    async def get_user_github_pat_encrypted(self, user_id: str) -> bytes | None:
+        """Fetch encrypted GitHub PAT bytes for a user."""
+        uid = validate_uuid(user_id, "user_id")
+        async with self.acquire(None, None) as conn:
+            return await conn.fetchval(
+                "SELECT github_pat_encrypted FROM authz_users WHERE user_id = $1",
+                uid,
+            )
 
     # ---------------------------------------------------------------------
     # Session Management

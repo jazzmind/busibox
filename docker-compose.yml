@@ -802,6 +802,7 @@ services:
       - ./srv/agent/alembic:/app/alembic:ro
       - ./srv/agent/tests:/app/tests:ro
       - ./srv/shared:/app/shared:ro
+      - builder_projects:/srv/projects
     command: ["sh", "-c", "echo 'Migration files:' && ls -la /app/alembic/versions/ && echo 'Current alembic head:' && python -m alembic heads && echo 'Current DB version:' && python -m alembic current && echo 'Running migrations...' && python -m alembic upgrade head && echo 'Migrations complete' && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/app"]
     environment:
       # Service
@@ -828,6 +829,9 @@ services:
       LITELLM_BASE_URL: http://litellm:4000/v1
       LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-local-dev-key}
       DEFAULT_MODEL: agent
+      # Claude Agent SDK routes through LiteLLM Anthropic-compatible endpoint
+      ANTHROPIC_BASE_URL: http://litellm:4000
+      ANTHROPIC_API_KEY: ${LITELLM_MASTER_KEY:-sk-local-dev-key}
       # LiteLLM database for spend tracking (admin stats)
       LITELLM_DATABASE_URL: postgresql://${POSTGRES_USER:-busibox_user}:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/litellm
       # Cloud provider API keys (for direct model listing from providers)
@@ -1091,6 +1095,38 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  # =========================================================================
+  # BUILDER SANDBOX CONTAINER
+  # =========================================================================
+  # Dedicated environment for app-builder development workflows.
+  # Hosts per-project source trees and dev servers managed by supervisord.
+  # Keep this separate from user-apps to isolate development from runtime apps.
+  # =========================================================================
+  builder-sandbox:
+    build:
+      context: .
+      dockerfile: provision/docker/builder-sandbox.Dockerfile
+    container_name: ${CONTAINER_PREFIX:-dev}-builder-sandbox
+    hostname: builder-sandbox
+    labels:
+      - "version=${GIT_COMMIT:-unknown}"
+    volumes:
+      - builder_projects:/srv/projects
+      - builder_logs:/var/log/builder
+    environment:
+      NODE_ENV: development
+    restart: unless-stopped
+    networks:
+      - busibox-net
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 8G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
 # ===========================================================================
   # NEXT.JS APPLICATIONS (Core Apps)
   # ===========================================================================
@@ -1214,6 +1250,10 @@ volumes:
   user_apps_data:
   # User apps logs - separate volume for app logs
   user_apps_logs:
+  # Builder projects workspace for app-builder development
+  builder_projects:
+  # Builder sandbox logs
+  builder_logs:
   # App-contributed docs - shared between deploy-api (writer) and docs-api (reader)
   # Contains per-app documentation synced during deployment (apps/<app-id>/*.md)
   app_docs:

@@ -64,10 +64,6 @@ class Config:
             if s.strip()
         ]
 
-        # Optional: shared bootstrap admin token for internal management endpoints.
-        # DEPRECATED: Use JWT-based auth with admin scopes instead.
-        self.admin_token: Optional[str] = os.getenv("AUTHZ_ADMIN_TOKEN")
-        
         # Master key for envelope encryption keystore.
         # This key is used to encrypt/decrypt KEKs (Key Encryption Keys) stored in PostgreSQL.
         # REQUIRED for envelope encryption - must be a high-entropy passphrase.
@@ -120,7 +116,6 @@ class Config:
             "rsa_key_size": self.rsa_key_size,
             "key_encryption_passphrase": self.key_encryption_passphrase,
             "allowed_audiences": self.allowed_audiences,
-            "admin_token": self.admin_token,
             "master_key": self.master_key,
             "test_mode_enabled": self.test_mode_enabled,
             "test_db_name": self.test_db_name,

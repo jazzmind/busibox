@@ -456,17 +456,75 @@ class TestKeystoreEndpoints:
     - Role-based access control for encryption
     
     Requires:
-    - AUTHZ_ADMIN_TOKEN to be set
+    - TEST_DB_* credentials for test database access
     - AUTHZ_MASTER_KEY to be configured on the authz service
     """
     
     @pytest.fixture
-    def admin_token(self):
-        """Get admin token from environment."""
-        token = os.getenv("AUTHZ_ADMIN_TOKEN")
-        if not token:
-            pytest.skip("AUTHZ_ADMIN_TOKEN not set")
-        return token
+    async def admin_token(self):
+        """Mint an authz-api access token for the test user via Zero Trust exchange."""
+        test_user_email = os.getenv("TEST_USER_EMAIL", "test@busibox.local")
+        test_mode_headers = {"X-Test-Mode": "true"}
+
+        async with httpx.AsyncClient() as client:
+            init_resp = await client.post(
+                f"{TEST_AUTHZ_URL}/auth/login/initiate",
+                json={"email": test_user_email},
+                headers=test_mode_headers,
+                timeout=30.0,
+            )
+            assert init_resp.status_code == 200, f"Login initiation failed: {init_resp.text}"
+
+        conn = await asyncpg.connect(
+            host=TEST_DB_HOST,
+            port=TEST_DB_PORT,
+            database=TEST_DB_NAME,
+            user=TEST_DB_USER,
+            password=TEST_DB_PASSWORD,
+            timeout=10.0,
+        )
+        try:
+            magic_link_row = await conn.fetchrow(
+                """
+                SELECT token
+                FROM authz_magic_links
+                WHERE email = $1
+                  AND used_at IS NULL
+                  AND expires_at > now()
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                test_user_email.lower(),
+            )
+            if not magic_link_row:
+                pytest.skip("No valid magic link token found for test user")
+            magic_link_token = magic_link_row["token"]
+        finally:
+            await conn.close()
+
+        async with httpx.AsyncClient() as client:
+            use_resp = await client.post(
+                f"{TEST_AUTHZ_URL}/auth/magic-links/{magic_link_token}/use",
+                headers=test_mode_headers,
+                timeout=30.0,
+            )
+            assert use_resp.status_code == 200, f"Magic link use failed: {use_resp.text}"
+            session_jwt = use_resp.json().get("session", {}).get("token")
+            if not session_jwt:
+                pytest.skip("Could not mint session JWT for test user")
+
+            exchange_resp = await client.post(
+                f"{TEST_AUTHZ_URL}/oauth/token",
+                headers=test_mode_headers,
+                data={
+                    "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                    "subject_token": session_jwt,
+                    "audience": "authz-api",
+                },
+                timeout=30.0,
+            )
+            assert exchange_resp.status_code == 200, f"Token exchange failed: {exchange_resp.text}"
+            return exchange_resp.json()["access_token"]
     
     @pytest.fixture
     def test_role_id(self):

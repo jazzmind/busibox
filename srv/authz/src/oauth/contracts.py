@@ -2,7 +2,6 @@
 OAuth2-aligned request/response contracts for Busibox authz.
 
 Authz supports:
-- OAuth2 client credentials: grant_type=client_credentials
 - OAuth2 token exchange (RFC 8693 style): grant_type=urn:ietf:params:oauth:grant-type:token-exchange
 
 We intentionally keep the response shape close to RFC 6749/8693.
@@ -19,10 +18,6 @@ TOKEN_EXCHANGE_GRANT = "urn:ietf:params:oauth:grant-type:token-exchange"
 
 class OAuthTokenRequest(BaseModel):
     grant_type: str = Field(..., description="OAuth2 grant type")
-
-    # OAuth2 client authentication (optional when subject_token is provided)
-    client_id: Optional[str] = Field(None, min_length=1)
-    client_secret: Optional[str] = Field(None, min_length=1)
 
     # Requested token restrictions
     scope: str = Field("", description="Space-delimited OAuth2 scopes")
@@ -46,8 +41,6 @@ class OAuthTokenRequest(BaseModel):
         description="App resource ID (UUID) - when provided, authz verifies user has app access via bindings"
     )
 
-    # Legacy: Compatibility with existing token-exchange using client credentials
-    requested_subject: Optional[str] = Field(None, description="User ID (uuid) - DEPRECATED, use subject_token instead")
     requested_purpose: Optional[str] = Field(None, description="Purpose label (audit/debug)")
 
     @field_validator("scope")

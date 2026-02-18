@@ -8,25 +8,22 @@ static admin tokens, callers authenticate with JWTs that have specific scopes.
 Supported authentication methods (in order of precedence):
 1. Access token with required scopes (audience: authz-api)
 2. Session JWT for self-service operations (audience: busibox-portal, typ: session)
-3. Service account (client_credentials) with allowed_scopes
 
 Note: Legacy admin token support has been removed for security.
 """
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
 from typing import List, Optional, Set, Tuple
 
 import jwt
+from cachetools import TTLCache
 from fastapi import HTTPException, Request, status
 
 from config import Config
-from oauth.client_auth import verify_client_secret
-from oauth.keys import load_private_key
-
 config = Config()
+_session_validity_cache: TTLCache = TTLCache(maxsize=1000, ttl=30)
 
 
 def _scope_matches(granted_scope: str, required_scope: str) -> bool:
@@ -55,8 +52,8 @@ def _scope_matches(granted_scope: str, required_scope: str) -> bool:
 @dataclass
 class AuthContext:
     """Authentication context for a request."""
-    auth_type: str  # "jwt", "session", or "service_account"
-    actor_id: str  # User ID (for JWT/session) or client_id (for service account)
+    auth_type: str  # "jwt" or "session"
+    actor_id: str  # User ID
     scopes: Set[str]  # Available scopes for this request
     email: Optional[str] = None  # User email (for JWT/session only)
     roles: Optional[List[dict]] = None  # User roles (for session JWT only)
@@ -108,23 +105,15 @@ async def verify_access_token(
     Returns (user_id, email, scopes) if valid.
     Raises HTTPException if invalid.
     """
-    await db.connect()
-    
-    # Get the active signing key's public key for verification
-    row = await db.get_active_signing_key()
-    if not row:
+    from routes.oauth import _get_signing_key_objects
+
+    try:
+        kid, alg, _, public_key = await _get_signing_key_objects(db)
+    except RuntimeError:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="no_signing_key_configured"
         )
-    
-    kid = row["kid"]
-    alg = row["alg"]
-    
-    # Load private key to extract public key
-    private_pem = row["private_key_pem"]
-    private_key = load_private_key(private_pem, config.key_encryption_passphrase)
-    public_key = private_key.public_key()
     
     try:
         # First decode without verification to get the header
@@ -197,23 +186,15 @@ async def verify_session_token(
     Returns (user_id, email, roles) if valid.
     Raises HTTPException if invalid.
     """
-    await db.connect()
-    
-    # Get the active signing key's public key for verification
-    row = await db.get_active_signing_key()
-    if not row:
+    from routes.oauth import _get_signing_key_objects
+
+    try:
+        kid, alg, _, public_key = await _get_signing_key_objects(db)
+    except RuntimeError:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="no_signing_key_configured"
         )
-    
-    kid = row["kid"]
-    alg = row["alg"]
-    
-    # Load private key to extract public key
-    private_pem = row["private_key_pem"]
-    private_key = load_private_key(private_pem, config.key_encryption_passphrase)
-    public_key = private_key.public_key()
     
     try:
         # First decode without verification to get the header
@@ -247,8 +228,13 @@ async def verify_session_token(
         
         # Check if session has been revoked (jti = session_id)
         jti = claims["jti"]
-        session = await db.get_session_by_id(jti)
-        if not session:
+        cache_key = (id(db), jti)
+        session_valid = _session_validity_cache.get(cache_key)
+        if session_valid is None:
+            session = await db.get_session_by_id(jti)
+            session_valid = session is not None
+            _session_validity_cache[cache_key] = session_valid
+        if not session_valid:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="session_revoked"
@@ -352,7 +338,6 @@ async def authenticate_request(
     
     Tries authentication methods in order:
     1. Bearer token (JWT access token with audience=authz-api)
-    2. Client credentials in request body (service account)
     
     Args:
         request: FastAPI request
@@ -392,42 +377,11 @@ async def authenticate_request(
             return ctx
             
         except HTTPException:
-            # JWT verification failed - will try other methods below
             pass
-    
-    # Try client credentials in body (service account)
-    try:
-        body = await request.json()
-        client_id = body.get("client_id")
-        client_secret = body.get("client_secret")
-        
-        if client_id and client_secret:
-            await db.connect()
-            client = await db.get_oauth_client(client_id)
-            if client and client.get("is_active"):
-                if verify_client_secret(client_secret, client["client_secret_hash"]):
-                    allowed_scopes = set(client.get("allowed_scopes", []))
-                    ctx = AuthContext(
-                        auth_type="service_account",
-                        actor_id=client_id,
-                        scopes=allowed_scopes,
-                    )
-                    
-                    # Check required scopes
-                    if required_scopes:
-                        if not ctx.has_any_scope(required_scopes):
-                            raise HTTPException(
-                                status_code=status.HTTP_403_FORBIDDEN,
-                                detail=f"Service account lacks required scopes. Required one of: {required_scopes}",
-                            )
-                    
-                    return ctx
-    except Exception:
-        pass
     
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Unauthorized: valid access token or service account credentials required",
+        detail="Unauthorized: valid access token required",
     )
 
 
@@ -459,7 +413,7 @@ async def require_auth_or_self_service(
 ) -> AuthContext:
     """
     Authenticate a request, allowing either:
-    1. Access token/service account with required scopes (for admin operations)
+    1. Access token with required scopes (for admin operations)
     2. Session JWT where user is accessing their own resources (self-service)
     
     This is the main entry point for endpoints that support both admin access

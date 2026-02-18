@@ -5,11 +5,9 @@ from oauth.claims import AccessTokenClaims, RoleClaim
 def test_oauth_token_request_normalizes_scope():
     req = OAuthTokenRequest(
         grant_type=TOKEN_EXCHANGE_GRANT,
-        client_id="c1",
-        client_secret="s1",
         scope="data.write  search.read data.write",
         audience="data-api",
-        requested_subject="11111111-1111-1111-1111-111111111111",
+        subject_token="session-jwt-placeholder",
     )
     assert req.scope == "data.write search.read"
 

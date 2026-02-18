@@ -8,8 +8,6 @@ Provides centralized audit logging for all services:
 
 Protected by (in order of precedence):
 - Access token (JWT) with authz.audit.* scopes (audience: authz-api)
-- OAuth client credentials (service account) with allowed_scopes
-- Admin token (deprecated)
 
 Required scopes:
 - authz.audit.write: Create audit entries
@@ -29,7 +27,6 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from config import Config
-from oauth.client_auth import verify_client_secret
 from oauth.jwt_auth import require_auth, AuthContext
 
 router = APIRouter()
@@ -97,8 +94,6 @@ async def _require_client_auth(request: Request, scopes: Optional[List[str]] = N
     
     Supports:
     - Access token (JWT) with audience=authz-api and required scopes
-    - OAuth client credentials (service account) with allowed_scopes
-    - Admin token (deprecated)
     
     Args:
         request: FastAPI request
@@ -109,29 +104,6 @@ async def _require_client_auth(request: Request, scopes: Optional[List[str]] = N
     """
     db = _get_pg(request)
     return await require_auth(request, db, scopes)
-
-
-async def _check_client_auth_from_body(request: Request, body: dict) -> bool:
-    """
-    Check if request has valid client auth from parsed body, but don't raise if missing.
-    Returns True if authenticated, False otherwise.
-    """
-    # Try OAuth client credentials in body
-    try:
-        client_id = body.get("client_id")
-        client_secret = body.get("client_secret")
-
-        if client_id and client_secret:
-            db = _get_pg(request)
-            await db.connect()
-            client = await db.get_oauth_client(client_id)
-            if client and client.get("is_active"):
-                if verify_client_secret(client_secret, client["client_secret_hash"]):
-                    return True
-    except Exception:
-        pass
-
-    return False
 
 
 def _is_security_event(action: str) -> bool:
@@ -176,8 +148,6 @@ async def _require_read_auth(request: Request) -> AuthContext:
     
     Supports:
     - Access token (JWT) with audience=authz-api and authz.audit.read scope
-    - OAuth client credentials (service account) with allowed_scopes
-    - Admin token (deprecated)
     """
     db = _get_pg(request)
     return await require_auth(request, db, scopes=["authz.audit.read"])
@@ -222,7 +192,6 @@ async def create_audit_log(request: Request):
     Create an audit log entry.
     
     Body:
-    - client_id, client_secret (OAuth client auth) - Optional for security events
     - actor_id: string (required) - The user performing the action
     - action: string (required) - The action performed (e.g., "USER_CREATED", "LOGIN")
     - resource_type: string (required) - The type of resource (e.g., "user", "role", "session")

@@ -369,6 +369,7 @@ def get_authz_schema() -> SchemaManager:
     schema.add_migration("ALTER TABLE authz_users ADD COLUMN IF NOT EXISTS last_name text NULL")
     schema.add_migration("ALTER TABLE authz_users ADD COLUMN IF NOT EXISTS avatar_url text NULL")
     schema.add_migration("ALTER TABLE authz_users ADD COLUMN IF NOT EXISTS favorite_color text NULL")
+    schema.add_migration("ALTER TABLE authz_users ADD COLUMN IF NOT EXISTS github_pat_encrypted bytea NULL")
     
     # User roles
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_authz_user_roles_user ON authz_user_roles(user_id)")

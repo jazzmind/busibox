@@ -3,8 +3,6 @@ Admin endpoints for RBAC management.
 
 Protected by (in order of precedence):
 - Access token (JWT) with authz.roles.* scopes (audience: authz-api)
-- OAuth client credentials (service account) with allowed_scopes
-- Admin token (deprecated)
 
 These endpoints allow busibox-portal (or other admin tools) to manage:
 - Roles (CRUD)
@@ -72,7 +70,6 @@ class _PgProxy:
     
     For routes that need test mode support, use:
         db = _get_pg(request)
-        await db.connect()
         result = await db.some_method(...)
     """
     
@@ -129,8 +126,6 @@ async def _require_admin_auth(request: Request, scopes: Optional[List[str]] = No
     
     Supports:
     - Access token (JWT) with audience=authz-api and required scopes
-    - OAuth client credentials (service account) with allowed_scopes
-    - Admin token (deprecated)
     
     Args:
         request: FastAPI request
@@ -154,8 +149,6 @@ async def create_role(request: Request):
     Create a new role.
 
     Body:
-    - client_id, client_secret (OAuth client auth), OR
-    - Authorization: Bearer <admin_token>
     - name: string (required)
     - description: string (optional)
     - scopes: array of OAuth2 scopes (optional)
@@ -169,7 +162,6 @@ async def create_role(request: Request):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
 
     db = _get_pg(request)
-    await db.connect()
     role = await db.create_role(name=role_data.name, description=role_data.description, scopes=role_data.scopes)
 
     return RoleResponse(
@@ -192,7 +184,6 @@ async def list_roles(request: Request):
     await _require_admin_auth(request, scopes=["authz.roles.read"])
 
     db = _get_pg(request)
-    await db.connect()
     roles = await db.list_roles()
 
     return [
@@ -223,7 +214,6 @@ async def get_role(request: Request, role_id: str):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid role ID format") from e
 
     db = _get_pg(request)
-    await db.connect()
     role = await db.get_role(role_id)
 
     if not role:
@@ -245,8 +235,6 @@ async def update_role(request: Request, role_id: str):
     Update a role.
 
     Body:
-    - client_id, client_secret (OAuth client auth), OR
-    - Authorization: Bearer <admin_token>
     - name: string (optional)
     - description: string (optional)
     - scopes: array of OAuth2 scopes (optional)
@@ -268,7 +256,6 @@ async def update_role(request: Request, role_id: str):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="At least one field must be provided")
 
     db = _get_pg(request)
-    await db.connect()
     role = await db.update_role(role_id=role_id, name=role_data.name, description=role_data.description, scopes=role_data.scopes)
 
     if not role:
@@ -301,7 +288,6 @@ async def delete_role(request: Request, role_id: str):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid role ID format") from e
 
     db = _get_pg(request)
-    await db.connect()
     deleted = await db.delete_role(role_id)
 
     if not deleted:
@@ -321,8 +307,6 @@ async def add_user_role(request: Request):
     Add a user-role binding.
 
     Body:
-    - client_id, client_secret (OAuth client auth), OR
-    - Authorization: Bearer <admin_token>
     - user_id: string (UUID)
     - role_id: string (UUID)
     """
@@ -341,7 +325,6 @@ async def add_user_role(request: Request):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid UUID format") from e
 
     db = _get_pg(request)
-    await db.connect()
     result = await db.add_user_role(user_id=binding.user_id, role_id=binding.role_id)
 
     return UserRoleBindingResponse(
@@ -357,8 +340,6 @@ async def remove_user_role(request: Request):
     Remove a user-role binding.
 
     Body:
-    - client_id, client_secret (OAuth client auth), OR
-    - Authorization: Bearer <admin_token>
     - user_id: string (UUID)
     - role_id: string (UUID)
     """
@@ -377,7 +358,6 @@ async def remove_user_role(request: Request):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid UUID format") from e
 
     db = _get_pg(request)
-    await db.connect()
     deleted = await db.remove_user_role(user_id=binding.user_id, role_id=binding.role_id)
 
     if not deleted:
@@ -410,7 +390,6 @@ async def get_user(request: Request, user_id: str):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user ID format") from e
 
     db = _get_pg(request)
-    await db.connect()
     user = await db.get_user(user_id)
 
     if not user:
@@ -453,7 +432,6 @@ async def get_user_roles(request: Request, user_id: str):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user ID format") from e
 
     db = _get_pg(request)
-    await db.connect()
     roles = await db.get_user_roles(user_id)
 
     return [
@@ -466,109 +444,6 @@ async def get_user_roles(request: Request, user_id: str):
             updated_at=r.get("updated_at").isoformat() if r.get("updated_at") else "",
         )
         for r in roles
-    ]
-
-
-# ============================================================================
-# OAuth Client Management
-# ============================================================================
-
-
-class OAuthClientCreate(BaseModel):
-    client_id: str = Field(..., min_length=1, description="Client ID for the new OAuth client")
-    client_secret: str = Field(..., min_length=1, description="Client secret for the new OAuth client")
-    allowed_audiences: List[str] = Field(default_factory=list)
-    allowed_scopes: List[str] = Field(default_factory=list)
-    # Optional: for authentication when admin token is not available
-    auth_client_id: Optional[str] = Field(None, description="Client ID for authentication (if not using admin token)")
-    auth_client_secret: Optional[str] = Field(None, description="Client secret for authentication (if not using admin token)")
-
-
-class OAuthClientResponse(BaseModel):
-    client_id: str
-    allowed_audiences: List[str]
-    allowed_scopes: List[str]
-    is_active: bool
-    created_at: str
-
-
-@router.post("/admin/oauth-clients", status_code=status.HTTP_201_CREATED)
-async def create_oauth_client(
-    client_data: OAuthClientCreate, request: Request
-) -> OAuthClientResponse:
-    """Create a new OAuth client."""
-    # Check authentication: admin token in header OR client credentials in body
-    auth_header = request.headers.get("authorization", "")
-    authenticated = False
-    
-    if auth_header.lower().startswith("bearer "):
-        token = auth_header[7:]
-        if config.admin_token and token == config.admin_token:
-            authenticated = True
-    
-    # Check OAuth client credentials in body (auth_client_id/auth_client_secret)
-    db = _get_pg(request)
-    if not authenticated and client_data.auth_client_id and client_data.auth_client_secret:
-        await db.connect()
-        client = await db.get_oauth_client(client_data.auth_client_id)
-        if client and client.get("is_active"):
-            if verify_client_secret(client_data.auth_client_secret, client["client_secret_hash"]):
-                authenticated = True
-    
-    if not authenticated:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Unauthorized: valid admin token or OAuth client credentials required",
-        )
-
-    from oauth.client_auth import hash_client_secret
-
-    # Hash the client secret
-    hashed_secret = hash_client_secret(client_data.client_secret)
-
-    # Create the client
-    await db.connect()
-    await db.create_oauth_client(
-        client_id=client_data.client_id,
-        client_secret_hash=hashed_secret,
-        allowed_audiences=client_data.allowed_audiences,
-        allowed_scopes=client_data.allowed_scopes,
-    )
-
-    # Fetch the created client
-    client = await db.get_oauth_client(client_data.client_id)
-    if not client:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create OAuth client",
-        )
-
-    return OAuthClientResponse(
-        client_id=client["client_id"],
-        allowed_audiences=client["allowed_audiences"],
-        allowed_scopes=client["allowed_scopes"],
-        is_active=client["is_active"],
-        created_at=str(client.get("created_at", "")),
-    )
-
-
-@router.get("/admin/oauth-clients")
-async def list_oauth_clients(request: Request) -> List[OAuthClientResponse]:
-    """List all OAuth clients."""
-    await _require_admin_auth(request, scopes=["authz.roles.read"])
-
-    db = _get_pg(request)
-    await db.connect()
-    clients = await db.list_oauth_clients()
-    return [
-        OAuthClientResponse(
-            client_id=c["client_id"],
-            allowed_audiences=c["allowed_audiences"],
-            allowed_scopes=c["allowed_scopes"],
-            is_active=c["is_active"],
-            created_at=str(c.get("created_at", "")),
-        )
-        for c in clients
     ]
 
 
@@ -589,7 +464,6 @@ async def get_passkey_by_credential(request: Request, credential_id: str):
     await _require_admin_auth(request)
 
     db = _get_pg(request)
-    await db.connect()
     passkey = await db.get_passkey_by_credential_id(credential_id)
 
     if not passkey:

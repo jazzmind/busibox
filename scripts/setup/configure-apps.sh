@@ -39,10 +39,6 @@ fi
 BUSIBOX_PORTAL_DIR="${BUSIBOX_PORTAL_DIR:-$(cd "${REPO_ROOT}/../busibox-portal" 2>/dev/null && pwd || echo "")}"
 BUSIBOX_AGENTS_DIR="${BUSIBOX_AGENTS_DIR:-$(cd "${REPO_ROOT}/../busibox-agents" 2>/dev/null && pwd || echo "")}"
 AUTHZ_BASE_URL="${AUTHZ_BASE_URL:-https://localhost/api/authz}"
-# DEPRECATED: Zero Trust model eliminates admin tokens. This is kept for backward
-# compatibility during migration. AuthZ client registration now uses user tokens
-# via the admin UI or token exchange flow.
-AUTHZ_ADMIN_TOKEN="${AUTHZ_ADMIN_TOKEN:-}"
 
 # =============================================================================
 # Helper Functions
@@ -64,39 +60,6 @@ check_busibox_agents() {
         return 1
     fi
     return 0
-}
-
-get_authz_admin_token() {
-    # DEPRECATED: Zero Trust model eliminates admin tokens.
-    # This function is kept for backward compatibility during migration.
-    # New integrations should use the admin UI or token exchange flow.
-    
-    # Try to get admin token from various sources
-    if [ -n "$AUTHZ_ADMIN_TOKEN" ]; then
-        echo "$AUTHZ_ADMIN_TOKEN"
-        return 0
-    fi
-    
-    # Try busibox-portal .env
-    if [ -f "${BUSIBOX_PORTAL_DIR}/.env" ]; then
-        local token=$(grep "^AUTHZ_ADMIN_TOKEN=" "${BUSIBOX_PORTAL_DIR}/.env" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
-        if [ -n "$token" ]; then
-            echo "$token"
-            return 0
-        fi
-    fi
-    
-    # Try busibox .env.local
-    if [ -f "${REPO_ROOT}/.env.local" ]; then
-        local token=$(grep "^AUTHZ_ADMIN_TOKEN=" "${REPO_ROOT}/.env.local" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
-        if [ -n "$token" ]; then
-            echo "$token"
-            return 0
-        fi
-    fi
-    
-    echo ""
-    return 1
 }
 
 generate_secret() {
@@ -175,45 +138,9 @@ assign_admin_role_in_authz() {
         return 1
     fi
     
-    local admin_token=$(get_authz_admin_token)
-    
-    if [ -z "$admin_token" ]; then
-        warn "AUTHZ_ADMIN_TOKEN not found, skipping role assignment"
-        return 1
-    fi
-    
-    info "Assigning Admin role to user $user_id in authz..."
-    
-    # First, get the Admin role ID
-    local roles_response=$(curl -sk "${AUTHZ_BASE_URL}/admin/roles" \
-        -H "Authorization: Bearer $admin_token" 2>&1)
-    
-    local admin_role_id=$(echo "$roles_response" | jq -r '.[] | select(.name == "Admin") | .id' 2>/dev/null)
-    
-    if [ -z "$admin_role_id" ] || [ "$admin_role_id" = "null" ]; then
-        warn "Admin role not found in authz service"
-        return 1
-    fi
-    
-    info "Found Admin role ID: $admin_role_id"
-    
-    # Assign the role
-    local assign_response=$(curl -sk -w "\n%{http_code}" -X POST \
-        "${AUTHZ_BASE_URL}/admin/users/${user_id}/roles/${admin_role_id}" \
-        -H "Authorization: Bearer $admin_token" \
-        -H "Content-Type: application/json" 2>&1)
-    
-    local http_code=$(echo "$assign_response" | tail -n1)
-    local body=$(echo "$assign_response" | sed '$d')
-    
-    if [ "$http_code" = "200" ] || [ "$http_code" = "201" ]; then
-        success "Admin role assigned to user"
-    elif [ "$http_code" = "409" ]; then
-        info "User already has Admin role"
-    else
-        warn "Failed to assign Admin role (HTTP $http_code): $body"
-        return 1
-    fi
+    warn "Automatic authz role assignment is disabled in Zero Trust mode."
+    warn "Assign Admin role from the UI using a logged-in admin session."
+    return 0
 }
 
 # =============================================================================
@@ -398,7 +325,7 @@ case "${1:-}" in
         echo "  BUSIBOX_PORTAL_DIR  Path to busibox-portal (default: ../busibox-portal)"
         echo "  BUSIBOX_AGENTS_DIR  Path to busibox-agents (default: ../busibox-agents)"
         echo "  AUTHZ_BASE_URL      AuthZ service URL (default: https://localhost/api/authz)"
-        echo "  AUTHZ_ADMIN_TOKEN   Admin token for authz service (admin/role assignment only)"
+        echo "  (none required)     AuthZ uses Zero Trust JWTs; no admin token is supported"
         ;;
     *)
         error "Unknown option: $1"

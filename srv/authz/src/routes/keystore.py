@@ -6,7 +6,7 @@ Provides endpoints for envelope encryption key management:
 - DEK wrapping and unwrapping (for file encryption)
 - Key rotation
 
-All endpoints require authentication via admin token or OAuth client.
+All endpoints require a valid authz JWT access token.
 """
 
 import base64
@@ -151,37 +151,25 @@ class RotateKekRequest(BaseModel):
 async def require_keystore_auth(request: Request):
     """
     Require authentication for keystore operations.
-    Accepts:
-    1. OAuth client credentials in request body (client_id, client_secret)
-    2. Bearer token (any valid bearer token from internal services)
+    Requires:
+    - Bearer token: valid JWT access token with audience=authz-api
     """
-    from oauth.client_auth import verify_client_secret
-    
-    # Try client credentials in body first
-    try:
-        body = await request.json()
-        client_id = body.get("client_id")
-        client_secret = body.get("client_secret")
-        
-        if client_id and client_secret:
-            db = _get_pg(request)
-            await db.connect()
-            client = await db.get_oauth_client(client_id)
-            if client and client.get("is_active"):
-                if verify_client_secret(client_secret, client["client_secret_hash"]):
-                    return {"auth_type": "service_account", "client_id": client_id}
-    except Exception:
-        pass  # Body is not JSON or doesn't have credentials
-    
-    # Check OAuth bearer token (from internal services)
+    from oauth.jwt_auth import verify_access_token
+
     auth_header = request.headers.get("authorization", "")
     if auth_header.lower().startswith("bearer "):
-        # Accept any valid bearer token from internal services
-        return {"auth_type": "oauth", "token": auth_header[7:]}
+        token = auth_header[7:]
+        db = _get_pg(request)
+        user_id, _, _ = await verify_access_token(token, db, "authz-api")
+
+        # Preserve identity on request state so downstream keystore endpoints can
+        # enforce user-specific decrypt behavior without re-parsing the token.
+        request.state.user_id = user_id
+        return {"auth_type": "jwt", "user_id": user_id}
     
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Keystore operations require OAuth client credentials or bearer token"
+        detail="Keystore operations require a valid bearer token"
     )
 
 

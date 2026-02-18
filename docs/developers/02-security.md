@@ -166,9 +166,7 @@ tests/security/
 |----------|-------------|---------|
 | `SECURITY_TEST_ENV` | Target environment (`local`, `test`, `production`) | `test` |
 | `TEST_JWT_TOKEN` | Valid JWT for authenticated tests | None |
-| `AUTHZ_ADMIN_TOKEN` | Admin token for admin endpoint tests | None |
-| `TEST_CLIENT_ID` | OAuth client ID for token tests | None |
-| `TEST_CLIENT_SECRET` | OAuth client secret for token tests | None |
+| `TEST_USER_EMAIL` | Test user email used for login + token exchange | `test@busibox.local` |
 | `TEST_USER_ID` | User ID for X-User-Id header | `test-security-user` |
 
 ### Service Endpoints
@@ -392,7 +390,7 @@ make bootstrap-test-creds INV=inventory/staging
 
 # Export credentials
 export TEST_JWT_TOKEN="..."
-export AUTHZ_ADMIN_TOKEN="..."
+export TEST_USER_EMAIL="test@busibox.local"
 ```
 
 ### Slow Tests Not Running
