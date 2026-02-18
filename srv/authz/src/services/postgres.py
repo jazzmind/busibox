@@ -2096,6 +2096,146 @@ class PostgresService:
             return int(result.split()[-1]) if result else 0
 
     # ---------------------------------------------------------------------
+    # User Channel Bindings
+    # ---------------------------------------------------------------------
+
+    async def create_user_channel_binding(
+        self,
+        *,
+        user_id: str,
+        channel_type: str,
+        delegation_token: str,
+        delegation_token_jti: str | None = None,
+        ttl_minutes: int = 15,
+    ) -> dict:
+        """Create/update a pending channel binding and return link code."""
+        uid = validate_uuid(user_id, "user_id")
+        channel = channel_type.strip().lower()
+        if not channel:
+            raise ValueError("channel_type is required")
+
+        import secrets
+        from datetime import datetime, timedelta, timezone
+
+        link_code = secrets.token_urlsafe(12).replace("-", "").replace("_", "")[:10].upper()
+        link_expires_at = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
+        jti_uuid = validate_uuid(delegation_token_jti, "delegation_token_jti") if delegation_token_jti else None
+
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO authz_user_channel_bindings (
+                    user_id, channel_type, external_id, link_code, link_expires_at,
+                    delegation_token_jti, delegation_token, verified_at, updated_at
+                )
+                VALUES ($1, $2, NULL, $3, $4, $5, $6, NULL, now())
+                ON CONFLICT (user_id, channel_type)
+                DO UPDATE SET
+                    external_id = NULL,
+                    link_code = EXCLUDED.link_code,
+                    link_expires_at = EXCLUDED.link_expires_at,
+                    delegation_token_jti = EXCLUDED.delegation_token_jti,
+                    delegation_token = EXCLUDED.delegation_token,
+                    verified_at = NULL,
+                    updated_at = now()
+                RETURNING id::text, user_id::text, channel_type, link_code, link_expires_at, created_at, updated_at, verified_at
+                """,
+                uid,
+                channel,
+                link_code,
+                link_expires_at,
+                jti_uuid,
+                delegation_token,
+            )
+            return dict(row)
+
+    async def verify_user_channel_binding(
+        self,
+        *,
+        channel_type: str,
+        external_id: str,
+        link_code: str,
+    ) -> dict | None:
+        """Verify a pending binding with link code and attach external identity."""
+        channel = channel_type.strip().lower()
+        external = external_id.strip().lower()
+        code = link_code.strip().upper()
+        if not channel or not external or not code:
+            return None
+
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                UPDATE authz_user_channel_bindings
+                SET
+                    external_id = $1,
+                    verified_at = now(),
+                    link_code = NULL,
+                    link_expires_at = NULL,
+                    updated_at = now()
+                WHERE channel_type = $2
+                  AND link_code = $3
+                  AND link_expires_at > now()
+                RETURNING id::text, user_id::text, channel_type, external_id, delegation_token, delegation_token_jti::text, verified_at
+                """,
+                external,
+                channel,
+                code,
+            )
+            return dict(row) if row else None
+
+    async def lookup_user_channel_binding(
+        self,
+        *,
+        channel_type: str,
+        external_id: str,
+    ) -> dict | None:
+        """Lookup verified channel binding by external identity."""
+        channel = channel_type.strip().lower()
+        external = external_id.strip().lower()
+        if not channel or not external:
+            return None
+
+        async with self.acquire(None, None) as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id::text, user_id::text, channel_type, external_id, delegation_token, delegation_token_jti::text, verified_at, created_at, updated_at
+                FROM authz_user_channel_bindings
+                WHERE channel_type = $1 AND external_id = $2 AND verified_at IS NOT NULL
+                """,
+                channel,
+                external,
+            )
+            return dict(row) if row else None
+
+    async def list_user_channel_bindings(self, user_id: str) -> List[dict]:
+        """List all channel bindings for a user."""
+        uid = validate_uuid(user_id, "user_id")
+        async with self.acquire(None, None) as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id::text, user_id::text, channel_type, external_id, verified_at, created_at, updated_at
+                FROM authz_user_channel_bindings
+                WHERE user_id = $1
+                ORDER BY created_at DESC
+                """,
+                uid,
+            )
+            return [dict(row) for row in rows]
+
+    async def delete_user_channel_binding(self, user_id: str, binding_id: str) -> bool:
+        """Delete a user-owned channel binding."""
+        uid = validate_uuid(user_id, "user_id")
+        bid = validate_uuid(binding_id, "binding_id")
+        async with self.acquire(None, None) as conn:
+            result = await conn.execute(
+                "DELETE FROM authz_user_channel_bindings WHERE id = $1 AND user_id = $2",
+                bid,
+                uid,
+            )
+            return result != "DELETE 0"
+
+    # ---------------------------------------------------------------------
     # Email Domain Configuration
     # ---------------------------------------------------------------------
 

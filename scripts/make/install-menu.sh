@@ -425,7 +425,7 @@ main() {
                 echo ""
                 printf "${YELLOW}This will redeploy all services but preserve your configuration and data.${NC}\n"
                 read -p "Continue? [y/N]: " confirm
-                if [[ "${confirm,,}" == "y" ]]; then
+                if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
                     # Reset install phase to force full redeploy
                     set_state "INSTALL_PHASE" "wizard_complete"
                     # Clear container creation flags to force service redeploy

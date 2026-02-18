@@ -286,6 +286,24 @@ def get_authz_schema() -> SchemaManager:
             revoked_at timestamptz NULL
         )
     """)
+
+    schema.add_table("""
+        CREATE TABLE IF NOT EXISTS authz_user_channel_bindings (
+            id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+            user_id uuid NOT NULL REFERENCES authz_users(user_id) ON DELETE CASCADE,
+            channel_type text NOT NULL,
+            external_id text NULL,
+            link_code text NULL,
+            link_expires_at timestamptz NULL,
+            delegation_token_jti uuid NULL REFERENCES authz_delegation_tokens(jti) ON DELETE SET NULL,
+            delegation_token text NULL,
+            verified_at timestamptz NULL,
+            created_at timestamptz NOT NULL DEFAULT now(),
+            updated_at timestamptz NOT NULL DEFAULT now(),
+            UNIQUE(channel_type, external_id),
+            UNIQUE(user_id, channel_type)
+        )
+    """)
     
     schema.add_table("""
         CREATE TABLE IF NOT EXISTS authz_email_domain_config (
@@ -347,6 +365,9 @@ def get_authz_schema() -> SchemaManager:
     # Delegation tokens
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_authz_delegation_tokens_user_id ON authz_delegation_tokens(user_id)")
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_authz_delegation_tokens_expires_at ON authz_delegation_tokens(expires_at)")
+    schema.add_index("CREATE INDEX IF NOT EXISTS idx_authz_user_channel_bindings_user_id ON authz_user_channel_bindings(user_id)")
+    schema.add_index("CREATE INDEX IF NOT EXISTS idx_authz_user_channel_bindings_channel_external ON authz_user_channel_bindings(channel_type, external_id)")
+    schema.add_index("CREATE INDEX IF NOT EXISTS idx_authz_user_channel_bindings_link_code ON authz_user_channel_bindings(link_code)")
     
     # Email domain config
     schema.add_index("CREATE INDEX IF NOT EXISTS idx_authz_email_domain_config_domain ON authz_email_domain_config(domain)")
@@ -394,6 +415,7 @@ def get_authz_schema() -> SchemaManager:
     schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON authz_totp_codes TO busibox_user")
     schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON authz_totp_secrets TO busibox_user")
     schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON authz_delegation_tokens TO busibox_user")
+    schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON authz_user_channel_bindings TO busibox_user")
     schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON authz_email_domain_config TO busibox_user")
     schema.add_migration("GRANT SELECT, INSERT, UPDATE, DELETE ON authz_role_bindings TO busibox_user")
     

@@ -20,6 +20,7 @@
 #   GITHUB_AUTH_TOKEN - Required for cloning private repos and npm packages
 #   BUSIBOX_PORTAL_GITHUB_REF - Git ref for busibox-portal (default: main)
 #   BUSIBOX_AGENTS_GITHUB_REF - Git ref for busibox-agents (default: main)
+#   BUSIBOX_APPBUILDER_GITHUB_REF - Git ref for busibox-appbuilder (default: main)
 #   DATABASE_URL - PostgreSQL connection string (required for busibox-portal)
 #
 # =============================================================================
@@ -29,6 +30,7 @@ set -euo pipefail
 # Default GitHub refs
 BUSIBOX_PORTAL_GITHUB_REF="${BUSIBOX_PORTAL_GITHUB_REF:-main}"
 BUSIBOX_AGENTS_GITHUB_REF="${BUSIBOX_AGENTS_GITHUB_REF:-main}"
+BUSIBOX_APPBUILDER_GITHUB_REF="${BUSIBOX_APPBUILDER_GITHUB_REF:-main}"
 
 # Logging functions
 log_info() {
@@ -141,6 +143,12 @@ deploy_app() {
             ;;
         busibox-agents)
             export NEXT_PUBLIC_BASE_PATH=/agents
+            export NEXT_PUBLIC_BUSIBOX_PORTAL_URL="${NEXT_PUBLIC_BUSIBOX_PORTAL_URL:-https://localhost/portal}"
+            ;;
+        busibox-appbuilder)
+            export NEXT_PUBLIC_BASE_PATH=/builder
+            export APP_NAME="${APP_NAME:-busibox-appbuilder}"
+            export NEXT_PUBLIC_APP_URL="${NEXT_PUBLIC_APP_URL:-https://localhost/builder}"
             export NEXT_PUBLIC_BUSIBOX_PORTAL_URL="${NEXT_PUBLIC_BUSIBOX_PORTAL_URL:-https://localhost/portal}"
             ;;
     esac
@@ -275,6 +283,7 @@ case "${1:-start}" in
         log_info "Checking app deployments..."
         deploy_if_needed "busibox-portal" "${BUSIBOX_PORTAL_GITHUB_REF}"
         deploy_if_needed "busibox-agents" "${BUSIBOX_AGENTS_GITHUB_REF}"
+        deploy_if_needed "busibox-appbuilder" "${BUSIBOX_APPBUILDER_GITHUB_REF}"
         
         log_success "Core apps started"
         
@@ -289,7 +298,7 @@ case "${1:-start}" in
         
         if [ -z "${APP_NAME}" ]; then
             log_error "Usage: entrypoint.sh deploy <app-name> [git-ref]"
-            log_error "  app-name: busibox-portal, busibox-agents"
+            log_error "  app-name: busibox-portal, busibox-agents, busibox-appbuilder"
             log_error "  git-ref: branch or tag (default: main)"
             exit 1
         fi

@@ -25,6 +25,7 @@ if not CONTAINER_PREFIX:
     raise RuntimeError("CONTAINER_PREFIX must be set for deploy-api")
 
 PROXY_CONTAINER = f"{CONTAINER_PREFIX}-proxy"
+CORE_APP_PATHS = {"/portal", "/agents", "/builder"}
 
 
 class NginxConfigurator:
@@ -33,6 +34,10 @@ class NginxConfigurator:
         self.config_dir = config.nginx_config_dir
         self.enabled_dir = config.nginx_enabled_dir
         self.apps_container_ip = config.apps_container_ip
+
+    @staticmethod
+    def _is_core_app_route(manifest: BusiboxManifest) -> bool:
+        return manifest.defaultPath.rstrip('/') in CORE_APP_PATHS
     
     def generate_location_config(
         self,
@@ -193,6 +198,16 @@ ln -s {source} {target}
         container_ip: Optional[str] = None
     ) -> Tuple[bool, str]:
         """Configure nginx for app (write, validate, enable, reload)"""
+        if self._is_core_app_route(manifest):
+            # Core app routes are defined in base nginx configs
+            # (e.g. /portal, /agents, /builder). Do not create dynamic snippets.
+            logger.info(
+                "Skipping dynamic nginx config for core app route %s (%s)",
+                manifest.defaultPath,
+                manifest.id,
+            )
+            await self.remove_config(manifest)
+            return True, f"Core app route {manifest.defaultPath} uses base nginx config"
         
         # In Docker/local environment, write config directly to mounted volume
         if is_docker_environment():
@@ -303,7 +318,45 @@ ln -s {source} {target}
 
     async def remove_config(self, manifest: BusiboxManifest) -> Tuple[bool, str]:
         """Remove nginx configuration for app via SSH"""
-        
+        if is_docker_environment():
+            busibox_path = os.environ.get("BUSIBOX_HOST_PATH", "/busibox")
+            host_config = f"{busibox_path}/config/nginx-sites/apps/{manifest.id}.conf"
+            container_config = f"/etc/nginx/conf.d/apps/{manifest.id}.conf"
+
+            try:
+                if os.path.exists(host_config):
+                    os.remove(host_config)
+
+                subprocess.run(
+                    ['docker', 'exec', PROXY_CONTAINER, 'sh', '-c', f'rm -f {shlex.quote(container_config)}'],
+                    capture_output=True,
+                    text=True,
+                )
+
+                test_result = subprocess.run(
+                    ['docker', 'exec', PROXY_CONTAINER, 'nginx', '-t'],
+                    capture_output=True,
+                    text=True,
+                )
+                if test_result.returncode != 0:
+                    error = (test_result.stderr or test_result.stdout or "").strip()
+                    return False, f"Nginx config test failed in {PROXY_CONTAINER}: {error}"
+
+                reload_result = subprocess.run(
+                    ['docker', 'exec', PROXY_CONTAINER, 'nginx', '-s', 'reload'],
+                    capture_output=True,
+                    text=True,
+                )
+                if reload_result.returncode != 0:
+                    error = (reload_result.stderr or reload_result.stdout or "").strip()
+                    return False, f"Nginx reload failed in {PROXY_CONTAINER}: {error}"
+
+                logger.info("Removed docker app config for %s", manifest.id)
+                return True, f"Removed config for {manifest.id}"
+            except Exception as e:
+                logger.error("Failed to remove docker nginx config: %s", e)
+                return False, f"Failed to remove config: {e}"
+
         # Remove from app-locations dir (current approach)
         config_path = f"{self.config_dir}/{manifest.id}.conf"
         # Also clean up any legacy symlink in sites-enabled (from older deploys)

@@ -77,6 +77,10 @@ class Settings(BaseSettings):
         "http://10.96.200.210:8010/oauth/token",
         description="Token endpoint for OAuth2 token exchange",
     )
+    authz_base_url: AnyHttpUrl = Field(
+        "http://10.96.200.210:8010",
+        description="Base URL for AuthZ API (channel linking lookup/verify)",
+    )
     delegation_token: str = Field(
         "",
         description="Pre-issued delegation token for signal-bot service account",
@@ -86,6 +90,7 @@ class Settings(BaseSettings):
     enable_web_search: bool = Field(True, description="Enable web search for queries")
     enable_doc_search: bool = Field(False, description="Enable document search")
     default_model: str = Field("auto", description="Default model selection")
+    default_agent_id: str = Field("chat-agent", description="Default agent ID for inbound bridge messages")
     max_message_length: int = Field(4000, description="Max message length for Signal")
 
     # Rate limiting

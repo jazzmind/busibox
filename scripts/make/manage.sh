@@ -541,6 +541,63 @@ _rebuild_app_submenu() {
     local env="$1"
     local prefix="$2"
 
+    _refresh_nginx_after_core_app_change() {
+        echo ""
+        info "Refreshing nginx routing..."
+        backend_service_action "nginx" "restart" "$env" "$prefix" || true
+    }
+
+    _docker_rebuild_core_app_from_source() {
+        local app_name="$1"
+        docker exec -e APP_NAME="$app_name" "${prefix}-core-apps" bash -lc '
+            set -euo pipefail
+
+            APP_PATH=""
+            for candidate in \
+                "/srv/${APP_NAME}" \
+                "/srv/apps/${APP_NAME}" \
+                /srv/apps/*/"${APP_NAME}" \
+                /srv/*/"${APP_NAME}"
+            do
+                if [[ -d "$candidate" ]]; then
+                    APP_PATH="$candidate"
+                    break
+                fi
+            done
+
+            if [[ -z "$APP_PATH" && -x /usr/local/bin/entrypoint.sh ]]; then
+                case "$APP_NAME" in
+                    busibox-portal) DEPLOY_REF="${BUSIBOX_PORTAL_GITHUB_REF:-main}" ;;
+                    busibox-agents) DEPLOY_REF="${BUSIBOX_AGENTS_GITHUB_REF:-main}" ;;
+                    busibox-appbuilder) DEPLOY_REF="${BUSIBOX_APPBUILDER_GITHUB_REF:-main}" ;;
+                    *) DEPLOY_REF="main" ;;
+                esac
+                echo "App not present; deploying ${APP_NAME} (ref: ${DEPLOY_REF})..."
+                /usr/local/bin/entrypoint.sh deploy "$APP_NAME" "$DEPLOY_REF"
+
+                for candidate in \
+                    "/srv/${APP_NAME}" \
+                    "/srv/apps/${APP_NAME}" \
+                    /srv/apps/*/"${APP_NAME}" \
+                    /srv/*/"${APP_NAME}"
+                do
+                    if [[ -d "$candidate" ]]; then
+                        APP_PATH="$candidate"
+                        break
+                    fi
+                done
+            fi
+
+            if [[ -z "$APP_PATH" ]]; then
+                echo "${APP_NAME} source directory not found in core-apps container"
+                echo "Checked: /srv/${APP_NAME}, /srv/apps/${APP_NAME}, /srv/apps/*/${APP_NAME}, /srv/*/${APP_NAME}"
+                exit 1
+            fi
+
+            cd "$APP_PATH" && npm install
+        '
+    }
+
     clear
     box_start 70 double "$CYAN"
     box_header "REBUILD APP"
@@ -549,7 +606,8 @@ _rebuild_app_submenu() {
     box_empty
     box_line "    ${BOLD}1)${NC} busibox-portal"
     box_line "    ${BOLD}2)${NC} busibox-agents"
-    box_line "    ${BOLD}3)${NC} both"
+    box_line "    ${BOLD}3)${NC} busibox-appbuilder"
+    box_line "    ${BOLD}4)${NC} all (portal + agents + appbuilder)"
     box_empty
     box_line "  ${DIM}b = back${NC}"
     box_empty
@@ -564,11 +622,13 @@ _rebuild_app_submenu() {
             echo ""
             info "Rebuilding busibox-portal from source..."
             if [[ "$_CURRENT_BACKEND" == "docker" ]]; then
-                docker exec "${prefix}-core-apps" bash -c "cd /srv/busibox-portal && npm install"
+                _docker_rebuild_core_app_from_source "busibox-portal"
                 docker restart "${prefix}-core-apps"
+                _refresh_nginx_after_core_app_change
             else
                 cd "${REPO_ROOT}/provision/ansible"
                 make deploy-busibox-portal INV="inventory/${env}"
+                _refresh_nginx_after_core_app_change
             fi
             read -n 1 -s -r -p "Press any key to continue..."
             ;;
@@ -576,29 +636,54 @@ _rebuild_app_submenu() {
             echo ""
             info "Rebuilding busibox-agents from source..."
             if [[ "$_CURRENT_BACKEND" == "docker" ]]; then
-                docker exec "${prefix}-core-apps" bash -c "cd /srv/busibox-agents && npm install"
+                _docker_rebuild_core_app_from_source "busibox-agents"
                 docker restart "${prefix}-core-apps"
+                _refresh_nginx_after_core_app_change
             else
                 cd "${REPO_ROOT}/provision/ansible"
                 make deploy-busibox-agents INV="inventory/${env}"
+                _refresh_nginx_after_core_app_change
             fi
             read -n 1 -s -r -p "Press any key to continue..."
             ;;
         3)
             echo ""
+            info "Rebuilding busibox-appbuilder from source..."
+            if [[ "$_CURRENT_BACKEND" == "docker" ]]; then
+                _docker_rebuild_core_app_from_source "busibox-appbuilder"
+                echo ""
+                docker restart "${prefix}-core-apps"
+                _refresh_nginx_after_core_app_change
+            else
+                cd "${REPO_ROOT}/provision/ansible"
+                make deploy-busibox-appbuilder INV="inventory/${env}"
+                _refresh_nginx_after_core_app_change
+            fi
+            read -n 1 -s -r -p "Press any key to continue..."
+            ;;
+        4)
+            echo ""
             info "Rebuilding busibox-portal from source..."
             if [[ "$_CURRENT_BACKEND" == "docker" ]]; then
-                docker exec "${prefix}-core-apps" bash -c "cd /srv/busibox-portal && npm install"
+                _docker_rebuild_core_app_from_source "busibox-portal"
                 echo ""
                 info "Rebuilding busibox-agents from source..."
-                docker exec "${prefix}-core-apps" bash -c "cd /srv/busibox-agents && npm install"
+                _docker_rebuild_core_app_from_source "busibox-agents"
+                echo ""
+                info "Rebuilding busibox-appbuilder from source..."
+                _docker_rebuild_core_app_from_source "busibox-appbuilder"
                 docker restart "${prefix}-core-apps"
+                _refresh_nginx_after_core_app_change
             else
                 cd "${REPO_ROOT}/provision/ansible"
                 make deploy-busibox-portal INV="inventory/${env}"
                 echo ""
                 info "Rebuilding busibox-agents from source..."
                 make deploy-busibox-agents INV="inventory/${env}"
+                echo ""
+                info "Rebuilding busibox-appbuilder from source..."
+                make deploy-busibox-appbuilder INV="inventory/${env}"
+                _refresh_nginx_after_core_app_change
             fi
             read -n 1 -s -r -p "Press any key to continue..."
             ;;
@@ -614,6 +699,7 @@ _deploy_core_app_submenu() {
     local -A CORE_APP_REPOS=(
         ["busibox-portal"]="jazzmind/busibox-portal"
         ["busibox-agents"]="jazzmind/busibox-agents"
+        ["busibox-appbuilder"]="jazzmind/busibox-appbuilder"
     )
 
     clear
@@ -624,7 +710,8 @@ _deploy_core_app_submenu() {
     box_empty
     box_line "    ${BOLD}1)${NC} busibox-portal"
     box_line "    ${BOLD}2)${NC} busibox-agents"
-    box_line "    ${BOLD}3)${NC} both (same ref)"
+    box_line "    ${BOLD}3)${NC} busibox-appbuilder"
+    box_line "    ${BOLD}4)${NC} all (same ref)"
     box_empty
     box_line "  ${DIM}b = back${NC}"
     box_empty
@@ -639,7 +726,8 @@ _deploy_core_app_submenu() {
     case "$app_choice" in
         1) apps_to_deploy=("busibox-portal") ;;
         2) apps_to_deploy=("busibox-agents") ;;
-        3) apps_to_deploy=("busibox-portal" "busibox-agents") ;;
+        3) apps_to_deploy=("busibox-appbuilder") ;;
+        4) apps_to_deploy=("busibox-portal" "busibox-agents" "busibox-appbuilder") ;;
         b|B) return ;;
         *) return ;;
     esac
@@ -666,6 +754,9 @@ _deploy_core_app_submenu() {
         unset DEPLOY_REF
         echo ""
     done
+
+    info "Refreshing nginx routing..."
+    backend_service_action "nginx" "restart" "$env" "${CONTAINER_PREFIX:-dev}" || true
 
     read -n 1 -s -r -p "Press any key to continue..."
 }

@@ -32,7 +32,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN npm install -g concurrently
 
 # Create directories for apps
-RUN mkdir -p /srv/busibox-portal /srv/busibox-agents \
+RUN mkdir -p /srv/busibox-portal /srv/busibox-agents /srv/busibox-appbuilder \
     /var/log
 
 # Set up npm authentication for private GitHub packages
@@ -50,7 +50,7 @@ COPY provision/docker/core-apps-entrypoint.sh /usr/local/bin/core-apps-entrypoin
 RUN chmod +x /usr/local/bin/core-apps-entrypoint.sh
 
 # Expose app ports
-EXPOSE 3000 3001
+EXPOSE 3000 3001 3004
 
 # Environment
 ENV NODE_ENV=development

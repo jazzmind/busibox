@@ -166,3 +166,46 @@ applications:
       DOCUMENTS_API_AUD: "https://busibox.local/documents"
       # Enable verbose authz logging for debugging
       VERBOSE_AUTHZ_LOGGING: "true"
+
+  - name: busibox-appbuilder
+    github_repo: jazzmind/busibox-appbuilder
+    container: core-apps-lxc
+    container_ip: "{{ core_apps_ip }}"
+    port: 3004
+    deploy_path: /srv/apps/busibox-appbuilder
+    health_endpoint: /builder/api/health  # Include basePath since Next.js runs with NEXT_PUBLIC_BASE_PATH=/builder
+    build_command: "npm run build"
+    start_command: "npm start"  # Standard Next.js start (not standalone mode)
+    process_manager: systemd  # Use systemd for consistent logging via journalctl
+    auto_deploy: true  # Deploy by default with core apps
+    routes:
+      - type: path
+        domain: "{{ full_domain }}"
+        path: /builder
+        strip_path: false  # Keep /builder path - app uses Next.js basePath
+        sse: true
+    secrets:
+      - sso_jwt_secret
+      - current_container_ip
+      - apps_container_ip
+      - agent_container_ip
+      - data_container_ip
+      - authz_container_ip
+    optional_secrets:
+      - github_auth_token
+    env:
+      NODE_ENV: "{{ node_env }}"
+      APP_NAME: "busibox-appbuilder"
+      PORT: "3004"
+      NEXT_PUBLIC_BASE_PATH: "/builder"
+      NEXT_PUBLIC_APP_URL: "https://{{ full_domain }}/builder"
+      NEXT_PUBLIC_BUSIBOX_PORTAL_URL: "https://{{ full_domain }}/portal"
+      AUTHZ_BASE_URL: "http://{{ authz_ip }}:8010"
+      DATA_API_URL: "http://{{ data_ip }}:8002"
+      AGENT_API_URL: "http://{{ agent_api_host }}:{{ agent_api_port }}"
+      DEPLOY_API_URL: "http://{{ authz_ip }}:8011"
+      CONTAINER_PREFIX: "{{ container_prefix }}"
+      BUILDER_PROJECT_ROOT: "/srv/projects"
+      BUILDER_TEMPLATE_SOURCE: "/srv/projects/templates/busibox-template"
+      BUILDER_LIBRARY_OWNER: "jazzmind"
+      BUILDER_LIBRARY_REPO: "busibox-app-library"

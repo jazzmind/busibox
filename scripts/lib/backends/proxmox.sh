@@ -50,7 +50,7 @@ _proxmox_get_service_ip() {
         bridge|bridge-api) echo "${network_base}.211" ;;
         authz|authz-api|deploy|deploy-api|docs|docs-api) echo "${network_base}.210" ;;
         search|search-api|embedding|embedding-api) echo "${network_base}.204" ;;
-        core-apps|apps|busibox-portal|busibox-agents) echo "${network_base}.201" ;;
+        core-apps|apps|busibox-portal|busibox-agents|busibox-appbuilder) echo "${network_base}.201" ;;
         nginx|proxy) echo "${network_base}.200" ;;
         litellm) echo "${network_base}.207" ;;
         vllm) echo "${network_base}.208" ;;
@@ -75,6 +75,7 @@ _proxmox_get_systemd_name() {
         nginx|proxy) echo "nginx" ;;
         busibox-portal) echo "busibox-portal" ;;
         busibox-agents) echo "busibox-agents" ;;
+        busibox-appbuilder) echo "busibox-appbuilder" ;;
         postgres|pg) echo "postgresql" ;;
         minio|files) echo "minio" ;;
         milvus) echo "milvus" ;;
@@ -248,7 +249,7 @@ backend_service_action() {
             # Core apps support deploying a specific ref (branch/tag)
             local deploy_ref="${DEPLOY_REF:-}"
             case "$service" in
-                busibox-portal|busibox-agents)
+                busibox-portal|busibox-agents|busibox-appbuilder)
                     if [[ -n "$deploy_ref" ]]; then
                         info "Deploying ${service} at ref: ${BOLD}${deploy_ref}${NC}"
                         if ! make deploy-app-ref APP="$service" REF="$deploy_ref" INV="$inventory"; then
@@ -275,6 +276,12 @@ backend_service_action() {
                         info "Deploying busibox-agents at ref: ${BOLD}${deploy_ref}${NC}"
                         if ! make deploy-app-ref APP="busibox-agents" REF="$deploy_ref" INV="$inventory"; then
                             error "Failed to redeploy busibox-agents"
+                            return 1
+                        fi
+                        echo ""
+                        info "Deploying busibox-appbuilder at ref: ${BOLD}${deploy_ref}${NC}"
+                        if ! make deploy-app-ref APP="busibox-appbuilder" REF="$deploy_ref" INV="$inventory"; then
+                            error "Failed to redeploy busibox-appbuilder"
                             return 1
                         fi
                     else

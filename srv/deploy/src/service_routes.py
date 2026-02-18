@@ -510,6 +510,7 @@ async def check_service_health(
     nginx_apps = {
         'busibox-agents': {'path': '/agents', 'health_endpoint': '/api/health'},
         'busibox-portal': {'path': '/portal', 'health_endpoint': '/api/health'},
+        'busibox-appbuilder': {'path': '/builder', 'health_endpoint': '/api/health'},
     }
     
     # Check nginx apps first (they don't have their own containers)
@@ -1084,6 +1085,7 @@ async def start_service_sse(
                         'bridge': ('bridge-api', 'bridge'),  # alias
                         'busibox-portal': ('core-apps', 'busibox-portal'),  # apps-lxc
                         'busibox-agents': ('core-apps', 'busibox-agents'),  # apps-lxc
+                        'busibox-appbuilder': ('core-apps', 'busibox-appbuilder'),  # apps-lxc
                     }
                     
                     if service not in proxmox_service_map:
@@ -1179,6 +1181,10 @@ async def start_service_sse(
                 # Map logical service names to actual container(s) to start
                 service_groups = {
                     'data-api': ['data-api', 'data-worker'],  # Data needs both API and worker
+                    # Frontend apps run inside the shared core-apps service
+                    'busibox-portal': ['core-apps'],
+                    'busibox-agents': ['core-apps'],
+                    'busibox-appbuilder': ['core-apps'],
                 }
                 services_to_start = service_groups.get(service, [service])
                 

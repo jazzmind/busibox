@@ -46,6 +46,7 @@ class AgentClient:
         base_url: str,
         auth_token_url: str,
         delegation_token: str,
+        default_agent_id: Optional[str] = None,
     ):
         """
         Initialize Agent API client with Zero Trust authentication.
@@ -58,10 +59,10 @@ class AgentClient:
         self.base_url = base_url.rstrip("/")
         self.auth_token_url = auth_token_url
         self.delegation_token = delegation_token
+        self.default_agent_id = default_agent_id
         
         self._client: Optional[httpx.AsyncClient] = None
-        self._token: Optional[str] = None
-        self._token_expires: Optional[datetime] = None
+        self._token_cache: Dict[str, tuple[str, datetime]] = {}
         
         # Conversation mapping: sender -> conversation_id
         self._conversations: Dict[str, str] = {}
@@ -80,7 +81,7 @@ class AgentClient:
             raise RuntimeError("Client not initialized. Use async with context.")
         return self._client
 
-    async def _get_token(self) -> str:
+    async def _get_token(self, subject_token: Optional[str] = None) -> str:
         """
         Get a valid agent-api token via token exchange.
         
@@ -93,10 +94,10 @@ class AgentClient:
             Bearer token string for agent-api
         """
         now = datetime.now(timezone.utc)
-        
-        # Return cached token if still valid
-        if self._token and self._token_expires and now < self._token_expires:
-            return self._token
+        exchange_subject_token = subject_token or self.delegation_token
+        cached = self._token_cache.get(exchange_subject_token)
+        if cached and now < cached[1]:
+            return cached[0]
         
         # Request new token via token exchange
         try:
@@ -104,7 +105,7 @@ class AgentClient:
                 self.auth_token_url,
                 data={
                     "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-                    "subject_token": self.delegation_token,
+                    "subject_token": exchange_subject_token,
                     "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
                     "audience": "agent-api",
                     "scope": "agent.execute chat.write chat.read",
@@ -114,14 +115,15 @@ class AgentClient:
             response.raise_for_status()
             
             data = response.json()
-            self._token = data["access_token"]
+            access_token = data["access_token"]
             
             # Parse expiry (default to 1 hour if not provided)
             expires_in = data.get("expires_in", 3600)
-            self._token_expires = now + timedelta(seconds=expires_in - 60)
+            expires_at = now + timedelta(seconds=expires_in - 60)
+            self._token_cache[exchange_subject_token] = (access_token, expires_at)
             
             logger.info("Obtained agent-api token via token exchange")
-            return self._token
+            return access_token
             
         except httpx.HTTPStatusError as e:
             logger.error(f"Token exchange failed: {e.response.status_code} - {e.response.text}")
@@ -130,9 +132,9 @@ class AgentClient:
             logger.error(f"Failed to get auth token: {e}")
             raise
 
-    async def _get_headers(self) -> Dict[str, str]:
+    async def _get_headers(self, subject_token: Optional[str] = None) -> Dict[str, str]:
         """Get headers with authentication."""
-        token = await self._get_token()
+        token = await self._get_token(subject_token)
         return {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
@@ -154,6 +156,8 @@ class AgentClient:
         enable_web_search: bool = True,
         enable_doc_search: bool = False,
         model: str = "auto",
+        agent_id: Optional[str] = None,
+        delegation_token_override: Optional[str] = None,
     ) -> ChatResponse:
         """
         Send a chat message and get a response (non-streaming).
@@ -169,7 +173,7 @@ class AgentClient:
             ChatResponse with AI response
         """
         url = f"{self.base_url}/chat/message"
-        headers = await self._get_headers()
+        headers = await self._get_headers(delegation_token_override)
         
         payload = {
             "message": message,
@@ -177,6 +181,9 @@ class AgentClient:
             "enable_web_search": enable_web_search,
             "enable_doc_search": enable_doc_search,
         }
+        effective_agent_id = agent_id or self.default_agent_id
+        if effective_agent_id:
+            payload["agent_id"] = effective_agent_id
         
         # Include conversation ID if we have one for this sender
         conversation_id = self.get_conversation_id(sender)
@@ -213,6 +220,8 @@ class AgentClient:
         enable_web_search: bool = True,
         enable_doc_search: bool = False,
         model: str = "auto",
+        agent_id: Optional[str] = None,
+        delegation_token_override: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         Send a chat message and stream the response.
@@ -228,7 +237,7 @@ class AgentClient:
             Event dictionaries from the stream
         """
         url = f"{self.base_url}/chat/message/stream/agentic"
-        headers = await self._get_headers()
+        headers = await self._get_headers(delegation_token_override)
         
         payload = {
             "message": message,
@@ -236,6 +245,9 @@ class AgentClient:
             "enable_web_search": enable_web_search,
             "enable_doc_search": enable_doc_search,
         }
+        effective_agent_id = agent_id or self.default_agent_id
+        if effective_agent_id:
+            payload["agent_id"] = effective_agent_id
         
         # Include conversation ID if we have one
         conversation_id = self.get_conversation_id(sender)

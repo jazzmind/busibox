@@ -875,7 +875,12 @@ mlx-status:
 # Reads HOST_AGENT_TOKEN from .env.dev for authentication
 mlx-start:
 	@echo "Starting MLX server..."
-	@TOKEN=$$(grep -s '^HOST_AGENT_TOKEN=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
+	@TOKEN=$$(awk -F= '/^HOST_AGENT_TOKEN=/{val=substr($$0, index($$0,$$2))} END{print val}' $(ENV_FILE) 2>/dev/null | tr -d '\r\n'); \
+	if ! curl -sf http://localhost:8089/health >/dev/null 2>&1; then \
+		echo "Host-agent not running. Starting host-agent..."; \
+		$(MAKE) host-agent-start >/dev/null; \
+		sleep 1; \
+	fi; \
 	if curl -sf http://localhost:8089/health >/dev/null 2>&1; then \
 		echo "Using host-agent to start MLX..."; \
 		if [ -n "$$TOKEN" ]; then \
@@ -890,14 +895,14 @@ mlx-start:
 				-d '{"model_type": "agent"}' || echo "Failed - authentication may be required"; \
 		fi; \
 	else \
-		echo "Host-agent not running. Starting MLX directly..."; \
+		echo "Host-agent unavailable. Starting MLX directly..."; \
 		bash scripts/llm/start-mlx-server.sh; \
 	fi
 
 # Stop MLX server
 mlx-stop:
 	@echo "Stopping MLX server..."
-	@TOKEN=$$(grep -s '^HOST_AGENT_TOKEN=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
+	@TOKEN=$$(awk -F= '/^HOST_AGENT_TOKEN=/{val=substr($$0, index($$0,$$2))} END{print val}' $(ENV_FILE) 2>/dev/null | tr -d '\r\n'); \
 	if curl -sf http://localhost:8089/health >/dev/null 2>&1; then \
 		if [ -n "$$TOKEN" ]; then \
 			curl -sf -X POST http://localhost:8089/mlx/stop \

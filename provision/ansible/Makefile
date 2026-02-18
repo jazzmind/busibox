@@ -1,4 +1,4 @@
-.PHONY: ping all files pg milvus neo4j nginx search search-api agent data data-api data-worker data-update-tests docs apps user-apps openwebui deploy-apps deploy-busibox-portal deploy-busibox-agents deploy-app-ref verify verify-health verify-smoke service-start service-stop service-restart service-status service-logs service-health test test-menu test-data test-data-all test-data-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-authz test-apps test-security test-security-auth test-security-injection test-security-fuzz test-all configure generate-token-keys bootstrap-test-creds bridge tailscale test-bridge check-embeddings migrate-embeddings migrate-embeddings-force staging production env core core-nginx core-storage core-database core-vectorstore core-graph llm llm-vllm llm-litellm llm-colpali apis apis-authz apis-data apis-search apis-agent apis-docs apis-bridge apps-frontend
+.PHONY: ping all files pg milvus neo4j nginx search search-api agent data data-api data-worker data-update-tests docs apps user-apps openwebui deploy-apps deploy-busibox-portal deploy-busibox-agents deploy-busibox-appbuilder deploy-app-ref verify verify-health verify-smoke service-start service-stop service-restart service-status service-logs service-health test test-menu test-data test-data-all test-data-coverage test-extraction-simple test-extraction-llm test-extraction-marker test-extraction-colpali test-search test-search-unit test-search-integration test-search-coverage test-agent test-authz test-apps test-security test-security-auth test-security-injection test-security-fuzz test-all configure generate-token-keys bootstrap-test-creds bridge tailscale test-bridge check-embeddings migrate-embeddings migrate-embeddings-force staging production env core core-nginx core-storage core-database core-vectorstore core-graph llm llm-vllm llm-litellm llm-colpali apis apis-authz apis-data apis-search apis-agent apis-docs apis-bridge apps-frontend
 
 # ============================================================================
 # ENVIRONMENT SELECTION (persists between runs via .busibox-state)
@@ -169,7 +169,7 @@ all:
 # Group 1: CORE (nginx, minio, postgres, milvus) - infrastructure
 # Group 2: LLM (vllm, litellm, colpali) - AI/ML services  
 # Group 3: APIs (authz, data, search, agent, docs, bridge) - application services
-# Group 4: APPS (busibox-portal, busibox-agents, openwebui) - frontend applications
+# Group 4: APPS (busibox-portal, busibox-agents, busibox-appbuilder, openwebui) - frontend applications
 
 # ----------------------------------------------------------------------------
 # Group 1: Core Services (infrastructure)
@@ -262,12 +262,12 @@ apis-bridge:
 
 # ----------------------------------------------------------------------------
 # Group 4: Apps (frontend applications)
-# Frontend applications (busibox-portal, busibox-agents)
+# Frontend applications (busibox-portal, busibox-agents, busibox-appbuilder)
 # ----------------------------------------------------------------------------
 
 apps-frontend:
 	@echo "=============================================="
-	@echo "Deploying frontend apps (busibox-portal, busibox-agents)"
+	@echo "Deploying frontend apps (busibox-portal, busibox-agents, busibox-appbuilder)"
 	@echo "=============================================="
 	ansible-playbook -i $(INV) site.yml --tags apps $(VAULT_FLAGS)
 
@@ -385,16 +385,19 @@ test-bridge:
 		echo "Bridge host not configured (BRIDGE_IP not set). Skipping test."; \
 	fi
 
-# T029: Deploy applications (runs app_deployer + secrets roles)
+# T029: Deploy applications (runs app_deployer + secrets + nginx roles)
 deploy-apps:
-	ansible-playbook -i $(INV) -l agent,apps --tags app_deployer,secrets site.yml $(VAULT_FLAGS)
+	ansible-playbook -i $(INV) -l agent,apps --tags app_deployer,secrets,nginx site.yml $(VAULT_FLAGS)
 
 # Deploy individual applications (apps container)
 deploy-busibox-portal:
-	ansible-playbook -i $(INV) -l apps --tags app_deployer,secrets site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=busibox-portal"
+	ansible-playbook -i $(INV) -l apps --tags app_deployer,secrets,nginx site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=busibox-portal"
 
 deploy-busibox-agents:
-	ansible-playbook -i $(INV) -l apps --tags app_deployer,secrets site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=busibox-agents"
+	ansible-playbook -i $(INV) -l apps --tags app_deployer,secrets,nginx site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=busibox-agents"
+
+deploy-busibox-appbuilder:
+	ansible-playbook -i $(INV) -l apps --tags app_deployer,secrets,nginx site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=busibox-appbuilder"
 
 # Deploy a specific app from an explicit ref (branch or tag).
 # Uses the Deploy API with the specified git ref (branch or tag).
@@ -404,15 +407,15 @@ deploy-busibox-agents:
 deploy-app-ref:
 ifndef APP
 	@echo "Error: APP is required"
-	@echo "Usage: make deploy-app-ref APP=<busibox-portal|busibox-agents> REF=<branch-or-tag> [INV=inventory/staging]"
+	@echo "Usage: make deploy-app-ref APP=<busibox-portal|busibox-agents|busibox-appbuilder> REF=<branch-or-tag> [INV=inventory/staging]"
 	@exit 1
 endif
 ifndef REF
 	@echo "Error: REF is required"
-	@echo "Usage: make deploy-app-ref APP=<busibox-portal|busibox-agents> REF=<branch-or-tag> [INV=inventory/staging]"
+	@echo "Usage: make deploy-app-ref APP=<busibox-portal|busibox-agents|busibox-appbuilder> REF=<branch-or-tag> [INV=inventory/staging]"
 	@exit 1
 endif
-	ansible-playbook -i $(INV) -l apps --tags app_deployer,secrets site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=$(APP) deploy_branch=$(REF)"
+	ansible-playbook -i $(INV) -l apps --tags app_deployer,secrets,nginx site.yml $(VAULT_FLAGS) --extra-vars "deploy_app=$(APP) deploy_branch=$(REF)"
 
 # Deploy agent-server (internal API service)
 # Usage:
@@ -512,6 +515,9 @@ SERVICE_MAP := \
   data-worker=data-worker@$(DATA_IP) \
   search-api=search-api@$(MILVUS_IP) \
   agent-api=agent@$(AGENT_IP) \
+  busibox-portal=busibox-portal@$(CORE_APPS_IP) \
+  busibox-agents=busibox-agents@$(CORE_APPS_IP) \
+  busibox-appbuilder=busibox-appbuilder@$(CORE_APPS_IP) \
   milvus=milvus@$(MILVUS_IP) \
   nginx=nginx@$(PROXY_IP) \
   postgresql=postgresql@10.96.200.203 \
@@ -522,7 +528,7 @@ ifndef SERVICE
 	@echo "Error: SERVICE is required"
 	@echo "Usage: make service-start SERVICE=<service>"
 	@echo ""
-	@echo "Available services: authz, data-api, data-worker, search-api, agent-api, milvus, nginx, postgresql, redis"
+	@echo "Available services: authz, data-api, data-worker, search-api, agent-api, busibox-portal, busibox-agents, busibox-appbuilder, milvus, nginx, postgresql, redis"
 	@exit 1
 endif
 	$(eval SVC_INFO := $(filter $(SERVICE)=%,$(SERVICE_MAP)))
@@ -1040,7 +1046,7 @@ docker-clean:
 # Runtime app management for Docker containers without rebuild.
 # These commands use the Deploy API or docker exec to manage apps.
 #
-# For core apps (busibox-portal, busibox-agents):
+# For core apps (busibox-portal, busibox-agents, busibox-appbuilder):
 #   make install SERVICE=busibox-portal            # Deploy/update via Deploy API
 #   make app-restart SERVICE=busibox-portal        # Restart app via supervisorctl
 #   make app-status                           # Show all app status
@@ -1061,7 +1067,7 @@ ifndef SERVICE
 	@echo ""
 	@echo "Usage: make install SERVICE=<service> [REF=<git-ref>]"
 	@echo ""
-	@echo "Core apps: busibox-portal, busibox-agents"
+	@echo "Core apps: busibox-portal, busibox-agents, busibox-appbuilder"
 	@echo "User apps: Any app deployed via Deploy API"
 	@echo ""
 	@echo "REF: git branch or tag (default: main)"
@@ -1123,7 +1129,7 @@ endif
 app-restart:
 ifndef SERVICE
 	@echo "Error: SERVICE is required"
-	@echo "Usage: make app-restart SERVICE=<busibox-portal|busibox-agents>"
+	@echo "Usage: make app-restart SERVICE=<busibox-portal|busibox-agents|busibox-appbuilder>"
 	@exit 1
 else
 	@echo "🔄 Restarting $(SERVICE)..."
@@ -1141,7 +1147,7 @@ endif
 app-stop:
 ifndef SERVICE
 	@echo "Error: SERVICE is required"
-	@echo "Usage: make app-stop SERVICE=<busibox-portal|busibox-agents>"
+	@echo "Usage: make app-stop SERVICE=<busibox-portal|busibox-agents|busibox-appbuilder>"
 	@exit 1
 else
 	@echo "🛑 Stopping $(SERVICE)..."
@@ -1159,7 +1165,7 @@ endif
 app-start:
 ifndef SERVICE
 	@echo "Error: SERVICE is required"
-	@echo "Usage: make app-start SERVICE=<busibox-portal|busibox-agents>"
+	@echo "Usage: make app-start SERVICE=<busibox-portal|busibox-agents|busibox-appbuilder>"
 	@exit 1
 else
 	@echo "🚀 Starting $(SERVICE)..."
@@ -1183,7 +1189,7 @@ app-status:
 		docker compose -f ../../docker-compose.yml -f ../../docker-compose.github.yml \
 			exec core-apps supervisorctl status; \
 	else \
-		ssh root@$(CORE_APPS_IP) 'systemctl status busibox-portal busibox-agents --no-pager'; \
+		ssh root@$(CORE_APPS_IP) 'systemctl status busibox-portal busibox-agents busibox-appbuilder --no-pager'; \
 	fi
 
 # Open shell in core-apps container
