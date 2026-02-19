@@ -183,7 +183,17 @@ def extract_content_from_output(output_summary: Optional[str]) -> str:
             lines = lines[:-1]
         content = "\n".join(lines)
 
+    content = _unescape_string_literals(content)
+
     return content.strip()
+
+
+def _unescape_string_literals(text: str) -> str:
+    """Convert escaped string literals (\\n, \\t) that survived extraction into real chars."""
+    text = text.replace("\\n", "\n")
+    text = text.replace("\\t", "\t")
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text
 
 
 def format_output_for_notification(output: Any) -> str:

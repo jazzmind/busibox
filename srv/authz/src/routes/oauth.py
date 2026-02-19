@@ -91,17 +91,16 @@ def _get_pg(request: Request = None):
     return _pg
 
 
-async def _ensure_bootstrap_roles() -> None:
+async def _ensure_bootstrap_roles_in_db(pg_service, db_name: str = "production") -> None:
     """
-    Ensure essential roles exist (Admin, User).
-    These roles are created if they don't exist.
+    Ensure essential roles exist in the given database.
+    
+    Roles are created if they don't exist.
     Admin role is also updated if scopes are missing.
     
     Scopes use glob-style wildcards (e.g., "authz.*" matches "authz.users.read").
     See oauth/jwt_auth.py _scope_matches() for wildcard semantics.
     """
-    # Define essential roles with their scopes/permissions
-    # Admin gets wildcard access to all service namespaces
     admin_scopes = [
         "*",           # Full wildcard - allows any scope
         "authz.*",     # All authz admin operations (users, roles, bindings, etc.)
@@ -137,28 +136,33 @@ async def _ensure_bootstrap_roles() -> None:
     ]
     
     for role_def in essential_roles:
-        existing = await _pg.get_role_by_name(role_def["name"])
+        existing = await pg_service.get_role_by_name(role_def["name"])
         if not existing:
-            created = await _pg.create_role(
+            created = await pg_service.create_role(
                 name=role_def["name"],
                 description=role_def["description"],
                 scopes=role_def["scopes"],
             )
-            logger.info("Bootstrapped role", role_name=role_def["name"], role_id=created.get("id"))
+            logger.info("Bootstrapped role", role_name=role_def["name"], role_id=created.get("id"), db=db_name)
         else:
-            # Ensure existing role has all required scopes (idempotent update)
             existing_scopes = set(existing.get("scopes") or [])
             required_scopes = set(role_def["scopes"])
             if not required_scopes.issubset(existing_scopes):
-                # Update role with missing scopes
                 new_scopes = list(existing_scopes | required_scopes)
-                await _pg.update_role(
+                await pg_service.update_role(
                     role_id=existing["id"],
-                    name=None,  # Don't change name
-                    description=None,  # Don't change description
+                    name=None,
+                    description=None,
                     scopes=new_scopes,
                 )
-                logger.info("Updated role with required scopes", role_name=role_def["name"], role_id=existing["id"])
+                logger.info("Updated role with required scopes", role_name=role_def["name"], role_id=existing["id"], db=db_name)
+
+
+async def _ensure_bootstrap_roles() -> None:
+    """Bootstrap essential roles in production and (if enabled) test databases."""
+    await _ensure_bootstrap_roles_in_db(_pg, "production")
+    if _pg_test:
+        await _ensure_bootstrap_roles_in_db(_pg_test, "test")
 
 
 async def _ensure_bootstrap_test_user() -> None:

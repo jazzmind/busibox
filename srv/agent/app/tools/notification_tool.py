@@ -109,13 +109,20 @@ def _strip_markdown(text: str) -> str:
     return stripped.strip()
 
 
+def _unescape_literals(text: str) -> str:
+    """Convert escaped \\n / \\t that survived JSON/regex extraction into real chars."""
+    text = text.replace("\\n", "\n")
+    text = text.replace("\\t", "\t")
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text
+
+
 def _bridge_format_body(channel_type: str, body: str) -> str:
     """Render body content for channel-specific markdown support."""
-    content = (body or "").strip()
+    content = _unescape_literals((body or "").strip())
     if channel_type == "signal":
         return _strip_markdown(content)
     if channel_type == "whatsapp":
-        # WhatsApp supports *bold* and _italic_ but not markdown heading/code patterns.
         normalized = content.replace("**", "*")
         normalized = re.sub(r"`([^`]+)`", r"\1", normalized)
         return normalized.strip()
@@ -221,13 +228,13 @@ async def _send_email_notification(
     """Send email notification via email service."""
     from app.services.email_service import send_email
     
-    # Build HTML body with portal link
-    html_body = _build_email_html(body, portal_link)
+    clean_body = _unescape_literals(body)
+    html_body = _build_email_html(clean_body, portal_link)
     
     result = await send_email(
         to=recipient,
         subject=subject,
-        body=body,  # Plain text fallback
+        body=clean_body,
         html_body=html_body,
     )
     
@@ -349,6 +356,9 @@ def _markdown_to_html(text: str) -> str:
     """
     import re
     import html
+    
+    # Convert escaped string literals before anything else
+    text = _unescape_literals(text)
     
     # Escape HTML entities first (but we'll unescape our own tags later)
     text = html.escape(text)
