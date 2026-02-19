@@ -230,6 +230,8 @@ class ChatAgent(BaseStreamingAgent):
         )
         try:
             client = get_client()
+            logger.info("fast_ack: calling LLM (model=fast)")
+            t_llm = time.monotonic()
             result = await client.chat_completion(
                 model="fast",
                 messages=[
@@ -241,6 +243,7 @@ class ChatAgent(BaseStreamingAgent):
                 ],
                 temperature=0.1,
             )
+            logger.info("fast_ack: LLM responded in %dms", round((time.monotonic() - t_llm) * 1000))
             raw = (
                 result.get("choices", [{}])[0]
                 .get("message", {})
@@ -264,7 +267,7 @@ class ChatAgent(BaseStreamingAgent):
                 return default
             return parsed
         except (json.JSONDecodeError, ValidationError, Exception) as exc:
-            logger.warning("Fast ack generation fallback triggered: %s", exc)
+            logger.warning("Fast ack generation fallback after %dms: %s", round((time.monotonic() - t_llm) * 1000) if 't_llm' in dir() else -1, exc)
             return default
 
     async def _generate_quick_findings(self, query: str, tool_results: Dict[str, Any]) -> str:
@@ -289,6 +292,8 @@ class ChatAgent(BaseStreamingAgent):
         )
         try:
             client = get_client()
+            logger.info("quick_findings: calling LLM (model=fast)")
+            t_qf = time.monotonic()
             result = await client.chat_completion(
                 model="fast",
                 messages=[
@@ -297,6 +302,7 @@ class ChatAgent(BaseStreamingAgent):
                 ],
                 temperature=0.2,
             )
+            logger.info("quick_findings: LLM responded in %dms", round((time.monotonic() - t_qf) * 1000))
             return (
                 result.get("choices", [{}])[0]
                 .get("message", {})
@@ -304,7 +310,7 @@ class ChatAgent(BaseStreamingAgent):
                 .strip()
             )
         except Exception as exc:
-            logger.debug("Quick findings summary skipped: %s", exc)
+            logger.warning("Quick findings summary skipped after %dms: %s", round((time.monotonic() - t_qf) * 1000) if 't_qf' in dir() else -1, exc)
             return ""
 
     async def run_with_streaming(
@@ -320,7 +326,9 @@ class ChatAgent(BaseStreamingAgent):
         2) Optional deeper tool-enabled response
         """
         t0 = time.monotonic()
+        logger.info("Chat run_with_streaming started, query=%s...", query[:60])
         agent_context = await self._setup_context(context, stream, query)
+        logger.info("Chat context setup: %dms", round((time.monotonic() - t0) * 1000))
         if agent_context is None:
             return "Authentication or session error. Please sign in and try again."
         if cancel.is_set():
@@ -357,10 +365,16 @@ class ChatAgent(BaseStreamingAgent):
             data={"phase": "deep_start"},
         ))
 
+        logger.info("Chat resolving attachments")
         await self._resolve_attachments(query, stream, agent_context)
 
         try:
             t_deep = time.monotonic()
+            logger.info(
+                "Chat deep pass starting (strategy=%s, tools=%s)",
+                self.config.tool_strategy.value,
+                self.config.tools,
+            )
             if self.config.tool_strategy == ToolStrategy.LLM_DRIVEN:
                 await self._execute_llm_driven(query, stream, cancel, agent_context)
             else:

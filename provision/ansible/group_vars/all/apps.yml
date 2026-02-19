@@ -177,7 +177,7 @@ applications:
     build_command: "npm run build"
     start_command: "npm start"  # Standard Next.js start (not standalone mode)
     process_manager: systemd  # Use systemd for consistent logging via journalctl
-    auto_deploy: true  # Deploy by default with core apps
+    auto_deploy: false  # Deploy via deploy-api after initial setup
     routes:
       - type: path
         domain: "{{ full_domain }}"

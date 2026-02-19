@@ -731,48 +731,61 @@ class BaseStreamingAgent(StreamingAgent):
                 return None
         
         # Compress conversation history if enabled and history is present
-        if (self.config.enable_history_compression and 
+        if (self.config.enable_history_compression and
             agent_context.conversation_history):
             try:
                 from app.services.context_compression import (
                     get_compression_service,
-                    ContextCompressionService,
                 )
                 from app.schemas.definitions import ContextCompressionConfig
-                
-                # Create compression config from agent config
+
                 compression_config = ContextCompressionConfig(
                     enabled=True,
                     compression_threshold_chars=self.config.compression_threshold_chars,
                     recent_messages_to_keep=self.config.recent_messages_to_keep,
                 )
-                
+
+                raw_count = len(agent_context.conversation_history)
+                raw_chars = sum(len(str(m.get("content", ""))) for m in agent_context.conversation_history)
+                logger.info(
+                    "%s context: %d messages, %d chars (threshold=%d)",
+                    self.name, raw_count, raw_chars,
+                    self.config.compression_threshold_chars,
+                )
+
+                t_compress = time.monotonic()
                 compression_service = get_compression_service(compression_config)
                 compression_result = await compression_service.compress_history(
                     agent_context.conversation_history
                 )
-                
-                # Store results in context
+                compress_ms = round((time.monotonic() - t_compress) * 1000)
+
                 agent_context.compressed_history_summary = compression_result.summary
                 agent_context.recent_messages = compression_result.recent_messages
-                
+
                 if compression_result.was_compressed:
+                    extra = " (cache hit)" if compression_result.cache_hit else ""
                     logger.info(
-                        f"{self.name} compressed conversation history: "
-                        f"{compression_result.original_char_count} -> {compression_result.compressed_char_count} chars, "
-                        f"{compression_result.messages_compressed} messages compressed, "
-                        f"{compression_result.messages_kept} messages kept"
+                        "%s history compressed in %dms%s: %d->%d chars, %d compressed, %d kept",
+                        self.name, compress_ms, extra,
+                        compression_result.original_char_count,
+                        compression_result.compressed_char_count,
+                        compression_result.messages_compressed,
+                        compression_result.messages_kept,
                     )
                 else:
-                    # No compression needed, use original history
-                    agent_context.recent_messages = agent_context.conversation_history
-                    
+                    logger.info(
+                        "%s history below threshold after filtering, no LLM call (%dms)",
+                        self.name, compress_ms,
+                    )
+
             except Exception as e:
-                logger.warning(f"Failed to compress history, using full history: {e}")
-                # Fallback to full history
+                logger.warning(
+                    "%s compression failed, using full history: %s",
+                    self.name, e,
+                )
                 agent_context.recent_messages = agent_context.conversation_history
         else:
-            # No compression, use full history
             agent_context.recent_messages = agent_context.conversation_history
         
         # Get relevant insights from context (passed by dispatcher)
