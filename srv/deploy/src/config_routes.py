@@ -259,12 +259,12 @@ async def get_config(
 @router.get("/{key}/raw")
 async def get_config_raw(
     key: str,
-    token_payload: dict = Depends(verify_admin_token)
+    token_payload: dict = Depends(verify_service_or_admin_token)
 ):
     """
     Get the raw (unmasked) configuration value.
     
-    Requires admin authentication.
+    Requires admin or service-to-service authentication.
     Use this when you need the actual value for service configuration.
     
     CAUTION: This returns the actual secret value. Handle with care.

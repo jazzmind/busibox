@@ -37,11 +37,14 @@ SERVICE_PORT = os.getenv("SERVICE_PORT", "8010")
 SERVICE_URL = os.getenv("TEST_AUTHZ_URL", f"http://localhost:{SERVICE_PORT}")
 
 # Database config - REQUIRED
+# When AUTHZ_TEST_MODE_ENABLED=true, PVT tests use the test database (test_authz)
+# to match the server-side routing triggered by X-Test-Mode: true headers.
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "")
 POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
-POSTGRES_DB = os.getenv("POSTGRES_DB", "busibox")
-POSTGRES_USER = os.getenv("POSTGRES_USER", "")
-POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
+_TEST_MODE = os.getenv("AUTHZ_TEST_MODE_ENABLED", "false").lower() == "true"
+POSTGRES_DB = os.getenv("TEST_DB_NAME", "test_authz") if _TEST_MODE else os.getenv("POSTGRES_DB", "busibox")
+POSTGRES_USER = os.getenv("TEST_DB_USER", "busibox_test_user") if _TEST_MODE else os.getenv("POSTGRES_USER", "")
+POSTGRES_PASSWORD = os.getenv("TEST_DB_PASSWORD", "testpassword") if _TEST_MODE else os.getenv("POSTGRES_PASSWORD", "")
 TEST_USER_EMAIL = os.getenv("TEST_USER_EMAIL", "test@busibox.local")
 TEST_USER_ID = os.getenv("TEST_USER_ID", "00000000-0000-0000-0000-000000000001")
 TEST_MODE_HEADERS = {"X-Test-Mode": "true"}
@@ -100,9 +103,20 @@ async def pvt_session_jwt(pvt_db_conn):
 
     Uses login initiation, then fetches the latest magic-link token from DB if
     test-mode token echo is unavailable, then consumes the link.
+
+    Also ensures the test user has an admin role so that admin PVT tests work.
     """
+    admin_role = await pvt_db_conn.fetchrow(
+        """
+        SELECT id
+        FROM authz_roles
+        WHERE name IN ('Admin', 'DockerTestAdmin')
+        ORDER BY CASE name WHEN 'Admin' THEN 0 ELSE 1 END
+        LIMIT 1
+        """
+    )
+
     async with httpx.AsyncClient() as client:
-        # Try the preferred test email first, then known bootstrapped fallback.
         candidate_emails = [TEST_USER_EMAIL.lower(), "test@test.example.com"]
         seen = set()
         candidate_emails = [e for e in candidate_emails if not (e in seen or seen.add(e))]
@@ -157,6 +171,24 @@ async def pvt_session_jwt(pvt_db_conn):
         use_data = use_resp.json()
         session_jwt = use_data.get("session", {}).get("token")
         assert session_jwt, "Missing session token after magic-link use"
+
+        if admin_role:
+            claims = jwt.decode(
+                session_jwt,
+                options={"verify_signature": False, "verify_aud": False},
+            )
+            user_id = claims.get("sub")
+            if user_id:
+                await pvt_db_conn.execute(
+                    """
+                    INSERT INTO authz_user_roles (user_id, role_id)
+                    VALUES ($1::uuid, $2)
+                    ON CONFLICT (user_id, role_id) DO NOTHING
+                    """,
+                    user_id,
+                    admin_role["id"],
+                )
+
         return session_jwt
 
 
@@ -164,6 +196,9 @@ async def pvt_session_jwt(pvt_db_conn):
 async def pvt_admin_token(pvt_session_jwt):
     """
     Return an admin token for admin-only PVT operations.
+
+    The pvt_session_jwt fixture already ensures the test user has an admin role,
+    so exchanging for authz-api audience produces a token with admin scopes.
     """
     token_data = await _exchange_token(pvt_session_jwt, "authz-api")
     return token_data["access_token"]
@@ -406,8 +441,14 @@ class TestPVTTokenExchangeHappyPath:
             token_data["access_token"],
             options={"verify_signature": False, "verify_aud": False},
         )
+        session_claims = jwt.decode(
+            pvt_session_jwt,
+            options={"verify_signature": False, "verify_aud": False},
+        )
         assert claims.get("aud") == "data-api"
-        assert claims.get("sub") == TEST_USER_ID
+        assert claims.get("sub") == session_claims.get("sub"), (
+            f"Exchanged token sub {claims.get('sub')} != session sub {session_claims.get('sub')}"
+        )
         assert claims.get("sub"), "Expected subject claim in exchanged token"
         assert claims.get("iss"), "Expected issuer claim in exchanged token"
         assert "jti" in claims
