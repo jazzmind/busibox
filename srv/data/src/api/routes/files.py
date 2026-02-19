@@ -1631,6 +1631,7 @@ async def move_file(fileId: str, request: Request):
     Body:
       - visibility: 'personal' or 'shared'
       - roleIds: [] required if visibility='shared'
+      - libraryId: target library ID (optional, updates library association)
 
     Rules:
       - Moving to personal is allowed only if actor is the owner.
@@ -1639,6 +1640,7 @@ async def move_file(fileId: str, request: Request):
     body = await request.json()
     target_visibility = body.get("visibility")
     role_ids = body.get("roleIds", [])
+    library_id = body.get("libraryId")
     actor_id = request.state.user_id
 
     if target_visibility not in ("personal", "shared"):
@@ -1689,6 +1691,7 @@ async def move_file(fileId: str, request: Request):
             visibility=target_visibility,
             role_ids=role_ids,
             actor_id=actor_id,
+            library_id=library_id,
         )
         await postgres_service.insert_audit(
             actor_id=actor_id,
@@ -1699,6 +1702,7 @@ async def move_file(fileId: str, request: Request):
                 "from_visibility": current_visibility,
                 "to_visibility": target_visibility,
                 "role_ids": role_ids,
+                "library_id": library_id,
             },
         )
     except Exception as exc:

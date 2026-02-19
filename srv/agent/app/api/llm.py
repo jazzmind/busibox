@@ -418,10 +418,16 @@ async def _get_configured_env_vars() -> Dict[str, str]:
     # Strategy 1: os.environ (set during key save in current process lifetime)
     import os
     result = {}
+    # The agent-api container has ANTHROPIC_API_KEY set to the LiteLLM master key
+    # for Claude Agent SDK proxy routing. Exclude values that match the LiteLLM
+    # master/API key so they don't falsely report "configured".
+    litellm_keys = set()
+    if settings.litellm_api_key:
+        litellm_keys.add(str(settings.litellm_api_key))
     for var in ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "AWS_ACCESS_KEY_ID",
                 "AWS_SECRET_ACCESS_KEY", "AWS_REGION_NAME", "AWS_BEARER_TOKEN_BEDROCK"]:
         val = os.environ.get(var, "")
-        if val:
+        if val and val not in litellm_keys:
             result[var] = val
     if result:
         return result
@@ -591,8 +597,11 @@ async def _get_api_key_for_provider(provider: str) -> Optional[str]:
         return None
     
     # Strategy 1: Check os.environ (set during key save or container startup)
+    # Exclude values that match the LiteLLM master/API key (agent-api sets
+    # ANTHROPIC_API_KEY to the LiteLLM key for Claude SDK proxy routing).
     val = os.environ.get(env_var, "")
-    if val:
+    litellm_key = str(settings.litellm_api_key) if settings.litellm_api_key else ""
+    if val and val != litellm_key:
         return val
     
     # Strategy 2: Query LiteLLM config/DB for stored env vars

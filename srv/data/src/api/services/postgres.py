@@ -369,9 +369,10 @@ class PostgresService:
         visibility: str,
         role_ids: Optional[List[str]],
         actor_id: str,
+        library_id: Optional[str] = None,
     ):
         """
-        Update a document's visibility and its document_roles atomically.
+        Update a document's visibility, library, and document_roles atomically.
         """
         if visibility not in ("personal", "shared"):
             raise ValueError("visibility must be 'personal' or 'shared'")
@@ -379,16 +380,27 @@ class PostgresService:
         async with self.acquire() as conn:
             await self._ensure_document_roles(conn)
             async with conn.transaction():
-                # Update visibility
-                await conn.execute(
-                    """
-                    UPDATE data_files
-                    SET visibility = $2, updated_at = NOW()
-                    WHERE file_id = $1
-                    """,
-                    uuid.UUID(file_id),
-                    visibility,
-                )
+                if library_id:
+                    await conn.execute(
+                        """
+                        UPDATE data_files
+                        SET visibility = $2, library_id = $3, updated_at = NOW()
+                        WHERE file_id = $1
+                        """,
+                        uuid.UUID(file_id),
+                        visibility,
+                        uuid.UUID(library_id),
+                    )
+                else:
+                    await conn.execute(
+                        """
+                        UPDATE data_files
+                        SET visibility = $2, updated_at = NOW()
+                        WHERE file_id = $1
+                        """,
+                        uuid.UUID(file_id),
+                        visibility,
+                    )
 
                 # Clear existing roles
                 await conn.execute(
