@@ -12,6 +12,12 @@
     state: present
     update_cache: yes
 
+- name: Remove conflicting NodeSource sources
+  shell: |
+    rm -f /etc/apt/sources.list.d/nodesource*.list
+    rm -f /usr/share/keyrings/nodesource.gpg
+  changed_when: false
+
 - name: Add NodeSource GPG key
   shell: |
     mkdir -p /etc/apt/keyrings
@@ -20,10 +26,10 @@
     creates: /etc/apt/keyrings/nodesource.gpg
 
 - name: Add NodeSource repository (Node.js 20.x LTS)
-  shell: |
-    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list
-  args:
-    creates: /etc/apt/sources.list.d/nodesource.list
+  copy:
+    content: "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main\n"
+    dest: /etc/apt/sources.list.d/nodesource.list
+    mode: "0644"
 
 - name: Install Node.js
   apt:
