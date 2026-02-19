@@ -122,7 +122,11 @@ class Settings(BaseSettings):
     )
     portal_name: str = Field(
         "Busibox",
-        description="Display name used in notification subjects (e.g. 'Dredging News from Busibox')",
+        description="Display name used in notification subjects (e.g. 'Dredging News from Busibox'). Overridden at runtime from deploy-api config store.",
+    )
+    deploy_api_url: Optional[str] = Field(
+        None,
+        description="Deploy API URL for reading runtime config (portal name, etc.)",
     )
     
     # Email configuration

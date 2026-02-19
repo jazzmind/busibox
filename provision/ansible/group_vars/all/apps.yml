@@ -204,7 +204,7 @@ applications:
       DATA_API_URL: "http://{{ data_ip }}:8002"
       AGENT_API_URL: "http://{{ agent_api_host }}:{{ agent_api_port }}"
       DEPLOY_API_URL: "http://{{ authz_ip }}:8011"
-      CONTAINER_PREFIX: "{{ container_prefix }}"
+      CONTAINER_PREFIX: "{{ container_prefix | default(busibox_env | default('prod')) }}"
       BUILDER_PROJECT_ROOT: "/srv/projects"
       BUILDER_TEMPLATE_SOURCE: "/srv/projects/templates/busibox-template"
       BUILDER_LIBRARY_OWNER: "jazzmind"

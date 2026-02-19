@@ -28,6 +28,44 @@ from app.services.token_service import get_or_exchange_token
 
 logger = logging.getLogger(__name__)
 
+_portal_name_cache: Dict[str, Any] = {"value": None, "expires": 0}
+
+
+async def _get_portal_name() -> str:
+    """Read portal site name from deploy-api config store with 5-minute cache."""
+    import time, os, httpx
+
+    now = time.monotonic()
+    if _portal_name_cache["value"] and now < _portal_name_cache["expires"]:
+        return _portal_name_cache["value"]
+
+    from app.config.settings import get_settings
+    settings = get_settings()
+    deploy_url = settings.deploy_api_url or os.getenv("DEPLOY_API_URL", "")
+    service_key = os.getenv("LITELLM_API_KEY", "")
+
+    if deploy_url and service_key:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(
+                    f"{deploy_url.rstrip('/')}/api/v1/config/PORTAL_SITE_NAME/raw",
+                    headers={"Authorization": f"Bearer {service_key}"},
+                )
+            if resp.status_code == 200:
+                data = resp.json() or {}
+                name = str(data.get("value") or "").strip()
+                if name:
+                    _portal_name_cache["value"] = name
+                    _portal_name_cache["expires"] = now + 300
+                    return name
+        except Exception as exc:
+            logger.debug("Could not read PORTAL_SITE_NAME from deploy-api: %s", exc)
+
+    fallback = getattr(settings, "portal_name", None) or "Busibox"
+    _portal_name_cache["value"] = fallback
+    _portal_name_cache["expires"] = now + 60
+    return fallback
+
 
 def _extract_content_from_output(output_summary: Optional[str]) -> str:
     """
@@ -923,10 +961,7 @@ class TaskSchedulerService:
         
         # Build notification content
         status_emoji = "✅" if success else "❌"
-        
-        from app.config.settings import get_settings as _get_settings
-        _settings = _get_settings()
-        _portal_name = getattr(_settings, "portal_name", None) or "Busibox"
+        _portal_name = await _get_portal_name()
         
         subject = f"{status_emoji} {task.name} from {_portal_name}"
         
