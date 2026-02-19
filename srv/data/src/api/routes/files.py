@@ -1692,6 +1692,7 @@ async def move_file(fileId: str, request: Request):
             role_ids=role_ids,
             actor_id=actor_id,
             library_id=library_id,
+            request=request,
         )
         await postgres_service.insert_audit(
             actor_id=actor_id,
