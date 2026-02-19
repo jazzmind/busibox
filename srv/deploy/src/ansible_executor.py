@@ -70,6 +70,7 @@ INFRASTRUCTURE_ANSIBLE_MAP = {
     'apps': ('apps', ['apps'], 'Frontend applications'),
     'busibox-portal': ('apps', ['app_deployer', 'secrets'], 'Busibox Portal'),
     'busibox-agents': ('apps', ['app_deployer', 'secrets'], 'Agent Manager'),
+    'busibox-appbuilder': ('apps', ['app_deployer', 'secrets'], 'App Builder'),
 }
 
 
@@ -101,7 +102,7 @@ INSTALLATION_ORDER = [
     
     # Group 6: Apps (need all APIs)
     ['busibox-portal'],
-    ['busibox-agents'],
+    ['busibox-agents', 'busibox-appbuilder'],
 ]
 
 
