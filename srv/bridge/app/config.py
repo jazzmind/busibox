@@ -71,6 +71,10 @@ class Settings(BaseSettings):
         "http://10.96.200.202:8000",
         description="Base URL for Busibox Agent API",
     )
+    data_api_url: AnyHttpUrl = Field(
+        "http://10.96.200.206:8002",
+        description="Base URL for Busibox Data API",
+    )
 
     # Auth configuration for Agent API (Zero Trust)
     auth_token_url: AnyHttpUrl = Field(
@@ -88,7 +92,7 @@ class Settings(BaseSettings):
 
     # Bot behavior (Signal-specific)
     enable_web_search: bool = Field(True, description="Enable web search for queries")
-    enable_doc_search: bool = Field(False, description="Enable document search")
+    enable_doc_search: bool = Field(True, description="Enable document search")
     default_model: str = Field("auto", description="Default model selection")
     default_agent_id: str = Field("chat-agent", description="Default agent ID for inbound bridge messages")
     max_message_length: int = Field(4000, description="Max message length for Signal")

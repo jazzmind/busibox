@@ -367,21 +367,17 @@ async def _send_task_notification(
     
     # Build notification content
     status_emoji = "✅" if success else "❌"
-    status_text = "succeeded" if success else "failed"
     
-    subject = f"{status_emoji} Task '{task.name}' {status_text}"
+    settings = get_settings()
+    _portal_name = getattr(settings, "portal_name", None) or "Busibox"
     
-    body_parts = [
-        f"**Task:** {task.name}",
-        f"**Status:** {status_text.upper()}",
-        f"**Executed at:** {execution.started_at.isoformat() if execution.started_at else 'N/A'}",
-    ]
+    subject = f"{status_emoji} {task.name} from {_portal_name}"
+    
+    body_parts: list[str] = []
     
     if output_summary:
-        # Format the output for better readability (parse dicts, extract result content)
         formatted_output = _format_output_for_notification(output_summary)
         
-        # Use LLM summarization for long outputs
         if len(formatted_output) > 500:
             try:
                 from app.services.output_summarizer import summarize_task_output
@@ -396,10 +392,13 @@ async def _send_task_notification(
         else:
             summary_preview = formatted_output
         
-        body_parts.append(f"\n**Result:**\n{summary_preview}")
+        body_parts.append(summary_preview)
     
     if not success and execution.error:
-        body_parts.append(f"\n**Error:**\n{execution.error}")
+        body_parts.append(f"Error: {execution.error}")
+    
+    if not body_parts:
+        body_parts.append("Task completed.")
     
     body = "\n".join(body_parts)
     

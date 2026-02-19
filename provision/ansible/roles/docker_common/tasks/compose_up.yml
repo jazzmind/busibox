@@ -28,6 +28,9 @@
   environment: &docker_secrets_env
     # Container naming
     CONTAINER_PREFIX: "{{ container_prefix | default('dev') }}"
+    # Ensure deploy-api and compose sub-processes use the actual host repo path.
+    BUSIBOX_HOST_PATH: "{{ docker_compose_dir }}"
+    BUSIBOX_REPO_ROOT: "{{ docker_compose_dir }}"
     # Secrets injected from encrypted Ansible vault at runtime
     POSTGRES_PASSWORD: "{{ secrets.postgresql.password | default('') }}"
     MINIO_ACCESS_KEY: "{{ secrets.minio.root_user | default('minioadmin') }}"

@@ -40,7 +40,7 @@ from .models import (
     ConfigListResponse,
     ConfigCategory,
 )
-from .auth import verify_admin_token
+from .auth import verify_admin_token, verify_service_or_admin_token
 from .config import config
 from .database import execute_sql
 
@@ -701,7 +701,7 @@ async def _apply_bridge_config_proxmox() -> dict:
 @router.post("/apply/{service}")
 async def apply_config(
     service: str,
-    token_payload: dict = Depends(verify_admin_token)
+    token_payload: dict = Depends(verify_service_or_admin_token)
 ):
     """
     Apply configuration changes to a service.

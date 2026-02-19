@@ -222,6 +222,7 @@ class AgentClient:
         model: str = "auto",
         agent_id: Optional[str] = None,
         delegation_token_override: Optional[str] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         Send a chat message and stream the response.
@@ -245,6 +246,8 @@ class AgentClient:
             "enable_web_search": enable_web_search,
             "enable_doc_search": enable_doc_search,
         }
+        if attachments:
+            payload["attachments"] = attachments
         effective_agent_id = agent_id or self.default_agent_id
         if effective_agent_id:
             payload["agent_id"] = effective_agent_id

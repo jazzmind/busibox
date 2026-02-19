@@ -20,6 +20,10 @@ class TelegramMessage:
     sender_id: str
     text: str
     audio_url: Optional[str] = None
+    attachment_url: Optional[str] = None
+    attachment_filename: Optional[str] = None
+    attachment_mime_type: Optional[str] = None
+    attachment_kind: Optional[str] = None
     is_group_message: bool = False
 
 
@@ -73,12 +77,43 @@ class TelegramClient:
                     self._offset = update_id + 1
 
                     msg = update.get("message") or {}
-                    text = (msg.get("text") or "").strip()
+                    text = (msg.get("text") or msg.get("caption") or "").strip()
                     audio_url: Optional[str] = None
+                    attachment_url: Optional[str] = None
+                    attachment_filename: Optional[str] = None
+                    attachment_mime_type: Optional[str] = None
+                    attachment_kind: Optional[str] = None
                     voice = msg.get("voice") or msg.get("audio")
                     if voice and voice.get("file_id"):
                         audio_url = await self._resolve_file_url(str(voice["file_id"]))
-                    if not text and not audio_url:
+
+                    document = msg.get("document") or {}
+                    if document.get("file_id"):
+                        attachment_url = await self._resolve_file_url(str(document["file_id"]))
+                        attachment_filename = str(document.get("file_name") or "telegram-document")
+                        attachment_mime_type = str(
+                            document.get("mime_type") or "application/octet-stream"
+                        )
+                        attachment_kind = "document"
+
+                    # For photos, Telegram sends sizes array. Use the largest one.
+                    photos = msg.get("photo") or []
+                    if not attachment_url and isinstance(photos, list) and photos:
+                        photo_obj = photos[-1]
+                        if isinstance(photo_obj, dict) and photo_obj.get("file_id"):
+                            attachment_url = await self._resolve_file_url(str(photo_obj["file_id"]))
+                            attachment_filename = "telegram-photo.jpg"
+                            attachment_mime_type = "image/jpeg"
+                            attachment_kind = "photo"
+
+                    video = msg.get("video") or {}
+                    if not attachment_url and video.get("file_id"):
+                        attachment_url = await self._resolve_file_url(str(video["file_id"]))
+                        attachment_filename = str(video.get("file_name") or "telegram-video.mp4")
+                        attachment_mime_type = str(video.get("mime_type") or "video/mp4")
+                        attachment_kind = "video"
+
+                    if not text and not audio_url and not attachment_url:
                         continue
 
                     chat = msg.get("chat") or {}
@@ -93,6 +128,10 @@ class TelegramClient:
                         sender_id=sender_id,
                         text=text,
                         audio_url=audio_url,
+                        attachment_url=attachment_url,
+                        attachment_filename=attachment_filename,
+                        attachment_mime_type=attachment_mime_type,
+                        attachment_kind=attachment_kind,
                         is_group_message=chat_type in {"group", "supergroup"},
                     )
             except Exception as e:

@@ -28,6 +28,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -68,11 +70,30 @@ def load_token_from_env():
 
 load_token_from_env()
 
+# ---------------------------------------------------------------------------
+# Lifespan — start/stop the background MLX health-check loop
+# ---------------------------------------------------------------------------
+_healthcheck_task: Optional[asyncio.Task] = None
+
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    global _healthcheck_task
+    _healthcheck_task = asyncio.create_task(_mlx_healthcheck_loop())
+    yield
+    _healthcheck_task.cancel()
+    try:
+        await _healthcheck_task
+    except asyncio.CancelledError:
+        pass
+
+
 # FastAPI app
 app = FastAPI(
     title="Busibox Host Agent",
     description="Host-native service control for MLX and other services",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 # Models
@@ -445,7 +466,6 @@ async def list_cached_models(_: bool = Depends(verify_token)):
 # Proactive MLX health check — auto-restarts MLX if it dies (e.g. display sleep)
 # ---------------------------------------------------------------------------
 MLX_HEALTHCHECK_INTERVAL = int(os.getenv("MLX_HEALTHCHECK_INTERVAL", "30"))
-_healthcheck_task: Optional[asyncio.Task] = None
 
 
 async def _mlx_healthcheck_loop():
@@ -518,23 +538,6 @@ async def _trigger_mlx_start():
         logger.error("MLX auto-restart timed out after 180s")
     except Exception:
         logger.exception("Failed to auto-restart MLX")
-
-
-@app.on_event("startup")
-async def start_healthcheck():
-    global _healthcheck_task
-    _healthcheck_task = asyncio.create_task(_mlx_healthcheck_loop())
-
-
-@app.on_event("shutdown")
-async def stop_healthcheck():
-    global _healthcheck_task
-    if _healthcheck_task:
-        _healthcheck_task.cancel()
-        try:
-            await _healthcheck_task
-        except asyncio.CancelledError:
-            pass
 
 
 if __name__ == "__main__":

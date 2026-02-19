@@ -22,7 +22,7 @@ bridge_enabled: true
 
 # Bot behavior (Signal-specific for now)
 signal_bot_enable_web_search: true
-signal_bot_enable_doc_search: false
+signal_bot_enable_doc_search: true
 signal_bot_default_model: "auto"
 signal_bot_poll_interval: 1.0
 

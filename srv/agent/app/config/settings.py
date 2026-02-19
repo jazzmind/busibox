@@ -120,6 +120,10 @@ class Settings(BaseSettings):
         "https://localhost",
         description="Base URL for portal links in notifications",
     )
+    portal_name: str = Field(
+        "Busibox",
+        description="Display name used in notification subjects (e.g. 'Dredging News from Busibox')",
+    )
     
     # Email configuration
     # Bridge API is the preferred email provider (handles SMTP/Resend internally)

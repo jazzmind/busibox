@@ -35,3 +35,21 @@
     msg: |
       Bridge API is running and ready
       API: http://localhost:{{ bridge_api_port | default(8081) }}
+
+- name: Re-apply stored bridge runtime config after redeploy
+  ansible.builtin.uri:
+    url: "http://localhost:8011/api/v1/config/apply/bridge"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ secrets.litellm_master_key if (secrets.litellm_master_key | default('') | length > 0) else (secrets.litellm_api_key | default('')) }}"
+    return_content: true
+    status_code:
+      - 200
+  register: bridge_config_apply_result
+  retries: 5
+  delay: 2
+  until: bridge_config_apply_result.status == 200
+
+- name: Show bridge runtime config apply result
+  ansible.builtin.debug:
+    msg: "{{ bridge_config_apply_result.json.message | default('Bridge runtime config applied after redeploy.') }}"

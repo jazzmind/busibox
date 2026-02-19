@@ -892,9 +892,16 @@ class TaskSchedulerService:
         
         def _format_output_for_notification(output: Any | None) -> str:
             """Format output summary for notification display."""
-            # Use top-level content extraction function
             if output is None:
                 return ""
+            if isinstance(output, dict):
+                for key in ("result", "summary", "output", "response", "content"):
+                    value = output.get(key)
+                    if value:
+                        if isinstance(value, str):
+                            return value
+                        return _extract_content_from_output(str(value))
+            # Fallback to top-level content extraction for strings/lists/other payloads.
             return _extract_content_from_output(str(output))
         
         notification_config = task.notification_config or {}
@@ -916,9 +923,12 @@ class TaskSchedulerService:
         
         # Build notification content
         status_emoji = "✅" if success else "❌"
-        status_text = "succeeded" if success else "failed"
         
-        subject = f"{status_emoji} Task '{task.name}' {status_text}"
+        from app.config.settings import get_settings as _get_settings
+        _settings = _get_settings()
+        _portal_name = getattr(_settings, "portal_name", None) or "Busibox"
+        
+        subject = f"{status_emoji} {task.name} from {_portal_name}"
         
         body_parts: List[str] = []
         

@@ -14,7 +14,8 @@ import logging
 import sys
 from collections import defaultdict
 from datetime import datetime, timedelta
-from typing import Any, Awaitable, Callable, Dict, List
+import json
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from .agent_client import AgentClient
 from .channel_identity import ChannelIdentityResolver
@@ -152,6 +153,7 @@ class MessageProcessor:
         channel: str,
         external_sender: str,
         text: str,
+        attachments: Optional[List[Dict[str, Any]]] = None,
         send_message: Callable[[str], Awaitable[None]],
         send_typing_start: Callable[[], Awaitable[None]] | None,
         send_typing_stop: Callable[[], Awaitable[None]] | None,
@@ -211,6 +213,7 @@ class MessageProcessor:
             "channel": channel,
             "sender_key": sender_key,
             "text": text,
+            "attachments": attachments or [],
             "send_message": send_message,
             "send_typing_start": send_typing_start,
             "send_typing_stop": send_typing_stop,
@@ -274,6 +277,7 @@ class MessageProcessor:
         try:
             await self._process_streaming(
                 text=request["text"],
+                attachments=request.get("attachments") or [],
                 sender=request["sender_key"],
                 agent_client=request["agent_client"],
                 delegation_token_override=request["delegation_token_override"],
@@ -291,6 +295,7 @@ class MessageProcessor:
         self,
         *,
         text: str,
+        attachments: List[Dict[str, Any]],
         sender: str,
         agent_client: AgentClient,
         delegation_token_override: str | None,
@@ -320,11 +325,13 @@ class MessageProcessor:
         async for event in agent_client.chat_message_stream(
             message=text,
             sender=sender,
-            enable_web_search=self.settings.enable_web_search,
-            enable_doc_search=self.settings.enable_doc_search,
+            # Bridge should not gate capabilities; the selected agent decides.
+            enable_web_search=True,
+            enable_doc_search=True,
             model=self.settings.default_model,
             agent_id=self.settings.default_agent_id or None,
             delegation_token_override=delegation_token_override,
+            attachments=attachments,
         ):
             if cancel_event and cancel_event.is_set():
                 break
@@ -401,6 +408,137 @@ class MessageProcessor:
             channel=channel,
             external_sender=external_sender,
             text=prompt,
+            attachments=None,
+            send_message=send_message,
+            send_typing_start=send_typing_start,
+            send_typing_stop=send_typing_stop,
+            agent_client=agent_client,
+        )
+
+    async def _exchange_access_token(
+        self,
+        *,
+        subject_token: str,
+        audience: str,
+        scope: str,
+    ) -> str:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(
+                str(self.settings.auth_token_url),
+                data={
+                    "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                    "subject_token": subject_token,
+                    "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
+                    "audience": audience,
+                    "scope": scope,
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+        resp.raise_for_status()
+        data = resp.json() or {}
+        token = str(data.get("access_token") or "").strip()
+        if not token:
+            raise RuntimeError("Token exchange succeeded but access_token was missing")
+        return token
+
+    async def _upload_attachment_for_chat(
+        self,
+        *,
+        source_url: str,
+        filename: str,
+        mime_type: str,
+        subject_token: str,
+        channel: str,
+        external_sender: str,
+    ) -> Dict[str, Any]:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            source_resp = await client.get(source_url)
+            source_resp.raise_for_status()
+            file_bytes = source_resp.content
+
+        data_api_token = await self._exchange_access_token(
+            subject_token=subject_token,
+            audience="data-api",
+            scope="data.write data.read",
+        )
+
+        metadata = {
+            "source": f"{channel}-bridge",
+            "external_sender": external_sender,
+        }
+        data = {
+            "visibility": "personal",
+            "metadata": json.dumps(metadata),
+        }
+        files = {"file": (filename, file_bytes, mime_type or "application/octet-stream")}
+        upload_url = f"{str(self.settings.data_api_url).rstrip('/')}/upload"
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            upload_resp = await client.post(
+                upload_url,
+                data=data,
+                files=files,
+                headers={"Authorization": f"Bearer {data_api_token}"},
+            )
+        upload_resp.raise_for_status()
+        payload = upload_resp.json() or {}
+        file_id = str(payload.get("file_id") or payload.get("id") or "").strip()
+        if not file_id:
+            raise RuntimeError("Upload succeeded but file_id was missing")
+        file_size = int(payload.get("size") or len(file_bytes) or 0)
+        file_url = f"{str(self.settings.data_api_url).rstrip('/')}/files/{file_id}/download"
+        return {
+            "name": filename,
+            "type": mime_type or "application/octet-stream",
+            "url": file_url,
+            "size": file_size,
+        }
+
+    async def process_document(
+        self,
+        *,
+        channel: str,
+        external_sender: str,
+        text: str,
+        attachment_url: str,
+        attachment_filename: str,
+        attachment_mime_type: str,
+        send_message: Callable[[str], Awaitable[None]],
+        send_typing_start: Callable[[], Awaitable[None]] | None,
+        send_typing_stop: Callable[[], Awaitable[None]] | None,
+        agent_client: AgentClient,
+    ) -> None:
+        binding = await self._resolve_sender_binding(channel, external_sender)
+        subject_token = ""
+        if binding and binding.get("delegation_token"):
+            subject_token = str(binding["delegation_token"]).strip()
+        else:
+            subject_token = str(self.settings.delegation_token or "").strip()
+        if not subject_token:
+            await send_message(
+                "This channel is not linked yet. Generate a link code in your Account settings and send /link <code>."
+            )
+            return
+
+        try:
+            attachment = await self._upload_attachment_for_chat(
+                source_url=attachment_url,
+                filename=attachment_filename or "telegram-attachment",
+                mime_type=attachment_mime_type or "application/octet-stream",
+                subject_token=subject_token,
+                channel=channel,
+                external_sender=external_sender,
+            )
+        except Exception as exc:
+            logger.error("Failed to ingest %s attachment: %s", channel, exc, exc_info=True)
+            await send_message("I couldn't ingest that attachment. Please try again.")
+            return
+
+        prompt = text.strip() if text and text.strip() else "I attached a file. Please analyze it and help me."
+        await self.process(
+            channel=channel,
+            external_sender=external_sender,
+            text=prompt,
+            attachments=[attachment],
             send_message=send_message,
             send_typing_start=send_typing_start,
             send_typing_stop=send_typing_stop,
@@ -537,6 +675,21 @@ class TelegramBot:
                             channel="telegram",
                             external_sender=msg.sender_id,
                             audio_url=msg.audio_url,
+                            send_message=lambda body, chat_id=msg.chat_id: telegram_client.send_message(chat_id, body),
+                            send_typing_start=lambda chat_id=msg.chat_id: telegram_client.send_typing_indicator(chat_id),
+                            send_typing_stop=None,
+                            agent_client=agent_client,
+                        )
+                        continue
+
+                    if msg.attachment_url:
+                        await self.processor.process_document(
+                            channel="telegram",
+                            external_sender=msg.sender_id,
+                            text=msg.text,
+                            attachment_url=msg.attachment_url,
+                            attachment_filename=msg.attachment_filename or "telegram-attachment",
+                            attachment_mime_type=msg.attachment_mime_type or "application/octet-stream",
                             send_message=lambda body, chat_id=msg.chat_id: telegram_client.send_message(chat_id, body),
                             send_typing_start=lambda chat_id=msg.chat_id: telegram_client.send_typing_indicator(chat_id),
                             send_typing_stop=None,
