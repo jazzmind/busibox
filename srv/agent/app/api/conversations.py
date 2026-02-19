@@ -818,7 +818,6 @@ async def create_chat_attachment(
         attachment = ChatAttachment(
             filename=payload.filename,
             file_url=payload.file_url,
-            file_id=payload.file_id,
             mime_type=payload.mime_type,
             size_bytes=payload.size_bytes,
             added_to_library=payload.added_to_library,

@@ -28,6 +28,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY shared/ ./shared/
 RUN pip install --no-cache-dir ./shared
 
+# Install aider-chat in an isolated venv to avoid dependency conflicts.
+# The BuilderLocalAgent calls `aider` as a subprocess CLI tool.
+RUN python -m venv /opt/aider && \
+    /opt/aider/bin/pip install --no-cache-dir aider-chat>=0.78.0
+# Keep system Python first for migrations/runtime; only use aider CLI when invoked.
+ENV PATH="$PATH:/opt/aider/bin"
+
 # Copy source code
 COPY agent/app/ ./app/
 COPY agent/alembic/ ./alembic/

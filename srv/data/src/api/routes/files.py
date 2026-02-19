@@ -540,6 +540,19 @@ async def get_file_metadata(fileId: str, request: Request):
                 if ("word_count" not in metadata or metadata["word_count"] is None) and file_row["chunk_count"]:
                     # Rough estimate: ~200 words per chunk on average
                     metadata["word_count"] = file_row["chunk_count"] * 200
+
+            # Self-heal stale status reads: if file already has extracted/indexed
+            # artifacts but stage remains queued/processing, report completed.
+            status_stage = status_row["stage"] if status_row else None
+            status_progress = status_row["progress"] if status_row else None
+            has_artifacts = bool(
+                file_row.get("has_markdown")
+                and int(file_row.get("chunk_count") or 0) > 0
+                and int(file_row.get("vector_count") or 0) > 0
+            )
+            if has_artifacts and str(status_stage or "").lower() in {"queued", "processing", "parsing", "indexing"}:
+                status_stage = "completed"
+                status_progress = 100
             
             return JSONResponse(
                 status_code=status.HTTP_200_OK,
@@ -567,8 +580,8 @@ async def get_file_metadata(fileId: str, request: Request):
                     "permissions": file_row["permissions"],
                     "processingStrategies": strategies,
                     "status": {
-                        "stage": status_row["stage"] if status_row else None,
-                        "progress": status_row["progress"] if status_row else None,
+                        "stage": status_stage,
+                        "progress": status_progress,
                         "chunksProcessed": status_row["chunks_processed"] if status_row else None,
                         "totalChunks": status_row["total_chunks"] if status_row else None,
                         "pagesProcessed": status_row["pages_processed"] if status_row else None,

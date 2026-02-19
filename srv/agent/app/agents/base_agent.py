@@ -36,6 +36,7 @@ from app.clients.busibox import BusiboxClient
 from app.config.settings import get_settings
 from app.schemas.auth import Principal
 from app.schemas.streaming import StreamEvent, thought, tool_start, tool_result, content, error, complete
+from app.services.attachment_resolver import attachment_resolver
 from app.services.token_service import get_or_exchange_token
 from app.services.skills_service import get_skills_service
 
@@ -575,6 +576,8 @@ class BaseStreamingAgent(StreamingAgent):
         agent_context = await self._setup_context(context, stream, query)
         if agent_context is None:
             return "Authentication or session error. Please sign in and try again."
+
+        await self._resolve_attachments(query, stream, agent_context)
         
         if cancel.is_set():
             return ""
@@ -752,6 +755,37 @@ class BaseStreamingAgent(StreamingAgent):
                 )
         
         return agent_context
+
+    async def _resolve_attachments(
+        self,
+        query: str,
+        stream: StreamCallback,
+        agent_context: AgentContext,
+    ) -> None:
+        """Resolve uploaded attachments into prompt-ready content."""
+        if not agent_context.attachment_metadata:
+            return
+
+        context_token_estimate = 0
+        if agent_context.compressed_history_summary:
+            context_token_estimate += len(agent_context.compressed_history_summary) // 4
+        if agent_context.recent_messages:
+            context_token_estimate += sum(
+                len(str(m.get("content", ""))) // 4 for m in agent_context.recent_messages
+            )
+        if agent_context.relevant_insights:
+            context_token_estimate += sum(
+                len(str(i.get("content", ""))) // 4 for i in agent_context.relevant_insights
+            )
+
+        agent_context.resolved_attachments = await attachment_resolver.resolve(
+            query=query,
+            attachment_metadata=agent_context.attachment_metadata,
+            principal=agent_context.principal,
+            user_id=agent_context.user_id,
+            stream=stream,
+            context_token_estimate=context_token_estimate,
+        )
 
     def _build_attachment_context_section(self, context: AgentContext) -> List[str]:
         """Render resolved attachment content for prompt injection."""
@@ -986,7 +1020,42 @@ class BaseStreamingAgent(StreamingAgent):
             for tool_name in self.config.tools:
                 tool_func = ToolRegistry.get(tool_name)
                 if tool_func:
-                    tools.append(_wrap_tool_with_truncation(tool_func))
+                    wrapped_tool = _wrap_tool_with_truncation(tool_func)
+
+                    @functools.wraps(wrapped_tool)
+                    async def monitored_tool(*args, _tool_name=tool_name, _tool=wrapped_tool, **kwargs):
+                        if cancel.is_set():
+                            return ""
+                        await stream(tool_start(
+                            source=_tool_name,
+                            message=f"Using {_tool_name}...",
+                        ))
+                        try:
+                            result = await _tool(*args, **kwargs)
+                            context.tool_results[_tool_name] = result
+                            result_data = (
+                                result.model_dump()
+                                if hasattr(result, "model_dump")
+                                else {"result": str(result)}
+                            )
+                            if not isinstance(result_data, dict):
+                                result_data = {"result": str(result_data)}
+                            await stream(tool_result(
+                                source=_tool_name,
+                                message=self._format_tool_result_message(_tool_name, result),
+                                data=result_data,
+                            ))
+                            return result
+                        except Exception as e:
+                            await stream(error(
+                                source=_tool_name,
+                                message=f"{_tool_name} failed: {str(e)}",
+                            ))
+                            raise
+
+                    monitored_tool.__signature__ = inspect.signature(wrapped_tool)
+                    monitored_tool.__annotations__ = getattr(wrapped_tool, "__annotations__", {})
+                    tools.append(monitored_tool)
         
         if not tools:
             # No tools configured - run as conversational agent without tool capabilities

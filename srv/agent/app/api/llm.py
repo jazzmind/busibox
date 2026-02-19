@@ -407,16 +407,33 @@ async def _get_configured_env_vars() -> Dict[str, str]:
     Get environment variables configured in LiteLLM.
     
     Tries multiple strategies:
-    1. /config/yaml (older LiteLLM)
-    2. LiteLLM database query (newer LiteLLM with STORE_MODEL_IN_DB)
-    3. os.environ fallback
+    1. os.environ (fastest - set when keys are saved via UI in current process)
+    2. /config/yaml (LiteLLM config endpoint)
+    3. LiteLLM database: LiteLLM_Config.environment_variables
+    4. LiteLLM database: LiteLLM_CredentialsTable (credentials stored by /credentials API)
+    
+    Note: Credentials in the DB are encrypted with LITELLM_SALT_KEY. We can't decrypt
+    them from agent-api, but we can detect their presence to report "configured" status.
     """
-    # Strategy 1: /config/yaml
+    # Strategy 1: os.environ (set during key save in current process lifetime)
+    import os
+    result = {}
+    for var in ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "AWS_ACCESS_KEY_ID",
+                "AWS_SECRET_ACCESS_KEY", "AWS_REGION_NAME", "AWS_BEARER_TOKEN_BEDROCK"]:
+        val = os.environ.get(var, "")
+        if val:
+            result[var] = val
+    if result:
+        return result
+    
+    # Strategy 2: /config/yaml
     config = await _get_litellm_config()
     if config and "environment_variables" in config:
-        return config.get("environment_variables", {})
+        env_from_config = config.get("environment_variables", {})
+        if env_from_config:
+            return env_from_config
     
-    # Strategy 2: Query LiteLLM database
+    # Strategy 3: Query LiteLLM database for environment_variables config
     if hasattr(settings, "litellm_database_url") and settings.litellm_database_url:
         try:
             import asyncpg
@@ -440,13 +457,32 @@ async def _get_configured_env_vars() -> Dict[str, str]:
         except Exception as e:
             logger.warning(f"Failed to query LiteLLM DB for env vars: {e}")
     
-    # Strategy 3: os.environ
-    import os
-    result = {}
-    for var in ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION_NAME"]:
-        val = os.environ.get(var, "")
-        if val:
-            result[var] = val
+    # Strategy 4: Check LiteLLM_CredentialsTable for stored credentials.
+    # We can't decrypt the values, but we can detect which providers have
+    # credentials stored. Return placeholder values so _is_key_configured works.
+    if hasattr(settings, "litellm_database_url") and settings.litellm_database_url:
+        try:
+            import asyncpg
+            conn = await asyncpg.connect(str(settings.litellm_database_url))
+            try:
+                rows = await conn.fetch(
+                    'SELECT credential_name FROM "LiteLLM_CredentialsTable"'
+                )
+                cred_names = {row["credential_name"] for row in rows}
+                if "openai_credentials" in cred_names:
+                    result["OPENAI_API_KEY"] = "****stored-in-credentials****"
+                if "anthropic_credentials" in cred_names:
+                    result["ANTHROPIC_API_KEY"] = "****stored-in-credentials****"
+                if "bedrock_credentials" in cred_names:
+                    result["AWS_ACCESS_KEY_ID"] = "****stored-in-credentials****"
+                    result["AWS_SECRET_ACCESS_KEY"] = "****stored-in-credentials****"
+            finally:
+                await conn.close()
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.debug(f"Failed to check credentials table: {e}")
+    
     return result
 
 
@@ -460,15 +496,50 @@ def _looks_like_real_key(value: str) -> bool:
     """Check if a value looks like a real API key vs an encrypted/placeholder value."""
     if not value:
         return False
-    # LiteLLM encrypted values often start with these patterns
     if value.startswith("os.environ/"):
         return False
     if value.startswith("encrypted:"):
         return False
-    # Very short values are likely placeholders
+    if value.startswith("****stored"):
+        return False
     if len(value) < 8:
         return False
     return True
+
+
+async def _clean_stale_config_env_vars(
+    client: "httpx.AsyncClient",
+    base_url: str,
+    headers: Dict[str, str],
+) -> None:
+    """Remove environment_variables from LiteLLM_Config to prevent stale encrypted
+    values from poisoning LiteLLM's env on its periodic DB reload.
+
+    LiteLLM encrypts env vars with LITELLM_SALT_KEY. If the salt key changes
+    (e.g. container recreated with a new master key), old encrypted blobs become
+    undecryptable and LiteLLM uses the raw ciphertext as the env var value,
+    causing auth failures and DNS errors.
+
+    We use a direct DB query because LiteLLM has no API to delete config entries.
+    """
+    if not (hasattr(settings, "litellm_database_url") and settings.litellm_database_url):
+        return
+    try:
+        import asyncpg
+        conn = await asyncpg.connect(str(settings.litellm_database_url))
+        try:
+            result = await conn.execute(
+                'DELETE FROM "LiteLLM_Config" '
+                "WHERE param_name = 'environment_variables'"
+            )
+            if result and "DELETE" in result:
+                logger.info(f"Cleaned stale LiteLLM config environment_variables: {result}")
+        finally:
+            await conn.close()
+    except ImportError:
+        logger.debug("asyncpg not available, skipping stale config cleanup")
+    except Exception as e:
+        logger.warning(f"Failed to clean stale config env vars from DB: {e}")
 
 
 async def _get_api_key_for_provider(provider: str) -> Optional[str]:
@@ -1037,9 +1108,16 @@ async def save_provider_key(
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             # Strategy 1: Use /credentials API (LiteLLM v1.65+)
+            # Models reference these via litellm_credential_name in litellm_params.
+            # Delete-then-create to avoid stale encrypted data from old salt keys.
             try:
+                cred_name = f"{provider}_credentials"
+                await client.delete(
+                    f"{base_url}/credentials/{cred_name}",
+                    headers=headers,
+                )
                 cred_payload = {
-                    "credential_name": f"{provider}_credentials",
+                    "credential_name": cred_name,
                     "credential_info": {
                         "provider": provider,
                         "description": f"{provider.title()} credentials",
@@ -1054,23 +1132,6 @@ async def save_provider_key(
                 if resp.status_code == 200:
                     logger.info(f"Saved {provider} key via /credentials API")
                     saved = True
-                elif resp.status_code == 409:
-                    # Credential exists, update it
-                    resp2 = await client.patch(
-                        f"{base_url}/credentials/{provider}_credentials",
-                        headers=headers,
-                        json={
-                            "credential_values": env_vars_to_save,
-                        },
-                    )
-                    if resp2.status_code == 200:
-                        logger.info(f"Updated {provider} key via /credentials API")
-                        saved = True
-                    else:
-                        logger.warning(
-                            f"/credentials PATCH returned {resp2.status_code}: "
-                            f"{resp2.text[:200]}"
-                        )
                 else:
                     logger.warning(
                         f"/credentials POST returned {resp.status_code}: "
@@ -1079,32 +1140,34 @@ async def save_provider_key(
             except Exception as e:
                 logger.warning(f"/credentials API failed: {e}")
             
-            # Strategy 2: Fallback to /config/update
-            if not saved:
-                try:
-                    resp = await client.post(
-                        f"{base_url}/config/update",
-                        headers=headers,
-                        json={"environment_variables": env_vars_to_save},
+            # Strategy 2: Also push via /config/update so LiteLLM sets these
+            # as actual environment variables on its periodic DB reload.
+            # /credentials is for models that reference credentials by name,
+            # /config/update sets them as env vars for all models to use.
+            try:
+                resp = await client.post(
+                    f"{base_url}/config/update",
+                    headers=headers,
+                    json={"environment_variables": env_vars_to_save},
+                )
+                if resp.status_code == 200:
+                    logger.info(f"Also saved {provider} key via /config/update")
+                    saved = True
+                else:
+                    error_text = resp.text[:500]
+                    logger.warning(
+                        f"/config/update returned {resp.status_code}: {error_text}"
                     )
-                    if resp.status_code == 200:
-                        logger.info(f"Saved {provider} key via /config/update")
-                        saved = True
-                    else:
-                        error_text = resp.text[:500]
-                        logger.warning(
-                            f"/config/update returned {resp.status_code}: {error_text}"
+                    if not saved and "STORE_MODEL_IN_DB" in error_text:
+                        raise HTTPException(
+                            status_code=status.HTTP_502_BAD_GATEWAY,
+                            detail="LiteLLM requires STORE_MODEL_IN_DB=True. "
+                                   "Set this env var on LiteLLM and restart."
                         )
-                        if "STORE_MODEL_IN_DB" in error_text:
-                            raise HTTPException(
-                                status_code=status.HTTP_502_BAD_GATEWAY,
-                                detail="LiteLLM requires STORE_MODEL_IN_DB=True. "
-                                       "Set this env var on LiteLLM and restart."
-                            )
-                except HTTPException:
-                    raise
-                except Exception as e:
-                    logger.warning(f"/config/update failed: {e}")
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.warning(f"/config/update failed: {e}")
     except HTTPException:
         raise
     except Exception as e:
@@ -1673,7 +1736,11 @@ async def register_cloud_models(
     # Already registered models
     registered = await _get_registered_model_names()
     
-    # Build new model entries for LiteLLM
+    # Build new model entries for LiteLLM.
+    # Models rely on environment variables for auth (set via /config/update
+    # when keys are saved). We do NOT use litellm_credential_name because
+    # it merges credential values into litellm_params, which breaks providers
+    # like Bedrock that use env vars (AWS_REGION_NAME etc.) rather than params.
     new_models = []
     for model_id in request.model_ids:
         if model_id in registered:

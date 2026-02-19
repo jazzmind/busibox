@@ -12,6 +12,7 @@ This provides the main chat interface that:
 import asyncio
 import json
 import logging
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Dict, List, Optional
@@ -41,6 +42,18 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 settings = get_settings()
+
+
+FILE_ID_FROM_URL_RE = re.compile(r"/files/([^/]+)/download")
+
+
+def _extract_file_id_from_url(file_url: Optional[str]) -> Optional[str]:
+    if not file_url:
+        return None
+    match = FILE_ID_FROM_URL_RE.search(file_url)
+    if not match:
+        return None
+    return match.group(1)
 
 
 async def _generate_insights_background(
@@ -539,7 +552,7 @@ async def send_chat_message_stream(
                     attachment.message_id = user_message.id
                     attachment_metadata.append({
                         "id": str(attachment.id),
-                        "file_id": attachment.file_id,
+                        "file_id": _extract_file_id_from_url(attachment.file_url),
                         "filename": attachment.filename,
                         "mime_type": attachment.mime_type,
                         "file_url": attachment.file_url,
@@ -792,6 +805,37 @@ async def send_chat_message_stream_agentic(
             )
             session.add(user_message)
             await session.flush()
+
+            # Load uploaded chat-attachments and link them to the user message
+            attachment_metadata: List[Dict[str, Any]] = []
+            if payload.attachment_ids:
+                attachment_result = await session.execute(
+                    select(ChatAttachment).where(ChatAttachment.id.in_(payload.attachment_ids))
+                )
+                attachments = attachment_result.scalars().all()
+                requested_ids = {str(att_id) for att_id in payload.attachment_ids}
+                found_ids = {str(att.id) for att in attachments}
+                missing_ids = requested_ids - found_ids
+                if missing_ids:
+                    logger.warning(
+                        "Some attachment IDs were not found",
+                        extra={
+                            "user_sub": principal.sub,
+                            "conversation_id": str(conversation.id),
+                            "missing_attachment_ids": sorted(missing_ids),
+                        },
+                    )
+
+                for attachment in attachments:
+                    attachment.message_id = user_message.id
+                    attachment_metadata.append({
+                        "id": str(attachment.id),
+                        "file_id": _extract_file_id_from_url(attachment.file_url),
+                        "filename": attachment.filename,
+                        "mime_type": attachment.mime_type,
+                        "file_url": attachment.file_url,
+                        "parsed_content": attachment.parsed_content,
+                    })
             
             # Get conversation history
             history_result = await session.execute(

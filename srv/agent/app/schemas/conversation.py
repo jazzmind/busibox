@@ -22,7 +22,6 @@ class ChatAttachmentCreate(BaseModel):
     """Schema for creating a chat attachment"""
     filename: str = Field(max_length=500, description="Original filename")
     file_url: str = Field(description="URL to the uploaded file")
-    file_id: Optional[str] = Field(None, description="Data-service file ID for attachment resolution")
     mime_type: Optional[str] = Field(None, max_length=255)
     size_bytes: Optional[int] = None
     added_to_library: bool = False

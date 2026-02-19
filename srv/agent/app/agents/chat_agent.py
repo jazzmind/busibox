@@ -8,6 +8,7 @@ This agent extends BaseStreamingAgent with multi-tool access and LLM-driven
 tool selection strategy.
 """
 
+import asyncio
 import json
 import logging
 from typing import Any, Dict, List, Optional
@@ -20,8 +21,7 @@ from app.agents.base_agent import (
     PipelineStep,
     ToolStrategy,
 )
-from app.schemas.streaming import content, error
-from app.services.attachment_resolver import attachment_resolver
+from app.schemas.streaming import content, error, thought
 from pydantic import BaseModel, ValidationError
 
 from busibox_common.llm import get_client
@@ -166,14 +166,54 @@ class ChatAgent(BaseStreamingAgent):
         lines.append(f"Current user message: {query}")
         return "\n".join(lines)
 
+    def _heuristic_fast_ack(self, query: str) -> FastAckDecision:
+        """
+        Fallback when fast LLM classification fails.
+        Keeps first response varied and context-aware instead of constant text.
+        """
+        q = query.strip().lower()
+        if any(token in q for token in ("hi", "hello", "hey")) and len(q.split()) <= 4:
+            return FastAckDecision(needs_tools=False, response="Hi! How can I help?")
+        if any(token in q for token in ("calendar", "schedule", "meeting", "today")):
+            return FastAckDecision(needs_tools=True, response="Got it - checking your calendar now.")
+        if any(token in q for token in ("weather", "forecast", "temperature")):
+            return FastAckDecision(needs_tools=True, response="Sure - let me pull the latest weather.")
+        if any(token in q for token in ("document", "file", "notes", "pdf")):
+            return FastAckDecision(needs_tools=True, response="Okay - I’ll check your documents.")
+        if any(token in q for token in ("news", "latest", "current", "search")):
+            return FastAckDecision(needs_tools=True, response="On it - I’ll look that up.")
+        return FastAckDecision(needs_tools=True, response="Got it. I’m working on that now.")
+
+    def _stream_chunks(self, text: str, chunk_size: int = 140) -> List[str]:
+        """Split text into stream-friendly chunks by sentence/size."""
+        stripped = text.strip()
+        if not stripped:
+            return []
+        if len(stripped) <= chunk_size:
+            return [stripped]
+
+        chunks: List[str] = []
+        current = ""
+        for part in stripped.split(" "):
+            next_part = f"{current} {part}".strip()
+            if len(next_part) > chunk_size:
+                if current:
+                    chunks.append(current)
+                current = part
+            else:
+                current = next_part
+            if current.endswith((".", "!", "?")) and len(current) >= 60:
+                chunks.append(current)
+                current = ""
+        if current:
+            chunks.append(current)
+        return chunks
+
     async def _generate_fast_ack(self, query: str, context: AgentContext) -> FastAckDecision:
         """
         Generate a fast first response and decide whether we need a deeper tool pass.
         """
-        default = FastAckDecision(
-            needs_tools=True,
-            response="Got it. Let me check that for you...",
-        )
+        default = self._heuristic_fast_ack(query)
         prompt = (
             "You are deciding how to handle a user message.\n"
             "Return ONLY JSON with keys: needs_tools (boolean) and response (string).\n"
@@ -212,13 +252,59 @@ class ChatAgent(BaseStreamingAgent):
                 raw = raw[3:]
             if raw.endswith("```"):
                 raw = raw[:-3]
-            parsed = FastAckDecision.model_validate(json.loads(raw.strip()))
+            raw = raw.strip()
+            if raw and not raw.startswith("{"):
+                start = raw.find("{")
+                end = raw.rfind("}")
+                if start != -1 and end != -1 and end > start:
+                    raw = raw[start:end + 1]
+            parsed = FastAckDecision.model_validate(json.loads(raw))
             if not parsed.response.strip():
                 return default
             return parsed
         except (json.JSONDecodeError, ValidationError, Exception) as exc:
             logger.warning("Fast ack generation fallback triggered: %s", exc)
             return default
+
+    async def _generate_quick_findings(self, query: str, tool_results: Dict[str, Any]) -> str:
+        """
+        Create a concise interim "what I found so far" message from tool outputs.
+        """
+        if not tool_results:
+            return ""
+        compact: Dict[str, str] = {}
+        for name, value in tool_results.items():
+            if name == "llm_response":
+                continue
+            text = value.model_dump_json() if hasattr(value, "model_dump_json") else str(value)
+            compact[name] = text[:700]
+        if not compact:
+            return ""
+        prompt = (
+            "Summarize these tool findings in 1-2 short sentences for a chat user.\n"
+            "Be concrete and avoid mentioning internal tooling.\n"
+            f"User query: {query}\n"
+            f"Findings: {json.dumps(compact)}"
+        )
+        try:
+            client = get_client()
+            result = await client.chat_completion(
+                model="fast",
+                messages=[
+                    {"role": "system", "content": "You write concise interim progress summaries."},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.2,
+            )
+            return (
+                result.get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+                .strip()
+            )
+        except Exception as exc:
+            logger.debug("Quick findings summary skipped: %s", exc)
+            return ""
 
     async def run_with_streaming(
         self,
@@ -254,28 +340,13 @@ class ChatAgent(BaseStreamingAgent):
         if not decision.needs_tools:
             return fast_response
 
-        # Resolve uploaded attachments between fast ack and deeper tool pass.
-        if agent_context.attachment_metadata:
-            context_token_estimate = 0
-            if agent_context.compressed_history_summary:
-                context_token_estimate += len(agent_context.compressed_history_summary) // 4
-            if agent_context.recent_messages:
-                context_token_estimate += sum(
-                    len(str(m.get("content", ""))) // 4 for m in agent_context.recent_messages
-                )
-            if agent_context.relevant_insights:
-                context_token_estimate += sum(
-                    len(str(i.get("content", ""))) // 4 for i in agent_context.relevant_insights
-                )
+        await stream(thought(
+            source=self.name,
+            message="Thinking through your request and selecting the best tools...",
+            data={"phase": "deep_start"},
+        ))
 
-            agent_context.resolved_attachments = await attachment_resolver.resolve(
-                query=query,
-                attachment_metadata=agent_context.attachment_metadata,
-                principal=agent_context.principal,
-                user_id=agent_context.user_id,
-                stream=stream,
-                context_token_estimate=context_token_estimate,
-            )
+        await self._resolve_attachments(query, stream, agent_context)
 
         try:
             if self.config.tool_strategy == ToolStrategy.LLM_DRIVEN:
@@ -293,8 +364,53 @@ class ChatAgent(BaseStreamingAgent):
         if cancel.is_set():
             return ""
 
-        # Return the deeper response. The fast ack is already streamed.
-        deep_response = await self._synthesize(query, stream, cancel, agent_context)
+        # For LLM-driven chat, _execute_llm_driven stores final text in llm_response,
+        # and base _synthesize emits one full content event. To preserve incremental
+        # second-phase UX, stream it in chunks ourselves.
+        if "llm_response" in agent_context.tool_results:
+            await stream(thought(
+                source=self.name,
+                message="Synthesizing findings...",
+                data={"phase": "synthesis"},
+            ))
+            quick_findings = await self._generate_quick_findings(query, agent_context.tool_results)
+            if quick_findings:
+                await stream(content(
+                    source=self.name,
+                    message=quick_findings,
+                    data={"phase": "quick_findings", "partial": False},
+                ))
+            deep_response = str(agent_context.tool_results["llm_response"] or "").strip()
+            if deep_response:
+                for chunk in self._stream_chunks(deep_response):
+                    if cancel.is_set():
+                        return ""
+                    await stream(content(
+                        source=self.name,
+                        message=chunk,
+                        data={"phase": "deep_response", "streaming": True, "partial": True},
+                    ))
+                    await asyncio.sleep(0.03)
+                await stream(content(
+                    source=self.name,
+                    message="",
+                    data={
+                        "phase": "deep_response",
+                        "streaming": False,
+                        "partial": False,
+                        "complete": True,
+                    },
+                ))
+            else:
+                deep_response = "I couldn't find a detailed answer right now."
+                await stream(content(
+                    source=self.name,
+                    message=deep_response,
+                    data={"phase": "deep_response", "partial": False},
+                ))
+        else:
+            # Fallback to base synthesis behavior for non-LLM-driven/custom paths.
+            deep_response = await self._synthesize(query, stream, cancel, agent_context)
         if fast_response:
             return f"{fast_response}\n\n{deep_response}".strip()
         return deep_response

@@ -676,6 +676,9 @@ class LibraryService:
                     f.size_bytes as "sizeBytes",
                     f.storage_path as "storagePath",
                     f.content_hash as "contentHash",
+                    f.has_markdown as "hasMarkdown",
+                    f.chunk_count as "chunkCount",
+                    f.vector_count as "vectorCount",
                     f.extracted_keywords as "extractedKeywords",
                     f.metadata,
                     f.visibility,
@@ -732,6 +735,19 @@ class LibraryService:
                     doc["createdAt"] = doc["createdAt"].isoformat()
                 if doc.get("updatedAt"):
                     doc["updatedAt"] = doc["updatedAt"].isoformat()
+
+                # Self-heal stale status reads: if ingestion artifacts exist but stage is
+                # still queued/processing, surface as completed in list responses.
+                status_value = str(doc.get("status") or "").lower()
+                has_artifacts = bool(
+                    doc.get("hasMarkdown")
+                    and int(doc.get("chunkCount") or 0) > 0
+                    and int(doc.get("vectorCount") or 0) > 0
+                )
+                if has_artifacts and status_value in {"queued", "processing", "parsing", "indexing"}:
+                    doc["status"] = "completed"
+                    doc["processingProgress"] = 100
+
                 # Parse metadata if JSON string
                 if doc.get("metadata") and isinstance(doc["metadata"], str):
                     import json
@@ -743,6 +759,10 @@ class LibraryService:
                 if doc.get("extractedKeywords") is None:
                     doc["extractedKeywords"] = []
                 doc["extractedKeywords"] = list(doc["extractedKeywords"]) if doc["extractedKeywords"] else []
+                # Internal artifact flags are not part of public response shape.
+                doc.pop("hasMarkdown", None)
+                doc.pop("chunkCount", None)
+                doc.pop("vectorCount", None)
                 documents.append(doc)
             
             return documents

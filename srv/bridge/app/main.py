@@ -334,6 +334,12 @@ class MessageProcessor:
                 detail = str(event.get("message") or event.get("error") or "Unknown error")
                 raise RuntimeError(detail)
 
+            if event_type in ("thought", "tool_start", "tool_result"):
+                telemetry_msg = str(event.get("message") or "").strip()
+                if telemetry_msg:
+                    await send_message(telemetry_msg)
+                continue
+
             if event_type not in ("content", "complete", "message_complete"):
                 continue
 
@@ -354,7 +360,12 @@ class MessageProcessor:
             if is_partial:
                 partial_buffer += message
                 now = loop.time()
-                if now - last_emit_at >= debounce_seconds:
+                should_flush = (
+                    now - last_emit_at >= debounce_seconds
+                    or len(partial_buffer) >= 140
+                    or partial_buffer.endswith((".", "!", "?", "\n"))
+                )
+                if should_flush:
                     await flush_partial_buffer()
                 continue
 

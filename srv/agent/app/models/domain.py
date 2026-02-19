@@ -425,7 +425,6 @@ class ChatAttachment(Base):
     )
     filename: Mapped[str] = mapped_column(String(500), nullable=False)
     file_url: Mapped[str] = mapped_column(Text, nullable=False)
-    file_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
     mime_type: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     size_bytes: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     added_to_library: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
