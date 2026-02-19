@@ -201,8 +201,9 @@ class PostgresService:
             """, content_hash)
             
             if row:
-                # Found a valid duplicate - also clean up any incomplete ones
-                # to prevent database bloat
+                # Found a valid duplicate - clean up incomplete copies that are
+                # old enough to be considered orphaned (>30min).  Recent records
+                # may still be processing in the worker queue.
                 await conn.execute("""
                     DELETE FROM data_files
                     WHERE content_hash = $1
@@ -216,6 +217,7 @@ class PostgresService:
                             WHERE stage = 'completed'
                         )
                     )
+                    AND created_at < NOW() - INTERVAL '30 minutes'
                 """, content_hash, row["file_id"])
                 
                 return {
@@ -225,8 +227,10 @@ class PostgresService:
                     "processing_duration_seconds": row["processing_duration_seconds"],
                 }
             
-            # No valid duplicate found - clean up ALL incomplete files with this hash
-            # so the new upload can proceed cleanly
+            # No valid duplicate found.
+            # DO NOT aggressively delete incomplete records here — they may be
+            # actively processing in the worker queue.  Only clean up records
+            # that have been stuck for over 30 minutes (likely orphaned).
             deleted = await conn.execute("""
                 DELETE FROM data_files
                 WHERE content_hash = $1
@@ -239,11 +243,12 @@ class PostgresService:
                         WHERE stage = 'completed'
                     )
                 )
+                AND created_at < NOW() - INTERVAL '30 minutes'
             """, content_hash)
             
             if deleted and deleted != "DELETE 0":
                 logger.info(
-                    "Cleaned up incomplete duplicates",
+                    "Cleaned up stale incomplete duplicates (>30min old)",
                     content_hash=content_hash[:16] + "...",
                     deleted=deleted,
                 )
@@ -370,6 +375,7 @@ class PostgresService:
         role_ids: Optional[List[str]],
         actor_id: str,
         library_id: Optional[str] = None,
+        request=None,
     ):
         """
         Update a document's visibility, library, and document_roles atomically.
@@ -377,7 +383,7 @@ class PostgresService:
         if visibility not in ("personal", "shared"):
             raise ValueError("visibility must be 'personal' or 'shared'")
 
-        async with self.acquire() as conn:
+        async with self.acquire(request) as conn:
             await self._ensure_document_roles(conn)
             async with conn.transaction():
                 if library_id:

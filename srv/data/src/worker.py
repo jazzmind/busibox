@@ -1448,17 +1448,32 @@ class IngestWorker:
                 has_user_token=user_token is not None,
             )
             
+            # Hard cap: refuse to process if retry count from job data is too high.
+            # This prevents infinite retry loops when DB tracking fails.
+            if job_retry_count >= 5:
+                logger.error(
+                    "Job exceeded hard retry cap, dropping permanently",
+                    file_id=file_id,
+                    job_retry_count=job_retry_count,
+                )
+                return
+
             # Get content_hash from database (with RLS context)
             conn = self.postgres_service._get_connection(self._current_rls_context)
             try:
                 with conn.cursor() as cur:
                     cur.execute(
                         "SELECT content_hash FROM data_files WHERE file_id = %s",
-                        (file_id,),  # Pass string directly, not UUID object
+                        (file_id,),
                     )
                     result = cur.fetchone()
                     if not result:
-                        raise ValueError(f"File {file_id} not found in database")
+                        logger.error(
+                            "File not found in database — orphaned job, skipping permanently",
+                            file_id=file_id,
+                            user_id=user_id,
+                        )
+                        return
                     content_hash = result[0]
             finally:
                 self.postgres_service._return_connection(conn)
