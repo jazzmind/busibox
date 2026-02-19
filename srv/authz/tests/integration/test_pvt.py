@@ -116,6 +116,20 @@ async def pvt_session_jwt(pvt_db_conn):
         """
     )
 
+    if not admin_role:
+        admin_scopes = [
+            "*", "authz.*", "data.*", "search.*", "agent.*",
+            "workflow.*", "web_search.*", "apps.*", "libraries.*", "admin.*",
+        ]
+        admin_role = await pvt_db_conn.fetchrow(
+            """
+            INSERT INTO authz_roles (name, description, scopes)
+            VALUES ('Admin', 'Full administrative access (PVT bootstrap)', $1::text[])
+            RETURNING id
+            """,
+            admin_scopes,
+        )
+
     async with httpx.AsyncClient() as client:
         candidate_emails = [TEST_USER_EMAIL.lower(), "test@test.example.com"]
         seen = set()
@@ -172,22 +186,22 @@ async def pvt_session_jwt(pvt_db_conn):
         session_jwt = use_data.get("session", {}).get("token")
         assert session_jwt, "Missing session token after magic-link use"
 
-        if admin_role:
-            claims = jwt.decode(
-                session_jwt,
-                options={"verify_signature": False, "verify_aud": False},
-            )
-            user_id = claims.get("sub")
-            if user_id:
-                await pvt_db_conn.execute(
-                    """
-                    INSERT INTO authz_user_roles (user_id, role_id)
-                    VALUES ($1::uuid, $2)
-                    ON CONFLICT (user_id, role_id) DO NOTHING
-                    """,
-                    user_id,
-                    admin_role["id"],
-                )
+        assert admin_role, "Admin role must exist (bootstrapped or created by fixture)"
+        claims = jwt.decode(
+            session_jwt,
+            options={"verify_signature": False, "verify_aud": False},
+        )
+        user_id = claims.get("sub")
+        assert user_id, "Session JWT missing sub claim"
+        await pvt_db_conn.execute(
+            """
+            INSERT INTO authz_user_roles (user_id, role_id)
+            VALUES ($1::uuid, $2)
+            ON CONFLICT (user_id, role_id) DO NOTHING
+            """,
+            user_id,
+            admin_role["id"],
+        )
 
         return session_jwt
 
