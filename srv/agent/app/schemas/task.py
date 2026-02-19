@@ -16,7 +16,16 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 TriggerType = Literal["cron", "webhook", "one_time", "library"]
 
 # Notification channels
-NotificationChannel = Literal["email", "teams", "slack", "webhook"]
+NotificationChannel = Literal[
+    "email",
+    "teams",
+    "slack",
+    "webhook",
+    "bridge_signal",
+    "bridge_telegram",
+    "bridge_discord",
+    "bridge_whatsapp",
+]
 
 # Task status
 TaskStatus = Literal["active", "paused", "completed", "failed", "expired"]

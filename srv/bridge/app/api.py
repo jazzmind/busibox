@@ -22,6 +22,9 @@ from pydantic import BaseModel, EmailStr
 from .config import Settings
 from .agent_client import AgentClient
 from .whatsapp_client import WhatsAppClient
+from .signal_client import SignalClient
+from .telegram_client import TelegramClient
+from .discord_client import DiscordClient
 from .email_client import EmailClient
 
 logger = logging.getLogger(__name__)
@@ -82,6 +85,13 @@ class LinkInitiateRequest(BaseModel):
     channel_type: str
     delegation_token: str
     delegation_token_jti: Optional[str] = None
+
+
+class SendChannelMessageRequest(BaseModel):
+    channel_type: str
+    recipient: str
+    text: str
+    metadata: Optional[dict] = None
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +197,73 @@ def create_app(
         except Exception as exc:
             logger.error("[API] link initiate failed: %s", exc, exc_info=True)
             raise HTTPException(status_code=500, detail=str(exc))
+
+    @app.post("/api/v1/channels/send")
+    async def send_channel_message(req: SendChannelMessageRequest):
+        """
+        Send an outbound bridge message to a specific channel recipient.
+        """
+        channel_type = (req.channel_type or "").strip().lower()
+        recipient = (req.recipient or "").strip()
+        text = (req.text or "").strip()
+
+        if not channel_type:
+            raise HTTPException(status_code=400, detail="channel_type is required")
+        if not recipient:
+            raise HTTPException(status_code=400, detail="recipient is required")
+        if not text:
+            raise HTTPException(status_code=400, detail="text is required")
+
+        try:
+            if channel_type == "signal":
+                if not settings.signal_enabled:
+                    raise HTTPException(status_code=503, detail="Signal channel not enabled")
+                if not settings.signal_phone_number:
+                    raise HTTPException(status_code=503, detail="SIGNAL_PHONE_NUMBER is not configured")
+                async with SignalClient(
+                    base_url=str(settings.signal_cli_url),
+                    phone_number=settings.signal_phone_number,
+                ) as signal_client:
+                    ok = await signal_client.send_message(recipient, text)
+                if not ok:
+                    raise HTTPException(status_code=502, detail="Failed to send Signal message")
+            elif channel_type == "telegram":
+                if not settings.telegram_enabled:
+                    raise HTTPException(status_code=503, detail="Telegram channel not enabled")
+                if not settings.telegram_bot_token:
+                    raise HTTPException(status_code=503, detail="TELEGRAM_BOT_TOKEN is not configured")
+                parse_mode = None
+                if req.metadata and isinstance(req.metadata, dict):
+                    parse_mode = req.metadata.get("telegram_parse_mode")
+                async with TelegramClient(settings.telegram_bot_token) as telegram_client:
+                    await telegram_client.send_message(recipient, text, parse_mode=parse_mode)
+            elif channel_type == "discord":
+                if not settings.discord_enabled:
+                    raise HTTPException(status_code=503, detail="Discord channel not enabled")
+                if not settings.discord_bot_token:
+                    raise HTTPException(status_code=503, detail="DISCORD_BOT_TOKEN is not configured")
+                async with DiscordClient(settings.discord_bot_token) as discord_client:
+                    await discord_client.send_message(recipient, text)
+            elif channel_type == "whatsapp":
+                if not settings.whatsapp_enabled:
+                    raise HTTPException(status_code=503, detail="WhatsApp channel not enabled")
+                if not settings.whatsapp_access_token or not settings.whatsapp_phone_number_id:
+                    raise HTTPException(status_code=503, detail="WhatsApp credentials are not configured")
+                async with WhatsAppClient(
+                    access_token=settings.whatsapp_access_token,
+                    phone_number_id=settings.whatsapp_phone_number_id,
+                    api_version=settings.whatsapp_api_version,
+                ) as wa_client:
+                    await wa_client.send_message(recipient, text)
+            else:
+                raise HTTPException(status_code=400, detail=f"Unsupported channel_type: {channel_type}")
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.error("[API] channel send failed: %s", exc, exc_info=True)
+            raise HTTPException(status_code=502, detail=str(exc))
+
+        return {"ok": True, "channel_type": channel_type, "recipient": recipient}
 
     # ------------------------------------------------------------------
     # WhatsApp webhook endpoints (Cloud API)

@@ -99,11 +99,14 @@ class TelegramClient:
                 logger.error("Telegram poll failed: %s", e)
                 await self._sleep(interval)
 
-    async def send_message(self, chat_id: str, text: str) -> None:
+    async def send_message(self, chat_id: str, text: str, parse_mode: Optional[str] = None) -> None:
         """Send a message to a Telegram chat."""
+        payload = {"chat_id": chat_id, "text": text}
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
         response = await self.client.post(
             f"{self.base_url}/sendMessage",
-            json={"chat_id": chat_id, "text": text},
+            json=payload,
         )
         response.raise_for_status()
 

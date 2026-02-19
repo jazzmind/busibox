@@ -43,43 +43,126 @@ def _extract_content_from_output(output_summary: Optional[str]) -> str:
     """
     import ast
     import json
+    import re
     
     if not output_summary:
         return ""
     
-    content = output_summary
-    
-    # Try to parse as dict if it looks like one
-    if content.startswith("{") and content.endswith("}"):
+    content = output_summary.strip()
+
+    def _extract_json_candidate(text: str) -> Optional[str]:
+        code_fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text, flags=re.IGNORECASE)
+        if code_fence_match:
+            return code_fence_match.group(1).strip()
+        if text.startswith("{") or text.startswith("["):
+            return text
+        start_positions = [idx for idx in (text.find("{"), text.find("[")) if idx >= 0]
+        if not start_positions:
+            return None
+        return text[min(start_positions):].strip()
+
+    def _repair_truncated_json(text: str) -> str:
+        repaired = text.rstrip()
+        # Remove trailing comma-only tails from truncation
+        repaired = re.sub(r",\s*$", "", repaired)
+
+        # Track quote and bracket balance to close truncated payloads.
+        in_string = False
+        escape = False
+        stack: List[str] = []
+        for ch in repaired:
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_string = False
+                continue
+
+            if ch == '"':
+                in_string = True
+            elif ch in "{[":
+                stack.append("}" if ch == "{" else "]")
+            elif ch in "}]":
+                if stack and ch == stack[-1]:
+                    stack.pop()
+
+        if in_string:
+            repaired += '"'
+        while stack:
+            repaired += stack.pop()
+        return repaired
+
+    def _extract_preferred_value(parsed: Any) -> Optional[str]:
+        if isinstance(parsed, dict):
+            for key in ("result", "summary", "output", "response", "content"):
+                value = parsed.get(key)
+                if value:
+                    return str(value)
+        return None
+
+    def _extract_preferred_value_by_regex(text: str) -> Optional[str]:
+        # Handles malformed/truncated dict-like strings such as:
+        # {'result': '...truncated
+        for key in ("result", "summary", "output", "response", "content"):
+            single_quote_match = re.search(
+                rf"['\"]{key}['\"]\s*:\s*'([\s\S]+)",
+                text,
+                flags=re.IGNORECASE,
+            )
+            if single_quote_match:
+                value = single_quote_match.group(1)
+                return value.rstrip("'}] \n\r\t")
+            double_quote_match = re.search(
+                rf"['\"]{key}['\"]\s*:\s*\"([\s\S]+)",
+                text,
+                flags=re.IGNORECASE,
+            )
+            if double_quote_match:
+                value = double_quote_match.group(1)
+                return value.rstrip("\"}] \n\r\t")
+        return None
+
+    json_candidate = _extract_json_candidate(content)
+    if json_candidate:
+        parsed = None
+
+        # 1) Strict JSON parse
         try:
-            parsed = ast.literal_eval(content)
-            if isinstance(parsed, dict):
-                # Extract the result content
-                result_content = parsed.get("result") or parsed.get("summary") or parsed.get("output")
-                if result_content:
-                    content = str(result_content)
-                else:
-                    # If no standard keys, format as readable key-value pairs
-                    formatted_parts = []
-                    for key, value in parsed.items():
-                        if isinstance(value, str) and len(value) > 500:
-                            value = value[:500] + "..."
-                        formatted_parts.append(f"**{key}:** {value}")
-                    content = "\n".join(formatted_parts)
-        except (ValueError, SyntaxError):
-            # Not a valid dict string, try JSON
-            pass
-    
-    # Also try JSON parsing
-    if content.startswith("{") or content.startswith("["):
-        try:
-            parsed = json.loads(content)
-            if isinstance(parsed, dict):
-                result_content = parsed.get("result") or parsed.get("summary") or parsed.get("output")
-                if result_content:
-                    content = str(result_content)
+            parsed = json.loads(json_candidate)
         except json.JSONDecodeError:
-            pass
+            parsed = None
+
+        # 2) Repaired JSON parse (handles truncation from token limits)
+        if parsed is None:
+            try:
+                parsed = json.loads(_repair_truncated_json(json_candidate))
+            except json.JSONDecodeError:
+                parsed = None
+
+        # 3) Python literal fallback for dict-like outputs
+        if parsed is None:
+            try:
+                parsed = ast.literal_eval(json_candidate)
+            except (ValueError, SyntaxError):
+                parsed = None
+
+        if parsed is not None:
+            preferred = _extract_preferred_value(parsed)
+            if preferred:
+                content = preferred
+            elif isinstance(parsed, dict):
+                formatted_parts = []
+                for key, value in parsed.items():
+                    if isinstance(value, str) and len(value) > 500:
+                        value = value[:500] + "..."
+                    formatted_parts.append(f"**{key}:** {value}")
+                content = "\n".join(formatted_parts)
+        else:
+            regex_value = _extract_preferred_value_by_regex(json_candidate)
+            if regex_value:
+                content = regex_value
     
     # Strip markdown code fences if present (e.g., ```markdown\n...\n```)
     content = content.strip()
@@ -605,8 +688,18 @@ class TaskSchedulerService:
                         workflow_execution_id = None
                         status = None
                         output_summary = None
+                        output_payload = None
                         success = False
                         error_msg = None
+
+                        def _build_output_summary(raw_output: Any) -> Optional[str]:
+                            """Parse structured output first, then truncate readable text."""
+                            if raw_output is None:
+                                return None
+                            parsed_content = _extract_content_from_output(str(raw_output))
+                            if not parsed_content:
+                                return None
+                            return parsed_content[:500]
                         
                         if task.workflow_id:
                             # Execute workflow
@@ -641,10 +734,8 @@ class TaskSchedulerService:
                                                   workflow_execution.step_outputs.get("result") or \
                                                   list(workflow_execution.step_outputs.values())[-1] if workflow_execution.step_outputs else None
                                 if last_output:
-                                    if isinstance(last_output, dict):
-                                        output_summary = last_output.get("result") or last_output.get("summary") or str(last_output)[:500]
-                                    else:
-                                        output_summary = str(last_output)[:500]
+                                    output_payload = last_output
+                                    output_summary = _build_output_summary(last_output)
                             
                             if not success:
                                 error_msg = workflow_execution.error
@@ -665,10 +756,8 @@ class TaskSchedulerService:
                             success = run_record.status in ("succeeded", "completed")
                             
                             if run_record.output:
-                                if isinstance(run_record.output, dict):
-                                    output_summary = run_record.output.get("result") or run_record.output.get("summary") or str(run_record.output)[:500]
-                                else:
-                                    output_summary = str(run_record.output)[:500]
+                                output_payload = run_record.output
+                                output_summary = _build_output_summary(run_record.output)
                             
                             if not success and isinstance(run_record.output, dict):
                                 error_msg = run_record.output.get("error")
@@ -708,6 +797,14 @@ class TaskSchedulerService:
                         
                         effective_run_id = run_id or workflow_execution_id if task.workflow_id else run_id
                         logger.info(f"Task {task_id} execution completed with run/workflow {effective_run_id}, status: {status}")
+
+                        # Save output to library first so bridge notifications can reference document ID
+                        library_document_id = await self._save_task_output_to_library(
+                            task=task,
+                            execution=execution,
+                            output_summary=output_summary,
+                            success=success,
+                        )
                         
                         # Send notification if configured
                         notification_config = task.notification_config or {}
@@ -728,6 +825,8 @@ class TaskSchedulerService:
                                 run_record=run_result,
                                 success=success,
                                 output_summary=output_summary,
+                                output_payload=output_payload,
+                                library_document_id=library_document_id,
                             )
                         
                         # Save insight from execution output (for duplicate detection)
@@ -737,14 +836,6 @@ class TaskSchedulerService:
                                 execution=execution,
                                 output_summary=output_summary,
                             )
-                        
-                        # Save output to library if configured
-                        await self._save_task_output_to_library(
-                            task=task,
-                            execution=execution,
-                            output_summary=output_summary,
-                            success=success,
-                        )
                         
                     except Exception as e:
                         logger.error(f"Task {task_id} execution failed: {e}", exc_info=True)
@@ -771,6 +862,7 @@ class TaskSchedulerService:
                                 run_record=None,
                                 success=False,
                                 output_summary=str(e),
+                                output_payload=str(e),
                             )
             
             except Exception as e:
@@ -786,6 +878,8 @@ class TaskSchedulerService:
         run_record,
         success: bool,
         output_summary: str | None,
+        output_payload: Any | None = None,
+        library_document_id: Optional[str] = None,
     ) -> None:
         """
         Send notification for task completion.
@@ -796,10 +890,12 @@ class TaskSchedulerService:
         from app.tools.notification_tool import send_notification
         from app.models.domain import TaskNotification
         
-        def _format_output_for_notification(output: str | None) -> str:
+        def _format_output_for_notification(output: Any | None) -> str:
             """Format output summary for notification display."""
             # Use top-level content extraction function
-            return _extract_content_from_output(output)
+            if output is None:
+                return ""
+            return _extract_content_from_output(str(output))
         
         notification_config = task.notification_config or {}
         
@@ -824,15 +920,12 @@ class TaskSchedulerService:
         
         subject = f"{status_emoji} Task '{task.name}' {status_text}"
         
-        body_parts = [
-            f"**Task:** {task.name}",
-            f"**Status:** {status_text.upper()}",
-            f"**Executed at:** {execution.started_at.isoformat() if execution.started_at else 'N/A'}",
-        ]
+        body_parts: List[str] = []
         
-        if output_summary:
-            # Format the output for better readability (parse dicts, extract result content)
-            formatted_output = _format_output_for_notification(output_summary)
+        output_source = output_payload if output_payload is not None else output_summary
+        if output_source:
+            # Format full output for readability, then summarize only if needed.
+            formatted_output = _format_output_for_notification(output_source)
             
             # Use LLM summarization for long outputs
             if len(formatted_output) > 500:
@@ -849,10 +942,13 @@ class TaskSchedulerService:
             else:
                 summary_preview = formatted_output
             
-            body_parts.append(f"\n**Result:**\n{summary_preview}")
+            body_parts.append(summary_preview)
         
         if not success and execution.error:
-            body_parts.append(f"\n**Error:**\n{execution.error}")
+            body_parts.append(f"Error: {execution.error}")
+
+        if not body_parts:
+            body_parts.append("Task completed.")
         
         body = "\n".join(body_parts)
         
@@ -925,6 +1021,7 @@ class TaskSchedulerService:
                         "execution_id": str(execution.id),
                         "run_id": str(run_record.id) if run_record else None,
                         "success": success,
+                        "library_document_id": library_document_id,
                     },
                 )
                 
@@ -1052,7 +1149,7 @@ class TaskSchedulerService:
         execution,
         output_summary: str | None,
         success: bool,
-    ) -> None:
+    ) -> Optional[str]:
         """
         Save task output to the user's personal Tasks library as a document.
         
@@ -1062,16 +1159,16 @@ class TaskSchedulerService:
         
         # Check if output saving is enabled
         if not output_saving_config.get("enabled", False):
-            return
+            return None
         
         # Check success-only constraint
         if output_saving_config.get("on_success_only", True) and not success:
             logger.debug(f"Skipping output save for task {task.id} (failed, on_success_only=true)")
-            return
+            return None
         
         if not output_summary or len(output_summary.strip()) < 10:
             logger.debug(f"No output to save for task {task.id}")
-            return
+            return None
         
         try:
             from app.clients.busibox import BusiboxClient
@@ -1099,7 +1196,7 @@ class TaskSchedulerService:
             try:
                 if not task.delegation_token:
                     logger.warning(f"Task {task.id} has no delegation token for output saving")
-                    return
+                    return None
                     
                 from app.auth.tokens import get_service_token
                 access_token = await get_service_token(
@@ -1109,7 +1206,7 @@ class TaskSchedulerService:
                 )
             except Exception as e:
                 logger.warning(f"Failed to get data-api token for task {task.id} output saving: {e}")
-                return
+                return None
             
             # Use the data content API via BusiboxClient
             client = BusiboxClient(access_token=access_token)
@@ -1139,9 +1236,11 @@ class TaskSchedulerService:
                     "tags": tags,
                 }
             )
+            return document_id
             
         except Exception as e:
             logger.error(f"Error saving task output to library: {e}", exc_info=True)
+            return None
     
     def schedule_task(
         self,

@@ -379,6 +379,11 @@ class PostgresService:
     ):
         """
         Update a document's visibility, library, and document_roles atomically.
+        
+        Requires a request with RLS context. The update policies use
+        WITH CHECK (true), so the USING clause gates on the current row
+        (ownership for personal, role access for shared) while allowing
+        the new row values to be anything.
         """
         if visibility not in ("personal", "shared"):
             raise ValueError("visibility must be 'personal' or 'shared'")
@@ -429,28 +434,6 @@ class PostgresService:
                             uuid.UUID(actor_id),
                         )
 
-    async def insert_audit(
-        self,
-        actor_id: str,
-        action: str,
-        resource_type: str,
-        resource_id: Optional[str],
-        details: dict,
-    ):
-        """Insert audit record."""
-        async with self.acquire() as conn:
-            await conn.execute(
-                """
-                INSERT INTO audit_logs (actor_id, action, resource_type, resource_id, details)
-                VALUES ($1, $2, $3, $4, $5)
-                """,
-                uuid.UUID(actor_id),
-                action,
-                resource_type,
-                uuid.UUID(resource_id) if resource_id else None,
-                details,
-            )
-    
     async def update_status(
         self,
         file_id: str,

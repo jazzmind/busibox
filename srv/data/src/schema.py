@@ -787,7 +787,7 @@ def get_data_schema() -> SchemaManager:
                 NULLIF(current_setting('app.user_id', true), '')::uuid,
                 '00000000-0000-0000-0000-000000000000'::uuid
             )
-        )
+        ) WITH CHECK (true)
     """)
     
     schema.add_rls("""
@@ -803,7 +803,7 @@ def get_data_schema() -> SchemaManager:
                     )
                 )
             )
-        )
+        ) WITH CHECK (true)
     """)
     
     schema.add_rls("""

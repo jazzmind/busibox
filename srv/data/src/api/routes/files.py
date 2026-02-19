@@ -1694,17 +1694,13 @@ async def move_file(fileId: str, request: Request):
             library_id=library_id,
             request=request,
         )
-        await postgres_service.insert_audit(
+        logger.info(
+            "File moved",
+            file_id=fileId,
             actor_id=actor_id,
-            action="file.move",
-            resource_type="file",
-            resource_id=fileId,
-            details={
-                "from_visibility": current_visibility,
-                "to_visibility": target_visibility,
-                "role_ids": role_ids,
-                "library_id": library_id,
-            },
+            from_visibility=current_visibility,
+            to_visibility=target_visibility,
+            library_id=library_id,
         )
     except Exception as exc:
         logger.error("Failed to move file", error=str(exc))

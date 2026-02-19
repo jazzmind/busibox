@@ -93,6 +93,8 @@ class ErrorHandler:
             "typeerror",
             "not found in database",  # Orphaned job - file never existed in DB
             "not present in table",   # Foreign key violation - orphaned job
+            "nul (0x00)",             # PostgreSQL rejects NUL bytes in text
+            "cannot contain nul",     # Alternate phrasing
         ]
         
         if any(indicator in error_str for indicator in permanent_indicators):

@@ -163,10 +163,10 @@ install() {
     <true/>
     
     <key>KeepAlive</key>
-    <dict>
-        <key>SuccessfulExit</key>
-        <false/>
-    </dict>
+    <true/>
+    
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
     
     <key>StandardOutPath</key>
     <string>${LOG_DIR}/host-agent.log</string>
@@ -175,7 +175,7 @@ install() {
     <string>${LOG_DIR}/host-agent.error.log</string>
     
     <key>ProcessType</key>
-    <string>Background</string>
+    <string>Interactive</string>
 </dict>
 </plist>
 EOF

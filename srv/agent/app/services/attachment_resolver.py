@@ -11,7 +11,8 @@ import asyncio
 import logging
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
-from app.auth.token_exchange import exchange_token_zero_trust
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.clients.busibox import BusiboxClient
 from app.schemas.auth import Principal
 from app.schemas.streaming import StreamEvent, thought
@@ -42,6 +43,7 @@ class AttachmentResolver:
         attachment_metadata: List[Dict[str, Any]],
         principal: Optional[Principal],
         user_id: Optional[str],
+        session: Optional[AsyncSession] = None,
         stream: Optional[StreamFn] = None,
         context_token_estimate: int = 0,
     ) -> List[Dict[str, Any]]:
@@ -50,19 +52,42 @@ class AttachmentResolver:
 
         resolved: List[Dict[str, Any]] = []
 
-        # If we cannot exchange token, still preserve image/file references.
         if not principal or not principal.token or not user_id:
             logger.warning("Attachment resolution skipped: missing principal token or user id")
             for attachment in attachment_metadata:
                 resolved.append(self._fallback_attachment(attachment))
             return resolved
 
-        data_token = await exchange_token_zero_trust(
-            subject_token=principal.token,
-            target_audience="data-api",
-            user_id=user_id,
-            scopes="data.read",
-        )
+        data_token: Optional[str] = None
+
+        # Use the proven get_or_exchange_token path (DB-cached, same as tools)
+        if session:
+            try:
+                from app.services.token_service import get_or_exchange_token
+                exchange_result = await get_or_exchange_token(
+                    session=session,
+                    principal=principal,
+                    scopes=["data.read"],
+                    purpose="data",
+                )
+                data_token = exchange_result.access_token
+            except Exception as exc:
+                logger.warning("Token exchange via token_service failed: %s", exc)
+
+        # Fallback: direct zero-trust exchange
+        if not data_token:
+            try:
+                from app.auth.token_exchange import exchange_token_zero_trust
+                result = await exchange_token_zero_trust(
+                    subject_token=principal.token,
+                    target_audience="data-api",
+                    user_id=user_id,
+                    scopes="data.read",
+                )
+                data_token = result.access_token if result else None
+            except Exception as exc:
+                logger.warning("Direct token exchange failed: %s", exc)
+
         if not data_token:
             logger.warning("Attachment resolution skipped: failed to get data-api token")
             for attachment in attachment_metadata:
@@ -181,6 +206,10 @@ class AttachmentResolver:
             file_info = await client.request("GET", f"/files/{file_id}")
             status = self._extract_status(file_info)
             status_lower = status.lower()
+            logger.debug(
+                "Attachment status poll: file_id=%s status=%s elapsed=%.1f",
+                file_id, status, elapsed,
+            )
 
             if status_lower in {"completed", "complete", "ready", "indexed", "success"}:
                 return
@@ -229,20 +258,27 @@ class AttachmentResolver:
             "state",
             "data_status",
         ]
+        nested_keys = ["stage", "status", "state"]
         for key in candidate_keys:
             value = payload.get(key)
             if isinstance(value, str) and value:
                 return value
             if isinstance(value, dict):
-                nested_status = value.get("status")
-                if isinstance(nested_status, str) and nested_status:
-                    return nested_status
+                for nk in nested_keys:
+                    nested_val = value.get(nk)
+                    if isinstance(nested_val, str) and nested_val:
+                        return nested_val
         data = payload.get("data")
         if isinstance(data, dict):
             for key in candidate_keys:
                 value = data.get(key)
                 if isinstance(value, str) and value:
                     return value
+                if isinstance(value, dict):
+                    for nk in nested_keys:
+                        nested_val = value.get(nk)
+                        if isinstance(nested_val, str) and nested_val:
+                            return nested_val
         return "unknown"
 
     def _extract_chunk_texts(self, response: Dict[str, Any]) -> List[str]:

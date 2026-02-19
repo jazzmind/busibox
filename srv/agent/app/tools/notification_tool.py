@@ -6,21 +6,35 @@ Provides a unified interface for sending notifications across multiple channels:
 - Microsoft Teams (Adaptive Cards)
 - Slack (Block Kit)
 - Generic webhooks
+- Bridge outbound channels (Signal/Telegram/Discord/WhatsApp)
 
 This tool is registered with the agent framework and can be called by agents
 to send notifications about task completion, alerts, or any other events.
 """
 
 import logging
+import re
 from typing import Any, Dict, Literal, Optional
 
+import httpx
 from pydantic import BaseModel, Field
+
+from app.config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
 
 # Notification channel types
-NotificationChannel = Literal["email", "teams", "slack", "webhook"]
+NotificationChannel = Literal[
+    "email",
+    "teams",
+    "slack",
+    "webhook",
+    "bridge_signal",
+    "bridge_telegram",
+    "bridge_discord",
+    "bridge_whatsapp",
+]
 
 
 class NotificationInput(BaseModel):
@@ -28,7 +42,7 @@ class NotificationInput(BaseModel):
     
     channel: NotificationChannel = Field(
         ...,
-        description="Notification channel: email, teams, slack, or webhook"
+        description="Notification channel: email, teams, slack, webhook, or bridge_* channel"
     )
     recipient: str = Field(
         ...,
@@ -62,6 +76,52 @@ class NotificationOutput(BaseModel):
     error: Optional[str] = Field(None, description="Error message if failed")
 
 
+def _metadata_to_fields(metadata: Optional[Dict[str, Any]]) -> list[Dict[str, str]]:
+    """Convert notification metadata to compact field/fact entries."""
+    if not metadata:
+        return []
+
+    ordered_keys = [
+        ("task_id", "Task ID"),
+        ("execution_id", "Execution"),
+        ("run_id", "Run"),
+        ("success", "Success"),
+        ("library_document_id", "Output Ref"),
+    ]
+    fields: list[Dict[str, str]] = []
+    for key, label in ordered_keys:
+        value = metadata.get(key)
+        if value is None or value == "":
+            continue
+        fields.append({"title": label, "value": str(value)})
+    return fields
+
+
+def _strip_markdown(text: str) -> str:
+    """Lightweight markdown stripping for channels that render plain text only."""
+    stripped = text
+    stripped = re.sub(r"```(?:\w+)?\n?([\s\S]*?)```", r"\1", stripped)
+    stripped = re.sub(r"`([^`]+)`", r"\1", stripped)
+    stripped = re.sub(r"\*\*([^*]+)\*\*", r"\1", stripped)
+    stripped = re.sub(r"\*([^*]+)\*", r"\1", stripped)
+    stripped = re.sub(r"_([^_]+)_", r"\1", stripped)
+    stripped = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1 (\2)", stripped)
+    return stripped.strip()
+
+
+def _bridge_format_body(channel_type: str, body: str) -> str:
+    """Render body content for channel-specific markdown support."""
+    content = (body or "").strip()
+    if channel_type == "signal":
+        return _strip_markdown(content)
+    if channel_type == "whatsapp":
+        # WhatsApp supports *bold* and _italic_ but not markdown heading/code patterns.
+        normalized = content.replace("**", "*")
+        normalized = re.sub(r"`([^`]+)`", r"\1", normalized)
+        return normalized.strip()
+    return content
+
+
 async def send_notification(
     channel: str,
     recipient: str,
@@ -76,7 +136,7 @@ async def send_notification(
     This is the main tool function that agents can call.
     
     Args:
-        channel: Notification channel (email, teams, slack, webhook)
+        channel: Notification channel (email, teams, slack, webhook, or bridge_* channel)
         recipient: Email address, webhook URL, or channel ID
         subject: Notification subject/title
         body: Notification body (supports markdown for teams/slack)
@@ -119,6 +179,15 @@ async def send_notification(
         elif channel == "webhook":
             return await _send_webhook_notification(
                 webhook_url=recipient,
+                subject=subject,
+                body=body,
+                portal_link=portal_link,
+                metadata=metadata,
+            )
+        elif channel.startswith("bridge_"):
+            return await _send_bridge_channel_notification(
+                bridge_channel=channel,
+                recipient=recipient,
                 subject=subject,
                 body=body,
                 portal_link=portal_link,
@@ -180,6 +249,7 @@ async def _send_teams_notification(
 ) -> NotificationOutput:
     """Send Microsoft Teams notification via webhook."""
     from app.services.webhook_sender import send_teams_message
+    facts = _metadata_to_fields(metadata)
     
     result = await send_teams_message(
         webhook_url=webhook_url,
@@ -187,6 +257,7 @@ async def _send_teams_notification(
         body=body,
         action_url=portal_link,
         action_text="View Details" if portal_link else None,
+        facts=facts or None,
     )
     
     return NotificationOutput(
@@ -207,6 +278,7 @@ async def _send_slack_notification(
 ) -> NotificationOutput:
     """Send Slack notification via webhook."""
     from app.services.webhook_sender import send_slack_message
+    fields = _metadata_to_fields(metadata)
     
     result = await send_slack_message(
         webhook_url=webhook_url,
@@ -214,6 +286,7 @@ async def _send_slack_notification(
         body=body,
         action_url=portal_link,
         action_text="View Details" if portal_link else None,
+        fields=fields or None,
     )
     
     return NotificationOutput(
@@ -240,6 +313,10 @@ async def _send_webhook_notification(
         "body": body,
         "portal_link": portal_link,
         "metadata": metadata or {},
+        "rendered": {
+            "email_html": _build_email_html(body, portal_link),
+            "plain_text": _strip_markdown(body),
+        },
     }
     
     result = await send_generic_webhook(
@@ -420,6 +497,116 @@ def _build_email_html(body: str, portal_link: Optional[str] = None) -> str:
     """
 
 
+def _bridge_channel_to_type(bridge_channel: str) -> str:
+    """Map notification channel names to bridge channel types."""
+    mapping = {
+        "bridge_signal": "signal",
+        "bridge_telegram": "telegram",
+        "bridge_discord": "discord",
+        "bridge_whatsapp": "whatsapp",
+    }
+    return mapping.get(bridge_channel, "")
+
+
+def _build_bridge_message(
+    channel_type: str,
+    subject: str,
+    body: str,
+    _portal_link: Optional[str],
+    library_document_id: Optional[str] = None,
+) -> str:
+    """Compose plain-text bridge message payload."""
+    rendered_body = _bridge_format_body(channel_type, body)
+    if channel_type == "telegram":
+        header = f"*{subject}*"
+    elif channel_type == "whatsapp":
+        header = f"*{subject}*"
+    elif channel_type in {"discord", "slack"}:
+        header = f"**{subject}**"
+    else:
+        header = subject
+
+    parts = [header, "", rendered_body]
+    if library_document_id:
+        if channel_type == "telegram":
+            parts.extend(["", f"Ref: `task-output/{library_document_id}`"])
+        elif channel_type in {"discord", "slack"}:
+            parts.extend(["", f"Ref: `task-output/{library_document_id}`"])
+        else:
+            parts.extend(["", f"Ref: task-output/{library_document_id}"])
+    return "\n".join(part for part in parts if part is not None).strip()
+
+
+async def _send_bridge_channel_notification(
+    bridge_channel: str,
+    recipient: str,
+    subject: str,
+    body: str,
+    portal_link: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> NotificationOutput:
+    """Send notification via bridge outbound channel endpoint."""
+    channel_type = _bridge_channel_to_type(bridge_channel)
+    if not channel_type:
+        return NotificationOutput(
+            success=False,
+            channel=bridge_channel,
+            recipient=recipient,
+            error=f"Unsupported bridge channel: {bridge_channel}",
+        )
+
+    settings = get_settings()
+    bridge_api_url = (settings.bridge_api_url or "").strip()
+    if not bridge_api_url:
+        return NotificationOutput(
+            success=False,
+            channel=bridge_channel,
+            recipient=recipient,
+            error="BRIDGE_API_URL is not configured in agent service",
+        )
+
+    library_document_id = None
+    if metadata:
+        library_document_id = metadata.get("library_document_id")
+
+    bridge_metadata = dict(metadata or {})
+    if channel_type == "telegram":
+        bridge_metadata.setdefault("telegram_parse_mode", "Markdown")
+
+    payload = {
+        "channel_type": channel_type,
+        "recipient": recipient,
+        "text": _build_bridge_message(
+            channel_type=channel_type,
+            subject=subject,
+            body=body,
+            _portal_link=portal_link,
+            library_document_id=library_document_id,
+        ),
+        "metadata": bridge_metadata,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{bridge_api_url.rstrip('/')}/api/v1/channels/send",
+                json=payload,
+            )
+            response.raise_for_status()
+        return NotificationOutput(
+            success=True,
+            channel=bridge_channel,
+            recipient=recipient,
+        )
+    except Exception as exc:
+        return NotificationOutput(
+            success=False,
+            channel=bridge_channel,
+            recipient=recipient,
+            error=str(exc),
+        )
+
+
 # Register the notification tool with the agent framework
 def register_notification_tool():
     """Register the notification tool with the ToolRegistry."""
@@ -443,7 +630,16 @@ NOTIFICATION_TOOL_SCHEMA = {
         "properties": {
             "channel": {
                 "type": "string",
-                "enum": ["email", "teams", "slack", "webhook"],
+                "enum": [
+                    "email",
+                    "teams",
+                    "slack",
+                    "webhook",
+                    "bridge_signal",
+                    "bridge_telegram",
+                    "bridge_discord",
+                    "bridge_whatsapp",
+                ],
                 "description": "Notification channel to use"
             },
             "recipient": {

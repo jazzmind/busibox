@@ -238,17 +238,21 @@ class PostgresService:
                 
                 for chunk in chunks:
                     metadata = chunk.get("metadata", {})
+                    chunk_text = (chunk.get("text", "") or "").replace("\x00", "")
+                    section = chunk.get("section_heading")
+                    if isinstance(section, str):
+                        section = section.replace("\x00", "")
                     cur.execute(
                         insert_query,
                         (
-                            file_id,  # Pass string directly, not UUID object
+                            file_id,
                             chunk.get("chunk_index", 0),
-                            chunk.get("text", ""),
+                            chunk_text,
                             chunk.get("char_offset"),
                             chunk.get("token_count", 0),
                             chunk.get("page_number"),
-                            chunk.get("section_heading"),
-                            json.dumps(metadata) if metadata else None,  # Convert dict to JSON string
+                            section,
+                            json.dumps(metadata) if metadata else None,
                         ),
                     )
                 
@@ -272,6 +276,15 @@ class PostgresService:
         finally:
             self._return_connection(conn)
     
+    @staticmethod
+    def _sanitize_pg_string(value):
+        """Strip NUL (0x00) bytes that PostgreSQL rejects in text fields."""
+        if isinstance(value, str):
+            return value.replace("\x00", "")
+        if isinstance(value, list):
+            return [v.replace("\x00", "") if isinstance(v, str) else v for v in value]
+        return value
+
     def update_file_metadata(
         self,
         file_id: str,
@@ -301,23 +314,23 @@ class PostgresService:
                 
                 if document_type is not None:
                     update_fields.append("document_type = %s")
-                    update_values.append(document_type)
+                    update_values.append(self._sanitize_pg_string(document_type))
                 
                 if primary_language is not None:
                     update_fields.append("primary_language = %s")
-                    update_values.append(primary_language)
+                    update_values.append(self._sanitize_pg_string(primary_language))
                 
                 if detected_languages is not None:
                     update_fields.append("detected_languages = %s")
-                    update_values.append(detected_languages)
+                    update_values.append(self._sanitize_pg_string(detected_languages))
                 
                 if extracted_title is not None:
                     update_fields.append("extracted_title = %s")
-                    update_values.append(extracted_title)
+                    update_values.append(self._sanitize_pg_string(extracted_title))
                 
                 if extracted_author is not None:
                     update_fields.append("extracted_author = %s")
-                    update_values.append(extracted_author)
+                    update_values.append(self._sanitize_pg_string(extracted_author))
                 
                 if extracted_date is not None:
                     update_fields.append("extracted_date = %s")
@@ -325,7 +338,7 @@ class PostgresService:
                 
                 if extracted_keywords is not None:
                     update_fields.append("extracted_keywords = %s")
-                    update_values.append(extracted_keywords)
+                    update_values.append(self._sanitize_pg_string(extracted_keywords))
                 
                 if chunk_count is not None:
                     update_fields.append("chunk_count = %s")

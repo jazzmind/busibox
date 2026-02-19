@@ -778,14 +778,23 @@ class BaseStreamingAgent(StreamingAgent):
                 len(str(i.get("content", ""))) // 4 for i in agent_context.relevant_insights
             )
 
-        agent_context.resolved_attachments = await attachment_resolver.resolve(
-            query=query,
-            attachment_metadata=agent_context.attachment_metadata,
-            principal=agent_context.principal,
-            user_id=agent_context.user_id,
-            stream=stream,
-            context_token_estimate=context_token_estimate,
-        )
+        try:
+            agent_context.resolved_attachments = await attachment_resolver.resolve(
+                query=query,
+                attachment_metadata=agent_context.attachment_metadata,
+                principal=agent_context.principal,
+                user_id=agent_context.user_id,
+                session=agent_context.session,
+                stream=stream,
+                context_token_estimate=context_token_estimate,
+            )
+        except Exception as exc:
+            logger.warning("Attachment resolution failed entirely: %s", exc, exc_info=True)
+            agent_context.resolved_attachments = []
+            await stream(thought(
+                source="attachments",
+                message="Could not process attachments. Proceeding without them.",
+            ))
 
     def _build_attachment_context_section(self, context: AgentContext) -> List[str]:
         """Render resolved attachment content for prompt injection."""
