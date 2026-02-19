@@ -53,11 +53,11 @@ stop_server() {
         pid=$(cat "$PID_FILE")
         if kill -0 "$pid" 2>/dev/null; then
             info "Stopping MLX-LM server (PID: ${pid})..."
-            kill "$pid" 2>/dev/null || true
+            # Kill the process group (covers caffeinate + child python)
+            kill -- -"$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
             sleep 2
-            # Force kill if still running
             if kill -0 "$pid" 2>/dev/null; then
-                kill -9 "$pid" 2>/dev/null || true
+                kill -9 -- -"$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null || true
             fi
             success "Server stopped"
         fi
@@ -65,6 +65,8 @@ stop_server() {
     else
         info "No server running"
     fi
+    # Clean up any orphaned mlx_lm.server processes
+    pkill -f "mlx_lm.server.*--port ${PORT}" 2>/dev/null || true
 }
 
 check_status() {
@@ -144,8 +146,10 @@ start_server() {
     echo "  Log: ${LOG_FILE}"
     echo ""
     
-    # Start server in background using venv python
-    nohup "$mlx_python" -m mlx_lm.server \
+    # Start server in background using venv python.
+    # caffeinate -di prevents macOS from throttling/killing the Metal-based
+    # MLX process when the display sleeps (-d = display, -i = idle).
+    nohup caffeinate -di "$mlx_python" -m mlx_lm.server \
         --model "$model" \
         --host 0.0.0.0 \
         --port "$PORT" \

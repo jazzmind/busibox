@@ -24,6 +24,7 @@ import os
 import subprocess
 import signal
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -166,15 +167,13 @@ def stop_mlx_server():
     
     try:
         os.kill(status.pid, signal.SIGTERM)
-        # Wait for process to stop
         for _ in range(10):
+            time.sleep(0.5)
             try:
                 os.kill(status.pid, 0)
-                asyncio.sleep(0.5)
             except OSError:
                 break
         else:
-            # Force kill
             try:
                 os.kill(status.pid, signal.SIGKILL)
             except OSError:
@@ -440,6 +439,102 @@ async def list_cached_models(_: bool = Depends(verify_token)):
                 })
     
     return {"models": cached_models}
+
+
+# ---------------------------------------------------------------------------
+# Proactive MLX health check — auto-restarts MLX if it dies (e.g. display sleep)
+# ---------------------------------------------------------------------------
+MLX_HEALTHCHECK_INTERVAL = int(os.getenv("MLX_HEALTHCHECK_INTERVAL", "30"))
+_healthcheck_task: Optional[asyncio.Task] = None
+
+
+async def _mlx_healthcheck_loop():
+    """Periodically check MLX and restart it if it's down."""
+    # Wait a bit after startup before first check
+    await asyncio.sleep(10)
+    logger.info(
+        f"MLX health-check loop started (interval={MLX_HEALTHCHECK_INTERVAL}s)"
+    )
+    consecutive_failures = 0
+    while True:
+        try:
+            status = get_mlx_status()
+            if status.running and status.healthy:
+                if consecutive_failures > 0:
+                    logger.info("MLX recovered and is healthy again")
+                consecutive_failures = 0
+            elif status.running and not status.healthy:
+                consecutive_failures += 1
+                if consecutive_failures >= 3:
+                    logger.warning(
+                        f"MLX process running but unhealthy for "
+                        f"{consecutive_failures} checks — restarting"
+                    )
+                    stop_mlx_server()
+                    await _trigger_mlx_start()
+                    consecutive_failures = 0
+                else:
+                    logger.info(
+                        f"MLX process running but not healthy yet "
+                        f"({consecutive_failures}/3 before restart)"
+                    )
+            else:
+                # Not running at all — check if PID file existed (was previously started)
+                if MLX_PID_FILE.exists() or consecutive_failures > 0:
+                    consecutive_failures += 1
+                    logger.warning(
+                        f"MLX not running (was previously started) — "
+                        f"triggering restart (failure #{consecutive_failures})"
+                    )
+                    await _trigger_mlx_start()
+                    consecutive_failures = 0
+        except Exception:
+            logger.exception("Error in MLX health-check loop")
+        await asyncio.sleep(MLX_HEALTHCHECK_INTERVAL)
+
+
+async def _trigger_mlx_start():
+    """Start MLX via the start script (async subprocess)."""
+    mlx_script = BUSIBOX_ROOT / "scripts" / "llm" / "start-mlx-server.sh"
+    if not mlx_script.exists():
+        logger.error(f"MLX start script not found: {mlx_script}")
+        return
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "bash", str(mlx_script), "agent",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(BUSIBOX_ROOT),
+        )
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=180)
+        if process.returncode == 0:
+            logger.info("MLX auto-restart succeeded")
+        else:
+            logger.error(
+                f"MLX auto-restart failed (code {process.returncode}): "
+                f"{stderr.decode('utf-8', errors='replace')[:500]}"
+            )
+    except asyncio.TimeoutError:
+        logger.error("MLX auto-restart timed out after 180s")
+    except Exception:
+        logger.exception("Failed to auto-restart MLX")
+
+
+@app.on_event("startup")
+async def start_healthcheck():
+    global _healthcheck_task
+    _healthcheck_task = asyncio.create_task(_mlx_healthcheck_loop())
+
+
+@app.on_event("shutdown")
+async def stop_healthcheck():
+    global _healthcheck_task
+    if _healthcheck_task:
+        _healthcheck_task.cancel()
+        try:
+            await _healthcheck_task
+        except asyncio.CancelledError:
+            pass
 
 
 if __name__ == "__main__":
