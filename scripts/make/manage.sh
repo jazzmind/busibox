@@ -881,11 +881,96 @@ show_manage_menu() {
     fi
     if [[ "$_CURRENT_BACKEND" == "proxmox" ]]; then
         printf "    ${BOLD}c)${NC} Rebuild Containers (recreate LXCs, ${GREEN}preserve data${NC})\n"
+        printf "    ${BOLD}g)${NC} Update Host Models / GPU Allocation\n"
     fi
     echo ""
     printf "  ${DIM}b = back to main menu    q = quit${NC}\n"
     echo ""
     box_footer
+}
+
+_manage_proxmox_models_gpu() {
+    local env
+    env=$(get_current_env)
+    local stage="staging"
+    if [[ "$env" == "production" ]]; then
+        stage="production"
+    fi
+
+    local host_dir="${REPO_ROOT}/provision/pct/host"
+    local setup_models_script="${host_dir}/setup-llm-models.sh"
+    local routing_script="${host_dir}/configure-vllm-model-routing.sh"
+    local gpu_alloc_script="${host_dir}/configure-gpu-allocation.sh"
+
+    while true; do
+        clear
+        box_start 74 double "$CYAN"
+        box_header "HOST MODELS / GPU ALLOCATION"
+        box_empty
+        box_line "  ${CYAN}Environment:${NC} ${env} (${stage})"
+        box_empty
+        box_line "  ${BOLD}1)${NC} Refresh host model cache (setup-llm-models)"
+        box_line "  ${BOLD}2)${NC} Configure vLLM model routing (interactive)"
+        box_line "  ${BOLD}3)${NC} Configure GPU allocation (interactive)"
+        box_line "  ${BOLD}4)${NC} Run 1 + 2 (recommended)"
+        box_empty
+        box_line "  ${DIM}b = back${NC}"
+        box_empty
+        box_footer
+        echo ""
+
+        read -n 1 -s -r -p "Select option: " choice
+        echo ""
+
+        case "$choice" in
+            1)
+                if [[ ! -f "$setup_models_script" ]]; then
+                    error "Missing script: $setup_models_script"
+                else
+                    echo ""
+                    info "Refreshing host model cache for ${stage}..."
+                    bash "$setup_models_script" "$stage" --interactive
+                fi
+                read -n 1 -s -r -p "Press any key to continue..."
+                ;;
+            2)
+                if [[ ! -f "$routing_script" ]]; then
+                    error "Missing script: $routing_script"
+                else
+                    echo ""
+                    info "Opening vLLM model routing configurator..."
+                    bash "$routing_script" --interactive
+                fi
+                read -n 1 -s -r -p "Press any key to continue..."
+                ;;
+            3)
+                if [[ ! -f "$gpu_alloc_script" ]]; then
+                    error "Missing script: $gpu_alloc_script"
+                else
+                    echo ""
+                    info "Opening GPU allocation configurator..."
+                    bash "$gpu_alloc_script" --interactive
+                fi
+                read -n 1 -s -r -p "Press any key to continue..."
+                ;;
+            4)
+                if [[ ! -f "$setup_models_script" || ! -f "$routing_script" ]]; then
+                    error "Missing required host scripts under provision/pct/host"
+                else
+                    echo ""
+                    info "Step 1/2: Refreshing host model cache for ${stage}..."
+                    bash "$setup_models_script" "$stage" --interactive
+                    echo ""
+                    info "Step 2/2: Opening vLLM model routing configurator..."
+                    bash "$routing_script" --interactive
+                fi
+                read -n 1 -s -r -p "Press any key to continue..."
+                ;;
+            b|B)
+                return
+                ;;
+        esac
+    done
 }
 
 main() {
@@ -1065,6 +1150,11 @@ main() {
                             ;;
                         b|B) ;;
                     esac
+                fi
+                ;;
+            g|G)
+                if [[ "$_CURRENT_BACKEND" == "proxmox" ]]; then
+                    _manage_proxmox_models_gpu
                 fi
                 ;;
             b|B)
