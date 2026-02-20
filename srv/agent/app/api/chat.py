@@ -981,11 +981,26 @@ async def send_chat_message_stream_agentic(
                 if event.type == "content":
                     full_content.append(event.message)
                 elif event.type in ("thought", "tool_start", "tool_result", "plan", "progress"):
-                    thoughts.append({
+                    thought_item = {
                         "type": event.type,
                         "source": event.source,
                         "message": event.message,
-                    })
+                    }
+                    # Persist structured intent-routing diagnostics for later analysis.
+                    if (
+                        event.type == "thought"
+                        and isinstance(event.data, dict)
+                        and event.data.get("phase") == "intent_routing"
+                    ):
+                        thought_item["data"] = {
+                            "phase": "intent_routing",
+                            "action_type": event.data.get("action_type"),
+                            "needs_tools": event.data.get("needs_tools"),
+                            "confidence": event.data.get("confidence"),
+                            "routing_source": event.data.get("routing_source"),
+                            "follow_up_question": event.data.get("follow_up_question"),
+                        }
+                    thoughts.append(thought_item)
                 
                 # Build run event log for RunRecord
                 run_events.append({
