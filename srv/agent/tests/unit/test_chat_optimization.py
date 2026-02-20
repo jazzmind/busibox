@@ -57,6 +57,7 @@ async def test_chat_agent_streams_plan_progress_and_interim(monkeypatch):
         )
 
     async def fake_execute_plan(query, stream, cancel, ctx, execution_plan):
+        ctx.tool_results["web_search"] = {"result_count": 1, "context": "Synthetic source context"}
         await stream(
             StreamEvent(
                 type="progress",
@@ -77,12 +78,24 @@ async def test_chat_agent_streams_plan_progress_and_interim(monkeypatch):
     async def fake_execute_llm_driven(query, stream, cancel, ctx):
         ctx.tool_results["llm_response"] = "Final synthesized response."
 
+    async def fake_synthesize(query, stream, cancel, ctx):
+        await stream(
+            StreamEvent(
+                type="content",
+                source=agent.name,
+                message="Final synthesized response.",
+                data={"phase": "synthesis"},
+            )
+        )
+        return "Final synthesized response."
+
     monkeypatch.setattr(agent, "_setup_context", fake_setup_context)
     monkeypatch.setattr(agent, "_resolve_attachments", fake_resolve_attachments)
     monkeypatch.setattr(agent, "_generate_fast_ack", fake_fast_ack)
     monkeypatch.setattr(agent, "_generate_plan", fake_plan)
     monkeypatch.setattr(agent, "_execute_plan", fake_execute_plan)
     monkeypatch.setattr(agent, "_execute_llm_driven", fake_execute_llm_driven)
+    monkeypatch.setattr(agent, "_synthesize", fake_synthesize)
 
     result = await agent.run_with_streaming(
         query="Research latest AI chips",

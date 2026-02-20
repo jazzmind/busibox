@@ -49,7 +49,14 @@ async def lifespan(app: FastAPI):
         logger.info("Task scheduler initialized and schedules restored")
     except Exception as e:
         logger.error(f"Failed to initialize task scheduler: {e}", exc_info=True)
-    
+
+    # Sync config-file models into LiteLLM DB (handles STORE_MODEL_IN_DB=True)
+    try:
+        from app.api.llm import sync_config_models_to_litellm
+        await sync_config_models_to_litellm()
+    except Exception as e:
+        logger.warning(f"LiteLLM model sync skipped: {e}")
+
     yield
     
     # Shutdown

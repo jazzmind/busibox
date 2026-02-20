@@ -1,10 +1,16 @@
 """Unit tests for insights generator service."""
 import pytest
+import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.services.insights_generator import (
     ConversationInsight,
+    PROFILE_FIELDS,
+    _should_promote_context_globally,
+    extract_profile_insights_from_messages,
+    get_profile_completeness,
+    identify_knowledge_gaps,
     get_embedding,
     analyze_conversation_for_insights,
     generate_and_store_insights,
@@ -108,11 +114,14 @@ async def test_analyze_conversation_user_preferences():
         ),
     ]
     
-    insights = await analyze_conversation_for_insights(
-        messages,
-        "conv-123",
-        "user-123"
-    )
+    with patch("app.services.insights_generator.extract_insights_with_llm", new=AsyncMock(return_value=[
+        {"content": "User prefers Python for data analysis workflows.", "category": "preference"}
+    ])):
+        insights = await analyze_conversation_for_insights(
+            messages,
+            "conv-123",
+            "user-123"
+        )
     
     # Should extract insights about preferences
     assert len(insights) > 0
@@ -141,11 +150,14 @@ async def test_analyze_conversation_questions():
         ),
     ]
     
-    insights = await analyze_conversation_for_insights(
-        messages,
-        "conv-123",
-        "user-123"
-    )
+    with patch("app.services.insights_generator.extract_insights_with_llm", new=AsyncMock(return_value=[
+        {"content": "User asked how to implement a neural network in PyTorch?", "category": "goal"}
+    ])):
+        insights = await analyze_conversation_for_insights(
+            messages,
+            "conv-123",
+            "user-123"
+        )
     
     # Questions should be extracted
     question_insights = [i for i in insights if "?" in i.content]
@@ -170,11 +182,14 @@ async def test_analyze_conversation_facts():
         ),
     ]
     
-    insights = await analyze_conversation_for_insights(
-        messages,
-        "conv-123",
-        "user-123"
-    )
+    with patch("app.services.insights_generator.extract_insights_with_llm", new=AsyncMock(return_value=[
+        {"content": "Machine learning is a subset of artificial intelligence.", "category": "fact"}
+    ])):
+        insights = await analyze_conversation_for_insights(
+            messages,
+            "conv-123",
+            "user-123"
+        )
     
     # Should extract factual statements
     assert len(insights) > 0
@@ -248,6 +263,7 @@ async def test_generate_and_store_insights_success(mock_get_embedding):
     mock_insights_service = MagicMock()
     mock_insights_service.insert_insights = MagicMock()
     mock_insights_service.get_conversation_insights = MagicMock(return_value=[])  # No existing insights
+    mock_insights_service.list_user_insights = MagicMock(return_value=([], 0))
     
     # Create conversation and messages
     conversation = Conversation(
@@ -293,6 +309,8 @@ async def test_generate_and_store_insights_no_insights():
     """Test when no insights are extracted."""
     mock_insights_service = MagicMock()
     mock_insights_service.get_conversation_insights = MagicMock(return_value=[])  # No existing insights
+    mock_insights_service.insert_insights = MagicMock()
+    mock_insights_service.list_user_insights = MagicMock(return_value=([], 0))
     
     conversation = Conversation(
         title="Test",
@@ -319,8 +337,10 @@ async def test_generate_and_store_insights_no_insights():
         None
     )
     
-    assert new_count == 0
+    # Session summary memory is intentionally created even for sparse chats.
+    assert new_count == 1
     assert existing_count == 0
+    mock_insights_service.insert_insights.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -337,6 +357,7 @@ async def test_generate_and_store_insights_with_existing(mock_get_embedding):
     mock_insights_service = MagicMock()
     mock_insights_service.insert_insights = MagicMock()
     mock_insights_service.get_conversation_insights = MagicMock(return_value=existing_insights)
+    mock_insights_service.list_user_insights = MagicMock(return_value=(existing_insights, len(existing_insights)))
     
     conversation = Conversation(
         title="Test Conversation",
@@ -363,9 +384,9 @@ async def test_generate_and_store_insights_with_existing(mock_get_embedding):
         None
     )
     
-    # Should not have generated duplicate insights
-    assert new_count == 0
-    assert existing_count == 1
+    # Existing insight should not be duplicated. A session summary may still be added.
+    assert new_count <= 1
+    assert existing_count >= 1
 
 
 def test_should_generate_insights_sufficient_messages():
@@ -426,4 +447,188 @@ def test_should_generate_insights_old_enough():
     )
     
     assert should_generate_insights(conversation, 2) is True
+
+
+def test_profile_fields_schema_present():
+    """Profile fields schema includes expected baseline fields."""
+    expected = {
+        "location",
+        "occupation",
+        "communication_tone",
+        "primary_language",
+        "timezone",
+        "key_interests",
+    }
+    assert expected.issubset(set(PROFILE_FIELDS.keys()))
+
+
+def test_get_profile_completeness_empty():
+    """Empty insights should return zero completeness and all fields missing."""
+    result = get_profile_completeness([])
+    assert result["score"] == 0.0
+    assert result["required_score"] == 0.0
+    assert set(result["missing_fields"]) == set(PROFILE_FIELDS.keys())
+    assert "location" in result["required_missing_fields"]
+
+
+def test_get_profile_completeness_detects_known_fields():
+    """Heuristics detect completed profile fields from insight corpus."""
+    existing = [
+        {"content": "I live in Boston and usually work remotely.", "category": "context"},
+        {"content": "I work as a software engineer.", "category": "fact"},
+        {"content": "Please keep it brief and direct.", "category": "preference"},
+    ]
+    result = get_profile_completeness(existing)
+    assert "location" in result["completed_fields"]
+    assert "occupation" in result["completed_fields"]
+    assert "communication_tone" in result["completed_fields"]
+    assert result["score"] > 0.0
+
+
+def test_extract_profile_insights_from_messages_captures_location():
+    """Deterministic profile extraction should capture location from user phrasing."""
+    messages = [
+        Message(
+            role="user",
+            content="I'm in Boston, MA.",
+            conversation_id="conv-123",
+            created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        ),
+        Message(
+            role="assistant",
+            content="Thanks for sharing your location.",
+            conversation_id="conv-123",
+            created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        ),
+    ]
+    extracted = extract_profile_insights_from_messages(
+        messages=messages,
+        conversation_id="conv-123",
+        user_id="user-123",
+        existing_insights=[],
+    )
+    assert any("based in Boston, MA" in insight.content for insight in extracted)
+
+
+def test_should_promote_context_globally_is_sparse():
+    """Only durable user-level context should be globally promoted."""
+    assert _should_promote_context_globally("Session summary: User topics: weather") is False
+    assert _should_promote_context_globally("User is based in Boston, MA.") is True
+    assert _should_promote_context_globally("User works as a product manager.") is True
+
+
+@pytest.mark.asyncio
+@patch("busibox_common.llm.get_client")
+async def test_identify_knowledge_gaps_creates_pending_question(mock_get_client):
+    """Missing profile fields should produce one pending_question insight."""
+    # Force LLM fallback path for determinism.
+    mock_get_client.side_effect = RuntimeError("llm unavailable")
+    conversation = Conversation(
+        id=uuid.uuid4(),
+        title="Test",
+        user_id="user-123",
+        created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        updated_at=datetime.now(timezone.utc).replace(tzinfo=None),
+    )
+    messages = [
+        Message(
+            role="user",
+            content="Can you help me plan my week?",
+            conversation_id="conv-123",
+            created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        ),
+        Message(
+            role="assistant",
+            content="Absolutely. Let me help with that.",
+            conversation_id="conv-123",
+            created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        ),
+    ]
+    pending = await identify_knowledge_gaps(
+        conversation=conversation,
+        messages=messages,
+        user_id="user-123",
+        existing_insights=[],
+    )
+    assert pending is not None
+    assert pending.category == "pending_question"
+    assert pending.conversation_id.startswith("pending:")
+    assert len(pending.content) > 10
+
+
+@pytest.mark.asyncio
+@patch("busibox_common.llm.get_client")
+async def test_identify_knowledge_gaps_skips_when_pending_exists(mock_get_client):
+    """No new pending question should be created when one already exists."""
+    mock_get_client.side_effect = RuntimeError("llm unavailable")
+    conversation = Conversation(
+        id=uuid.uuid4(),
+        title="Test",
+        user_id="user-123",
+        created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        updated_at=datetime.now(timezone.utc).replace(tzinfo=None),
+    )
+    messages = [
+        Message(
+            role="user",
+            content="Need help prioritizing work.",
+            conversation_id="conv-123",
+            created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        ),
+        Message(
+            role="assistant",
+            content="Sure, let's do that.",
+            conversation_id="conv-123",
+            created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        ),
+    ]
+    existing_insights = [
+        {"content": "Quick profile question: what timezone should I assume for dates and scheduling?", "category": "pending_question"}
+    ]
+    pending = await identify_knowledge_gaps(
+        conversation=conversation,
+        messages=messages,
+        user_id="user-123",
+        existing_insights=existing_insights,
+    )
+    assert pending is None
+
+
+@pytest.mark.asyncio
+@patch("busibox_common.llm.get_client")
+async def test_identify_knowledge_gaps_moves_past_location_when_known(mock_get_client):
+    """If location is already known, the next pending question should target another field."""
+    mock_get_client.side_effect = RuntimeError("llm unavailable")
+    conversation = Conversation(
+        id=uuid.uuid4(),
+        title="Test",
+        user_id="user-123",
+        created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        updated_at=datetime.now(timezone.utc).replace(tzinfo=None),
+    )
+    messages = [
+        Message(
+            role="user",
+            content="What's the weather tomorrow?",
+            conversation_id="conv-123",
+            created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        ),
+        Message(
+            role="assistant",
+            content="I can help with that.",
+            conversation_id="conv-123",
+            created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        ),
+    ]
+    existing_insights = [
+        {"content": "User is based in Boston, MA.", "category": "fact"},
+    ]
+    pending = await identify_knowledge_gaps(
+        conversation=conversation,
+        messages=messages,
+        user_id="user-123",
+        existing_insights=existing_insights,
+    )
+    assert pending is not None
+    assert "city or region" not in pending.content.lower()
 

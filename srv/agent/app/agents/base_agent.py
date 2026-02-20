@@ -375,6 +375,10 @@ class AgentContext:
     recent_messages: List[Dict[str, Any]] = field(default_factory=list)
     # Relevant insights from user's past conversations (agent memories)
     relevant_insights: List[Dict[str, Any]] = field(default_factory=list)
+    # Missing profile fields (computed by dispatcher)
+    missing_profile_fields: List[str] = field(default_factory=list)
+    # Follow-up profile questions that should be asked naturally when relevant
+    pending_questions: List[Dict[str, Any]] = field(default_factory=list)
     # Application context metadata (e.g. projectId, appName) from the chat request
     metadata: Dict[str, Any] = field(default_factory=dict)
     # Raw attachment metadata from chat request (unresolved)
@@ -662,6 +666,8 @@ class BaseStreamingAgent(StreamingAgent):
             agent_context.user_id = context.get("user_id")
             agent_context.agent_id = context.get("agent_id")
             agent_context.conversation_history = context.get("conversation_history", [])
+            agent_context.missing_profile_fields = context.get("missing_profile_fields", []) or []
+            agent_context.pending_questions = context.get("pending_questions", []) or []
             agent_context.metadata = context.get("metadata") or {}
             agent_context.attachment_metadata = context.get("attachment_metadata", []) or []
             agent_context.response_schema = context.get("response_schema")
@@ -1329,6 +1335,22 @@ class BaseStreamingAgent(StreamingAgent):
                 content = insight.get("content", "")
                 parts.append(f"- [{category}] {content}")
             parts.append("")
+
+        if context.missing_profile_fields:
+            parts.append("## Missing Profile Context")
+            parts.append("These profile details are still missing and may improve future assistance:")
+            for field_name in context.missing_profile_fields:
+                parts.append(f"- {field_name}")
+            parts.append("")
+
+        if context.pending_questions:
+            parts.append("## Pending Follow-up Questions")
+            parts.append("Ask at most ONE of these naturally when relevant, then continue helping with the current request:")
+            for item in context.pending_questions[:3]:
+                question = str(item.get("content", "")).strip()
+                if question:
+                    parts.append(f"- {question}")
+            parts.append("")
         
         # Add compressed history summary if present
         if context.compressed_history_summary:
@@ -1356,7 +1378,14 @@ class BaseStreamingAgent(StreamingAgent):
         parts.append(query)
         
         # Add guidance about using context
-        has_context = context.recent_messages or context.compressed_history_summary or context.relevant_insights or context.metadata
+        has_context = (
+            context.recent_messages
+            or context.compressed_history_summary
+            or context.relevant_insights
+            or context.missing_profile_fields
+            or context.pending_questions
+            or context.metadata
+        )
         if has_context:
             parts.append("")
             parts.append("Please respond to the current query using all available context above. Use the user context to personalize your response, the conversation history to understand follow-up references (like 'it', 'that', 'this topic'), and make informed decisions about which tools to use.")
@@ -1487,6 +1516,22 @@ class BaseStreamingAgent(StreamingAgent):
                 category = insight.get("category", "context")
                 content = insight.get("content", "")
                 parts.append(f"- [{category}] {content}")
+            parts.append("")
+
+        if context.missing_profile_fields:
+            parts.append("## Missing Profile Context")
+            parts.append("These details are missing and would improve personalization:")
+            for field_name in context.missing_profile_fields:
+                parts.append(f"- {field_name}")
+            parts.append("")
+
+        if context.pending_questions:
+            parts.append("## Pending Follow-up Questions")
+            parts.append("If appropriate, ask one concise follow-up question naturally before or after answering:")
+            for item in context.pending_questions[:3]:
+                question = str(item.get("content", "")).strip()
+                if question:
+                    parts.append(f"- {question}")
             parts.append("")
         
         # 2. Add compressed history summary if present

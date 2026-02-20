@@ -33,7 +33,12 @@ from app.schemas.dispatcher import DispatcherRequest, FileAttachment, UserSettin
 from app.services.dispatcher_service import route_query
 from app.services.model_selector import select_model_and_tools, list_available_models, ModelCapabilities
 from app.services.chat_executor import execute_chat, execute_chat_stream
-from app.services.insights_generator import generate_and_store_insights, should_generate_insights
+from app.services.insights_generator import (
+    generate_and_store_insights,
+    identify_knowledge_gaps,
+    should_generate_insights,
+)
+from app.services.insights_service import ChatInsight
 from app.api.insights import get_insights_service
 from app.config.settings import get_settings
 from app.auth.token_exchange import exchange_token_zero_trust
@@ -72,20 +77,16 @@ async def _generate_insights_background(
         user_token: User's auth token for Zero Trust exchange
     """
     try:
-        insights_service = get_insights_service()
-        
-        # Use dedicated embedding-api service (no auth required)
-        embedding_url = settings.embedding_api_url or "http://embedding-api:8005"
-        
-        new_count, existing_count = await generate_and_store_insights(
+        follow_up = await _generate_insights_and_pending_question(
             conversation=conversation,
             messages=messages,
-            insights_service=insights_service,
-            embedding_service_url=str(embedding_url),
-            authorization=None  # embedding-api doesn't require auth
+            user_id=user_id,
+            user_token=user_token,
         )
         logger.info(
-            f"Background insights: {new_count} new, {existing_count} existing for conversation {conversation.id}"
+            "Background insights complete for conversation %s (pending_follow_up=%s)",
+            conversation.id,
+            bool(follow_up),
         )
     except Exception as e:
         logger.error(
@@ -93,6 +94,89 @@ async def _generate_insights_background(
             extra={"conversation_id": str(conversation.id)},
             exc_info=True
         )
+
+
+async def _generate_insights_and_pending_question(
+    conversation: Conversation,
+    messages: List[Message],
+    user_id: str,
+    user_token: Optional[str] = None,
+) -> Optional[str]:
+    """
+    Generate insights and optionally create one pending follow-up question.
+
+    Returns:
+        Question text if a new pending profile question was created, else None.
+    """
+    try:
+        insights_service = get_insights_service()
+        embedding_url = settings.embedding_api_url or "http://embedding-api:8005"
+
+        await generate_and_store_insights(
+            conversation=conversation,
+            messages=messages,
+            insights_service=insights_service,
+            embedding_service_url=str(embedding_url),
+            authorization=None,
+        )
+
+        # Evaluate profile gaps against the latest user insights.
+        all_insights, _ = insights_service.list_user_insights(
+            user_id=user_id,
+            limit=250,
+        )
+        # Refresh pending profile prompts each chat cycle: remove stale unresolved
+        # prompts, then compute whether a new question is still needed.
+        non_pending_insights: List[Dict[str, Any]] = []
+        for insight in all_insights:
+            if str(insight.get("category", "")) == "pending_question":
+                insight_id = str(insight.get("id", ""))
+                if insight_id:
+                    try:
+                        insights_service.delete_insight(insight_id=insight_id, user_id=user_id)
+                    except Exception as exc:
+                        logger.warning("Failed to delete stale pending question %s: %s", insight_id, exc)
+                continue
+            non_pending_insights.append(insight)
+        pending_question = await identify_knowledge_gaps(
+            conversation=conversation,
+            messages=messages,
+            user_id=user_id,
+            existing_insights=non_pending_insights,
+        )
+        if not pending_question:
+            return None
+
+        embedding = await insights_service.generate_embedding(
+            pending_question.content,
+            user_id=user_id,
+            authorization=user_token,
+        )
+        pending_insight = ChatInsight(
+            id=str(uuid.uuid4()),
+            user_id=user_id,
+            content=pending_question.content,
+            embedding=embedding,
+            conversation_id=pending_question.conversation_id,
+            analyzed_at=int(datetime.now(timezone.utc).timestamp()),
+            category="pending_question",
+        )
+        insights_service.insert_insights([pending_insight])
+        logger.info(
+            "Created pending follow-up question insight",
+            extra={
+                "conversation_id": str(conversation.id),
+                "user_id": user_id,
+            },
+        )
+        return pending_question.content
+    except Exception as exc:
+        logger.warning(
+            "Failed to generate pending follow-up question (non-critical): %s",
+            exc,
+            exc_info=True,
+        )
+        return None
 
 
 class ChatMessageRequest(BaseModel):
@@ -877,6 +961,8 @@ async def send_chat_message_stream_agentic(
             selected_agent_id = None
             
             # Run agentic dispatcher
+            dispatcher_metadata: Dict[str, Any] = dict(payload.metadata or {})
+            dispatcher_metadata["conversation_id"] = str(conversation.id)
             async for event in run_agentic_dispatcher(
                 query=payload.message,
                 user_id=principal.sub,
@@ -885,7 +971,7 @@ async def send_chat_message_stream_agentic(
                 available_agents=available_agents,
                 conversation_history=history_dicts,
                 principal=principal,
-                metadata=payload.metadata,
+                metadata=dispatcher_metadata,
                 attachment_metadata=attachment_metadata,
             ):
                 # Yield event to client
@@ -972,6 +1058,36 @@ async def send_chat_message_stream_agentic(
             
             await session.commit()
             await session.refresh(assistant_message)
+
+            # Trigger insights generation + pending follow-up question for the agentic path.
+            pending_follow_up_question: Optional[str] = None
+            try:
+                from sqlalchemy import func
+                count_result = await session.execute(
+                    select(func.count()).select_from(Message).where(Message.conversation_id == conversation.id)
+                )
+                message_count = count_result.scalar_one()
+                if should_generate_insights(conversation, message_count):
+                    pending_follow_up_question = await _generate_insights_and_pending_question(
+                        conversation=conversation,
+                        messages=history_messages + [user_message, assistant_message],
+                        user_id=principal.sub,
+                        user_token=principal.token,
+                    )
+            except Exception as exc:
+                logger.error("Failed to trigger agentic insights generation: %s", exc, exc_info=True)
+
+            if pending_follow_up_question:
+                interim_payload = {
+                    "type": "interim",
+                    "source": "insights",
+                    "message": pending_follow_up_question,
+                    "data": {
+                        "kind": "profile_follow_up",
+                        "bridge_channels": payload.metadata.get("bridge_channels", []) if payload.metadata else [],
+                    },
+                }
+                yield f"event: interim\ndata: {json.dumps(interim_payload)}\n\n"
             
             # Send completion event with message ID
             completion_data = {

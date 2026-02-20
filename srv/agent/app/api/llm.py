@@ -728,14 +728,146 @@ async def _get_litellm_config() -> Optional[Dict[str, Any]]:
     headers = _get_litellm_headers()
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"{base_url}/config/yaml", headers=headers)
-            if resp.status_code == 200:
-                return resp.json()
-            else:
-                logger.warning(f"/config/yaml returned {resp.status_code}: {resp.text[:200]}")
+            # LiteLLM endpoint compatibility: some versions accept GET with no body,
+            # others require a request body and return 422 otherwise.
+            attempts = [
+                ("GET", None),
+                ("GET", {}),
+                ("POST", {}),
+            ]
+            last_status = None
+            last_text = ""
+            for method, payload in attempts:
+                try:
+                    request_kwargs: Dict[str, Any] = {"headers": headers}
+                    if payload is not None:
+                        request_kwargs["json"] = payload
+                    resp = await client.request(method, f"{base_url}/config/yaml", **request_kwargs)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if isinstance(data, dict) and data.get("model_list"):
+                            return data
+                        logger.debug(f"/config/yaml 200 but no model_list (got keys: {list(data.keys()) if isinstance(data, dict) else type(data).__name__})")
+                    last_status = resp.status_code
+                    last_text = resp.text[:200]
+                except Exception:
+                    continue
+            if last_status is not None:
+                logger.warning(f"/config/yaml returned {last_status}: {last_text}")
     except Exception as e:
         logger.error(f"Failed to fetch LiteLLM config: {e}")
+
+    # Fallback: read mounted config file directly inside the agent container.
+    try:
+        import os
+        import yaml
+
+        local_paths = [
+            "/app/litellm-config.yaml",
+            "/app/config.yaml",
+            "/app/config/litellm-config.yaml",
+            "/srv/config/litellm-config.yaml",
+        ]
+        for path in local_paths:
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    data = yaml.safe_load(f) or {}
+                if isinstance(data, dict) and data.get("model_list"):
+                    logger.info(f"Loaded LiteLLM config from local file fallback: {path}")
+                    return data
+    except Exception as e:
+        logger.warning(f"Local LiteLLM config fallback failed: {e}")
+
     return None
+
+
+def _read_local_litellm_config() -> Optional[Dict[str, Any]]:
+    """Read the mounted litellm-config.yaml file (sync, no network)."""
+    import os
+    try:
+        import yaml
+    except ImportError:
+        return None
+    for path in [
+        "/app/litellm-config.yaml",
+        "/app/config.yaml",
+    ]:
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = yaml.safe_load(f) or {}
+                if isinstance(data, dict) and data.get("model_list"):
+                    return data
+            except Exception:
+                continue
+    return None
+
+
+async def sync_config_models_to_litellm() -> None:
+    """
+    Ensure every model in the mounted litellm-config.yaml is registered
+    in LiteLLM's DB.  Called at agent startup so that STORE_MODEL_IN_DB=True
+    environments don't silently drop config-file models.
+    """
+    config = _read_local_litellm_config()
+    if not config:
+        logger.debug("No local litellm config to sync")
+        return
+
+    config_models = config.get("model_list", [])
+    if not config_models:
+        return
+
+    base_url = _get_litellm_base_url()
+    headers = _get_litellm_headers()
+
+    existing_names: set = set()
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            for method, payload in [("GET", None), ("GET", {}), ("POST", {})]:
+                try:
+                    kw: Dict[str, Any] = {"headers": headers}
+                    if payload is not None:
+                        kw["json"] = payload
+                    resp = await client.request(method, f"{base_url}/model/info", **kw)
+                    if resp.status_code == 200:
+                        for m in resp.json().get("data", []):
+                            existing_names.add(m.get("model_name", ""))
+                        break
+                except Exception:
+                    continue
+    except Exception as e:
+        logger.warning(f"sync_config_models: cannot reach /model/info: {e}")
+        return
+
+    registered = 0
+    for entry in config_models:
+        name = entry.get("model_name", "")
+        if not name or name in existing_names:
+            continue
+        payload = {
+            "model_name": name,
+            "litellm_params": entry.get("litellm_params", {}),
+        }
+        info = entry.get("model_info")
+        if info:
+            payload["model_info"] = info
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    f"{base_url}/model/new",
+                    headers=headers,
+                    json=payload,
+                )
+                if resp.status_code == 200:
+                    registered += 1
+                else:
+                    logger.warning(f"sync_config_models: failed to register {name}: {resp.status_code}")
+        except Exception as e:
+            logger.warning(f"sync_config_models: error registering {name}: {e}")
+
+    if registered:
+        logger.info(f"Synced {registered} config-file model(s) into LiteLLM DB")
 
 
 async def _get_model_info() -> List[Dict[str, Any]]:
@@ -752,12 +884,26 @@ async def _get_model_info() -> List[Dict[str, Any]]:
     headers = _get_litellm_headers()
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"{base_url}/model/info", headers=headers)
-            if resp.status_code == 200:
-                data = resp.json()
-                return data.get("data", [])
-            else:
-                logger.warning(f"/model/info returned {resp.status_code}")
+            attempts = [
+                ("GET", None),
+                ("GET", {}),
+                ("POST", {}),
+            ]
+            last_status = None
+            for method, payload in attempts:
+                try:
+                    request_kwargs: Dict[str, Any] = {"headers": headers}
+                    if payload is not None:
+                        request_kwargs["json"] = payload
+                    resp = await client.request(method, f"{base_url}/model/info", **request_kwargs)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        return data.get("data", [])
+                    last_status = resp.status_code
+                except Exception:
+                    continue
+            if last_status is not None:
+                logger.warning(f"/model/info returned {last_status}")
     except Exception as e:
         logger.warning(f"Failed to fetch /model/info: {e}")
     return []
@@ -853,6 +999,48 @@ def _build_purpose_map(model_entries: List[Dict]) -> Dict[str, str]:
     return purpose_map
 
 
+def _merge_model_entries(model_info_entries: List[Dict], config_entries: List[Dict]) -> List[Dict]:
+    """
+    Merge model entries from /model/info (DB/runtime) and config/model_list (file).
+
+    - Keep config-defined models even if DB only has a subset.
+    - Overlay DB metadata (db_model/id) when the same model_name exists.
+    """
+    by_name: Dict[str, Dict[str, Any]] = {}
+
+    for entry in config_entries:
+        name = entry.get("model_name", "")
+        if not name:
+            continue
+        by_name[name] = {
+            "model_name": name,
+            "litellm_params": dict(entry.get("litellm_params", {}) or {}),
+            "model_info": dict(entry.get("model_info", {}) or {}),
+        }
+
+    for entry in model_info_entries:
+        name = entry.get("model_name", "")
+        if not name:
+            continue
+        if name in by_name:
+            merged = by_name[name]
+            merged_params = dict(merged.get("litellm_params", {}) or {})
+            merged_params.update(dict(entry.get("litellm_params", {}) or {}))
+            merged_info = dict(merged.get("model_info", {}) or {})
+            merged_info.update(dict(entry.get("model_info", {}) or {}))
+            merged["litellm_params"] = merged_params
+            merged["model_info"] = merged_info
+            by_name[name] = merged
+        else:
+            by_name[name] = {
+                "model_name": name,
+                "litellm_params": dict(entry.get("litellm_params", {}) or {}),
+                "model_info": dict(entry.get("model_info", {}) or {}),
+            }
+
+    return list(by_name.values())
+
+
 # =============================================================================
 # Endpoints
 # =============================================================================
@@ -867,11 +1055,14 @@ async def list_models(
     Uses /model/info first (richest data), falls back to /config/yaml,
     then /v1/models as last resort.
     """
-    # Strategy 1: /model/info (works with both config-file and DB models)
     model_infos = await _get_model_info()
-    if model_infos:
+    config = await _get_litellm_config()
+    config_entries = config.get("model_list", []) if config else []
+    merged_entries = _merge_model_entries(model_infos, config_entries)
+
+    if merged_entries:
         models = []
-        for entry in model_infos:
+        for entry in merged_entries:
             mname = entry.get("model_name", "")
             params = entry.get("litellm_params", {})
             info = entry.get("model_info", {})
@@ -885,28 +1076,10 @@ async def list_models(
                 model_id=info.get("id", "") if is_db else None,
                 actual_model=params.get("model", ""),
             ))
-        purpose_map = _build_purpose_map(model_infos)
+        purpose_map = _build_purpose_map(merged_entries)
         return ModelsResponse(models=models, purposes=purpose_map)
-    
-    # Strategy 2: /config/yaml
-    config = await _get_litellm_config()
-    if config:
-        model_list = config.get("model_list", [])
-        models = []
-        for entry in model_list:
-            mname = entry.get("model_name", "")
-            params = entry.get("litellm_params", {})
-            info = entry.get("model_info", {})
-            provider = _detect_provider(mname, params)
-            models.append(ModelInfo(
-                id=mname,
-                provider=provider,
-                description=info.get("description", ""),
-            ))
-        purpose_map = _build_purpose_map(model_list)
-        return ModelsResponse(models=models, purposes=purpose_map)
-    
-    # Strategy 3: /v1/models (minimal info)
+
+    # Fallback: /v1/models (minimal info)
     v1_models = await _get_v1_models()
     if v1_models:
         models = []
@@ -1835,34 +2008,16 @@ async def get_purpose_mappings(
     
     Uses /model/info first, falls back to /config/yaml, then /v1/models.
     """
-    # Strategy 1: /model/info
     model_infos = await _get_model_info()
-    if model_infos:
-        purpose_map = _build_purpose_map(model_infos)
-        available_models = []
-        for entry in model_infos:
-            mname = entry.get("model_name", "")
-            params = entry.get("litellm_params", {})
-            actual_model = params.get("model", "")
-            info = entry.get("model_info", {})
-            available_models.append({
-                "model_name": mname,
-                "actual_model": actual_model,
-                "description": info.get("description", ""),
-            })
-        return {
-            "purposes": purpose_map,
-            "configurable_purposes": CONFIGURABLE_PURPOSES,
-            "available_models": available_models,
-        }
-    
-    # Strategy 2: /config/yaml
     config = await _get_litellm_config()
-    if config:
-        model_list = config.get("model_list", [])
-        purpose_map = _build_purpose_map(model_list)
+    config_entries = config.get("model_list", []) if config else []
+    merged_entries = _merge_model_entries(model_infos, config_entries)
+
+    if merged_entries:
+        purpose_map_all = _build_purpose_map(merged_entries)
+        purpose_map = {p: purpose_map_all.get(p, "") for p in CONFIGURABLE_PURPOSES if p in purpose_map_all}
         available_models = []
-        for entry in model_list:
+        for entry in merged_entries:
             mname = entry.get("model_name", "")
             params = entry.get("litellm_params", {})
             actual_model = params.get("model", "")
@@ -1877,8 +2032,8 @@ async def get_purpose_mappings(
             "configurable_purposes": CONFIGURABLE_PURPOSES,
             "available_models": available_models,
         }
-    
-    # Strategy 3: /v1/models (minimal - no purpose mapping possible)
+
+    # Fallback: /v1/models (minimal - no purpose mapping possible)
     v1_models = await _get_v1_models()
     if v1_models:
         available_models = [
@@ -1922,12 +2077,11 @@ async def update_purpose_mapping(
                    f"Allowed: {CONFIGURABLE_PURPOSES}"
         )
     
-    # Get model info - try /model/info first, then /config/yaml
-    model_entries = await _get_model_info()
-    if not model_entries:
-        config = await _get_litellm_config()
-        if config:
-            model_entries = config.get("model_list", [])
+    # Merge runtime DB entries with declarative config entries.
+    model_infos = await _get_model_info()
+    config = await _get_litellm_config()
+    config_entries = config.get("model_list", []) if config else []
+    model_entries = _merge_model_entries(model_infos, config_entries)
     
     if not model_entries:
         raise HTTPException(

@@ -77,6 +77,19 @@ available_models:
     # Reranker-specific configuration
     hf_overrides: '{"architectures": ["Qwen3ForSequenceClassification"], "classifier_from_token": ["no", "yes"], "is_original_qwen3_reranker": true}'
 
+  "qwen3-0.6b-vllm":
+    provider: "vllm"
+    model: "qwen3-0.6b"
+    model_name: "Qwen/Qwen3-0.6B"
+    description: "Tiny dispatch/classification model on GPU (vLLM)"
+    # vLLM tuning parameters
+    gpu_memory_utilization: 0.1  # Keep tiny and always-hot for routing
+    max_model_len: 4096  # Routing/classification prompts are short
+    max_num_seqs: 32  # High concurrency for dispatch traffic
+    cpu_offload_gb: 0
+    tool_calling: false
+    multimodal: false
+
   "bge-reranker-v2-m3-gpu":
     provider: "vllm"
     model: "bge-reranker-v2-m3"
@@ -259,23 +272,27 @@ available_models:
 # =============================================================================
 # Model Purposes - Staging/Production (vLLM + Bedrock)
 # =============================================================================
+# Production GPU strategy (3x RTX 3090, 24GB each):
+# - GPU 0: ingestion stack (Marker/ColPali/embeddings)
+# - GPU 1: qwen3-30b alone for heavy agent/chat/tool-calling workloads
+# - GPU 2: phi-4 + qwen3-0.6b-vllm + qwen3-reranker
 model_purposes:
   # Primary models
-  default: "phi-4"   # General purpose agent model (default for most tasks)
+  default: "qwen3-30b"   # Primary text workhorse
   frontier: "claude-sonnet-4-5"   # Most capable model (Claude 4.5 Sonnet)
   frontier-fast: "claude-haiku-4-5"   # Fast frontier model (Claude 4.5 Haiku)
   
   # Task-specific
   research: "qwen3-30b"   # Research and analysis
   agent: "qwen3-30b"   # Agent model for agentic tasks
-  chat: "phi-4"   # General chat
+  chat: "qwen3-30b"   # Main chat model
   vision: "phi-4"   # Vision-language model for image understanding
-  classify: "phi-4"   # Document classification
+  classify: "qwen3-0.6b-vllm"   # Tiny dispatch/classification model on GPU
   parsing: "phi-4"   # Document parsing and structure extraction
   cleanup: "phi-4"   # Text cleanup and formatting  
-  fast: "phi-4"   # Fast model for quick operations
+  fast: "qwen3-0.6b-vllm"   # Tiny always-hot routing model
   tool_calling: "qwen3-30b"   # Tool calling model for tool calling tasks
-  test: "qwen3-0.6b"   # Tiny model for validation tests
+  test: "qwen3-0.6b-vllm"   # Tiny model for validation tests (GPU)
 
   # Video generation (cloud API)
   video: "sora-2"   # Video generation model (OpenAI Sora-2)
