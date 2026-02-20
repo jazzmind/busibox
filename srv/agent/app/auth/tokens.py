@@ -169,6 +169,13 @@ def _audience_for_purpose(purpose: str, scopes: List[str]) -> str:
 
     We keep this mapping local to agent-server so we don't have to change its DB schema
     (TokenGrant is keyed on scopes), while still ensuring tokens are audience-bound.
+
+    Audience mapping:
+      data.*   → data-api
+      search.* → search-api
+      rag.*    → search-api
+      task.*   → agent-api  (tasks live on agent-api)
+      *        → agent-api  (fallback)
     """
     p = (purpose or "").lower()
     if "data" in p:

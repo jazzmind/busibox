@@ -1,3 +1,4 @@
+import logging
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -5,17 +6,32 @@ import httpx
 from app.config.settings import get_settings
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 class BusiboxClient:
     """
     Thin HTTP client for Busibox APIs (search, data, RAG).
-    Attaches downstream bearer tokens obtained via token exchange.
+
+    Supports per-audience tokens so that each downstream service receives
+    a correctly audience-scoped JWT.  Falls back to a single ``access_token``
+    for backward compatibility (existing callers that pass one token).
     """
 
-    def __init__(self, access_token: str) -> None:
-        self._token = access_token
-        self._headers = {"Authorization": f"Bearer {self._token}"}
+    def __init__(
+        self,
+        access_token: str,
+        *,
+        tokens_by_audience: Optional[Dict[str, str]] = None,
+    ) -> None:
+        self._default_token = access_token
+        self._tokens: Dict[str, str] = tokens_by_audience or {}
+        self._default_headers = {"Authorization": f"Bearer {self._default_token}"}
+
+    def _headers_for(self, audience: str) -> Dict[str, str]:
+        """Return auth headers using the audience-specific token if available."""
+        token = self._tokens.get(audience, self._default_token)
+        return {"Authorization": f"Bearer {token}"}
 
     async def request(
         self,
@@ -46,7 +62,7 @@ class BusiboxClient:
                 url=f"{base_url}{path}",
                 json=json,
                 params=params,
-                headers=self._headers,
+                headers=self._headers_for("data-api"),
                 timeout=timeout,
             )
             resp.raise_for_status()
@@ -100,14 +116,13 @@ class BusiboxClient:
             request_body["mmr"] = True
             request_body["mmr_lambda"] = mmr_lambda
         
-        # Remove trailing slash from base URL to avoid double slashes
         base_url = str(settings.search_api_url).rstrip('/')
         
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 f"{base_url}/search",
                 json=request_body,
-                headers=self._headers,
+                headers=self._headers_for("search-api"),
                 timeout=30,
             )
             resp.raise_for_status()
@@ -117,15 +132,14 @@ class BusiboxClient:
         """
         Legacy file-based ingestion (for file paths).
         """
-        # Remove trailing slash from base URL to avoid double slashes
         base_url = str(settings.data_api_url).rstrip('/')
         
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 f"{base_url}/documents",
                 json={"path": path, "metadata": metadata or {}},
-                headers=self._headers,
-                timeout=180,  # 3 minutes for document ingestion with embedding generation
+                headers=self._headers_for("data-api"),
+                timeout=180,
             )
             resp.raise_for_status()
             return resp.json()
@@ -174,21 +188,20 @@ class BusiboxClient:
             resp = await client.post(
                 f"{base_url}/data/content",
                 json=payload,
-                headers=self._headers,
-                timeout=180,  # 3 minutes for content ingestion with embedding generation
+                headers=self._headers_for("data-api"),
+                timeout=180,
             )
             resp.raise_for_status()
             return resp.json()
 
     async def rag_query(self, database: str, query: str, top_k: int = 5) -> Dict[str, Any]:
-        # Remove trailing slash from base URL to avoid double slashes
         base_url = str(settings.rag_api_url).rstrip('/')
         
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 f"{base_url}/databases/{database}/query",
                 json={"query": query, "top_k": top_k},
-                headers=self._headers,
+                headers=self._headers_for("search-api"),
                 timeout=30,
             )
             resp.raise_for_status()

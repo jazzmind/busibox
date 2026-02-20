@@ -708,22 +708,43 @@ class BaseStreamingAgent(StreamingAgent):
                 ))
                 return None
         
-        # Perform token exchange for tools that require scopes
+        # Perform token exchange for tools that require scopes.
+        # Different tools may target different downstream services (search-api,
+        # data-api, etc.).  We group scopes by audience and exchange once per
+        # audience so the BusiboxClient can send the right token to each service.
         if scopes and agent_context.principal and agent_context.session:
             try:
-                # Determine purpose from first scope (e.g., "search.read" -> "search")
-                purpose = scopes[0].split(".")[0] if scopes else "search"
-                
-                exchanged_token = await get_or_exchange_token(
-                    session=agent_context.session,
-                    principal=agent_context.principal,
-                    scopes=scopes,
-                    purpose=purpose
+                from app.auth.tokens import _audience_for_purpose
+
+                audience_scopes: Dict[str, List[str]] = {}
+                for scope in scopes:
+                    purpose = scope.split(".")[0]
+                    aud = _audience_for_purpose(purpose, [scope])
+                    audience_scopes.setdefault(aud, []).append(scope)
+
+                tokens_by_audience: Dict[str, str] = {}
+                first_token = None
+
+                for aud, aud_scope_list in audience_scopes.items():
+                    exchanged = await get_or_exchange_token(
+                        session=agent_context.session,
+                        principal=agent_context.principal,
+                        scopes=aud_scope_list,
+                        purpose=aud_scope_list[0].split(".")[0],
+                    )
+                    tokens_by_audience[aud] = exchanged.access_token
+                    if first_token is None:
+                        first_token = exchanged.access_token
+
+                logger.info(
+                    f"Token exchange successful for {self.name}",
+                    extra={"audiences": list(tokens_by_audience.keys())},
                 )
-                logger.info(f"Token exchange successful for {self.name}")
-                
-                # Create authenticated client
-                busibox_client = BusiboxClient(access_token=exchanged_token.access_token)
+
+                busibox_client = BusiboxClient(
+                    access_token=first_token,
+                    tokens_by_audience=tokens_by_audience,
+                )
                 agent_context.deps = BusiboxDeps(
                     principal=agent_context.principal,
                     busibox_client=busibox_client
