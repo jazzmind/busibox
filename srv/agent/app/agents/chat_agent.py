@@ -9,6 +9,7 @@ tool selection strategy.
 """
 
 import asyncio
+import inspect
 import json
 import logging
 import time
@@ -262,6 +263,30 @@ class ChatAgent(BaseStreamingAgent):
         if mapped in self.config.tools and ToolRegistry.has(mapped):
             return mapped
         return None
+
+    def _normalize_planned_step_args(self, tool_name: str, args: Any, query: str) -> Dict[str, Any]:
+        """
+        Normalize planner args and backfill required fields for tool calls.
+
+        The planner can return partial args (for example only `limit` for
+        `document_search`). If the tool requires `query`, inject the user query.
+        """
+        normalized: Dict[str, Any] = args.copy() if isinstance(args, dict) else {}
+        tool_func = ToolRegistry.get(tool_name)
+        if not tool_func:
+            return normalized
+        try:
+            query_param = inspect.signature(tool_func).parameters.get("query")
+            if (
+                query_param
+                and query_param.default is inspect.Parameter.empty
+                and "query" not in normalized
+            ):
+                normalized["query"] = query
+        except Exception:
+            # Keep planner args as-is if signature introspection fails.
+            pass
+        return normalized
 
     def _heuristic_fast_ack(self, query: str) -> FastAckDecision:
         """
@@ -582,7 +607,7 @@ class ChatAgent(BaseStreamingAgent):
             if step_id in used_ids:
                 step_id = f"{step_id}_{idx}"
             used_ids.add(step_id)
-            args = step.args if isinstance(step.args, dict) else {}
+            args = self._normalize_planned_step_args(tool, step.args, query)
             if not args:
                 args = {"query": query}
             seen_steps.append(

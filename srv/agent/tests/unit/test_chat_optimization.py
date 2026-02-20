@@ -26,6 +26,42 @@ class StreamCollector:
 
 
 @pytest.mark.asyncio
+async def test_generate_plan_backfills_required_query_for_document_search(monkeypatch):
+    """Planner output missing query should be normalized for document_search."""
+    agent = ChatAgent()
+    context = AgentContext()
+
+    class FakeClient:
+        async def chat_completion(self, **kwargs):
+            return {
+                "choices": [{
+                    "message": {
+                        "content": (
+                            '{"summary":"Search docs","steps":[{"id":"step_1","tool":"document_search",'
+                            '"objective":"Search user docs","run_mode":"serial","args":{"limit":5}}],'
+                            '"parallel_groups":[],"feedback_points":[],"estimated_duration":"quick"}'
+                        )
+                    }
+                }]
+            }
+
+    monkeypatch.setattr("app.agents.chat_agent.get_client", lambda: FakeClient())
+    monkeypatch.setattr("app.agents.chat_agent.ToolRegistry.has", lambda name: name == "document_search")
+    monkeypatch.setattr("app.agents.chat_agent.ToolRegistry.get", lambda name: (lambda query, limit=5: None) if name == "document_search" else None)
+
+    plan = await agent._generate_plan(
+        query="do I have any resumes of people who are good at data analytics?",
+        context=context,
+        dispatch=FastAckDecision(action_type="search", needs_tools=True, response="Checking now."),
+    )
+
+    assert plan.steps
+    assert plan.steps[0].tool == "document_search"
+    assert plan.steps[0].args.get("query") == "do I have any resumes of people who are good at data analytics?"
+    assert plan.steps[0].args.get("limit") == 5
+
+
+@pytest.mark.asyncio
 async def test_chat_agent_streams_plan_progress_and_interim(monkeypatch):
     """The two-phase flow should emit plan/progress/interim events before final content."""
     agent = ChatAgent()
