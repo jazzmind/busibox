@@ -463,51 +463,113 @@ async def list_cached_models(_: bool = Depends(verify_token)):
 
 
 # ---------------------------------------------------------------------------
-# Proactive MLX health check — auto-restarts MLX if it dies (e.g. display sleep)
+# Proactive MLX health check — auto-restarts MLX if it dies or hangs
 # ---------------------------------------------------------------------------
 MLX_HEALTHCHECK_INTERVAL = int(os.getenv("MLX_HEALTHCHECK_INTERVAL", "30"))
+# Run inference probe every N health-check cycles (default: every 4th = ~2min)
+MLX_INFERENCE_PROBE_EVERY = int(os.getenv("MLX_INFERENCE_PROBE_EVERY", "4"))
+MLX_INFERENCE_PROBE_TIMEOUT = float(os.getenv("MLX_INFERENCE_PROBE_TIMEOUT", "15"))
+
+
+def _inference_probe() -> bool:
+    """
+    Send a tiny completion request to MLX and verify it responds.
+
+    This catches the case where /v1/models returns 200 but Metal/GPU
+    inference is hung (e.g. after display-off power management changes).
+    Uses the smallest available model with max_tokens=1 to be fast.
+    """
+    import httpx as _httpx
+    try:
+        resp = _httpx.post(
+            f"http://localhost:{MLX_PORT}/v1/chat/completions",
+            json={
+                "model": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 1,
+            },
+            timeout=MLX_INFERENCE_PROBE_TIMEOUT,
+        )
+        if resp.status_code == 200:
+            body = resp.json()
+            choices = body.get("choices", [])
+            if choices and choices[0].get("message", {}).get("content") is not None:
+                return True
+        logger.warning(f"Inference probe got status {resp.status_code}")
+        return False
+    except Exception as exc:
+        logger.warning(f"Inference probe failed: {exc}")
+        return False
 
 
 async def _mlx_healthcheck_loop():
-    """Periodically check MLX and restart it if it's down."""
-    # Wait a bit after startup before first check
+    """Periodically check MLX and restart it if it's down or inference is hung."""
     await asyncio.sleep(10)
     logger.info(
-        f"MLX health-check loop started (interval={MLX_HEALTHCHECK_INTERVAL}s)"
+        f"MLX health-check loop started "
+        f"(interval={MLX_HEALTHCHECK_INTERVAL}s, "
+        f"inference probe every {MLX_INFERENCE_PROBE_EVERY} cycles)"
     )
-    consecutive_failures = 0
+    inference_failures = 0
+    cycle = 0
+    was_running = False
     while True:
         try:
             status = get_mlx_status()
+
             if status.running and status.healthy:
-                if consecutive_failures > 0:
-                    logger.info("MLX recovered and is healthy again")
-                consecutive_failures = 0
-            elif status.running and not status.healthy:
-                consecutive_failures += 1
-                if consecutive_failures >= 3:
-                    logger.warning(
-                        f"MLX process running but unhealthy for "
-                        f"{consecutive_failures} checks — restarting"
+                was_running = True
+                cycle += 1
+                if cycle >= MLX_INFERENCE_PROBE_EVERY:
+                    cycle = 0
+                    logger.info("Running inference probe...")
+                    probe_ok = await asyncio.get_event_loop().run_in_executor(
+                        None, _inference_probe
                     )
-                    stop_mlx_server()
-                    await _trigger_mlx_start()
-                    consecutive_failures = 0
-                else:
                     logger.info(
-                        f"MLX process running but not healthy yet "
-                        f"({consecutive_failures}/3 before restart)"
+                        f"Inference probe result: {'OK' if probe_ok else 'FAILED'}"
                     )
+                    if probe_ok:
+                        if inference_failures > 0:
+                            logger.info("MLX inference recovered")
+                        inference_failures = 0
+                    else:
+                        inference_failures += 1
+                        logger.warning(
+                            f"MLX models endpoint OK but inference hung "
+                            f"({inference_failures}/2 before restart)"
+                        )
+                        if inference_failures >= 2:
+                            logger.error(
+                                "MLX inference confirmed hung — restarting"
+                            )
+                            stop_mlx_server()
+                            await _trigger_mlx_start()
+                            inference_failures = 0
+                            cycle = 0
+
+            elif status.running and not status.healthy:
+                was_running = True
+                cycle = 0
+                logger.info(
+                    "MLX process running but /v1/models not responding — "
+                    "will retry next cycle"
+                )
+
             else:
-                # Not running at all — check if PID file existed (was previously started)
-                if MLX_PID_FILE.exists() or consecutive_failures > 0:
-                    consecutive_failures += 1
+                cycle = 0
+                should_restart = (
+                    MLX_PID_FILE.exists()
+                    or was_running
+                )
+                if should_restart:
                     logger.warning(
-                        f"MLX not running (was previously started) — "
-                        f"triggering restart (failure #{consecutive_failures})"
+                        "MLX not running (was previously started) — "
+                        "triggering restart"
                     )
+                    was_running = False
                     await _trigger_mlx_start()
-                    consecutive_failures = 0
+                    inference_failures = 0
         except Exception:
             logger.exception("Error in MLX health-check loop")
         await asyncio.sleep(MLX_HEALTHCHECK_INTERVAL)

@@ -391,6 +391,23 @@ class PostgresService:
         async with self.acquire(request) as conn:
             await self._ensure_document_roles(conn)
             async with conn.transaction():
+                # When changing to shared, insert roles BEFORE updating visibility.
+                # PostgreSQL RLS checks SELECT visibility of the new row after UPDATE;
+                # shared_docs_select requires a matching document_roles entry.
+                if visibility == "shared" and role_ids:
+                    for role_id in role_ids:
+                        await conn.execute(
+                            """
+                            INSERT INTO document_roles (file_id, role_id, role_name, added_by)
+                            VALUES ($1, $2, $3, $4)
+                            ON CONFLICT (file_id, role_id) DO NOTHING
+                            """,
+                            uuid.UUID(file_id),
+                            uuid.UUID(role_id),
+                            f"Role-{role_id[:8]}",
+                            uuid.UUID(actor_id),
+                        )
+
                 if library_id:
                     await conn.execute(
                         """
@@ -413,26 +430,19 @@ class PostgresService:
                         visibility,
                     )
 
-                # Clear existing roles
-                await conn.execute(
-                    "DELETE FROM document_roles WHERE file_id = $1",
-                    uuid.UUID(file_id),
-                )
-
-                # Insert new roles for shared
+                # Clean up old roles that don't match the new set
                 if visibility == "shared" and role_ids:
-                    for role_id in role_ids:
-                        await conn.execute(
-                            """
-                            INSERT INTO document_roles (file_id, role_id, role_name, added_by)
-                            VALUES ($1, $2, $3, $4)
-                            ON CONFLICT (file_id, role_id) DO NOTHING
-                            """,
-                            uuid.UUID(file_id),
-                            uuid.UUID(role_id),
-                            f"Role-{role_id[:8]}",
-                            uuid.UUID(actor_id),
-                        )
+                    role_uuids = [uuid.UUID(r) for r in role_ids]
+                    await conn.execute(
+                        "DELETE FROM document_roles WHERE file_id = $1 AND role_id != ALL($2)",
+                        uuid.UUID(file_id),
+                        role_uuids,
+                    )
+                elif visibility == "personal":
+                    await conn.execute(
+                        "DELETE FROM document_roles WHERE file_id = $1",
+                        uuid.UUID(file_id),
+                    )
 
     async def update_status(
         self,

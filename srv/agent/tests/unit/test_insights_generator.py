@@ -377,8 +377,8 @@ def test_should_generate_insights_sufficient_messages():
         updated_at=datetime.now(timezone.utc).replace(tzinfo=None)
     )
     
-    # 4 messages (2 exchanges)
-    assert should_generate_insights(conversation, 4) is True
+    # 2 messages (1 exchange)
+    assert should_generate_insights(conversation, 2) is True
     
     # 6 messages (3 exchanges)
     assert should_generate_insights(conversation, 6) is True
@@ -393,25 +393,25 @@ def test_should_generate_insights_insufficient_messages():
         updated_at=datetime.now(timezone.utc).replace(tzinfo=None)
     )
     
-    # Less than 4 messages
-    assert should_generate_insights(conversation, 2) is False
-    assert should_generate_insights(conversation, 3) is False
+    # Less than 2 messages
+    assert should_generate_insights(conversation, 1) is False
+    assert should_generate_insights(conversation, 0) is False
 
 
 def test_should_generate_insights_too_recent():
     """Test insights generation threshold with recent conversation."""
     from datetime import timedelta
     
-    # Conversation less than 5 minutes old
+    # Conversation less than 30 seconds old
     conversation = Conversation(
         title="Test",
         user_id="user-123",
-        created_at=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=2),
+        created_at=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=10),
         updated_at=datetime.now(timezone.utc).replace(tzinfo=None)
     )
     
     # Even with enough messages, should not generate if too recent
-    assert should_generate_insights(conversation, 6) is False
+    assert should_generate_insights(conversation, 2) is False
 
 
 def test_should_generate_insights_old_enough():
@@ -425,5 +425,5 @@ def test_should_generate_insights_old_enough():
         updated_at=datetime.now(timezone.utc).replace(tzinfo=None)
     )
     
-    assert should_generate_insights(conversation, 4) is True
+    assert should_generate_insights(conversation, 2) is True
 
