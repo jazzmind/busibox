@@ -47,15 +47,21 @@ CHAT_SYSTEM_PROMPT = """You are a versatile chat assistant that helps users by u
    - Questions about "my documents" or specific files → search documents
    - Requests for recurring tasks → create task
 
-3. **Handle Ambiguous References**: When the user says "it", "that", "this topic", etc., look at the conversation history to understand what they're referring to.
+3. **Gather Profile Context Opportunistically**:
+   - If pending follow-up questions or missing profile fields are provided in context, ask at most one short follow-up question naturally.
+   - Do not interrupt urgent task completion; weave the question into natural transitions.
+   - Keep profile prompts optional and friendly (e.g. "Quick preference check: do you prefer concise or detailed responses?")
+   - If a pending profile question is present, prioritize that phrasing.
 
-4. **Cite Sources**: When using tools, include relevant sources (URLs for web, filenames for documents).
+4. **Handle Ambiguous References**: When the user says "it", "that", "this topic", etc., look at the conversation history to understand what they're referring to.
 
-5. **Be Conversational**: Respond naturally and reference previous context when relevant.
+5. **Cite Sources**: When using tools, include relevant sources (URLs for web, filenames for documents).
 
-6. **Handle Failures Gracefully**: If a tool fails or returns no results, explain and offer alternatives.
+6. **Be Conversational**: Respond naturally and reference previous context when relevant.
 
-7. **Mobile-Friendly Responses**: Keep responses concise and easy to read in messaging apps:
+7. **Handle Failures Gracefully**: If a tool fails or returns no results, explain and offer alternatives.
+
+8. **Mobile-Friendly Responses**: Keep responses concise and easy to read in messaging apps:
    - Prefer short paragraphs and concise bullet lists
    - Avoid long walls of text
    - Start with the most important answer first
@@ -70,6 +76,7 @@ class FastAckDecision(BaseModel):
     response: str
     follow_up_question: Optional[str] = None
     confidence: float = 0.75
+    routing_source: str = "llm"
 
 
 class PlanStep(BaseModel):
@@ -127,6 +134,8 @@ class ChatAgent(BaseStreamingAgent):
                 "generate_image",
                 "transcribe_audio",
                 "text_to_speech",
+                "memory_search",
+                "memory_save",
             ],
             execution_mode=ExecutionMode.RUN_ONCE,
             tool_strategy=ToolStrategy.LLM_DRIVEN,  # Let LLM decide which tools to use
@@ -199,6 +208,18 @@ class ChatAgent(BaseStreamingAgent):
                 lines.append(f"- {filename} ({mime_type})")
             lines.append("")
 
+        if context.pending_questions:
+            lines.append("Pending follow-up prompts:")
+            for item in context.pending_questions[:2]:
+                question = str(item.get("content", "")).strip()
+                if question:
+                    lines.append(f"- {question}")
+            lines.append("")
+
+        if context.missing_profile_fields:
+            lines.append(f"Missing profile fields: {', '.join(context.missing_profile_fields)}")
+            lines.append("")
+
         lines.append(f"Current user message: {query}")
         return "\n".join(lines)
 
@@ -254,6 +275,7 @@ class ChatAgent(BaseStreamingAgent):
                 needs_tools=False,
                 response="Hi! How can I help?",
                 confidence=0.95,
+                routing_source="heuristic_fallback",
             )
         if any(token in q for token in ("calendar", "schedule", "meeting", "today")):
             return FastAckDecision(
@@ -261,6 +283,7 @@ class ChatAgent(BaseStreamingAgent):
                 needs_tools=True,
                 response="Got it - checking your calendar now.",
                 confidence=0.85,
+                routing_source="heuristic_fallback",
             )
         if any(token in q for token in ("weather", "forecast", "temperature")):
             return FastAckDecision(
@@ -268,6 +291,7 @@ class ChatAgent(BaseStreamingAgent):
                 needs_tools=True,
                 response="Sure - let me pull the latest weather.",
                 confidence=0.9,
+                routing_source="heuristic_fallback",
             )
         if any(token in q for token in ("document", "file", "notes", "pdf")):
             return FastAckDecision(
@@ -275,6 +299,7 @@ class ChatAgent(BaseStreamingAgent):
                 needs_tools=True,
                 response="Okay - I’ll check your documents.",
                 confidence=0.9,
+                routing_source="heuristic_fallback",
             )
         if any(token in q for token in ("news", "latest", "current", "search")):
             return FastAckDecision(
@@ -282,6 +307,7 @@ class ChatAgent(BaseStreamingAgent):
                 needs_tools=True,
                 response="On it - I’ll look that up.",
                 confidence=0.85,
+                routing_source="heuristic_fallback",
             )
         if len(q.split()) <= 2 and "?" not in q:
             return FastAckDecision(
@@ -290,12 +316,14 @@ class ChatAgent(BaseStreamingAgent):
                 response="Could you share a bit more detail so I can help?",
                 follow_up_question="What outcome do you want from this request?",
                 confidence=0.55,
+                routing_source="heuristic_fallback",
             )
         return FastAckDecision(
             action_type="multi_step",
             needs_tools=True,
             response="Got it. I’m working on that now.",
             confidence=0.7,
+            routing_source="heuristic_fallback",
         )
 
     def _stream_chunks(self, text: str, chunk_size: int = 140) -> List[str]:
@@ -342,6 +370,10 @@ class ChatAgent(BaseStreamingAgent):
             "- response must be concise (max 1 sentence, max 120 chars).\n"
             "- If needs_tools=true, response should acknowledge and indicate you are checking.\n"
             "- If needs_tools=false, response should be a complete direct reply.\n\n"
+            "Intent guidance (IMPORTANT):\n"
+            "- Queries about owned records/documents/candidates/resumes (e.g. 'do I have resumes for data analytics?') MUST set action_type=search and needs_tools=true.\n"
+            "- If user asks to find/list/show/filter internal data, do NOT answer directly; use tools.\n"
+            "- Prefer false positives (using tools) over false negatives (missing a search).\n\n"
             f"{self._build_fast_ack_context(query, context)}"
         )
         try:
@@ -386,6 +418,7 @@ class ChatAgent(BaseStreamingAgent):
                 parsed.needs_tools = False
                 if not parsed.follow_up_question:
                     parsed.follow_up_question = "Could you clarify what you want me to focus on?"
+            parsed.routing_source = "llm"
             return parsed
         except (json.JSONDecodeError, ValidationError, Exception) as exc:
             logger.warning("Fast ack generation fallback after %dms: %s", round((time.monotonic() - t_llm) * 1000) if 't_llm' in dir() else -1, exc)
@@ -471,7 +504,7 @@ class ChatAgent(BaseStreamingAgent):
                 PlanStep(id="step_1", tool="web_search", objective="Gather external context", args={"query": query})
             )
         if "document_search" in enabled_tools and (
-            ("document" in ql or "file" in ql or "pdf" in ql) and not list_intent
+            ("document" in ql or "file" in ql or "pdf" in ql)
         ):
             fallback_steps.append(
                 PlanStep(id="step_2", tool="document_search", objective="Search attached/library documents", args={"query": query})
@@ -700,8 +733,27 @@ class ChatAgent(BaseStreamingAgent):
                 "elapsed_ms": round((time.monotonic() - t_ack) * 1000),
                 "needs_tools": decision.needs_tools,
                 "response_preview": decision.response[:60],
+                "action_type": decision.action_type,
+                "confidence": decision.confidence,
+                "routing_source": decision.routing_source,
             }
         )
+        await stream(thought(
+            source=self.name,
+            message=(
+                f"Intent routing: {decision.action_type} "
+                f"(tools={'yes' if decision.needs_tools else 'no'}, "
+                f"confidence={decision.confidence:.2f}, source={decision.routing_source})"
+            ),
+            data={
+                "phase": "intent_routing",
+                "action_type": decision.action_type,
+                "needs_tools": decision.needs_tools,
+                "confidence": decision.confidence,
+                "routing_source": decision.routing_source,
+                "follow_up_question": decision.follow_up_question,
+            },
+        ))
         fast_response = decision.response.strip()
         if fast_response:
             await stream(content(

@@ -155,8 +155,8 @@ def generate_litellm_config_from_registry(
     # Define which purposes map to LiteLLM model names
     # These are the model names that services request from LiteLLM
     litellm_purposes = [
-        'test', 'fast', 'agent', 'chat', 'frontier', 'default', 'tool_calling',
-        'image', 'transcribe', 'voice'
+        'test', 'fast', 'classify', 'cleanup', 'parsing', 'agent', 'chat', 'frontier', 'default',
+        'tool_calling', 'video', 'image', 'transcribe', 'voice'
     ]
     
     model_list = []
@@ -198,6 +198,53 @@ def generate_litellm_config_from_registry(
             if mode:
                 model_entry['model_info']['mode'] = mode
         
+        model_list.append(model_entry)
+
+    # Also register concrete model aliases (e.g. qwen3-4b) for every unique
+    # purpose-backed registry model. This allows admin UI purpose assignment to
+    # target explicit model entries, not only purpose aliases.
+    unique_model_keys = []
+    for purpose in litellm_purposes:
+        model_key = purposes.get(purpose)
+        if model_key and model_key not in unique_model_keys:
+            unique_model_keys.append(model_key)
+
+    for model_key in unique_model_keys:
+        model_name, model_config = resolve_model_name(registry, model_key)
+        provider = model_config.get('provider', 'mlx')
+
+        # Pick API base from the first purpose that points to this model key.
+        representative_purpose = next(
+            (p for p in litellm_purposes if purposes.get(p) == model_key),
+            'default',
+        )
+
+        litellm_params = {}
+        if provider == 'bedrock':
+            litellm_params['model'] = f"bedrock/{model_name}"
+        elif provider in ('mlx', 'vllm'):
+            litellm_params['model'] = f"openai/{model_name}"
+            resolved_api_base = purpose_api_base(representative_purpose)
+            if resolved_api_base:
+                litellm_params['api_base'] = resolved_api_base
+                litellm_params['api_key'] = 'local'
+        else:
+            litellm_params['model'] = model_name
+
+        model_entry = {
+            'model_name': model_key,
+            'litellm_params': litellm_params,
+        }
+
+        description = model_config.get('description')
+        mode = model_config.get('mode')
+        if description or mode:
+            model_entry['model_info'] = {}
+            if description:
+                model_entry['model_info']['description'] = description
+            if mode:
+                model_entry['model_info']['mode'] = mode
+
         model_list.append(model_entry)
     
     # Build the full config

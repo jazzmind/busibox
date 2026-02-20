@@ -21,6 +21,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -70,12 +71,40 @@ def get_embedding_config() -> Tuple[str, int]:
 # Get embedding config at module load
 EMBEDDING_MODEL, EMBEDDING_DIMENSION = get_embedding_config()
 
+# Profile fields that define minimum useful user context for proactive assistance.
+PROFILE_FIELDS: Dict[str, Dict[str, Any]] = {
+    "location": {
+        "description": "Where the user lives or is usually based (city/region/country).",
+        "required": True,
+    },
+    "occupation": {
+        "description": "The user's role, work, or primary domain.",
+        "required": True,
+    },
+    "communication_tone": {
+        "description": "Preferred assistant tone/style (brief, formal, casual, etc.).",
+        "required": True,
+    },
+    "primary_language": {
+        "description": "Primary language for communication.",
+        "required": False,
+    },
+    "timezone": {
+        "description": "Timezone or locale to ground dates/times.",
+        "required": False,
+    },
+    "key_interests": {
+        "description": "Recurring topics/interests the user cares about.",
+        "required": False,
+    },
+}
+
 
 class ConversationInsight:
     """Insight extracted from conversation."""
     
     # Valid categories
-    CATEGORIES = {"preference", "fact", "goal", "context", "other"}
+    CATEGORIES = {"preference", "fact", "goal", "context", "pending_question", "other"}
     
     def __init__(
         self,
@@ -106,10 +135,10 @@ def build_session_summary_insight(
     if not messages:
         return None
 
-    # Use recent turns to keep summary concise and avoid giant embeddings.
+    # Use recent user turns only to keep summaries concise and avoid storing
+    # assistant verbosity as memory.
     recent = messages[-8:]
     user_points: List[str] = []
-    assistant_points: List[str] = []
     for msg in recent:
         text = (msg.content or "").strip()
         if not text:
@@ -117,21 +146,16 @@ def build_session_summary_insight(
         compact = text[:180]
         if msg.role == "user":
             user_points.append(compact)
-        elif msg.role == "assistant":
-            assistant_points.append(compact)
 
-    if not user_points and not assistant_points:
+    if not user_points:
         return None
 
     parts = ["Session summary:"]
-    if user_points:
-        parts.append("User topics: " + " | ".join(user_points[:3]))
-    if assistant_points:
-        parts.append("Assistant responses: " + " | ".join(assistant_points[:3]))
+    parts.append("User topics: " + " | ".join(user_points[:3]))
 
     return ConversationInsight(
         content="\n".join(parts),
-        conversation_id=f"summary:{conversation_id}",
+        conversation_id=conversation_id,
         user_id=user_id,
         importance=0.6,
         category="context",
@@ -195,6 +219,345 @@ def classify_insight_category(content: str) -> str:
     
     # Default to "other"
     return "other"
+
+
+def _content_matches_patterns(content_lower: str, patterns: List[str]) -> bool:
+    """Return True if any regex pattern matches the lowercased content."""
+    for pattern in patterns:
+        if re.search(pattern, content_lower):
+            return True
+    return False
+
+
+def extract_profile_insights_from_messages(
+    messages: List[Message],
+    conversation_id: str,
+    user_id: str,
+    existing_insights: Optional[List[Dict[str, Any]]] = None,
+) -> List[ConversationInsight]:
+    """
+    Deterministically extract profile facts/preferences from user messages.
+
+    This complements LLM extraction so critical profile facts (like location)
+    are still captured even when the extraction model is unavailable.
+    """
+    existing = existing_insights or []
+    extracted: List[ConversationInsight] = []
+    seen_contents: List[Dict[str, Any]] = list(existing)
+
+    def add_insight(content: str, category: str = "fact", importance: float = 0.85) -> None:
+        normalized = content.strip()
+        if len(normalized) < 8:
+            return
+        if is_similar_to_existing(normalized, seen_contents, similarity_threshold=0.74):
+            return
+        extracted.append(
+            ConversationInsight(
+                content=normalized,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                importance=importance,
+                category=category,
+            )
+        )
+        seen_contents.append({"content": normalized, "category": category})
+
+    for msg in messages[-20:]:
+        if msg.role != "user":
+            continue
+        text = str(msg.content or "").strip()
+        if not text:
+            continue
+        lower = text.lower()
+
+        # Location signals
+        location_match = re.search(
+            r"\b(?:i am|i'm|im|i live|i(?:'m| am)? based)\s+in\s+([A-Za-z][A-Za-z .,'-]{1,80})",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if location_match:
+            location = location_match.group(1).strip().rstrip(".!?")
+            add_insight(f"User is based in {location}.", category="fact", importance=0.92)
+
+        # Occupation signals
+        occupation_match = re.search(
+            r"\b(?:i work as|my job is|i am|i'm)\s+(?:an?\s+)?([A-Za-z][A-Za-z \-]{2,60})",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if occupation_match and " in " not in occupation_match.group(1).lower():
+            role = occupation_match.group(1).strip().rstrip(".!?")
+            add_insight(f"User works as {role}.", category="fact", importance=0.9)
+
+        # Tone/style preferences
+        if re.search(r"\b(keep it|be|reply|responses?)\s+(brief|concise|short|direct)\b", lower):
+            add_insight("User prefers concise and direct assistant responses.", category="preference", importance=0.9)
+        if re.search(r"\b(detailed|thorough|step[- ]by[- ]step)\b", lower):
+            add_insight("User prefers detailed, step-by-step responses when possible.", category="preference", importance=0.85)
+
+        # Language preference
+        language_match = re.search(
+            r"\b(?:i speak|prefer)\s+(english|spanish|french|german|italian|portuguese|hindi)\b",
+            lower,
+        )
+        if language_match:
+            language = language_match.group(1).capitalize()
+            add_insight(f"User's preferred language is {language}.", category="fact", importance=0.85)
+
+        # Timezone/local time preference
+        timezone_match = re.search(r"\b(?:timezone|time zone)\s*(?:is|=)?\s*([A-Za-z0-9_+\-/:]{2,20})", text, flags=re.IGNORECASE)
+        if timezone_match:
+            tz = timezone_match.group(1).strip().rstrip(".!?")
+            add_insight(f"User's timezone is {tz}.", category="fact", importance=0.85)
+
+    return extracted
+
+
+def _should_promote_context_globally(content: str) -> bool:
+    """
+    Return True only for durable, broadly reusable context.
+
+    This intentionally keeps promotion sparse.
+    """
+    lower = content.lower()
+    if "session summary:" in lower:
+        return False
+    promotion_signals = [
+        r"\buser is based in\b",
+        r"\buser works as\b",
+        r"\buser prefers\b",
+        r"\buser's preferred language\b",
+        r"\buser's timezone\b",
+    ]
+    return _content_matches_patterns(lower, promotion_signals)
+
+
+def get_profile_completeness(existing_insights: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Compute profile completeness against PROFILE_FIELDS from existing insights.
+
+    Args:
+        existing_insights: Existing insight dicts (usually from InsightsService)
+
+    Returns:
+        Dict containing completed_fields, missing_fields, required_missing_fields,
+        score (0..1), and required_score (0..1)
+    """
+    if not existing_insights:
+        required_fields = [name for name, meta in PROFILE_FIELDS.items() if meta.get("required")]
+        return {
+            "completed_fields": [],
+            "missing_fields": list(PROFILE_FIELDS.keys()),
+            "required_missing_fields": required_fields,
+            "score": 0.0,
+            "required_score": 0.0,
+        }
+
+    text_blobs: List[str] = []
+    for insight in existing_insights:
+        content = str(insight.get("content", "")).strip()
+        category = str(insight.get("category", "")).strip()
+        if not content:
+            continue
+        # pending_question does not count as profile completion.
+        if category == "pending_question":
+            continue
+        text_blobs.append(content.lower())
+    corpus = "\n".join(text_blobs)
+
+    detectors: Dict[str, List[str]] = {
+        "location": [
+            r"\blive in\b",
+            r"\bbased in\b",
+            r"\bfrom\b",
+            r"\bcurrently in\b",
+            r"\bi(?:'m| am|m)\s+in\b",
+            r"\b(city|state|country|region)\b",
+        ],
+        "occupation": [
+            r"\bi work as\b",
+            r"\bi am a\b",
+            r"\bmy job\b",
+            r"\bengineer\b",
+            r"\bdeveloper\b",
+            r"\bmanager\b",
+            r"\bfounder\b",
+            r"\bstudent\b",
+            r"\bconsultant\b",
+        ],
+        "communication_tone": [
+            r"\bkeep (it )?(brief|concise|short)\b",
+            r"\bbe direct\b",
+            r"\bformal\b",
+            r"\bcasual\b",
+            r"\btone\b",
+            r"\bstyle\b",
+        ],
+        "primary_language": [
+            r"\bi speak\b",
+            r"\blanguage\b",
+            r"\benglish\b",
+            r"\bspanish\b",
+            r"\bfrench\b",
+            r"\bgerman\b",
+        ],
+        "timezone": [
+            r"\btimezone\b",
+            r"\btime zone\b",
+            r"\best\b",
+            r"\bpst\b",
+            r"\bcst\b",
+            r"\bgmt\b",
+            r"\butc\b",
+        ],
+        "key_interests": [
+            r"\binterested in\b",
+            r"\bi care about\b",
+            r"\bmy focus\b",
+            r"\bhobby\b",
+            r"\binterests\b",
+            r"\bworking on\b",
+        ],
+    }
+
+    completed_fields: List[str] = []
+    missing_fields: List[str] = []
+    required_missing_fields: List[str] = []
+    for field_name, field_meta in PROFILE_FIELDS.items():
+        if _content_matches_patterns(corpus, detectors.get(field_name, [])):
+            completed_fields.append(field_name)
+        else:
+            missing_fields.append(field_name)
+            if field_meta.get("required"):
+                required_missing_fields.append(field_name)
+
+    total_fields = max(1, len(PROFILE_FIELDS))
+    required_fields = [name for name, meta in PROFILE_FIELDS.items() if meta.get("required")]
+    required_total = max(1, len(required_fields))
+
+    return {
+        "completed_fields": completed_fields,
+        "missing_fields": missing_fields,
+        "required_missing_fields": required_missing_fields,
+        "score": len(completed_fields) / total_fields,
+        "required_score": (len(required_fields) - len(required_missing_fields)) / required_total,
+    }
+
+
+async def identify_knowledge_gaps(
+    conversation: Conversation,
+    messages: List[Message],
+    user_id: str,
+    existing_insights: Optional[List[Dict[str, Any]]] = None,
+) -> Optional[ConversationInsight]:
+    """
+    Identify missing profile knowledge and generate one follow-up question insight.
+
+    The returned insight uses category `pending_question` so it can be surfaced
+    at the end of this chat and asked again at the next chat start if unanswered.
+    """
+    existing = existing_insights or []
+    completeness = get_profile_completeness(existing)
+    missing_fields: List[str] = completeness.get("missing_fields", [])
+    if not missing_fields:
+        return None
+
+    # Avoid creating multiple unresolved follow-up prompts.
+    existing_pending = [
+        i for i in existing
+        if str(i.get("category", "")).strip().lower() == "pending_question"
+    ]
+    if existing_pending:
+        return None
+
+    fallback_questions = {
+        "location": "Quick profile question: what city or region are you usually based in?",
+        "occupation": "Quick profile question: what kind of work do you do?",
+        "communication_tone": "Quick profile question: do you prefer concise, direct replies or more detailed explanations?",
+        "primary_language": "Quick profile question: what language should I default to when replying?",
+        "timezone": "Quick profile question: what timezone should I assume for dates and scheduling?",
+        "key_interests": "Quick profile question: what topics do you most want me to prioritize for you?",
+    }
+    target_field = missing_fields[0]
+    fallback_question = fallback_questions.get(
+        target_field,
+        "Quick profile question: what’s one thing I should know to better personalize help for you?",
+    )
+
+    # Format a compact conversation view for the gap-identification pass.
+    conversation_text = "\n".join(
+        f"{msg.role.upper()}: {str(msg.content or '')[:350]}"
+        for msg in messages[-10:]
+    )
+    existing_compact = "\n".join(
+        f"- [{i.get('category', 'other')}] {str(i.get('content', ''))[:180]}"
+        for i in existing[:15]
+    ) or "None"
+
+    prompt = (
+        "You are selecting ONE follow-up question to improve a user profile for future assistant quality.\n"
+        "Return ONLY JSON: {\"target_field\":\"...\", \"question\":\"...\"}\n"
+        f"Missing fields: {missing_fields}\n"
+        f"Current profile completeness: {round(float(completeness.get('score', 0.0)), 3)}\n"
+        "Question requirements:\n"
+        "- Ask exactly one natural, concise question.\n"
+        "- Must be optional/non-intrusive in tone.\n"
+        "- Prefer highest-impact missing field.\n"
+        "- Max 160 characters.\n\n"
+        f"Existing insights:\n{existing_compact}\n\n"
+        f"Recent conversation:\n{conversation_text}"
+    )
+
+    question_text = fallback_question
+    try:
+        from busibox_common.llm import get_client
+
+        client = get_client()
+        response = await client.chat_completion(
+            model="fast",
+            messages=[
+                {"role": "system", "content": "You are a strict JSON generator. Return only valid JSON."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.2,
+        )
+        raw = response.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        if raw.startswith("```json"):
+            raw = raw[7:]
+        if raw.startswith("```"):
+            raw = raw[3:]
+        if raw.endswith("```"):
+            raw = raw[:-3]
+        raw = raw.strip()
+        if raw and not raw.startswith("{"):
+            start = raw.find("{")
+            end = raw.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                raw = raw[start:end + 1]
+        parsed = json.loads(raw)
+        candidate_question = str(parsed.get("question", "")).strip()
+        candidate_field = str(parsed.get("target_field", "")).strip()
+        if candidate_field in missing_fields and candidate_question:
+            question_text = candidate_question[:160]
+    except Exception as exc:
+        logger.warning("Knowledge-gap question generation fallback: %s", exc)
+
+    # Guard against near-duplicate pending questions across user's memory.
+    if is_similar_to_existing(
+        question_text,
+        [i for i in existing if str(i.get("category", "")) == "pending_question"],
+        similarity_threshold=0.75,
+    ):
+        return None
+
+    return ConversationInsight(
+        content=question_text,
+        conversation_id=f"pending:{conversation.id}",
+        user_id=user_id,
+        importance=0.7,
+        category="pending_question",
+    )
 
 
 async def get_embedding(
@@ -580,6 +943,11 @@ async def generate_and_store_insights(
             conversation.user_id
         )
         existing_count = len(existing_insights)
+        # Also fetch broader user insights for cross-conversation dedup/updates.
+        user_existing_insights, _ = insights_service.list_user_insights(
+            user_id=conversation.user_id,
+            limit=250,
+        )
         
         logger.info(
             f"Found {existing_count} existing insights for conversation {conversation.id}",
@@ -587,39 +955,51 @@ async def generate_and_store_insights(
         )
         
         # Analyze conversation, passing existing insights to avoid duplicates
-        insights = await analyze_conversation_for_insights(
+        llm_insights = await analyze_conversation_for_insights(
             messages,
             str(conversation.id),
             conversation.user_id,
-            existing_insights=existing_insights
+            existing_insights=user_existing_insights
         )
 
-        # Add a session-level summary memory when not already present.
-        has_existing_summary = any(
-            str(i.get("conversationId", "")).startswith("summary:")
-            for i in existing_insights
+        # Deterministic extraction for critical user profile fields.
+        profile_insights = extract_profile_insights_from_messages(
+            messages=messages,
+            conversation_id=str(conversation.id),
+            user_id=conversation.user_id,
+            existing_insights=user_existing_insights,
         )
-        if not has_existing_summary:
-            summary = build_session_summary_insight(
-                messages=messages,
-                conversation_id=str(conversation.id),
-                user_id=conversation.user_id,
-            )
-            if summary is not None:
-                insights.append(summary)
+        # Keep only non-context LLM insights by default. Thread context is handled
+        # as a single updatable summary below.
+        insights: List[ConversationInsight] = []
+        for insight in llm_insights:
+            if insight.category == "context" and not _should_promote_context_globally(insight.content):
+                continue
+            if insight.category == "context" and _should_promote_context_globally(insight.content):
+                # Promote sparse durable context to global fact memory.
+                insight.category = "fact"
+            insights.append(insight)
+        insights.extend(profile_insights)
+
+        # Maintain exactly ONE thread-scoped context summary insight per conversation.
+        summary = build_session_summary_insight(
+            messages=messages,
+            conversation_id=str(conversation.id),
+            user_id=conversation.user_id,
+        )
         
         if not insights:
             logger.info(
                 f"No new insights extracted from conversation {conversation.id} (had {existing_count} existing)",
                 extra={"conversation_id": str(conversation.id), "existing_count": existing_count}
             )
-            return 0, existing_count
+            # Still allow summary upsert below.
 
         # Merge/update existing insights when new insights are similar but stronger.
         updated_count = 0
         insights_to_insert: List[ConversationInsight] = []
         for insight in insights:
-            existing_match = find_similar_existing_insight(insight.content, existing_insights)
+            existing_match = find_similar_existing_insight(insight.content, user_existing_insights)
             if not existing_match:
                 insights_to_insert.append(insight)
                 continue
@@ -649,6 +1029,37 @@ async def generate_and_store_insights(
                 except Exception as exc:
                     logger.warning("Failed to update existing insight %s: %s", existing_id, exc)
             insights_to_insert.append(insight)
+
+        # Upsert single thread summary context insight (per conversation).
+        if summary is not None:
+            existing_thread_summary = next(
+                (
+                    i for i in existing_insights
+                    if str(i.get("conversationId", "")) == str(conversation.id)
+                    and str(i.get("category", "")) == "context"
+                    and str(i.get("content", "")).startswith("Session summary:")
+                ),
+                None,
+            )
+            if existing_thread_summary:
+                summary_id = str(existing_thread_summary.get("id", ""))
+                if summary_id:
+                    try:
+                        updated = insights_service.update_insight(
+                            insight_id=summary_id,
+                            user_id=conversation.user_id,
+                            content=summary.content,
+                            category="context",
+                        )
+                        if updated:
+                            updated_count += 1
+                        else:
+                            insights_to_insert.append(summary)
+                    except Exception as exc:
+                        logger.warning("Failed to update thread summary insight %s: %s", summary_id, exc)
+                        insights_to_insert.append(summary)
+            else:
+                insights_to_insert.append(summary)
         
         # Get embeddings for insights
         chat_insights = []

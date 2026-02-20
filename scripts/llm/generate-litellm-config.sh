@@ -200,7 +200,8 @@ model_list:
 EOF
 
     # Define purposes to include (order matters for readability)
-    local purposes=("default" "test" "fast" "agent" "chat" "frontier" "tool_calling" "image" "transcribe" "voice")
+    local purposes=("default" "test" "fast" "classify" "cleanup" "parsing" "agent" "chat" "frontier" "tool_calling" "video" "image" "transcribe" "voice")
+    local unique_model_keys=""
     
     for purpose in "${purposes[@]}"; do
         local model_key=$(get_model_for_purpose "$purpose")
@@ -215,6 +216,12 @@ EOF
         local mode=$(get_model_mode "$model_key")
         local purpose_api_base
         purpose_api_base=$(get_api_base_for_purpose "$backend" "$purpose")
+
+        # Track unique registry model keys used by purposes so we can register
+        # explicit model entries (e.g. qwen3-4b) in addition to purpose aliases.
+        if [[ ",${unique_model_keys}," != *",${model_key},"* ]]; then
+            unique_model_keys="${unique_model_keys},${model_key}"
+        fi
         
         # Build model entry based on provider
         if [[ "$provider" == "bedrock" ]]; then
@@ -265,6 +272,85 @@ EOF
             fi
         fi
         
+        echo "" >> "$OUTPUT_FILE"
+    done
+
+    # Register explicit model entries for each unique registry model key.
+    # Purpose aliases (agent/fast/etc.) remain for runtime calls, while these
+    # entries let admin UI purpose assignment target concrete models.
+    IFS=',' read -r -a _model_key_arr <<< "${unique_model_keys}"
+    for model_key in "${_model_key_arr[@]}"; do
+        [[ -z "$model_key" ]] && continue
+
+        local model_name
+        model_name=$(get_model_name "$model_key")
+        local provider
+        provider=$(get_model_provider "$model_key")
+        local description
+        description=$(get_model_description "$model_key")
+        local mode
+        mode=$(get_model_mode "$model_key")
+
+        # Choose API base using the first purpose that maps to this model key.
+        local representative_purpose=""
+        for purpose in "${purposes[@]}"; do
+            local key_for_purpose
+            key_for_purpose=$(get_model_for_purpose "$purpose")
+            if [[ "$key_for_purpose" == "$model_key" ]]; then
+                representative_purpose="$purpose"
+                break
+            fi
+        done
+        local model_api_base=""
+        model_api_base=$(get_api_base_for_purpose "$backend" "${representative_purpose:-default}")
+
+        if [[ "$provider" == "bedrock" ]]; then
+            cat >> "$OUTPUT_FILE" << EOF
+  - model_name: ${model_key}
+    litellm_params:
+      model: bedrock/${model_name}
+EOF
+        elif [[ "$provider" == "mlx" || "$provider" == "vllm" ]]; then
+            if [[ -n "$model_api_base" ]]; then
+                cat >> "$OUTPUT_FILE" << EOF
+  - model_name: ${model_key}
+    litellm_params:
+      model: openai/${model_name}
+      api_base: ${model_api_base}
+      api_key: local
+EOF
+            else
+                cat >> "$OUTPUT_FILE" << EOF
+  - model_name: ${model_key}
+    litellm_params:
+      model: openai/${model_name}
+      api_key: local
+EOF
+            fi
+        else
+            cat >> "$OUTPUT_FILE" << EOF
+  - model_name: ${model_key}
+    litellm_params:
+      model: ${model_name}
+EOF
+        fi
+
+        if [[ -n "$description" || -n "$mode" ]]; then
+            cat >> "$OUTPUT_FILE" << EOF
+    model_info:
+EOF
+            if [[ -n "$description" ]]; then
+                cat >> "$OUTPUT_FILE" << EOF
+      description: "${description}"
+EOF
+            fi
+            if [[ -n "$mode" ]]; then
+                cat >> "$OUTPUT_FILE" << EOF
+      mode: "${mode}"
+EOF
+            fi
+        fi
+
         echo "" >> "$OUTPUT_FILE"
     done
     

@@ -860,17 +860,38 @@ vault-setup:
 # Check MLX server status
 mlx-status:
 	@echo "=== MLX Server Status ==="
-	@if curl -sf http://localhost:8080/v1/models >/dev/null 2>&1; then \
+	@PRIMARY_MODEL=$$(ps -ax -o command= | awk '/mlx_lm\.server/ && /--port 8080/ {for(i=1;i<=NF;i++) if($$i=="--model" && (i+1)<=NF){print $$(i+1); exit}}'); \
+	if [ -n "$$PRIMARY_MODEL" ]; then \
 		echo "MLX Primary: Running (port 8080)"; \
-		curl -sf http://localhost:8080/v1/models 2>/dev/null | head -5 || true; \
+		echo "  Active model: $$PRIMARY_MODEL"; \
+		if curl -sf http://localhost:8080/v1/models >/dev/null 2>&1; then \
+			echo "  Health: Healthy"; \
+		else \
+			echo "  Health: Not responding"; \
+		fi; \
 	else \
 		echo "MLX Primary: Not running"; \
 	fi
-	@if curl -sf http://localhost:$${MLX_FAST_PORT:-18081}/v1/models >/dev/null 2>&1; then \
-		echo "MLX Fast: Running (port $${MLX_FAST_PORT:-18081})"; \
-		curl -sf http://localhost:$${MLX_FAST_PORT:-18081}/v1/models 2>/dev/null | head -5 || true; \
+	@FAST_PORT=$${MLX_FAST_PORT:-18081}; \
+	FAST_MODEL=$$(ps -ax -o command= | awk -v p="$$FAST_PORT" '/mlx_lm\.server/ { \
+		has_port=0; \
+		for(i=1;i<=NF;i++) { \
+			if($$i=="--port" && (i+1)<=NF && $$(i+1)==p) has_port=1; \
+		} \
+		if(has_port) { \
+			for(i=1;i<=NF;i++) if($$i=="--model" && (i+1)<=NF) {print $$(i+1); exit} \
+		} \
+	}'); \
+	if [ -n "$$FAST_MODEL" ]; then \
+		echo "MLX Fast: Running (port $$FAST_PORT)"; \
+		echo "  Active model: $$FAST_MODEL"; \
+		if curl -sf http://localhost:$$FAST_PORT/v1/models >/dev/null 2>&1; then \
+			echo "  Health: Healthy"; \
+		else \
+			echo "  Health: Not responding"; \
+		fi; \
 	else \
-		echo "MLX Fast: Not running"; \
+		echo "MLX Fast: Not running (port $$FAST_PORT)"; \
 	fi
 	@echo ""
 	@echo "=== Host Agent Status ==="

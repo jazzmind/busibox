@@ -80,7 +80,7 @@ class ChatInsight:
     """Chat insight entity structure."""
     
     # Valid categories for insights
-    VALID_CATEGORIES = {"preference", "fact", "goal", "context", "other"}
+    VALID_CATEGORIES = {"preference", "fact", "goal", "context", "pending_question", "other"}
     
     def __init__(
         self,
@@ -91,7 +91,7 @@ class ChatInsight:
         conversation_id: str,
         analyzed_at: int,  # Unix timestamp
         model_name: str = "bge-large-en-v1.5",  # Embedding model used
-        category: str = "other",  # Category: preference, fact, goal, context, other
+        category: str = "other",  # Category: preference, fact, goal, context, pending_question, other
     ):
         self.id = id
         self.user_id = user_id
@@ -274,7 +274,7 @@ class InsightsService:
                 name="category",
                 dtype=DataType.VARCHAR,
                 max_length=50,
-                description="Insight category: preference, fact, goal, context, other",
+                description="Insight category: preference, fact, goal, context, pending_question, other",
             ),
         ]
         
@@ -737,6 +737,56 @@ class InsightsService:
         logger.info(f"Listed {len(paginated_results)} insights for user {user_id} (total: {total_count}, category: {category})")
         
         return paginated_results, total_count
+
+    def list_insights_by_category(
+        self,
+        user_id: str,
+        category: str,
+        limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """
+        List recent insights for a user filtered to a single category.
+
+        Args:
+            user_id: User ID
+            category: Insight category (must be in ChatInsight.VALID_CATEGORIES)
+            limit: Maximum number of records to return
+
+        Returns:
+            List of insight dicts sorted by analyzedAt descending
+        """
+        if category not in ChatInsight.VALID_CATEGORIES:
+            return []
+
+        self.connect()
+
+        if not utility.has_collection(COLLECTION_NAME, using="insights"):
+            logger.info(f"Collection {COLLECTION_NAME} does not exist, creating...")
+            self.initialize_collection()
+
+        if not self.collection:
+            self.collection = Collection(COLLECTION_NAME, using="insights")
+
+        try:
+            self.collection.load()
+        except Exception as e:
+            logger.debug(f"Collection load (may already be loaded): {e}")
+
+        available_fields = {field.name for field in self.collection.schema.fields}
+        if "category" not in available_fields:
+            return []
+
+        try:
+            results = self.collection.query(
+                expr=f'userId == "{user_id}" && category == "{category}"',
+                output_fields=["id", "userId", "content", "conversationId", "analyzedAt", "modelName", "category"],
+            )
+        except Exception as e:
+            logger.warning(f"Error querying insights by category: {e}")
+            return []
+
+        results.sort(key=lambda x: x.get("analyzedAt", 0), reverse=True)
+        return results[: max(1, min(limit, 50))]
     
     def get_category_counts(self, user_id: str) -> Dict[str, int]:
         """

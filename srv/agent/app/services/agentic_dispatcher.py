@@ -32,6 +32,7 @@ from app.agents.base_agent import create_agent_from_definition, BaseStreamingAge
 from app.config.settings import get_settings
 from app.core.logging import get_logger
 from app.schemas.streaming import StreamEvent, thought, content, complete, error
+from app.services.insights_generator import get_profile_completeness
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -485,6 +486,8 @@ Choose the most appropriate single agent for the query.""",
             # Step 1.5: Fetch relevant insights (agent memories) for the query
             t_insights = time.monotonic()
             relevant_insights = []
+            pending_questions: List[Dict[str, Any]] = []
+            missing_profile_fields: List[str] = []
             if user_id:
                 try:
                     from app.api.insights import get_insights_service
@@ -507,9 +510,28 @@ Choose the most appropriate single agent for the query.""",
                             "content": insight.content,
                             "category": insight.category,
                             "score": insight.score,
+                            "conversation_id": insight.conversation_id,
                         }
                         for insight in search_results
                     ]
+
+                    # Thread-scoped memory policy:
+                    # - context insights are considered thread-local
+                    # - only include context from the current conversation thread
+                    current_conversation_id = None
+                    if metadata and metadata.get("conversation_id"):
+                        current_conversation_id = str(metadata.get("conversation_id"))
+                    if current_conversation_id:
+                        relevant_insights = [
+                            i for i in relevant_insights
+                            if i.get("category") != "context"
+                            or str(i.get("conversation_id", "")) == current_conversation_id
+                        ]
+                    else:
+                        relevant_insights = [
+                            i for i in relevant_insights
+                            if i.get("category") != "context"
+                        ]
                     
                     if relevant_insights:
                         logger.info(
@@ -527,16 +549,39 @@ Choose the most appropriate single agent for the query.""",
                             message=f"Found {len(relevant_insights)} relevant memories from past conversations.",
                             data={"insight_count": len(relevant_insights)}
                         )
+
+                    # Also gather pending profile follow-up prompts and profile completeness.
+                    pending_questions = insights_service.list_insights_by_category(
+                        user_id=user_id,
+                        category="pending_question",
+                        limit=3,
+                    )
+                    all_insights, _ = insights_service.list_user_insights(
+                        user_id=user_id,
+                        limit=250,
+                    )
+                    completeness = get_profile_completeness(all_insights)
+                    missing_profile_fields = completeness.get("missing_fields", [])
+                    if pending_questions:
+                        yield thought(
+                            source="dispatcher",
+                            message=f"I'll also include {len(pending_questions)} pending profile follow-up prompt(s).",
+                            data={"pending_questions": len(pending_questions)},
+                        )
                         
                 except Exception as e:
                     logger.warning(f"Failed to fetch insights (non-critical): {e}")
                     relevant_insights = []
+                    pending_questions = []
+                    missing_profile_fields = []
             
             logger.info(
                 "Insights fetch complete",
                 extra={
                     "elapsed_ms": round((time.monotonic() - t_insights) * 1000),
                     "insight_count": len(relevant_insights),
+                        "pending_question_count": len(pending_questions),
+                        "missing_profile_fields": missing_profile_fields,
                 }
             )
             
@@ -635,6 +680,8 @@ Choose the most appropriate single agent for the query.""",
                         "user_id": user_id,
                         "session": session,  # Pass DB session for token exchange
                         "relevant_insights": relevant_insights,  # Agent memories from dispatcher
+                        "missing_profile_fields": missing_profile_fields,
+                        "pending_questions": pending_questions,
                         "metadata": metadata,  # Application context (e.g. projectId)
                         "attachment_metadata": attachment_metadata or [],
                     }
