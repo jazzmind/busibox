@@ -118,6 +118,8 @@ def create_app(
 
     @app.get("/health")
     async def health():
+        from .main import get_polling_status
+
         return {
             "status": "ok",
             "service": "bridge",
@@ -128,6 +130,7 @@ def create_app(
             "discord_enabled": settings.discord_enabled,
             "whatsapp_enabled": settings.whatsapp_enabled,
             "default_agent_id": settings.default_agent_id or None,
+            "polling": get_polling_status(),
         }
 
     @app.post("/api/v1/test/agent-roundtrip")

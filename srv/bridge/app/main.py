@@ -890,7 +890,6 @@ async def run_api_server(settings: Settings, whatsapp_handler: Callable[[dict], 
 
 async def run_signal_bot(settings: Settings, processor: MessageProcessor):
     if not settings.signal_enabled:
-        logger.info("Signal channel disabled")
         return
     if not settings.signal_phone_number:
         logger.warning("Signal enabled but SIGNAL_PHONE_NUMBER not set")
@@ -903,7 +902,6 @@ async def run_signal_bot(settings: Settings, processor: MessageProcessor):
 
 async def run_telegram_bot(settings: Settings, processor: MessageProcessor):
     if not settings.telegram_enabled:
-        logger.info("Telegram channel disabled")
         return
     if not settings.telegram_bot_token:
         logger.warning("Telegram enabled but TELEGRAM_BOT_TOKEN not set")
@@ -917,7 +915,6 @@ async def run_telegram_bot(settings: Settings, processor: MessageProcessor):
 
 async def run_discord_bot(settings: Settings, processor: MessageProcessor):
     if not settings.discord_enabled:
-        logger.info("Discord channel disabled")
         return
     if not settings.discord_bot_token:
         logger.warning("Discord enabled but DISCORD_BOT_TOKEN not set")
@@ -930,7 +927,6 @@ async def run_discord_bot(settings: Settings, processor: MessageProcessor):
 
 async def run_email_inbound_bot(settings: Settings, processor: MessageProcessor):
     if not settings.email_inbound_enabled:
-        logger.info("Inbound email channel disabled")
         return
     if not settings.delegation_token:
         logger.warning("Inbound email enabled but DELEGATION_TOKEN not set")
@@ -939,6 +935,135 @@ async def run_email_inbound_bot(settings: Settings, processor: MessageProcessor)
         logger.warning("Inbound email enabled but IMAP credentials are incomplete")
         return
     await EmailInboundBot(settings, processor).run()
+
+
+# ---------------------------------------------------------------------------
+# Polling Manager — supervises all channel polling tasks
+# ---------------------------------------------------------------------------
+
+# Shared state dict — the health endpoint reads this.
+_polling_status: Dict[str, str] = {}
+
+
+def get_polling_status() -> Dict[str, str]:
+    """Return snapshot of channel polling status for health endpoint."""
+    return dict(_polling_status)
+
+
+class PollingManager:
+    """
+    Manages the lifecycle of channel polling tasks.
+
+    Every ``check_interval`` seconds, inspects which channels *should* be
+    running and which *are* running.  Starts new tasks, restarts crashed
+    ones, and logs status.
+
+    The manager re-reads settings from the cached ``get_settings()`` each
+    cycle so it picks up env-var changes that arrive via container restart.
+    """
+
+    CHECK_INTERVAL = 5.0  # seconds between supervision cycles
+    BACKOFF_BASE = 5.0    # seconds to wait before restarting a crashed task
+    BACKOFF_MAX = 60.0    # cap for exponential back-off
+
+    def __init__(self, settings: Settings, processor: MessageProcessor):
+        self.settings = settings
+        self.processor = processor
+        self._tasks: Dict[str, asyncio.Task] = {}
+        self._crash_count: Dict[str, int] = {}
+
+    def _channel_should_run(self, name: str) -> bool:
+        s = self.settings
+        if name == "signal":
+            return bool(s.signal_enabled and s.signal_phone_number)
+        if name == "telegram":
+            return bool(s.telegram_enabled and s.telegram_bot_token)
+        if name == "discord":
+            return bool(s.discord_enabled and s.discord_bot_token)
+        if name == "email_inbound":
+            return bool(
+                s.email_inbound_enabled
+                and s.imap_host and s.imap_user and s.imap_password
+            )
+        return False
+
+    def _create_coro(self, name: str):
+        if name == "signal":
+            return run_signal_bot(self.settings, self.processor)
+        if name == "telegram":
+            return run_telegram_bot(self.settings, self.processor)
+        if name == "discord":
+            return run_discord_bot(self.settings, self.processor)
+        if name == "email_inbound":
+            return run_email_inbound_bot(self.settings, self.processor)
+        raise ValueError(f"Unknown channel: {name}")
+
+    def _start_task(self, name: str) -> None:
+        task = asyncio.create_task(self._create_coro(name), name=f"bridge-poll-{name}")
+        self._tasks[name] = task
+        _polling_status[name] = "running"
+        logger.info("Polling started for %s", name)
+
+    async def run(self) -> None:
+        """Supervision loop — runs forever alongside the API server."""
+        channels = ["signal", "telegram", "discord", "email_inbound"]
+
+        # Initial start for all enabled channels
+        for ch in channels:
+            if self._channel_should_run(ch):
+                self._start_task(ch)
+            else:
+                _polling_status[ch] = "disabled"
+                logger.info("Channel %s not configured — skipping", ch)
+
+        while True:
+            await asyncio.sleep(self.CHECK_INTERVAL)
+
+            for ch in channels:
+                should_run = self._channel_should_run(ch)
+                task = self._tasks.get(ch)
+                is_running = task is not None and not task.done()
+
+                if should_run and not is_running:
+                    # Needs to be running but isn't
+                    if task is not None and task.done():
+                        try:
+                            exc = task.exception() if not task.cancelled() else None
+                        except (asyncio.CancelledError, Exception):
+                            exc = None
+                        if exc:
+                            crashes = self._crash_count.get(ch, 0) + 1
+                            self._crash_count[ch] = crashes
+                            backoff = min(
+                                self.BACKOFF_BASE * (2 ** (crashes - 1)),
+                                self.BACKOFF_MAX,
+                            )
+                            _polling_status[ch] = f"crashed (attempt #{crashes})"
+                            logger.error(
+                                "Channel %s crashed (attempt #%d): %s — restarting in %.0fs",
+                                ch, crashes, exc, backoff,
+                            )
+                            await asyncio.sleep(backoff)
+                        else:
+                            logger.info(
+                                "Channel %s exited cleanly — restarting", ch,
+                            )
+                            self._crash_count[ch] = 0
+
+                    self._start_task(ch)
+
+                elif not should_run and is_running:
+                    logger.info("Channel %s no longer configured — stopping", ch)
+                    task.cancel()
+                    self._tasks.pop(ch, None)
+                    self._crash_count.pop(ch, None)
+                    _polling_status[ch] = "disabled"
+
+                elif should_run and is_running:
+                    self._crash_count[ch] = 0
+
+                elif not should_run and not is_running:
+                    _polling_status[ch] = "disabled"
 
 
 async def main():
@@ -960,13 +1085,12 @@ async def main():
     whatsapp_bot = WhatsAppWebhookBot(settings, processor) if settings.whatsapp_enabled else None
     whatsapp_handler = whatsapp_bot.handle_webhook if whatsapp_bot else None
 
+    polling_manager = PollingManager(settings, processor)
+
     try:
         await asyncio.gather(
             run_api_server(settings, whatsapp_handler),
-            run_signal_bot(settings, processor),
-            run_telegram_bot(settings, processor),
-            run_discord_bot(settings, processor),
-            run_email_inbound_bot(settings, processor),
+            polling_manager.run(),
         )
     except KeyboardInterrupt:
         logger.info("Received keyboard interrupt")
