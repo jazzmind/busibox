@@ -12,7 +12,7 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from app.agents.base_agent import (
     AgentConfig,
@@ -20,9 +20,10 @@ from app.agents.base_agent import (
     BaseStreamingAgent,
     ExecutionMode,
     PipelineStep,
+    ToolRegistry,
     ToolStrategy,
 )
-from app.schemas.streaming import content, error, thought
+from app.schemas.streaming import content, error, interim, plan, progress, thought
 from pydantic import BaseModel, ValidationError
 
 from busibox_common.llm import get_client
@@ -64,8 +65,39 @@ CHAT_SYSTEM_PROMPT = """You are a versatile chat assistant that helps users by u
 class FastAckDecision(BaseModel):
     """Structured response from the fast-ack classifier."""
 
-    needs_tools: bool
+    action_type: str = "multi_step"
+    needs_tools: bool = True
     response: str
+    follow_up_question: Optional[str] = None
+    confidence: float = 0.75
+
+
+class PlanStep(BaseModel):
+    """A concrete tool step in a generated execution plan."""
+
+    id: str
+    tool: str
+    objective: str
+    run_mode: str = "serial"  # serial | parallel
+    args: Dict[str, Any] = {}
+
+
+class FeedbackPoint(BaseModel):
+    """A user-facing update point during execution."""
+
+    after_step_id: str
+    message: str
+    kind: str = "interim"  # interim | clarify
+
+
+class ExecutionPlan(BaseModel):
+    """Structured plan produced before tool execution."""
+
+    summary: str
+    steps: List[PlanStep] = []
+    parallel_groups: List[List[str]] = []
+    feedback_points: List[FeedbackPoint] = []
+    estimated_duration: str = "quick"
 
 
 class ChatAgent(BaseStreamingAgent):
@@ -167,6 +199,40 @@ class ChatAgent(BaseStreamingAgent):
         lines.append(f"Current user message: {query}")
         return "\n".join(lines)
 
+    def _normalize_action_type(self, action_type: str) -> str:
+        normalized = (action_type or "").strip().lower().replace("-", "_")
+        supported = {"direct", "research", "search", "analysis", "clarify", "multi_step"}
+        return normalized if normalized in supported else "multi_step"
+
+    def _plan_tool_aliases(self) -> Dict[str, str]:
+        aliases = {
+            "doc_search": "document_search",
+            "document_search": "document_search",
+            "search_documents": "document_search",
+            "web_search": "web_search",
+            "search_web": "web_search",
+            "weather": "get_weather",
+            "get_weather": "get_weather",
+            "task": "create_task",
+            "create_task": "create_task",
+            "notify": "send_notification",
+            "send_notification": "send_notification",
+            "image": "generate_image",
+            "generate_image": "generate_image",
+            "transcription": "transcribe_audio",
+            "transcribe_audio": "transcribe_audio",
+            "tts": "text_to_speech",
+            "text_to_speech": "text_to_speech",
+        }
+        return aliases
+
+    def _resolve_planned_tool(self, raw_tool: str) -> Optional[str]:
+        key = (raw_tool or "").strip().lower().replace("-", "_")
+        mapped = self._plan_tool_aliases().get(key, key)
+        if mapped in self.config.tools and ToolRegistry.has(mapped):
+            return mapped
+        return None
+
     def _heuristic_fast_ack(self, query: str) -> FastAckDecision:
         """
         Fallback when fast LLM classification fails.
@@ -174,16 +240,54 @@ class ChatAgent(BaseStreamingAgent):
         """
         q = query.strip().lower()
         if any(token in q for token in ("hi", "hello", "hey")) and len(q.split()) <= 4:
-            return FastAckDecision(needs_tools=False, response="Hi! How can I help?")
+            return FastAckDecision(
+                action_type="direct",
+                needs_tools=False,
+                response="Hi! How can I help?",
+                confidence=0.95,
+            )
         if any(token in q for token in ("calendar", "schedule", "meeting", "today")):
-            return FastAckDecision(needs_tools=True, response="Got it - checking your calendar now.")
+            return FastAckDecision(
+                action_type="multi_step",
+                needs_tools=True,
+                response="Got it - checking your calendar now.",
+                confidence=0.85,
+            )
         if any(token in q for token in ("weather", "forecast", "temperature")):
-            return FastAckDecision(needs_tools=True, response="Sure - let me pull the latest weather.")
+            return FastAckDecision(
+                action_type="search",
+                needs_tools=True,
+                response="Sure - let me pull the latest weather.",
+                confidence=0.9,
+            )
         if any(token in q for token in ("document", "file", "notes", "pdf")):
-            return FastAckDecision(needs_tools=True, response="Okay - I’ll check your documents.")
+            return FastAckDecision(
+                action_type="search",
+                needs_tools=True,
+                response="Okay - I’ll check your documents.",
+                confidence=0.9,
+            )
         if any(token in q for token in ("news", "latest", "current", "search")):
-            return FastAckDecision(needs_tools=True, response="On it - I’ll look that up.")
-        return FastAckDecision(needs_tools=True, response="Got it. I’m working on that now.")
+            return FastAckDecision(
+                action_type="research",
+                needs_tools=True,
+                response="On it - I’ll look that up.",
+                confidence=0.85,
+            )
+        if len(q.split()) <= 2 and "?" not in q:
+            return FastAckDecision(
+                action_type="clarify",
+                needs_tools=False,
+                response="Could you share a bit more detail so I can help?",
+                follow_up_question="What outcome do you want from this request?",
+                confidence=0.55,
+            )
+        return FastAckDecision(
+            action_type="multi_step",
+            needs_tools=True,
+            response="Got it. I’m working on that now.",
+            confidence=0.7,
+        )
 
     def _stream_chunks(self, text: str, chunk_size: int = 140) -> List[str]:
         """Split text into stream-friendly chunks by sentence/size."""
@@ -217,12 +321,15 @@ class ChatAgent(BaseStreamingAgent):
         default = self._heuristic_fast_ack(query)
         prompt = (
             "You are deciding how to handle a user message.\n"
-            "Return ONLY JSON with keys: needs_tools (boolean) and response (string).\n"
+            "Return ONLY JSON with keys: action_type, needs_tools, response, follow_up_question, confidence.\n"
             "Rules:\n"
+            "- action_type must be one of: direct, research, search, analysis, clarify, multi_step.\n"
             "- needs_tools=true when external tools or fresh system data are useful "
             "(calendar, docs, web, weather, tasking, notifications, app data).\n"
             "- needs_tools=false for greetings/chitchat/simple acknowledgements where "
             "a direct response is enough.\n"
+            "- use action_type=clarify when the request is ambiguous or underspecified.\n"
+            "- if action_type=clarify, set needs_tools=false and provide a follow_up_question.\n"
             "- response must be concise (max 1 sentence, max 120 chars).\n"
             "- If needs_tools=true, response should acknowledge and indicate you are checking.\n"
             "- If needs_tools=false, response should be a complete direct reply.\n\n"
@@ -265,6 +372,11 @@ class ChatAgent(BaseStreamingAgent):
             parsed = FastAckDecision.model_validate(json.loads(raw))
             if not parsed.response.strip():
                 return default
+            parsed.action_type = self._normalize_action_type(parsed.action_type)
+            if parsed.action_type == "clarify":
+                parsed.needs_tools = False
+                if not parsed.follow_up_question:
+                    parsed.follow_up_question = "Could you clarify what you want me to focus on?"
             return parsed
         except (json.JSONDecodeError, ValidationError, Exception) as exc:
             logger.warning("Fast ack generation fallback after %dms: %s", round((time.monotonic() - t_llm) * 1000) if 't_llm' in dir() else -1, exc)
@@ -313,6 +425,222 @@ class ChatAgent(BaseStreamingAgent):
             logger.warning("Quick findings summary skipped after %dms: %s", round((time.monotonic() - t_qf) * 1000) if 't_qf' in dir() else -1, exc)
             return ""
 
+    async def _generate_plan(
+        self,
+        query: str,
+        context: AgentContext,
+        dispatch: FastAckDecision,
+    ) -> ExecutionPlan:
+        """Generate a lightweight execution plan before tool execution."""
+        enabled_tools = [t for t in self.config.tools if ToolRegistry.has(t)]
+        fallback_steps: List[PlanStep] = []
+
+        # Deterministic fallback mapping by action type.
+        if dispatch.action_type in {"research", "search"} and "web_search" in enabled_tools:
+            fallback_steps.append(
+                PlanStep(id="step_1", tool="web_search", objective="Gather external context", args={"query": query})
+            )
+        if "document_search" in enabled_tools and (
+            "document" in query.lower() or "file" in query.lower() or "pdf" in query.lower()
+        ):
+            fallback_steps.append(
+                PlanStep(id="step_2", tool="document_search", objective="Search attached/library documents", args={"query": query})
+            )
+        if not fallback_steps and enabled_tools:
+            fallback_steps.append(
+                PlanStep(id="step_1", tool=enabled_tools[0], objective="Collect supporting context", args={"query": query})
+            )
+
+        fallback = ExecutionPlan(
+            summary="I'll gather the most relevant information first, then synthesize the final answer.",
+            steps=fallback_steps,
+            parallel_groups=[[]],
+            feedback_points=[],
+            estimated_duration="quick" if len(fallback_steps) <= 1 else "moderate",
+        )
+
+        if not enabled_tools:
+            return ExecutionPlan(
+                summary="No tools are required for this request.",
+                steps=[],
+                parallel_groups=[],
+                feedback_points=[],
+                estimated_duration="quick",
+            )
+
+        prompt = (
+            "Plan tool execution for this user request.\n"
+            "Return ONLY JSON with keys: summary, steps, parallel_groups, feedback_points, estimated_duration.\n"
+            "Constraints:\n"
+            f"- Allowed tools: {enabled_tools}\n"
+            "- Each step must include id, tool, objective, run_mode, args.\n"
+            "- parallel_groups is a list of step-id lists.\n"
+            "- feedback_points is a list of objects: after_step_id, message, kind.\n"
+            "- keep plan concise and practical.\n\n"
+            f"Dispatch action type: {dispatch.action_type}\n"
+            f"User query: {query}\n"
+            f"{self._build_fast_ack_context(query, context)}"
+        )
+        try:
+            client = get_client()
+            result = await client.chat_completion(
+                model="fast",
+                messages=[
+                    {"role": "system", "content": "You are a strict JSON planner. Return valid JSON only."},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.1,
+            )
+            raw = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            if raw.startswith("```json"):
+                raw = raw[7:]
+            if raw.startswith("```"):
+                raw = raw[3:]
+            if raw.endswith("```"):
+                raw = raw[:-3]
+            raw = raw.strip()
+            if raw and not raw.startswith("{"):
+                start = raw.find("{")
+                end = raw.rfind("}")
+                if start != -1 and end != -1 and end > start:
+                    raw = raw[start:end + 1]
+            planned = ExecutionPlan.model_validate(json.loads(raw))
+        except (json.JSONDecodeError, ValidationError, Exception) as exc:
+            logger.warning("Plan generation fallback: %s", exc)
+            planned = fallback
+
+        seen_steps: List[PlanStep] = []
+        used_ids: Set[str] = set()
+        for idx, step in enumerate(planned.steps, start=1):
+            tool = self._resolve_planned_tool(step.tool)
+            if not tool:
+                continue
+            step_id = step.id.strip() if step.id else f"step_{idx}"
+            if step_id in used_ids:
+                step_id = f"{step_id}_{idx}"
+            used_ids.add(step_id)
+            args = step.args if isinstance(step.args, dict) else {}
+            if not args:
+                args = {"query": query}
+            seen_steps.append(
+                PlanStep(
+                    id=step_id,
+                    tool=tool,
+                    objective=step.objective or f"Run {tool}",
+                    run_mode=step.run_mode if step.run_mode in {"serial", "parallel"} else "serial",
+                    args=args,
+                )
+            )
+
+        if not seen_steps:
+            seen_steps = fallback.steps
+
+        valid_step_ids = {step.id for step in seen_steps}
+        normalized_groups: List[List[str]] = []
+        for group in planned.parallel_groups:
+            if not isinstance(group, list):
+                continue
+            valid_group = [step_id for step_id in group if step_id in valid_step_ids]
+            if valid_group:
+                normalized_groups.append(valid_group)
+
+        if not normalized_groups:
+            normalized_groups = []
+            parallel_ids = [step.id for step in seen_steps if step.run_mode == "parallel"]
+            if parallel_ids:
+                normalized_groups.append(parallel_ids)
+
+        feedback_points = [
+            fp for fp in planned.feedback_points
+            if fp.after_step_id in valid_step_ids and fp.kind in {"interim", "clarify"}
+        ]
+
+        return ExecutionPlan(
+            summary=planned.summary or fallback.summary,
+            steps=seen_steps,
+            parallel_groups=normalized_groups,
+            feedback_points=feedback_points,
+            estimated_duration=planned.estimated_duration or fallback.estimated_duration,
+        )
+
+    def _format_plan_summary(self, execution_plan: ExecutionPlan) -> str:
+        if not execution_plan.steps:
+            return "No tools needed. I'll respond directly."
+        bullets = [f"{idx}. {step.objective} (`{step.tool}`)" for idx, step in enumerate(execution_plan.steps, start=1)]
+        return (
+            f"{execution_plan.summary}\n\n"
+            f"Estimated duration: {execution_plan.estimated_duration}\n"
+            "Planned steps:\n- " + "\n- ".join(bullets)
+        )
+
+    async def _execute_plan(
+        self,
+        query: str,
+        stream,
+        cancel,
+        agent_context: AgentContext,
+        execution_plan: ExecutionPlan,
+    ) -> None:
+        if not execution_plan.steps:
+            return
+
+        step_by_id = {step.id: step for step in execution_plan.steps}
+        group_map: Dict[str, int] = {}
+        for group_idx, group in enumerate(execution_plan.parallel_groups):
+            for step_id in group:
+                group_map[step_id] = group_idx
+
+        completed: Set[str] = set()
+        total = len(execution_plan.steps)
+
+        while len(completed) < total:
+            if cancel.is_set():
+                return
+
+            pending = [step for step in execution_plan.steps if step.id not in completed]
+            if not pending:
+                break
+
+            next_step = pending[0]
+            group_idx = group_map.get(next_step.id)
+            if group_idx is not None:
+                group_ids = [sid for sid in execution_plan.parallel_groups[group_idx] if sid not in completed]
+                runnable = [step_by_id[sid] for sid in group_ids if sid in step_by_id]
+            else:
+                runnable = [next_step]
+
+            tasks = []
+            for step in runnable:
+                pipeline_step = PipelineStep(tool=step.tool, args=step.args)
+                tasks.append(self._execute_step(pipeline_step, stream, cancel, agent_context))
+
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+            for step in runnable:
+                completed.add(step.id)
+                await stream(progress(
+                    source=self.name,
+                    message=f"Completed {len(completed)}/{total}: {step.objective}",
+                    data={
+                        "completed": len(completed),
+                        "total": total,
+                        "step_id": step.id,
+                        "tool": step.tool,
+                    },
+                ))
+                for fp in execution_plan.feedback_points:
+                    if fp.after_step_id == step.id:
+                        bridge_channels = agent_context.metadata.get("bridge_channels")
+                        await stream(interim(
+                            source=self.name,
+                            message=fp.message,
+                            data={
+                                "kind": fp.kind,
+                                "after_step_id": step.id,
+                                "bridge_channels": bridge_channels if isinstance(bridge_channels, list) else [],
+                            },
+                        ))
+
     async def run_with_streaming(
         self,
         query: str,
@@ -355,6 +683,17 @@ class ChatAgent(BaseStreamingAgent):
         if cancel.is_set():
             return ""
 
+        # If dispatch asks a clarifying question, stop after first response.
+        if decision.action_type == "clarify":
+            if decision.follow_up_question and decision.follow_up_question not in fast_response:
+                await stream(content(
+                    source=self.name,
+                    message=decision.follow_up_question,
+                    data={"phase": "clarify", "partial": False},
+                ))
+                return f"{fast_response}\n\n{decision.follow_up_question}".strip()
+            return fast_response
+
         # For simple conversational messages, the fast response is final.
         if not decision.needs_tools:
             return fast_response
@@ -368,6 +707,13 @@ class ChatAgent(BaseStreamingAgent):
         logger.info("Chat resolving attachments")
         await self._resolve_attachments(query, stream, agent_context)
 
+        execution_plan = await self._generate_plan(query, agent_context, decision)
+        await stream(plan(
+            source=self.name,
+            message=self._format_plan_summary(execution_plan),
+            data=execution_plan.model_dump(),
+        ))
+
         try:
             t_deep = time.monotonic()
             logger.info(
@@ -375,7 +721,11 @@ class ChatAgent(BaseStreamingAgent):
                 self.config.tool_strategy.value,
                 self.config.tools,
             )
-            if self.config.tool_strategy == ToolStrategy.LLM_DRIVEN:
+            if execution_plan.steps:
+                await self._execute_plan(query, stream, cancel, agent_context, execution_plan)
+                # Keep LLM-driven synthesis for final answer after tools complete.
+                await self._execute_llm_driven(query, stream, cancel, agent_context)
+            elif self.config.tool_strategy == ToolStrategy.LLM_DRIVEN:
                 await self._execute_llm_driven(query, stream, cancel, agent_context)
             else:
                 await self._execute_pipeline(query, stream, cancel, agent_context)
@@ -444,6 +794,33 @@ class ChatAgent(BaseStreamingAgent):
         else:
             # Fallback to base synthesis behavior for non-LLM-driven/custom paths.
             deep_response = await self._synthesize(query, stream, cancel, agent_context)
+
+        # Optional voice output for bridge/voice clients.
+        voice_enabled = bool(agent_context.metadata.get("voice_output"))
+        if voice_enabled and deep_response and "text_to_speech" in self.config.tools:
+            try:
+                tts_step = PipelineStep(
+                    tool="text_to_speech",
+                    args={
+                        "text": deep_response[:2000],
+                        "voice": str(agent_context.metadata.get("voice_name", "alloy")),
+                        "speed": float(agent_context.metadata.get("voice_speed", 1.0)),
+                    },
+                )
+                tts_result = await self._execute_step(tts_step, stream, cancel, agent_context)
+                audio_url = getattr(tts_result, "audio_url", None) if tts_result else None
+                if audio_url:
+                    await stream(interim(
+                        source=self.name,
+                        message="Generated spoken version of the response.",
+                        data={
+                            "kind": "voice_output",
+                            "audio_url": audio_url,
+                            "bridge_channels": agent_context.metadata.get("bridge_channels", []),
+                        },
+                    ))
+            except Exception as exc:
+                logger.warning("Voice output generation skipped: %s", exc)
         total_ms = round((time.monotonic() - t0) * 1000)
         logger.info(
             "Chat agent request complete",

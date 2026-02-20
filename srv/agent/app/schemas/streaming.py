@@ -21,6 +21,9 @@ class StreamEvent(BaseModel):
     
     type: Literal[
         "thought",      # Agent's reasoning/explanation
+        "plan",         # Planned execution summary
+        "progress",     # Progress update for multi-step plans
+        "interim",      # Mid-execution user-facing update
         "tool_start",   # Starting a tool execution
         "tool_result",  # Tool completed with result
         "content",      # Final response content (streams to chat message)
@@ -70,6 +73,21 @@ def tool_result(source: str, message: str, data: Optional[Dict[str, Any]] = None
 def content(source: str, message: str, data: Optional[Dict[str, Any]] = None) -> StreamEvent:
     """Helper to create a content event."""
     return StreamEvent(type="content", source=source, message=message, data=data)
+
+
+def plan(source: str, message: str, data: Optional[Dict[str, Any]] = None) -> StreamEvent:
+    """Helper to create a plan event."""
+    return StreamEvent(type="plan", source=source, message=message, data=data)
+
+
+def progress(source: str, message: str, data: Optional[Dict[str, Any]] = None) -> StreamEvent:
+    """Helper to create a progress event."""
+    return StreamEvent(type="progress", source=source, message=message, data=data)
+
+
+def interim(source: str, message: str, data: Optional[Dict[str, Any]] = None) -> StreamEvent:
+    """Helper to create an interim user-facing update event."""
+    return StreamEvent(type="interim", source=source, message=message, data=data)
 
 
 def complete(source: str, message: str = "Done!", data: Optional[Dict[str, Any]] = None) -> StreamEvent:

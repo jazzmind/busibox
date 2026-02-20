@@ -894,7 +894,7 @@ async def send_chat_message_stream_agentic(
                 # Collect content and thoughts
                 if event.type == "content":
                     full_content.append(event.message)
-                elif event.type in ("thought", "tool_start", "tool_result"):
+                elif event.type in ("thought", "tool_start", "tool_result", "plan", "progress"):
                     thoughts.append({
                         "type": event.type,
                         "source": event.source,

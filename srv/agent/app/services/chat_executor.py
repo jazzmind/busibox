@@ -173,6 +173,7 @@ async def execute_document_search(
     query: str, 
     user_id: str,
     principal: Optional[Principal] = None,
+    session: Optional[AsyncSession] = None,
 ) -> ToolExecutionResult:
     """
     Execute document search tool.
@@ -181,6 +182,7 @@ async def execute_document_search(
         query: Search query
         user_id: User ID for logging
         principal: Optional authenticated principal for API access
+        session: Optional database session for token exchange caching
         
     Returns:
         ToolExecutionResult with search results
@@ -203,9 +205,24 @@ async def execute_document_search(
         # Import here to avoid circular imports
         from app.agents.core import BusiboxDeps
         from app.clients.busibox import BusiboxClient
+        from app.services.token_service import get_or_exchange_token
         
-        # Create BusiboxClient with user's token
-        busibox_client = BusiboxClient(access_token=principal.token)
+        # Exchange the agent-api token for a search-api token
+        if session:
+            exchanged = await get_or_exchange_token(
+                session=session,
+                principal=principal,
+                scopes=["search.read"],
+                purpose="search",
+            )
+            access_token = exchanged.access_token
+        else:
+            from app.auth.tokens import get_service_token
+            access_token = await get_service_token(
+                principal.token, principal.sub, "search-api"
+            )
+        
+        busibox_client = BusiboxClient(access_token=access_token)
         deps = BusiboxDeps(principal=principal, busibox_client=busibox_client)
         
         # Run the document agent with deps
@@ -249,6 +266,7 @@ async def execute_tools(
     query: str,
     user_id: str,
     principal: Optional[Principal] = None,
+    session: Optional[AsyncSession] = None,
 ) -> List[ToolExecutionResult]:
     """
     Execute selected tools in parallel.
@@ -258,6 +276,7 @@ async def execute_tools(
         query: User query
         user_id: User ID for logging
         principal: Optional authenticated principal for tools that require it
+        session: Optional database session for token exchange caching
         
     Returns:
         List of ToolExecutionResult
@@ -276,7 +295,7 @@ async def execute_tools(
         if tool_name == "web_search":
             tasks.append(execute_web_search(query, user_id))
         elif tool_name == "doc_search":
-            tasks.append(execute_document_search(query, user_id, principal=principal))
+            tasks.append(execute_document_search(query, user_id, principal=principal, session=session))
         else:
             logger.warning(
                 f"Unknown tool: {tool_name}",
@@ -378,9 +397,11 @@ async def execute_agent(
         
         # Set scopes based on whether agent uses tools
         if needs_token_exchange:
-            scopes = ["search:read", "data:write", "rag:read"]
+            scopes = ["search.read", "data.write", "rag.read"]
+            purpose = "search"
         else:
-            scopes = []  # No tools = no downstream services = no token exchange needed
+            scopes = []
+            purpose = "agent-api"
         
         # Use run_service for actual execution
         run_record = await create_run(
@@ -389,7 +410,7 @@ async def execute_agent(
             agent_id=agent_uuid,
             payload={"prompt": query, "context": context or {}},
             scopes=scopes,
-            purpose="chat-agent-execution",
+            purpose=purpose,
             agent_tier="simple"  # Chat agents use simple tier (30s timeout)
         )
         
@@ -652,7 +673,7 @@ async def execute_chat(
     )
     
     # Execute tools and agents in parallel
-    tool_task = execute_tools(routing_decision.selected_tools, query, user_id)
+    tool_task = execute_tools(routing_decision.selected_tools, query, user_id, principal=principal, session=session)
     agent_task = execute_agents(routing_decision.selected_agents, query, user_id, session, principal=principal)
     
     tool_results, agent_results = await asyncio.gather(tool_task, agent_task)
@@ -801,7 +822,7 @@ async def execute_chat_stream(
             }
             
             # Execute this tool immediately and report result
-            results = await execute_tools([tool_name], query, user_id)
+            results = await execute_tools([tool_name], query, user_id, principal=principal, session=session)
             if results:
                 result = results[0]
                 tool_results.append(result)

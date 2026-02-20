@@ -302,6 +302,37 @@ def is_similar_to_existing(
     return False
 
 
+def find_similar_existing_insight(
+    content: str,
+    existing_insights: List[Dict[str, Any]],
+    similarity_threshold: float = 0.72,
+) -> Optional[Dict[str, Any]]:
+    """
+    Return the most similar existing insight candidate for update/merge.
+    """
+    if not existing_insights:
+        return None
+
+    new_words = set(content.lower().split())
+    if not new_words:
+        return None
+
+    best_match: Optional[Dict[str, Any]] = None
+    best_score = 0.0
+    for existing in existing_insights:
+        existing_content = str(existing.get("content", ""))
+        existing_words = set(existing_content.lower().split())
+        if not existing_words:
+            continue
+        intersection = len(new_words & existing_words)
+        union = len(new_words | existing_words)
+        similarity = intersection / union if union > 0 else 0.0
+        if similarity >= similarity_threshold and similarity > best_score:
+            best_score = similarity
+            best_match = existing
+    return best_match
+
+
 INSIGHT_EXTRACTION_PROMPT = """Analyze this conversation and extract meaningful insights about the user.
 
 IMPORTANT: Only extract TRUE INSIGHTS - not conversation snippets. An insight should be a conclusion or inference about the user, NOT a copy of what they said.
@@ -583,15 +614,50 @@ async def generate_and_store_insights(
                 extra={"conversation_id": str(conversation.id), "existing_count": existing_count}
             )
             return 0, existing_count
+
+        # Merge/update existing insights when new insights are similar but stronger.
+        updated_count = 0
+        insights_to_insert: List[ConversationInsight] = []
+        for insight in insights:
+            existing_match = find_similar_existing_insight(insight.content, existing_insights)
+            if not existing_match:
+                insights_to_insert.append(insight)
+                continue
+
+            existing_id = str(existing_match.get("id", ""))
+            if not existing_id:
+                insights_to_insert.append(insight)
+                continue
+
+            existing_content = str(existing_match.get("content", ""))
+            existing_category = str(existing_match.get("category", "other"))
+
+            # Replace only when the new insight is materially richer.
+            richer_content = len(insight.content) >= len(existing_content) + 15
+            better_category = existing_category == "other" and insight.category != "other"
+            if richer_content or better_category:
+                try:
+                    updated = insights_service.update_insight(
+                        insight_id=existing_id,
+                        user_id=conversation.user_id,
+                        content=insight.content,
+                        category=insight.category,
+                    )
+                    if updated:
+                        updated_count += 1
+                        continue
+                except Exception as exc:
+                    logger.warning("Failed to update existing insight %s: %s", existing_id, exc)
+            insights_to_insert.append(insight)
         
         # Get embeddings for insights
         chat_insights = []
         embedding_model = None
         
-        logger.info(f"Getting embeddings for {len(insights)} insights")
+        logger.info(f"Getting embeddings for {len(insights_to_insert)} insights")
         
-        for i, insight in enumerate(insights):
-            logger.debug(f"Processing insight {i+1}/{len(insights)}: {insight.content[:50]}...")
+        for i, insight in enumerate(insights_to_insert):
+            logger.debug(f"Processing insight {i+1}/{len(insights_to_insert)}: {insight.content[:50]}...")
             
             # Get embedding (returns tuple of embedding, model_name)
             embedding, model_name = await get_embedding(
@@ -630,16 +696,17 @@ async def generate_and_store_insights(
             insights_service.insert_insights(chat_insights)
             
             logger.info(
-                f"Stored {len(chat_insights)} new insights for conversation {conversation.id} (had {existing_count} existing)",
+                f"Stored {len(chat_insights)} new insights and updated {updated_count} for conversation {conversation.id} (had {existing_count} existing)",
                 extra={
                     "conversation_id": str(conversation.id),
                     "user_id": conversation.user_id,
                     "new_insight_count": len(chat_insights),
+                    "updated_insight_count": updated_count,
                     "existing_count": existing_count
                 }
             )
-        
-        return len(chat_insights), existing_count
+
+        return len(chat_insights), existing_count + updated_count
     
     except Exception as e:
         import traceback
@@ -697,16 +764,16 @@ def should_generate_insights(conversation: Conversation, message_count: int) -> 
         True if insights should be generated
     """
     # Generate insights if:
-    # 1. Conversation has at least 4 messages (2 exchanges)
-    # 2. Conversation is at least 5 minutes old (not too fresh)
+    # 1. Conversation has at least 2 messages (1 substantive exchange)
+    # 2. Conversation is at least 30 seconds old (avoid immediate race with writes)
     # 3. Not generated too recently (TODO: track last generation time)
-    
-    if message_count < 4:
+
+    if message_count < 2:
         return False
     
     # Check conversation age
     age_minutes = (datetime.now(timezone.utc).replace(tzinfo=None) - conversation.created_at).total_seconds() / 60
-    if age_minutes < 5:
+    if age_minutes < 0.5:
         return False
     
     return True
