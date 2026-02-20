@@ -62,6 +62,32 @@ async def test_generate_plan_backfills_required_query_for_document_search(monkey
 
 
 @pytest.mark.asyncio
+async def test_generate_plan_fallback_prioritizes_document_library_search(monkeypatch):
+    """Fallback planner should search document library before data documents."""
+    agent = ChatAgent()
+    context = AgentContext()
+
+    class FailingClient:
+        async def chat_completion(self, **kwargs):
+            raise RuntimeError("planner unavailable")
+
+    monkeypatch.setattr("app.agents.chat_agent.get_client", lambda: FailingClient())
+    monkeypatch.setattr("app.agents.chat_agent.ToolRegistry.has", lambda name: name in {"document_search", "list_data_documents", "web_search"})
+    monkeypatch.setattr("app.agents.chat_agent.ToolRegistry.get", lambda name: (lambda query, limit=5: None) if name == "document_search" else (lambda **kwargs: None))
+
+    plan = await agent._generate_plan(
+        query="do I have any resumes of people who are good at data analytics?",
+        context=context,
+        dispatch=FastAckDecision(action_type="search", needs_tools=True, response="Checking now."),
+    )
+
+    assert plan.steps
+    assert plan.steps[0].tool == "document_search"
+    assert plan.steps[0].args.get("query") == "do I have any resumes of people who are good at data analytics?"
+    assert all(step.tool != "list_data_documents" for step in plan.steps)
+
+
+@pytest.mark.asyncio
 async def test_chat_agent_streams_plan_progress_and_interim(monkeypatch):
     """The two-phase flow should emit plan/progress/interim events before final content."""
     agent = ChatAgent()

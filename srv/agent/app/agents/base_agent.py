@@ -1010,15 +1010,16 @@ class BaseStreamingAgent(StreamingAgent):
                 )
 
             # Execute tool
-            # Check if tool needs BusiboxDeps context
+            # Detect whether the tool function expects a RunContext `ctx`.
+            expects_ctx = "ctx" in tool_sig.parameters
             tool_scopes = TOOL_SCOPES.get(step.tool, [])
             logger.info(f"Executing tool {step.tool} with scopes={tool_scopes}, has_deps={context.deps is not None}")
             
-            if tool_scopes and context.deps:
+            if expects_ctx and context.deps:
                 deps_for_tool = context.deps
                 # Exchange per-tool token so each tool gets the correct downstream audience.
                 # This prevents mixed-scope agents from reusing a token minted for the wrong API.
-                if context.session and context.principal:
+                if tool_scopes and context.session and context.principal:
                     try:
                         purpose = tool_scopes[0].split(".")[0] if tool_scopes else "search"
                         exchanged_token = await get_or_exchange_token(
@@ -1044,6 +1045,8 @@ class BaseStreamingAgent(StreamingAgent):
                 
                 mock_ctx = MockRunContext(deps_for_tool)
                 result = await tool_func(ctx=mock_ctx, **filtered_args)
+            elif expects_ctx and not context.deps:
+                raise RuntimeError(f"Tool {step.tool} requires authenticated context")
             else:
                 # Tool doesn't need deps context - call directly
                 result = await tool_func(**filtered_args)

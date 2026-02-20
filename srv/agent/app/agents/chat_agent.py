@@ -134,7 +134,6 @@ class ChatAgent(BaseStreamingAgent):
                 "send_notification",
                 "generate_image",
                 "transcribe_audio",
-                "text_to_speech",
                 "memory_search",
                 "memory_save",
             ],
@@ -504,35 +503,55 @@ class ChatAgent(BaseStreamingAgent):
 
         # Deterministic fallback mapping by action type.
         ql = query.lower()
-        list_intent = any(
+        data_document_list_intent = any(
             phrase in ql for phrase in (
-                "what documents do i have",
-                "list my documents",
-                "show my documents",
-                "what files do i have",
-                "list files",
+                "list data documents",
+                "show data documents",
+                "data document list",
+                "list my data tables",
+                "show my data tables",
+            )
+        )
+        document_library_intent = any(
+            phrase in ql for phrase in (
+                "document",
+                "documents",
+                "file",
+                "files",
+                "pdf",
+                "resume",
+                "resumes",
+                "candidate",
+                "candidates",
             )
         )
 
-        if list_intent and "list_data_documents" in enabled_tools:
+        if document_library_intent and "document_search" in enabled_tools:
             fallback_steps.append(
                 PlanStep(
                     id="step_1",
-                    tool="list_data_documents",
-                    objective="List available user documents",
-                    args={"limit": 50},
+                    tool="document_search",
+                    objective="Search attached/library documents",
+                    args={"query": query},
                 )
             )
 
-        if dispatch.action_type in {"research", "search"} and "web_search" in enabled_tools:
+        if (
+            dispatch.action_type in {"research", "search"}
+            and "web_search" in enabled_tools
+            and not document_library_intent
+        ):
             fallback_steps.append(
                 PlanStep(id="step_1", tool="web_search", objective="Gather external context", args={"query": query})
             )
-        if "document_search" in enabled_tools and (
-            ("document" in ql or "file" in ql or "pdf" in ql)
-        ):
+        if data_document_list_intent and "list_data_documents" in enabled_tools:
             fallback_steps.append(
-                PlanStep(id="step_2", tool="document_search", objective="Search attached/library documents", args={"query": query})
+                PlanStep(
+                    id="step_2" if fallback_steps else "step_1",
+                    tool="list_data_documents",
+                    objective="List available structured data documents",
+                    args={"limit": 50},
+                )
             )
         if not fallback_steps and enabled_tools:
             fallback_steps.append(
@@ -565,6 +584,10 @@ class ChatAgent(BaseStreamingAgent):
             "- parallel_groups is a list of step-id lists.\n"
             "- feedback_points is a list of objects: after_step_id, message, kind.\n"
             "- keep plan concise and practical.\n\n"
+            "Planning policy:\n"
+            "- For queries about user documents/files/resumes/candidates, start with `document_search`.\n"
+            "- Use `list_data_documents`, `get_data_document`, or `query_data` ONLY when the user explicitly asks about structured data documents/tables/records.\n"
+            "- Do NOT include `memory_search` unless the user explicitly asks about previous conversations, preferences, or saved memory.\n\n"
             f"Dispatch action type: {dispatch.action_type}\n"
             f"User query: {query}\n"
             f"{self._build_fast_ack_context(query, context)}"

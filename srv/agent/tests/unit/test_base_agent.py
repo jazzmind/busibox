@@ -653,6 +653,29 @@ class TestToolExecution:
         # Should not have any events
         assert len(mock_stream_callback.events) == 0
 
+    @pytest.mark.asyncio
+    async def test_execute_step_passes_ctx_when_tool_requires_it_without_scopes(
+        self, test_agent_config_no_auth, mock_stream_callback, mock_cancel_event
+    ):
+        """Tools declaring `ctx` should receive it even when TOOL_SCOPES has no entry."""
+        agent = BaseStreamingAgent(test_agent_config_no_auth)
+        context = AgentContext(deps=MagicMock())
+
+        async def ctx_tool(ctx, query):
+            assert hasattr(ctx, "deps")
+            assert query == "test"
+            result = MagicMock()
+            result.found = True
+            result.result_count = 1
+            result.model_dump = MagicMock(return_value={"found": True})
+            return result
+
+        with patch.object(ToolRegistry, 'get', return_value=ctx_tool):
+            step = PipelineStep(tool="custom_ctx_tool", args={"query": "test"})
+            result = await agent._execute_step(step, mock_stream_callback, mock_cancel_event, context)
+
+        assert result is not None
+
 
 # =============================================================================
 # Pipeline Execution Tests
