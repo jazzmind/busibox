@@ -988,22 +988,59 @@ class BaseStreamingAgent(StreamingAgent):
         ))
         
         try:
+            # Filter planned/tool args to only what the tool function accepts.
+            # This prevents planner-injected keys (e.g. user_id) from crashing tools.
+            tool_sig = inspect.signature(tool_func)
+            accepted_args = set(tool_sig.parameters.keys())
+            # Context-aware tools receive ctx separately; never pass it from step args.
+            accepted_args.discard("ctx")
+            filtered_args = {k: v for k, v in step.args.items() if k in accepted_args}
+            dropped_args = sorted(set(step.args.keys()) - set(filtered_args.keys()))
+            if dropped_args:
+                logger.info(
+                    "Filtered unsupported tool args for %s: %s",
+                    step.tool,
+                    dropped_args,
+                )
+
             # Execute tool
             # Check if tool needs BusiboxDeps context
             tool_scopes = TOOL_SCOPES.get(step.tool, [])
             logger.info(f"Executing tool {step.tool} with scopes={tool_scopes}, has_deps={context.deps is not None}")
             
             if tool_scopes and context.deps:
+                deps_for_tool = context.deps
+                # Exchange per-tool token so each tool gets the correct downstream audience.
+                # This prevents mixed-scope agents from reusing a token minted for the wrong API.
+                if context.session and context.principal:
+                    try:
+                        purpose = tool_scopes[0].split(".")[0] if tool_scopes else "search"
+                        exchanged_token = await get_or_exchange_token(
+                            session=context.session,
+                            principal=context.principal,
+                            scopes=tool_scopes,
+                            purpose=purpose,
+                        )
+                        deps_for_tool = BusiboxDeps(
+                            principal=context.principal,
+                            busibox_client=BusiboxClient(access_token=exchanged_token.access_token),
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Per-tool token exchange failed for %s, falling back to shared deps token: %s",
+                            step.tool,
+                            exc,
+                        )
                 # Create mock context for tools that need BusiboxDeps
                 class MockRunContext:
                     def __init__(self, deps):
                         self.deps = deps
                 
-                mock_ctx = MockRunContext(context.deps)
-                result = await tool_func(ctx=mock_ctx, **step.args)
+                mock_ctx = MockRunContext(deps_for_tool)
+                result = await tool_func(ctx=mock_ctx, **filtered_args)
             else:
                 # Tool doesn't need deps context - call directly
-                result = await tool_func(**step.args)
+                result = await tool_func(**filtered_args)
             
             # Log result details for debugging
             result_count = getattr(result, 'result_count', None)
@@ -1035,6 +1072,10 @@ class BaseStreamingAgent(StreamingAgent):
     
     def _format_tool_result_message(self, tool_name: str, result: Any) -> str:
         """Format a human-readable message for tool results."""
+        if hasattr(result, 'error') and getattr(result, 'error'):
+            return f"Failed: {getattr(result, 'error')}"
+        if hasattr(result, 'total') and isinstance(getattr(result, 'total'), int):
+            return f"Found **{getattr(result, 'total')} documents**"
         if hasattr(result, 'result_count'):
             return f"Found **{result.result_count} results**"
         if hasattr(result, 'found') and not result.found:

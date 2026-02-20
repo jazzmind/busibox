@@ -19,13 +19,20 @@ except Exception:
         pass
 
 _ensure_lock = threading.Lock()
-_last_check_at = 0.0
-_last_status = None
+_last_check_at = {"primary": 0.0, "fast": 0.0}
+_last_status = {"primary": None, "fast": None}
 _TTL_OK_SECONDS = 120.0
 _TTL_FAIL_SECONDS = 15.0
+_MLX_PRIMARY_PORT = int(os.environ.get("MLX_PORT", "8080"))
+_MLX_FAST_PORT = int(os.environ.get("MLX_FAST_PORT", "18081"))
 _CONFIG_PATH = os.environ.get("LITELLM_CONFIG_PATH", "/app/config.yaml")
 _mlx_models_lock = threading.Lock()
 _mlx_models_cache: Dict[str, object] = {"mtime": None, "models": set()}
+
+_FAST_ALIAS_ENV = os.environ.get("MLX_FAST_MODEL_ALIASES", "fast,classify,test")
+_FAST_MODEL_ALIASES = {
+    alias.strip() for alias in _FAST_ALIAS_ENV.split(",") if alias.strip()
+}
 
 
 def _load_mlx_chat_models_from_config() -> Set[str]:
@@ -81,38 +88,47 @@ def _load_mlx_chat_models_from_config() -> Set[str]:
         return set(models)
 
 
-def _should_ensure_mlx(data: dict, call_type: str) -> bool:
-    """Decide if this request is targeting an MLX text model."""
+def _get_mlx_target(data: dict, call_type: str) -> str | None:
+    """Decide if this request targets MLX text models, and which server target."""
     if os.environ.get("LLM_BACKEND", "").lower() != "mlx":
-        return False
+        return None
 
     # Restrict to text completion pathways.
     if call_type not in {"completion", "text_completion"}:
-        return False
+        return None
 
     requested_model = str(data.get("model", "")).strip()
     if not requested_model:
-        return False
+        return None
 
     api_base = str(data.get("api_base", "")).lower()
-    if "host.docker.internal" in api_base and ":8080" in api_base:
-        return True
+    if "host.docker.internal" in api_base and f":{_MLX_FAST_PORT}" in api_base:
+        return "fast"
+    if "host.docker.internal" in api_base and f":{_MLX_PRIMARY_PORT}" in api_base:
+        return "primary"
 
     mlx_chat_aliases = _load_mlx_chat_models_from_config()
     if requested_model in mlx_chat_aliases:
-        return True
+        if requested_model in _FAST_MODEL_ALIASES:
+            return "fast"
+        return "primary"
 
     requested_lower = requested_model.lower()
     if requested_lower.startswith("openai/mlx-community/"):
         # Exclude non-LLM endpoints served by different MLX stacks/ports.
         if "whisper" in requested_lower or "kokoro" in requested_lower:
-            return False
-        return True
+            return None
+        # If the alias explicitly maps to a fast class, keep it on fast server.
+        if requested_model in _FAST_MODEL_ALIASES:
+            return "fast"
+        return "primary"
 
-    return False
+    if requested_model in _FAST_MODEL_ALIASES:
+        return "fast"
+    return None
 
 
-def _mlx_healthcheck(mlx_port: str) -> bool:
+def _mlx_healthcheck(mlx_port: int) -> bool:
     # Import lazily so missing optional deps never break module import/startup.
     try:
         import httpx  # type: ignore
@@ -136,7 +152,7 @@ def _mlx_healthcheck(mlx_port: str) -> bool:
         return False
 
 
-def _check_and_start_mlx() -> None:
+def _check_and_start_mlx(target: str) -> None:
     global _last_check_at, _last_status
     # Import lazily so missing optional deps never break module import/startup.
     try:
@@ -148,17 +164,21 @@ def _check_and_start_mlx() -> None:
         return
 
     try:
-        mlx_port = os.environ.get("MLX_PORT", "8080")
+        mlx_port = int(
+            os.environ.get("MLX_FAST_PORT", "18081")
+            if target == "fast"
+            else os.environ.get("MLX_PORT", "8080")
+        )
 
         if _mlx_healthcheck(mlx_port):
-            _last_check_at = time.monotonic()
-            _last_status = "ok"
+            _last_check_at[target] = time.monotonic()
+            _last_status[target] = "ok"
             return
 
         deploy_api_url = os.environ.get("DEPLOY_API_URL", "").rstrip("/")
         if not deploy_api_url:
-            _last_check_at = time.monotonic()
-            _last_status = "no_deploy_api"
+            _last_check_at[target] = time.monotonic()
+            _last_status[target] = "no_deploy_api"
             return
 
         token = os.environ.get("LITELLM_API_KEY") or os.environ.get("LITELLM_MASTER_KEY", "")
@@ -170,6 +190,7 @@ def _check_and_start_mlx() -> None:
             response = httpx.post(
                 f"{deploy_api_url}/api/v1/services/mlx/ensure/quick",
                 headers=headers,
+                json={"target": target},
                 timeout=15.0,
             )
             status_code = response.status_code
@@ -195,17 +216,17 @@ def _check_and_start_mlx() -> None:
             except Exception:
                 json_payload = None
 
-        _last_check_at = time.monotonic()
+        _last_check_at[target] = time.monotonic()
         if status_code == 200:
             if isinstance(json_payload, dict):
-                _last_status = str(json_payload.get("status", "unknown"))
+                _last_status[target] = str(json_payload.get("status", "unknown"))
             else:
-                _last_status = "unknown"
+                _last_status[target] = "unknown"
         else:
-            _last_status = "failed"
+            _last_status[target] = "failed"
     except Exception:
-        _last_check_at = time.monotonic()
-        _last_status = "error"
+        _last_check_at[target] = time.monotonic()
+        _last_status[target] = "error"
     finally:
         _ensure_lock.release()
 
@@ -214,15 +235,18 @@ class MLXEnsureHook(CustomLogger):
     async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
         global _last_check_at, _last_status
 
-        if not _should_ensure_mlx(data=data, call_type=call_type):
+        target = _get_mlx_target(data=data, call_type=call_type)
+        if target is None:
             return data
 
         now = time.monotonic()
-        ttl_seconds = _TTL_OK_SECONDS if _last_status == "ok" else _TTL_FAIL_SECONDS
-        if now - _last_check_at < ttl_seconds:
+        status = _last_status.get(target)
+        last_check_at = _last_check_at.get(target, 0.0)
+        ttl_seconds = _TTL_OK_SECONDS if status == "ok" else _TTL_FAIL_SECONDS
+        if now - last_check_at < ttl_seconds:
             return data
 
-        threading.Thread(target=_check_and_start_mlx, daemon=True).start()
+        threading.Thread(target=_check_and_start_mlx, args=(target,), daemon=True).start()
         return data
 
 

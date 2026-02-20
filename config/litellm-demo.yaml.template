@@ -15,10 +15,28 @@ model_list:
   - model_name: fast
     litellm_params:
       model: openai/{{DEMO_MODEL_FAST}}
-      api_base: http://host.docker.internal:8080/v1
+      api_base: http://host.docker.internal:18081/v1
       api_key: demo
     model_info:
       description: "Fast local model for simple tasks"
+
+  # Classify model alias (uses fast model on dedicated fast server)
+  - model_name: classify
+    litellm_params:
+      model: openai/{{DEMO_MODEL_FAST}}
+      api_base: http://host.docker.internal:18081/v1
+      api_key: demo
+    model_info:
+      description: "Fast classifier model alias"
+
+  # Test model alias (uses fast model on dedicated fast server)
+  - model_name: test
+    litellm_params:
+      model: openai/{{DEMO_MODEL_FAST}}
+      api_base: http://host.docker.internal:18081/v1
+      api_key: demo
+    model_info:
+      description: "Fast test model alias"
 
   # Agent model - balanced for reasoning and tool use
   - model_name: agent

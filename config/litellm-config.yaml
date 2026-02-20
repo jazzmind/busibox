@@ -1,65 +1,65 @@
 # LiteLLM Configuration - Generated from model_registry.yml
 # Environment: development
 # Backend: mlx
-# Generated: 2026-02-15T13:33:30-05:00
+# Generated: 2026-02-19T23:07:46-05:00
 # DO NOT EDIT - regenerate with: scripts/llm/generate-litellm-config.sh
 
 model_list:
   - model_name: default
     litellm_params:
-      model: openai/mlx-community/Qwen3-0.6B-4bit
+      model: openai/mlx-community/Qwen3-4B-Instruct-2507-4bit
       api_base: http://host.docker.internal:8080/v1
       api_key: local
     model_info:
-      description: "Tiny test model with reasoning (0.6B params, has <think> mode)"
+      description: "Primary agent/chat/tool-calling model (4B params, 128K ctx, Hermes tools)"
 
   - model_name: test
     litellm_params:
       model: openai/mlx-community/Qwen3-0.6B-4bit
-      api_base: http://host.docker.internal:8080/v1
+      api_base: http://host.docker.internal:18081/v1
       api_key: local
     model_info:
       description: "Tiny test model with reasoning (0.6B params, has <think> mode)"
 
   - model_name: fast
     litellm_params:
-      model: openai/mlx-community/Qwen2.5-3B-Instruct-4bit
-      api_base: http://host.docker.internal:8080/v1
+      model: openai/mlx-community/Qwen3-0.6B-4bit
+      api_base: http://host.docker.internal:18081/v1
       api_key: local
     model_info:
-      description: "Fast model for quick operations (3B params)"
+      description: "Tiny test model with reasoning (0.6B params, has <think> mode)"
 
   - model_name: agent
     litellm_params:
-      model: openai/mlx-community/Qwen2.5-7B-Instruct-4bit
+      model: openai/mlx-community/Qwen3-4B-Instruct-2507-4bit
       api_base: http://host.docker.internal:8080/v1
       api_key: local
     model_info:
-      description: "Agent model for reasoning tasks (7B params)"
+      description: "Primary agent/chat/tool-calling model (4B params, 128K ctx, Hermes tools)"
 
   - model_name: chat
     litellm_params:
-      model: openai/mlx-community/Qwen2.5-3B-Instruct-4bit
+      model: openai/mlx-community/Qwen3-4B-Instruct-2507-4bit
       api_base: http://host.docker.internal:8080/v1
       api_key: local
     model_info:
-      description: "Fast model for quick operations (3B params)"
+      description: "Primary agent/chat/tool-calling model (4B params, 128K ctx, Hermes tools)"
 
   - model_name: frontier
     litellm_params:
-      model: openai/mlx-community/Qwen2.5-14B-Instruct-4bit
+      model: openai/mlx-community/Qwen3-8B-4bit
       api_base: http://host.docker.internal:8080/v1
       api_key: local
     model_info:
-      description: "Frontier model for complex analysis (14B params)"
+      description: "Frontier local model for complex reasoning (8B params, 128K ctx)"
 
   - model_name: tool_calling
     litellm_params:
-      model: openai/mlx-community/Qwen2.5-7B-Instruct-4bit
+      model: openai/mlx-community/Qwen3-4B-Instruct-2507-4bit
       api_base: http://host.docker.internal:8080/v1
       api_key: local
     model_info:
-      description: "Agent model for reasoning tasks (7B params)"
+      description: "Primary agent/chat/tool-calling model (4B params, 128K ctx, Hermes tools)"
 
   - model_name: image
     litellm_params:

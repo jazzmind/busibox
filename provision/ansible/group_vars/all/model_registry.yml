@@ -148,6 +148,41 @@ available_models:
     description: "Tiny test model with reasoning (0.6B params, has <think> mode)"
     tool_calling: true
     tier: "micro"
+
+  "qwen3-1.7b":
+    provider: "mlx"
+    model: "qwen3-1.7b"
+    model_name: "mlx-community/Qwen3-1.7B-4bit"
+    description: "Small Qwen3 for classification and simple tasks (1.7B params)"
+    tool_calling: true
+    tier: "micro"
+
+  "qwen3-4b":
+    provider: "mlx"
+    model: "qwen3-4b"
+    model_name: "mlx-community/Qwen3-4B-Instruct-2507-4bit"
+    description: "Primary agent/chat/tool-calling model (4B params, 128K ctx, Hermes tools)"
+    tool_calling: true
+    tool_call_parser: "hermes"
+    tier: "standard"
+
+  "qwen3-8b":
+    provider: "mlx"
+    model: "qwen3-8b"
+    model_name: "mlx-community/Qwen3-8B-4bit"
+    description: "Frontier local model for complex reasoning (8B params, 128K ctx)"
+    tool_calling: true
+    tool_call_parser: "hermes"
+    tier: "standard"
+
+  "qwen3-vl-4b":
+    provider: "mlx"
+    model: "qwen3-vl-4b"
+    model_name: "mlx-community/Qwen3-VL-4B-Instruct-4bit"
+    description: "Vision-language model for image understanding (4B params)"
+    tool_calling: false
+    multimodal: true
+    tier: "standard"
     
   "qwen2.5-0.5b":
     provider: "mlx"
@@ -260,21 +295,21 @@ model_purposes:
 # Uses smaller, locally-cached models for faster iteration and offline dev
 # Maps to models cached by `make warmup` - bge-small and qwen3-0.6b
 model_purposes_dev:
-  # Primary models (all use small MLX models for dev speed)
-  default: "qwen3-0.6b"   # General purpose (tiny, fast, cached by warmup)
-  frontier: "qwen2.5-14b"   # Most capable local model
-  frontier-fast: "qwen2.5-7b"   # Fast frontier (local)
-  
-  # Task-specific (use small/fast models for dev)
-  research: "qwen2.5-7b"   # Research and analysis
-  agent: "qwen2.5-7b"   # Agent model for agentic tasks
-  chat: "qwen2.5-3b"   # General chat
-  vision: "qwen2.5-3b"   # Vision-language model (basic support)
-  classify: "qwen2.5-3b"   # Document classification
-  parsing: "qwen2.5-3b"   # Document parsing
-  cleanup: "qwen2.5-3b"   # Text cleanup
-  fast: "qwen2.5-3b"   # Fast model for quick operations
-  tool_calling: "qwen2.5-7b"   # Tool calling
+  # Primary models (port 8080 - Qwen3-4B)
+  default: "qwen3-4b"   # ~70% MMLU, 128K ctx, Hermes tools
+  frontier: "qwen3-8b"   # 8B: swap into port 8080 on demand
+  frontier-fast: "qwen3-4b"   # Same as default
+
+  # Task-specific
+  research: "qwen3-4b"   # 4B handles research with 128K context
+  agent: "qwen3-4b"   # Primary agent model with tool calling
+  chat: "qwen3-4b"   # Chat quality is strong at 4B
+  vision: "qwen3-vl-4b"   # Qwen3-VL (swap into port 8080 on demand)
+  classify: "qwen3-0.6b"   # Port 18081 - always loaded, instant
+  parsing: "qwen3-4b"   # 4B for document structure extraction
+  cleanup: "qwen3-1.7b"   # 1.7B (swap into port 18081 on demand)
+  fast: "qwen3-0.6b"   # Port 18081 - always loaded, instant
+  tool_calling: "qwen3-4b"   # 4B with Hermes-style tool calling
   test: "qwen3-0.6b"   # Tiny model for validation tests (cached by warmup)
 
   # Video generation (requires OpenAI API key even in dev)

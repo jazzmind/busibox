@@ -162,9 +162,11 @@ print(model.get('mode', ''))
 get_api_base_for_purpose() {
     local backend="$1"
     local purpose="$2"
+    local mlx_fast_port="${MLX_FAST_PORT:-18081}"
 
     if [[ "$backend" == "mlx" ]]; then
         case "$purpose" in
+            fast|test|classify) echo "http://host.docker.internal:${mlx_fast_port}/v1" ;;
             transcribe) echo "http://host.docker.internal:8081/v1" ;;
             voice) echo "http://host.docker.internal:8082/v1" ;;
             image) echo "http://host.docker.internal:8083/v1" ;;
@@ -283,6 +285,7 @@ litellm_settings:
   drop_params: true
   request_timeout: 120
   set_verbose: true
+  callbacks: litellm_hooks.mlx_ensure_hook.mlx_ensure_hook_instance
 EOF
     
     success "Generated ${OUTPUT_FILE}"

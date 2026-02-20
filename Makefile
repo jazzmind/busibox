@@ -860,17 +860,23 @@ vault-setup:
 # Check MLX server status
 mlx-status:
 	@echo "=== MLX Server Status ==="
-	@if curl -sf http://localhost:8080/health >/dev/null 2>&1; then \
-		echo "MLX Server: Running (port 8080)"; \
+	@if curl -sf http://localhost:8080/v1/models >/dev/null 2>&1; then \
+		echo "MLX Primary: Running (port 8080)"; \
 		curl -sf http://localhost:8080/v1/models 2>/dev/null | head -5 || true; \
 	else \
-		echo "MLX Server: Not running"; \
+		echo "MLX Primary: Not running"; \
+	fi
+	@if curl -sf http://localhost:$${MLX_FAST_PORT:-18081}/v1/models >/dev/null 2>&1; then \
+		echo "MLX Fast: Running (port $${MLX_FAST_PORT:-18081})"; \
+		curl -sf http://localhost:$${MLX_FAST_PORT:-18081}/v1/models 2>/dev/null | head -5 || true; \
+	else \
+		echo "MLX Fast: Not running"; \
 	fi
 	@echo ""
 	@echo "=== Host Agent Status ==="
 	@if curl -sf http://localhost:8089/health >/dev/null 2>&1; then \
 		echo "Host Agent: Running (port 8089)"; \
-		curl -sf http://localhost:8089/mlx/status 2>/dev/null || true; \
+		curl -sf "http://localhost:8089/mlx/status?target=all" 2>/dev/null || true; \
 	else \
 		echo "Host Agent: Not running"; \
 	fi
@@ -891,16 +897,20 @@ mlx-start:
 			curl -sf -X POST http://localhost:8089/mlx/start \
 				-H "Content-Type: application/json" \
 				-H "Authorization: Bearer $$TOKEN" \
-				-d '{"model_type": "agent"}' && echo "MLX server started" || echo "Failed - check host-agent logs"; \
+				-d '{"model_type": "dual"}' && echo "MLX server started" || echo "Failed - check host-agent logs"; \
 		else \
 			echo "Warning: HOST_AGENT_TOKEN not found in $(ENV_FILE)"; \
 			curl -sf -X POST http://localhost:8089/mlx/start \
 				-H "Content-Type: application/json" \
-				-d '{"model_type": "agent"}' || echo "Failed - authentication may be required"; \
+				-d '{"model_type": "dual"}' || echo "Failed - authentication may be required"; \
+		fi; \
+		if ! curl -sf http://localhost:8080/v1/models >/dev/null 2>&1 || ! curl -sf http://localhost:$${MLX_FAST_PORT:-18081}/v1/models >/dev/null 2>&1; then \
+			echo "Host-agent start did not bring up both MLX servers. Falling back to direct dual startup..."; \
+			bash scripts/llm/start-mlx-server.sh --dual; \
 		fi; \
 	else \
 		echo "Host-agent unavailable. Starting MLX directly..."; \
-		bash scripts/llm/start-mlx-server.sh; \
+		bash scripts/llm/start-mlx-server.sh --dual; \
 	fi
 
 # Stop MLX server

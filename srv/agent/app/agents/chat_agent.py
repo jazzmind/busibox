@@ -119,6 +119,9 @@ class ChatAgent(BaseStreamingAgent):
                 "web_search",
                 "get_weather",
                 "document_search",
+                "list_data_documents",
+                "get_data_document",
+                "query_data",
                 "create_task",
                 "send_notification",
                 "generate_image",
@@ -223,6 +226,12 @@ class ChatAgent(BaseStreamingAgent):
             "transcribe_audio": "transcribe_audio",
             "tts": "text_to_speech",
             "text_to_speech": "text_to_speech",
+            "list_documents": "list_data_documents",
+            "list_data_documents": "list_data_documents",
+            "documents_list": "list_data_documents",
+            "get_document": "get_data_document",
+            "get_data_document": "get_data_document",
+            "query_data": "query_data",
         }
         return aliases
 
@@ -436,12 +445,33 @@ class ChatAgent(BaseStreamingAgent):
         fallback_steps: List[PlanStep] = []
 
         # Deterministic fallback mapping by action type.
+        ql = query.lower()
+        list_intent = any(
+            phrase in ql for phrase in (
+                "what documents do i have",
+                "list my documents",
+                "show my documents",
+                "what files do i have",
+                "list files",
+            )
+        )
+
+        if list_intent and "list_data_documents" in enabled_tools:
+            fallback_steps.append(
+                PlanStep(
+                    id="step_1",
+                    tool="list_data_documents",
+                    objective="List available user documents",
+                    args={"limit": 50},
+                )
+            )
+
         if dispatch.action_type in {"research", "search"} and "web_search" in enabled_tools:
             fallback_steps.append(
                 PlanStep(id="step_1", tool="web_search", objective="Gather external context", args={"query": query})
             )
         if "document_search" in enabled_tools and (
-            "document" in query.lower() or "file" in query.lower() or "pdf" in query.lower()
+            ("document" in ql or "file" in ql or "pdf" in ql) and not list_intent
         ):
             fallback_steps.append(
                 PlanStep(id="step_2", tool="document_search", objective="Search attached/library documents", args={"query": query})
@@ -723,8 +753,6 @@ class ChatAgent(BaseStreamingAgent):
             )
             if execution_plan.steps:
                 await self._execute_plan(query, stream, cancel, agent_context, execution_plan)
-                # Keep LLM-driven synthesis for final answer after tools complete.
-                await self._execute_llm_driven(query, stream, cancel, agent_context)
             elif self.config.tool_strategy == ToolStrategy.LLM_DRIVEN:
                 await self._execute_llm_driven(query, stream, cancel, agent_context)
             else:

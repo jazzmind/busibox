@@ -26,7 +26,7 @@ import signal
 import sys
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from contextlib import asynccontextmanager
 
@@ -98,7 +98,7 @@ app = FastAPI(
 
 # Models
 class StartMLXRequest(BaseModel):
-    model_type: str = "agent"  # fast, agent, frontier, or specific model name
+    model_type: str = "agent"  # fast, agent/default (dual), frontier, dual/all, or specific model name
 
 
 class DownloadModelRequest(BaseModel):
@@ -138,23 +138,29 @@ async def verify_token(authorization: str = Header(None)):
 # MLX helper functions
 MLX_PID_FILE = Path("/tmp/mlx-lm-server.pid")
 MLX_LOG_FILE = Path("/tmp/mlx-lm-server.log")
+MLX_FAST_PID_FILE = Path("/tmp/mlx-lm-fast-server.pid")
+MLX_FAST_LOG_FILE = Path("/tmp/mlx-lm-fast-server.log")
 MLX_PORT = int(os.getenv("MLX_PORT", "8080"))
+MLX_FAST_PORT = int(os.getenv("MLX_FAST_PORT", "18081"))
 
 
-def get_mlx_status() -> MLXStatusResponse:
-    """Check if MLX server is running."""
-    if not MLX_PID_FILE.exists():
+def get_mlx_status_for_target(target: str = "primary") -> MLXStatusResponse:
+    """Check if target MLX server is running."""
+    pid_file = MLX_FAST_PID_FILE if target == "fast" else MLX_PID_FILE
+    port = MLX_FAST_PORT if target == "fast" else MLX_PORT
+
+    if not pid_file.exists():
         return MLXStatusResponse(running=False)
     
     try:
-        pid = int(MLX_PID_FILE.read_text().strip())
+        pid = int(pid_file.read_text().strip())
         # Check if process is running
         os.kill(pid, 0)  # Raises OSError if not running
         
         # Check if responding to HTTP
         import httpx
         try:
-            response = httpx.get(f"http://localhost:{MLX_PORT}/v1/models", timeout=2.0)
+            response = httpx.get(f"http://localhost:{port}/v1/models", timeout=2.0)
             healthy = response.status_code == 200
             # Try to extract model name from response
             model = None
@@ -168,23 +174,46 @@ def get_mlx_status() -> MLXStatusResponse:
             return MLXStatusResponse(
                 running=True,
                 pid=pid,
-                port=MLX_PORT,
+                port=port,
                 model=model,
                 healthy=healthy,
             )
         except:
-            return MLXStatusResponse(running=True, pid=pid, port=MLX_PORT, healthy=False)
+            return MLXStatusResponse(running=True, pid=pid, port=port, healthy=False)
     except (OSError, ValueError):
         # Process not running or invalid PID
-        MLX_PID_FILE.unlink(missing_ok=True)
+        pid_file.unlink(missing_ok=True)
         return MLXStatusResponse(running=False)
 
 
-def stop_mlx_server():
-    """Stop the MLX server."""
-    status = get_mlx_status()
+def get_mlx_status() -> MLXStatusResponse:
+    """Backward-compatible primary MLX status helper."""
+    return get_mlx_status_for_target("primary")
+
+
+def get_all_mlx_status() -> Dict[str, Any]:
+    """Get status for both primary and fast MLX servers."""
+    primary = get_mlx_status_for_target("primary")
+    fast = get_mlx_status_for_target("fast")
+    return {
+        # Backward-compatible top-level fields (primary)
+        "running": primary.running,
+        "pid": primary.pid,
+        "port": primary.port,
+        "model": primary.model,
+        "healthy": primary.healthy,
+        # Expanded dual-server status
+        "primary": primary.model_dump(),
+        "fast": fast.model_dump(),
+        "all_running": primary.running and fast.running,
+        "all_healthy": primary.healthy and fast.healthy,
+    }
+
+
+def _stop_mlx_target(target: str) -> Dict[str, Any]:
+    status = get_mlx_status_for_target(target)
     if not status.running:
-        return {"success": True, "message": "Server not running"}
+        return {"success": True, "message": f"{target} server not running"}
     
     try:
         os.kill(status.pid, signal.SIGTERM)
@@ -200,10 +229,29 @@ def stop_mlx_server():
             except OSError:
                 pass
         
-        MLX_PID_FILE.unlink(missing_ok=True)
-        return {"success": True, "message": "Server stopped"}
+        if target == "fast":
+            MLX_FAST_PID_FILE.unlink(missing_ok=True)
+        else:
+            MLX_PID_FILE.unlink(missing_ok=True)
+        return {"success": True, "message": f"{target} server stopped"}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+def stop_mlx_server(target: str = "all") -> Dict[str, Any]:
+    """Stop primary, fast, or both MLX servers."""
+    if target == "primary":
+        return _stop_mlx_target("primary")
+    if target == "fast":
+        return _stop_mlx_target("fast")
+
+    primary_res = _stop_mlx_target("primary")
+    fast_res = _stop_mlx_target("fast")
+    return {
+        "success": bool(primary_res.get("success")) and bool(fast_res.get("success")),
+        "primary": primary_res,
+        "fast": fast_res,
+    }
 
 
 # Routes
@@ -214,9 +262,13 @@ async def health():
 
 
 @app.get("/mlx/status")
-async def mlx_status(_: bool = Depends(verify_token)):
-    """Get MLX server status."""
-    return get_mlx_status()
+async def mlx_status(target: str = "primary", _: bool = Depends(verify_token)):
+    """Get MLX server status (primary, fast, or all)."""
+    if target == "all":
+        return get_all_mlx_status()
+    if target == "fast":
+        return get_mlx_status_for_target("fast")
+    return get_mlx_status_for_target("primary")
 
 
 @app.post("/mlx/start")
@@ -229,14 +281,20 @@ async def mlx_start(
     
     Returns a streaming response with startup logs.
     """
-    # Check if already running
-    status = get_mlx_status()
-    if status.running and status.healthy:
-        return {"success": True, "message": "MLX server already running", "status": status}
-    
-    # Stop if running but unhealthy
-    if status.running:
-        stop_mlx_server()
+    requested_type = (request.model_type or "agent").strip().lower()
+    dual_mode = requested_type in {"agent", "default", "dual", "all"}
+    status = get_all_mlx_status() if dual_mode else get_mlx_status_for_target("primary")
+
+    if dual_mode:
+        if status.get("all_healthy"):
+            return {"success": True, "message": "MLX primary+fast servers already running", "status": status}
+        if status.get("all_running") and not status.get("all_healthy"):
+            stop_mlx_server("all")
+    else:
+        if status.running and status.healthy:
+            return {"success": True, "message": "MLX server already running", "status": status}
+        if status.running:
+            stop_mlx_server("primary")
     
     # Build command
     mlx_script = BUSIBOX_ROOT / "scripts" / "llm" / "start-mlx-server.sh"
@@ -247,11 +305,13 @@ async def mlx_start(
         """Stream startup output."""
         import json
         
-        yield f"data: {json.dumps({'type': 'info', 'message': f'Starting MLX server with {request.model_type} model...'})}\n\n"
+        start_arg = "--dual" if dual_mode else request.model_type
+        mode_label = "primary+fast dual mode" if dual_mode else f"{request.model_type} mode"
+        yield f"data: {json.dumps({'type': 'info', 'message': f'Starting MLX server with {mode_label}...'})}\n\n"
         
         # Run the start script
         process = await asyncio.create_subprocess_exec(
-            "bash", str(mlx_script), request.model_type,
+            "bash", str(mlx_script), start_arg,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(BUSIBOX_ROOT),
@@ -299,10 +359,16 @@ async def mlx_start(
         if returncode == 0:
             # Wait for server to be healthy
             for i in range(30):
-                status = get_mlx_status()
-                if status.healthy:
-                    yield f"data: {json.dumps({'type': 'success', 'message': 'MLX server started and healthy', 'done': True})}\n\n"
-                    return
+                if dual_mode:
+                    dual_status = get_all_mlx_status()
+                    if dual_status.get("all_healthy"):
+                        yield f"data: {json.dumps({'type': 'success', 'message': 'MLX primary+fast servers started and healthy', 'done': True})}\n\n"
+                        return
+                else:
+                    single_status = get_mlx_status_for_target("primary")
+                    if single_status.healthy:
+                        yield f"data: {json.dumps({'type': 'success', 'message': 'MLX server started and healthy', 'done': True})}\n\n"
+                        return
                 await asyncio.sleep(1)
                 if i % 5 == 0:
                     yield f"data: {json.dumps({'type': 'info', 'message': 'Waiting for server to be healthy...'})}\n\n"
@@ -322,9 +388,9 @@ async def mlx_start(
 
 
 @app.post("/mlx/stop")
-async def mlx_stop(_: bool = Depends(verify_token)):
-    """Stop the MLX server."""
-    return stop_mlx_server()
+async def mlx_stop(target: str = "all", _: bool = Depends(verify_token)):
+    """Stop primary, fast, or all MLX servers."""
+    return stop_mlx_server(target)
 
 
 @app.get("/mlx/models")
@@ -481,10 +547,21 @@ def _inference_probe() -> bool:
     """
     import httpx as _httpx
     try:
+        models_resp = _httpx.get(
+            f"http://localhost:{MLX_PORT}/v1/models",
+            timeout=MLX_INFERENCE_PROBE_TIMEOUT,
+        )
+        models_resp.raise_for_status()
+        model_data = models_resp.json().get("data", [])
+        model_id = model_data[0].get("id") if model_data else None
+        if not model_id:
+            logger.warning("Inference probe could not determine loaded model id")
+            return False
+
         resp = _httpx.post(
             f"http://localhost:{MLX_PORT}/v1/chat/completions",
             json={
-                "model": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+                "model": model_id,
                 "messages": [{"role": "user", "content": "hi"}],
                 "max_tokens": 1,
             },
@@ -503,7 +580,7 @@ def _inference_probe() -> bool:
 
 
 async def _mlx_healthcheck_loop():
-    """Periodically check MLX and restart it if it's down or inference is hung."""
+    """Periodically check MLX servers and restart if down or inference is hung."""
     await asyncio.sleep(10)
     logger.info(
         f"MLX health-check loop started "
@@ -515,9 +592,11 @@ async def _mlx_healthcheck_loop():
     was_running = False
     while True:
         try:
-            status = get_mlx_status()
+            status = get_all_mlx_status()
+            primary_status = MLXStatusResponse.model_validate(status["primary"])
+            fast_status = MLXStatusResponse.model_validate(status["fast"])
 
-            if status.running and status.healthy:
+            if primary_status.running and primary_status.healthy and fast_status.running and fast_status.healthy:
                 was_running = True
                 cycle += 1
                 if cycle >= MLX_INFERENCE_PROBE_EVERY:
@@ -541,31 +620,39 @@ async def _mlx_healthcheck_loop():
                         )
                         if inference_failures >= 2:
                             logger.error(
-                                "MLX inference confirmed hung — restarting"
+                                "MLX inference confirmed hung — restarting dual servers"
                             )
-                            stop_mlx_server()
+                            stop_mlx_server("all")
                             await _trigger_mlx_start()
                             inference_failures = 0
                             cycle = 0
 
-            elif status.running and not status.healthy:
+            elif primary_status.running and not primary_status.healthy:
                 was_running = True
                 cycle = 0
                 logger.info(
-                    "MLX process running but /v1/models not responding — "
+                    "MLX primary process running but /v1/models not responding — "
                     "will retry next cycle"
                 )
+            elif primary_status.running and primary_status.healthy and not fast_status.running:
+                was_running = True
+                cycle = 0
+                logger.warning("MLX fast server is down while primary is healthy — triggering dual restart")
+                stop_mlx_server("all")
+                await _trigger_mlx_start()
+                inference_failures = 0
 
             else:
                 cycle = 0
                 should_restart = (
                     MLX_PID_FILE.exists()
+                    or MLX_FAST_PID_FILE.exists()
                     or was_running
                 )
                 if should_restart:
                     logger.warning(
-                        "MLX not running (was previously started) — "
-                        "triggering restart"
+                        "MLX primary/fast servers not running (was previously started) — "
+                        "triggering dual restart"
                     )
                     was_running = False
                     await _trigger_mlx_start()
@@ -576,14 +663,14 @@ async def _mlx_healthcheck_loop():
 
 
 async def _trigger_mlx_start():
-    """Start MLX via the start script (async subprocess)."""
+    """Start MLX primary+fast servers via the dual start script mode."""
     mlx_script = BUSIBOX_ROOT / "scripts" / "llm" / "start-mlx-server.sh"
     if not mlx_script.exists():
         logger.error(f"MLX start script not found: {mlx_script}")
         return
     try:
         process = await asyncio.create_subprocess_exec(
-            "bash", str(mlx_script), "agent",
+            "bash", str(mlx_script), "--dual",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(BUSIBOX_ROOT),

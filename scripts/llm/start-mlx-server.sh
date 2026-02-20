@@ -40,46 +40,62 @@ get_mlx_pip() {
 }
 
 # Server configuration
-PORT="${MLX_PORT:-8080}"
-PID_FILE="/tmp/mlx-lm-server.pid"
-LOG_FILE="/tmp/mlx-lm-server.log"
+PRIMARY_PORT="${MLX_PORT:-8080}"
+FAST_PORT="${MLX_FAST_PORT:-18081}"
+PRIMARY_PID_FILE="/tmp/mlx-lm-server.pid"
+PRIMARY_LOG_FILE="/tmp/mlx-lm-server.log"
+FAST_PID_FILE="/tmp/mlx-lm-fast-server.pid"
+FAST_LOG_FILE="/tmp/mlx-lm-fast-server.log"
 
 # Get models
 eval "$(bash "${SCRIPT_DIR}/get-models.sh" all)"
 
-stop_server() {
-    if [[ -f "$PID_FILE" ]]; then
+stop_server_instance() {
+    local pid_file="$1"
+    local port="$2"
+    local label="$3"
+
+    if [[ -f "$pid_file" ]]; then
         local pid
-        pid=$(cat "$PID_FILE")
+        pid=$(cat "$pid_file")
         if kill -0 "$pid" 2>/dev/null; then
-            info "Stopping MLX-LM server (PID: ${pid})..."
+            info "Stopping MLX-LM ${label} server (PID: ${pid})..."
             # Kill the process group (covers caffeinate + child python)
             kill -- -"$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
             sleep 2
             if kill -0 "$pid" 2>/dev/null; then
                 kill -9 -- -"$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null || true
             fi
-            success "Server stopped"
+            success "MLX-LM ${label} server stopped"
         fi
-        rm -f "$PID_FILE"
-    else
-        info "No server running"
+        rm -f "$pid_file"
     fi
-    # Clean up any orphaned mlx_lm.server processes
-    pkill -f "mlx_lm.server.*--port ${PORT}" 2>/dev/null || true
+
+    # Clean up any orphaned mlx_lm.server processes on this port
+    pkill -f "mlx_lm.server.*--port ${port}" 2>/dev/null || true
 }
 
-check_status() {
-    if [[ -f "$PID_FILE" ]]; then
+stop_server() {
+    stop_server_instance "$PRIMARY_PID_FILE" "$PRIMARY_PORT" "primary"
+    stop_server_instance "$FAST_PID_FILE" "$FAST_PORT" "fast"
+}
+
+check_status_instance() {
+    local pid_file="$1"
+    local port="$2"
+    local log_file="$3"
+    local label="$4"
+
+    if [[ -f "$pid_file" ]]; then
         local pid
-        pid=$(cat "$PID_FILE")
+        pid=$(cat "$pid_file")
         if kill -0 "$pid" 2>/dev/null; then
-            success "MLX-LM server running (PID: ${pid})"
-            echo "  Port: ${PORT}"
-            echo "  Log: ${LOG_FILE}"
+            success "MLX-LM ${label} server running (PID: ${pid})"
+            echo "  Port: ${port}"
+            echo "  Log: ${log_file}"
             
             # Check if responding
-            if curl -sf "http://localhost:${PORT}/v1/models" &>/dev/null; then
+            if curl -sf "http://localhost:${port}/v1/models" &>/dev/null; then
                 echo "  Status: Healthy"
             else
                 warn "  Status: Not responding"
@@ -87,36 +103,47 @@ check_status() {
             return 0
         fi
     fi
-    
-    info "No MLX-LM server running"
+
+    warn "MLX-LM ${label} server is not running"
     return 1
 }
 
-start_server() {
-    local role="${1:-agent}"
-    local model
-    
-    case "$role" in
-        fast) model="$LLM_MODEL_FAST" ;;
-        agent) model="$LLM_MODEL_AGENT" ;;
-        frontier) model="$LLM_MODEL_FRONTIER" ;;
-        test) model="${LLM_MODEL_TEST:-$LLM_MODEL_AGENT}" ;;
-        default) model="${LLM_MODEL_DEFAULT:-$LLM_MODEL_AGENT}" ;;
-        *) model="$LLM_MODEL_AGENT" ;;
-    esac
-    
+check_status() {
+    local status=0
+    check_status_instance "$PRIMARY_PID_FILE" "$PRIMARY_PORT" "$PRIMARY_LOG_FILE" "primary" || status=1
+    check_status_instance "$FAST_PID_FILE" "$FAST_PORT" "$FAST_LOG_FILE" "fast" || true
+    return "$status"
+}
+
+start_server_instance() {
+    local role="$1"
+    local model="$2"
+    local port="$3"
+    local pid_file="$4"
+    local log_file="$5"
+    local label="$6"
+
     # Check if already running
-    if [[ -f "$PID_FILE" ]]; then
+    if [[ -f "$pid_file" ]]; then
         local pid
-        pid=$(cat "$PID_FILE")
+        pid=$(cat "$pid_file")
         if kill -0 "$pid" 2>/dev/null; then
-            warn "MLX-LM server already running (PID: ${pid})"
-            info "Use --stop to stop it first"
-            return 1
+            if curl -sf "http://localhost:${port}/v1/models" &>/dev/null; then
+                warn "MLX-LM ${label} server already running (PID: ${pid})"
+                return 1
+            fi
+
+            # Stale/misaligned process (e.g., running on prior port): recycle it.
+            warn "MLX-LM ${label} PID exists but port ${port} is unhealthy; restarting"
+            kill -- -"$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+            sleep 2
+            if kill -0 "$pid" 2>/dev/null; then
+                kill -9 -- -"$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null || true
+            fi
         fi
-        rm -f "$PID_FILE"
+        rm -f "$pid_file"
     fi
-    
+
     # Setup venv and install mlx-lm if needed
     setup_mlx_venv
     local mlx_python
@@ -128,22 +155,22 @@ start_server() {
         info "Installing mlx-lm into virtual environment..."
         "$mlx_pip" install -q mlx-lm huggingface_hub
     fi
-    
+
     # Display banner
     echo ""
     echo -e "${CYAN}╔══════════════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║${NC}              ${BOLD}MLX-LM Server for Apple Silicon${NC}                      ${CYAN}║${NC}"
+    echo -e "${CYAN}║${NC}           ${BOLD}MLX-LM ${label} Server for Apple Silicon${NC}                   ${CYAN}║${NC}"
     echo -e "${CYAN}╠══════════════════════════════════════════════════════════════════════╣${NC}"
     printf "${CYAN}║${NC}  System: %-60s${CYAN}║${NC}\n" "${LLM_TIER} tier"
     printf "${CYAN}║${NC}  Model:  %-60s${CYAN}║${NC}\n" "${model}"
-    printf "${CYAN}║${NC}  Port:   %-60s${CYAN}║${NC}\n" "${PORT}"
+    printf "${CYAN}║${NC}  Port:   %-60s${CYAN}║${NC}\n" "${port}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════════════════╝${NC}"
     echo ""
     
-    info "Starting MLX-LM server..."
+    info "Starting MLX-LM ${label} server..."
     echo "  Model: ${model}"
-    echo "  Port: ${PORT}"
-    echo "  Log: ${LOG_FILE}"
+    echo "  Port: ${port}"
+    echo "  Log: ${log_file}"
     echo ""
     
     # Start server in background using venv python.
@@ -152,13 +179,13 @@ start_server() {
     nohup caffeinate -di "$mlx_python" -m mlx_lm.server \
         --model "$model" \
         --host 0.0.0.0 \
-        --port "$PORT" \
+        --port "$port" \
         --trust-remote-code \
-        > "$LOG_FILE" 2>&1 &
+        > "$log_file" 2>&1 &
     
-    echo $! > "$PID_FILE"
+    echo $! > "$pid_file"
     
-    info "Server started with PID: $(cat $PID_FILE)"
+    info "Server started with PID: $(cat "$pid_file")"
     echo ""
     
     # Wait for server to be ready
@@ -167,7 +194,7 @@ start_server() {
     local attempt=0
     
     while [[ $attempt -lt $max_attempts ]]; do
-        if curl -sf "http://localhost:${PORT}/v1/models" &>/dev/null; then
+        if curl -sf "http://localhost:${port}/v1/models" &>/dev/null; then
             break
         fi
         sleep 2
@@ -179,12 +206,57 @@ start_server() {
     echo ""
     
     if [[ $attempt -ge $max_attempts ]]; then
-        error "Server failed to start within timeout"
-        echo "Check log: ${LOG_FILE}"
+        error "MLX-LM ${label} server failed to start within timeout"
+        echo "Check log: ${log_file}"
         return 1
     fi
     
-    success "MLX-LM server ready at http://localhost:${PORT}/v1"
+    success "MLX-LM ${label} server ready at http://localhost:${port}/v1"
+}
+
+start_server() {
+    local role="${1:-agent}"
+    local model
+
+    case "$role" in
+        fast) model="$LLM_MODEL_FAST" ;;
+        agent) model="$LLM_MODEL_AGENT" ;;
+        frontier) model="$LLM_MODEL_FRONTIER" ;;
+        test) model="${LLM_MODEL_TEST:-$LLM_MODEL_AGENT}" ;;
+        default) model="${LLM_MODEL_DEFAULT:-$LLM_MODEL_AGENT}" ;;
+        *) model="$LLM_MODEL_AGENT" ;;
+    esac
+
+    start_server_instance "$role" "$model" "$PRIMARY_PORT" "$PRIMARY_PID_FILE" "$PRIMARY_LOG_FILE" "primary"
+}
+
+start_dual_servers() {
+    local primary_model="${LLM_MODEL_AGENT}"
+    local fast_model="${LLM_MODEL_FAST:-$LLM_MODEL_TEST}"
+
+    if [[ -z "$fast_model" ]]; then
+        fast_model="$LLM_MODEL_AGENT"
+    fi
+
+    # Start both servers independently so one already-running server
+    # does not block starting the other.
+    local failed=0
+    start_server_instance "agent" "$primary_model" "$PRIMARY_PORT" "$PRIMARY_PID_FILE" "$PRIMARY_LOG_FILE" "primary" || failed=1
+    start_server_instance "fast" "$fast_model" "$FAST_PORT" "$FAST_PID_FILE" "$FAST_LOG_FILE" "fast" || failed=1
+
+    # Final health gate: if both are healthy, treat as success.
+    if curl -sf "http://localhost:${PRIMARY_PORT}/v1/models" >/dev/null 2>&1 && \
+       curl -sf "http://localhost:${FAST_PORT}/v1/models" >/dev/null 2>&1; then
+        success "Both MLX-LM primary and fast servers are healthy"
+        return 0
+    fi
+
+    if [[ $failed -ne 0 ]]; then
+        error "Dual MLX startup incomplete: one or more servers failed to start"
+    else
+        warn "Dual MLX startup finished but one or more health checks failed"
+    fi
+    return 1
 }
 
 # Main
@@ -204,6 +276,9 @@ main() {
             ;;
         --status)
             check_status
+            ;;
+        --dual)
+            start_dual_servers
             ;;
         fast|agent|frontier|test|default)
             start_server "$action"

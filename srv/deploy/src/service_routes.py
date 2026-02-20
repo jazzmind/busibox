@@ -133,9 +133,14 @@ def generate_litellm_config_from_registry(
         else:
             api_base = None  # Cloud models don't need api_base
 
+    mlx_fast_port = os.getenv("MLX_FAST_PORT", "18081")
+    mlx_fast_api_base = f"http://host.docker.internal:{mlx_fast_port}/v1"
+
     def purpose_api_base(purpose: str) -> str | None:
         """Get per-purpose API base for backends that use multiple local servers."""
         if llm_backend == 'mlx':
+            if purpose in {'fast', 'test', 'classify'}:
+                return mlx_fast_api_base
             if purpose == 'transcribe':
                 return 'http://host.docker.internal:8081/v1'
             if purpose == 'voice':
@@ -1778,6 +1783,7 @@ litellm_settings:
 LITELLM_URL = os.getenv("LITELLM_URL", "http://litellm:4000")
 AGENT_API_URL = os.getenv("AGENT_API_URL", "http://agent-api:8000")
 MLX_SERVER_URL = os.getenv("MLX_SERVER_URL", "http://host.docker.internal:8080")
+MLX_FAST_SERVER_URL = os.getenv("MLX_FAST_SERVER_URL", "http://host.docker.internal:18081")
 VLLM_URL = os.getenv("VLLM_URL", "http://vllm:8000")  # Configured by Ansible on Proxmox
 LLM_BACKEND = os.getenv("LLM_BACKEND", "")  # mlx, vllm, or cloud
 DEPLOYMENT_BACKEND = os.getenv("DEPLOYMENT_BACKEND", "docker")  # docker or proxmox
@@ -1806,6 +1812,16 @@ async def ensure_mlx_quick(
         }
     """
     llm_backend = LLM_BACKEND or 'unknown'
+    target = "primary"
+    try:
+        payload = await request.json()
+        if isinstance(payload, dict):
+            requested_target = str(payload.get("target", "")).strip().lower()
+            if requested_target in {"primary", "fast"}:
+                target = requested_target
+    except Exception:
+        pass
+    target_url = MLX_FAST_SERVER_URL if target == "fast" else MLX_SERVER_URL
     
     # Skip if not MLX backend
     if llm_backend != 'mlx':
@@ -1823,13 +1839,13 @@ async def ensure_mlx_quick(
     async with httpx.AsyncClient(timeout=15.0) as client:
         # Step 1: Check if MLX is already running
         try:
-            response = await client.get(f'{MLX_SERVER_URL}/v1/models', timeout=3.0)
+            response = await client.get(f'{target_url}/v1/models', timeout=3.0)
             if response.status_code == 200:
                 models_data = response.json()
                 model_count = len(models_data.get('data', []))
                 return {
                     "status": "running",
-                    "message": f"MLX is running ({model_count} model(s))",
+                    "message": f"MLX {target} server is running ({model_count} model(s))",
                     "backend": "mlx"
                 }
         except Exception:
@@ -1838,40 +1854,41 @@ async def ensure_mlx_quick(
         # Step 2: Check host-agent and start MLX if needed
         try:
             status_response = await client.get(
-                f'{HOST_AGENT_URL}/mlx/status',
+                f'{HOST_AGENT_URL}/mlx/status?target=all',
                 headers=host_agent_headers,
                 timeout=5.0
             )
             
             if status_response.status_code == 200:
                 mlx_status = status_response.json()
-                if mlx_status.get('running'):
-                    if mlx_status.get('healthy', False):
+                target_status = mlx_status.get(target, {})
+                if target_status.get('running'):
+                    if target_status.get('healthy', False):
                         return {
                             "status": "running",
-                            "message": f"MLX is running (model: {mlx_status.get('model', 'unknown')})",
+                            "message": f"MLX {target} server is running (model: {target_status.get('model', 'unknown')})",
                             "backend": "mlx"
                         }
                     else:
                         # Process running but not yet healthy — still loading
                         return {
                             "status": "starting",
-                            "message": "MLX process running, waiting for model to load",
+                            "message": f"MLX {target} process running, waiting for model to load",
                             "backend": "mlx"
                         }
                 
-                # MLX not running — trigger start (fire-and-forget, don't wait)
-                logger.info("MLX not running, triggering start via host-agent")
+                # One or both MLX servers not running — trigger dual start
+                logger.info(f"MLX {target} not running, triggering dual start via host-agent")
                 try:
                     await client.post(
                         f'{HOST_AGENT_URL}/mlx/start',
                         headers=host_agent_headers,
-                        json={'model_type': 'agent'},
+                        json={'model_type': 'dual'},
                         timeout=10.0
                     )
                     return {
                         "status": "starting",
-                        "message": "MLX start triggered, server is loading",
+                        "message": f"MLX dual start triggered for {target} server",
                         "backend": "mlx"
                     }
                 except Exception as e:

@@ -99,13 +99,15 @@ except Exception as e:
 "
 }
 
-# Wrapper that tries purpose first, falls back to tier
+# Wrapper that prefers purpose-based models from model_registry.yml.
+# This keeps MLX startup aligned with model_purposes_dev for all core text roles.
+# Tier-based demo-models remain as a fallback for specialized roles.
 get_model() {
     local role="$1"
-    
-    # For 'test' and 'default', use purpose-based lookup from model_registry.yml
+
+    # Core text roles should always follow model registry purpose mappings.
     case "$role" in
-        test|default)
+        fast|agent|frontier|test|default)
             get_purpose_model "$role"
             ;;
         *)
