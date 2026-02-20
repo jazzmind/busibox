@@ -56,7 +56,7 @@ available_models:
     description: "General purpose agent model"
     # vLLM tuning parameters
     gpu_memory_utilization: 0.9  # Large model - needs 80% GPU
-    max_model_len: 28000  # Supports very long context (AWQ quantized)
+    max_model_len: 88000  # Supports very long context (AWQ quantized)
     max_num_seqs: 3  # Standard concurrent requests
     cpu_offload_gb: 0  # Heavy CPU offload for KV cache
     # Tool calling support
@@ -83,7 +83,7 @@ available_models:
     model_name: "Qwen/Qwen3-0.6B"
     description: "Tiny dispatch/classification model on GPU (vLLM)"
     # vLLM tuning parameters
-    gpu_memory_utilization: 0.1  # Keep tiny and always-hot for routing
+    gpu_memory_utilization: 0.2  # ~7GB - plenty for 0.6B weights + KV cache + CUDA overhead
     max_model_len: 4096  # Routing/classification prompts are short
     max_num_seqs: 32  # High concurrency for dispatch traffic
     cpu_offload_gb: 0

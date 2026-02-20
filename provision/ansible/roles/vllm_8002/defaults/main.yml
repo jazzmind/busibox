@@ -40,7 +40,7 @@ vllm_hf_token: "{{ huggingface_token | default('') }}"
 vllm_max_num_batched_tokens: null
 vllm_enable_prefix_caching: true
 vllm_disable_log_stats: false
-vllm_cpu_offload_gb: 150
+vllm_cpu_offload_gb: 0
 
 # API Configuration
 vllm_served_model_name: null

@@ -578,7 +578,7 @@ show_model_memory_estimates() {
     section "Model Memory Estimates (vLLM with CPU Offloading)"
     
     # Get CPU offload configuration (default from vLLM role)
-    local default_cpu_offload=150  # Default from vllm/defaults/main.yml
+    local default_cpu_offload=0  # Default from vllm/defaults/main.yml
     local cpu_offload="${1:-$default_cpu_offload}"
     
     echo "Memory requirements for each model (8K context, 256 concurrent):"
@@ -763,7 +763,7 @@ check_model_fits() {
     local tensor_parallel="${3:-1}"
     local max_seq_length="${4:-8192}"
     local max_concurrent_seqs="${5:-256}"
-    local cpu_offload_gb="${6:-150}"  # Default CPU offload from vLLM config
+    local cpu_offload_gb="${6:-0}"  # Default: no CPU offload
     
     # Get model configuration (includes precision and quantization)
     local config=$(get_model_config "$model_full")
@@ -893,10 +893,11 @@ interactive_routing() {
     section "Interactive Model Routing"
     
     # Get CPU offload configuration
-    local default_cpu_offload=150
+    local default_cpu_offload=0
     echo "CPU Offload Configuration:"
-    echo "  This allows KV cache to be offloaded to system RAM, dramatically increasing"
-    echo "  concurrent request capacity (20-40x improvement) with +100-200ms latency for cache misses."
+    echo "  This allows KV cache to be offloaded to system RAM."
+    echo "  Only useful when models don't fit in VRAM. Adds PCIe latency."
+    echo "  Recommended: 0 (disabled) unless you need it for very large models."
     echo ""
     read -p "CPU offload capacity (GB, default: ${default_cpu_offload}): " cpu_offload_input
     local cpu_offload="${cpu_offload_input:-$default_cpu_offload}"

@@ -80,7 +80,7 @@
     vllm_gpu_memory_utilization: "{{ model_config_data.models[vllm_assigned_model].gpu_memory_utilization | default(0.9) }}"
     vllm_max_model_len: "{{ model_config_data.models[vllm_assigned_model].max_model_len | default(8192) }}"
     vllm_max_num_seqs: "{{ model_config_data.models[vllm_assigned_model].max_num_seqs | default(256) }}"
-    vllm_cpu_offload_gb: "{{ model_config_data.models[vllm_assigned_model].cpu_offload_gb | default(150) }}"
+    vllm_cpu_offload_gb: "{{ model_config_data.models[vllm_assigned_model].cpu_offload_gb | default(0) }}"
   when: vllm_assigned_model != ""
 
 - name: Check if model has tool calling config in registry
