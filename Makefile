@@ -44,6 +44,10 @@ MODE ?= container
 # Additional args (e.g., pytest args)
 ARGS ?=
 
+# Test listing options
+CATEGORY ?=
+DETAIL ?=
+
 # FAST mode: skip slow/gpu tests (default for local testing)
 FAST ?=
 
@@ -189,12 +193,12 @@ help:
 	@echo "═══════════════════════════════════════════════════════════════════════"
 	@echo ""
 	@echo "  Docker (local development):"
-	@echo "    make test-docker SERVICE=authz         # Run authz tests"
+	@echo "    make test-docker                       # Show full help + filtering guide"
 	@echo "    make test-docker SERVICE=agent         # Run agent tests"
-	@echo "    make test-docker SERVICE=busibox-portal     # Run busibox-portal tests"
-	@echo "    make test-docker SERVICE=apps          # Run all Node.js app tests"
-	@echo "    make test-docker SERVICE=all           # Run all tests"
+	@echo "    make test-docker SERVICE=agent ARGS='tests/unit'  # Run only unit tests"
 	@echo "    make test-docker SERVICE=agent ARGS='-k test_weather'"
+	@echo "    make test-docker ACTION=list           # List all services + test categories"
+	@echo "    make test-docker ACTION=list SERVICE=agent CATEGORY=unit DETAIL=full"
 	@echo ""
 	@echo "  Against remote (staging/production via Proxmox):"
 	@echo "    make test-local SERVICE=agent INV=staging"
@@ -338,31 +342,76 @@ test-db-check:
 
 # Run tests against local Docker
 # Usage: make test-docker SERVICE=authz
+#        make test-docker ACTION=list                          # List all services + test categories
+#        make test-docker ACTION=list SERVICE=agent            # List agent test files
+#        make test-docker ACTION=list SERVICE=agent CATEGORY=unit  # List agent unit test files
+#        make test-docker ACTION=list SERVICE=agent CATEGORY=unit DETAIL=full  # Collect test IDs from Docker
 test-docker:
+ifeq ($(ACTION),list)
+	@bash scripts/test/list-tests.sh $(SERVICE) $(CATEGORY) $(DETAIL)
+else
 ifndef SERVICE
 	@echo ""
-	@echo "Error: SERVICE is required"
+	@echo "make test-docker — Run pytest tests inside Docker containers"
 	@echo ""
-	@echo "Usage: make test-docker SERVICE=<service>"
+	@echo "USAGE:"
+	@echo "  make test-docker SERVICE=<service> [ARGS='...'] [FAST=0|1]"
 	@echo ""
-	@echo "Services:"
-	@echo "  Python APIs: authz, data, search, agent, bridge"
-	@echo "  Node.js apps: busibox-portal, busibox-agents, apps (both)"
-	@echo "  All: all"
+	@echo "SERVICES (Python APIs — run via pytest inside Docker container):"
+	@echo "  authz      Authorization service (srv/authz)"
+	@echo "  agent      Agent/chat service (srv/agent)"
+	@echo "  data       Data/ingest service (srv/data)"
+	@echo "  search     Search service (srv/search)"
+	@echo "  bridge     Bridge service (srv/bridge)"
 	@echo ""
-	@echo "Examples:"
-	@echo "  make test-docker SERVICE=authz"
-	@echo "  make test-docker SERVICE=agent"
-	@echo "  make test-docker SERVICE=bridge"
-	@echo "  make test-docker SERVICE=busibox-portal"
-	@echo "  make test-docker SERVICE=apps          # Both Node.js apps"
-	@echo "  make test-docker SERVICE=all           # Everything"
-	@echo "  make test-docker SERVICE=agent ARGS='-k test_weather'"
-	@echo "  make test-docker SERVICE=agent FAST=0  # Include slow tests"
+	@echo "SERVICES (Node.js apps — run via vitest inside Docker container):"
+	@echo "  busibox-portal   Portal app"
+	@echo "  busibox-agents   Agents app"
+	@echo "  apps             Both Node.js apps"
+	@echo ""
+	@echo "SPECIAL:"
+	@echo "  all        Run all Python + Node.js tests"
+	@echo ""
+	@echo "FILTERING TESTS:"
+	@echo "  Run a specific test directory:"
+	@echo "    make test-docker SERVICE=agent ARGS='tests/unit'"
+	@echo "    make test-docker SERVICE=agent ARGS='tests/integration'"
+	@echo ""
+	@echo "  Run a specific test file:"
+	@echo "    make test-docker SERVICE=agent ARGS='tests/unit/test_base_agent.py'"
+	@echo ""
+	@echo "  Run a specific test class:"
+	@echo "    make test-docker SERVICE=agent ARGS='tests/unit/test_base_agent.py::TestToolExecution'"
+	@echo ""
+	@echo "  Run specific test methods (space-separated paths in ARGS):"
+	@echo "    make test-docker SERVICE=agent ARGS='tests/unit/test_base_agent.py::TestToolExecution::test_execute_step_passes_ctx_when_tool_requires_it_without_scopes tests/unit/test_chat_optimization.py::test_generate_plan_backfills_required_query_for_document_search'"
+	@echo ""
+	@echo "  Filter by test name pattern (-k):"
+	@echo "    make test-docker SERVICE=agent ARGS='-k test_weather'"
+	@echo "    make test-docker SERVICE=agent ARGS='-k \"test_chat and not slow\"'"
+	@echo ""
+	@echo "  Filter by pytest marker (-m):"
+	@echo "    make test-docker SERVICE=agent ARGS='-m integration'"
+	@echo "    make test-docker SERVICE=agent ARGS='-m \"not slow and not gpu\"'"
+	@echo ""
+	@echo "  Common markers: unit, integration, pvt, slow, gpu"
+	@echo ""
+	@echo "OPTIONS:"
+	@echo "  FAST=1     Skip @pytest.mark.slow and @pytest.mark.gpu tests (default)"
+	@echo "  FAST=0     Include slow/GPU tests"
+	@echo "  WORKER=1   Start local data worker for pipeline tests"
+	@echo ""
+	@echo "DISCOVERING TESTS:"
+	@echo "  make test-docker ACTION=list                              # Overview of all services"
+	@echo "  make test-docker ACTION=list SERVICE=agent                # List agent test files by category"
+	@echo "  make test-docker ACTION=list SERVICE=agent CATEGORY=unit  # List unit test files"
+	@echo "  make test-docker ACTION=list SERVICE=agent CATEGORY=unit DETAIL=full"
+	@echo "                                                            # Collect full test IDs from Docker"
 	@echo ""
 	@exit 1
 endif
 	@FAST=$${FAST:-1} INV=docker bash scripts/test/run-local-tests.sh $(SERVICE) docker $(ARGS)
+endif
 
 # Security tests
 test-security:

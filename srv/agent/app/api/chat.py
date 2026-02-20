@@ -50,6 +50,24 @@ settings = get_settings()
 
 
 FILE_ID_FROM_URL_RE = re.compile(r"/files/([^/]+)/download")
+BRIDGE_FILTERED_STANDARD_EVENTS = {
+    "model_selected",
+    "routing_decision",
+    "planning",
+    "tool_start",
+    "tool_result",
+    "agent_start",
+    "agent_result",
+    "agent_response_start",
+    "synthesis_start",
+}
+BRIDGE_FILTERED_AGENTIC_EVENTS = {
+    "thought",
+    "plan",
+    "progress",
+    "tool_start",
+    "tool_result",
+}
 
 
 def _extract_file_id_from_url(file_url: Optional[str]) -> Optional[str]:
@@ -59,6 +77,14 @@ def _extract_file_id_from_url(file_url: Optional[str]) -> Optional[str]:
     if not match:
         return None
     return match.group(1)
+
+
+def _is_bridge_request(metadata: Optional[Dict[str, Any]]) -> bool:
+    """Detect bridge-originated chat requests (e.g. Telegram)."""
+    if not metadata:
+        return False
+    bridge_channels = metadata.get("bridge_channels")
+    return isinstance(bridge_channels, list) and len(bridge_channels) > 0
 
 
 async def _generate_insights_background(
@@ -581,6 +607,7 @@ async def send_chat_message_stream(
     async def generate_events() -> AsyncGenerator[str, None]:
         """Generate SSE events for streaming response."""
         try:
+            suppress_thinking_events = _is_bridge_request(payload.metadata)
             # Get or create conversation (same logic as non-streaming)
             if payload.conversation_id:
                 result = await session.execute(
@@ -682,7 +709,8 @@ async def send_chat_message_stream(
                 selected_model = model_selection.model_id
                 
                 # Send model selection event
-                yield f"event: model_selected\ndata: {json.dumps(model_selection.model_dump())}\n\n"
+                if not suppress_thinking_events:
+                    yield f"event: model_selected\ndata: {json.dumps(model_selection.model_dump())}\n\n"
             
             # Route through dispatcher
             # If specific agents are selected, use them as available_agents for intelligent routing
@@ -734,7 +762,8 @@ async def send_chat_message_stream(
             decision = routing_response.routing_decision
             
             # Send routing decision event
-            yield f"event: routing_decision\ndata: {json.dumps(decision.model_dump())}\n\n"
+            if not suppress_thinking_events:
+                yield f"event: routing_decision\ndata: {json.dumps(decision.model_dump())}\n\n"
             
             # Execute tools and agents with streaming
             full_content = []
@@ -753,8 +782,9 @@ async def send_chat_message_stream(
                 event_type = event["type"]
                 event_data = event["data"]
                 
-                # Forward event to client
-                yield f"event: {event_type}\ndata: {json.dumps(event_data)}\n\n"
+                # Forward event to client (hide verbose thinking events for bridge channels)
+                if not (suppress_thinking_events and event_type in BRIDGE_FILTERED_STANDARD_EVENTS):
+                    yield f"event: {event_type}\ndata: {json.dumps(event_data)}\n\n"
                 
                 # Collect data for storage
                 if event_type == "content_chunk":
@@ -857,6 +887,7 @@ async def send_chat_message_stream_agentic(
             }
         )
         try:
+            suppress_thinking_events = _is_bridge_request(payload.metadata)
             # Get or create conversation
             title_updated = False
             if payload.conversation_id:
@@ -974,8 +1005,9 @@ async def send_chat_message_stream_agentic(
                 metadata=dispatcher_metadata,
                 attachment_metadata=attachment_metadata,
             ):
-                # Yield event to client
-                yield f"event: {event.type}\ndata: {event.model_dump_json()}\n\n"
+                # Yield event to client (hide verbose thinking events for bridge channels)
+                if not (suppress_thinking_events and event.type in BRIDGE_FILTERED_AGENTIC_EVENTS):
+                    yield f"event: {event.type}\ndata: {event.model_dump_json()}\n\n"
                 
                 # Collect content and thoughts
                 if event.type == "content":
