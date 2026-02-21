@@ -170,6 +170,7 @@ class StatusAssistantAgent(BaseStreamingAgent):
                 "query_data",
                 "insert_records",
                 "update_records",
+                "search_users",
             ],
             # Must use RUN_MAX_ITERATIONS (not RUN_ONCE) because our pipeline
             # uses dynamic chaining via process_tool_result(). RUN_ONCE breaks
@@ -185,6 +186,7 @@ class StatusAssistantAgent(BaseStreamingAgent):
         self._doc_ids: Dict[str, str] = {}  # name -> document_id
         self._extracted_data: Dict[str, Any] = {}  # parsed from user text
         self._query_results: Dict[str, Any] = {}
+        self._user_id_cache: Dict[str, str] = {}  # normalized name -> user_id
         self._bootstrapping: bool = False  # True when creating initial data documents
         self._awaiting_create_check: bool = False  # True when query_data is checking for existing projects before create
 
@@ -451,11 +453,13 @@ class StatusAssistantAgent(BaseStreamingAgent):
         elif step.tool == "create_data_document":
             return await self._handle_create_doc_result(step, result, context)
         elif step.tool == "query_data":
-            return self._handle_query_result(step, result, context)
+            return await self._handle_query_result(step, result, context)
         elif step.tool == "insert_records":
             return self._handle_insert_result(step, result, context)
         elif step.tool == "update_records":
             return self._handle_update_result(step, result, context)
+        elif step.tool == "search_users":
+            return self._handle_user_search_result(step, result, context)
         return []
 
     def _get_original_query(self, context: AgentContext) -> str:
@@ -571,6 +575,7 @@ class StatusAssistantAgent(BaseStreamingAgent):
                             "description": {"type": "string"},
                             "status": {"type": "string"},
                             "assignee": {"type": "string"},
+                            "assigneeId": {"type": "string"},
                             "priority": {"type": "string"},
                             "dueDate": {"type": "string"},
                             "order": {"type": "number"},
@@ -698,13 +703,13 @@ class StatusAssistantAgent(BaseStreamingAgent):
         if self._intent == INTENT_CONFIRM_CREATE:
             return self._build_insert_steps()
 
-        # Otherwise, query existing projects to check for matches first
+        # Query existing projects to check for matches (include description for LLM matching)
         self._awaiting_create_check = True
         return [PipelineStep(
             tool="query_data",
             args={
                 "document_id": projects_doc_id,
-                "select": ["id", "name", "status", "progress"],
+                "select": ["id", "name", "description", "status", "progress"],
                 "limit": 50,
             },
         )]
@@ -810,7 +815,7 @@ class StatusAssistantAgent(BaseStreamingAgent):
 
         return steps
 
-    def _handle_query_result(
+    async def _handle_query_result(
         self,
         step: PipelineStep,
         result: Any,
@@ -819,7 +824,6 @@ class StatusAssistantAgent(BaseStreamingAgent):
         """Store query results for synthesis -- or chain inserts for create flow."""
         doc_id = step.args.get("document_id", "")
 
-        # Determine which document this is
         doc_type = "unknown"
         for name, did in self._doc_ids.items():
             if did == doc_id:
@@ -832,25 +836,25 @@ class StatusAssistantAgent(BaseStreamingAgent):
                 "total": getattr(result, 'total', len(result.records)),
             }
 
-        # If this was a "check existing before create" query, handle matching
         if self._awaiting_create_check:
             self._awaiting_create_check = False
-            return self._handle_create_query_result(result, context)
+            return await self._handle_create_query_result(result, context)
 
-        # For update intent, after all queries are done, we would need to
-        # build update steps. For now, we let the synthesis handle it.
         return []
 
-    def _handle_create_query_result(
+    async def _handle_create_query_result(
         self,
         result: Any,
         context: AgentContext,
     ) -> List[PipelineStep]:
         """
-        Compare extracted projects against existing ones.
+        Compare extracted projects against existing ones using substring match
+        first, then an LLM similarity classifier for ambiguous cases.
 
-        If matches found: store match details and return [] (synthesis will ask user).
-        If no matches: proceed with insert steps.
+        Outcomes per project:
+        - High-confidence match (>0.8): auto-update existing project
+        - Medium-confidence match (0.5-0.8): ask user to confirm
+        - No/low match: create new project
         """
         existing_records = []
         if hasattr(result, 'records') and result.records:
@@ -860,46 +864,205 @@ class StatusAssistantAgent(BaseStreamingAgent):
         if not extracted_projects:
             return []
 
-        # Compare extracted project names against existing ones (fuzzy match)
-        matches = []
-        unmatched = []
-        existing_names = {
+        existing_by_name = {
             rec.get("name", "").lower(): rec
             for rec in existing_records
             if rec.get("name")
         }
 
+        auto_update: List[Dict[str, Any]] = []
+        confirm_matches: List[Dict[str, Any]] = []
+        unmatched: List[Dict[str, Any]] = []
+
         for proj in extracted_projects:
             proj_name = proj.get("name", "").lower()
-            matched = False
-            for existing_name, existing_rec in existing_names.items():
-                # Exact or substring match
-                if (proj_name == existing_name
-                        or proj_name in existing_name
-                        or existing_name in proj_name):
-                    matches.append({
-                        "extracted": proj,
-                        "existing": existing_rec,
-                    })
-                    matched = True
+            proj_desc = proj.get("description", "").lower()
+
+            # Phase 1: exact / substring match (high confidence)
+            substring_match = None
+            for existing_name, existing_rec in existing_by_name.items():
+                if proj_name == existing_name:
+                    substring_match = existing_rec
                     break
-            if not matched:
+                if proj_name in existing_name or existing_name in proj_name:
+                    substring_match = existing_rec
+                    break
+
+            if substring_match:
+                auto_update.append({"extracted": proj, "existing": substring_match})
+                continue
+
+            # Phase 2: LLM similarity check for non-obvious matches
+            if existing_records:
+                llm_match = await self._llm_match_project(proj, existing_records)
+                if llm_match:
+                    confidence = llm_match.get("confidence", 0)
+                    if confidence >= 0.8:
+                        auto_update.append({
+                            "extracted": proj,
+                            "existing": llm_match["existing"],
+                        })
+                    elif confidence >= 0.5:
+                        confirm_matches.append({
+                            "extracted": proj,
+                            "existing": llm_match["existing"],
+                            "confidence": confidence,
+                        })
+                    else:
+                        unmatched.append(proj)
+                else:
+                    unmatched.append(proj)
+            else:
                 unmatched.append(proj)
 
-        if matches:
-            # Store match details for synthesis to build a confirmation question
-            self._extracted_data["_matches"] = matches
+        # Build combined response
+        if auto_update:
+            self._extracted_data["_auto_update"] = auto_update
+            logger.info(
+                "Auto-updating %d projects with high-confidence matches",
+                len(auto_update),
+            )
+
+        if confirm_matches:
+            self._extracted_data["_matches"] = confirm_matches
             self._extracted_data["_unmatched"] = unmatched
             logger.info(
-                f"Found {len(matches)} matching projects, "
-                f"{len(unmatched)} new projects -- asking user to confirm"
+                "Found %d projects needing confirmation, %d new",
+                len(confirm_matches),
+                len(unmatched),
             )
-            # Return empty -- synthesis will ask the user
-            return []
+            # Don't insert yet — synthesis will ask user to confirm medium matches
+            return self._build_auto_update_steps()
 
-        # No matches at all -- safe to proceed with inserts
+        if auto_update and not unmatched:
+            return self._build_auto_update_steps()
+
+        if auto_update and unmatched:
+            # Insert unmatched as new, update matched ones
+            self._extracted_data["projects"] = unmatched
+            steps = self._build_auto_update_steps()
+            steps.extend(self._build_insert_steps())
+            return steps
+
+        # No matches at all
         logger.info("No matching projects found -- proceeding with insert")
         return self._build_insert_steps()
+
+    async def _llm_match_project(
+        self,
+        extracted: Dict[str, Any],
+        existing_records: List[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Use the fast LLM to determine if an extracted project matches any
+        existing project. Returns the best match with a confidence score,
+        or None if no match.
+        """
+        try:
+            _ensure_openai_env()
+            settings = get_settings()
+            model = OpenAIChatModel(
+                model_name=settings.fast_model or settings.default_model,
+                provider="openai",
+            )
+
+            existing_summaries = []
+            for i, rec in enumerate(existing_records[:20]):
+                name = rec.get("name", "Unnamed")
+                desc = rec.get("description", "")
+                status = rec.get("status", "")
+                existing_summaries.append(
+                    f"{i}: \"{name}\" - {desc} (status: {status})"
+                )
+
+            prompt = (
+                f"Compare this new project against existing projects and determine "
+                f"if it matches any of them.\n\n"
+                f"New project: \"{extracted.get('name', '')}\" - "
+                f"{extracted.get('description', '')}\n\n"
+                f"Existing projects:\n"
+                + "\n".join(existing_summaries)
+                + "\n\nRespond with ONLY valid JSON: "
+                f'{{ "match_index": <index or -1>, "confidence": <0.0-1.0> }}'
+            )
+
+            agent = Agent(model=model, system_prompt="You match projects by semantic similarity. Respond with JSON only.")
+            result = await agent.run(prompt)
+            text = str(result.output).strip()
+
+            # Extract JSON from response
+            match = re.search(r'\{[^}]+\}', text)
+            if not match:
+                return None
+
+            data = json.loads(match.group())
+            idx = data.get("match_index", -1)
+            confidence = float(data.get("confidence", 0))
+
+            if idx < 0 or idx >= len(existing_records) or confidence < 0.3:
+                return None
+
+            return {
+                "existing": existing_records[idx],
+                "confidence": confidence,
+            }
+        except Exception as e:
+            logger.warning("LLM project matching failed: %s", e)
+            return None
+
+    def _build_auto_update_steps(self) -> List[PipelineStep]:
+        """Build update_records steps for auto-matched projects."""
+        auto_updates = self._extracted_data.get("_auto_update", [])
+        if not auto_updates:
+            return []
+
+        projects_doc_id = self._doc_ids.get("projects")
+        if not projects_doc_id:
+            return []
+
+        steps = []
+        for match in auto_updates:
+            extracted = match["extracted"]
+            existing = match["existing"]
+            existing_id = existing.get("id")
+            if not existing_id:
+                continue
+
+            updates: Dict[str, Any] = {}
+            for field in ("description", "status", "progress", "owner", "tags"):
+                val = extracted.get(field)
+                if val and val != existing.get(field):
+                    updates[field] = val
+
+            if not updates:
+                continue
+
+            steps.append(PipelineStep(
+                tool="update_records",
+                args={
+                    "document_id": projects_doc_id,
+                    "record_ids": [existing_id],
+                    "updates": updates,
+                },
+            ))
+
+            # Map extracted project name to existing ID for task linking
+            extracted_name = extracted.get("name", "").strip().lower()
+            if extracted_name:
+                self._extracted_data.setdefault("_project_id_map", {})[extracted_name] = existing_id
+
+        # Also handle pending tasks for auto-updated projects
+        pending_tasks = self._extracted_data.get("_pending_tasks", [])
+        if pending_tasks and self._doc_ids.get("tasks"):
+            id_map = self._extracted_data.get("_project_id_map", {})
+            if id_map:
+                # Re-map tasks to use existing project IDs
+                for task in pending_tasks:
+                    pname = task.get("project_name", "").strip().lower()
+                    if pname in id_map:
+                        task["_resolved_project_id"] = id_map[pname]
+
+        return steps
 
     def _handle_insert_result(
         self,
@@ -924,8 +1087,12 @@ class StatusAssistantAgent(BaseStreamingAgent):
         def _norm(value: Any) -> str:
             return str(value or "").strip().lower()
 
-        # Map project names to IDs from the insert result
-        project_name_to_id: Dict[str, str] = {}
+        # Start with any IDs resolved during auto-update matching
+        project_name_to_id: Dict[str, str] = dict(
+            self._extracted_data.get("_project_id_map", {})
+        )
+
+        # Merge IDs from the insert result
         if hasattr(result, 'record_ids') and result.record_ids:
             projects = self._extracted_data.get("projects", [])
             for i, rid in enumerate(result.record_ids):
@@ -934,9 +1101,7 @@ class StatusAssistantAgent(BaseStreamingAgent):
                     if name_key:
                         project_name_to_id[name_key] = rid
 
-        # Fallback for API responses that don't include record_ids:
-        # If exactly one project was extracted and one project row is known,
-        # bind all tasks to that project to avoid orphan task inserts.
+        # Fallback for API responses that don't include record_ids
         if not project_name_to_id:
             extracted_projects = self._extracted_data.get("projects", [])
             known_projects = (self._query_results.get("projects", {}) or {}).get("records", [])
@@ -949,25 +1114,33 @@ class StatusAssistantAgent(BaseStreamingAgent):
         # Build task records with projectId references
         task_records = []
         skipped_tasks = []
+        assignee_names_to_resolve: List[str] = []
+
         for task in pending_tasks:
-            project_name = task.get("project_name", "")
-            normalized_project_name = _norm(project_name)
-            project_id = project_name_to_id.get(normalized_project_name, "")
+            # Use pre-resolved ID from auto-update flow if available
+            project_id = task.pop("_resolved_project_id", "")
 
-            # If no exact match, try fuzzy matching
-            if not project_id and normalized_project_name:
-                for pname, pid in project_name_to_id.items():
-                    if normalized_project_name in pname or pname in normalized_project_name:
-                        project_id = pid
-                        break
+            if not project_id:
+                project_name = task.get("project_name", "")
+                normalized_project_name = _norm(project_name)
+                project_id = project_name_to_id.get(normalized_project_name, "")
 
-            # Last-resort fallback: if only one created project is available, use it.
-            if not project_id and len(project_name_to_id) == 1:
-                project_id = next(iter(project_name_to_id.values()))
+                if not project_id and normalized_project_name:
+                    for pname, pid in project_name_to_id.items():
+                        if normalized_project_name in pname or pname in normalized_project_name:
+                            project_id = pid
+                            break
+
+                if not project_id and len(project_name_to_id) == 1:
+                    project_id = next(iter(project_name_to_id.values()))
 
             if not project_id:
                 skipped_tasks.append(task.get("title", "Untitled Task"))
                 continue
+
+            assignee = task.get("assignee", "").strip()
+            if assignee and assignee.lower() not in self._user_id_cache:
+                assignee_names_to_resolve.append(assignee)
 
             task_records.append({
                 "projectId": project_id,
@@ -975,7 +1148,7 @@ class StatusAssistantAgent(BaseStreamingAgent):
                 "description": task.get("description", ""),
                 "status": task.get("status", "todo"),
                 "priority": task.get("priority", "medium"),
-                "assignee": task.get("assignee", ""),
+                "assignee": assignee,
             })
 
         if skipped_tasks:
@@ -985,18 +1158,76 @@ class StatusAssistantAgent(BaseStreamingAgent):
                 skipped_tasks[:10],
             )
 
-        # Clear pending tasks to avoid re-insertion once we decide on follow-up step.
         self._extracted_data["_pending_tasks"] = []
-        if task_records:
-            return [PipelineStep(
-                tool="insert_records",
-                args={
-                    "document_id": tasks_doc_id,
-                    "records": task_records,
-                },
-            )]
 
-        return []
+        if not task_records:
+            return []
+
+        # Deduplicate assignee names to search
+        unique_names = list(dict.fromkeys(n for n in assignee_names_to_resolve if n))
+
+        if unique_names:
+            # Defer task insert until user searches complete
+            self._extracted_data["_deferred_task_records"] = task_records
+            self._extracted_data["_pending_user_searches"] = unique_names[1:]
+            return [PipelineStep(tool="search_users", args={"query": unique_names[0]})]
+
+        # No assignees to resolve — insert immediately
+        return [PipelineStep(
+            tool="insert_records",
+            args={"document_id": tasks_doc_id, "records": task_records},
+        )]
+
+    def _handle_user_search_result(
+        self,
+        step: PipelineStep,
+        result: Any,
+        context: AgentContext,
+    ) -> List[PipelineStep]:
+        """
+        Cache user search results and, once all pending searches are resolved,
+        proceed with the task insert that was deferred.
+        """
+        search_query = step.args.get("query", "").strip().lower()
+        if hasattr(result, "users") and result.users:
+            best = result.users[0]
+            user_id = best.get("id", "")
+            if user_id:
+                self._user_id_cache[search_query] = user_id
+                # Also cache by individual name parts for fuzzy matching
+                for field in ("display_name", "first_name", "last_name", "email"):
+                    val = best.get(field, "")
+                    if val:
+                        self._user_id_cache[val.strip().lower()] = user_id
+
+        # Check if there are still pending user searches
+        pending_searches = self._extracted_data.get("_pending_user_searches", [])
+        if pending_searches:
+            next_name = pending_searches.pop(0)
+            return [PipelineStep(tool="search_users", args={"query": next_name})]
+
+        # All user searches done — proceed with the deferred task insert
+        return self._build_task_insert_from_cache()
+
+    def _build_task_insert_from_cache(self) -> List[PipelineStep]:
+        """Build task insert steps using the resolved user ID cache."""
+        deferred_tasks = self._extracted_data.get("_deferred_task_records", [])
+        tasks_doc_id = self._doc_ids.get("tasks")
+        if not deferred_tasks or not tasks_doc_id:
+            return []
+
+        for task in deferred_tasks:
+            assignee_name = task.get("assignee", "").strip()
+            if assignee_name:
+                user_id = self._user_id_cache.get(assignee_name.lower(), "")
+                if user_id:
+                    task["assigneeId"] = user_id
+
+        self._extracted_data["_deferred_task_records"] = []
+        return [PipelineStep(
+            tool="insert_records",
+            args={"document_id": tasks_doc_id, "records": deferred_tasks},
+        )]
 
     def _handle_update_result(
         self,
@@ -1004,9 +1235,63 @@ class StatusAssistantAgent(BaseStreamingAgent):
         result: Any,
         context: AgentContext,
     ) -> List[PipelineStep]:
-        """Store update results for synthesis."""
-        # Update results are captured by context.tool_results automatically
-        return []
+        """
+        After update_records completes, check if there are pending tasks
+        that need to be inserted (from the auto-update create flow).
+        """
+        pending_tasks = self._extracted_data.get("_pending_tasks", [])
+        tasks_doc_id = self._doc_ids.get("tasks")
+
+        if not pending_tasks or not tasks_doc_id:
+            return []
+
+        # Build task records with resolved project IDs
+        id_map = self._extracted_data.get("_project_id_map", {})
+        task_records = []
+        assignee_names_to_resolve: List[str] = []
+
+        def _norm(value: Any) -> str:
+            return str(value or "").strip().lower()
+
+        for task in pending_tasks:
+            project_id = task.pop("_resolved_project_id", "")
+            if not project_id:
+                pname = _norm(task.get("project_name", ""))
+                project_id = id_map.get(pname, "")
+                if not project_id and len(id_map) == 1:
+                    project_id = next(iter(id_map.values()))
+
+            if not project_id:
+                continue
+
+            assignee = task.get("assignee", "").strip()
+            if assignee and assignee.lower() not in self._user_id_cache:
+                assignee_names_to_resolve.append(assignee)
+
+            task_records.append({
+                "projectId": project_id,
+                "title": task.get("title", "Untitled Task"),
+                "description": task.get("description", ""),
+                "status": task.get("status", "todo"),
+                "priority": task.get("priority", "medium"),
+                "assignee": assignee,
+            })
+
+        self._extracted_data["_pending_tasks"] = []
+
+        if not task_records:
+            return []
+
+        unique_names = list(dict.fromkeys(n for n in assignee_names_to_resolve if n))
+        if unique_names:
+            self._extracted_data["_deferred_task_records"] = task_records
+            self._extracted_data["_pending_user_searches"] = unique_names[1:]
+            return [PipelineStep(tool="search_users", args={"query": unique_names[0]})]
+
+        return [PipelineStep(
+            tool="insert_records",
+            args={"document_id": tasks_doc_id, "records": task_records},
+        )]
 
     def _build_synthesis_context(self, query: str, context: AgentContext) -> str:
         """Build context for the synthesis LLM from tool results."""
@@ -1032,42 +1317,61 @@ class StatusAssistantAgent(BaseStreamingAgent):
 
         # Add tool results
         if self._intent in (INTENT_CREATE, INTENT_CONFIRM_CREATE):
-            # Check if we're asking the user to confirm (matches were found)
-            matches = self._extracted_data.get("_matches", [])
+            confirm_matches = self._extracted_data.get("_matches", [])
+            auto_updates = self._extracted_data.get("_auto_update", [])
             unmatched = self._extracted_data.get("_unmatched", [])
 
-            if matches and self._intent == INTENT_CREATE:
-                # Matches found -- ask the user what to do
+            if confirm_matches and self._intent == INTENT_CREATE:
                 parts.append("## Existing Projects Found")
                 parts.append(
                     "The user asked to create projects, but similar ones already exist. "
                     "Ask the user whether they want to UPDATE the existing projects or "
                     "CREATE NEW entries. Be specific about which projects matched."
                 )
-                parts.append("\n### Matching Projects")
-                for m in matches:
+                parts.append("\n### Matching Projects (need confirmation)")
+                for m in confirm_matches:
                     ext = m["extracted"]
                     ex = m["existing"]
+                    conf = m.get("confidence", "?")
                     parts.append(
                         f"- Requested: **{ext.get('name', '?')}** ↔ "
                         f"Existing: **{ex.get('name', '?')}** "
                         f"(status: {ex.get('status', '?')}, "
-                        f"progress: {ex.get('progress', 0)}%)"
+                        f"progress: {ex.get('progress', 0)}%, "
+                        f"similarity: {conf})"
                     )
+                if auto_updates:
+                    parts.append(f"\n### Auto-Updated Projects ({len(auto_updates)})")
+                    for m in auto_updates:
+                        ext = m["extracted"]
+                        ex = m["existing"]
+                        parts.append(
+                            f"- ✅ Updated **{ex.get('name', '?')}** with new data from "
+                            f"**{ext.get('name', '?')}**"
+                        )
                 if unmatched:
                     parts.append(f"\n### New Projects (no match found, {len(unmatched)})")
                     for p in unmatched:
                         parts.append(f"- **{p.get('name', 'Unnamed')}**: {p.get('description', '')}")
                 parts.append(
-                    "\nAsk the user: would they like to update the existing projects, "
-                    "or create new entries for everything?"
+                    "\nAsk the user: would they like to update the matching projects, "
+                    "or create new entries for them?"
                 )
             else:
-                # Normal create flow -- show what was created
                 parts.append("## Actions Taken")
+
+                if auto_updates:
+                    parts.append(f"\n### Projects Updated ({len(auto_updates)})")
+                    for m in auto_updates:
+                        ext = m["extracted"]
+                        ex = m["existing"]
+                        parts.append(
+                            f"- ✅ Updated **{ex.get('name', '?')}** with new data"
+                        )
+
                 for tool_name, result in context.tool_results.items():
                     if tool_name == "list_data_documents":
-                        continue  # Skip internal detail
+                        continue
                     if tool_name == "insert_records":
                         if hasattr(result, 'success') and result.success:
                             count = getattr(result, 'count', 0)
@@ -1075,7 +1379,6 @@ class StatusAssistantAgent(BaseStreamingAgent):
                         elif hasattr(result, 'error'):
                             parts.append(f"- Insert failed: {result.error}")
 
-                # Show what was extracted
                 projects = self._extracted_data.get("projects", [])
                 tasks = self._extracted_data.get("tasks", [])
                 if projects:
@@ -1132,11 +1435,11 @@ class StatusAssistantAgent(BaseStreamingAgent):
     def _build_fallback_response(self, query: str, context: AgentContext) -> str:
         """Build a fallback response if synthesis fails."""
         if self._intent in (INTENT_CREATE, INTENT_CONFIRM_CREATE):
-            # Check for the ask-confirmation case
-            matches = self._extracted_data.get("_matches", [])
-            if matches and self._intent == INTENT_CREATE:
+            confirm_matches = self._extracted_data.get("_matches", [])
+            auto_updates = self._extracted_data.get("_auto_update", [])
+            if confirm_matches and self._intent == INTENT_CREATE:
                 parts = ["I found existing projects that match your request:\n"]
-                for m in matches:
+                for m in confirm_matches:
                     ext = m["extracted"]
                     ex = m["existing"]
                     parts.append(
@@ -1144,17 +1447,24 @@ class StatusAssistantAgent(BaseStreamingAgent):
                         f"**{ex.get('name', '?')}** "
                         f"({ex.get('status', '?')}, {ex.get('progress', 0)}%)"
                     )
+                if auto_updates:
+                    parts.append(f"\nI also auto-updated {len(auto_updates)} matching projects.")
                 parts.append(
-                    "\nWould you like to update the existing projects "
+                    "\nWould you like to update the matching projects "
                     "or create new entries?"
                 )
                 return "\n".join(parts)
 
+            parts = ["Here's what I did:\n"]
+            if auto_updates:
+                parts.append(f"**Updated {len(auto_updates)} existing projects:**")
+                for m in auto_updates:
+                    parts.append(f"- ✅ {m['existing'].get('name', 'Unnamed')}")
+
             projects = self._extracted_data.get("projects", [])
             tasks = self._extracted_data.get("tasks", [])
-            parts = ["Here's what I did:\n"]
             if projects:
-                parts.append(f"**Created {len(projects)} projects:**")
+                parts.append(f"\n**Created {len(projects)} new projects:**")
                 for p in projects:
                     parts.append(f"- {p.get('name', 'Unnamed')}")
             if tasks:
@@ -1222,10 +1532,17 @@ class StatusAssistantAgent(BaseStreamingAgent):
         context: Optional[dict] = None,
     ) -> str:
         """
-        Override to store the original query for later use in intent classification.
+        Override to store the original query and reset per-request state.
         """
-        # Store the original query in metadata so pipeline_steps/process_tool_result
-        # can access it (the base class doesn't pass query to process_tool_result)
+        # Reset per-call state (singleton is reused across requests)
+        self._intent = INTENT_CHAT
+        self._doc_ids = {}
+        self._extracted_data = {}
+        self._query_results = {}
+        self._user_id_cache = {}
+        self._bootstrapping = False
+        self._awaiting_create_check = False
+
         if context is None:
             context = {}
         if "metadata" not in context or context["metadata"] is None:
@@ -1715,7 +2032,15 @@ Guidelines:
         cancel,
         context: Optional[dict] = None,
     ) -> str:
-        """Store original query in metadata for access during pipeline."""
+        """Store original query in metadata and reset per-request state."""
+        self._doc_ids = {}
+        self._existing_projects = []
+        self._existing_tasks = []
+        self._update_data = {}
+        self._queries_done = 0
+        self._expected_queries = 0
+        self._write_steps_built = False
+
         if context is None:
             context = {}
         if "metadata" not in context or context["metadata"] is None:

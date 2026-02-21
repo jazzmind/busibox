@@ -26,7 +26,7 @@ import signal
 import sys
 import time
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 from contextlib import asynccontextmanager
 
@@ -113,6 +113,10 @@ class MLXStatusResponse(BaseModel):
     healthy: bool = False
 
 
+class MediaToggleRequest(BaseModel):
+    server: str  # "transcribe", "voice", or "image"
+
+
 # Authentication
 async def verify_token(authorization: str = Header(None)):
     """Verify the authorization token."""
@@ -142,6 +146,35 @@ MLX_FAST_PID_FILE = Path("/tmp/mlx-lm-fast-server.pid")
 MLX_FAST_LOG_FILE = Path("/tmp/mlx-lm-fast-server.log")
 MLX_PORT = int(os.getenv("MLX_PORT", "8080"))
 MLX_FAST_PORT = int(os.getenv("MLX_FAST_PORT", "18081"))
+
+# Media server config
+MEDIA_SCRIPT = BUSIBOX_ROOT / "scripts" / "llm" / "start-mlx-media-servers.sh"
+TRANSCRIBE_PORT = int(os.getenv("TRANSCRIBE_PORT", "8081"))
+VOICE_PORT = int(os.getenv("VOICE_PORT", "8082"))
+IMAGE_PORT = int(os.getenv("IMAGE_PORT", "8083"))
+MEDIA_SERVERS = {
+    "transcribe": {
+        "pid_file": Path("/tmp/mlx-openai-transcribe.pid"),
+        "port": TRANSCRIBE_PORT,
+        "kind": "on-demand",
+        "label": "Transcribe / STT",
+        "memory_estimate_mb": 3072,
+    },
+    "voice": {
+        "pid_file": Path("/tmp/mlx-openai-voice.pid"),
+        "port": VOICE_PORT,
+        "kind": "always-on",
+        "label": "Voice / TTS",
+        "memory_estimate_mb": 205,
+    },
+    "image": {
+        "pid_file": Path("/tmp/mlx-openai-image.pid"),
+        "port": IMAGE_PORT,
+        "kind": "on-demand",
+        "label": "Image Generation",
+        "memory_estimate_mb": 4096,
+    },
+}
 
 
 def get_mlx_status_for_target(target: str = "primary") -> MLXStatusResponse:
@@ -208,6 +241,140 @@ def get_all_mlx_status() -> Dict[str, Any]:
         "all_running": primary.running and fast.running,
         "all_healthy": primary.healthy and fast.healthy,
     }
+
+
+def _get_process_memory_mb(pid: int) -> Optional[float]:
+    """Return RSS memory in MB for a given PID, or None on failure."""
+    try:
+        import psutil
+        return psutil.Process(pid).memory_info().rss / (1024 * 1024)
+    except Exception:
+        pass
+    # Fallback: use `ps` on macOS/Linux
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "rss=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if result.returncode == 0:
+            rss_kb = int(result.stdout.strip())
+            return rss_kb / 1024
+    except Exception:
+        pass
+    return None
+
+
+def get_media_server_status(name: str) -> Dict[str, Any]:
+    """Return status dict for a named media server (transcribe, voice, image)."""
+    cfg = MEDIA_SERVERS.get(name)
+    if not cfg:
+        return {"name": name, "running": False, "error": "Unknown server"}
+
+    pid_file: Path = cfg["pid_file"]
+    port: int = cfg["port"]
+
+    base = {
+        "name": name,
+        "label": cfg["label"],
+        "kind": cfg["kind"],
+        "port": port,
+        "running": False,
+        "healthy": False,
+        "pid": None,
+        "model": None,
+        "memory_mb": None,
+        "memory_estimate_mb": cfg["memory_estimate_mb"],
+    }
+
+    if not pid_file.exists():
+        return base
+
+    try:
+        pid = int(pid_file.read_text().strip())
+        os.kill(pid, 0)
+    except (OSError, ValueError):
+        pid_file.unlink(missing_ok=True)
+        return base
+
+    base["running"] = True
+    base["pid"] = pid
+    base["memory_mb"] = _get_process_memory_mb(pid)
+
+    try:
+        import httpx
+        resp = httpx.get(f"http://localhost:{port}/v1/models", timeout=2.0)
+        if resp.status_code == 200:
+            base["healthy"] = True
+            data = resp.json()
+            models = data.get("data", [])
+            if models:
+                base["model"] = models[0].get("id")
+    except Exception:
+        pass
+
+    return base
+
+
+def get_all_media_status() -> Dict[str, Any]:
+    """Return status for all three media servers plus aggregate memory."""
+    statuses = {name: get_media_server_status(name) for name in MEDIA_SERVERS}
+
+    mlx_servers = [
+        ("primary", MLX_PID_FILE, MLX_PORT),
+        ("fast", MLX_FAST_PID_FILE, MLX_FAST_PORT),
+    ]
+    mlx_memory: List[Dict[str, Any]] = []
+    for label, pid_file, port in mlx_servers:
+        if pid_file.exists():
+            try:
+                pid = int(pid_file.read_text().strip())
+                os.kill(pid, 0)
+                mem = _get_process_memory_mb(pid)
+                mlx_memory.append({"name": label, "port": port, "memory_mb": mem})
+            except (OSError, ValueError):
+                pass
+
+    total_media_mb = sum(
+        (s.get("memory_mb") or 0) for s in statuses.values()
+    )
+    total_llm_mb = sum((m.get("memory_mb") or 0) for m in mlx_memory)
+    total_mlx_mb = total_media_mb + total_llm_mb
+
+    return {
+        "servers": statuses,
+        "llm_servers": mlx_memory,
+        "total_media_memory_mb": total_media_mb,
+        "total_llm_memory_mb": total_llm_mb,
+        "total_mlx_memory_mb": total_mlx_mb,
+    }
+
+
+def _get_system_memory() -> Dict[str, Any]:
+    """Return total and available system memory in MB."""
+    result: Dict[str, Any] = {
+        "total_mb": None,
+        "available_mb": None,
+        "used_mb": None,
+    }
+    try:
+        import psutil
+        vm = psutil.virtual_memory()
+        result["total_mb"] = vm.total / (1024 * 1024)
+        result["available_mb"] = vm.available / (1024 * 1024)
+        result["used_mb"] = vm.used / (1024 * 1024)
+        return result
+    except Exception:
+        pass
+    # Fallback for macOS using sysctl
+    try:
+        r = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=3)
+        if r.returncode == 0:
+            result["total_mb"] = int(r.stdout.strip()) / (1024 * 1024)
+    except Exception:
+        pass
+    return result
 
 
 def _stop_mlx_target(target: str) -> Dict[str, Any]:
@@ -505,6 +672,79 @@ except Exception as e:
             "Connection": "keep-alive",
         }
     )
+
+
+@app.get("/media/status")
+async def media_status(_: bool = Depends(verify_token)):
+    """Get status for all MLX media servers (transcribe, voice, image) with memory info."""
+    return get_all_media_status()
+
+
+@app.post("/media/toggle")
+async def media_toggle(request: MediaToggleRequest, _: bool = Depends(verify_token)):
+    """
+    Toggle a media server (start if stopped, stop if running).
+
+    Only 'transcribe' and 'image' can be toggled; 'voice' is always-on.
+    Returns the new status of the server.
+    """
+    server = request.server.lower()
+    if server not in MEDIA_SERVERS:
+        raise HTTPException(status_code=400, detail=f"Unknown media server: {server}. Valid: transcribe, voice, image")
+
+    if not MEDIA_SCRIPT.exists():
+        raise HTTPException(status_code=500, detail=f"Media server script not found: {MEDIA_SCRIPT}")
+
+    action_map = {
+        "transcribe": "transcribe",
+        "image": "image",
+        "voice": "start",  # always-on; hitting toggle just ensures it's running
+    }
+    action = action_map[server]
+
+    try:
+        result = await asyncio.create_subprocess_exec(
+            "bash", str(MEDIA_SCRIPT), action,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(BUSIBOX_ROOT),
+        )
+        stdout, stderr = await asyncio.wait_for(result.communicate(), timeout=120)
+        rc = result.returncode
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Media server toggle timed out after 120s")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to toggle media server: {e}")
+
+    await asyncio.sleep(1)
+    new_status = get_media_server_status(server)
+
+    return {
+        "success": rc == 0,
+        "server": server,
+        "action": action,
+        "stdout": stdout.decode("utf-8", errors="replace")[-500:] if stdout else "",
+        "stderr": stderr.decode("utf-8", errors="replace")[-500:] if stderr else "",
+        "status": new_status,
+    }
+
+
+@app.get("/system/memory")
+async def system_memory(_: bool = Depends(verify_token)):
+    """Return system memory stats and per-process MLX memory breakdown."""
+    sys_mem = _get_system_memory()
+    media = get_all_media_status()
+
+    return {
+        "system": sys_mem,
+        "mlx": {
+            "llm_servers": media["llm_servers"],
+            "media_servers": list(media["servers"].values()),
+            "total_media_memory_mb": media["total_media_memory_mb"],
+            "total_llm_memory_mb": media["total_llm_memory_mb"],
+            "total_mlx_memory_mb": media["total_mlx_memory_mb"],
+        },
+    }
 
 
 @app.get("/models/cached")

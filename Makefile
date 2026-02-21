@@ -5,7 +5,7 @@
         install update manage login recover-admin rotate-secrets profile demo warmup demo-clean demo-status \
         docker-deploy docker-deploy-infra docker-deploy-apis docker-deploy-llm docker-deploy-frontend \
         deploy-user-app undeploy-user-app list-user-apps user-app-logs user-app-status \
-        mlx-status mlx-start mlx-stop mlx-restart mlx-media-status mlx-media-start mlx-media-stop mlx-media-restart host-agent-status host-agent-start host-agent-stop host-agent-restart \
+        mlx-status mlx-start mlx-stop mlx-restart mlx-media-status mlx-media-start mlx-media-start-all mlx-media-stop mlx-media-restart mlx-transcribe mlx-image host-agent-status host-agent-start host-agent-stop host-agent-restart \
         k8s-deploy k8s-sync k8s-build k8s-apply k8s-status k8s-delete k8s-secrets k8s-logs \
         k8s-gpu-up k8s-gpu-down k8s-gpu-status k8s-gpu-window \
         spot-check spot-swap spot-price \
@@ -221,10 +221,13 @@ help:
 	@echo "    make mlx-start                 # Start MLX server"
 	@echo "    make mlx-stop                  # Stop MLX server"
 	@echo "    make mlx-restart               # Restart MLX server"
-	@echo "    make mlx-media-status          # Check MLX media server status (image/transcribe/voice)"
-	@echo "    make mlx-media-start           # Start MLX media servers (ports 8081-8083)"
-	@echo "    make mlx-media-stop            # Stop MLX media servers"
-	@echo "    make mlx-media-restart         # Restart MLX media servers"
+	@echo "    make mlx-media-status          # Check MLX media server status"
+	@echo "    make mlx-media-start           # Start always-on media servers (voice/TTS only, ~0.2GB)"
+	@echo "    make mlx-media-start-all       # Start ALL media servers including on-demand"
+	@echo "    make mlx-media-stop            # Stop all media servers"
+	@echo "    make mlx-media-restart         # Restart always-on media servers"
+	@echo "    make mlx-transcribe            # Toggle Whisper STT server (on-demand, ~3GB)"
+	@echo "    make mlx-image                 # Toggle Flux image-gen server (on-demand, ~4GB)"
 	@echo ""
 	@echo "  Host Agent (controls MLX from Docker):"
 	@echo "    make host-agent-status         # Check host-agent status"
@@ -1007,18 +1010,30 @@ mlx-restart: mlx-stop
 mlx-media-status:
 	@bash scripts/llm/start-mlx-media-servers.sh status
 
-# Start MLX media servers (transcribe, voice, image)
+# Start always-on media servers (voice/TTS only, ~0.2GB)
 mlx-media-start:
 	@bash scripts/llm/start-mlx-media-servers.sh start
 
-# Stop MLX media servers
+# Start ALL media servers including on-demand (Whisper ~3GB + Flux ~4GB)
+mlx-media-start-all:
+	@bash scripts/llm/start-mlx-media-servers.sh start-all
+
+# Stop all media servers
 mlx-media-stop:
 	@bash scripts/llm/start-mlx-media-servers.sh stop
 
-# Restart MLX media servers
+# Restart always-on media servers
 mlx-media-restart: mlx-media-stop
 	@sleep 2
 	@$(MAKE) mlx-media-start
+
+# Toggle Whisper STT server (on-demand, ~3GB — starts if stopped, stops if running)
+mlx-transcribe:
+	@bash scripts/llm/start-mlx-media-servers.sh transcribe
+
+# Toggle Flux image-gen server (on-demand, ~4GB — starts if stopped, stops if running)
+mlx-image:
+	@bash scripts/llm/start-mlx-media-servers.sh image
 
 # Check host-agent status
 host-agent-status:

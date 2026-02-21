@@ -252,6 +252,7 @@ available_models:
     description: "Speech-to-text transcription (Whisper Large v3)"
     mode: "audio_transcription"
     tier: "standard"
+    memory_estimate_gb: 3.0   # ~3 GB RAM when loaded (fp16 weights + buffers)
 
   "kokoro-82m":
     provider: "mlx"
@@ -260,6 +261,7 @@ available_models:
     description: "Text-to-speech voice generation (Kokoro 82M)"
     mode: "audio_speech"
     tier: "micro"
+    memory_estimate_gb: 0.2   # ~200 MB RAM (tiny 82M param model)
 
   "flux-schnell":
     provider: "mlx"
@@ -268,6 +270,7 @@ available_models:
     description: "Fast local image generation model (FLUX Schnell)"
     mode: "image_generation"
     tier: "standard"
+    memory_estimate_gb: 4.0   # ~4 GB RAM (Flux Schnell Q8 quantized)
 
 # =============================================================================
 # Model Purposes - Staging/Production (vLLM + Bedrock)

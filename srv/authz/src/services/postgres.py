@@ -1095,7 +1095,13 @@ class PostgresService:
                 param_idx += 1
             
             if search:
-                conditions.append(f"(email ILIKE ${param_idx} OR COALESCE(display_name, '') ILIKE ${param_idx})")
+                conditions.append(
+                    f"(email ILIKE ${param_idx}"
+                    f" OR COALESCE(display_name, '') ILIKE ${param_idx}"
+                    f" OR COALESCE(first_name, '') ILIKE ${param_idx}"
+                    f" OR COALESCE(last_name, '') ILIKE ${param_idx}"
+                    f" OR COALESCE(first_name, '') || ' ' || COALESCE(last_name, '') ILIKE ${param_idx})"
+                )
                 params.append(f"%{search}%")
                 param_idx += 1
             

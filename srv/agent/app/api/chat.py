@@ -1135,6 +1135,24 @@ async def send_chat_message_stream_agentic(
                     },
                 }
                 yield f"event: interim\ndata: {json.dumps(interim_payload)}\n\n"
+
+            # Online eval: sample a percentage of production conversations for
+            # background LLM quality grading (fire-and-forget).
+            try:
+                from app.services.eval_runner import sample_online_eval
+                asyncio.ensure_future(
+                    sample_online_eval(
+                        session=session,
+                        conversation_id=conversation.id,
+                        message_id=assistant_message.id,
+                        query=payload.message,
+                        response=response_text,
+                        agent_id=selected_agent_id,
+                        user_id=principal.sub,
+                    )
+                )
+            except Exception as _eval_exc:
+                logger.debug(f"Online eval hook skipped: {_eval_exc}")
             
             # Send completion event with message ID
             completion_data = {

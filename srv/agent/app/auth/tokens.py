@@ -174,16 +174,21 @@ def _audience_for_purpose(purpose: str, scopes: List[str]) -> str:
       data.*   → data-api
       search.* → search-api
       rag.*    → search-api
+      authz.*  → authz-api
       task.*   → agent-api  (tasks live on agent-api)
       *        → agent-api  (fallback)
     """
     p = (purpose or "").lower()
+    if "authz" in p:
+        return "authz-api"
     if "data" in p:
         return "data-api"
     if "search" in p or "rag" in p:
         return "search-api"
     # fallback: infer by scope prefix
     for s in scopes:
+        if s.startswith("authz."):
+            return "authz-api"
         if s.startswith("data."):
             return "data-api"
         if s.startswith("search."):

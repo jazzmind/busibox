@@ -158,10 +158,12 @@ list_markers() {
             if [[ "$line" =~ ^[a-z] ]] || [[ -z "$line" ]]; then
                 break
             fi
-            local trimmed
+            local trimmed marker_name
             trimmed=$(echo "$line" | sed 's/^[[:space:]]*//')
-            if [[ -n "$trimmed" ]]; then
-                echo "  @pytest.mark.${trimmed}"
+            # Only keep the marker name — strip the colon and description
+            marker_name=$(echo "$trimmed" | cut -d: -f1 | tr -d '[:space:]')
+            if [[ -n "$marker_name" ]]; then
+                echo "  @pytest.mark.${marker_name}"
             fi
         fi
     done < "$ini"

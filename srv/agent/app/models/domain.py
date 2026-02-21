@@ -249,6 +249,151 @@ class EvalDefinition(Base):
         return f"<EvalDefinition(id={self.id}, name={self.name}, version={self.version})>"
 
 
+class EvalDataset(Base):
+    """A named collection of eval scenarios for testing agents."""
+    __tablename__ = "eval_datasets"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    # Optional: restrict this dataset to a specific agent
+    agent_id: Mapped[Optional[str]] = mapped_column(String(255), index=True)
+    tags: Mapped[list] = mapped_column(JSON, default=list)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[Optional[str]] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+    scenarios: Mapped[list["EvalScenario"]] = relationship(
+        "EvalScenario", back_populates="dataset", cascade="all, delete-orphan"
+    )
+
+    def __repr__(self) -> str:
+        return f"<EvalDataset(id={self.id}, name={self.name})>"
+
+
+class EvalScenario(Base):
+    """A single test case: a query with expected outcomes."""
+    __tablename__ = "eval_scenarios"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    dataset_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("eval_datasets.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(255))
+    query: Mapped[str] = mapped_column(Text)
+    # Optional expected outcomes for heuristic and LLM grading
+    expected_agent: Mapped[Optional[str]] = mapped_column(String(120))
+    expected_tools: Mapped[Optional[list]] = mapped_column(JSON)
+    expected_output_contains: Mapped[Optional[list]] = mapped_column(JSON)
+    expected_outcome: Mapped[Optional[str]] = mapped_column(Text)
+    # Extra context injected with the query (e.g., conversation history)
+    scenario_metadata: Mapped[dict] = mapped_column(JSON, default=dict)
+    tags: Mapped[list] = mapped_column(JSON, default=list)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+    dataset: Mapped["EvalDataset"] = relationship("EvalDataset", back_populates="scenarios")
+
+    __table_args__ = (
+        Index("idx_eval_scenarios_dataset_id", "dataset_id"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<EvalScenario(id={self.id}, name={self.name}, dataset_id={self.dataset_id})>"
+
+
+class EvalRun(Base):
+    """Tracks a batch eval execution against a dataset."""
+    __tablename__ = "eval_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    dataset_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("eval_datasets.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    name: Mapped[Optional[str]] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(50), default="pending", index=True)
+    # Status: pending, running, completed, failed
+    scorers: Mapped[list] = mapped_column(JSON, default=list)  # list of scorer names
+    model_override: Mapped[Optional[str]] = mapped_column(String(120))
+    # Summary results
+    total_scenarios: Mapped[int] = mapped_column(Integer, default=0)
+    passed_scenarios: Mapped[int] = mapped_column(Integer, default=0)
+    failed_scenarios: Mapped[int] = mapped_column(Integer, default=0)
+    avg_score: Mapped[Optional[float]] = mapped_column(Float)
+    duration_seconds: Mapped[Optional[float]] = mapped_column(Float)
+    error: Mapped[Optional[str]] = mapped_column(Text)
+    created_by: Mapped[Optional[str]] = mapped_column(String(255))
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+    dataset: Mapped[Optional["EvalDataset"]] = relationship("EvalDataset")
+    scores: Mapped[list["EvalScore"]] = relationship(
+        "EvalScore", back_populates="eval_run", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        Index("idx_eval_runs_dataset_id", "dataset_id"),
+        Index("idx_eval_runs_status", "status"),
+        Index("idx_eval_runs_created_at", "created_at"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<EvalRun(id={self.id}, status={self.status}, dataset_id={self.dataset_id})>"
+
+
+class EvalScore(Base):
+    """Persisted score result for a single agent response."""
+    __tablename__ = "eval_scores"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    # Source: run_record, conversation message, or direct eval
+    run_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("run_records.id", ondelete="SET NULL"), nullable=True
+    )
+    conversation_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True
+    )
+    message_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
+    )
+    # Eval batch context
+    eval_run_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("eval_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    scenario_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("eval_scenarios.id", ondelete="SET NULL"), nullable=True
+    )
+    # Agent that produced the response
+    agent_id: Mapped[Optional[str]] = mapped_column(String(255), index=True)
+    # Scoring metadata
+    scorer_name: Mapped[str] = mapped_column(String(120), index=True)
+    score: Mapped[float] = mapped_column(Float)
+    passed: Mapped[bool] = mapped_column(Boolean)
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
+    # For LLM-as-judge: which model was used to grade
+    grading_model: Mapped[Optional[str]] = mapped_column(String(120))
+    # Online vs offline eval
+    source: Mapped[str] = mapped_column(String(50), default="offline")
+    # Source: "offline" (batch eval), "online" (production sampling)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+    eval_run: Mapped[Optional["EvalRun"]] = relationship("EvalRun", back_populates="scores")
+
+    __table_args__ = (
+        Index("idx_eval_scores_agent_id", "agent_id"),
+        Index("idx_eval_scores_scorer_name", "scorer_name"),
+        Index("idx_eval_scores_eval_run_id", "eval_run_id"),
+        Index("idx_eval_scores_created_at", "created_at"),
+        Index("idx_eval_scores_source", "source"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<EvalScore(id={self.id}, scorer_name={self.scorer_name}, score={self.score}, passed={self.passed})>"
+
+
 class RagDatabase(Base):
     __tablename__ = "rag_databases"
 

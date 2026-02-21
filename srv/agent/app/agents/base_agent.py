@@ -208,6 +208,7 @@ TOOL_SCOPES: Dict[str, List[str]] = {
     "memory_save": [],
     "calendar_list_events": [],
     "calendar_create_event": [],
+    "search_users": ["authz.read"],
 }
 
 
@@ -326,6 +327,13 @@ def _register_builtin_tools():
     except ImportError as e:
         logger.warning(f"Could not register task/notification tools: {e}")
     
+    # Register user search tool
+    try:
+        from app.tools.user_search_tool import search_users, UserSearchOutput
+        ToolRegistry.register("search_users", search_users, UserSearchOutput)
+    except ImportError as e:
+        logger.warning(f"Could not register user search tool: {e}")
+
     # Register data management tools (list, query, insert, update, delete data documents)
     try:
         from app.tools.data_tool import (

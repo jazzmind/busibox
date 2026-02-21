@@ -2725,3 +2725,89 @@ litellm_settings:
             "X-Accel-Buffering": "no",
         }
     )
+
+
+# =============================================================================
+# Media Server Management (proxy to host-agent)
+# =============================================================================
+
+def _host_agent_headers() -> dict:
+    """Build auth headers for host-agent requests."""
+    headers = {}
+    if HOST_AGENT_TOKEN:
+        headers["Authorization"] = f"Bearer {HOST_AGENT_TOKEN}"
+    return headers
+
+
+@router.get("/media/status")
+async def media_server_status(_: dict = Depends(verify_admin_token)):
+    """
+    Return status for all MLX media servers (transcribe, voice, image) with per-process memory info.
+    Proxies to host-agent GET /media/status.
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{HOST_AGENT_URL}/media/status",
+                headers=_host_agent_headers(),
+                timeout=10.0,
+            )
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.ConnectError:
+        raise HTTPException(status_code=503, detail="Host agent not reachable - not running on MLX backend")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Media status error: {e}")
+
+
+class MediaToggleRequest(BaseModel):
+    server: str  # "transcribe", "voice", or "image"
+
+
+@router.post("/media/toggle")
+async def media_server_toggle(request: MediaToggleRequest, _: dict = Depends(verify_admin_token)):
+    """
+    Toggle a media server on/off (start if stopped, stop if running).
+    Proxies to host-agent POST /media/toggle.
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{HOST_AGENT_URL}/media/toggle",
+                json={"server": request.server},
+                headers=_host_agent_headers(),
+                timeout=130.0,  # allow up to ~2min for model loading
+            )
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.ConnectError:
+        raise HTTPException(status_code=503, detail="Host agent not reachable - not running on MLX backend")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Media toggle error: {e}")
+
+
+@router.get("/system/memory")
+async def system_memory(_: dict = Depends(verify_admin_token)):
+    """
+    Return system memory and per-process MLX memory breakdown.
+    Proxies to host-agent GET /system/memory.
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{HOST_AGENT_URL}/system/memory",
+                headers=_host_agent_headers(),
+                timeout=10.0,
+            )
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.ConnectError:
+        raise HTTPException(status_code=503, detail="Host agent not reachable - not running on MLX backend")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"System memory error: {e}")
