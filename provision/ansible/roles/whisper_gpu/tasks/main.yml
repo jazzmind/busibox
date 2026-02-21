@@ -1,0 +1,41 @@
+---
+# whisper_gpu role - main tasks
+# Installs and configures on-demand GPU-accelerated Whisper STT service
+
+- name: Create whisper-gpu install directory
+  file:
+    path: "{{ whisper_gpu_install_dir }}"
+    state: directory
+    owner: "{{ whisper_gpu_user }}"
+    group: "{{ whisper_gpu_group }}"
+    mode: "0755"
+
+- name: Create virtual environment for whisper-gpu
+  command: python3 -m venv "{{ whisper_gpu_venv_dir }}"
+  args:
+    creates: "{{ whisper_gpu_venv_dir }}/bin/python"
+  become_user: "{{ whisper_gpu_user }}"
+
+- name: Install faster-whisper-server and CUDA dependencies
+  pip:
+    name:
+      - "faster-whisper-server[gpu]"
+      - "torch"
+    virtualenv: "{{ whisper_gpu_venv_dir }}"
+    extra_args: "--extra-index-url https://download.pytorch.org/whl/cu121"
+  become_user: "{{ whisper_gpu_user }}"
+
+- name: Deploy whisper-gpu systemd service
+  template:
+    src: whisper-gpu.service.j2
+    dest: "/etc/systemd/system/{{ whisper_gpu_service_name }}.service"
+    mode: "0644"
+  notify: reload systemd
+
+- name: Enable whisper-gpu service (but do not start - on-demand)
+  systemd:
+    name: "{{ whisper_gpu_service_name }}"
+    enabled: "{{ whisper_gpu_enable_service }}"
+    state: stopped
+    daemon_reload: true
+  when: whisper_gpu_enable_service

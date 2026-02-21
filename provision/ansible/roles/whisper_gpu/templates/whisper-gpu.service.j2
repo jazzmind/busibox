@@ -1,0 +1,40 @@
+[Unit]
+Description=Whisper GPU STT Server (faster-whisper, GPU {{ whisper_gpu_cuda_devices }}, Port {{ whisper_gpu_port }})
+Documentation=https://github.com/SYSTRAN/faster-whisper
+After=network.target
+
+[Service]
+Type=simple
+User={{ whisper_gpu_user }}
+Group={{ whisper_gpu_group }}
+WorkingDirectory={{ whisper_gpu_install_dir }}
+
+# GPU assignment - share GPU 0 with ingestion stack
+Environment="CUDA_VISIBLE_DEVICES={{ whisper_gpu_cuda_devices }}"
+Environment="HF_HOME={{ whisper_gpu_cache_dir }}"
+
+ExecStart={{ whisper_gpu_venv_dir }}/bin/python -m faster_whisper_server.main \
+  --host {{ whisper_gpu_host }} \
+  --port {{ whisper_gpu_port }} \
+  --model {{ whisper_gpu_model }} \
+  --device {{ whisper_gpu_device }} \
+  --compute-type {{ whisper_gpu_compute_type }}
+
+# On-demand: do not auto-restart on failure; let deploy-api manage lifecycle
+Restart=no
+RestartSec={{ whisper_gpu_restart_sec }}
+TimeoutStartSec={{ whisper_gpu_startup_timeout }}
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths={{ whisper_gpu_install_dir }}
+ReadWritePaths={{ whisper_gpu_cache_dir }}
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier={{ whisper_gpu_service_name }}
+
+[Install]
+WantedBy=multi-user.target

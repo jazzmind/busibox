@@ -680,6 +680,49 @@ async def media_status(_: bool = Depends(verify_token)):
     return get_all_media_status()
 
 
+@app.post("/media/ensure")
+async def media_ensure(request: MediaToggleRequest, _: bool = Depends(verify_token)):
+    """
+    Ensure a media server is running. Start it if not already up.
+    Unlike /media/toggle, this is idempotent: no-op if already healthy.
+    Returns { running: true, started: bool }.
+    """
+    server = request.server.lower()
+    if server not in MEDIA_SERVERS:
+        raise HTTPException(status_code=400, detail=f"Unknown media server: {server}. Valid: transcribe, voice, image")
+
+    status = get_media_server_status(server)
+    if status.get("running") and status.get("healthy"):
+        return {"running": True, "started": False, "server": server, "status": status}
+
+    if not MEDIA_SCRIPT.exists():
+        raise HTTPException(status_code=500, detail=f"Media server script not found: {MEDIA_SCRIPT}")
+
+    action_map = {
+        "transcribe": "transcribe",
+        "image": "image",
+        "voice": "start",
+    }
+    action = action_map[server]
+
+    try:
+        result = await asyncio.create_subprocess_exec(
+            "bash", str(MEDIA_SCRIPT), action,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(BUSIBOX_ROOT),
+        )
+        await asyncio.wait_for(result.communicate(), timeout=120)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Media server ensure timed out after 120s")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to ensure media server: {e}")
+
+    await asyncio.sleep(1)
+    new_status = get_media_server_status(server)
+    return {"running": new_status.get("running", False), "started": True, "server": server, "status": new_status}
+
+
 @app.post("/media/toggle")
 async def media_toggle(request: MediaToggleRequest, _: bool = Depends(verify_token)):
     """

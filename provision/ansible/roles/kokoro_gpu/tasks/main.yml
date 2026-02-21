@@ -1,0 +1,41 @@
+---
+# kokoro_gpu role - main tasks
+# Installs and configures on-demand GPU-accelerated Kokoro TTS service
+
+- name: Create kokoro-gpu install directory
+  file:
+    path: "{{ kokoro_gpu_install_dir }}"
+    state: directory
+    owner: "{{ kokoro_gpu_user }}"
+    group: "{{ kokoro_gpu_group }}"
+    mode: "0755"
+
+- name: Create virtual environment for kokoro-gpu
+  command: python3 -m venv "{{ kokoro_gpu_venv_dir }}"
+  args:
+    creates: "{{ kokoro_gpu_venv_dir }}/bin/python"
+  become_user: "{{ kokoro_gpu_user }}"
+
+- name: Install kokoro-fastapi and CUDA dependencies
+  pip:
+    name:
+      - "kokoro-fastapi[gpu]"
+      - "torch"
+    virtualenv: "{{ kokoro_gpu_venv_dir }}"
+    extra_args: "--extra-index-url https://download.pytorch.org/whl/cu121"
+  become_user: "{{ kokoro_gpu_user }}"
+
+- name: Deploy kokoro-gpu systemd service
+  template:
+    src: kokoro-gpu.service.j2
+    dest: "/etc/systemd/system/{{ kokoro_gpu_service_name }}.service"
+    mode: "0644"
+  notify: reload systemd
+
+- name: Enable kokoro-gpu service (but do not start - on-demand)
+  systemd:
+    name: "{{ kokoro_gpu_service_name }}"
+    enabled: "{{ kokoro_gpu_enable_service }}"
+    state: stopped
+    daemon_reload: true
+  when: kokoro_gpu_enable_service

@@ -272,6 +272,33 @@ available_models:
     tier: "standard"
     memory_estimate_gb: 4.0   # ~4 GB RAM (Flux Schnell Q8 quantized)
 
+  # GPU-accelerated media models for Proxmox (on-demand, GPU 0)
+  "whisper-large-v3-gpu":
+    provider: "gpu"
+    model: "whisper-large-v3-gpu"
+    model_name: "whisper-large-v3"
+    description: "GPU-accelerated Whisper STT (faster-whisper, float16, GPU 0)"
+    mode: "audio_transcription"
+    tier: "standard"
+    port: 8006
+    gpu: "0"
+    on_demand: true
+    memory_estimate_gb: 3.1   # ~3.1 GB VRAM (large-v3 float16)
+    service_name: "whisper-gpu"
+
+  "kokoro-82m-gpu":
+    provider: "gpu"
+    model: "kokoro-82m-gpu"
+    model_name: "hexgrad/Kokoro-82M"
+    description: "GPU-accelerated Kokoro TTS (kokoro-fastapi, GPU 0)"
+    mode: "audio_speech"
+    tier: "micro"
+    port: 8007
+    gpu: "0"
+    on_demand: true
+    memory_estimate_gb: 0.5   # ~500 MB VRAM (82M params on GPU)
+    service_name: "kokoro-gpu"
+
 # =============================================================================
 # Model Purposes - Staging/Production (vLLM + Bedrock)
 # =============================================================================
@@ -300,8 +327,9 @@ model_purposes:
   # Video generation (cloud API)
   video: "sora-2"   # Video generation model (OpenAI Sora-2)
   image: "flux-schnell"   # Image generation model (local MLX FLUX)
-  transcribe: "whisper-large-v3"   # Speech-to-text (Whisper)
-  voice: "kokoro-82m"   # Text-to-speech (Kokoro)
+  # GPU media services (on-demand, GPU 0). Override to "whisper-large-v3" / "kokoro-82m" for MLX fallback.
+  transcribe: "whisper-large-v3-gpu"   # GPU STT (faster-whisper, port 8006)
+  voice: "kokoro-82m-gpu"   # GPU TTS (kokoro-fastapi, port 8007)
 
   # Embeddings (dedicated services)
   embedding: "bge-large"   # Text embedding generation (1024-d)

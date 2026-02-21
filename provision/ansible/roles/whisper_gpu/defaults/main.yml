@@ -1,0 +1,28 @@
+---
+# whisper_gpu Role - Default Variables
+# On-demand GPU-accelerated faster-whisper STT service
+# Runs on GPU 0 alongside the ingestion stack; started/stopped via systemctl on-demand.
+
+whisper_gpu_port: 8006
+whisper_gpu_service_name: "whisper-gpu"
+whisper_gpu_model: "large-v3"
+whisper_gpu_compute_type: "float16"     # float16 for CUDA; int8 for CPU fallback
+whisper_gpu_cuda_devices: "0"           # Share GPU 0 with ingestion stack
+whisper_gpu_device: "cuda"
+whisper_gpu_host: "0.0.0.0"
+
+# Installation
+whisper_gpu_install_dir: /opt/whisper-gpu
+whisper_gpu_venv_dir: "{{ whisper_gpu_install_dir }}/venv"
+whisper_gpu_user: "{{ vllm_user | default('ollama') }}"
+whisper_gpu_group: "{{ vllm_group | default('ollama') }}"
+whisper_gpu_cache_dir: /var/lib/llm-models/huggingface
+
+# On-demand: service is NOT auto-started; it is started via deploy-api toggle
+whisper_gpu_enable_service: true
+whisper_gpu_start_on_boot: false        # on-demand only
+whisper_gpu_restart_sec: 10
+whisper_gpu_startup_timeout: 300        # 5 min to load model into GPU
+
+# Memory (for reference / dashboard display)
+whisper_gpu_memory_estimate_gb: 3.1     # large-v3 float16 on GPU

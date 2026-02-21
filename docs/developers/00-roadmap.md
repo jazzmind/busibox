@@ -9,6 +9,7 @@
 - might move portal and agent-manager to another stack (flutter?)
 
 ### Installation
+- Minimum Requirements. Currently apple silicon, M4, 24gb OR 3090 gpu, 24 GB.
 - create a better installer/manager script that explains choices
 - basic mode - use case optimizes model selection, memory use, whether it's a prod deploy or app dev deploy (hot reload on user-apps), or core system dev deploy (hot reload on all)
 - advanced mode - allow model selection, maybe vectordb, other components

@@ -1,0 +1,38 @@
+[Unit]
+Description=Kokoro GPU TTS Server (kokoro-fastapi, GPU {{ kokoro_gpu_cuda_devices }}, Port {{ kokoro_gpu_port }})
+Documentation=https://github.com/remsky/Kokoro-FastAPI
+After=network.target
+
+[Service]
+Type=simple
+User={{ kokoro_gpu_user }}
+Group={{ kokoro_gpu_group }}
+WorkingDirectory={{ kokoro_gpu_install_dir }}
+
+# GPU assignment - share GPU 0 with ingestion stack
+Environment="CUDA_VISIBLE_DEVICES={{ kokoro_gpu_cuda_devices }}"
+Environment="HF_HOME={{ kokoro_gpu_cache_dir }}"
+
+ExecStart={{ kokoro_gpu_venv_dir }}/bin/python -m kokoro_fastapi \
+  --host {{ kokoro_gpu_host }} \
+  --port {{ kokoro_gpu_port }} \
+  --device {{ kokoro_gpu_device }}
+
+# On-demand: do not auto-restart on failure; let deploy-api manage lifecycle
+Restart=no
+RestartSec={{ kokoro_gpu_restart_sec }}
+TimeoutStartSec={{ kokoro_gpu_startup_timeout }}
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths={{ kokoro_gpu_install_dir }}
+ReadWritePaths={{ kokoro_gpu_cache_dir }}
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier={{ kokoro_gpu_service_name }}
+
+[Install]
+WantedBy=multi-user.target

@@ -19,8 +19,8 @@ except Exception:
         pass
 
 _ensure_lock = threading.Lock()
-_last_check_at = {"primary": 0.0, "fast": 0.0}
-_last_status = {"primary": None, "fast": None}
+_last_check_at = {"primary": 0.0, "fast": 0.0, "transcribe": 0.0, "image": 0.0, "voice": 0.0}
+_last_status = {"primary": None, "fast": None, "transcribe": None, "image": None, "voice": None}
 _TTL_OK_SECONDS = 120.0
 _TTL_FAIL_SECONDS = 15.0
 _MLX_PRIMARY_PORT = int(os.environ.get("MLX_PORT", "8080"))
@@ -152,6 +152,91 @@ def _mlx_healthcheck(mlx_port: int) -> bool:
         return False
 
 
+def _get_media_target(data: dict, call_type: str) -> str | None:
+    """Return the media server name if this request targets an MLX media endpoint."""
+    if os.environ.get("LLM_BACKEND", "").lower() != "mlx":
+        return None
+
+    # Map LiteLLM call types to media server names.
+    # atranscription / transcription = Whisper STT
+    # aimage_generation / image_generation = image gen
+    # aspeech / speech = TTS/voice (always-on but still worth ensuring)
+    if call_type in {"atranscription", "transcription"}:
+        return "transcribe"
+    if call_type in {"aimage_generation", "image_generation"}:
+        return "image"
+    if call_type in {"aspeech", "speech"}:
+        return "voice"
+    return None
+
+
+def _check_and_start_media(server: str) -> None:
+    """Start a media server via deploy-api /media/ensure if not already running."""
+    try:
+        import httpx  # type: ignore
+    except Exception:
+        httpx = None
+
+    if not _ensure_lock.acquire(blocking=False):
+        return
+
+    try:
+        deploy_api_url = os.environ.get("DEPLOY_API_URL", "").rstrip("/")
+        if not deploy_api_url:
+            _last_check_at[server] = time.monotonic()
+            _last_status[server] = "no_deploy_api"
+            return
+
+        token = os.environ.get("LITELLM_API_KEY") or os.environ.get("LITELLM_MASTER_KEY", "")
+        headers = {"Content-Type": "application/json"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+
+        if httpx is not None:
+            response = httpx.post(
+                f"{deploy_api_url}/api/v1/services/media/ensure",
+                headers=headers,
+                json={"server": server},
+                timeout=130.0,
+            )
+            status_code = response.status_code
+            json_payload = None
+            try:
+                json_payload = response.json()
+            except Exception:
+                json_payload = None
+        else:
+            import json
+            import urllib.request
+            req = urllib.request.Request(
+                f"{deploy_api_url}/api/v1/services/media/ensure",
+                data=json.dumps({"server": server}).encode(),
+                headers=headers,
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=130.0) as response:
+                status_code = response.status
+                raw = response.read().decode("utf-8", errors="replace")
+            try:
+                json_payload = json.loads(raw) if raw else None
+            except Exception:
+                json_payload = None
+
+        _last_check_at[server] = time.monotonic()
+        if status_code == 200:
+            if isinstance(json_payload, dict) and json_payload.get("running"):
+                _last_status[server] = "ok"
+            else:
+                _last_status[server] = "unknown"
+        else:
+            _last_status[server] = "failed"
+    except Exception:
+        _last_check_at[server] = time.monotonic()
+        _last_status[server] = "error"
+    finally:
+        _ensure_lock.release()
+
+
 def _check_and_start_mlx(target: str) -> None:
     global _last_check_at, _last_status
     # Import lazily so missing optional deps never break module import/startup.
@@ -235,6 +320,18 @@ class MLXEnsureHook(CustomLogger):
     async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
         global _last_check_at, _last_status
 
+        # Check for media server targets first (transcribe, image, voice).
+        media_target = _get_media_target(data=data, call_type=call_type)
+        if media_target is not None:
+            now = time.monotonic()
+            status = _last_status.get(media_target)
+            last_check_at = _last_check_at.get(media_target, 0.0)
+            ttl_seconds = _TTL_OK_SECONDS if status == "ok" else _TTL_FAIL_SECONDS
+            if now - last_check_at >= ttl_seconds:
+                threading.Thread(target=_check_and_start_media, args=(media_target,), daemon=True).start()
+            return data
+
+        # Fall through to LLM text server checks.
         target = _get_mlx_target(data=data, call_type=call_type)
         if target is None:
             return data

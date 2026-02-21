@@ -2790,6 +2790,281 @@ async def media_server_toggle(request: MediaToggleRequest, _: dict = Depends(ver
         raise HTTPException(status_code=500, detail=f"Media toggle error: {e}")
 
 
+@router.get("/gpu/status")
+async def gpu_status(_: dict = Depends(verify_admin_token)):
+    """
+    Return NVIDIA GPU VRAM utilization and model assignments from the vLLM host.
+    Runs nvidia-smi over SSH and cross-references running vLLM processes with model_config.yml.
+    Returns gracefully empty if not on a GPU backend.
+    """
+    import asyncio
+    import csv
+    import io
+
+    vllm_host = os.environ.get("VLLM_HOST", "")
+    if not vllm_host:
+        return {"available": False, "gpus": [], "message": "No VLLM_HOST configured"}
+
+    # Query GPU memory/utilization via ssh + nvidia-smi
+    nvidia_cmd = (
+        "nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu,temperature.gpu "
+        "--format=csv,noheader,nounits"
+    )
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
+            vllm_host, nvidia_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10.0)
+    except Exception as e:
+        return {"available": False, "gpus": [], "message": f"SSH to vLLM host failed: {e}"}
+
+    if proc.returncode != 0:
+        return {"available": False, "gpus": [], "message": "nvidia-smi failed on vLLM host"}
+
+    gpus = []
+    reader = csv.reader(io.StringIO(stdout.decode("utf-8", errors="replace")))
+    for row in reader:
+        if len(row) < 6:
+            continue
+        try:
+            index, name, mem_used, mem_total, util, temp = [r.strip() for r in row]
+            gpus.append({
+                "index": int(index),
+                "name": name,
+                "vram_used_mb": float(mem_used),
+                "vram_total_mb": float(mem_total),
+                "utilization_pct": float(util),
+                "temp_c": float(temp) if temp not in ("[N/A]", "") else None,
+                "models": [],
+            })
+        except (ValueError, TypeError):
+            continue
+
+    # Cross-reference running vLLM processes to attach model names to GPU indices
+    try:
+        ps_cmd = "bash -c \"ps aux | grep vllm | grep -v grep | grep -oP '\\-\\-model\\s+\\K\\S+' || true\""
+        proc2 = await asyncio.create_subprocess_exec(
+            "ssh", "-o", "StrictHostKeyChecking=no",
+            vllm_host, ps_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        ps_out, _ = await asyncio.wait_for(proc2.communicate(), timeout=8.0)
+        running_models = [m.strip() for m in ps_out.decode("utf-8", errors="replace").splitlines() if m.strip()]
+        # Attach running models to GPUs with significant utilization or VRAM usage
+        for gpu in gpus:
+            if gpu["utilization_pct"] > 1 or gpu["vram_used_mb"] > 500:
+                gpu["models"] = running_models
+    except Exception:
+        pass
+
+    return {"available": True, "gpus": gpus}
+
+
+@router.post("/media/ensure")
+async def media_server_ensure(request: MediaToggleRequest, _: dict = Depends(verify_admin_token)):
+    """
+    Ensure a media server is running (idempotent: no-op if already healthy).
+    Proxies to host-agent POST /media/ensure.
+    Used by LiteLLM hook for auto-starting media servers before requests.
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{HOST_AGENT_URL}/media/ensure",
+                json={"server": request.server},
+                headers=_host_agent_headers(),
+                timeout=130.0,  # allow up to ~2min for model loading
+            )
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.ConnectError:
+        raise HTTPException(status_code=503, detail="Host agent not reachable - not running on MLX backend")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Media ensure error: {e}")
+
+
+_GPU_MEDIA_SERVICES = {
+    "transcribe": {
+        "service": "whisper-gpu",
+        "port": 8006,
+        "label": "Whisper GPU (STT)",
+        "memory_estimate_gb": 3.1,
+    },
+    "voice": {
+        "service": "kokoro-gpu",
+        "port": 8007,
+        "label": "Kokoro GPU (TTS)",
+        "memory_estimate_gb": 0.5,
+    },
+}
+
+
+async def _ssh_systemctl(host: str, action: str, service: str) -> tuple[int, str]:
+    """Run systemctl {action} {service} over SSH. Returns (returncode, output)."""
+    import asyncio
+    proc = await asyncio.create_subprocess_exec(
+        "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
+        host, "systemctl", action, service,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=120.0)
+    return proc.returncode, stdout.decode("utf-8", errors="replace")
+
+
+async def _gpu_media_service_status(host: str, name: str) -> dict:
+    """Get status of a GPU media service via SSH systemctl is-active."""
+    import asyncio
+    cfg = _GPU_MEDIA_SERVICES[name]
+    service = cfg["service"]
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
+            host, "systemctl", "is-active", service,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10.0)
+        active = stdout.decode("utf-8", errors="replace").strip() == "active"
+    except Exception:
+        active = False
+
+    # Check HTTP health if active
+    healthy = False
+    if active:
+        try:
+            import httpx
+            vllm_host_ip = host.split("@")[-1] if "@" in host else host
+            resp = await asyncio.wait_for(
+                asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: httpx.get(f"http://{vllm_host_ip}:{cfg['port']}/health", timeout=3.0)
+                ),
+                timeout=5.0,
+            )
+            healthy = resp.status_code == 200
+        except Exception:
+            pass
+
+    return {
+        "name": name,
+        "service": service,
+        "label": cfg["label"],
+        "port": cfg["port"],
+        "running": active,
+        "healthy": healthy,
+        "memory_estimate_gb": cfg["memory_estimate_gb"],
+    }
+
+
+@router.get("/gpu-media/status")
+async def gpu_media_status(_: dict = Depends(verify_admin_token)):
+    """
+    Return status for on-demand GPU media services (whisper-gpu, kokoro-gpu) on the vLLM host.
+    Uses SSH + systemctl to check service state.
+    """
+    import asyncio
+
+    vllm_host = os.environ.get("VLLM_HOST", "")
+    if not vllm_host:
+        return {"available": False, "servers": {}, "message": "No VLLM_HOST configured"}
+
+    tasks = {name: _gpu_media_service_status(vllm_host, name) for name in _GPU_MEDIA_SERVICES}
+    results = {}
+    for name, coro in tasks.items():
+        try:
+            results[name] = await coro
+        except Exception as e:
+            results[name] = {"name": name, "running": False, "error": str(e)}
+
+    return {"available": True, "servers": results}
+
+
+class GPUMediaToggleRequest(BaseModel):
+    server: str  # "transcribe" or "voice"
+    action: str = "toggle"  # "start" | "stop" | "toggle"
+
+
+@router.post("/gpu-media/toggle")
+async def gpu_media_toggle(request: GPUMediaToggleRequest, _: dict = Depends(verify_admin_token)):
+    """
+    Start or stop an on-demand GPU media service (whisper-gpu or kokoro-gpu) via SSH systemctl.
+    action: "start" | "stop" | "toggle" (default)
+    """
+    import asyncio
+
+    server = request.server.lower()
+    if server not in _GPU_MEDIA_SERVICES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown GPU media server: {server}. Valid: {list(_GPU_MEDIA_SERVICES.keys())}"
+        )
+
+    vllm_host = os.environ.get("VLLM_HOST", "")
+    if not vllm_host:
+        raise HTTPException(status_code=503, detail="No VLLM_HOST configured")
+
+    cfg = _GPU_MEDIA_SERVICES[server]
+    service = cfg["service"]
+
+    action = request.action.lower()
+    if action == "toggle":
+        status = await _gpu_media_service_status(vllm_host, server)
+        action = "stop" if status["running"] else "start"
+
+    rc, output = await _ssh_systemctl(vllm_host, action, service)
+    if rc != 0:
+        raise HTTPException(status_code=500, detail=f"systemctl {action} {service} failed: {output}")
+
+    await asyncio.sleep(1)
+    new_status = await _gpu_media_service_status(vllm_host, server)
+    return {
+        "success": True,
+        "server": server,
+        "action": action,
+        "output": output[-500:],
+        "status": new_status,
+    }
+
+
+@router.post("/gpu-media/ensure")
+async def gpu_media_ensure(request: GPUMediaToggleRequest, _: dict = Depends(verify_admin_token)):
+    """
+    Ensure a GPU media service is running. No-op if already active.
+    Used by LiteLLM hook for Proxmox backends.
+    """
+    import asyncio
+
+    server = request.server.lower()
+    if server not in _GPU_MEDIA_SERVICES:
+        raise HTTPException(status_code=400, detail=f"Unknown GPU media server: {server}")
+
+    vllm_host = os.environ.get("VLLM_HOST", "")
+    if not vllm_host:
+        raise HTTPException(status_code=503, detail="No VLLM_HOST configured")
+
+    status = await _gpu_media_service_status(vllm_host, server)
+    if status["running"] and status["healthy"]:
+        return {"running": True, "started": False, "server": server, "status": status}
+
+    cfg = _GPU_MEDIA_SERVICES[server]
+    rc, output = await _ssh_systemctl(vllm_host, "start", cfg["service"])
+    if rc != 0:
+        raise HTTPException(status_code=500, detail=f"Failed to start {cfg['service']}: {output}")
+
+    await asyncio.sleep(2)
+    new_status = await _gpu_media_service_status(vllm_host, server)
+    return {"running": new_status.get("running", False), "started": True, "server": server, "status": new_status}
+
+
 @router.get("/system/memory")
 async def system_memory(_: dict = Depends(verify_admin_token)):
     """

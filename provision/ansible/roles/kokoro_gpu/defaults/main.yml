@@ -1,0 +1,27 @@
+---
+# kokoro_gpu Role - Default Variables
+# On-demand GPU-accelerated Kokoro TTS service
+# Runs on GPU 0 alongside the ingestion stack; started/stopped via systemctl on-demand.
+
+kokoro_gpu_port: 8007
+kokoro_gpu_service_name: "kokoro-gpu"
+kokoro_gpu_model: "hexgrad/Kokoro-82M"
+kokoro_gpu_cuda_devices: "0"           # Share GPU 0 with ingestion stack
+kokoro_gpu_device: "cuda"
+kokoro_gpu_host: "0.0.0.0"
+
+# Installation
+kokoro_gpu_install_dir: /opt/kokoro-gpu
+kokoro_gpu_venv_dir: "{{ kokoro_gpu_install_dir }}/venv"
+kokoro_gpu_user: "{{ vllm_user | default('ollama') }}"
+kokoro_gpu_group: "{{ vllm_group | default('ollama') }}"
+kokoro_gpu_cache_dir: /var/lib/llm-models/huggingface
+
+# On-demand: service is NOT auto-started; it is started via deploy-api toggle
+kokoro_gpu_enable_service: true
+kokoro_gpu_start_on_boot: false        # on-demand only
+kokoro_gpu_restart_sec: 10
+kokoro_gpu_startup_timeout: 120        # 2 min (small model, fast to load)
+
+# Memory (for reference / dashboard display)
+kokoro_gpu_memory_estimate_gb: 0.5     # Kokoro-82M on GPU (weights + activations)
