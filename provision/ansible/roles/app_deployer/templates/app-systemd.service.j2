@@ -36,12 +36,14 @@ Environment="HOSTNAME=0.0.0.0"
 Environment="NODE_OPTIONS=--max-old-space-size=512"
 
 # Start command
-# Prefer standalone server if available (much lower memory footprint)
-{% if app.start_command is defined %}
-ExecStart=/bin/bash -c '{{ app.start_command }}'
-{% else %}
-ExecStart=/bin/bash -c 'if [ -f .next/standalone/server.js ]; then exec node .next/standalone/server.js; else exec npm start; fi'
-{% endif %}
+# In a monorepo standalone build, server.js may be nested under the app's
+# relative path (e.g. .next/standalone/apps/portal/server.js).
+# We find it dynamically to support both monorepo and standalone layouts.
+ExecStart=/bin/bash -c '\
+  SERVER_JS=$(find .next/standalone -name server.js -maxdepth 4 2>/dev/null | head -1); \
+  if [ -n "$SERVER_JS" ]; then exec node "$SERVER_JS"; \
+  elif [ -f .next/standalone/server.js ]; then exec node .next/standalone/server.js; \
+  else exec npm start; fi'
 
 # Restart configuration
 Restart=always

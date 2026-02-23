@@ -549,12 +549,23 @@ NPMRC_EOF
             NODE_ENV=production pnpm run build
             echo "=== BUILD END ==="
             
-            # Copy standalone assets
+            # Copy standalone assets.
+            # In a monorepo, Next.js nests the standalone output under the
+            # app's relative path from the tracing root, e.g.:
+            #   .next/standalone/apps/portal/server.js
+            # We locate server.js and copy assets next to it.
             if [ -d ".next/standalone" ]; then
                 echo "=== STANDALONE ASSETS START ==="
-                cp -r public .next/standalone/public 2>/dev/null || true
-                mkdir -p .next/standalone/.next
-                cp -r .next/static .next/standalone/.next/static
+                SERVER_JS=$(find .next/standalone -name server.js -maxdepth 4 | head -1)
+                if [ -n "$SERVER_JS" ]; then
+                    SERVER_DIR=$(dirname "$SERVER_JS")
+                    echo "Found server.js at: $SERVER_JS"
+                    cp -r public "$SERVER_DIR/public" 2>/dev/null || true
+                    mkdir -p "$SERVER_DIR/.next"
+                    cp -r .next/static "$SERVER_DIR/.next/static"
+                else
+                    echo "WARNING: server.js not found in .next/standalone/"
+                fi
                 echo "=== STANDALONE ASSETS END ==="
             fi
             

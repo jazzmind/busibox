@@ -28,7 +28,6 @@ _monorepo_defaults: &monorepo_defaults
   container: core-apps-lxc
   container_ip: "{{ core_apps_ip }}"
   build_command: "pnpm run build"
-  start_command: "node .next/standalone/server.js"
   process_manager: systemd
 
 # Common environment variables shared by all apps
