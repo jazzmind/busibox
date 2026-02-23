@@ -501,7 +501,21 @@ manage_service() {
                 ;;
             5) # Redeploy
                 echo ""
-                backend_service_action "$service" "redeploy" "$env" "$prefix"
+                # For Proxmox core-apps, prompt for branch/ref before redeploying
+                if [[ "$_CURRENT_BACKEND" == "proxmox" && "$service" == "core-apps" ]]; then
+                    local selected_ref
+                    selected_ref=$(select_github_ref "jazzmind/busibox-frontend" "main")
+                    if [[ -n "$selected_ref" ]]; then
+                        info "Deploying all core apps at ref: ${BOLD}${selected_ref}${NC}"
+                        export DEPLOY_REF="$selected_ref"
+                        backend_service_action "$service" "redeploy" "$env" "$prefix"
+                        unset DEPLOY_REF
+                    else
+                        warn "No ref selected, aborting"
+                    fi
+                else
+                    backend_service_action "$service" "redeploy" "$env" "$prefix"
+                fi
                 # Skip companion redeploy - the Ansible playbook already deploys
                 # all services under the same tag (e.g. --tags data deploys both
                 # data-api and data-worker). Running it again would be redundant.
@@ -696,23 +710,21 @@ _rebuild_app_submenu() {
 _deploy_core_app_submenu() {
     local env="$1"
 
-    # Core app repo mapping
-    local -A CORE_APP_REPOS=(
-        ["busibox-portal"]="jazzmind/busibox-portal"
-        ["busibox-agents"]="jazzmind/busibox-agents"
-        ["busibox-appbuilder"]="jazzmind/busibox-appbuilder"
-    )
+    # All core apps live in the busibox-frontend monorepo
+    local MONOREPO="jazzmind/busibox-frontend"
+    local -a ALL_CORE_APPS=("busibox-portal" "busibox-admin" "busibox-agents" "busibox-chat" "busibox-appbuilder" "busibox-media" "busibox-documents")
 
     clear
     box_start 70 double "$CYAN"
     box_header "DEPLOY CORE APP"
     box_empty
-    box_line "  ${BOLD}Select app to deploy:${NC}"
+    box_line "  ${BOLD}Select app to deploy:${NC}  ${DIM}(repo: ${MONOREPO})${NC}"
     box_empty
-    box_line "    ${BOLD}1)${NC} busibox-portal"
-    box_line "    ${BOLD}2)${NC} busibox-agents"
-    box_line "    ${BOLD}3)${NC} busibox-appbuilder"
-    box_line "    ${BOLD}4)${NC} all (same ref)"
+    local i
+    for i in "${!ALL_CORE_APPS[@]}"; do
+        box_line "    ${BOLD}$((i+1)))${NC} ${ALL_CORE_APPS[$i]}"
+    done
+    box_line "    ${BOLD}a)${NC} all (same ref)"
     box_empty
     box_line "  ${DIM}b = back${NC}"
     box_empty
@@ -725,18 +737,16 @@ _deploy_core_app_submenu() {
     local apps_to_deploy=()
 
     case "$app_choice" in
-        1) apps_to_deploy=("busibox-portal") ;;
-        2) apps_to_deploy=("busibox-agents") ;;
-        3) apps_to_deploy=("busibox-appbuilder") ;;
-        4) apps_to_deploy=("busibox-portal" "busibox-agents" "busibox-appbuilder") ;;
+        [1-7])
+            apps_to_deploy=("${ALL_CORE_APPS[$((app_choice-1))]}")
+            ;;
+        a|A) apps_to_deploy=("${ALL_CORE_APPS[@]}") ;;
         b|B) return ;;
         *) return ;;
     esac
 
-    # Use the first app's repo for ref selection (or the shared one for "both")
-    local repo="${CORE_APP_REPOS[${apps_to_deploy[0]}]}"
     local selected_ref
-    selected_ref=$(select_github_ref "$repo" "main")
+    selected_ref=$(select_github_ref "$MONOREPO" "main")
 
     if [[ -z "$selected_ref" ]]; then
         warn "No ref selected, aborting"

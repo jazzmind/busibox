@@ -42,6 +42,8 @@ _common_env: &common_env
   NEXT_PUBLIC_BUSIBOX_PORTAL_URL: "https://{{ full_domain }}/portal"
   LITELLM_BASE_URL: "http://{{ litellm_ip }}:{{ litellm_port }}/v1"
   SSO_TOKEN_EXPIRY: "900"
+  DATA_API_HOST: "{{ data_ip }}"
+  DATA_API_PORT: "8002"
 
 # Common secrets shared by most apps
 _common_secrets: &common_secrets
@@ -313,3 +315,5 @@ applications:
       NEXT_PUBLIC_APP_URL: "https://{{ full_domain }}/documents"
       NEXT_PUBLIC_BASE_PATH: "/documents"
       PORT: "3006"
+      SEARCH_API_HOST: "{{ search_api_ip }}"
+      SEARCH_API_PORT: "8003"

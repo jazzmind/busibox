@@ -35,16 +35,14 @@ _V_NC="${NC:-\033[0m}"
 # Repositories we track
 declare -A TRACKED_REPOS=(
     ["busibox"]="jazzmind/busibox"
-    ["busibox-portal"]="jazzmind/busibox-portal"
-    ["busibox-agents"]="jazzmind/busibox-agents"
+    ["busibox-frontend"]="jazzmind/busibox-frontend"
     ["busibox-app"]="jazzmind/busibox-app"
 )
 
 # Default branches for each repo
 declare -A DEFAULT_BRANCHES=(
     ["busibox"]="main"
-    ["busibox-portal"]="main"
-    ["busibox-agents"]="main"
+    ["busibox-frontend"]="main"
     ["busibox-app"]="main"
 )
 

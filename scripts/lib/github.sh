@@ -43,8 +43,7 @@ fi
 
 # Repositories that the GitHub token must have access to
 GITHUB_REQUIRED_REPOS=(
-    "jazzmind/busibox-portal"
-    "jazzmind/busibox-agents"
+    "jazzmind/busibox-frontend"
     "jazzmind/busibox-app"
 )
 
@@ -236,7 +235,7 @@ ensure_github_token() {
     echo -e "┌─ ${BOLD}GITHUB AUTHENTICATION${NC} ──────────────────────────────────────────────────────┐"
     echo -e "│                                                                              │"
     echo -e "│  A GitHub Personal Access Token is required to:                              │"
-    echo -e "│    - Clone private repositories (busibox-portal, busibox-agents)                   │"
+    echo -e "│    - Clone private repositories (busibox-frontend monorepo)                  │"
     echo -e "│    - Download npm packages from GitHub Packages (@jazzmind/busibox-app)      │"
     echo -e "│                                                                              │"
     echo -e "│  Required scopes: ${BOLD}repo${NC}, ${BOLD}read:packages${NC}                                        │"
